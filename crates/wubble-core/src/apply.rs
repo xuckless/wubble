@@ -96,6 +96,20 @@ pub enum Applied {
     ScreenshotOutput(ShotOutput),
     /// The link hints' letters (`hints::alphabet`).
     HintsAlphabet(&'static str),
+    /// The video controls and the per-site speeds.
+    Video {
+        controls: bool,
+        rates: crate::video::RateTable,
+    },
+    MediaKeys(bool),
+    PipOnTabSwitch(bool),
+    /// SponsorBlock: on, asked about, and what each category does.
+    Sponsor {
+        enabled: bool,
+        asked: bool,
+        acts: crate::sponsor::ActTable,
+    },
+    BoostsEnabled(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -180,6 +194,26 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         }
         k if k == s::SCREENSHOT_OUTPUT.key => Applied::ScreenshotOutput(ShotOutput::from_id(v)?),
         k if k == s::HINTS_ALPHABET.key => Applied::HintsAlphabet(crate::hints::alphabet(v)),
+        k if [s::VIDEO_CONTROLS.key, s::VIDEO_RATES.key].contains(&k) => Applied::Video {
+            controls: flag(&s::VIDEO_CONTROLS, stored),
+            rates: map(&s::VIDEO_RATES, stored),
+        },
+        k if k == s::MEDIA_KEYS.key => Applied::MediaKeys(flag(def, stored)),
+        k if k == s::PIP_ON_TAB_SWITCH.key => Applied::PipOnTabSwitch(flag(def, stored)),
+        k if [
+            s::SPONSOR_ENABLED.key,
+            s::SPONSOR_ASKED.key,
+            s::SPONSOR_ACTIONS.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::Sponsor {
+                enabled: flag(&s::SPONSOR_ENABLED, stored),
+                asked: flag(&s::SPONSOR_ASKED, stored),
+                acts: map(&s::SPONSOR_ACTIONS, stored),
+            }
+        }
+        k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         _ => return None,
     })
 }
@@ -391,6 +425,36 @@ mod tests {
         assert_eq!(
             effect_of("hints.alphabet", &s),
             Some(Applied::HintsAlphabet("sadfjklewcmpgh"))
+        );
+    }
+
+    #[test]
+    fn media_rows_apply_as_one_value_each() {
+        let s = stored(&[
+            ("video.rates", r#"{"a.test":150}"#),
+            ("sponsor.enabled", "1"),
+            ("sponsor.actions", r#"{"intro":0}"#),
+        ]);
+        let video = Applied::Video {
+            controls: true,
+            rates: crate::video::RateTable::from([("a.test".into(), 150)]),
+        };
+        assert_eq!(effect_of("video.controls", &s), Some(video.clone()));
+        assert_eq!(effect_of("video.rates", &s), Some(video));
+        let sponsor = Applied::Sponsor {
+            enabled: true,
+            asked: false,
+            acts: crate::sponsor::ActTable::from([("intro".into(), 0)]),
+        };
+        assert_eq!(effect_of("sponsor.asked", &s), Some(sponsor));
+        assert_eq!(
+            effect_of("pip.on_tab_switch", &s),
+            Some(Applied::PipOnTabSwitch(false))
+        );
+        assert_eq!(effect_of("media.keys", &s), Some(Applied::MediaKeys(true)));
+        assert_eq!(
+            effect_of("boosts.enabled", &s),
+            Some(Applied::BoostsEnabled(true))
         );
     }
 

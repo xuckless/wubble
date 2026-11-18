@@ -11,6 +11,7 @@
 //! both drive the futures with whatever executor they have (`pollster::block_on` is enough).
 
 mod bookmarks;
+mod boosts;
 mod check;
 mod closed;
 mod downloads;
@@ -33,13 +34,14 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality, GlassScene,
-    HintsAlphabet, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions,
-    MiddleClickAutoscroll, OverlayScrollbars, PageThemeDefault, PageThemeSites, PasswordsAutofill,
-    PasswordsOfferToSave, ReaderDetect, ReaderFontSetting, ReaderSize, ReaderThemeSetting,
-    ReaderWidthSetting, ScreenshotOutput, SearchEngineChoice, Setting, SidebarModeSetting,
-    SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter, SleepKeepPinned, ZoomDefault,
-    text_of,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, BoostsEnabled, GlassQuality,
+    GlassScene, HintsAlphabet, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions,
+    MediaKeys, MiddleClickAutoscroll, OverlayScrollbars, PageThemeDefault, PageThemeSites,
+    PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch, ReaderDetect, ReaderFontSetting,
+    ReaderSize, ReaderThemeSetting, ReaderWidthSetting, ScreenshotOutput, SearchEngineChoice,
+    Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    SleepKeepPinned, SponsorActions, SponsorAsked, SponsorEnabled, VideoControls, VideoRates,
+    ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -66,6 +66,10 @@ pub enum Command {
     SetPageTheme(String, PageTheme),
     /// Capture the element at this point (physical px, view-relative).
     ShotElement((i32, i32)),
+    /// Turn this Boost on or off (its store id).
+    ToggleBoost(i64),
+    /// Open the Boost editor on this Boost.
+    EditBoost(i64),
     /// A divider between groups; never chosen.
     Separator,
 }

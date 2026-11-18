@@ -829,6 +829,7 @@ mod tests {
             Action::CyclePageTheme,
             Action::ScreenshotVisible,
             Action::ScreenshotFullPage,
+            Action::NewBoost,
         ];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);

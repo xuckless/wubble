@@ -69,6 +69,8 @@ enum SmokeArg {
     Session,
     Autofill,
     Builtins,
+    Video,
+    Boost,
     SessionPhase(Phase),
 }
 
@@ -85,6 +87,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
         None if value == "builtins" => Ok(SmokeArg::Builtins),
+        None if value == "video" => Ok(SmokeArg::Video),
+        None if value == "boost" => Ok(SmokeArg::Boost),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -93,7 +97,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
-             `pages`, `session`, `autofill`, `builtins` or `session-phase=1|2`"
+             `pages`, `session`, `autofill`, `builtins`, `video`, `boost` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -130,6 +134,11 @@ pub enum Smoke {
     /// Dark mode for pages, reader mode, link hints, screenshots and the PDF viewer on
     /// bundled pages.
     Builtins,
+    /// A loopback video page: the video controls, speed per site, SponsorBlock against a fake
+    /// endpoint, a media key, the picture-in-picture spike.
+    Video,
+    /// Boosts on loopback pages: CSS, a tint and a document-start script; a CSP page.
+    Boost,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -216,6 +225,8 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
+            (Some(SmokeArg::Video), None, None) => Smoke::Video,
+            (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -339,6 +350,19 @@ mod tests {
             Some(Command::Smoke(Smoke::Builtins))
         );
         assert!(parse(["wubble", "--smoke", "builtins", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
+    fn smoke_video_and_boost() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "video"]).ok(),
+            Some(Command::Smoke(Smoke::Video))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "boost"]).ok(),
+            Some(Command::Smoke(Smoke::Boost))
+        );
+        assert!(parse(["wubble", "--smoke", "video", "--url", "about:blank"]).is_err());
     }
 
     #[test]

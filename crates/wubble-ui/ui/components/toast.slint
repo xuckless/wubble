@@ -1,7 +1,10 @@
-import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Palette, Motion, Fonts, Spacing } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
 import { GlassTier } from "model.slint";
+import { IconButton } from "nav-buttons.slint";
+import { IconPaths } from "icon.slint";
+import { TextButton } from "settings.slint";
 
 // A brief notice: the zoom level after Ctrl +/-/0, "Press Esc to exit full screen". One
 // component for both. Written from scratch: the design repo has no toast. Look and motion are
@@ -9,18 +12,31 @@ import { GlassTier } from "model.slint";
 // 46 high, radius 14, rising 14 px from .95 on a 400 ms spring; on thick glass over content.
 // The host bumps `serial` with each notice; it shows for Shell.toast-shown, a later one restarts
 // the time. Pointer events pass through to the page.
+//
+// With an `action` (SponsorBlock's "Skipped sponsor: Undo", its one-time "Turn on" question) the
+// notice carries a button, stays a while longer, and takes the pointer over itself only. A
+// `sticky` one stays until answered or closed (its close button); `hide-serial` takes any away.
 export component Toast inherits Rectangle {
     in property <string> text;
     in property <int> serial;
+    in property <string> action;
+    in property <bool> sticky;
+    in property <int> hide-serial;
+    callback acted();
+    callback closed();
 
     property <bool> shown: false;
     changed serial => {
         root.shown = true;
         hide.running = false;
-        hide.running = true;
+        hide.running = !root.sticky;
+    }
+    changed hide-serial => {
+        root.shown = false;
+        hide.running = false;
     }
     hide := Timer {
-        interval: Shell.toast-shown;
+        interval: root.action == "" ? Shell.toast-shown : Shell.toast-action-shown;
         running: false;
         triggered => {
             root.shown = false;
@@ -28,7 +44,7 @@ export component Toast inherits Rectangle {
         }
     }
 
-    width: label.preferred-width + 2 * Shell.toast-pad;
+    width: row.preferred-width;
     height: Shell.toast-height;
 
     GlassPanel {
@@ -47,14 +63,40 @@ export component Toast inherits Rectangle {
             duration: root.shown ? Shell.menu-in : Shell.toast-out;
             easing: root.shown ? Motion.easeOut : Motion.easeIn;
         }
-        label := Text {
-            text: root.text;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            color: Palette.ink;
-            font-family: Fonts.ui;
-            font-size: Shell.toast-font;
-            font-weight: Shell.toast-weight;
+        // Only a notice with a button takes the pointer.
+        if root.shown && root.action != "": TouchArea { }
+        row := HorizontalLayout {
+            padding-left: Shell.toast-pad;
+            padding-right: root.action == "" ? Shell.toast-pad : Spacing.s2;
+            spacing: Spacing.s2;
+            alignment: center;
+            Text {
+                text: root.text;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Shell.toast-font;
+                font-weight: Shell.toast-weight;
+            }
+            if root.action != "": TextButton {
+                y: (parent.height - self.height) / 2;
+                text: root.action;
+                enabled: root.shown;
+                clicked => {
+                    root.shown = false;
+                    root.acted();
+                }
+            }
+            if root.action != "" && root.sticky: IconButton {
+                y: (parent.height - self.height) / 2;
+                icon-path: IconPaths.close;
+                enabled: root.shown;
+                clicked => {
+                    root.shown = false;
+                    root.closed();
+                }
+            }
         }
     }
 }

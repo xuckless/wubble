@@ -199,6 +199,17 @@ settings! {
     ReaderThemeSetting: ReaderTheme = defs::READER_THEME;
     ScreenshotOutput: ShotOutput = defs::SCREENSHOT_OUTPUT;
     HintsAlphabet: String = defs::HINTS_ALPHABET;
+    VideoControls: bool = defs::VIDEO_CONTROLS;
+    /// Per-site video speed (`wubble_core::video`): sites at normal speed are absent.
+    VideoRates: ZoomTable = defs::VIDEO_RATES;
+    MediaKeys: bool = defs::MEDIA_KEYS;
+    PipOnTabSwitch: bool = defs::PIP_ON_TAB_SWITCH;
+    /// Off until the user turns it on: a request wubble makes itself.
+    SponsorEnabled: bool = defs::SPONSOR_ENABLED;
+    SponsorAsked: bool = defs::SPONSOR_ASKED;
+    /// Category to skip 0 / show 1 / off 2 (`wubble_core::sponsor`).
+    SponsorActions: ZoomTable = defs::SPONSOR_ACTIONS;
+    BoostsEnabled: bool = defs::BOOSTS_ENABLED;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

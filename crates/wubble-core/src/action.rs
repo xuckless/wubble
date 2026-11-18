@@ -68,12 +68,14 @@ pub enum Action {
     ScreenshotRegion,
     ScreenshotVisible,
     ScreenshotFullPage,
+    /// The Boost editor on a new Boost for the visible site (`boost`).
+    NewBoost,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 46] = [
+const FIXED: [(&str, Action); 47] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -119,6 +121,7 @@ const FIXED: [(&str, Action); 46] = [
     ("screenshot", Action::ScreenshotRegion),
     ("screenshot-visible", Action::ScreenshotVisible),
     ("screenshot-full-page", Action::ScreenshotFullPage),
+    ("new-boost", Action::NewBoost),
     ("quit", Action::Quit),
 ];
 
@@ -183,7 +186,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 21] = [
+pub const PALETTE: [ActionInfo; 22] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -290,6 +293,11 @@ pub const PALETTE: [ActionInfo; 21] = [
         title: "Screenshot of the Full Page",
         keywords: "capture image whole long scrolling",
     },
+    ActionInfo {
+        action: Action::NewBoost,
+        title: "New Boost for This Site",
+        keywords: "css style script customise tweak userstyle userscript stylus arc",
+    },
 ];
 
 #[cfg(test)]
@@ -299,7 +307,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 64);
+        assert_eq!(all.len(), 65);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -310,7 +318,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 64);
+        assert_eq!(ids.len(), 65);
     }
 
     #[test]
@@ -364,6 +372,7 @@ mod tests {
                 Action::ScreenshotFullPage,
                 "Screenshot of the Full Page",
             ),
+            ("new-boost", Action::NewBoost, "New Boost for This Site"),
         ] {
             assert_eq!(Action::from_id(id), Some(action));
             assert_eq!(action.id(), id);

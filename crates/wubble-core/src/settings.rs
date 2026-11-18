@@ -347,6 +347,82 @@ pub const HINTS_ALPHABET: SettingDef = SettingDef {
     restart: false,
 };
 
+/// Video controls over every page's main video (`video`).
+pub const VIDEO_CONTROLS: SettingDef = SettingDef {
+    key: "video.controls",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Video controls on pages (speed, loop, frame)",
+    section: Section::General,
+    restart: false,
+};
+/// Per-site video speed (`video::RateTable`, host to rate in hundredths): sites at normal speed
+/// are absent. Set from the video controls.
+pub const VIDEO_RATES: SettingDef = SettingDef {
+    key: "video.rates",
+    kind: SettingKind::Map,
+    default: "{}",
+    label: "Site video speeds",
+    section: Section::Hidden,
+    restart: false,
+};
+/// Media keys and the system's media controls (MPRIS on Linux) for the playing tab.
+pub const MEDIA_KEYS: SettingDef = SettingDef {
+    key: "media.keys",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Media keys control the playing tab",
+    section: Section::General,
+    restart: false,
+};
+/// Leaving a tab whose video plays pops it into picture-in-picture (`pip`).
+pub const PIP_ON_TAB_SWITCH: SettingDef = SettingDef {
+    key: "pip.on_tab_switch",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Picture-in-picture when leaving a tab with a playing video",
+    section: Section::General,
+    restart: false,
+};
+/// SponsorBlock lookups (`sponsor`): a request wubble itself makes, so off until the user
+/// turns it on (the first YouTube video asks once). The label carries the data's attribution.
+pub const SPONSOR_ENABLED: SettingDef = SettingDef {
+    key: "sponsor.enabled",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Skip sponsor segments on YouTube (uses SponsorBlock data from https://sponsor.ajay.app/)",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The one-time "Skip sponsor segments?" question was answered.
+pub const SPONSOR_ASKED: SettingDef = SettingDef {
+    key: "sponsor.asked",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Asked about sponsor segments",
+    section: Section::Hidden,
+    restart: false,
+};
+/// Per-category choices (`sponsor::ActTable`, category to skip 0 / show 1 / off 2); absent
+/// categories use their default.
+pub const SPONSOR_ACTIONS: SettingDef = SettingDef {
+    key: "sponsor.actions",
+    kind: SettingKind::Map,
+    default: "{}",
+    label: "Sponsor segment categories",
+    section: Section::Hidden,
+    restart: false,
+};
+/// Boosts (`boost`): the kill switch for every site's own CSS and scripts.
+pub const BOOSTS_ENABLED: SettingDef = SettingDef {
+    key: "boosts.enabled",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Boosts: your own CSS and scripts for sites",
+    section: Section::Appearance,
+    restart: false,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -378,6 +454,14 @@ pub const ALL: &[&SettingDef] = &[
     &READER_THEME,
     &SCREENSHOT_OUTPUT,
     &HINTS_ALPHABET,
+    &VIDEO_CONTROLS,
+    &VIDEO_RATES,
+    &MEDIA_KEYS,
+    &PIP_ON_TAB_SWITCH,
+    &SPONSOR_ENABLED,
+    &SPONSOR_ASKED,
+    &SPONSOR_ACTIONS,
+    &BOOSTS_ENABLED,
 ];
 
 /// The definition of `key`, if it is a setting.
@@ -430,6 +514,23 @@ mod tests {
         const { assert!(OVERLAY_SCROLLBARS.restart && MIDDLE_CLICK_AUTOSCROLL.restart) };
         assert_eq!(find("glass.quality"), Some(&GLASS_QUALITY));
         assert_eq!(find("nope"), None);
+    }
+
+    #[test]
+    fn media_rows_start_as_decided() {
+        // A request wubble makes itself starts off (TODO.md "Decided": nothing phones home).
+        assert_eq!(SPONSOR_ENABLED.default, "0");
+        assert!(
+            SPONSOR_ENABLED
+                .label
+                .contains(crate::sponsor::DEFAULT_ENDPOINT)
+        );
+        assert_eq!(PIP_ON_TAB_SWITCH.default, "0");
+        assert_eq!(VIDEO_CONTROLS.default, "1");
+        assert_eq!(BOOSTS_ENABLED.default, "1");
+        for d in [&VIDEO_RATES, &SPONSOR_ASKED, &SPONSOR_ACTIONS] {
+            assert_eq!(d.section, Section::Hidden, "{}", d.key);
+        }
     }
 
     #[test]

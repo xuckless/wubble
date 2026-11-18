@@ -408,6 +408,7 @@ impl Host {
             &host,
             self.page_theme_of(&url),
         ));
+        entries.extend(self.boost_entries(&url));
         self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

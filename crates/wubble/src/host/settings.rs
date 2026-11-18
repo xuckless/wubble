@@ -114,6 +114,15 @@ impl Host {
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
+            Applied::Video { controls, rates } => self.set_video_settings(controls, rates),
+            Applied::MediaKeys(on) => self.set_media_keys(on),
+            Applied::PipOnTabSwitch(on) => self.set_pip_auto(on),
+            Applied::Sponsor {
+                enabled,
+                asked,
+                acts,
+            } => self.set_sponsor(enabled, asked, acts),
+            Applied::BoostsEnabled(on) => self.set_boosts_enabled(on),
             Applied::RestartOnly => {}
         }
     }

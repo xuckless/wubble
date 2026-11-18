@@ -44,11 +44,15 @@ impl Host {
         let Some(tab) = self.tab_of(view) else {
             return;
         };
-        // The built-ins' answers (`host/builtins.rs`).
+        // The built-ins' answers (`host/builtins.rs`, `host/media.rs`).
         if matches!(
             event,
             PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. }
         ) {
+            self.media_smoke_page(&event);
+            if self.media_answer(tab, &event) {
+                return;
+            }
             self.builtins_answer(tab, &event);
             self.builtin_smoke_step(crate::builtin_smoke::Input::Page(&event));
             return;
@@ -88,6 +92,8 @@ impl Host {
             }
             Routed::Find(e) => self.apply_find(tab, e),
             Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
+            // Picture-in-picture's fullscreen is the video's, in its own window.
+            Routed::Fullscreen(true) if self.pip_tab() == Some(tab) => {}
             Routed::Fullscreen(true) if visible => {
                 self.apply_screen(window, ScreenEvent::PageEntered(tab));
             }
@@ -98,6 +104,7 @@ impl Host {
                 }
             }
             Routed::Fullscreen(false) => {
+                self.pip_fullscreen_left(tab);
                 self.apply_screen(window, ScreenEvent::PageLeft(tab));
             }
             Routed::Muted(muted) => {
@@ -105,6 +112,7 @@ impl Host {
                 self.after_change();
             }
             Routed::Audible(audible) => {
+                self.media_audible(audible);
                 self.audio.entry(tab).or_default().audible = audible;
                 self.after_change();
             }
@@ -276,6 +284,8 @@ impl Host {
                     self.set_site_theme(&host, theme)
                 }
                 MenuEffect::Run(MenuCommand::ShotElement(at)) => self.shot_element(tab, at),
+                MenuEffect::Run(MenuCommand::ToggleBoost(id)) => self.toggle_boost(id),
+                MenuEffect::Run(MenuCommand::EditBoost(id)) => self.edit_boost(id),
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
         }
@@ -580,8 +590,24 @@ impl Host {
     // ----- shell helpers
 
     pub(super) fn toast(&mut self, window: &AppWindow, text: &str) {
+        self.toast_replaced();
+        self.show_toast(window, text, "", false);
+    }
+
+    /// A notice with a button (`action`); `sticky`: it stays until answered. What the button
+    /// does is the caller's to remember (`host/media.rs`).
+    pub(super) fn toast_with(&mut self, text: &str, action: &str, sticky: bool) {
+        self.toast_replaced();
+        if let Some(window) = self.window.upgrade() {
+            self.show_toast(&window, text, action, sticky);
+        }
+    }
+
+    fn show_toast(&mut self, window: &AppWindow, text: &str, action: &str, sticky: bool) {
         self.toast_serial = self.toast_serial.wrapping_add(1);
         window.set_toast_text(text.into());
+        window.set_toast_action(action.into());
+        window.set_toast_sticky(sticky);
         window.set_toast_serial(self.toast_serial);
     }
 

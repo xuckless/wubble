@@ -149,6 +149,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ScreenshotRegion => builtin(Builtin::Shot(ShotRequest::Region)),
         Action::ScreenshotVisible => builtin(Builtin::Shot(ShotRequest::Visible)),
         Action::ScreenshotFullPage => builtin(Builtin::Shot(ShotRequest::FullPage)),
+        Action::NewBoost => builtin(Builtin::NewBoost),
         Action::Quit => Plan::Quit,
         Action::NewWindow
         | Action::NewSpace
@@ -255,6 +256,7 @@ mod tests {
                 Action::ScreenshotFullPage,
                 Builtin::Shot(ShotRequest::FullPage),
             ),
+            (Action::NewBoost, Builtin::NewBoost),
         ] {
             assert_eq!(plan(action, &m), Plan::Builtin(want), "{action:?}");
         }
@@ -280,6 +282,7 @@ mod tests {
             Action::ToggleReader,
             Action::ScreenshotRegion,
             Action::CyclePageTheme,
+            Action::NewBoost,
         ] {
             assert_eq!(plan(action, &m), Plan::Nothing, "{action:?}");
         }

@@ -42,6 +42,14 @@ png = "0.18"
 # An image on the clipboard (Slint's own clipboard is text only). Already in Cargo.lock through
 # Slint's winit backend; `wayland-data-control` copies on Wayland (MIT OR Apache-2.0).
 arboard = { version = "3.7", features = ["image-data", "wayland-data-control"] }
+# SponsorBlock's lookup (`sponsor_net.rs`); already in Cargo.lock through wubble-blocker
+# (MIT OR Apache-2.0).
+ureq = "3"
+# The SponsorBlock endpoint's host (loopback or not); a workspace dependency already.
+url.workspace = true
+# Media keys and the system's media controls: MPRIS over zbus on Linux (pure Rust, no libdbus;
+# zbus is already in Cargo.lock), the Now Playing centre on macOS, SMTC on Windows (MIT).
+souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
 
 [dev-dependencies]
 tempfile = "3"

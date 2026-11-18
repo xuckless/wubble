@@ -176,6 +176,19 @@ export global Shell {
     out property <duration> toast-in: 400ms;
     out property <duration> toast-out: 190ms;
     out property <duration> toast-shown: 1500ms;
+    // A notice with a button (SponsorBlock's undo) stays as long as it can be undone
+    // (`wubble_core::sponsor::TOAST_MS`).
+    out property <duration> toast-action-shown: 6000ms;
+    // The Boost editor docked beside the page.
+    out property <length> boost-panel-width: 340px;
+    out property <length> boost-code-height: 150px;
+    out property <length> boost-swatch: 22px;
+    out property <length> boost-swatch-ring: 2px;
+    out property <length> boost-swatch-rim: 1px;
+    // The video controls' progress bar: the rail, a segment's least width, the knob.
+    out property <length> video-rail: 4px;
+    out property <length> video-mark-min: 2px;
+    out property <length> video-knob: 10px;
     // The find bar: an .ur-o-surface strip at the content's top right (Chromium's place), the
     // command bar's input metrics.
     out property <length> find-width: 360px;

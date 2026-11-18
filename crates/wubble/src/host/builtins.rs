@@ -76,6 +76,8 @@ pub enum Builtin {
     LinkHints,
     ToggleReader,
     Shot(ShotRequest),
+    /// The Boost editor on a new Boost for the visible site.
+    NewBoost,
 }
 
 impl Host {
@@ -88,6 +90,7 @@ impl Host {
             Builtin::LinkHints => self.hint_event(tab, HintEvent::Toggle),
             Builtin::ToggleReader => self.reader_event(tab, ReaderEvent::Toggle),
             Builtin::Shot(request) => self.shot_event(tab, ShotEvent::Request(request)),
+            Builtin::NewBoost => self.new_boost(),
         }
     }
 
@@ -138,12 +141,14 @@ impl Host {
     pub(super) fn builtins_view_opened(&mut self, tab: TabId, url: &str) {
         self.builtins.applied.remove(&tab);
         self.sync_page_theme(tab, Some(url));
+        self.boosts_view_opened(tab, url);
     }
 
     /// `tab` is about to load `url`: its theme goes first, so the page never shows in the
     /// other one.
     pub(super) fn builtins_loading(&mut self, tab: TabId, url: &str) {
         self.sync_page_theme(tab, Some(url));
+        self.boosts_loading(tab, url);
     }
 
     /// The tab's view is gone (closed, discarded): forget what it was told.
@@ -155,6 +160,8 @@ impl Host {
             self.builtins.hints = None;
         }
         self.shot_page_gone(tab);
+        self.boosts_view_gone(tab);
+        self.media_view_gone(tab);
     }
 
     /// No answer can come from `tab`'s page any more: a screenshot of it ends.
@@ -167,8 +174,13 @@ impl Host {
     /// What the built-ins take from navigation. Called before the host's own handling.
     pub(super) fn builtins_web(&mut self, tab: TabId, event: &WebEvent) {
         match event {
-            WebEvent::UrlChanged(url) => self.sync_page_theme(tab, Some(url)),
+            WebEvent::UrlChanged(url) => {
+                self.sync_page_theme(tab, Some(url));
+                self.boosts_committed(tab, url);
+            }
             WebEvent::LoadStarted => {
+                self.media_page_changed(tab);
+                self.boosts_started(tab);
                 self.builtins.pdf.remove(&tab);
                 self.reader_event(tab, ReaderEvent::PageStarted);
                 if self.hints_tab() == Some(tab) {
@@ -569,7 +581,7 @@ impl Host {
                     };
                     self.shot_event(tab, event);
                 }
-                ShotEffect::Save(png) => self.save_shot(tab, png),
+                ShotEffect::Save(png) => self.save_shot(tab, png, false),
                 ShotEffect::Toast(text) => {
                     if let Some(window) = self.window.upgrade() {
                         self.toast(&window, text);
@@ -580,8 +592,9 @@ impl Host {
     }
 
     /// Hands the PNG to the saver thread: the file in the downloads folder, the clipboard, as
-    /// the setting says. Its outcome comes back on the Slint thread as `Saved`.
-    fn save_shot(&mut self, tab: TabId, png: String) {
+    /// the setting says. Its outcome comes back on the Slint thread as `Saved`. `frame`: a video
+    /// frame from the video controls, not the screenshot machine's.
+    pub(super) fn save_shot(&mut self, tab: TabId, png: String, frame: bool) {
         let output = self.builtins.output;
         let title = self
             .model
@@ -607,16 +620,28 @@ impl Host {
                 saved.file = Some(false);
             }
             let _ = slint::invoke_from_event_loop(move || {
-                crate::with_host(|host| host.shot_saved(tab, path, saved));
+                crate::with_host(|host| host.shot_saved(tab, path, saved, frame));
             });
         });
     }
 
-    fn shot_saved(&mut self, tab: TabId, path: Option<std::path::PathBuf>, saved: Saved) {
+    fn shot_saved(
+        &mut self,
+        tab: TabId,
+        path: Option<std::path::PathBuf>,
+        saved: Saved,
+        frame: bool,
+    ) {
         if let Some(path) = &path {
             self.downloads.release(path);
         }
         let text = shot::saved_text(saved.file, saved.clipboard);
+        if frame {
+            if let Some(window) = self.window.upgrade() {
+                self.toast(&window, text);
+            }
+            return;
+        }
         self.shot_event(tab, ShotEvent::Saved(text));
         if self.checks.builtin_smoke.is_some() {
             let seen = self.builtin_smoke_seen();
@@ -625,7 +650,7 @@ impl Host {
     }
 
     /// Where the visible pane's page starts in the content area, logical px.
-    fn content_origin(&self, window: &AppWindow) -> (f32, f32) {
+    pub(super) fn content_origin(&self, window: &AppWindow) -> (f32, f32) {
         let origin = self.focus_origin(window);
         (
             origin.0 - window.get_content_x(),

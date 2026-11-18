@@ -13,3 +13,5 @@ serde_json.workspace = true
 zeroize = "1"
 url.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+# The SponsorBlock lookup's hash prefix (`sponsor`); pure Rust, already in Cargo.lock (MIT OR Apache-2.0).
+sha2 = "0.11"

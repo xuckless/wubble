@@ -1,0 +1,163 @@
+import { Palette, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { GlassTier, VideoView } from "model.slint";
+import { IconButton } from "nav-buttons.slint";
+import { IconPaths } from "icon.slint";
+import { TextButton } from "settings.slint";
+
+// Video controls over the page's main video (wubble_core::video): play, a progress bar with the
+// SponsorBlock segments on it, speed, loop, picture-in-picture, a frame screenshot, mute and the
+// media downloader's save. Written from scratch: the design repo has no media controls. Built
+// from the house's parts: the reader controls' thick glass strip over content (GlassPanel), the
+// sidebar's icon buttons (PressableButton) and the settings page's TextButton for the speeds.
+// Only the strip and the speed menu take the pointer; the rest of the video stays the page's.
+// Intents only: `command(name, value)` with name play, speeds, rate, loop, mute, seek, pip,
+// frame, save (`value`: the rate, or the seek fraction).
+export component VideoControls inherits Rectangle {
+    in property <VideoView> video;
+    // The speed menu's rows, slowest first (`wubble_core::video::RATES`).
+    in property <[string]> rates;
+    callback command(string, float);
+    // The pointer is over the controls (they stay while it is).
+    callback hovered(bool);
+
+    x: root.video.x;
+    y: root.video.y;
+    width: root.video.w;
+    height: root.video.h;
+    visible: root.video.w > 0;
+
+    strip := GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        x: Spacing.s2;
+        width: max(0px, root.width - 2 * Spacing.s2);
+        height: Shell.icon-button + 2 * Spacing.s1;
+        y: root.height - self.height - Spacing.s2 + (root.video.open ? 0px : Shell.toast-rise);
+        opacity: root.video.open ? 1 : 0;
+        animate opacity, y {
+            duration: root.video.open ? Shell.menu-in : Shell.menu-out;
+            easing: root.video.open ? Motion.easeOut : Motion.easeIn;
+        }
+        hover := TouchArea {
+            enabled: root.video.open;
+            changed has-hover => {
+                root.hovered(self.has-hover);
+            }
+        }
+        if root.video.open: HorizontalLayout {
+            padding: Spacing.s1;
+            spacing: Spacing.s1;
+            IconButton {
+                icon-path: root.video.paused ? IconPaths.play : IconPaths.pause;
+                clicked => {
+                    root.command("play", 0);
+                }
+            }
+            // The progress bar: the played part, the segments, a click seeks.
+            bar := Rectangle {
+                horizontal-stretch: 1;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: Shell.video-rail;
+                    border-radius: Shell.video-rail / 2;
+                    background: Shell.track;
+                }
+                for mark in root.video.marks: Rectangle {
+                    x: mark.from * parent.width;
+                    width: max(Shell.video-mark-min, (mark.to - mark.from) * parent.width);
+                    y: (parent.height - self.height) / 2;
+                    height: Shell.video-rail;
+                    background: mark.colour;
+                    opacity: 0.85;
+                }
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: root.video.progress * parent.width;
+                    height: Shell.video-rail;
+                    border-radius: Shell.video-rail / 2;
+                    background: Palette.ink.transparentize(0.25);
+                }
+                Rectangle {
+                    x: root.video.progress * parent.width - self.width / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: Shell.video-knob;
+                    height: Shell.video-knob;
+                    border-radius: Shell.video-knob / 2;
+                    background: Palette.ink;
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.command("seek", clamp(self.mouse-x / self.width, 0, 1));
+                    }
+                }
+            }
+            TextButton {
+                text: root.video.rate;
+                clicked => {
+                    root.command("speeds", 0);
+                }
+            }
+            IconButton {
+                icon-path: IconPaths.loop;
+                background: root.video.looped ? Shell.icon-button-hover.with-alpha(0.18) : self.hovered ? Shell.icon-button-hover : transparent;
+                clicked => {
+                    root.command("loop", 0);
+                }
+            }
+            if root.video.can-pip: IconButton {
+                icon-path: IconPaths.pip;
+                clicked => {
+                    root.command("pip", 0);
+                }
+            }
+            IconButton {
+                icon-path: IconPaths.camera;
+                clicked => {
+                    root.command("frame", 0);
+                }
+            }
+            IconButton {
+                icon-path: root.video.muted ? IconPaths.speaker-muted : IconPaths.speaker;
+                clicked => {
+                    root.command("mute", 0);
+                }
+            }
+            if root.video.can-save: IconButton {
+                icon-path: IconPaths.download;
+                clicked => {
+                    root.command("save", 0);
+                }
+            }
+        }
+    }
+
+    // The speed menu, over the strip's right end.
+    if root.video.open && root.video.speeds: GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        x: strip.x + strip.width - self.width;
+        y: strip.y - self.height - Spacing.s1;
+        width: list.preferred-width;
+        height: min(list.preferred-height, strip.y - Spacing.s1);
+        clip: true;
+        TouchArea {
+            changed has-hover => {
+                root.hovered(self.has-hover);
+            }
+        }
+        list := VerticalLayout {
+            padding: Spacing.s1;
+            for rate[i] in root.rates: TextButton {
+                text: (i == root.video.rate-index ? "\u{2713} " : "    ") + rate;
+                clicked => {
+                    root.command("rate", i);
+                }
+            }
+        }
+    }
+}

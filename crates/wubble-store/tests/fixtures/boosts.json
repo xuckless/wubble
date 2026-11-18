@@ -1,0 +1,5 @@
+[
+  {"name": "Calm news", "site": "news.example", "css": "aside{display:none!important}", "js": "", "js_at": 0, "tint": null, "tint_strength": 0, "font": null, "enabled": true},
+  {"name": "Docs reading", "site": "https://docs.example/*", "css": "body{max-width:70ch;margin:auto}", "js": "document.title = 'docs';", "js_at": 1, "tint": 16764057, "tint_strength": 20, "font": "Geist", "enabled": true},
+  {"name": "Off for now", "site": "*.example.org", "css": "", "js": "console.log(\"hi\")", "js_at": 0, "tint": null, "tint_strength": 0, "font": null, "enabled": false}
+]

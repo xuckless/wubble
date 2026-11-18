@@ -14,6 +14,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (8, include_str!("../sql/008_favicons.sql")),
     (9, include_str!("../sql/009_logins_vault_shape.sql")),
     (10, include_str!("../sql/010_space_icons.sql")),
+    (11, include_str!("../sql/011_boosts.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -90,6 +91,7 @@ mod tests {
                 "downloads",
                 "favicons",
                 "favicon_origins",
+                "boosts",
             ] {
                 let mut rows = conn
                     .query(
@@ -157,6 +159,7 @@ mod tests {
                 ("SELECT count(*) FROM site_permissions", 0),
                 ("SELECT count(*) FROM downloads", 0),
                 ("SELECT count(*) FROM split_panes", 0),
+                ("SELECT count(*) FROM boosts", 0),
             ] {
                 assert_eq!(count(&conn, sql).await, want, "{sql}");
             }

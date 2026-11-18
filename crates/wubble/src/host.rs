@@ -15,8 +15,10 @@
 //! keymap, and every action runs through [`Host::perform`].
 
 mod autofill;
+mod boost;
 mod builtins;
 mod downloads;
+mod media;
 mod pages;
 mod panes;
 mod settings;
@@ -218,6 +220,10 @@ pub struct Checks {
     pub pages_smoke: Option<PagesSmoke>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
+    /// `--smoke video` and `--smoke boost`.
+    pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
+    /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
+    pub sponsor_endpoint: Option<String>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -361,6 +367,12 @@ pub struct Host {
     pace: Option<Pace>,
     /// Dark mode for pages, reader mode, link hints, screenshots (`host/builtins.rs`).
     builtins: builtins::Builtins,
+    /// Boosts and the page kit (`host/boost.rs`).
+    boosts: boost::Boosts,
+    /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/media.rs`).
+    media: media::Media,
+    /// `--smoke video` or `--smoke boost` passed.
+    pub media_passed: Option<String>,
 }
 
 impl Host {
@@ -388,6 +400,7 @@ impl Host {
             site_permissions,
             downloads,
             favicons,
+            boosts,
         } = loaded;
         let favicons = model
             .tabs
@@ -407,6 +420,12 @@ impl Host {
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
         let begin_frames = checks.begin_frames;
+        let media = match checks.sponsor_endpoint.clone() {
+            Some(endpoint) => {
+                media::Media::for_smoke(endpoint, crate::media_smoke::SMOKE_VIDEO.into())
+            }
+            None => media::Media::default(),
+        };
         let mut host = Self {
             engine,
             window: window.as_weak(),
@@ -482,6 +501,9 @@ impl Host {
                 timer: slint::Timer::default(),
             }),
             builtins: builtins::Builtins::default(),
+            boosts: boost::Boosts::new(boosts),
+            media,
+            media_passed: None,
         };
         host.replay_settings();
         host.render_downloads(window);
@@ -635,6 +657,9 @@ impl Host {
         );
         self.render_surfaces(&window);
         self.render_builtins(&window);
+        self.media_after_change();
+        self.render_video(&window);
+        self.render_boost(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
         self.render_pages();
@@ -754,6 +779,7 @@ impl Host {
         self.split_smoke_step(&window);
         self.autofill_smoke_worked();
         self.builtin_smoke_worked();
+        self.media_smoke_worked();
         let framed = self
             .model
             .visible_tab()
@@ -909,6 +935,9 @@ impl Host {
         self.block_smoke_step(block_smoke::Input::Web(&event));
         self.builtins_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
+        if self.checks.media_smoke.is_some() {
+            self.media_smoke_step(crate::media_smoke::Input::Web(&event));
+        }
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -1907,6 +1936,7 @@ impl Host {
         if let Some(view) = self.pane_view(pane) {
             view.mouse_move(point, &modifiers, now);
         }
+        self.media_pointer(pane, Some(point));
     }
 
     pub fn pointer_left(&mut self, pane: i32, point: Point) {
@@ -1915,6 +1945,7 @@ impl Host {
         if let Some(view) = self.pane_view(pane) {
             view.mouse_leave(point, &modifiers, now);
         }
+        self.media_pointer(pane, None);
     }
 
     /// A press in a pane that is not focused focuses it first (the design's pane focus on
