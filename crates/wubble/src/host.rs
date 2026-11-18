@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
@@ -52,6 +53,8 @@ use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 
 use crate::backdrop::Glass;
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
+use crate::block_smoke::{self, BlockSmoke};
+use crate::blocking::Blocking;
 use crate::ime::Ime;
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
@@ -191,6 +194,7 @@ pub struct Checks {
     pub tabs_smoke: Option<TabsSmoke>,
     pub session_smoke: Option<SessionSmoke>,
     pub page_smoke: Option<PageSmoke>,
+    pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
@@ -297,6 +301,10 @@ pub struct Host {
     find_focus: i32,
     /// The zoom `--smoke page` passed with.
     pub page_zoom: Option<u32>,
+    /// The blocked count `--smoke block` passed with.
+    pub blocked_seen: Option<u32>,
+    /// The content blocker, whose per-view counts the tab rows show.
+    blocking: Arc<Blocking>,
     /// Remembered permission decisions (one owner; stored through the store).
     site_permissions: SitePermissions,
     /// Certificate errors the user proceeded past, for this run only.
@@ -322,6 +330,7 @@ impl Host {
         open: Option<String>,
         checks: Checks,
         downloads_dir: Option<PathBuf>,
+        blocking: Arc<Blocking>,
     ) -> Self {
         let Loaded {
             model,
@@ -405,6 +414,8 @@ impl Host {
             toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
+            blocked_seen: None,
+            blocking,
             site_permissions,
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
@@ -544,14 +555,26 @@ impl Host {
         self.sync_focus(&window);
         let tabs = &self.model.tabs;
         self.favicons.retain(|tab, _| tabs.contains_key(tab));
+        let blocked = self.blocked_counts();
         crate::bind::render(
             &window,
-            &crate::shell::view_model(&self.model, &self.audio),
+            &crate::shell::view_model(&self.model, &self.audio, &blocked),
             &self.favicons,
         );
         self.render_surfaces(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
+    }
+
+    /// The blocker's count for each tab with a view.
+    fn blocked_counts(&mut self) -> crate::shell::BlockedMap {
+        let ids: Vec<_> = self.views.iter().map(|(&tab, &id)| (tab, id)).collect();
+        ids.into_iter()
+            .filter_map(|(tab, id)| {
+                let browser = self.engine.view(id)?.browser_id();
+                Some((tab, self.blocking.blocked(browser)))
+            })
+            .collect()
     }
 
     /// Shows `icon` on `tab`'s row if it is still its page's icon (a late image of the previous
@@ -643,6 +666,10 @@ impl Host {
             .visible_tab()
             .is_some_and(|t| self.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
+        if self.checks.block_smoke.is_some() {
+            let blocked = self.visible_blocked();
+            self.block_smoke_step(block_smoke::Input::Worked { blocked });
+        }
         if self.checks.page_smoke.is_some() {
             let view_width = self.model.visible_tab().map_or(0.0, |t| {
                 self.pane_layout(&window, t).size.width as f32 / window.window().scale_factor()
@@ -779,6 +806,7 @@ impl Host {
         };
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
+        self.block_smoke_step(block_smoke::Input::Web(&event));
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -1240,6 +1268,30 @@ impl Host {
                 quit();
             }
             Some(split_smoke::Action::Fail(reason)) => self.fail(reason),
+            None => {}
+        }
+    }
+
+    fn visible_blocked(&mut self) -> u32 {
+        let id = self.model.visible_tab().and_then(|t| self.views.get(&t));
+        let browser = id
+            .copied()
+            .and_then(|id| self.engine.view(id)?.browser_id().into());
+        browser.map_or(0, |b| self.blocking.blocked(b))
+    }
+
+    fn block_smoke_step(&mut self, input: block_smoke::Input) {
+        let Some(state) = self.checks.block_smoke.take() else {
+            return;
+        };
+        let (state, action) = block_smoke::next(state, input);
+        self.checks.block_smoke = Some(state);
+        match action {
+            Some(block_smoke::Action::Pass(blocked)) => {
+                self.blocked_seen = Some(blocked);
+                quit();
+            }
+            Some(block_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
         }
     }
