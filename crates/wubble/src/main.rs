@@ -978,6 +978,7 @@ fn run(
     }
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
+    wubble_ui::window::no_os_window_restoration();
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("femtovg-wgpu".into())
