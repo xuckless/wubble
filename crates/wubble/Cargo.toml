@@ -13,3 +13,4 @@ wubble-engine.workspace = true
 wubble-gfx.workspace = true
 wubble-ui.workspace = true
 slint.workspace = true
+clap.workspace = true

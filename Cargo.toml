@@ -30,6 +30,7 @@ welding = { version = "0.15", features = ["cef-runtime"] }
 # Pinned by welding 0.15 (cef ^154.5); only one cef-dll-sys may be linked. Bump together.
 cef = "154.5"
 serde_json = "1"
+clap = { version = "4.6", features = ["derive"] }
 
 [profile.dev]
 opt-level = 1

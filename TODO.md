@@ -36,12 +36,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Search | First-run choice between Google and DuckDuckGo. Suggestions are local (tabs/history/bookmarks); live engine suggestions exist behind a flag, off by default, and never send typed addresses |
 | Network on its own | No telemetry. Crash reports are opt-in and open a GitHub issue; designed at ship time (M7) |
 | Tab sleeping | Freeze after 1 min hidden, discard after 15 min, discard immediately under critical memory pressure. Pinned tabs freeze but never discard. Busy tabs (audio, capture) are left alone |
+| CEF sandbox | Off on Linux for now: welding `CefSandboxMode::UnsandboxedTrustedContent` (`no_sandbox=1`) in both `wubble-engine` and `wubble-helper`. Turned on by the M1 item "Sandbox enabled on all platforms" |
+| CEF message pump (interim) | A repeating 8 ms `slint::Timer` calls `Engine::tick` (`do_message_loop_work`), with CEF's `external_message_pump` on. Not schedule-driven (`OnScheduleMessagePumpWork`) because welding's `CefRuntime` owns the CEF `App` and exposes no browser-process handler, and the welding producers need that runtime. The same polled pump is what welding's README and the cef-rs `osr` example use. Replaced by compositor-driven ticks in "Frame pacing" |
+| Helper binary | `wubble-helper` is a separate package, so `cargo build --workspace` must run before `cargo run -p wubble`; the engine refuses to start with a message saying so if the helper is missing |
 
 ## Layout
 
 ```
 crates/wubble          main binary: wires engine + gfx + ui
-crates/wubble-helper   CEF subprocess entry point (renderer/GPU/utility), no Slint or wgpu
+crates/wubble-helper   CEF subprocess entry point (renderer/GPU/utility), no Slint
 crates/wubble-core     tabs, spaces, sleep policy, session — pure logic, unit-tested
 crates/wubble-engine   the only crate that names CEF types
 crates/wubble-gfx      the only crate that touches native texture handles
@@ -60,8 +63,8 @@ Exit: one live page inside the Slint window at display refresh rate, with zero C
 copies, on Linux/Wayland/NVIDIA. Nothing else starts until this passes.
 
 - [x] Workspace skeleton; `cargo check --workspace` passes against prebuilt CEF
-- [ ] CEF init + external message pump integrated with Slint's winit event loop
-- [ ] `wubble-helper` runs `execute_process`; subprocesses start from it
+- [x] CEF init + external message pump integrated with Slint's winit event loop (`wubble --smoke boot` checks it)
+- [x] `wubble-helper` runs `execute_process`; subprocesses start from it
 - [ ] Linux: `OnAcceleratedPaint` dmabuf → Vulkan external memory → `wgpu::Texture` on Slint's device
 - [ ] Texture → `slint::Image` → `AppWindow.web-frame`
 - [ ] Confirm which Slint renderer accepts wgpu textures at full speed (femtovg-wgpu vs vello vs skia-vulkan)
