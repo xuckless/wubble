@@ -1,10 +1,8 @@
-//! Storage behind a small trait so wubble-store can provide the table later.
+//! Storage behind a small trait. Production uses `store_adapter::StoreLogins` (wubble-store's
+//! `logins` table); `MemoryStore` serves tests.
 
 use crate::origin::Origin;
 use crate::record::{RecordId, StoredRecord};
-
-/// SQL for the `logins` table (SQLite/Turso compatible, like wubble-store's).
-pub const MIGRATION_001: &str = include_str!("../sql/001_logins.sql");
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
@@ -18,7 +16,8 @@ pub enum StoreError {
 
 pub trait LoginStore {
     fn insert(&mut self, record: StoredRecord) -> Result<(), StoreError>;
-    /// Replace an existing row.
+    /// Replace the encrypted secrets of an existing row. The vault only ever re-encrypts: the
+    /// other fields are never changed through `update`.
     fn update(&mut self, record: StoredRecord) -> Result<(), StoreError>;
     fn delete(&mut self, id: &RecordId) -> Result<bool, StoreError>;
     fn get(&self, id: &RecordId) -> Result<Option<StoredRecord>, StoreError>;
@@ -92,17 +91,5 @@ impl LoginStore for MemoryStore {
         row.times_used += 1;
         row.last_used_ms = Some(now_ms);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn migration_text_is_present() {
-        assert!(MIGRATION_001.contains("CREATE TABLE logins"));
-        assert!(MIGRATION_001.contains("logins_origin"));
-        assert!(MIGRATION_001.contains("password_enc"));
     }
 }

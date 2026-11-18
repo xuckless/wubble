@@ -7858,9 +7858,13 @@ dependencies = [
  "aes-gcm",
  "csv",
  "keyring",
+ "pollster",
  "rand 0.8.8",
+ "tempfile",
  "thiserror 2.0.21",
  "url",
+ "wubble-core",
+ "wubble-store",
  "zeroize",
 ]
 

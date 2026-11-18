@@ -40,6 +40,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate, pinned `=0.9.0-pre.5`, default features off because `mimalloc` would install a global allocator; no async runtime needed) with a declared schema and `PRAGMA user_version` migrations: Spaces, tabs, session, history, bookmarks, settings; passwords get their own encrypted store later. Chromium keeps only cookies/cache per container |
 | Persistence in the app | One store thread owns the `Store` (created on it, futures driven by `pollster::block_on`), requests over a channel, replies hop to the Slint thread with `invoke_from_event_loop`; only the newest queued save runs. Save policy `persist::should_save`: after 20 session changes, or one quiet lifecycle tick (5 s) after a change, and always at orderly shutdown. A database that fails to open or load is left untouched and the run has no persistence. Profile = `--profile` or the per-user data dir (`wubble_engine::app::user_data_dir`: XDG on Linux, `~/Library/Application Support/wubble`, `%APPDATA%\wubble`); DB `wubble.db`, CEF cache `cef/` inside it (the old cache path). Smokes use a temporary profile |
 | Session storage | `wubble-store` loads and saves `wubble_core::model::Model` directly (`load_session`/`save_session`, one transaction, schema v2). Restored tabs are Discarded, idle, no opener; scroll, busy, folder collapse and id counters are not stored (counters derived as max id + 1 by `Model::from_parts`, so a freed highest id can be reused after restart). `Tab.container` is the effective container, so it covers the per-tab override. Recently-closed list bounded to 25. Settings are typed through one `settings!` table |
+| Vault storage and settings table | One `logins` schema, the vault's (text id generated client side because it is AEAD associated data; migration 4 drops the store's earlier v3 table, which nothing wrote). The vault trait stays sync: `wubble_vault::StoreLogins` owns the `Store` and `pollster::block_on`s each call, so a `Vault` lives only on the store thread (never Slint's). `Vault::unlock` returns `UnlockOutcome { Ready, NewKey { unreadable }, Unreadable { rows }, Unavailable }` so the UI can say saved passwords cannot be read. Settings: `wubble_core::settings::ALL` (key, kind, storage-text default, label, section, restart) is the one table; the store's typed `settings!` and the settings page both derive from it. Page view-models take plain rows defined in core (`pages`); the downloads one is filled by the host from the engine because there is no downloads table (persisting finished downloads is a possible migration 5) |
 | Containers | Each Space has a default container; a tab can be reopened in another, and Spaces may share one |
 | Deleting a Space | Closes its tabs (as Zen does); the UI confirms first. The last Space cannot be deleted |
 | Ctrl+T in the model | `Command::OpenCommandBar` returns only `Effect::ShowCommandBar`; the tab exists once `NewTab` is sent after a choice |
@@ -165,13 +166,13 @@ Daily-drive set
 - [x] Turso schema + migrations (`wubble-store`): session, history, bookmarks table, settings
 - [x] Session restore and history recording wired into the app: the session loads at start (only the visible tab gets a view; the rest restore on activation), saves by `persist::should_save` and at shutdown; visits (typed when started from the bar) and titles are recorded for http(s) pages; closed tabs feed reopen-closed-tab; sidebar width and compact mode persist (`--smoke session`)
 - [x] First-run: search engine choice (Google / DuckDuckGo), interim: the command bar offers both as its first rows until one is stored; a proper first-run screen comes later
-- [x] Store: bookmarks tree API and command-bar search, import apply, `logins` table with byte-row CRUD for the vault, history upkeep (expire, clear range, forget URL/site, retention setting), `check_consistency` (schema v3)
+- [x] Store: bookmarks tree API and command-bar search, import apply, `logins` table with byte-row CRUD for the vault, history upkeep (expire, clear range, forget URL/site, retention setting), `check_consistency` (schema v4)
 
 After daily-drive
 - [ ] Component sheet: elastic slider, toggle, pin, download button, toolbar dock + gliding tooltip, menus, checkboxes
 - [ ] Split view (2–4 panes); glance / peek
 - [ ] Tab drag: reorder, between Spaces, into split, out to a window (reorder: the UI emits `tab-moved(id, to)`; the host's `on_tab_moved` → `Command::MoveTab` is not wired)
-- [ ] Bookmarks, settings UI, keybinding editor
+- [~] Bookmarks, settings UI, keybinding editor: view-models done in `wubble_core::{pages,settings}` (history by day with search, bookmark tree and flat list, downloads, passwords metadata, settings page from the one `SettingDef` table; `Store::{list_visits, all_bookmarks}`); the Slint pages are open
 - [ ] Touch sizing (44 px rows)
 
 ## M3 — Memory and sleeping
@@ -196,7 +197,8 @@ After daily-drive
   - [ ] List fetch behind an off-by-default flag, CEF network hook, cosmetic injection, per-site toggle UI
 - [~] Built-in password manager: encrypted store keyed from the OS keyring, form detection and fill, save prompt, generator, import from Zen/Arc
   - [x] `wubble-vault` crate: keyring-keyed AES-GCM store, origin matching, generator, Firefox/Chromium CSV parser
-  - [ ] Form detection and fill, save prompt, store table in wubble-store, Zen/Arc import
+  - [x] Store table: the vault's `logins` shape is the single schema (migration 4 replaced the store's v3 table); `wubble_vault::StoreLogins` implements the vault's sync `LoginStore` over it, `Vault::unlock` returns an `UnlockOutcome` (a new key over existing rows is reported), `import::apply` saves parsed CSV rows through the vault with dedup (wiring into the store thread is open)
+  - [ ] Form detection and fill, save prompt, Zen/Arc import (no logins reader: Firefox `logins.json` is NSS-encrypted, so CSV export only)
 - [ ] Reader mode, screenshots, PDF viewer
 
 ## M5 — Arc-style features

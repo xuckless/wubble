@@ -28,13 +28,15 @@ pub mod origin;
 pub mod record;
 pub mod state;
 pub mod store;
+pub mod store_adapter;
 pub mod vault;
 
 pub use generate::{GenError, GeneratorOptions, generate};
-pub use import::{Import, ImportError, ImportRow, parse_csv};
+pub use import::{ApplyReport, Import, ImportError, ImportRow, apply, parse_csv};
 pub use keyring::{FakeKeyRing, KeyRing, OsKeyRing};
 pub use origin::Origin;
 pub use record::{Candidate, Meta, NewLogin, RecordId};
 pub use state::VaultState;
-pub use store::{LoginStore, MIGRATION_001, MemoryStore, StoreError};
-pub use vault::{Vault, VaultError};
+pub use store::{LoginStore, MemoryStore, StoreError};
+pub use store_adapter::StoreLogins;
+pub use vault::{UnlockOutcome, Vault, VaultError};

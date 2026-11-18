@@ -4,6 +4,7 @@
 
 use turso::Connection;
 use wubble_core::omnibox::HistoryEntry;
+use wubble_core::pages::HistoryRow;
 
 use crate::{HistoryRetentionDays, Result, Store, ids, narrow};
 
@@ -113,6 +114,33 @@ impl Store {
             .execute("UPDATE urls SET title = ?2 WHERE url = ?1", (url, title))
             .await?;
         Ok(())
+    }
+
+    /// One page of the history page's rows: visits strictly before `before_ms` (`None`: from the
+    /// newest), newest first, at most `limit`. Searching and day grouping are
+    /// `wubble_core::pages::history_page`.
+    pub async fn list_visits(
+        &self,
+        limit: usize,
+        before_ms: Option<i64>,
+    ) -> Result<Vec<HistoryRow>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT u.url, u.title, v.visit_time FROM visits v JOIN urls u ON u.id = v.url_id \
+                 WHERE v.visit_time < ?1 ORDER BY v.visit_time DESC, v.id DESC LIMIT ?2",
+                (before_ms.unwrap_or(i64::MAX), limit as i64),
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(HistoryRow {
+                url: r.get(0)?,
+                title: r.get(1)?,
+                visit_ms: r.get(2)?,
+            });
+        }
+        Ok(out)
     }
 
     /// Command-bar history suggestions for `prefix`, best first. Each entry carries the frecency
@@ -299,6 +327,36 @@ mod tests {
 
     fn ago(days: i64) -> i64 {
         NOW - days * DAY_MS
+    }
+
+    #[test]
+    fn list_visits_is_newest_first_one_row_per_visit_and_pages() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for (url, t) in [
+                ("https://a.test/", 10),
+                ("https://b.test/", 30),
+                ("https://a.test/", 20),
+            ] {
+                s.record_visit(url, "T", t, Transition::Link).await.unwrap();
+            }
+            let all = s.list_visits(10, None).await.unwrap();
+            let got: Vec<(&str, i64)> = all.iter().map(|r| (r.url.as_str(), r.visit_ms)).collect();
+            assert_eq!(
+                got,
+                [
+                    ("https://b.test/", 30),
+                    ("https://a.test/", 20),
+                    ("https://a.test/", 10)
+                ]
+            );
+            assert_eq!(all[0].title, "T");
+            assert_eq!(s.list_visits(2, None).await.unwrap().len(), 2);
+            let older = s.list_visits(10, Some(20)).await.unwrap();
+            assert_eq!(older.len(), 1);
+            assert_eq!(older[0].visit_ms, 10);
+            assert!(s.list_visits(10, Some(10)).await.unwrap().is_empty());
+        });
     }
 
     #[test]

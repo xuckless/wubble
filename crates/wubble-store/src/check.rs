@@ -94,7 +94,7 @@ const CHECKS: &[(&str, &str)] = &[
     ),
     (
         "login with negative use count",
-        "SELECT id FROM logins WHERE times_used < 0",
+        "SELECT rowid FROM logins WHERE times_used < 0",
     ),
 ];
 
@@ -315,7 +315,7 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 3);
+            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 4);
 
             // Old data intact and consistent.
             assert_eq!(s.check_consistency().await.unwrap(), Vec::<String>::new());

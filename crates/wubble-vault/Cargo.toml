@@ -17,3 +17,10 @@ rand = "0.8"
 csv = "1.4"
 url.workspace = true
 thiserror = "2"
+wubble-core.workspace = true
+wubble-store.workspace = true
+# Drives the store's futures to completion on the store thread (see `store_adapter`).
+pollster = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

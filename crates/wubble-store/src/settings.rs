@@ -1,5 +1,7 @@
-//! Typed settings over the key/value `settings` table, defined once in the `settings!` table
-//! below as (name, type, key, default). Values are text; each type has one [`Codec`].
+//! Typed settings over the key/value `settings` table. The keys and defaults are not written
+//! here: the `settings!` table below binds each Rust type to its `wubble_core::settings`
+//! definition, the one table the settings page also reads. Values are text; each type has one
+//! [`Codec`].
 //!
 //! Design reference, no code copied: Chromium's pref registration (a path, a type and a default
 //! per pref, e.g. `RegisterBooleanPref`), BSD-3-Clause.
@@ -7,6 +9,7 @@
 //! A missing or undecodable row yields the default: a bad settings row must not block startup.
 
 use wubble_core::omnibox::SearchEngine;
+use wubble_core::settings as defs;
 
 use crate::{Result, Store};
 
@@ -55,22 +58,16 @@ impl Codec for f32 {
     }
 }
 
-/// `None` (ask on first run) is the empty string.
+/// `None` (ask on first run) is the empty string; engines use their `EngineInfo::id`.
 impl Codec for Option<SearchEngine> {
     fn encode(&self) -> String {
-        match self {
-            None => "",
-            Some(SearchEngine::Google) => "google",
-            Some(SearchEngine::DuckDuckGo) => "duckduckgo",
-        }
-        .into()
+        self.map_or("", SearchEngine::id).into()
     }
     fn decode(s: &str) -> Option<Self> {
-        match s {
-            "" => Some(None),
-            "google" => Some(Some(SearchEngine::Google)),
-            "duckduckgo" => Some(Some(SearchEngine::DuckDuckGo)),
-            _ => None,
+        if s.is_empty() {
+            Some(None)
+        } else {
+            SearchEngine::from_id(s).map(Some)
         }
     }
 }
@@ -86,37 +83,42 @@ impl Codec for Vec<String> {
 }
 
 macro_rules! settings {
-    ($($(#[$doc:meta])* $name:ident: $ty:ty = $key:literal, $default:expr;)*) => {
+    ($($(#[$doc:meta])* $name:ident: $ty:ty = $def:expr;)*) => {
         $(
             $(#[$doc])*
             pub struct $name;
             impl Setting for $name {
                 type Value = $ty;
-                const KEY: &'static str = $key;
-                fn default() -> $ty { $default }
+                const KEY: &'static str = $def.key;
+                fn default() -> $ty {
+                    <$ty as Codec>::decode($def.default)
+                        .expect("a core settings default decodes with its codec")
+                }
             }
         )*
-        /// Every key in the table, for the uniqueness test.
+        /// Each typed setting's core definition, for the table-agreement tests.
         #[cfg(test)]
-        const ALL_KEYS: &[&str] = &[$($key),*];
+        fn typed() -> Vec<(&'static defs::SettingDef, fn(&str) -> bool)> {
+            vec![$((&$def, |s| <$ty as Codec>::decode(s).is_some())),*]
+        }
     };
 }
 
 settings! {
     /// `None` = ask on first run.
-    SearchEngineChoice: Option<SearchEngine> = "search.engine", None;
+    SearchEngineChoice: Option<SearchEngine> = defs::SEARCH_ENGINE;
     /// Live engine suggestions; off until the user turns them on.
-    LiveSuggestions: bool = "suggest.live", false;
-    /// Logical pixels; matches `Sizes.sidebar-width` in the UI tokens.
-    SidebarWidth: f32 = "ui.sidebar_width", 260.0;
-    CompactMode: bool = "ui.compact", false;
+    LiveSuggestions: bool = defs::LIVE_SUGGESTIONS;
+    /// Logical pixels.
+    SidebarWidth: f32 = defs::SIDEBAR_WIDTH;
+    CompactMode: bool = defs::COMPACT_MODE;
     /// Opaque entries; the keybinding editor owns their format.
-    KeybindingOverrides: Vec<String> = "keys.overrides", vec![];
-    BlockerEnabled: bool = "blocker.enabled", true;
+    KeybindingOverrides: Vec<String> = defs::KEYBINDING_OVERRIDES;
+    BlockerEnabled: bool = defs::BLOCKER_ENABLED;
     /// Hosts the blocker skips.
-    BlockerExceptions: Vec<String> = "blocker.exceptions", vec![];
+    BlockerExceptions: Vec<String> = defs::BLOCKER_EXCEPTIONS;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
-    HistoryRetentionDays: u32 = "history.retention_days", 0;
+    HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
 }
 
 impl Store {
@@ -183,6 +185,7 @@ mod tests {
             assert!(s.setting::<KeybindingOverrides>().await.unwrap().is_empty());
             assert!(s.setting::<BlockerEnabled>().await.unwrap());
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
+            assert_eq!(s.setting::<HistoryRetentionDays>().await.unwrap(), 0);
         });
     }
 
@@ -229,9 +232,37 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_unique() {
-        for (i, k) in ALL_KEYS.iter().enumerate() {
-            assert!(!ALL_KEYS[..i].contains(k), "duplicate key {k}");
+    fn typed_settings_are_exactly_the_core_table() {
+        let typed: Vec<&str> = typed().iter().map(|(d, _)| d.key).collect();
+        let table: Vec<&str> = defs::ALL.iter().map(|d| d.key).collect();
+        assert_eq!(typed, table);
+    }
+
+    #[test]
+    fn core_kinds_agree_with_the_codecs() {
+        let samples = [
+            "",
+            "0",
+            "1",
+            "2",
+            "-1",
+            "3650",
+            "260",
+            "1.5",
+            "NaN",
+            "google",
+            "duckduckgo",
+            "bing",
+            "[]",
+            "[\"a\"]",
+            "{",
+        ];
+        for (def, decodes) in typed() {
+            assert!(decodes(def.default), "{} default does not decode", def.key);
+            for s in samples {
+                // Anything the page accepts, the store must read back.
+                assert!(!def.kind.accepts(s) || decodes(s), "{} {s:?}", def.key);
+            }
         }
     }
 

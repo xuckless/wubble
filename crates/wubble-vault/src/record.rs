@@ -84,6 +84,18 @@ impl From<&StoredRecord> for Meta {
     }
 }
 
+impl From<&Meta> for wubble_core::pages::LoginEntry {
+    fn from(m: &Meta) -> Self {
+        wubble_core::pages::LoginEntry {
+            id: m.id.0.clone(),
+            origin: m.origin.to_string(),
+            created_ms: m.created_ms,
+            last_used_ms: m.last_used_ms,
+            times_used: m.times_used,
+        }
+    }
+}
+
 /// A fill candidate for a page: the username is shown, the password is not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
