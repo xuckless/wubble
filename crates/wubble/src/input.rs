@@ -19,6 +19,7 @@ use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
 use wubble_core::action::Action;
 use wubble_core::keys::{self, Chord, Key as ChordKey, Keymap, Platform, Route};
 use wubble_engine::input::{Buttons, KeyId, KeyInput, Modifiers, MouseButton};
+use wubble_ui::AppWindow;
 
 /// Where keyboard focus is, as far as routing a key cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,6 +248,15 @@ pub fn button_action(button: WinitButton) -> Option<Action> {
         WinitButton::Forward => Some(Action::Forward),
         _ => None,
     }
+}
+
+/// Whether `p` (logical px) is over the page area (its frames cover the scene there).
+pub fn over_content(window: &AppWindow, p: slint::LogicalPosition) -> bool {
+    let (x, y) = (window.get_content_x(), window.get_content_y());
+    p.x >= x
+        && p.y >= y
+        && p.x < x + window.get_content_width()
+        && p.y < y + window.get_content_height()
 }
 
 /// Whether a press of `button` sends a wave through the backdrop: the left button only, not

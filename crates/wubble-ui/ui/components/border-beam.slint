@@ -1,0 +1,122 @@
+// The border beam drawn by Slint, where the wgpu scene cannot draw it (no scene, or a panel over
+// the web view: the peeking sidebar's address pill, the command bar). The scene's version is
+// the design's shader (`glass.wgsl` uBeam, after core/gl/glsl.ts `BEAM`, the owner's design
+// repo); this traces the same shape (wubble_core::beam: head, tail length, strength, hue) as a
+// stroke round the parent's rounded rect: the tail in `segments` strokes, each as bright as the
+// shader's `(1 − behind/length)^2.2` at its middle, coloured by the same cyclic brand sheen
+// (`sheen(s · 1.5 + hue)`), with a wider faint stroke under it for the bloom. Slint cannot blur
+// or vary a stroke along its length, so the glow is flat and the tail steps. Strength 0 draws
+// nothing and costs nothing.
+
+import { Palette } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { BeamShape } from "model.slint";
+
+struct BeamPoint {
+    x: float,
+    y: float,
+}
+
+export component BorderBeam inherits Rectangle {
+    in property <BeamShape> shape;
+    in property <length> radius;
+    // px of the rect, as plain numbers for the path
+    property <float> w: root.width / Shell.beam-unit;
+    property <float> h: root.height / Shell.beam-unit;
+    property <float> r: max(0, min(root.radius / Shell.beam-unit, min(root.w, root.h) / 2));
+    property <float> ex: max(0, root.w / 2 - root.r);
+    property <float> ey: max(0, root.h / 2 - root.r);
+    property <float> arc: 0.5 * 3.14159265 * root.r;
+    property <float> per: 4 * (root.ex + root.ey + root.arc);
+
+    // `perimeterAt` (beam.wgsl) inverted: the point `s` (0..1) clockwise from the top centre
+    pure function corner(ox: float, oy: float, a0: float, t: float) -> BeamPoint {
+        let a = a0 + t / max(0.001, root.r);
+        { x: root.w / 2 + ox + root.r * Math.cos(a * 1rad), y: root.h / 2 + oy + root.r * Math.sin(a * 1rad) }
+    }
+    pure function at(s: float) -> BeamPoint {
+        let d = Math.mod(Math.mod(s, 1) + 1, 1) * root.per;
+        let cx = root.w / 2;
+        let cy = root.h / 2;
+        let q = 1.5707963;
+        if d <= root.ex { return { x: cx + d, y: cy - root.ey - root.r }; }
+        let d1 = d - root.ex;
+        if d1 <= root.arc { return root.corner(root.ex, -root.ey, -q, d1); }
+        let d2 = d1 - root.arc;
+        if d2 <= 2 * root.ey { return { x: cx + root.ex + root.r, y: cy - root.ey + d2 }; }
+        let d3 = d2 - 2 * root.ey;
+        if d3 <= root.arc { return root.corner(root.ex, root.ey, 0, d3); }
+        let d4 = d3 - root.arc;
+        if d4 <= 2 * root.ex { return { x: cx + root.ex - d4, y: cy + root.ey + root.r }; }
+        let d5 = d4 - 2 * root.ex;
+        if d5 <= root.arc { return root.corner(-root.ex, root.ey, q, d5); }
+        let d6 = d5 - root.arc;
+        if d6 <= 2 * root.ey { return { x: cx - root.ex - root.r, y: cy + root.ey - d6 }; }
+        let d7 = d6 - 2 * root.ey;
+        if d7 <= root.arc { return root.corner(-root.ex, -root.ey, 2 * q, d7); }
+        { x: cx - root.ex + (d7 - root.arc), y: cy - root.ey - root.r }
+    }
+    // the brand sheen, cyclic: Sky → Lilac → Blush → Mint → Sky (beam.wgsl `sheen`)
+    pure function sheen(u: float) -> color {
+        let x = Math.mod(Math.mod(u, 1) + 1, 1) * 4;
+        let i = Math.floor(x);
+        let f = x - i;
+        let m = f * f * (3 - 2 * f);
+        if i == 0 { return Palette.lilac.mix(Palette.sky, m); }
+        if i == 1 { return Palette.blush.mix(Palette.lilac, m); }
+        if i == 2 { return Palette.mint.mix(Palette.blush, m); }
+        Palette.sky.mix(Palette.mint, m)
+    }
+
+    if root.shape.strength > 0.001 && root.per > 0: Rectangle {
+        for i in Shell.beam-segments: Rectangle {
+            // this piece covers `behind` from b0 down to b1 (0 at the head)
+            property <float> b0: root.shape.length * (1 - i / Shell.beam-segments);
+            property <float> b1: root.shape.length * (1 - (i + 1) / Shell.beam-segments);
+            property <float> mid: (self.b0 + self.b1) / 2;
+            property <float> s0: root.shape.head - self.b0;
+            property <float> st: (self.b1 - self.b0) / 4;
+            property <BeamPoint> p0: root.at(self.s0);
+            property <BeamPoint> p1: root.at(self.s0 - self.st);
+            property <BeamPoint> p2: root.at(self.s0 - 2 * self.st);
+            property <BeamPoint> p3: root.at(self.s0 - 3 * self.st);
+            property <BeamPoint> p4: root.at(self.s0 - 4 * self.st);
+            property <color> tint: root.sheen((root.shape.head - self.mid) * 1.5 + root.shape.hue);
+            opacity: Math.pow(max(0, 1 - self.mid / root.shape.length), 2.2) * root.shape.strength;
+            // the bloom: a wide faint stroke under the line
+            Path {
+                width: root.width;
+                height: root.height;
+                viewbox-width: root.w;
+                viewbox-height: root.h;
+                clip: false;
+                fill: transparent;
+                stroke: parent.tint;
+                stroke-width: Shell.beam-bloom;
+                stroke-line-cap: butt;
+                opacity: Shell.beam-bloom-alpha;
+                MoveTo { x: p0.x; y: p0.y; }
+                LineTo { x: p1.x; y: p1.y; }
+                LineTo { x: p2.x; y: p2.y; }
+                LineTo { x: p3.x; y: p3.y; }
+                LineTo { x: p4.x; y: p4.y; }
+            }
+            Path {
+                width: root.width;
+                height: root.height;
+                viewbox-width: root.w;
+                viewbox-height: root.h;
+                clip: false;
+                fill: transparent;
+                stroke: parent.tint;
+                stroke-width: Shell.glow-width;
+                stroke-line-cap: butt;
+                MoveTo { x: p0.x; y: p0.y; }
+                LineTo { x: p1.x; y: p1.y; }
+                LineTo { x: p2.x; y: p2.y; }
+                LineTo { x: p3.x; y: p3.y; }
+                LineTo { x: p4.x; y: p4.y; }
+            }
+        }
+    }
+}

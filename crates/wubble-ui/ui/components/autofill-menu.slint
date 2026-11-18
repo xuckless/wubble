@@ -63,8 +63,8 @@ export component AutofillMenu inherits Rectangle {
         transform-scale: root.view.menu-open ? 1 : Motion.dropdownFrom;
         opacity: root.view.menu-open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.view.menu-open ? Shell.menu-in : Shell.menu-out;
-            easing: root.view.menu-open ? Motion.easeOut : Motion.easeIn;
+            duration: root.view.menu-open ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.view.menu-open ? Motion.easeOut : Motion.easeInOut;
         }
         TouchArea {
             enabled: root.view.menu-open;
@@ -116,8 +116,8 @@ export component AutofillMenu inherits Rectangle {
         transform-scale: root.prompting ? 1 : Motion.dropdownFrom;
         opacity: root.prompting ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.prompting ? Shell.menu-in : Shell.menu-out;
-            easing: root.prompting ? Motion.easeOut : Motion.easeIn;
+            duration: root.prompting ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.prompting ? Motion.easeOut : Motion.easeInOut;
         }
         TouchArea { }
 

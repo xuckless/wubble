@@ -33,8 +33,8 @@
 //! - `scene.set_palette(space_colours)` on a Space switch (600 ms crossfade);
 //! - `scene.pointer_move(x, y)` / `pointer_leave()` from the window's pointer
 //!   events, `scene.tap(x, y)` on a press;
-//! - `scene.set_beam(Some(address_bar))` with the layout and `scene.lap_beam()`
-//!   when a page starts loading;
+//! - `scene.set_beam(Some(address_bar))` with the layout and `scene.set_beam_shape(shape)`
+//!   every frame (the shell's `wubble_core::beam` owns the lap);
 //! - `renderer.set_quality(governor.quality())` after
 //!   `governor = governor.next(cost, budget)`, for each GPU frame cost
 //!   [`Renderer::take_cost`] hands back (GPU timestamps; none without them).
@@ -71,6 +71,6 @@ pub use quality::{
 pub(crate) use render::with_prelude;
 pub use render::{Renderer, readback_rgba8};
 pub use state::{
-    BEAM_LAP, Beam, BeamRect, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, Scene,
-    SceneOptions, Tier, hex, lap_beam_at, surface_of,
+    Beam, BeamRect, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, Scene,
+    SceneOptions, Tier, hex, surface_of,
 };

@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use wubble_gfx::scene::{BeamRect, GlassRect, Quality, Rect, Renderer, SceneOptions, Tier};
+use wubble_gfx::scene::{Beam, BeamRect, GlassRect, Quality, Rect, Renderer, SceneOptions, Tier};
 
 /// Logical view size and scale of every run.
 pub const VIEW: (f32, f32, f32) = (320.0, 200.0, 2.0);
@@ -92,7 +92,12 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
                     rect: bar,
                     radius: 15.0,
                 }));
-                r.scene.lap_beam();
+                r.scene.set_beam_shape(Some(Beam {
+                    head: 0.5,
+                    length: 0.35,
+                    strength: 1.0,
+                    hue: 0.3,
+                }));
                 let table = bow_table(run.bow);
                 r.scene
                     .set_bow((run.bow != 0.0).then_some(wubble_gfx::Edge {
@@ -101,8 +106,12 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
                         offset: &table,
                     }));
             }
-            // a ripple through the liquid and a press wave through the thick glass
-            r.scene.tap(60.0, 50.0);
+            // a press wave through the thick glass (with glass), and a ripple through the
+            // liquid off every panel (in both runs alike)
+            if run.glass {
+                r.scene.tap(60.0, 50.0);
+            }
+            r.scene.tap(200.0, 150.0);
         }
         r.scene.pointer_move(150.0 + i as f32, 90.0);
         r.render_under_ui(w, h, dpr, dt);

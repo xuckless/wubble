@@ -17,12 +17,30 @@ export component ContextMenu inherits Rectangle {
     in property <length> anchor-x;
     in property <length> anchor-y;
     in property <[MenuEntry]> entries;
+    // What the panel shows: the last open menu's, kept while it leaves (the host clears the
+    // menu as it closes it).
+    property <[MenuEntry]> rows;
+    property <length> at-x;
+    property <length> at-y;
+    changed open => {
+        root.latch();
+    }
+    changed entries => {
+        root.latch();
+    }
+    function latch() {
+        if root.open {
+            root.rows = root.entries;
+            root.at-x = root.anchor-x;
+            root.at-y = root.anchor-y;
+        }
+    }
     callback chosen(int);
     callback dismissed();
     // The panel's left edge, after flipping and clamping.
     out property <length> panel-x: panel.x;
 
-    property <int> count: root.entries.length;
+    property <int> count: root.rows.length;
     // Keyboard highlight; -1 for none (the pointer highlights by hover).
     property <int> current: -1;
 
@@ -39,7 +57,7 @@ export component ContextMenu inherits Rectangle {
             return -1;
         }
         let i = mod(from + delta + root.count, root.count);
-        return root.entries[i].separator ? mod(i + delta + root.count, root.count) : i;
+        return root.rows[i].separator ? mod(i + delta + root.count, root.count) : i;
     }
 
     // Opens to the right of and below the pointer; flips where it would leave the parent, then
@@ -49,10 +67,13 @@ export component ContextMenu inherits Rectangle {
         return max(Spacing.s2, min(flipped, limit - size - Spacing.s2));
     }
 
-    visible: root.open;
+    // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
+    // the panel has faded, on what it showed; only the open menu takes the pointer.
+    visible: root.open || panel.opacity > 0;
 
     // The scrim: transparent, catches the outside click.
     TouchArea {
+        enabled: root.open;
         pointer-event(e) => {
             if e.kind == PointerEventKind.down {
                 root.dismissed();
@@ -92,20 +113,20 @@ export component ContextMenu inherits Rectangle {
     panel := GlassPanel {
         width: Shell.menu-width;
         height: list.preferred-height;
-        x: root.place(root.anchor-x, self.width, root.width);
-        y: root.place(root.anchor-y, self.height, root.height);
+        x: root.place(root.at-x, self.width, root.width);
+        y: root.place(root.at-y, self.height, root.height);
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
         over-content: true;
         transform-origin: {
-            x: max(0px, min(self.width, root.anchor-x - self.x)),
-            y: max(0px, min(self.height, root.anchor-y - self.y)),
+            x: max(0px, min(self.width, root.at-x - self.x)),
+            y: max(0px, min(self.height, root.at-y - self.y)),
         };
         transform-scale: root.open ? 1 : Motion.dropdownFrom;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Shell.menu-in : Shell.menu-out;
-            easing: root.open ? Motion.easeOut : Motion.easeIn;
+            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
         // Swallow clicks between rows so they do not reach the scrim.
         TouchArea { }
@@ -113,7 +134,7 @@ export component ContextMenu inherits Rectangle {
         list := VerticalLayout {
             padding: Shell.menu-pad;
             // The rows enter on the Overlap stagger (OverlapLayer, the design repo's port).
-            for entry[i] in root.entries: OverlapLayer {
+            for entry[i] in root.rows: OverlapLayer {
                 shown: root.open;
                 index: i;
                 height: entry.separator ? Shell.menu-separator : Shell.menu-row;
@@ -131,7 +152,7 @@ export component ContextMenu inherits Rectangle {
                         easing: Motion.easeOut;
                     }
                     row-touch := TouchArea {
-                        enabled: entry.enabled;
+                        enabled: entry.enabled && root.open;
                         clicked => {
                             root.chosen(i);
                         }

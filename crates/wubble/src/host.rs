@@ -628,8 +628,17 @@ impl Host {
             &self.favicons,
         );
         self.render_surfaces(&window);
-        let page = self.view().map(|view| view.nav().page.clone());
-        crate::bind::render_history(&window, page.as_ref());
+        let nav = self.view().map(|view| {
+            (
+                view.nav().page.clone(),
+                matches!(view.nav().phase, Phase::Loading { .. }),
+            )
+        });
+        crate::bind::render_history(
+            &window,
+            nav.as_ref().map(|n| &n.0),
+            nav.as_ref().is_some_and(|n| n.1),
+        );
         self.render_pages();
     }
 
@@ -1732,14 +1741,21 @@ impl Host {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
             }
-            // A left press anywhere sends a wave through the scene (the page gets it too). Raw,
-            // so the side buttons navigate over the shell too, without a wave.
+            // A left press on the shell sends a wave through the scene: through the glass under
+            // it, else through the liquid. Not over the page, which covers the scene (the
+            // design's web view never ripples the backdrop). Raw, so the side buttons navigate
+            // over the shell too, without a wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
-                if input::taps_backdrop(*button) {
+                if input::taps_backdrop(*button)
+                    && !self
+                        .input
+                        .pointer
+                        .is_some_and(|p| input::over_content(&window, p))
+                {
                     self.glass.borrow_mut().tap();
                 }
                 if let Some(action) = input::button_action(*button) {

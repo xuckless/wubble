@@ -16,6 +16,23 @@ export struct TabItem {
     blocked: int,
 }
 
+// The border beam this frame (wubble_core::beam::Shape): head and tail length as fractions of
+// the perimeter (clockwise from the top centre), strength 0..1 (0: nothing drawn), sheen hue.
+export struct BeamShape {
+    head: float,
+    length: float,
+    strength: float,
+    hue: float,
+}
+
+// A tab row on its way out (wubble_core::tabs::Leaving): what it showed, where it was, and how
+// far it has gone (0..1).
+export struct LeavingRow {
+    tab: TabItem,
+    y: length,
+    e: float,
+}
+
 export struct SpaceItem {
     id: int,
     name: string,

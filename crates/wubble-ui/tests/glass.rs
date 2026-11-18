@@ -142,9 +142,15 @@ fn glass_panels_report_their_items() {
         near(item(&seen, address).x, pill.x + 4.0),
         "back with the peek"
     );
-    // The scene draws no beam over the peek, so the pill's loading shows as the Slint sheen.
-    app.set_address_loading(true);
-    pump(200);
+    // The scene draws no beam over the peek, so the pill's beam is the Slint one.
+    let lit = wubble_ui::BeamShape {
+        head: 0.5,
+        length: 0.35,
+        strength: 1.0,
+        hue: 0.0,
+    };
+    app.set_address_beam(lit);
+    pump(1);
     assert!(app.get_address_sheen() > 0.99, "sheen over the peek");
 
     // Back over the scene, which draws the pill and its beam: no sheen on top.
@@ -153,7 +159,7 @@ fn glass_panels_report_their_items() {
     app.set_sidebar_width(252.0);
     pump(1);
     assert_eq!(app.get_address_sheen(), 0.0, "no sheen over the scene");
-    app.set_address_loading(false);
+    app.set_address_beam(Default::default());
 
     // The scene off again: everything absent.
     layer.set_scene_active(false);
