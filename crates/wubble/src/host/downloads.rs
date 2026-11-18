@@ -343,10 +343,6 @@ impl Host {
         self.downloads.get(id).map(|e| e.url.clone())
     }
 
-    pub(super) fn forget_download_entry(&mut self, id: i64) {
-        self.forget_download(id);
-    }
-
     pub(super) fn apply_download(&mut self, id: i64, event: DownloadEvent) {
         let Some(at) = self.downloads.list.iter().position(|e| e.id == id) else {
             return;
@@ -431,7 +427,7 @@ impl Host {
         }
     }
 
-    fn forget_download(&mut self, id: i64) {
+    pub(super) fn forget_download(&mut self, id: i64) {
         self.downloads.list.retain(|e| e.id != id);
         self.downloads.unsaved.remove(&id);
         self.store.remove_download(id);

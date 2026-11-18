@@ -51,14 +51,20 @@ impl Progress {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Job {
-    /// Reading the variant's playlists and keys.
-    Resolving,
+    /// Reading the variant's playlists and keys; `paused` by the user before they came, so
+    /// the plan enters [`Job::Paused`].
+    Resolving {
+        paused: bool,
+    },
     Fetching(Progress),
     Paused(Progress),
     /// A fetch failed; resuming continues from the segments done.
     Interrupted(Progress, String),
-    /// Every track is written: joining them into the file.
-    Joining,
+    /// Every track is written: joining them into the file. A join cannot be stopped:
+    /// `cancelled` by the user, its saved file is deleted once it ends.
+    Joining {
+        cancelled: bool,
+    },
     Done,
     Failed(String),
     Cancelled,
@@ -98,7 +104,7 @@ pub enum JobEffect {
     CloseTrack(usize),
     /// Join the tracks into the saved file.
     Join,
-    /// Delete the job's partial files.
+    /// Delete the job's partial files (and what a cancelled join saved).
     Discard,
 }
 
@@ -126,22 +132,32 @@ fn begin(mut p: Progress) -> (Job, Vec<JobEffect>) {
     }
     if p.track == p.counts.len() {
         effects.push(JobEffect::Join);
-        return (Job::Joining, effects);
+        return (Job::Joining { cancelled: false }, effects);
     }
     let (p, fetches) = fill(p);
     effects.extend(fetches);
     (Job::Fetching(p), effects)
 }
 
+impl Job {
+    /// Still fetching, or able to: it holds partial files and no saved one.
+    pub fn is_live(&self) -> bool {
+        matches!(
+            self,
+            Job::Resolving { .. } | Job::Fetching(_) | Job::Paused(_) | Job::Interrupted(..)
+        )
+    }
+}
+
 pub fn transition(job: Job, event: JobEvent) -> (Job, Vec<JobEffect>) {
     use JobEffect as Fx;
     use JobEvent as E;
     match (job, event) {
-        (Job::Resolving, E::Planned { counts, limit }) => {
+        (Job::Resolving { paused }, E::Planned { counts, limit }) => {
             if counts.iter().all(|&c| c == 0) {
                 return (Job::Failed("nothing to download".into()), vec![]);
             }
-            begin(Progress {
+            let p = Progress {
                 counts,
                 track: 0,
                 done: 0,
@@ -149,9 +165,15 @@ pub fn transition(job: Job, event: JobEvent) -> (Job, Vec<JobEffect>) {
                 next: 0,
                 running: 0,
                 limit,
-            })
+            };
+            if paused {
+                return (Job::Paused(p), vec![]);
+            }
+            begin(p)
         }
-        (Job::Resolving, E::Refused(why)) => (Job::Failed(why), vec![]),
+        (Job::Resolving { .. }, E::Pause) => (Job::Resolving { paused: true }, vec![]),
+        (Job::Resolving { .. }, E::Resume) => (Job::Resolving { paused: false }, vec![]),
+        (Job::Resolving { .. }, E::Refused(why)) => (Job::Failed(why), vec![]),
         (Job::Fetching(_) | Job::Paused(_) | Job::Interrupted(..), E::Refused(why)) => {
             (Job::Failed(why), vec![Fx::StopFetches, Fx::Discard])
         }
@@ -190,15 +212,16 @@ pub fn transition(job: Job, event: JobEvent) -> (Job, Vec<JobEffect>) {
                 track: p.track,
                 keep: p.done,
             }];
-            let (p, fetches) = fill(p);
-            effects.extend(fetches);
-            (Job::Fetching(p), effects)
+            // `begin`: a plan paused before it started may open on empty tracks.
+            let (job, more) = begin(p);
+            effects.extend(more);
+            (job, effects)
         }
-        (Job::Resolving | Job::Fetching(_) | Job::Paused(_) | Job::Interrupted(..), E::Cancel) => {
-            (Job::Cancelled, vec![Fx::StopFetches, Fx::Discard])
-        }
-        (Job::Joining, E::Joined(Ok(()))) => (Job::Done, vec![]),
-        (Job::Joining, E::Joined(Err(why))) => (Job::Failed(why), vec![]),
+        (job, E::Cancel) if job.is_live() => (Job::Cancelled, vec![Fx::StopFetches, Fx::Discard]),
+        (Job::Joining { .. }, E::Cancel) => (Job::Joining { cancelled: true }, vec![]),
+        (Job::Joining { cancelled: true }, E::Joined(_)) => (Job::Cancelled, vec![Fx::Discard]),
+        (Job::Joining { .. }, E::Joined(Ok(()))) => (Job::Done, vec![]),
+        (Job::Joining { .. }, E::Joined(Err(why))) => (Job::Failed(why), vec![]),
         // Late answers of stopped fetches, and anything else out of place.
         (job, _) => (job, vec![]),
     }
@@ -212,7 +235,7 @@ pub fn list_event(job: &Job) -> Option<DownloadEvent> {
         Job::Done => Some(DownloadEvent::Finished),
         Job::Failed(why) => Some(DownloadEvent::Failed(why.clone())),
         Job::Fetching(_) => Some(DownloadEvent::Resumed),
-        Job::Resolving | Job::Paused(_) | Job::Joining | Job::Cancelled => None,
+        Job::Resolving { .. } | Job::Paused(_) | Job::Joining { .. } | Job::Cancelled => None,
     }
 }
 
@@ -247,7 +270,7 @@ mod tests {
     #[test]
     fn a_pair_fetches_both_tracks_then_joins() {
         let (job, fx) = transition(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             E::Planned {
                 counts: vec![3, 1],
                 limit: 2,
@@ -264,7 +287,10 @@ mod tests {
         let (job, fx) = transition(job, done(1, 0));
         assert_eq!(
             (job.clone(), fx),
-            (Job::Joining, vec![Fx::CloseTrack(1), Fx::Join])
+            (
+                Job::Joining { cancelled: false },
+                vec![Fx::CloseTrack(1), Fx::Join]
+            )
         );
         assert_eq!(transition(job, E::Joined(Ok(()))).0, Job::Done);
     }
@@ -272,7 +298,7 @@ mod tests {
     #[test]
     fn pause_and_resume_keep_what_is_done() {
         let (job, _) = run(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             vec![
                 E::Planned {
                     counts: vec![5],
@@ -305,7 +331,7 @@ mod tests {
     #[test]
     fn a_failed_fetch_interrupts_and_resumes() {
         let (job, _) = run(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             vec![
                 E::Planned {
                     counts: vec![2],
@@ -329,7 +355,7 @@ mod tests {
     #[test]
     fn cancel_from_every_live_state() {
         let fetching = transition(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             E::Planned {
                 counts: vec![2],
                 limit: 1,
@@ -338,19 +364,19 @@ mod tests {
         .0;
         let paused = transition(fetching.clone(), E::Pause).0;
         let interrupted = transition(fetching.clone(), E::SegmentFailed("x".into())).0;
-        for job in [Job::Resolving, fetching, paused, interrupted] {
+        for job in [
+            Job::Resolving { paused: false },
+            fetching,
+            paused,
+            interrupted,
+        ] {
             assert_eq!(
                 transition(job, E::Cancel),
                 (Job::Cancelled, vec![Fx::StopFetches, Fx::Discard])
             );
         }
-        // Joining is nearly done: a cancel is ignored, as for the finished states.
-        for job in [
-            Job::Joining,
-            Job::Done,
-            Job::Failed("x".into()),
-            Job::Cancelled,
-        ] {
+        // A cancel is ignored by the finished states.
+        for job in [Job::Done, Job::Failed("x".into()), Job::Cancelled] {
             assert_eq!(transition(job.clone(), E::Cancel), (job, vec![]));
         }
     }
@@ -358,7 +384,7 @@ mod tests {
     #[test]
     fn refusals_and_empty_plans_fail() {
         let (job, fx) = transition(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             E::Refused("Protected, cannot be saved".into()),
         );
         assert_eq!(
@@ -371,7 +397,7 @@ mod tests {
         );
         assert_eq!(
             transition(
-                Job::Resolving,
+                Job::Resolving { paused: false },
                 E::Planned {
                     counts: vec![0],
                     limit: 4
@@ -382,7 +408,7 @@ mod tests {
         );
         // An empty audio track after the video closes at once.
         let (job, fx) = run(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             vec![
                 E::Planned {
                     counts: vec![1, 0],
@@ -394,18 +420,21 @@ mod tests {
         assert_eq!(
             (job, fx[1..].to_vec()),
             (
-                Job::Joining,
+                Job::Joining { cancelled: false },
                 vec![Fx::CloseTrack(0), Fx::CloseTrack(1), Fx::Join]
             )
         );
-        let (failed, _) = transition(Job::Joining, E::Joined(Err("ffmpeg failed".into())));
+        let (failed, _) = transition(
+            Job::Joining { cancelled: false },
+            E::Joined(Err("ffmpeg failed".into())),
+        );
         assert_eq!(failed, Job::Failed("ffmpeg failed".into()));
     }
 
     #[test]
     fn a_stream_found_protected_while_fetching_stops() {
         let (job, _) = transition(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             E::Planned {
                 counts: vec![4],
                 limit: 2,
@@ -419,7 +448,7 @@ mod tests {
     #[test]
     fn segments_never_started_are_ignored() {
         let (job, _) = transition(
-            Job::Resolving,
+            Job::Resolving { paused: false },
             E::Planned {
                 counts: vec![9],
                 limit: 1,
@@ -429,6 +458,53 @@ mod tests {
         assert_eq!((same, fx), (job.clone(), vec![]));
         let (same, fx) = transition(job.clone(), done(1, 0));
         assert_eq!((same, fx), (job, vec![]));
+    }
+
+    #[test]
+    fn a_cancel_while_joining_deletes_what_the_join_saves() {
+        let joining = Job::Joining { cancelled: false };
+        let (job, fx) = transition(joining, E::Cancel);
+        assert_eq!(
+            (job.clone(), fx),
+            (Job::Joining { cancelled: true }, vec![])
+        );
+        assert_eq!(list_event(&job), None);
+        for result in [Ok(()), Err("ffmpeg failed".into())] {
+            assert_eq!(
+                transition(job.clone(), E::Joined(result)),
+                (Job::Cancelled, vec![Fx::Discard])
+            );
+        }
+    }
+
+    #[test]
+    fn a_pause_before_the_plan_holds_it() {
+        let planned = E::Planned {
+            counts: vec![0, 2],
+            limit: 4,
+        };
+        let (job, fx) = transition(Job::Resolving { paused: false }, E::Pause);
+        assert_eq!((job.clone(), fx), (Job::Resolving { paused: true }, vec![]));
+        let (job, fx) = transition(job, planned.clone());
+        assert!(fx.is_empty());
+        assert!(matches!(&job, Job::Paused(p) if p.running == 0 && p.track == 0));
+        assert_eq!(list_event(&job), None);
+        // Resuming starts past the empty first track.
+        let (job, fx) = transition(job, E::Resume);
+        assert_eq!(
+            fx,
+            vec![
+                Fx::Rewind { track: 0, keep: 0 },
+                Fx::CloseTrack(0),
+                fetch(1, 0),
+                fetch(1, 1)
+            ]
+        );
+        assert!(matches!(&job, Job::Fetching(p) if p.track == 1));
+        // A resume before the plan came lets it start.
+        let (job, _) = transition(Job::Resolving { paused: true }, E::Resume);
+        let (_, fx) = transition(job, planned);
+        assert_eq!(fx, vec![Fx::CloseTrack(0), fetch(1, 0), fetch(1, 1)]);
     }
 
     #[test]

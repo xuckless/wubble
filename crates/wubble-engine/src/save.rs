@@ -250,6 +250,7 @@ impl Files {
 pub struct Writer {
     commands: Sender<WriteCmd>,
     events: Arc<Mutex<Vec<WriteEvent>>>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 impl Writer {
@@ -259,7 +260,7 @@ impl Writer {
         let (commands, rx): (Sender<WriteCmd>, Receiver<WriteCmd>) = mpsc::channel();
         let events = Arc::new(Mutex::new(Vec::new()));
         let queue = events.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("wubble-media-writer".into())
             .spawn(move || {
                 let mut files = Files::default();
@@ -270,12 +271,23 @@ impl Writer {
                     }
                 }
             })?;
-        Ok(Self { commands, events })
+        Ok(Self {
+            commands,
+            events,
+            thread,
+        })
     }
 
     pub fn send(&self, cmd: WriteCmd) {
-        // The thread ends only with the process: a send cannot fail before that.
+        // The thread ends only in `finish`: a send cannot fail before that.
         let _ = self.commands.send(cmd);
+    }
+
+    /// Runs every command sent (a join already asked for finishes) and ends the thread: at
+    /// shutdown, so the files are deleted or saved before the process exits.
+    pub fn finish(self) {
+        drop(self.commands);
+        let _ = self.thread.join();
     }
 
     pub fn take_events(&self) -> Vec<WriteEvent> {
@@ -582,5 +594,20 @@ mod tests {
             Container::Webm,
         );
         assert!(!webm.iter().any(|a| a == "-movflags"));
+    }
+
+    #[test]
+    fn finish_runs_what_was_sent_before_returning() {
+        let d = dir().join("finish");
+        std::fs::create_dir_all(&d).unwrap();
+        let part = d.join("v.mp4.part0");
+        std::fs::write(&part, b"partial").unwrap();
+        let writer = Writer::start(|| {}).unwrap();
+        writer.send(WriteCmd::Discard {
+            job: 7,
+            paths: vec![part.clone()],
+        });
+        writer.finish();
+        assert!(!part.exists());
     }
 }

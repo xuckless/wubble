@@ -23,7 +23,8 @@ pub fn page_title(title: &str) -> &str {
         .map_or(title, |(at, _)| title[..at].trim_end())
 }
 
-/// `Title (720p).mp4`; the note is left out when empty.
+/// `Title (720p).mp4` (or `Title (audio).m4a`, a track of a pair that could not be joined);
+/// the note is left out when empty.
 pub fn media_file_name(title: &str, note: &str, container: Container) -> String {
     let title = if title.trim().is_empty() {
         "video"
@@ -37,11 +38,6 @@ pub fn media_file_name(title: &str, note: &str, container: Container) -> String 
         format!("{title} ({note}).{ext}")
     };
     sanitize_file_name(&name)
-}
-
-/// The name a track of a pair is kept under when it cannot be joined: `Title (video).mp4`.
-pub fn track_file_name(title: &str, track: &str, container: Container) -> String {
-    media_file_name(title, track, container)
 }
 
 #[cfg(test)]
@@ -77,10 +73,6 @@ mod tests {
         let name = media_file_name(&long, "1080p", Container::Webm);
         assert!(name.len() <= 255 && name.ends_with(".webm"));
         assert!(name.is_char_boundary(name.len() - ".webm".len()));
-        assert_eq!(
-            track_file_name("T", "audio", Container::M4a),
-            "T (audio).m4a"
-        );
         let taken = |p: &Path| p.ends_with("T (720p).mp4");
         let path = unique_name(
             Path::new("/d"),

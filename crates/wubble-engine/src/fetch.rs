@@ -39,6 +39,9 @@ pub struct FetchSpec {
     pub post: Option<Vec<u8>>,
     /// Send and store the context's cookies (`UR_FLAG_ALLOW_STORED_CREDENTIALS`).
     pub credentials: bool,
+    /// May be answered from the HTTP cache (a manifest the page has just loaded); otherwise
+    /// the cache is skipped (`UR_FLAG_SKIP_CACHE`).
+    pub cached: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -185,7 +188,7 @@ impl Fetcher {
             request.set_method(Some(&cef::CefString::from("POST")));
             request.set_post_data(Some(&mut data));
         }
-        let flags = FLAG_SKIP_CACHE
+        let flags = if spec.cached { 0 } else { FLAG_SKIP_CACHE }
             | if spec.credentials {
                 FLAG_ALLOW_STORED_CREDENTIALS
             } else {
@@ -212,6 +215,15 @@ impl Fetcher {
         if let Some(request) = self.running.get(&id) {
             request.cancel();
         }
+    }
+
+    /// Stops every request and releases its handle now, with what is queued: at shutdown, so
+    /// no CEF reference outlives CEF. No event of these requests is reported.
+    pub fn stop_all(&mut self) {
+        for (_, request) in self.running.drain() {
+            request.cancel();
+        }
+        self.queue.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// What arrived since the last call. A request's handle is released once its `Done` is

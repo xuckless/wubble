@@ -93,6 +93,15 @@ enum Purpose {
         url: String,
         body: Vec<u8>,
     },
+    /// One variant's media playlist of a resolved HLS master, read for DRM keys that only
+    /// the variants carry, so the menu shows the refusal before offering anything.
+    Probe {
+        tab: TabId,
+        item: u32,
+        url: String,
+        resolution: Resolution,
+        body: Vec<u8>,
+    },
     /// A job track's HLS media playlist.
     Playlist {
         job: i64,
@@ -116,7 +125,7 @@ enum Purpose {
 impl Purpose {
     fn job(&self) -> Option<i64> {
         match self {
-            Purpose::Resolve { .. } => None,
+            Purpose::Resolve { .. } | Purpose::Probe { .. } => None,
             Purpose::Playlist { job, .. }
             | Purpose::Key { job, .. }
             | Purpose::Segment { job, .. } => Some(*job),
@@ -153,6 +162,8 @@ struct Run {
     fetched: BTreeMap<(usize, usize), u64>,
     /// The known size of the whole download.
     size: Option<u64>,
+    /// What the join saved (deleted again when the job was cancelled while joining).
+    saved: Vec<PathBuf>,
 }
 
 impl Run {
@@ -312,10 +323,12 @@ impl Host {
                     ..FetchSpec::default()
                 }
             }
+            // The manifest the page has just loaded: from the HTTP cache when it may be.
             _ => FetchSpec {
                 url: url.clone(),
                 referrer: page,
                 credentials: true,
+                cached: true,
                 ..FetchSpec::default()
             },
         };
@@ -376,10 +389,24 @@ impl Host {
         self.media_smoke_step();
     }
 
-    /// Shutdown: every request of the downloader is cancelled before CEF goes.
+    /// Shutdown, before CEF goes: every request of the downloader is stopped and released;
+    /// unfinished downloads (which do not resume across a restart) delete their part files,
+    /// and the writer finishes what it was sent.
     pub(super) fn media_shutdown(&mut self) {
-        for (id, _) in std::mem::take(&mut self.media.fetches) {
-            self.media.fetcher.cancel(id);
+        self.media.fetches.clear();
+        self.media.fetcher.stop_all();
+        let live: Vec<i64> = self
+            .media
+            .runs
+            .iter()
+            .filter(|(_, r)| r.job.is_live())
+            .map(|(&id, _)| id)
+            .collect();
+        for id in live {
+            self.job_effect(id, JobEffect::Discard);
+        }
+        if let Some(writer) = self.media.writer.take() {
+            writer.finish();
         }
     }
 
@@ -475,6 +502,7 @@ impl Host {
         };
         match purpose {
             Purpose::Resolve { body, .. }
+            | Purpose::Probe { body, .. }
             | Purpose::Playlist { body, .. }
             | Purpose::Key { body, .. } => {
                 if body.len() + bytes.len() > MAX_TEXT {
@@ -560,6 +588,28 @@ impl Host {
                 if let Err(e) = &result {
                     eprintln!("wubble: media {url}: {}", e.message());
                 }
+                match result {
+                    Ok(resolution) if kind == Kind::Hls => {
+                        self.media_probe(tab, item, resolution);
+                    }
+                    result => self.media_update(tab, MediaEvent::Resolved { id: item, result }),
+                }
+            }
+            Purpose::Probe {
+                tab,
+                item,
+                url,
+                resolution,
+                body,
+            } => {
+                let text = String::from_utf8_lossy(&body);
+                let protected =
+                    result.is_ok() && hls::parse_media(&text, &url) == Err(Refusal::Protected);
+                let result = if protected {
+                    Err(Refusal::Protected)
+                } else {
+                    Ok(resolution)
+                };
                 self.media_update(tab, MediaEvent::Resolved { id: item, result });
             }
             Purpose::Playlist {
@@ -609,6 +659,40 @@ impl Host {
                 }
                 Err(e) => self.job_event(job, JobEvent::SegmentFailed(e)),
             },
+        }
+    }
+
+    /// A resolved HLS master: one variant's media playlist is read first (`Purpose::Probe`);
+    /// without one to read (or when it cannot start) the master is listed as it is.
+    fn media_probe(&mut self, tab: TabId, item: u32, resolution: Resolution) {
+        let playlist = resolution.variants.iter().find_map(|v| match &v.source {
+            wubble_core::media::Source::HlsPlaylist(url) => Some((url.clone(), v.headers.clone())),
+            _ => None,
+        });
+        let Some((url, headers)) = playlist else {
+            let result = Ok(resolution);
+            self.media_update(tab, MediaEvent::Resolved { id: item, result });
+            return;
+        };
+        let page = self.committed.get(&tab).cloned().unwrap_or_default();
+        let spec = FetchSpec {
+            url: url.clone(),
+            referrer: page,
+            headers,
+            credentials: true,
+            cached: true,
+            ..FetchSpec::default()
+        };
+        let purpose = Purpose::Probe {
+            tab,
+            item,
+            url,
+            resolution: resolution.clone(),
+            body: Vec::new(),
+        };
+        if self.media_fetch(tab, spec, purpose).is_err() {
+            let result = Ok(resolution);
+            self.media_update(tab, MediaEvent::Resolved { id: item, result });
         }
     }
 
@@ -757,7 +841,7 @@ impl Host {
             .collect();
         let id = self.add_download_entry(url, &output, size);
         let run = Run {
-            job: Job::Resolving,
+            job: Job::Resolving { paused: false },
             tab,
             page,
             title,
@@ -767,6 +851,7 @@ impl Host {
             keys: HashMap::new(),
             fetched: BTreeMap::new(),
             size,
+            saved: Vec::new(),
         };
         self.media.runs.insert(id, run);
         self.media_resolve_job(id);
@@ -825,7 +910,10 @@ impl Host {
         let Some(run) = self.media.runs.get(&job) else {
             return;
         };
-        if resolving || run.job != Job::Resolving || run.tracks.iter().any(|t| t.plan.is_none()) {
+        if resolving
+            || !matches!(run.job, Job::Resolving { .. })
+            || run.tracks.iter().any(|t| t.plan.is_none())
+        {
             return;
         }
         let mut missing: Vec<String> = run
@@ -879,7 +967,7 @@ impl Host {
             };
             let before = std::mem::discriminant(&run.job);
             let (next, effects) =
-                job::transition(std::mem::replace(&mut run.job, Job::Resolving), event);
+                job::transition(std::mem::replace(&mut run.job, Job::Cancelled), event);
             run.job = next;
             let changed = before != std::mem::discriminant(&run.job);
             let report = changed.then(|| job::list_event(&run.job)).flatten();
@@ -975,7 +1063,7 @@ impl Host {
                     [("video", containers[0]), ("audio", containers[1])]
                         .iter()
                         .filter_map(|(what, c)| {
-                            self.media_path(&name::track_file_name(&title, what, *c))
+                            self.media_path(&name::media_file_name(&title, what, *c))
                         })
                         .collect()
                 } else {
@@ -994,7 +1082,8 @@ impl Host {
                 None
             }
             JobEffect::Discard => {
-                let paths = run.tracks.iter().map(|t| t.part.clone()).collect();
+                let parts = run.tracks.iter().map(|t| t.part.clone());
+                let paths = parts.chain(std::mem::take(&mut run.saved)).collect();
                 self.media.write(WriteCmd::Discard { job, paths });
                 None
             }
@@ -1002,11 +1091,17 @@ impl Host {
     }
 
     fn media_joined(&mut self, job: i64, result: Result<Vec<PathBuf>, String>) {
+        let Some(run) = self.media.runs.get_mut(&job) else {
+            return;
+        };
+        let kept = run.job == Job::Joining { cancelled: false };
         if let Ok(paths) = &result {
-            if let Some(first) = paths.first() {
+            run.saved.clone_from(paths);
+            if kept && let Some(first) = paths.first() {
                 self.set_download_path(job, first);
             }
-            if paths.len() == 2
+            if kept
+                && paths.len() == 2
                 && let Some(window) = self.window.upgrade()
             {
                 self.toast(
@@ -1017,6 +1112,21 @@ impl Host {
         }
         self.job_event(job, JobEvent::Joined(result.map(|_| ())));
         self.media_progress(job);
+        // The entry went while the join ran (removed, or replaced by a retry): so does the run.
+        if self.download_url(job).is_none() {
+            self.media.runs.remove(&job);
+        }
+    }
+
+    /// The entry of `id` goes (removed, or replaced by a retry): so does its run, unless its
+    /// join still runs; then the run, and the paths it reserves, stay until it ends.
+    fn media_release(&mut self, id: i64) {
+        if !matches!(
+            self.media.runs.get(&id).map(|r| &r.job),
+            Some(Job::Joining { .. })
+        ) {
+            self.media.runs.remove(&id);
+        }
     }
 
     /// The list's buttons on a media entry (`DownloadEffect`s of its machine).
@@ -1027,15 +1137,10 @@ impl Host {
             DownloadEffect::CancelEngine => self.job_event(id, JobEvent::Cancel),
             DownloadEffect::StartAgain => self.media_restart(id),
             DownloadEffect::Forget => {
-                if let Some(run) = self.media.runs.remove(&id)
-                    && matches!(
-                        run.job,
-                        Job::Resolving | Job::Fetching(_) | Job::Paused(_) | Job::Interrupted(..)
-                    )
-                {
-                    let paths = run.tracks.iter().map(|t| t.part.clone()).collect();
-                    self.media.write(WriteCmd::Discard { job: id, paths });
+                if self.media.runs.get(&id).is_some_and(|r| r.job.is_live()) {
+                    self.job_effect(id, JobEffect::Discard);
                 }
+                self.media_release(id);
             }
             DownloadEffect::Save => {}
         }
@@ -1044,19 +1149,25 @@ impl Host {
     /// Retry of a failed or cancelled media download: the same tracks as a new download, which
     /// replaces the entry.
     fn media_restart(&mut self, id: i64) {
-        let Some(run) = self.media.runs.remove(&id) else {
+        let Some(run) = self.media.runs.get(&id) else {
             return;
         };
         let container = run
             .tracks
             .first()
             .map_or(Container::Other, |t| t.variant.container);
-        let variants: Vec<Variant> = run.tracks.into_iter().map(|t| t.variant).collect();
-        let url = self.download_url(id).unwrap_or_default();
-        self.forget_download_entry(id);
-        self.start_media(
-            run.tab, run.page, run.title, run.note, variants, container, run.size, &url,
+        let variants: Vec<Variant> = run.tracks.iter().map(|t| t.variant.clone()).collect();
+        let (tab, page, title, note, size) = (
+            run.tab,
+            run.page.clone(),
+            run.title.clone(),
+            run.note.clone(),
+            run.size,
         );
+        self.media_release(id);
+        let url = self.download_url(id).unwrap_or_default();
+        self.forget_download(id);
+        self.start_media(tab, page, title, note, variants, container, size, &url);
     }
 }
 

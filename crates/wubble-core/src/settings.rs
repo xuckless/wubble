@@ -311,7 +311,9 @@ pub const PASSWORDS_AUTOFILL: SettingDef = SettingDef {
     restart: false,
 };
 /// The media downloader: a download glyph on the address pill when a page plays a video or
-/// audio stream (detection reads response headers only, nothing is fetched until asked).
+/// audio stream. Detection reads response headers; a detected HLS or DASH manifest (and one
+/// variant playlist of an HLS master) is read again to list its qualities, through the page's
+/// HTTP cache and session (a cache miss is a request; see TODO's Decided "Media detection").
 pub const MEDIA_ENABLED: SettingDef = SettingDef {
     key: "media.enabled",
     kind: SettingKind::Bool,

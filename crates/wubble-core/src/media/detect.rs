@@ -151,6 +151,16 @@ pub struct Detected {
     pub found: Found,
 }
 
+impl Detected {
+    /// The URL is a part of this stream: a segment or a playlist of it.
+    fn contains(&self, url: &str) -> bool {
+        matches!(&self.found, Found::Ready(variants) if variants.iter().any(|v| match &v.source {
+            Source::File { url: u, .. } | Source::HlsPlaylist(u) => u == url,
+            Source::Planned(plan) => plan.segments.iter().any(|s| s.url == url),
+        }))
+    }
+}
+
 /// The input of [`TabMedia::update`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MediaEvent {
@@ -190,18 +200,26 @@ impl TabMedia {
                 vec![],
             ),
             MediaEvent::Resolved { id, result } => {
-                if let Some(item) = self
+                let Some(at) = self
                     .items
-                    .iter_mut()
-                    .find(|i| i.id == id && i.found == Found::Resolving)
-                {
-                    match result {
-                        Ok(r) => {
-                            item.title = r.title;
-                            item.found = Found::Ready(r.variants);
-                        }
-                        Err(refusal) => item.found = Found::Refused(refusal),
+                    .iter()
+                    .position(|i| i.id == id && i.found == Found::Resolving)
+                else {
+                    return (self, vec![]);
+                };
+                match result {
+                    Ok(r) => {
+                        let item = &mut self.items[at];
+                        item.title = r.title;
+                        item.found = Found::Ready(r.variants);
+                        // The player loads a master's variant and rendition playlists while
+                        // the master resolves: they are listed until now, as streams of
+                        // their own.
+                        let master = self.items[at].clone();
+                        self.items
+                            .retain(|i| i.id == master.id || !master.contains(&i.url));
                     }
+                    Err(refusal) => self.items[at].found = Found::Refused(refusal),
                 }
                 (self, vec![])
             }
@@ -245,13 +263,9 @@ impl TabMedia {
 
     /// The URL is listed, or is a part of a listed stream (a segment or a playlist of it).
     fn knows(&self, url: &str) -> bool {
-        self.items.iter().any(|item| {
-            item.url == url
-                || matches!(&item.found, Found::Ready(variants) if variants.iter().any(|v| match &v.source {
-                    Source::File { url: u, .. } | Source::HlsPlaylist(u) => u == url,
-                    Source::Planned(plan) => plan.segments.iter().any(|s| s.url == url),
-                }))
-        })
+        self.items
+            .iter()
+            .any(|item| item.url == url || item.contains(url))
     }
 
     /// Something to show: a stream to save, or one to explain (protected, live).
@@ -443,6 +457,41 @@ mod tests {
         // Ids are never reused.
         let (m, _) = m.update(seen("https://a.test/v.mp4", Kind::File));
         assert_eq!(m.items[0].id, 2);
+    }
+
+    #[test]
+    fn playlists_seen_while_the_master_resolves_fold_into_it() {
+        let m = TabMedia::default();
+        let (m, _) = m.update(seen("https://a.test/master.m3u8", Kind::Hls));
+        let (m, _) = m.update(seen("https://a.test/v720.m3u8", Kind::Hls));
+        let (m, _) = m.update(seen("https://a.test/audio.m3u8", Kind::Hls));
+        let (m, _) = m.update(seen("https://a.test/other.mp4", Kind::File));
+        assert_eq!(m.items.len(), 4);
+        let playlist = |url: &str, track| Variant {
+            source: Source::HlsPlaylist(url.into()),
+            ..Variant::file("x", track, Container::Ts, None, false)
+        };
+        let (m, _) = m.update(MediaEvent::Resolved {
+            id: 0,
+            result: Ok(Resolution {
+                variants: vec![
+                    playlist("https://a.test/v720.m3u8", Track::Video),
+                    playlist("https://a.test/audio.m3u8", Track::Audio),
+                ],
+                title: None,
+            }),
+        });
+        let urls: Vec<&str> = m.items.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec!["https://a.test/master.m3u8", "https://a.test/other.mp4"]
+        );
+        // The variant's own resolve answering late finds nothing.
+        let (m2, _) = m.clone().update(MediaEvent::Resolved {
+            id: 1,
+            result: Err(Refusal::Live),
+        });
+        assert_eq!(m2, m);
     }
 
     #[test]
