@@ -8,26 +8,42 @@
 //! the active top-level one (prerendered, in the back/forward cache).
 //!
 //! The message goes through welding's CDP pass-through (`send_devtools_message`); its reply
-//! comes back on the same channel. [`Pending`] is the pure bookkeeping between the two.
+//! comes back on the same channel. [`Pending`] is the pure bookkeeping between the two. It also
+//! asks a page for its target id (`Target.getTargetInfo`, handler `target_handler.cc`, BSD-3-Clause,
+//! called, nothing copied), which names the page to the DevTools frontend (`wubble_core::devtools`).
 
 use std::collections::BTreeMap;
 
 use crate::page::PageEvent;
 
-/// Freeze requests sent and not yet answered, by CDP message id.
+/// What a request in flight asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Request {
+    /// `Page.setWebLifecycleState`, to freeze (true) or thaw.
+    Freeze(bool),
+    /// `Target.getTargetInfo`: the page's own target id, for the docked DevTools frontend.
+    TargetId,
+}
+
+/// Requests sent and not yet answered, by CDP message id.
 #[derive(Debug, Default)]
 pub(crate) struct Pending {
     next: u32,
-    waiting: BTreeMap<u32, bool>,
+    waiting: BTreeMap<u32, Request>,
 }
 
 impl Pending {
-    /// A new request: its id and the message to send.
-    pub(crate) fn request(&mut self, frozen: bool) -> (u32, String) {
+    fn add(&mut self, request: Request) -> u32 {
         // High ids, so they never meet welding's own snapshot requests (small ids).
         self.next += 1;
         let id = 0x4000_0000 + self.next;
-        self.waiting.insert(id, frozen);
+        self.waiting.insert(id, request);
+        id
+    }
+
+    /// A new freeze request: its id and the message to send.
+    pub(crate) fn request(&mut self, frozen: bool) -> (u32, String) {
+        let id = self.add(Request::Freeze(frozen));
         let state = if frozen { "frozen" } else { "active" };
         let message = format!(
             r#"{{"id":{id},"method":"Page.setWebLifecycleState","params":{{"state":"{state}"}}}}"#
@@ -35,26 +51,43 @@ impl Pending {
         (id, message)
     }
 
+    /// A new target id request (a page session answers with its own target).
+    pub(crate) fn request_target_id(&mut self) -> (u32, String) {
+        let id = self.add(Request::TargetId);
+        (
+            id,
+            format!(r#"{{"id":{id},"method":"Target.getTargetInfo"}}"#),
+        )
+    }
+
     /// The request could not be sent: no reply will come.
     pub(crate) fn cancel(&mut self, id: u32) {
         self.waiting.remove(&id);
     }
 
-    /// A message from the channel: the answer to one of ours becomes [`PageEvent::Frozen`];
+    /// A message from the channel: the answer to one of ours becomes a [`PageEvent`];
     /// anything else (events, other replies) is ignored.
     pub(crate) fn reply(&mut self, message: &str) -> Option<PageEvent> {
         let value: serde_json::Value = serde_json::from_str(message).ok()?;
         let id = u32::try_from(value.get("id")?.as_u64()?).ok()?;
-        let frozen = self.waiting.remove(&id)?;
-        let ok = value.get("error").is_none();
-        if !ok {
-            eprintln!(
-                "wubble-engine: Page.setWebLifecycleState {}: {}",
-                if frozen { "frozen" } else { "active" },
-                value["error"]
-            );
+        let request = self.waiting.remove(&id)?;
+        let error = value.get("error");
+        if let Some(error) = error {
+            eprintln!("wubble-engine: CDP {request:?}: {error}");
         }
-        Some(PageEvent::Frozen { frozen, ok })
+        Some(match request {
+            Request::Freeze(frozen) => PageEvent::Frozen {
+                frozen,
+                ok: error.is_none(),
+            },
+            Request::TargetId => PageEvent::TargetId(
+                value["result"]["targetInfo"]["targetId"]
+                    .as_str()
+                    .filter(|_| error.is_none())
+                    .map(str::to_string)
+                    .ok_or(()),
+            ),
+        })
     }
 
     /// Whether replies are still expected (the channel is polled only then).
@@ -104,6 +137,44 @@ mod tests {
         assert!(p.is_empty());
         // Answered once only.
         assert_eq!(p.reply(&format!(r#"{{"id":{a},"result":{{}}}}"#)), None);
+    }
+
+    #[test]
+    fn the_target_id_request_has_its_own_id_and_reply() {
+        let mut p = Pending::default();
+        let (freeze_id, _) = p.request(true);
+        let (target_id, message) = p.request_target_id();
+        assert_ne!(freeze_id, target_id);
+        let v: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(v["method"], "Target.getTargetInfo");
+        assert_eq!(v["id"].as_u64(), Some(u64::from(target_id)));
+        // out of order: the target reply first, the freeze still waiting
+        assert_eq!(
+            p.reply(&format!(
+                r#"{{"id":{target_id},"result":{{"targetInfo":{{"targetId":"ABC123","type":"page"}}}}}}"#
+            )),
+            Some(PageEvent::TargetId(Ok("ABC123".into())))
+        );
+        assert!(!p.is_empty());
+        assert_eq!(
+            p.reply(&format!(r#"{{"id":{freeze_id},"result":{{}}}}"#)),
+            Some(PageEvent::Frozen {
+                frozen: true,
+                ok: true
+            })
+        );
+        // an error, or a reply with no id in it, is a failure
+        for reply in [
+            r#"{"id":ID,"error":{"code":-32601,"message":"no"}}"#,
+            r#"{"id":ID,"result":{}}"#,
+        ] {
+            let (id, _) = p.request_target_id();
+            assert_eq!(
+                p.reply(&reply.replace("ID", &id.to_string())),
+                Some(PageEvent::TargetId(Err(())))
+            );
+        }
+        assert!(p.is_empty());
     }
 
     #[test]

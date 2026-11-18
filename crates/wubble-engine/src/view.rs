@@ -364,6 +364,12 @@ impl View {
     /// `WindowInfo` on a windowless browser may need a parent there): elsewhere
     /// it logs and does nothing.
     pub fn open_devtools(&mut self) {
+        self.open_devtools_at(None);
+    }
+
+    /// [`Self::open_devtools`], revealing the element under `at` (CSS pixels of the page) in
+    /// the Elements panel (`ShowDevTools`'s `inspect_element_at`).
+    pub fn open_devtools_at(&mut self, at: Option<(i32, i32)>) {
         if !cfg!(target_os = "linux") {
             eprintln!("wubble-engine: DevTools is not verified on this platform yet");
             return;
@@ -373,7 +379,7 @@ impl View {
                 Some(&cef::WindowInfo::default()),
                 None,
                 Some(&cef::BrowserSettings::default()),
-                None,
+                at.map(|(x, y)| cef::Point { x, y }).as_ref(),
             )
         });
     }
@@ -397,6 +403,21 @@ impl View {
             );
             self.cdp.cancel(id);
             self.page.push(PageEvent::Frozen { frozen, ok: false });
+        }
+    }
+
+    /// Asks the page for its CDP target id (`Target.getTargetInfo`); [`PageEvent::TargetId`]
+    /// follows. The docked DevTools frontend names its page by it.
+    pub fn request_target_id(&mut self) {
+        if !self.is_open() {
+            self.page.push(PageEvent::TargetId(Err(())));
+            return;
+        }
+        let (id, message) = self.cdp.request_target_id();
+        if let Err(e) = self.producer.send_devtools_message(&message) {
+            eprintln!("wubble-engine: view {}: target id: {e}", self.browser_id);
+            self.cdp.cancel(id);
+            self.page.push(PageEvent::TargetId(Err(())));
         }
     }
 

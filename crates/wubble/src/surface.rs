@@ -320,6 +320,8 @@ pub enum Routed {
         frozen: bool,
         ok: bool,
     },
+    /// The page's CDP target id, for the docked DevTools frontend.
+    TargetId(Result<String, ()>),
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
     /// CEF gave up on these requests: every surface showing one closes.
@@ -393,6 +395,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
         PageEvent::Frozen { frozen, ok } => Routed::Frozen { frozen, ok },
+        PageEvent::TargetId(id) => Routed::TargetId(id),
         PageEvent::Committed => Routed::Committed,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
         PageEvent::PermissionRequested {

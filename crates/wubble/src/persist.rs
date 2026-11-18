@@ -195,6 +195,7 @@ impl Settings {
             site_isolation: on(&defs::PROCESS_SITE_ISOLATION),
             renderer_limit: count(&defs::PROCESS_RENDERER_LIMIT),
             spare_renderer: on(&defs::PROCESS_SPARE_RENDERER),
+            remote_debugging_port: defs::remote_port(count(&defs::DEVTOOLS_REMOTE_PORT)),
         }
     }
 

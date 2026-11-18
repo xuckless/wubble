@@ -10,6 +10,7 @@ use slint::winit_030::winit::event::Ime as WinitIme;
 use std::path::PathBuf;
 
 use wubble_core::busy::Reason;
+use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::model::Command;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
@@ -45,6 +46,9 @@ impl Host {
         let Some(tab) = self.tab_of(view) else {
             return;
         };
+        if tab == PANEL_TAB {
+            return self.on_panel_page_event(event);
+        }
         let seen = self.checks.page_smoke.is_some().then(|| event.clone());
         let visible = self.model.visible_tab() == Some(tab);
         let routed = surface::route(event);
@@ -95,6 +99,8 @@ impl Host {
             }
             Routed::Audible(audible) => self.set_busy(tab, Reason::Audible, audible),
             Routed::Frozen { frozen, ok } => self.frozen_answered(tab, frozen, ok),
+            Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
+            Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
             Routed::Committed => self.busy_page_started(tab),
             Routed::ImeBounds(rect) if visible => {
                 place_candidates(window, self.focus_origin(window), rect)
@@ -265,6 +271,7 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
+                MenuEffect::Run(MenuCommand::Inspect { at }) => self.inspect_at(tab, at),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
@@ -321,6 +328,9 @@ impl Host {
     /// The tab's view closed: its surfaces close without answering (welding
     /// answered every held request), its fullscreen and sound end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
+        if self.devtools.dock.tab() == Some(tab) {
+            self.dock_event(DockEvent::TabGone(tab));
+        }
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }

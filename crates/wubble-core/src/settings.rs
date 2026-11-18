@@ -319,6 +319,25 @@ pub const PROCESS_SPARE_RENDERER: SettingDef = SettingDef {
     restart: true,
 };
 
+/// Chromium's remote debugging endpoint (`remote-debugging-port`), on 127.0.0.1 only. Off by
+/// default: with a port set, any program on this computer can read and drive every open tab.
+/// Docked DevTools is the frontend page served by that endpoint, so it needs the port; without
+/// one, DevTools opens in its own window. Ports 1 to 1023 are privileged and count as off.
+pub const DEVTOOLS_REMOTE_PORT: SettingDef = SettingDef {
+    key: "devtools.remote_port",
+    kind: SettingKind::Count { min: 0, max: 65535 },
+    default: "0",
+    label: "Debugging port, 1024 to 65535 (0 off). Warning: any program on this computer can read and control every open tab. Docks DevTools beside the page",
+    section: Section::Privacy,
+    restart: true,
+};
+
+/// The port `DEVTOOLS_REMOTE_PORT`'s value asks for: `None` for 0 (off) and for the privileged
+/// ports 1 to 1023, and for anything past 65535.
+pub fn remote_port(raw: u32) -> Option<u16> {
+    u16::try_from(raw).ok().filter(|p| *p >= 1024)
+}
+
 /// What `MEMORY_BACK_FORWARD_CACHE` asks of Chromium.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackForwardCache {
@@ -368,6 +387,7 @@ pub const ALL: &[&SettingDef] = &[
     &PROCESS_SITE_ISOLATION,
     &PROCESS_RENDERER_LIMIT,
     &PROCESS_SPARE_RENDERER,
+    &DEVTOOLS_REMOTE_PORT,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
 ];
@@ -387,6 +407,20 @@ mod tests {
             assert!(!d.key.is_empty() && !d.label.is_empty());
             assert!(ALL[..i].iter().all(|o| o.key != d.key), "dup {}", d.key);
         }
+    }
+
+    #[test]
+    fn the_debugging_port_is_off_by_default_and_ignores_privileged_ports() {
+        assert_eq!(remote_port(0), None);
+        assert_eq!(remote_port(1), None);
+        assert_eq!(remote_port(1023), None);
+        assert_eq!(remote_port(1024), Some(1024));
+        assert_eq!(remote_port(65535), Some(65535));
+        assert_eq!(remote_port(65536), None);
+        let d = &DEVTOOLS_REMOTE_PORT;
+        assert!(d.restart && d.default == "0");
+        assert_eq!(d.kind, SettingKind::Count { min: 0, max: 65535 });
+        assert_eq!(remote_port(d.default.parse().unwrap()), None);
     }
 
     #[test]

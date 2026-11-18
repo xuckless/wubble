@@ -5,11 +5,12 @@
 use std::time::Instant;
 
 use slint::ComponentHandle;
-use wubble_core::bow::EdgeTable;
+use wubble_core::bow::{BOWED, EdgeTable};
+use wubble_core::devtools::PANEL_TAB;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::space::MAX_PANES;
-use wubble_core::split::SPLIT;
+use wubble_core::split::{Bow, SPLIT, string_line};
 use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
 use wubble_engine::view::{Layout, ScreenArea};
@@ -21,7 +22,7 @@ use wubble_ui::{AppWindow, Palette, SplitPane, SplitSeam};
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
 use crate::menu::{self, MenuEvent};
-use crate::panes::{PageRect, RADIUS};
+use crate::panes::{PageRect, RADIUS, page_width};
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
 
@@ -86,14 +87,21 @@ fn framed_tabs(model: &Model, screen: &Screen) -> Vec<TabId> {
 
 impl Host {
     pub(super) fn framed_tabs(&self) -> Vec<TabId> {
-        framed_tabs(&self.model, &self.screen)
+        let mut tabs = framed_tabs(&self.model, &self.screen);
+        tabs.extend((self.devtools.width() > 0.0).then_some(PANEL_TAB));
+        tabs
     }
 
     /// The tabs on screen, left to right: a fullscreen page alone, else the model's.
     pub(super) fn shown_tabs(&self) -> Vec<TabId> {
         match self.screen {
             Screen::Page { tab, .. } => vec![tab],
-            _ => self.model.visible_tabs(),
+            _ => {
+                let mut tabs = self.model.visible_tabs();
+                // the docked panel is a pane too
+                tabs.extend((self.devtools.width() > 0.0).then_some(PANEL_TAB));
+                tabs
+            }
         }
     }
 
@@ -103,7 +111,9 @@ impl Host {
         let scale = window.window().scale_factor();
         let rects = match self.screen {
             Screen::Page { tab, .. } => vec![PageRect { tab, x: 0.0, width }],
-            _ => self.panes.rects(&self.model.visible_tabs(), width),
+            _ => self
+                .panes
+                .rects(&self.model.visible_tabs(), width, self.devtools.width()),
         };
         rects.into_iter().map(|r| r.on_pixels(scale)).collect()
     }
@@ -156,6 +166,7 @@ impl Host {
     /// outside rendering. Returns whether they move.
     fn step_strings(&mut self, window: &AppWindow, dt: f64) -> bool {
         let (width, height) = content_size(window);
+        let width = page_width(width, self.devtools.width());
         let (moving, commands) = self.panes.frame(&self.model, dt, width, height);
         if !commands.is_empty() {
             let first = self.split_commands.is_empty();
@@ -167,6 +178,20 @@ impl Host {
         moving
     }
 
+    /// One frame of the DevTools panel's string; whether it moves.
+    fn step_source(&mut self, window: &AppWindow, dt: f64) -> bool {
+        if !self.devtools.seam.open && !self.devtools.seam.held {
+            return false;
+        }
+        let scale = f64::from(window.window().scale_factor());
+        let size = window.window().size();
+        let (w, h) = (
+            f64::from(size.width) / scale,
+            f64::from(size.height) / scale,
+        );
+        self.devtools.seam.step(dt, w, h)
+    }
+
     /// The rendering notifier's frame, before the shell is drawn: the split's strings, every
     /// view's size from the window as this frame lays it out, and each pane's stretch
     /// (`wubble_core::stretch`). Returns whether another frame is needed.
@@ -175,12 +200,13 @@ impl Host {
             now.duration_since(prev).as_secs_f64().min(DT_CAP)
         });
         let strings = self.model.shown_split().is_some() && self.step_strings(window, dt);
+        let source = self.step_source(window, dt);
         self.lay_out_views(window);
         let stretching = self.step_stretch(window, dt);
         let bowed = self.mask_panes(window);
         self.render_panes(window);
         self.measure_shell(window, bowed);
-        let moving = strings || stretching;
+        let moving = strings || stretching || source;
         if !moving {
             self.panes_last = None;
         }
@@ -362,6 +388,8 @@ impl Host {
         let focused = self.model.visible_tab();
         let rects = self.pane_rects(window);
         let fill = rects.len() == 1;
+        let split = self.panes.seam_count() > 0;
+        let panel_x = rects.iter().find(|r| r.tab == PANEL_TAB).map(|r| r.x);
         let panes: Vec<SplitPane> = rects
             .into_iter()
             .map(|r| {
@@ -379,7 +407,13 @@ impl Host {
                     stretch_x: (sx - 1.0) as f32,
                     stretch_y: (sy - 1.0) as f32,
                     fill,
-                    focused: Some(r.tab) == focused,
+                    focused: if r.tab == PANEL_TAB {
+                        self.devtools.focused
+                    } else {
+                        Some(r.tab) == focused
+                    },
+                    // the panes of a split and the docked panel close; a lone page does not
+                    closable: split || r.tab == PANEL_TAB,
                     edge: masked.as_ref().map(|m| m.image.clone()).unwrap_or_default(),
                     margin: masked.as_ref().map_or(0.0, |m| m.margin),
                     prev_opacity: prev.map_or(0.0, |p| p.2),
@@ -393,9 +427,28 @@ impl Host {
         let seams: Vec<SplitSeam> = if fullscreen {
             vec![]
         } else {
+            let source = &self.devtools.seam;
+            // the panel's string, after the split's (`Host::split_grab`)
+            let panel = panel_x.map(|x| {
+                let held = source.held || source.bend.x.abs() > BOWED;
+                let bow = Bow {
+                    bend: source.bend.x,
+                    gy: source.gy - f64::from(window.get_content_y()),
+                };
+                let x = x - SPLIT::gap / 2.0;
+                (
+                    x,
+                    if held {
+                        string_line(x, height, RADIUS, bow)
+                    } else {
+                        String::new()
+                    },
+                )
+            });
             self.panes
                 .seams(height)
                 .into_iter()
+                .chain(panel)
                 .map(|(x, path)| SplitSeam {
                     x: x as f32,
                     path: path.into(),
@@ -415,12 +468,16 @@ impl Host {
     /// The presenter slot of `tab`: its own while its frame is kept, else one no kept frame
     /// holds.
     fn slot_for(&mut self, tab: TabId) -> usize {
+        // the panel's presenter is the one after the pages'
+        if tab == PANEL_TAB {
+            self.slots[MAX_PANES] = Some(tab);
+            return MAX_PANES;
+        }
         if let Some(i) = self.slots.iter().position(|s| *s == Some(tab)) {
             return i;
         }
         let shown = self.framed_tabs();
-        let i = self
-            .slots
+        let i = self.slots[..MAX_PANES]
             .iter()
             .position(|s| s.is_none_or(|t| !shown.contains(&t)))
             .unwrap_or(MAX_PANES - 1);
@@ -560,20 +617,39 @@ impl Host {
         }
     }
 
+    /// The seam the gesture holds: the split's, or the DevTools panel's after them.
     pub fn split_grab(&mut self, seam: i32, x: f32, y: f32) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
         if let Ok(seam) = usize::try_from(seam) {
-            self.panes.grab(seam, x.into(), y.into());
+            if seam >= self.panes.seam_count() && self.devtools.width() > 0.0 {
+                self.source_grab(&window, x, y);
+            } else {
+                self.panes.grab(seam, x.into(), y.into());
+            }
             self.kick();
         }
     }
 
     pub fn split_drag(&mut self, x: f32, y: f32) {
-        self.panes.drag(x.into(), y.into());
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        if self.devtools.seam.held {
+            self.source_drag(&window, x, y);
+        } else {
+            self.panes.drag(x.into(), y.into());
+        }
         self.kick();
     }
 
     pub fn split_release(&mut self) {
-        self.panes.release();
+        if self.devtools.seam.held {
+            self.source_release();
+        } else {
+            self.panes.release();
+        }
         self.kick();
     }
 
@@ -584,6 +660,10 @@ impl Host {
 
     pub fn pane_close(&mut self, pane: i32) {
         if let Some(tab) = crate::shell::tab_id(pane) {
+            if tab == PANEL_TAB {
+                self.panel_closed();
+                return;
+            }
             self.panes.close(tab);
             self.kick();
         }

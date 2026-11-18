@@ -75,6 +75,9 @@ pub struct PageFeatures {
     pub renderer_limit: u32,
     /// `settings::PROCESS_SPARE_RENDERER`.
     pub spare_renderer: bool,
+    /// `settings::DEVTOOLS_REMOTE_PORT` through `settings::remote_port`: Chromium's remote
+    /// debugging endpoint, on 127.0.0.1. `None`: no socket is opened.
+    pub remote_debugging_port: Option<u16>,
 }
 
 pub use wubble_core::settings::BackForwardCache;
@@ -89,6 +92,7 @@ impl Default for PageFeatures {
             site_isolation: true,
             renderer_limit: 0,
             spare_renderer: true,
+            remote_debugging_port: None,
         }
     }
 }
@@ -166,6 +170,14 @@ impl PageFeatures {
                 !self.spare_renderer,
                 Disable("SpareRendererForSitePerProcess"),
                 "no renderer started ahead of the next navigation",
+            ),
+            (
+                self.remote_debugging_port.is_some(),
+                Switch(
+                    "remote-debugging-port",
+                    self.remote_debugging_port.map(|p| p.to_string()),
+                ),
+                "DevTools endpoint on 127.0.0.1 only; any local program can drive every tab",
             ),
         ]
     }
@@ -872,6 +884,23 @@ mod tests {
             ..PageFeatures::default()
         };
         assert_eq!(off.switches(), [s("disable-back-forward-cache", None)]);
+    }
+
+    #[test]
+    fn the_debugging_endpoint_is_a_switch_only_with_a_port() {
+        let s = |name: &str, value: Option<&str>| (name.to_string(), value.map(str::to_string));
+        let base = PageFeatures {
+            overlay_scrollbars: false,
+            middle_click_autoscroll: false,
+            ..PageFeatures::default()
+        };
+        assert_eq!(PageFeatures::default().remote_debugging_port, None);
+        assert!(base.switches().is_empty());
+        let open = PageFeatures {
+            remote_debugging_port: Some(9333),
+            ..base
+        };
+        assert_eq!(open.switches(), [s("remote-debugging-port", Some("9333"))]);
     }
 
     #[test]

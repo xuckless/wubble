@@ -59,6 +59,8 @@ pub enum Command {
     OpenBeside,
     /// Run an action, as from a key.
     Perform(Action),
+    /// Open DevTools on the element under the pointer (physical pixels relative to the view).
+    Inspect { at: (i32, i32) },
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
     /// A divider between groups; never chosen.
@@ -223,6 +225,22 @@ const ROWS: &[Row] = &[
         show: |c| c.page(),
         enabled: always,
         command: |_| Command::Engine(cef_id::RELOAD),
+    },
+    Row {
+        group: 6,
+        label: "View Page Source",
+        show: |c| c.page(),
+        enabled: always,
+        command: |_| Command::Perform(Action::ViewSource),
+    },
+    Row {
+        group: 6,
+        label: "Inspect",
+        show: always,
+        enabled: always,
+        command: |c| Command::Inspect {
+            at: (c.menu.x, c.menu.y),
+        },
     },
 ];
 
@@ -508,18 +526,42 @@ mod tests {
             forward: false,
         };
         let e = entries(&page(), nav);
-        assert_eq!(labels(&e), ["Back", "Forward", "Reload"]);
+        assert_eq!(
+            labels(&e),
+            [
+                "Back",
+                "Forward",
+                "Reload",
+                "-",
+                "View Page Source",
+                "Inspect"
+            ]
+        );
         assert_eq!(
             e.iter().map(|e| e.enabled).collect::<Vec<_>>(),
-            [true, false, true]
+            [true, false, true, false, true, true]
         );
         assert_eq!(e[0].command, Command::Engine(cef_id::BACK));
     }
 
     #[test]
+    fn inspect_carries_the_pointer_and_view_source_is_for_the_bare_page() {
+        let e = entries(&page(), NavFlags::default());
+        let inspect = e.iter().find(|e| e.label == "Inspect").unwrap();
+        assert_eq!(inspect.command, Command::Inspect { at: (10, 20) });
+        let source = e.iter().find(|e| e.label == "View Page Source").unwrap();
+        assert_eq!(source.command, Command::Perform(Action::ViewSource));
+        let e = entries(&link(), NavFlags::default());
+        assert!(e.iter().all(|e| e.label != "View Page Source"));
+    }
+
+    #[test]
     fn a_link_offers_new_tab_and_copy() {
         let e = entries(&link(), NavFlags::default());
-        assert_eq!(labels(&e), ["Open Link in New Tab", "Copy Link Address"]);
+        assert_eq!(
+            labels(&e),
+            ["Open Link in New Tab", "Copy Link Address", "-", "Inspect"]
+        );
         assert_eq!(
             e[0].command,
             Command::OpenInNewTab("https://a.test/next".into())
@@ -546,7 +588,9 @@ mod tests {
                 "Copy Link Address",
                 "-",
                 "Open Image in New Tab",
-                "Copy Image Address"
+                "Copy Image Address",
+                "-",
+                "Inspect"
             ]
         );
     }
@@ -558,7 +602,7 @@ mod tests {
             ..page()
         };
         let e = entries(&m, NavFlags::default());
-        assert_eq!(labels(&e), ["Copy"]);
+        assert_eq!(labels(&e), ["Copy", "-", "Inspect"]);
         assert!(e[0].enabled);
     }
 
@@ -590,7 +634,9 @@ mod tests {
                     "Copy",
                     "Paste",
                     "Delete",
-                    "Select All"
+                    "Select All",
+                    "-",
+                    "Inspect"
                 ]
             );
             for (label, flag) in all {

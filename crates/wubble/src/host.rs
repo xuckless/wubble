@@ -16,6 +16,7 @@
 
 mod autofill;
 mod busy;
+mod devtools;
 mod downloads;
 mod pages;
 mod panes;
@@ -38,6 +39,7 @@ use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
 use wubble_core::busy::Reason;
+use wubble_core::devtools::PANEL_TAB;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
@@ -268,8 +270,9 @@ pub struct Host {
     pub timer: slint::Timer,
     /// One ring of textures per pane on screen (each pane has its own frame size), and the tab
     /// each slot presents; a tab keeps its slot while it stays on screen.
-    presenters: [FramePresenter; MAX_PANES],
-    slots: [Option<TabId>; MAX_PANES],
+    /// The last one is the DevTools panel's (`PANEL_TAB`).
+    presenters: [FramePresenter; MAX_PANES + 1],
+    slots: [Option<TabId>; MAX_PANES + 1],
     /// The popup widget's frames: a ring of their own, since a popup's size
     /// differs from the page's and changes with every popup.
     popup_presenter: FramePresenter,
@@ -375,6 +378,8 @@ pub struct Host {
     snapshots: snapshots::Snapshots,
     /// The Task manager page's meter (`host/tasks.rs`).
     tasks: tasks::TasksPage,
+    /// DevTools: the dock's state and its panel (`host/devtools.rs`).
+    devtools: devtools::Docked,
 }
 
 impl Host {
@@ -386,7 +391,7 @@ impl Host {
     pub fn new(
         engine: Engine,
         window: &AppWindow,
-        presenters: [FramePresenter; MAX_PANES + 1],
+        presenters: [FramePresenter; MAX_PANES + 2],
         glass: Rc<RefCell<Glass>>,
         panels: Rc<RefCell<GlassRegistry>>,
         loaded: Loaded,
@@ -416,7 +421,8 @@ impl Host {
             .collect();
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
-        let [a, b, c, popup_presenter] = presenters;
+        let dock_port = settings.page_features().remote_debugging_port;
+        let [a, b, c, popup_presenter, panel_presenter] = presenters;
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
@@ -425,8 +431,8 @@ impl Host {
             engine,
             window: window.as_weak(),
             timer: slint::Timer::default(),
-            presenters: [a, b, c],
-            slots: [None; MAX_PANES],
+            presenters: [a, b, c, panel_presenter],
+            slots: [None; MAX_PANES + 1],
             popup_presenter,
             glass,
             panels,
@@ -498,6 +504,7 @@ impl Host {
             pressure: busy::PressureGauge::system(),
             snapshots: snapshots::Snapshots::default(),
             tasks: tasks::TasksPage::default(),
+            devtools: devtools::Docked::new(dock_port),
         };
         host.replay_settings();
         host.render_downloads(window);
@@ -634,6 +641,7 @@ impl Host {
         let Some(window) = self.window.upgrade() else {
             return;
         };
+        self.dock_follows_tab();
         // Another tab's frame (and cursor) must not stay on screen while
         // input already goes to the tabs shown now: blank until they paint.
         let kept = self.framed_tabs();
@@ -694,6 +702,9 @@ impl Host {
     }
 
     fn tab_view(&mut self, tab: TabId) -> Option<&mut View> {
+        if tab == PANEL_TAB {
+            return self.panel_view();
+        }
         let id = *self.views.get(&tab)?;
         self.engine.view(id)
     }
@@ -714,6 +725,14 @@ impl Host {
         self.tab_view(self.model.visible_tab()?)
     }
 
+    /// The view that gets keys: the DevTools panel's after a press in it, else the page's.
+    fn focused_view(&mut self) -> Option<&mut View> {
+        if self.devtools.focused && self.devtools.view.is_some() {
+            return self.panel_view();
+        }
+        self.view()
+    }
+
     /// The visible tab's view, else any live tab's: for work that needs a view but none in
     /// particular (a retried download started from an internal page).
     fn any_view(&mut self) -> Option<&mut View> {
@@ -726,6 +745,9 @@ impl Host {
     }
 
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
+        if self.devtools.view == Some(view) {
+            return Some(PANEL_TAB);
+        }
         self.views
             .iter()
             .find_map(|(&tab, &id)| (id == view).then_some(tab))
@@ -790,6 +812,7 @@ impl Host {
                 framed,
                 popup_framed,
                 view_width,
+                panel: self.dock_seen(),
             });
         }
         if self.checks.quit_after.is_some() {
@@ -815,6 +838,15 @@ impl Host {
             self.views.remove(&tab);
             self.view_gone(tab);
             self.dispatch(Command::CloseTab(tab));
+        }
+        // the frontend closed itself
+        if self
+            .devtools
+            .view
+            .is_some_and(|id| !self.engine.has_view(id))
+        {
+            self.devtools.view = None;
+            self.panel_closed();
         }
     }
 
@@ -923,6 +955,9 @@ impl Host {
         let Some(tab) = self.tab_of(view) else {
             return;
         };
+        if tab == PANEL_TAB {
+            return self.on_panel_event(event);
+        }
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
@@ -1144,6 +1179,7 @@ impl Host {
             }
             Plan::Copy(text) => self.copy(&text),
             Plan::BookmarkPage => self.bookmark_page(),
+            Plan::DevTools => self.toggle_devtools(),
             Plan::OpenBeside => self.open_beside(),
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {
@@ -1647,6 +1683,7 @@ impl Host {
                     self.find_event(FindEvent::Query(query.into()));
                 }
                 page_smoke::Action::ZoomIn => self.perform(Action::ZoomIn),
+                page_smoke::Action::ToggleDevTools => self.perform(Action::DevTools),
                 page_smoke::Action::Pass(percent) => {
                     self.page_zoom = Some(percent);
                     quit();
@@ -1731,11 +1768,14 @@ impl Host {
     /// window has focus and the web content is the shell's focused item.
     /// A view that stops being visible loses focus first.
     pub fn sync_focus(&mut self, window: &AppWindow) {
-        let target = self
-            .model
-            .visible_tab()
-            .and_then(|t| self.views.get(&t))
-            .copied();
+        let target = if self.devtools.focused && self.devtools.view.is_some() {
+            self.devtools.view
+        } else {
+            self.model
+                .visible_tab()
+                .and_then(|t| self.views.get(&t))
+                .copied()
+        };
         if target != self.focus_view {
             if let Some(view) = self.focus_view.and_then(|id| self.engine.view(id)) {
                 view.focus(false);
@@ -1750,9 +1790,9 @@ impl Host {
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| s.menu.keeps_page_focus());
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
-        let view_open = self.view().is_some();
+        let view_open = self.focused_view().is_some();
         if let Some(focused) = self.input.focus_change(focused, view_open)
-            && let Some(view) = self.view()
+            && let Some(view) = self.focused_view()
         {
             view.focus(focused);
             // Slint enables IME only for its own text fields (and disables
@@ -1861,7 +1901,7 @@ impl Host {
                     KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
                 ) {
                     self.pace(PaceEvent::Wake);
-                    if let Some(view) = self.view() {
+                    if let Some(view) = self.focused_view() {
                         view.key(&key);
                     }
                 }
@@ -1975,12 +2015,18 @@ impl Host {
         let Some(button) = input::mouse_button(button) else {
             return;
         };
-        if pressed
-            && let Some(tab) = crate::shell::tab_id(pane)
-            && self.model.visible_tab() != Some(tab)
-            && self.model.visible_tabs().contains(&tab)
-        {
-            self.dispatch(Command::ActivateTab(tab));
+        if pressed && let Some(tab) = crate::shell::tab_id(pane) {
+            // keys follow the pane that was pressed: the DevTools panel or a page
+            let panel = tab == PANEL_TAB;
+            if self.devtools.focused != panel && self.shown_tabs().contains(&tab) {
+                self.devtools.focused = panel;
+                if let Some(window) = self.window.upgrade() {
+                    self.sync_focus(&window);
+                }
+            }
+            if self.model.visible_tab() != Some(tab) && self.model.visible_tabs().contains(&tab) {
+                self.dispatch(Command::ActivateTab(tab));
+            }
         }
         let sent = if pressed {
             vec![button]

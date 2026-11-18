@@ -16,7 +16,11 @@
 //!    one is dismissed through the menu's path and answered exactly once.
 //! 5. Find "needle" through the find bar: 2 matches.
 //! 6. Zoom in: the page reports a zoom above 100 %.
-//! 7. Right-click once more and quit with the menu open: closing the browser
+//! 7. Open DevTools through F12's path: with the endpoint on a free loopback port the panel docks
+//!    beside the page (the page's view gets narrower), shows a frame (a second frame stream) and
+//!    its title starts with "DevTools" (the frontend reached the page); toggle it shut and the
+//!    page's width is back.
+//! 8. Right-click once more and quit with the menu open: closing the browser
 //!    cancels it.
 //!
 //! Real pointer and key use of the popup, the dialog's feel and the
@@ -29,8 +33,19 @@ use wubble_gfx::FrameSize;
 
 use crate::menu::{self, NavFlags};
 
+/// A pane is on screen next to the page after this many logical px of its width are taken.
+pub const WIDTH_SLACK: u32 = 1;
+
 /// Runs of CEF work one step may take before the smoke gives up.
 pub const MAX_STEP_RUNS: u32 = 2_000;
+
+/// A loopback port nothing listens on, for the DevTools endpoint (bound and released; the
+/// browser binds it again a moment later).
+pub fn free_port() -> std::io::Result<u16> {
+    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
+        .local_addr()?
+        .port())
+}
 
 /// Where `page.html` puts things, view-relative logical px (it lays them
 /// out absolutely).
@@ -61,6 +76,12 @@ pub enum Step {
     Cancelled(usize),
     Found,
     Zoomed,
+    /// Zoomed to this percent; the next run of work records the view's width.
+    Docking(u32),
+    /// DevTools toggled open at this view width (logical px, rounded).
+    DockOpen(u32, u32),
+    /// DevTools toggled shut: waiting for the page to have its width back.
+    DockClosing(u32, u32),
     /// Waiting for the last menu, left open at exit, with the zoom to pass.
     Exit(u32),
 }
@@ -103,10 +124,25 @@ pub enum Input<'a> {
         popup_framed: bool,
         /// The view's width, logical px.
         view_width: f32,
+        panel: Panel,
     },
     Web(&'a WebEvent),
     /// A page event, and the view's physical size.
     Page(&'a PageEvent, FrameSize),
+}
+
+/// What the DevTools dock shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panel {
+    Closed,
+    /// DevTools is in its own window (the endpoint is off or failed).
+    Detached,
+    Docked {
+        /// The panel has shown a frame.
+        framed: bool,
+        /// The frontend set its title: it reached the page over the endpoint.
+        titled: bool,
+    },
 }
 
 /// Whether a popup (physical px, view-relative) starts left of or above the
@@ -135,6 +171,8 @@ pub enum Action {
     MenuGone,
     Find(&'static str),
     ZoomIn,
+    /// F12's path: open DevTools, or close it.
+    ToggleDevTools,
     Pass(u32),
     Fail(String),
 }
@@ -240,7 +278,59 @@ pub fn next(state: PageSmoke, input: Input) -> (PageSmoke, Vec<Action>) {
             ),
         },
         (Zoomed, Page(PageEvent::ZoomChanged { percent }, _)) if *percent > 100 => {
-            (to(Exit(*percent)), vec![Action::RightClick(LINK_AT)])
+            (to(Docking(*percent)), vec![])
+        }
+        (Docking(percent), Worked { view_width, .. }) => (
+            to(DockOpen(percent, view_width.round() as u32)),
+            vec![Action::ToggleDevTools],
+        ),
+        (
+            DockOpen(_, _),
+            Worked {
+                panel: Panel::Detached,
+                ..
+            },
+        ) => (
+            PageSmoke::Done,
+            vec![Action::Fail(
+                "DevTools opened in its own window, not docked: is the endpoint up?".into(),
+            )],
+        ),
+        (
+            DockOpen(percent, width),
+            Worked {
+                panel:
+                    Panel::Docked {
+                        framed: true,
+                        titled: true,
+                    },
+                view_width,
+                ..
+            },
+        ) => {
+            if view_width.round() as u32 + WIDTH_SLACK < width {
+                (
+                    to(DockClosing(percent, width)),
+                    vec![Action::ToggleDevTools],
+                )
+            } else {
+                (
+                    PageSmoke::Done,
+                    vec![Action::Fail(format!(
+                        "the docked panel left the page {view_width} px of its {width}"
+                    ))],
+                )
+            }
+        }
+        (
+            DockClosing(percent, width),
+            Worked {
+                panel: Panel::Closed,
+                view_width,
+                ..
+            },
+        ) if (view_width.round() as u32).abs_diff(width) <= WIDTH_SLACK => {
+            (to(Exit(percent)), vec![Action::RightClick(LINK_AT)])
         }
         (Exit(percent), Page(PageEvent::ContextMenuRequested { .. }, _)) => {
             (PageSmoke::Done, vec![Action::Pass(percent)])
@@ -277,6 +367,16 @@ mod tests {
         framed: true,
         popup_framed: false,
         view_width: 800.0,
+        panel: Panel::Closed,
+    };
+    const DOCKED: Input = Input::Worked {
+        framed: true,
+        popup_framed: false,
+        view_width: 400.0,
+        panel: Panel::Docked {
+            framed: true,
+            titled: true,
+        },
     };
 
     #[test]
@@ -318,6 +418,7 @@ mod tests {
                 framed: true,
                 popup_framed: true,
                 view_width: 800.0,
+                panel: Panel::Closed,
             },
             Input::Page(&PageEvent::PopupHidden, VIEW),
             Input::Page(&alert, VIEW),
@@ -331,6 +432,11 @@ mod tests {
             Input::Page(&menu, VIEW),
             Input::Page(&found, VIEW),
             Input::Page(&zoom, VIEW),
+            // the dock: opens at the page's width, docked and framed, shut again
+            WORK,
+            WORK,
+            DOCKED,
+            WORK,
             Input::Page(&menu, VIEW),
         ]);
         assert_eq!(s, PageSmoke::Done);
@@ -360,10 +466,63 @@ mod tests {
                 Action::DismissMenu,
                 Action::Find(NEEDLE),
                 Action::ZoomIn,
+                Action::ToggleDevTools,
+                Action::ToggleDevTools,
                 Action::RightClick(LINK_AT),
                 Action::Pass(110),
             ]
         );
+    }
+
+    fn worked(view_width: f32, panel: Panel) -> Input<'static> {
+        Input::Worked {
+            framed: true,
+            popup_framed: false,
+            view_width,
+            panel,
+        }
+    }
+
+    #[test]
+    fn the_dock_waits_for_the_frontend_and_for_the_pages_width() {
+        let at = |step| PageSmoke::At { step, runs: 0 };
+        // still on `step`, one more run of work spent
+        let waiting_on = |step| PageSmoke::At { step, runs: 1 };
+        let attached = Panel::Docked {
+            framed: true,
+            titled: true,
+        };
+        let open = at(Step::DockOpen(110, 800));
+        // framed but not titled: still waiting
+        let waiting = Panel::Docked {
+            framed: true,
+            titled: false,
+        };
+        assert_eq!(
+            next(open, worked(400.0, waiting)).0,
+            waiting_on(Step::DockOpen(110, 800))
+        );
+        // attached, but the page did not make room
+        let (s, actions) = next(open, worked(800.0, attached));
+        assert_eq!(s, PageSmoke::Done);
+        assert!(matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("px of its")));
+        // its own window instead of the dock
+        let (s, actions) = next(open, worked(800.0, Panel::Detached));
+        assert_eq!(s, PageSmoke::Done);
+        assert!(matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("own window")));
+        // closing: the page's width must be back before the smoke goes on
+        let closing = at(Step::DockClosing(110, 800));
+        assert_eq!(
+            next(closing, worked(600.0, Panel::Closed)).0,
+            waiting_on(Step::DockClosing(110, 800))
+        );
+        assert_eq!(
+            next(closing, worked(800.0, attached)).0,
+            waiting_on(Step::DockClosing(110, 800))
+        );
+        let (s, actions) = next(closing, worked(800.0, Panel::Closed));
+        assert_eq!(s, at(Step::Exit(110)));
+        assert_eq!(actions, [Action::RightClick(LINK_AT)]);
     }
 
     #[test]

@@ -8,9 +8,10 @@
 //! commands, write panes and seams. The focus ring is `browser/chrome.tsx` `split-layout`'s.
 
 use wubble_core::bow::{BOWED, Curve, EdgeTable, edge_table};
+use wubble_core::devtools::PANEL_TAB;
 use wubble_core::model::{Command, Model};
 use wubble_core::space::SpaceId;
-use wubble_core::split::{Bow, Split, SplitEvent, string_line, string_rect};
+use wubble_core::split::{Bow, SPLIT, Split, SplitEvent, string_line, string_rect};
 use wubble_core::tab::TabId;
 use wubble_engine::view::Layout;
 use wubble_gfx::FrameSize;
@@ -52,6 +53,15 @@ impl PageRect {
             scale,
             area: None,
         }
+    }
+}
+
+/// The width the pages share when the docked panel is `panel` wide (0: no panel).
+pub fn page_width(width: f64, panel: f64) -> f64 {
+    if panel <= 0.0 {
+        width
+    } else {
+        (width - panel - SPLIT::gap).max(0.0)
     }
 }
 
@@ -124,7 +134,23 @@ impl Panes {
     /// page, the physics' rect for a pane of the split. A pane with no width (closing) or not
     /// synced yet has none. When the physics has closed a split down to one page before the
     /// model unsplits it, that page is the one on screen.
-    pub fn rects(&self, tabs: &[TabId], width: f64) -> Vec<PageRect> {
+    pub fn rects(&self, tabs: &[TabId], width: f64, panel: f64) -> Vec<PageRect> {
+        if panel <= 0.0 {
+            return self.page_rects(tabs, width);
+        }
+        // The docked panel takes the right edge; the pages share what is left of the width.
+        let page_width = page_width(width, panel);
+        let mut rects = self.page_rects(tabs, page_width);
+        rects.push(PageRect {
+            tab: PANEL_TAB,
+            x: width - panel,
+            width: panel,
+        });
+        rects
+    }
+
+    /// `rects` of the pages alone.
+    fn page_rects(&self, tabs: &[TabId], width: f64) -> Vec<PageRect> {
         if !self.shown() {
             let page = match self.split.ids.as_slice() {
                 [id] if self.space.is_some() => Some(TabId(*id)),
@@ -146,6 +172,11 @@ impl Panes {
                 })
             })
             .collect()
+    }
+
+    /// How many split seams are shown (the panel's seam comes after them).
+    pub fn seam_count(&self) -> usize {
+        if self.shown() { self.split.n() - 1 } else { 0 }
     }
 
     /// The seams: centre x and the bowed string while held or twanging ("" when straight).
@@ -287,7 +318,7 @@ mod tests {
         assert_eq!(p.frame(&m, DT, 1000.0, 700.0), (false, vec![]));
         let t = m.visible_tab().unwrap();
         assert_eq!(
-            p.rects(&m.visible_tabs(), 1000.0),
+            p.rects(&m.visible_tabs(), 1000.0, 0.0),
             vec![PageRect {
                 tab: t,
                 x: 0.0,
@@ -296,7 +327,33 @@ mod tests {
         );
         assert!(p.seams(700.0).is_empty());
         assert_eq!(p.ring(Some(t), 700.0), "");
-        assert!(p.rects(&[], 1000.0).is_empty());
+        assert!(p.rects(&[], 1000.0, 0.0).is_empty());
+    }
+
+    #[test]
+    fn the_docked_panel_takes_the_right_edge_and_the_pages_what_is_left() {
+        let m = with_tabs(2);
+        let mut p = Panes::default();
+        p.frame(&m, DT, page_width(1000.0, 400.0), 700.0);
+        let t = m.visible_tab().unwrap();
+        assert_eq!(page_width(1000.0, 0.0), 1000.0);
+        assert_eq!(
+            p.rects(&m.visible_tabs(), 1000.0, 400.0),
+            vec![
+                PageRect {
+                    tab: t,
+                    x: 0.0,
+                    width: 1000.0 - 400.0 - SPLIT::gap
+                },
+                PageRect {
+                    tab: PANEL_TAB,
+                    x: 600.0,
+                    width: 400.0
+                },
+            ]
+        );
+        // no room left: the page keeps no width, never a negative one
+        assert_eq!(page_width(300.0, 400.0), 0.0);
     }
 
     #[test]
@@ -307,7 +364,7 @@ mod tests {
         // the first frame places the seams at their stops, nothing animates
         let (moving, commands) = p.frame(&m, 0.0, 1008.0, 700.0);
         assert!(!moving && commands.is_empty());
-        let rects = p.rects(&m.visible_tabs(), 1008.0);
+        let rects = p.rects(&m.visible_tabs(), 1008.0, 0.0);
         let want = [(TabId(2), 0.0, 500.0), (TabId(1), 508.0, 500.0)]
             .map(|(tab, x, width)| PageRect { tab, x, width });
         assert_eq!(rects, want);
@@ -424,7 +481,7 @@ mod tests {
         let commands = settle(&mut p, &m, 1000.0, 700.0);
         assert_eq!(commands[0], Command::Unsplit(left));
         assert_eq!(
-            p.rects(&m.visible_tabs(), 1000.0),
+            p.rects(&m.visible_tabs(), 1000.0, 0.0),
             vec![PageRect {
                 tab: right,
                 x: 0.0,
@@ -459,7 +516,7 @@ mod tests {
         p.frame(&m, 0.0, 1000.0, 700.0);
         let (m, _) = apply(m, Command::ActivateTab(TabId(1)));
         // still the split (TabId(1) is a pane): nothing to forget
-        assert_eq!(p.rects(&m.visible_tabs(), 1000.0).len(), 2);
+        assert_eq!(p.rects(&m.visible_tabs(), 1000.0, 0.0).len(), 2);
         let (m, _) = apply(
             m,
             Command::NewSpace {

@@ -1005,6 +1005,7 @@ fn run(
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);
     let measuring = matches!(mode, Mode::Measure { .. });
     // Smokes download into their throwaway profile.
@@ -1115,6 +1116,15 @@ fn run(
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
     });
+    // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
+    // settings turn it on, on a free loopback port.
+    let mut loaded = loaded;
+    if smoke_page {
+        loaded.settings.stored.insert(
+            wubble_core::settings::DEVTOOLS_REMOTE_PORT.key.into(),
+            page_smoke::free_port()?.to_string(),
+        );
+    }
     let blocking = blocking::Blocking::new();
     let engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
@@ -1144,6 +1154,7 @@ fn run(
         engine,
         &window,
         [
+            gpu.presenter(),
             gpu.presenter(),
             gpu.presenter(),
             gpu.presenter(),

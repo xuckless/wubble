@@ -416,6 +416,8 @@ pub enum PageEvent {
         frozen: bool,
         ok: bool,
     },
+    /// The page answered `View::request_target_id` with its CDP target id (`Err`: refused).
+    TargetId(Result<String, ()>),
     /// The main frame committed a new document (not a same-document navigation): what the old
     /// documents' frames reported through frame messages is stale.
     Committed,

@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 
 use wubble_core::busy::{Busy, Frames, PROBED, Reason};
+use wubble_core::devtools::Dock;
 use wubble_core::model::Command;
 use wubble_core::pressure::Gauge;
 use wubble_core::sleep::Pressure;
@@ -112,7 +113,8 @@ impl Host {
     pub(super) fn devtools_tick(&mut self) {
         let tabs: Vec<TabId> = self.views.keys().copied().collect();
         for tab in tabs {
-            let open = self.tab_view(tab).is_some_and(|v| v.has_devtools());
+            let docked = self.devtools.dock == Dock::Open { tab };
+            let open = docked || self.tab_view(tab).is_some_and(|v| v.has_devtools());
             self.set_busy(tab, Reason::DevTools, open);
         }
     }

@@ -7,6 +7,7 @@ pub mod apply;
 pub mod autofill;
 pub mod bow;
 pub mod busy;
+pub mod devtools;
 pub mod download;
 pub mod favicon;
 pub mod import;
