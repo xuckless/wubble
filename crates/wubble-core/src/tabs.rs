@@ -109,6 +109,14 @@ impl TabRows {
         }
         self.rows = next;
         self.active = active;
+        // wubble change: the host's model can change under a held press (a tab closes itself,
+        // a popup opens). Keep the drag on its row by id, or drop it when the row is gone, so
+        // `up` never reorders by stale indices.
+        self.drag = self.drag.and_then(|mut d| {
+            d.from = self.rows.iter().position(|r| r.id == d.id)?;
+            d.to = d.to.min(self.rows.len() - 1);
+            Some(d)
+        });
     }
 
     // @source slint-tabs-slot
@@ -173,14 +181,16 @@ impl TabRows {
         began
     }
 
-    /// Pointer up on row `i`: a click picks the row, a drag may reorder (the owner applies
+    /// Pointer up: a click picks the row, a drag may reorder (the owner applies
     /// `Moved(from, to)` to its model; the rows here are already in the new order).
-    pub fn up(&mut self, i: usize) -> TabUp {
+    pub fn up(&mut self) -> TabUp {
         let Some(d) = self.drag.take() else {
             return TabUp::None;
         };
+        // wubble change: picks the press's own row (kept by id across `set_ids`); the port takes
+        // the pointer-up's row index, which names another tab once the list has changed.
         if !d.moved {
-            return TabUp::Pick(i);
+            return TabUp::Pick(d.from);
         }
         if d.to != d.from {
             let row = self.rows.remove(d.from);
@@ -320,7 +330,7 @@ mod tests {
         }
         // rows 1 and 2 made room
         assert!(t.rows[1].y.x < TABS::pitch);
-        assert_eq!(t.up(0), TabUp::Moved(0, 2));
+        assert_eq!(t.up(), TabUp::Moved(0, 2));
         assert_eq!(t.active, Some(2));
         let mut n = 0;
         while t.step(1.0 / 60.0) {
@@ -349,7 +359,7 @@ mod tests {
         // a reorder with no active row keeps it none
         t.down(0, 0.0);
         t.r#move(2.0 * TABS::pitch);
-        assert_eq!(t.up(0), TabUp::Moved(0, 2));
+        assert_eq!(t.up(), TabUp::Moved(0, 2));
         assert_eq!(t.active, None);
         t.set_ids(&[], None);
         settle(&mut t);
@@ -376,16 +386,42 @@ mod tests {
     }
 
     #[test]
+    fn model_change_under_a_drag_follows_the_row_by_id() {
+        // A, B, C; A dragged to slot 2, then C closes before the release.
+        let mut t = TabRows::new(&[1, 2, 3], Some(2));
+        t.down(0, 0.0);
+        t.r#move(2.0 * TABS::pitch);
+        t.set_ids(&[1, 2], Some(0));
+        assert_eq!(t.up(), TabUp::Moved(0, 1));
+        assert_eq!(t.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [2, 1]);
+        assert_eq!(t.active, Some(1));
+
+        // A row opens above the pressed one: the click still picks the pressed row.
+        let mut t = TabRows::new(&[1, 2], Some(0));
+        t.down(1, 0.0);
+        t.set_ids(&[9, 1, 2], Some(1));
+        assert_eq!(t.up(), TabUp::Pick(2));
+
+        // The dragged row itself goes away: the drag ends with nothing to report.
+        let mut t = TabRows::new(&[1, 2, 3], Some(0));
+        t.down(2, 0.0);
+        t.r#move(-2.0 * TABS::pitch);
+        t.set_ids(&[1, 2], Some(0));
+        assert!(!t.is_dragging(3));
+        assert_eq!(t.up(), TabUp::None);
+    }
+
+    #[test]
     fn six_px_separates_a_pick_from_a_drag() {
         let mut t = TabRows::new(&[1, 2, 3], Some(0));
         t.down(1, 100.0);
         assert!(!t.r#move(100.0 + TABS::dragStart));
-        assert_eq!(t.up(1), TabUp::Pick(1));
+        assert_eq!(t.up(), TabUp::Pick(1));
         t.down(1, 100.0);
         assert!(t.r#move(100.0 + TABS::dragStart + 0.5));
         assert!(t.is_dragging(2));
         // back over its own slot: a drag that lands where it started is no move
         t.r#move(100.0);
-        assert_eq!(t.up(1), TabUp::None);
+        assert_eq!(t.up(), TabUp::None);
     }
 }

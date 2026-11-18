@@ -26,10 +26,7 @@ use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
-use crate::{AppWindow, SidebarMode};
-
-/// Corner radius of the web view (`Radius.md`), for the seam's string (`Seam::clip`).
-const WEB_RADIUS: f64 = 14.0;
+use crate::{AppWindow, Radius, SidebarMode};
 
 impl From<seam::SidebarMode> for SidebarMode {
     fn from(m: seam::SidebarMode) -> Self {
@@ -168,8 +165,8 @@ impl Driver {
         window.set_sidebar_mode(self.seam.mode.into());
     }
 
-    fn tab_up(&mut self, window: &AppWindow, i: usize) -> Option<Emit> {
-        match self.tabs.up(i) {
+    fn tab_up(&mut self, window: &AppWindow) -> Option<Emit> {
+        match self.tabs.up() {
             TabUp::Pick(i) => self.ids.get(i).copied().map(Emit::Activated),
             TabUp::Moved(from, to) => {
                 let id = *self.ids.get(from)?;
@@ -229,9 +226,12 @@ impl Driver {
         let bowed = self.seam.held || self.seam.bend.x.abs() > 0.05;
         window.set_seam_bowed(bowed);
         if bowed {
-            let a = if w > 0.5 { w + INSET } else { 0.0 };
+            // The string runs along the web view's left edge, in the web view's frame (inset on
+            // every side); app.slint decides where that edge is, from the width set above.
+            let a = f64::from(window.get_content_x()) - INSET;
+            let r = f64::from(window.global::<Radius>().get_md());
             let (lw, lh) = (w_win - INSET * 2.0, h_win - INSET * 2.0);
-            let (_path, line) = self.seam.clip(a, lw, lh, WEB_RADIUS, self.seam.gy - INSET);
+            let (_path, line) = self.seam.clip(a, lw, lh, r, self.seam.gy - INSET);
             window.set_seam_path(line.into());
         } else {
             window.set_seam_path(Default::default());
@@ -321,7 +321,7 @@ pub fn connect(window: &AppWindow) -> Shared {
         })
     });
     let (d, w) = hook();
-    window.on_tab_release(move |i| run(&d, &w, |s, w| s.tab_up(w, index(i))));
+    window.on_tab_release(move |_| run(&d, &w, |s, w| s.tab_up(w)));
 
     // seam: one gesture for resize, rail and hidden
     let (d, w) = hook();

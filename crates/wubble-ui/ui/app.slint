@@ -14,7 +14,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, GlassBackdrops, Chrome }
+export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, GlassBackdrops, Chrome, Radius }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -214,6 +214,14 @@ export component AppWindow inherits Window {
             keys: @keys(Control + W);
             activated => {
                 root.close-tab-requested();
+            }
+        }
+        // Action::ToggleSidebar (wubble-core keys.rs, Ctrl+Alt+Z; Slint reads Control as Command
+        // on macOS). The way back from a seam-hidden sidebar besides the peek.
+        KeyBinding {
+            keys: @keys(Control + Alt + Z);
+            activated => {
+                root.toggle-sidebar();
             }
         }
 
