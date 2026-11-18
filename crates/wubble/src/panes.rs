@@ -51,6 +51,7 @@ impl PageRect {
                 physical(height as f32, scale),
             ),
             scale,
+            area: None,
         }
     }
 }

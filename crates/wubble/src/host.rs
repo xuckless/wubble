@@ -19,9 +19,10 @@ mod panes;
 mod surfaces;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
@@ -52,6 +53,8 @@ use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 
 use crate::backdrop::Glass;
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
+use crate::block_smoke::{self, BlockSmoke};
+use crate::blocking::Blocking;
 use crate::ime::Ime;
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
@@ -174,6 +177,8 @@ struct Bar {
     /// The store's latest history hits; ranked against each new query until
     /// that query's own hits arrive.
     history: Vec<HistoryEntry>,
+    /// The icons of those hits' origins, by hit URL. Data for the rows; the shell draws none yet.
+    icons: HashMap<String, wubble_store::Favicon>,
     /// Bumped per query; a history reply for an older one is dropped.
     generation: u64,
 }
@@ -189,6 +194,7 @@ pub struct Checks {
     pub tabs_smoke: Option<TabsSmoke>,
     pub session_smoke: Option<SessionSmoke>,
     pub page_smoke: Option<PageSmoke>,
+    pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
@@ -253,6 +259,8 @@ pub struct Host {
     pub nav_title: Option<String>,
     pub tabs_passed: bool,
     pub session_passed: bool,
+    /// `--smoke session`: whether the store returned the icon the first run filed.
+    session_icon: Option<bool>,
     pub split_passed: bool,
     pub(crate) input: InputState,
     keymap: Keymap,
@@ -281,8 +289,8 @@ pub struct Host {
     ime: Ime,
     /// Sound per live tab, as its view reported it.
     audio: AudioMap,
-    /// Each tab's page icon, as its view last downloaded it; shown on its row. Kept in memory
-    /// only (the store's favicon cache is not wired yet).
+    /// Each tab's page icon: the store's at start, then as its view last downloaded it (and
+    /// filed in the store); shown on its row.
     favicons: BTreeMap<TabId, slint::Image>,
     /// Per-site zoom; stored through the store, applied on each commit.
     site_zoom: ZoomTable,
@@ -291,6 +299,10 @@ pub struct Host {
     find_focus: i32,
     /// The zoom `--smoke page` passed with.
     pub page_zoom: Option<u32>,
+    /// The blocked count `--smoke block` passed with.
+    pub blocked_seen: Option<u32>,
+    /// The content blocker, whose per-view counts the tab rows show.
+    blocking: Arc<Blocking>,
     /// Remembered permission decisions (one owner; stored through the store).
     site_permissions: SitePermissions,
     /// Certificate errors the user proceeded past, for this run only.
@@ -316,13 +328,26 @@ impl Host {
         open: Option<String>,
         checks: Checks,
         downloads_dir: Option<PathBuf>,
+        blocking: Arc<Blocking>,
     ) -> Self {
         let Loaded {
             model,
             settings,
             site_permissions,
             downloads,
+            favicons,
         } = loaded;
+        let favicons = model
+            .tabs
+            .values()
+            .filter_map(|t| {
+                let icon = favicons.get(&t.url)?;
+                Some((
+                    t.id,
+                    crate::bind::favicon_image(icon.width, icon.height, &icon.rgba),
+                ))
+            })
+            .collect();
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
         let [a, b, c, popup_presenter] = presenters;
@@ -349,6 +374,7 @@ impl Host {
                 query: String::new(),
                 rows: vec![],
                 history: vec![],
+                icons: HashMap::new(),
                 generation: 0,
             },
             focus_view: None,
@@ -363,6 +389,7 @@ impl Host {
             nav_title: None,
             tabs_passed: false,
             session_passed: false,
+            session_icon: None,
             split_passed: false,
             input: InputState::default(),
             keymap: input::keymap(Platform::current(), &settings.keybinding_overrides),
@@ -379,11 +406,13 @@ impl Host {
             screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
-            favicons: BTreeMap::new(),
+            favicons,
             site_zoom,
             toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
+            blocked_seen: None,
+            blocking,
             site_permissions,
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
@@ -393,6 +422,7 @@ impl Host {
             }),
         };
         host.render_downloads(window);
+        host.session_icon_setup();
         match open {
             Some(url) => host.dispatch(new_tab(url, None)),
             None => host.after_change(),
@@ -522,14 +552,30 @@ impl Host {
         self.sync_focus(&window);
         let tabs = &self.model.tabs;
         self.favicons.retain(|tab, _| tabs.contains_key(tab));
+        let blocked = self.blocked_counts();
         crate::bind::render(
             &window,
-            &crate::shell::view_model(&self.model, &self.audio),
+            &crate::shell::view_model(&self.model, &self.audio, &blocked),
             &self.favicons,
         );
         self.render_surfaces(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
+    }
+
+    /// The blocker's count for `tab`, if it has a view.
+    fn blocked_of(&mut self, tab: TabId) -> Option<u32> {
+        let id = *self.views.get(&tab)?;
+        let browser = self.engine.view(id)?.browser_id();
+        Some(self.blocking.blocked(browser))
+    }
+
+    /// The blocker's count for each tab with a view.
+    fn blocked_counts(&mut self) -> crate::shell::BlockedMap {
+        let tabs: Vec<_> = self.views.keys().copied().collect();
+        tabs.into_iter()
+            .filter_map(|tab| Some((tab, self.blocked_of(tab)?)))
+            .collect()
     }
 
     /// Shows `icon` on `tab`'s row if it is still its page's icon (a late image of the previous
@@ -541,12 +587,13 @@ impl Host {
         {
             return;
         }
-        let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-            &icon.rgba,
-            icon.width,
-            icon.height,
+        if let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone()) {
+            self.store.put_favicon(&url, &icon, now_ms());
+        }
+        self.favicons.insert(
+            tab,
+            crate::bind::favicon_image(icon.width, icon.height, &icon.rgba),
         );
-        self.favicons.insert(tab, slint::Image::from_rgba8(pixels));
         self.after_change();
     }
 
@@ -620,10 +667,20 @@ impl Host {
             .visible_tab()
             .is_some_and(|t| self.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
-        self.page_smoke_step(page_smoke::Input::Worked {
-            framed,
-            popup_framed,
-        });
+        if self.checks.block_smoke.is_some() {
+            let blocked = self.visible_blocked();
+            self.block_smoke_step(block_smoke::Input::Worked { blocked });
+        }
+        if self.checks.page_smoke.is_some() {
+            let view_width = self.model.visible_tab().map_or(0.0, |t| {
+                self.pane_layout(&window, t).size.width as f32 / window.window().scale_factor()
+            });
+            self.page_smoke_step(page_smoke::Input::Worked {
+                framed,
+                popup_framed,
+                view_width,
+            });
+        }
         if self.checks.quit_after.is_some() {
             self.idle_runs += 1;
             if self.idle_runs > SMOKE_MAX_IDLE_RUNS {
@@ -750,6 +807,7 @@ impl Host {
         };
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
+        self.block_smoke_step(block_smoke::Input::Web(&event));
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -857,11 +915,12 @@ impl Host {
             });
     }
 
-    fn history_arrived(&mut self, generation: u64, hits: Vec<HistoryEntry>) {
+    fn history_arrived(&mut self, generation: u64, hits: persist::Hits) {
         if generation != self.bar.generation {
             return;
         }
-        self.bar.history = hits;
+        self.bar.history = hits.entries;
+        self.bar.icons = hits.icons;
         if let Some(window) = self.window.upgrade() {
             self.render_bar(&window);
         }
@@ -948,6 +1007,11 @@ impl Host {
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
                     let percent = view.zoom_percent();
                     self.user_zoomed(tab, percent);
+                }
+            }
+            Plan::Print => {
+                if let Some(tab) = self.model.visible_tab() {
+                    self.print(tab);
                 }
             }
             Plan::Find(event) => self.find_event(event),
@@ -1214,6 +1278,27 @@ impl Host {
         }
     }
 
+    fn visible_blocked(&mut self) -> u32 {
+        let tab = self.model.visible_tab();
+        tab.and_then(|t| self.blocked_of(t)).unwrap_or(0)
+    }
+
+    fn block_smoke_step(&mut self, input: block_smoke::Input) {
+        let Some(state) = self.checks.block_smoke.take() else {
+            return;
+        };
+        let (state, action) = block_smoke::next(state, input);
+        self.checks.block_smoke = Some(state);
+        match action {
+            Some(block_smoke::Action::Pass(blocked)) => {
+                self.blocked_seen = Some(blocked);
+                quit();
+            }
+            Some(block_smoke::Action::Fail(reason)) => self.fail(reason),
+            None => {}
+        }
+    }
+
     fn page_smoke_step(&mut self, input: page_smoke::Input) {
         let Some(state) = self.checks.page_smoke.take() else {
             return;
@@ -1288,6 +1373,36 @@ impl Host {
         }
     }
 
+    /// `--smoke session`: the first run files an icon and a visit for a page; the second asks
+    /// the store for them through the history path.
+    fn session_icon_setup(&mut self) {
+        let Some(smoke) = self.checks.session_smoke else {
+            return;
+        };
+        match smoke.phase {
+            crate::cli::Phase::Write => {
+                let at = now_ms();
+                self.store.record_visit(
+                    session_smoke::ICON_PAGE,
+                    "icon smoke",
+                    at,
+                    Transition::Typed,
+                );
+                self.store
+                    .put_favicon(session_smoke::ICON_PAGE, &session_smoke::smoke_icon(), at);
+            }
+            crate::cli::Phase::Read => {
+                self.store
+                    .query_history("favicon.wubble.test", now_ms(), 5, |hits| {
+                        let found = session_smoke::icon_restored(&hits);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            with_host(|host| host.session_icon = Some(found));
+                        });
+                    });
+            }
+        }
+    }
+
     fn session_smoke_step(&mut self) {
         let Some(state) = self.checks.session_smoke.take() else {
             return;
@@ -1309,6 +1424,7 @@ impl Host {
             visible: order
                 .iter()
                 .position(|&t| Some(t) == self.model.visible_tab()),
+            icon: self.session_icon,
         };
         let (state, action) = session_smoke::next(state, &seen, &want);
         self.checks.session_smoke = Some(state);
@@ -1383,14 +1499,16 @@ impl Host {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
             }
-            // A press anywhere sends a wave through the scene (the page gets it too). Raw, so
-            // the side buttons navigate over the shell too.
+            // A left press anywhere sends a wave through the scene (the page gets it too). Raw,
+            // so the side buttons navigate over the shell too, without a wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
-                self.glass.borrow_mut().tap();
+                if input::taps_backdrop(*button) {
+                    self.glass.borrow_mut().tap();
+                }
                 if let Some(action) = input::button_action(*button) {
                     self.perform(action);
                 }

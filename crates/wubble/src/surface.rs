@@ -337,6 +337,11 @@ pub enum Routed {
     Console(String),
     /// The page's icon, downloaded (`host/surfaces.rs`, `show_favicon`).
     Favicon(wubble_engine::favicon::FaviconImage),
+    /// A page saved as PDF, or not: the toast says which.
+    Pdf {
+        path: std::path::PathBuf,
+        text: String,
+    },
     Ignore,
 }
 
@@ -428,8 +433,18 @@ pub fn route(event: PageEvent) -> Routed {
         } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
         PageEvent::DragStarted { .. } => Routed::Ignore,
         PageEvent::FaviconImage(icon) => Routed::Favicon(icon),
-        // Nothing in the shell prints yet.
-        PageEvent::PdfPrinted { .. } => Routed::Ignore,
+        PageEvent::PdfPrinted { path, ok } => Routed::Pdf {
+            text: pdf_notice(&path, ok),
+            path,
+        },
+    }
+}
+
+/// What the toast says when a page was printed to `path`, or could not be.
+pub fn pdf_notice(path: &std::path::Path, ok: bool) -> String {
+    match path.file_name().filter(|_| ok) {
+        Some(name) => format!("Saved {}", name.to_string_lossy()),
+        None => "Could not save the PDF".into(),
     }
 }
 
@@ -468,6 +483,32 @@ mod tests {
             accept,
             text: text.into(),
         })
+    }
+
+    #[test]
+    fn a_printed_page_is_reported_by_name() {
+        let done = PageEvent::PdfPrinted {
+            path: "/d/Page title.pdf".into(),
+            ok: true,
+        };
+        assert_eq!(
+            route(done),
+            Routed::Pdf {
+                path: "/d/Page title.pdf".into(),
+                text: "Saved Page title.pdf".into()
+            }
+        );
+        let failed = PageEvent::PdfPrinted {
+            path: "/d/x.pdf".into(),
+            ok: false,
+        };
+        assert_eq!(
+            route(failed),
+            Routed::Pdf {
+                path: "/d/x.pdf".into(),
+                text: "Could not save the PDF".into()
+            }
+        );
     }
 
     #[test]

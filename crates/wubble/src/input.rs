@@ -256,6 +256,12 @@ pub fn button_action(button: WinitButton) -> Option<Action> {
     }
 }
 
+/// Whether a press of `button` sends a wave through the backdrop: the left button only, not
+/// the right, middle or side buttons.
+pub fn taps_backdrop(button: WinitButton) -> bool {
+    button == WinitButton::Left
+}
+
 /// The releases to send when `button` is released while `held` are down:
 /// `button`, then every other held button. Slint's `TouchArea` ends its
 /// pointer grab on any release (i-slint-core 1.19 `items/input_items.rs`,
@@ -641,5 +647,22 @@ mod tests {
             releases(Buttons::default(), MouseButton::Left),
             vec![MouseButton::Left]
         );
+    }
+
+    #[test]
+    fn only_the_left_button_taps_the_backdrop() {
+        let cases = [
+            (WinitButton::Left, true),
+            (WinitButton::Right, false),
+            (WinitButton::Middle, false),
+            (WinitButton::Back, false),
+            (WinitButton::Forward, false),
+            (WinitButton::Other(7), false),
+        ];
+        for (button, want) in cases {
+            assert_eq!(taps_backdrop(button), want, "{button:?}");
+        }
+        // The side buttons still navigate.
+        assert_eq!(button_action(WinitButton::Back), Some(Action::Back));
     }
 }

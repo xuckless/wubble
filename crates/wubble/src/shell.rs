@@ -18,6 +18,9 @@ pub struct TabRow {
     pub url: String,
     pub audible: bool,
     pub muted: bool,
+    /// Requests the content blocker stopped since the page's main-frame request; 0 for a tab
+    /// without a view. Data for the shields badge, which the shell does not draw yet.
+    pub blocked: u32,
     /// The tab is a pane of its Space's split, shown or not (the design's `split?.includes`).
     pub in_split: bool,
 }
@@ -31,6 +34,9 @@ pub struct Audio {
 }
 
 pub type AudioMap = BTreeMap<TabId, Audio>;
+
+/// Requests blocked per live tab (`Blocking::blocked` of its view).
+pub type BlockedMap = BTreeMap<TabId, u32>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceRow {
@@ -54,7 +60,7 @@ pub struct ShellView {
     pub path: String,
 }
 
-pub fn view_model(model: &Model, audio: &AudioMap) -> ShellView {
+pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> ShellView {
     let space = model.spaces.iter().find(|s| s.id == model.active_space);
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
         ids.filter_map(|id| {
@@ -66,6 +72,7 @@ pub fn view_model(model: &Model, audio: &AudioMap) -> ShellView {
                 url: tab.url.clone(),
                 audible: sound.audible,
                 muted: sound.muted,
+                blocked: blocked.get(&id).copied().unwrap_or(0),
                 in_split: model.split_of(id).is_some(),
             })
         })
@@ -213,7 +220,11 @@ mod tests {
 
     #[test]
     fn an_empty_model_shows_nothing_active() {
-        let v = view_model(&Model::new(std::time::Instant::now()), &AudioMap::new());
+        let v = view_model(
+            &Model::new(std::time::Instant::now()),
+            &AudioMap::new(),
+            &BlockedMap::new(),
+        );
         assert_eq!((v.pinned.len(), v.tabs.len()), (0, 0));
         assert_eq!(v.active_tab, -1);
         assert_eq!(v.active_space, 0);
@@ -249,7 +260,7 @@ mod tests {
                 to: Dest::Folder { folder, index: 0 },
             },
         );
-        let v = view_model(&m, &AudioMap::new());
+        let v = view_model(&m, &AudioMap::new(), &BlockedMap::new());
         assert_eq!(titles(&v.pinned), ["a.test"]);
         assert_eq!(titles(&v.tabs), ["c.test", "b.test"]);
         assert_eq!(v.active_tab, i32::try_from(c.0).unwrap());
@@ -269,7 +280,7 @@ mod tests {
         );
         let (m, _) = apply(m, Command::SwitchSpace(SpaceId(1)));
         let (m, _) = new_tab(m, "https://w.test/");
-        let v = view_model(&m, &AudioMap::new());
+        let v = view_model(&m, &AudioMap::new(), &BlockedMap::new());
         assert_eq!(titles(&v.tabs), ["w.test"]);
         assert_eq!(v.tabs[0].url, "https://w.test/");
         assert_eq!(v.spaces[1].tint, Rgb(1, 2, 3));
@@ -286,7 +297,7 @@ mod tests {
         let (m, _) = apply(m, Command::ActivateTab(a));
         let (m, _) = apply(m, Command::SplitWith(b));
         let split = |m: &Model| -> Vec<bool> {
-            view_model(m, &AudioMap::new())
+            view_model(m, &AudioMap::new(), &BlockedMap::new())
                 .tabs
                 .iter()
                 .map(|r| r.in_split)
@@ -317,11 +328,20 @@ mod tests {
                 },
             ),
         ]);
-        let v = view_model(&m, &audio);
+        let v = view_model(&m, &audio, &BlockedMap::new());
         let sound: Vec<_> = v.tabs.iter().map(|r| (r.audible, r.muted)).collect();
         assert_eq!(sound, [(true, false), (false, true)]);
-        let quiet = view_model(&m, &AudioMap::new());
+        let quiet = view_model(&m, &AudioMap::new(), &BlockedMap::new());
         assert!(quiet.tabs.iter().all(|r| !r.audible && !r.muted));
+    }
+
+    #[test]
+    fn rows_carry_their_tab_s_blocked_count() {
+        let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
+        let (m, _b) = new_tab(m, "https://b.test/");
+        let v = view_model(&m, &AudioMap::new(), &BlockedMap::from([(a, 4)]));
+        let counts: Vec<_> = v.tabs.iter().map(|r| r.blocked).collect();
+        assert_eq!(counts, [4, 0]);
     }
 
     #[test]
@@ -331,7 +351,7 @@ mod tests {
             "https://example.com/x",
         );
         assert_eq!(
-            view_model(&m, &AudioMap::new()).tabs[0].title,
+            view_model(&m, &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
             "example.com"
         );
         let (m, _) = apply(
@@ -341,9 +361,15 @@ mod tests {
                 title: "Example".into(),
             },
         );
-        assert_eq!(view_model(&m, &AudioMap::new()).tabs[0].title, "Example");
+        assert_eq!(
+            view_model(&m, &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
+            "Example"
+        );
         let (m, _) = new_tab(m, "");
-        assert_eq!(view_model(&m, &AudioMap::new()).tabs[1].title, "New tab");
+        assert_eq!(
+            view_model(&m, &AudioMap::new(), &BlockedMap::new()).tabs[1].title,
+            "New tab"
+        );
     }
 
     /// Tabs a, b, c, then a folder holding d and e; p pinned.
@@ -385,7 +411,7 @@ mod tests {
             .0;
         }
         let (m, _) = apply(m, Command::PinTab(p));
-        let v = view_model(&m, &AudioMap::new());
+        let v = view_model(&m, &AudioMap::new(), &BlockedMap::new());
         assert_eq!(
             titles(&v.tabs),
             ["a.test", "b.test", "c.test", "d.test", "e.test"]
@@ -396,7 +422,7 @@ mod tests {
     fn moved(m: Model, tab: TabId, to: usize) -> Vec<String> {
         let dest = move_dest(&m, tab, to).expect("a row");
         let (m, _) = apply(m, Command::MoveTab { tab, to: dest });
-        view_model(&m, &AudioMap::new())
+        view_model(&m, &AudioMap::new(), &BlockedMap::new())
             .tabs
             .into_iter()
             .map(|r| r.title)

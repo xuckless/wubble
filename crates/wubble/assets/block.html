@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble block</title>
+</head>
+<body>
+<!-- --smoke block: two requests the smoke's list blocks (nothing is fetched:
+     the blocker answers before the network), one it allows (a data: URL). -->
+<img src="https://blocked.wubble.test/ad.png" width="8" height="8" alt="">
+<script src="https://blocked.wubble.test/ad.js"></script>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="8" height="8" alt="">
+<p>bundled page for <code>--smoke block</code></p>
+</body>
+</html>

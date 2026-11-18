@@ -122,6 +122,7 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
             layout: Layout {
                 size: FrameSize::new(800, 600),
                 scale: 1.0,
+                area: None,
             },
             frame_rate: 30,
             begin_frames: false,

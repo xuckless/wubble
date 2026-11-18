@@ -23,7 +23,7 @@ struct Cli {
     /// switch, sleep, restore and close tabs on bundled pages, then exit), `split` (two
     /// bundled pages side by side, each checked, then unsplit and exit), `page`
     /// (a bundled page's select popup, alert, context menu, find and zoom,
-    /// then exit) or `session` (open two tabs, quit, start again and check they come back).
+    /// then exit), `block` (a bundled page's blocked requests are counted, then exit) or `session` (open two tabs, quit, start again and check they come back).
     /// `session-phase=1|2` is one half of `session`, run by it.
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke, conflicts_with = "measure")]
     smoke: Option<SmokeArg>,
@@ -63,6 +63,7 @@ enum SmokeArg {
     Tabs,
     Split,
     Page,
+    Block,
     Session,
     SessionPhase(Phase),
 }
@@ -74,6 +75,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
         None if value == "page" => Ok(SmokeArg::Page),
+        None if value == "block" => Ok(SmokeArg::Block),
         None if value == "session" => Ok(SmokeArg::Session),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
@@ -82,7 +84,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `session` or \
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `session` or \
              `session-phase=1|2`"
                 .into(),
         ),
@@ -107,6 +109,8 @@ pub enum Smoke {
     Split,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
+    /// The bundled page requests URLs the smoke's list blocks; they are counted.
+    Block,
     /// Runs both session phases on a temporary profile.
     Session,
     /// One half of `Session`, on the profile in `profile`.
@@ -189,6 +193,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
+            (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
         };
         Ok(Command::Smoke(smoke))
@@ -278,9 +283,18 @@ mod tests {
     }
 
     #[test]
+    fn smoke_block() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "block"]).ok(),
+            Some(Command::Smoke(Smoke::Block))
+        );
+        assert!(parse(["wubble", "--smoke", "block", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
     fn a_url_does_not_combine_with_a_smoke() {
         for smoke in [
-            "boot", "nav", "tabs", "split", "page", "frames=3", "session",
+            "boot", "nav", "tabs", "split", "page", "block", "frames=3", "session",
         ] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),

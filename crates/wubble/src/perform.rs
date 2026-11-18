@@ -39,6 +39,8 @@ pub enum ViewOp {
 pub enum Plan {
     Model(Command),
     View(ViewOp),
+    /// Save the visible page as a PDF in the downloads folder (`Host::print`).
+    Print,
     /// Open the command bar on the visible tab's address.
     FocusAddress,
     /// Take the newest entry off the store's recently-closed list and open it.
@@ -107,6 +109,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ZoomOut => view(ViewOp::ZoomOut),
         Action::ZoomReset => view(ViewOp::ZoomReset),
         Action::ToggleMute => view(ViewOp::ToggleMute),
+        Action::Print => visible.map_or(Plan::Nothing, |_| Plan::Print),
         Action::Fullscreen => Plan::Fullscreen,
         Action::CopyUrl => visible
             .and_then(|t| model.tabs.get(&t))
@@ -207,6 +210,7 @@ mod tests {
         assert_eq!(plan(Action::HardReload, &m), Plan::View(ViewOp::HardReload));
         assert_eq!(plan(Action::ZoomIn, &m), Plan::View(ViewOp::ZoomIn));
         assert_eq!(plan(Action::ToggleMute, &m), Plan::View(ViewOp::ToggleMute));
+        assert_eq!(plan(Action::Print, &m), Plan::Print);
         assert_eq!(plan(Action::Find, &m), Plan::Find(FindEvent::Open));
         assert_eq!(plan(Action::FindPrev, &m), Plan::Find(FindEvent::Prev));
         assert_eq!(plan(Action::Fullscreen, &m), Plan::Fullscreen);
@@ -230,6 +234,7 @@ mod tests {
             Action::Find,
             Action::ZoomOut,
             Action::ToggleMute,
+            Action::Print,
             Action::CopyUrl,
         ] {
             assert_eq!(plan(action, &m), Plan::Nothing, "{action:?}");

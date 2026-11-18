@@ -1,6 +1,7 @@
 mod backdrop;
 mod bar;
 mod bind;
+mod block_smoke;
 mod blocking;
 mod chooser;
 mod cli;
@@ -69,6 +70,7 @@ pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
+pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
 
 /// `--smoke tabs`'s pages, in tab order.
 pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
@@ -199,6 +201,30 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: page FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Block) => {
+            match with_smoke_dir(|config, dir| run(Mode::Block, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    blocked_seen: Some(blocked),
+                    ..
+                }) => {
+                    println!("smoke: block ok");
+                    log::debug!("block smoke counted {blocked}");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: block FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: block FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -344,9 +370,32 @@ fn install_shell_driver(
 /// lifecycle state, not by time: the engine closes its views and reports each
 /// one closed once CEF has let go of it.
 fn drain(engine: &mut Engine) {
+    trace("shutdown requested");
     engine.request_shutdown();
+    let mut ticks = 0u64;
     while !engine.is_stopped() {
         engine.tick();
+        ticks += 1;
+        // A shutdown that never ends shows as a count that keeps growing.
+        if ticks.is_power_of_two() && ticks >= 1 << 10 {
+            trace(&format!("still shutting down after {ticks} ticks"));
+        }
+    }
+    trace(&format!("stopped after {ticks} ticks"));
+}
+
+/// `WUBBLE_TRACE=1`: stage lines on stderr with the time since the first one, for finding where
+/// a run that hangs (once, 300 s, right after a rebuild: never reproduced) is stuck. Take
+/// `eu-stack -p <pid>` of the process and its children next to the last line. Off by default.
+fn trace(stage: &str) {
+    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    let start = START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()));
+    if let Some(start) = start {
+        eprintln!(
+            "wubble: trace +{}ms pid {}: {stage}",
+            start.elapsed().as_millis(),
+            std::process::id()
+        );
     }
 }
 
@@ -415,10 +464,18 @@ fn remove_cache(cache_dir: &Path) {
 }
 
 fn smoke_boot(config: Result<EngineConfig, EngineError>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = Engine::start(config?)?;
+    let config = config?;
+    trace(&format!(
+        "starting CEF from {}, cache {}",
+        config.exe_dir.display(),
+        config.cache_dir.display()
+    ));
+    let mut engine = Engine::start(config)?;
+    trace("CEF started");
     for _ in 0..SMOKE_TICKS {
         engine.tick();
     }
+    trace("ticked");
     drain(&mut engine);
     Ok(())
 }
@@ -436,6 +493,8 @@ struct Outcome {
     session_passed: bool,
     /// The zoom `--smoke page` passed with.
     page_zoom: Option<u32>,
+    /// The blocked count `--smoke block` passed with.
+    blocked_seen: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
     /// `--measure`'s report and CSV.
@@ -459,6 +518,8 @@ enum Mode {
     Split,
     /// `--smoke page`.
     Page,
+    /// `--smoke block`.
+    Block,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -555,6 +616,7 @@ pub fn content_layout(window: &AppWindow) -> Layout {
             physical(window.get_content_height(), scale),
         ),
         scale,
+        area: None,
     }
 }
 
@@ -744,10 +806,12 @@ fn run(
         tabs_smoke: None,
         session_smoke: None,
         page_smoke: None,
+        block_smoke: None,
         split_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    let smoke_block = matches!(mode, Mode::Block);
     let measuring = matches!(mode, Mode::Measure { .. });
     // Smokes download into their throwaway profile.
     let downloads = match &mode {
@@ -798,6 +862,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Block => (
+            Some(page_url(BLOCK_PAGE)),
+            Checks {
+                block_smoke: Some(block_smoke::BlockSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Session(phase) => (
             None,
             Checks {
@@ -834,7 +905,12 @@ fn run(
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
     });
-    blocking.start(profile, &loaded.settings.blocker);
+    if smoke_block {
+        // Only the smoke's own list, through the same filter wiring as the browser's.
+        blocking.use_list(block_smoke::BLOCK_LIST);
+    } else {
+        blocking.start(profile, &loaded.settings.blocker);
+    }
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
     let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));
@@ -859,6 +935,7 @@ fn run(
         url,
         checks,
         downloads,
+        blocking,
     );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
@@ -905,6 +982,7 @@ fn run(
         split_passed: host.split_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
+        blocked_seen: host.blocked_seen,
         measured,
     })
 }

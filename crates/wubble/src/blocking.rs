@@ -155,6 +155,13 @@ impl Blocking {
             .unwrap_or_else(PoisonError::into_inner) = overrides;
     }
 
+    /// `--smoke block`: only `list` blocks, shields on, nothing read from disk or fetched.
+    pub fn use_list(&self, list: &str) {
+        self.set_enabled(true);
+        self.set_overrides(SiteOverrides::default());
+        self.replace_blocker(Blocker::from_lists(&[list]));
+    }
+
     /// Swaps in a new blocker; requests already being checked finish on the
     /// old one. The lock is held for the pointer move only: the old engine
     /// is dropped after it is released.
@@ -168,10 +175,6 @@ impl Blocking {
     }
 
     /// Requests blocked in a view since its last main-frame request.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "for the shell's shields badge, not drawn yet")
-    )]
     pub fn blocked(&self, browser_id: i32) -> u32 {
         self.counts().get(&browser_id).copied().unwrap_or(0)
     }
@@ -434,6 +437,19 @@ example.com##.sponsor
             ..req("https://next.test/", "https://next.test/", Document)
         });
         assert_eq!((b.blocked(1), b.blocked(2)), (0, 1));
+    }
+
+    #[test]
+    fn the_smoke_list_blocks_its_host_from_a_bundled_page_and_nothing_else() {
+        let b = Blocking::new();
+        b.set_enabled(false);
+        b.use_list(crate::block_smoke::BLOCK_LIST);
+        let bundled = "data:text/html,page";
+        let hit = |url| check(&b, url, bundled, Image);
+        assert_eq!(hit("https://blocked.wubble.test/ad.png"), Block);
+        assert_eq!(hit("https://sub.blocked.wubble.test/ad.js"), Block);
+        assert_eq!(hit("https://other.test/ad.png"), Allow);
+        assert_eq!(hit("data:image/gif;base64,R0lGODlhAQABAAAAACw="), Allow);
     }
 
     #[test]

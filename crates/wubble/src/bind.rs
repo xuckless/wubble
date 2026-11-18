@@ -32,6 +32,14 @@ fn sync<T: Clone + PartialEq + 'static>(
     }
 }
 
+/// A page icon (straight RGBA, `width * height * 4` bytes) as a shell image: the one place
+/// pixels become an `Image`, for icons that just arrived and icons the store restored.
+pub fn favicon_image(width: u32, height: u32, rgba: &[u8]) -> slint::Image {
+    slint::Image::from_rgba8(
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba, width, height),
+    )
+}
+
 fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<TabItem> {
     rows.iter()
         .map(|r| TabItem {

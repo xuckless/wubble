@@ -3,9 +3,41 @@
 //! same profile checks that both tabs came back, in order, with only the
 //! visible one live. Each half is a pure state machine over what the host
 //! sees after a run of CEF work, bounded by a count of runs, never by time.
+//!
+//! The icons ride along: the first process files an icon for a page and visits
+//! it; the second asks the store (with one live view, so no view is needed)
+//! and must get that icon back. The bundled `data:` tabs have no origin to
+//! file an icon under, and a tab on a real page could not be made without
+//! loading it, so the icon is checked through the history row path.
+
+use wubble_engine::favicon::FaviconImage;
 
 use crate::cli::Phase;
 use crate::nav_smoke::MAX_WORK_RUNS;
+use crate::persist::Hits;
+
+/// The page whose icon the first process files and the second must find.
+pub const ICON_PAGE: &str = "https://favicon.wubble.test/";
+
+/// The icon filed for [`ICON_PAGE`]: 2x2, one distinct byte per pixel.
+pub fn smoke_icon() -> FaviconImage {
+    FaviconImage {
+        url: "https://favicon.wubble.test/icon.png".into(),
+        width: 2,
+        height: 2,
+        rgba: (0..16).collect(),
+    }
+}
+
+/// Whether `hits` (a history query for [`ICON_PAGE`]) carry [`smoke_icon`].
+pub fn icon_restored(hits: &Hits) -> bool {
+    let icon = smoke_icon();
+    hits.entries.iter().any(|e| e.url == ICON_PAGE)
+        && hits
+            .icons
+            .get(ICON_PAGE)
+            .is_some_and(|got| got.icon_url == icon.url && got.rgba == icon.rgba)
+}
 
 /// What the host sees after a run of CEF work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -21,6 +53,8 @@ pub struct Seen {
     pub discarded: Vec<bool>,
     /// The index in `urls` of the visible tab.
     pub visible: Option<usize>,
+    /// Whether the store gave back [`smoke_icon`]; `None` until it answered.
+    pub icon: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +112,7 @@ pub fn next(s: SessionSmoke, seen: &Seen, want: &[String]) -> (SessionSmoke, Opt
         (Phase::Write, Stage::Opening) if seen.urls == want && seen.views == 2 => {
             Some((Stage::Done, Action::Pass))
         }
-        (Phase::Read, Stage::Start) if seen.ready => {
+        (Phase::Read, Stage::Start) if seen.ready && seen.icon.is_some() => {
             Some((Stage::Done, check_restored(seen, want)))
         }
         _ => None,
@@ -116,6 +150,9 @@ fn check_restored(seen: &Seen, want: &[String]) -> Action {
     if seen.views != 1 {
         return Action::Fail(format!("want exactly one live view, have {}", seen.views));
     }
+    if seen.icon != Some(true) {
+        return Action::Fail("the icon filed by the first run did not come back".into());
+    }
     Action::Pass
 }
 
@@ -134,6 +171,7 @@ mod tests {
             views,
             discarded: vec![false; urls.len()],
             visible: urls.len().checked_sub(1),
+            icon: Some(true),
         }
     }
 
@@ -202,11 +240,62 @@ mod tests {
                 visible: Some(0),
                 ..restored.clone()
             },
+            Seen {
+                icon: Some(false),
+                ..restored.clone()
+            },
         ];
         for b in bad {
             let (_, actions) = run(Phase::Read, std::slice::from_ref(&b));
             assert!(matches!(actions.as_slice(), [Action::Fail(_)]), "{b:?}");
         }
+    }
+
+    #[test]
+    fn phase_two_waits_for_the_store_to_answer_about_the_icon() {
+        let waiting = Seen {
+            discarded: vec![true, false],
+            icon: None,
+            ..seen(true, &["a", "b"], 1)
+        };
+        let (s, actions) = run(Phase::Read, &[waiting]);
+        assert_eq!((s.stage, actions), (Stage::Start, vec![]));
+    }
+
+    #[test]
+    fn the_icon_must_be_the_one_filed() {
+        use std::collections::HashMap;
+        use wubble_core::omnibox::HistoryEntry;
+        let icon = smoke_icon();
+        let stored = |rgba: Vec<u8>| wubble_store::Favicon {
+            icon_url: icon.url.clone(),
+            width: 2,
+            height: 2,
+            rgba,
+        };
+        let entry = HistoryEntry {
+            url: ICON_PAGE.into(),
+            title: String::new(),
+            visit_count: 1,
+            typed_count: 1,
+            last_visit_ms: 1,
+        };
+        let hits = |entries: Vec<HistoryEntry>, rgba: Option<Vec<u8>>| Hits {
+            entries,
+            icons: rgba
+                .map(|r| HashMap::from([(ICON_PAGE.to_string(), stored(r))]))
+                .unwrap_or_default(),
+        };
+        assert!(icon_restored(&hits(
+            vec![entry.clone()],
+            Some(icon.rgba.clone())
+        )));
+        assert!(!icon_restored(&hits(
+            vec![entry.clone()],
+            Some(vec![0; 16])
+        )));
+        assert!(!icon_restored(&hits(vec![entry], None)));
+        assert!(!icon_restored(&hits(vec![], Some(icon.rgba))));
     }
 
     #[test]

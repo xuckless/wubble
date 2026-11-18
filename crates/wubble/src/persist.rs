@@ -13,6 +13,7 @@
 //! Firefox's `SessionSaver` (MPL-2.0) do with timers. Here the "quiet" clock
 //! is the host's coarse lifecycle tick, counted, never read.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
@@ -24,10 +25,11 @@ use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_core::zoom::ZoomTable;
+use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, KeybindingOverrides,
-    LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
-    Store, Transition,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon,
+    KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting,
+    SidebarWidth, SiteZoom, Store, Transition,
 };
 
 use crate::blocking::BlockerSettings;
@@ -155,6 +157,17 @@ impl Default for Settings {
 /// Download entries read at start (newest first).
 pub const DOWNLOADS_KEPT: usize = 50;
 
+/// Icon bytes kept across runs: 256 icons of 64x64, the most the store holds.
+pub const FAVICON_CAP_BYTES: u64 = 4 << 20;
+
+/// History hits for a query, with the icon of each hit's origin that has one.
+#[derive(Debug, Default)]
+pub struct Hits {
+    pub entries: Vec<HistoryEntry>,
+    /// Keyed by the hit's URL.
+    pub icons: HashMap<String, Favicon>,
+}
+
 /// What the store thread hands over at start.
 #[derive(Debug)]
 pub struct Loaded {
@@ -163,6 +176,10 @@ pub struct Loaded {
     pub site_permissions: SitePermissions,
     /// Newest first; what was unfinished in the last run has failed.
     pub downloads: Vec<DownloadEntry>,
+    /// The stored icon of each tab, keyed by the tab's URL (a tab on a page
+    /// without an origin, or without an icon, is absent). Pruned to
+    /// [`FAVICON_CAP_BYTES`] first.
+    pub favicons: HashMap<String, Favicon>,
 }
 
 impl Default for Loaded {
@@ -172,6 +189,7 @@ impl Default for Loaded {
             settings: Settings::default(),
             site_permissions: SitePermissions::default(),
             downloads: vec![],
+            favicons: HashMap::new(),
         }
     }
 }
@@ -197,7 +215,12 @@ enum Request {
         prefix: String,
         now_ms: i64,
         limit: usize,
-        reply: Reply<Vec<HistoryEntry>>,
+        reply: Reply<Hits>,
+    },
+    PutFavicon {
+        page_url: String,
+        icon: Favicon,
+        now_ms: i64,
     },
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
@@ -283,13 +306,27 @@ impl StoreClient {
         prefix: &str,
         now_ms: i64,
         limit: usize,
-        reply: impl FnOnce(Vec<HistoryEntry>) + Send + 'static,
+        reply: impl FnOnce(Hits) + Send + 'static,
     ) {
         self.send(Request::Query {
             prefix: prefix.into(),
             now_ms,
             limit,
             reply: Box::new(reply),
+        });
+    }
+
+    /// Files the page's downloaded icon under its origin.
+    pub fn put_favicon(&self, page_url: &str, icon: &FaviconImage, now_ms: i64) {
+        self.send(Request::PutFavicon {
+            page_url: page_url.into(),
+            icon: Favicon {
+                icon_url: icon.url.clone(),
+                width: icon.width,
+                height: icon.height,
+                rgba: icon.rgba.clone(),
+            },
+            now_ms,
         });
     }
 
@@ -413,11 +450,15 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             store.update_download(new).await?;
         }
     }
+    store.prune_favicons(FAVICON_CAP_BYTES).await?;
+    let urls: Vec<&str> = model.tabs.values().map(|t| t.url.as_str()).collect();
+    let favicons = store.favicons_for(&urls).await?;
     let loaded = Loaded {
         model,
         settings,
         site_permissions,
         downloads,
+        favicons,
     };
     Ok((store, loaded))
 }
@@ -444,15 +485,32 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
             limit,
             reply,
         } => {
-            let hits = store.query_history(&prefix, now_ms, limit).await;
-            match hits {
-                Ok(hits) => reply(hits),
+            let mut failure = None;
+            let entries = store
+                .query_history(&prefix, now_ms, limit)
+                .await
+                .unwrap_or_else(|e| {
+                    failure = Some(e);
+                    Vec::new()
+                });
+            let urls: Vec<&str> = entries.iter().map(|h| h.url.as_str()).collect();
+            let icons = match store.favicons_for(&urls).await {
+                Ok(icons) => icons,
                 Err(e) => {
-                    reply(vec![]);
-                    return Err(e);
+                    failure = failure.or(Some(e));
+                    HashMap::new()
                 }
+            };
+            reply(Hits { entries, icons });
+            if let Some(e) = failure {
+                return Err(e);
             }
         }
+        Request::PutFavicon {
+            page_url,
+            icon,
+            now_ms,
+        } => store.put_favicon(&page_url, &icon, now_ms).await?,
         Request::PushClosed(tab) => store.push_closed(&tab).await?,
         Request::PopClosed(reply) => {
             let tab = store.pop_closed().await;
@@ -709,7 +767,7 @@ mod tests {
         client.query_history("a.t", 10, 5, move |hits| {
             hits_tx.send(hits).unwrap();
         });
-        let hits = hits_rx.recv().unwrap();
+        let hits = hits_rx.recv().unwrap().entries;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "A");
         assert_eq!(hits[0].typed_count, 1);
@@ -771,5 +829,90 @@ mod tests {
             std::fs::read(&path).unwrap(),
             b"not a database, and longer than one header"
         );
+    }
+
+    fn icon(url: &str, shade: u8) -> FaviconImage {
+        FaviconImage {
+            url: url.into(),
+            width: 2,
+            height: 2,
+            rgba: vec![shade; 16],
+        }
+    }
+
+    fn model_of(urls: &[&str]) -> Model {
+        urls.iter().fold(Model::new(Instant::now()), |model, url| {
+            apply(
+                model,
+                Command::NewTab {
+                    url: (*url).into(),
+                    container: None,
+                    opener: None,
+                },
+            )
+            .0
+        })
+    }
+
+    #[test]
+    fn a_saved_icon_comes_back_with_its_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wubble.db");
+        let (client, loaded) = start(&path);
+        assert!(loaded.favicons.is_empty());
+        let model = model_of(&["https://a.test/page", "https://b.test/", "about:blank"]);
+        client.save(&model, Settings::default().ui);
+        client.put_favicon("https://a.test/other", &icon("https://a.test/i.png", 7), 1);
+        client.shutdown();
+
+        let (client, loaded) = start(&path);
+        // Filed by origin, handed back under each tab's own URL; a tab with no
+        // icon or no origin has no entry.
+        assert_eq!(loaded.favicons.len(), 1);
+        let got = &loaded.favicons["https://a.test/page"];
+        assert_eq!(got.icon_url, "https://a.test/i.png");
+        assert_eq!(
+            (got.width, got.height, got.rgba.clone()),
+            (2, 2, vec![7; 16])
+        );
+        client.shutdown();
+    }
+
+    #[test]
+    fn history_hits_carry_their_icons() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, _) = start(&dir.path().join("wubble.db"));
+        client.record_visit("https://a.test/x", "X", 5, Transition::Typed);
+        client.record_visit("https://b.test/", "B", 5, Transition::Typed);
+        client.put_favicon("https://a.test/", &icon("https://a.test/i.png", 3), 6);
+        let (tx, rx) = mpsc::channel();
+        client.query_history("a.test", 10, 5, move |hits| tx.send(hits).unwrap());
+        let hits = rx.recv().unwrap();
+        assert_eq!(hits.entries.len(), 1);
+        assert_eq!(hits.icons.len(), 1);
+        assert_eq!(hits.icons["https://a.test/x"].rgba, vec![3; 16]);
+        let (tx, rx) = mpsc::channel();
+        client.query_history("b.test", 10, 5, move |hits| tx.send(hits).unwrap());
+        let hits = rx.recv().unwrap();
+        assert_eq!(hits.entries.len(), 1);
+        assert!(hits.icons.is_empty(), "no icon stored for b.test");
+        client.shutdown();
+    }
+
+    #[test]
+    fn startup_prunes_icons_over_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wubble.db");
+        let (client, _) = start(&path);
+        client.put_favicon("https://a.test/", &icon("https://a.test/i.png", 1), 1);
+        client.shutdown();
+        // Prune directly at a cap below one icon: what the start does with the real cap.
+        let mut store = pollster::block_on(Store::open(&path)).unwrap();
+        assert_eq!(pollster::block_on(store.prune_favicons(15)).unwrap(), 1);
+        drop(store);
+        let (client, loaded) = start(&path);
+        assert!(loaded.favicons.is_empty());
+        client.shutdown();
+        const _: () = assert!(FAVICON_CAP_BYTES >= 64 * 64 * 4);
     }
 }

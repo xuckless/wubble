@@ -3,7 +3,7 @@
 //! machine), out to the engine, the store and the shell. The list here is
 //! the one owner of what the popover shows; the store is its persistence.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
@@ -35,6 +35,8 @@ pub(super) struct Downloads {
     list: Vec<DownloadEntry>,
     next_id: i64,
     inflight: HashMap<DownloadId, Inflight>,
+    /// PDFs being printed: their paths are reserved until `PdfPrinted` arrives.
+    pdfs: HashSet<PathBuf>,
     /// Entries whose progress is not yet stored (written on the tick).
     unsaved: BTreeSet<i64>,
 }
@@ -48,6 +50,19 @@ impl Downloads {
             next_id,
             ..Self::default()
         }
+    }
+
+    /// A path in `dir` for `suggested` that no file, running download or running print has.
+    fn unique_path(&self, suggested: &str) -> Option<PathBuf> {
+        let dir = self.dir.as_deref()?;
+        download::unique_name(dir, suggested, |p: &Path| {
+            p.exists() || self.pdfs.contains(p) || self.inflight.values().any(|f| f.path == p)
+        })
+    }
+
+    /// The print to `path` ended: its name is free to reuse.
+    pub(super) fn finish_pdf(&mut self, path: &Path) {
+        self.pdfs.remove(path);
     }
 
     fn entry_of(&self, download: DownloadId) -> Option<i64> {
@@ -170,6 +185,32 @@ impl Host {
         }
     }
 
+    /// Ctrl+P: saves `tab`'s page as a PDF in the downloads folder, named after its title. The
+    /// result arrives as `PageEvent::PdfPrinted`, which toasts it (`Routed::Pdf`).
+    pub(super) fn print(&mut self, tab: TabId) {
+        let title = self
+            .model
+            .tabs
+            .get(&tab)
+            .map(crate::shell::tab_title)
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "page".into());
+        let failure = match self.download_path(&format!("{title}.pdf")) {
+            Some(path) => match self.tab_view(tab).map(|view| view.print_to_pdf(&path)) {
+                Some(Ok(())) => {
+                    self.downloads.pdfs.insert(path);
+                    return;
+                }
+                Some(Err(_)) => "Could not save the PDF",
+                None => return,
+            },
+            None => "Cannot print: no downloads folder",
+        };
+        if let Some(window) = self.window.upgrade() {
+            self.toast(&window, failure);
+        }
+    }
+
     /// A unique path in the downloads directory, created if needed.
     fn download_path(&self, suggested: &str) -> Option<PathBuf> {
         let dir = self.downloads.dir.as_deref()?;
@@ -177,10 +218,7 @@ impl Host {
             eprintln!("wubble: downloads folder {}: {e}", dir.display());
             return None;
         }
-        let inflight = &self.downloads.inflight;
-        download::unique_name(dir, suggested, |p: &Path| {
-            p.exists() || inflight.values().any(|f| f.path == p)
-        })
+        self.downloads.unique_path(suggested)
     }
 
     fn engine_download(&mut self, download: DownloadId, event: DownloadEvent) {
@@ -357,6 +395,17 @@ mod tests {
             state,
             started_ms: 0,
         }
+    }
+
+    #[test]
+    fn a_pdf_being_printed_keeps_its_name() {
+        let mut d = Downloads::new(Some("/wubble-test-no-such-dir".into()), vec![]);
+        let first = d.unique_path("Page.pdf").unwrap();
+        d.pdfs.insert(first.clone());
+        let second = d.unique_path("Page.pdf").unwrap();
+        assert_ne!(first, second);
+        d.finish_pdf(&first);
+        assert_eq!(d.unique_path("Page.pdf"), Some(first));
     }
 
     #[test]

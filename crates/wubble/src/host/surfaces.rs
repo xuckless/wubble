@@ -112,12 +112,17 @@ impl Host {
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
+            Routed::Pdf { path, text } => {
+                self.downloads.finish_pdf(&path);
+                self.toast(window, &text);
+            }
             Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);
         // After the event took effect, so the smoke acts on the open surface.
         if let Some(event) = seen {
-            self.page_smoke_step(crate::page_smoke::Input::Page(&event));
+            let view = self.pane_layout(window, tab).size;
+            self.page_smoke_step(crate::page_smoke::Input::Page(&event, view));
         }
     }
 

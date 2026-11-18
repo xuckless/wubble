@@ -30,7 +30,11 @@ cef::wrap_render_handler! {
         ) {
             if let Some(rect) = rect {
                 // GetViewRect is answered in DIP, not physical pixels.
-                let (w, h) = self.handler.metrics.lock().unwrap().logical();
+                // wubble change: x, y carry the view's offset in the window.
+                let (x, y, w, h) = self.handler.metrics.lock().unwrap().view_rect_dip();
+                log::trace!("view_rect -> {x},{y} {w}x{h} dip");
+                rect.x = x;
+                rect.y = y;
                 rect.width = w;
                 rect.height = h;
             }
@@ -42,21 +46,55 @@ cef::wrap_render_handler! {
             screen_info: Option<&mut cef::ScreenInfo>,
         ) -> ::std::os::raw::c_int {
             if let Some(info) = screen_info {
-                info.device_scale_factor = self.handler.metrics.lock().unwrap().scale();
+                let metrics = self.handler.metrics.lock().unwrap();
+                info.device_scale_factor = metrics.scale();
+                // wubble change: the window is the screen, so Blink can place
+                // popups outside the view (cefclient `real_screen_bounds`).
+                if let Some((x, y, w, h)) = metrics.screen_rect_dip() {
+                    let rect = cef::Rect { x, y, width: w, height: h };
+                    info.rect = rect.clone();
+                    info.available_rect = rect;
+                }
                 return 1;
             }
             0
         }
 
+        fn root_screen_rect(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            rect: Option<&mut cef::Rect>,
+        ) -> ::std::os::raw::c_int {
+            // wubble change: see `screen_info`.
+            let area = self.handler.metrics.lock().unwrap().screen_rect_dip();
+            match (rect, area) {
+                (Some(rect), Some((x, y, w, h))) => {
+                    *rect = cef::Rect { x, y, width: w, height: h };
+                    1
+                }
+                _ => 0,
+            }
+        }
+
         fn screen_point(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _view_x: ::std::os::raw::c_int,
-            _view_y: ::std::os::raw::c_int,
-            _screen_x: Option<&mut ::std::os::raw::c_int>,
-            _screen_y: Option<&mut ::std::os::raw::c_int>,
+            view_x: ::std::os::raw::c_int,
+            view_y: ::std::os::raw::c_int,
+            screen_x: Option<&mut ::std::os::raw::c_int>,
+            screen_y: Option<&mut ::std::os::raw::c_int>,
         ) -> ::std::os::raw::c_int {
-            0
+            // wubble change: view point to screen point (device px; DIP on
+            // macOS), as cefclient's `GetScreenPoint` does.
+            let point = self.handler.metrics.lock().unwrap().screen_point_dip(view_x, view_y);
+            match (screen_x, screen_y, point) {
+                (Some(sx), Some(sy), Some((x, y))) => {
+                    *sx = x;
+                    *sy = y;
+                    1
+                }
+                _ => 0,
+            }
         }
 
         #[cfg(feature = "cef-runtime")]
