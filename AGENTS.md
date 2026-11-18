@@ -17,6 +17,7 @@ its "Decided" table before proposing architecture.
 | `wubble-ui` | Slint shell (`ui/*.slint`) | slint |
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
+| `wubble-sysmem` | OS readers: memory pressure, per-process memory and CPU | core, sysinfo (and the OS APIs) |
 
 `vendor/welding/` is our fork of the `welding` crate (MPL-2.0), outside the
 workspace members: keep its upstream style, mark each change `wubble change`
