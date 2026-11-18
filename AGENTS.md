@@ -18,6 +18,10 @@ its "Decided" table before proposing architecture.
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 
+`vendor/welding/` is our fork of the `welding` crate (MPL-2.0), outside the
+workspace members: keep its upstream style, mark each change `wubble change`
+and list it in `vendor/welding/WUBBLE_CHANGES.md`; test with `cargo test -p welding`.
+
 `ux/pack/` is a read-only snapshot of the design canvas. It is a style guideline
 (colour, glass, type, motion), not a layout spec.
 
