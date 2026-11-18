@@ -89,4 +89,4 @@ the lanes into one integration branch and runs the full check round.
 - The lead creates the integration branch and the lane worktrees, launches the workflow, then reviews the integration diff before merging to `main` and pushing.
 - Each stage uses the cheapest model that can do it: Sonnet medium by default, Opus medium for items marked `hard`, per-stage overrides (including Haiku) via the item's `models`.
 - Research runs for every item unless it sets `research: false`, and is copy-first: it looks for code to reuse before designing anything.
-- All lanes share `CARGO_TARGET_DIR=~/Dev/wubble/target`, so builds queue instead of competing.
+- Lanes build through `~/Dev/wubble-wt/cargo.sh`: one build at a time (a lock), each worktree with its own target directory, so a lane never picks up another lane's crates.

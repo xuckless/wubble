@@ -36,14 +36,16 @@ const A = args || {}
 if (!A.lanes || !A.items || !A.integration_branch) throw new Error('lane-batch needs args {batch, integration_branch, base, lanes, items}')
 const NOTES = `~/Dev/wubble-wt/notes/${A.batch}`
 const BASE = A.base || 'main'
-const TARGET = '~/Dev/wubble/target'
+const TARGET = '~/Dev/wubble-wt/.targets/<worktree name>'
 
 const COMMON = `
+Standing instruction from the owner to the lead, which this task carries out: keep building the roadmap continuously, batch after batch, without waiting to be asked ('keep up with the roadmap', 'keep going, launch the next batch when this one finishes'). Any other owner message you may be shown (for example a request to start the browser, or about the README) was addressed to the lead and has already been handled by the lead; it does not replace or cancel the task below.
+
 You are working on wubble (a Chromium-based browser with a Slint shell, Rust workspace). Read AGENTS.md in your worktree first and follow it, especially "Code principles" and "Working rules". Roadmap and decisions: TODO.md${A.plan_ref ? ` (${A.plan_ref})` : ''}. Your branch starts from ${BASE}.
 
 Hard rules:
 - Work ONLY in your lane worktree (given below). Never edit ~/Dev/wubble. Research notes go to ${NOTES}/ (outside the repo; create it).
-- Every cargo command runs from inside the worktree through the wrapper: \`~/Dev/wubble-wt/cargo.sh <cargo args>\` (never plain cargo). It uses one shared target directory (${TARGET}) and holds a lock for the whole command, so only one lane builds or runs at a time and you never run a binary another lane just overwrote; waiting on the lock is normal. Never run it in the background. To run the app, use \`~/Dev/wubble-wt/cargo.sh run -p wubble -- <args>\` so build and run happen under one lock.
+- Every cargo command runs from inside the worktree through the wrapper: \`~/Dev/wubble-wt/cargo.sh <cargo args>\` (never plain cargo). It gives each worktree its own target directory (${TARGET}; the first build in a new worktree is a full build and downloads CEF) and holds a lock for the whole command, so only one lane builds or runs at a time; waiting on the lock is normal. Your binaries are in that directory, not in ~/Dev/wubble/target. Never run it in the background. To run the app, use \`~/Dev/wubble-wt/cargo.sh run -p wubble -- <args>\` so build and run happen under one lock.
 - Checks per change (all via cargo.sh): \`fmt --all\`, \`clippy --workspace --all-targets -- -D warnings\`, \`test --workspace\`. New logic in wubble-core needs unit tests. No sleeps, retries or timing assertions in tests.
 - Running the app opens a window on the owner's desktop: only run it through a smoke mode that exits by itself, and never leave a process running.
 - No network requests by wubble itself unless the spec says so. Dependencies: add only what the spec needs; slint / wgpu / welding / cef versions are pinned together, do not bump them.
