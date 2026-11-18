@@ -6,11 +6,16 @@
 //! grab. Minimise goes straight to winit rather than through Slint's `minimized` property: on
 //! Wayland winit cannot report the state back, so Slint's flag would stay set and the button would
 //! work once.
+//!
+//! macOS keeps a native frame with a transparent, hidden title bar ([`NATIVE_FRAME`],
+//! [`attributes`]): AppKit then gives the window its edge resize, shadow and rounded corners
+//! (winit 0.30 has no `drag_resize_window` there), while the shell still draws its own window
+//! buttons over the full-size content.
 
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use slint::winit_030::winit::window::ResizeDirection;
+use slint::winit_030::winit::window::{ResizeDirection, WindowAttributes};
 
 use crate::{AppWindow, WindowEdge};
 
@@ -42,6 +47,26 @@ impl Kind {
     pub fn transparent_corners(self) -> bool {
         matches!(self, Kind::Wayland | Kind::MacOs)
     }
+}
+
+/// The OS frames the window (edge resize, shadow, corners) under the shell's drawn buttons.
+pub const NATIVE_FRAME: bool = cfg!(target_os = "macos");
+
+/// The native window's attributes; pass to `BackendSelector::with_winit_window_attributes_hook`.
+/// macOS: a full-size content view under a transparent title bar with no title and no traffic
+/// lights (the shell draws them), so only AppKit's frame behaviour remains. Elsewhere unchanged:
+/// the window is frameless (`no-frame`).
+pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
+    #[cfg(target_os = "macos")]
+    let attributes = {
+        use slint::winit_030::winit::platform::macos::WindowAttributesExtMacOS;
+        attributes
+            .with_titlebar_transparent(true)
+            .with_title_hidden(true)
+            .with_fullsize_content_view(true)
+            .with_titlebar_buttons_hidden(true)
+    };
+    attributes
 }
 
 /// The window's mode. Not stored: it is read from the window each time (one owner).
@@ -166,6 +191,7 @@ fn run(window: &slint::Window, intent: Intent) {
 /// Connect the shell's window intents. Call once, after `AppWindow::new`. The platform flags are
 /// applied later, by [`native_window_ready`].
 pub fn wire(app: &AppWindow) {
+    app.set_native_frame(NATIVE_FRAME);
     let weak = app.as_weak();
     let on = move |intent: Intent| {
         let weak = weak.clone();

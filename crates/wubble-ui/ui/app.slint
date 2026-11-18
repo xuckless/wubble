@@ -32,8 +32,10 @@ export component AppWindow inherits Window {
     min-width: Chrome.windowMinW;
     min-height: Chrome.windowMinH;
     // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
-    // colour, rounded where the platform can show transparent corners.
-    no-frame: true;
+    // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
+    // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
+    in property <bool> native-frame: false;
+    no-frame: !root.native-frame;
     background: transparent;
     default-font-family: Fonts.ui;
     default-font-size: Type.body.size;
@@ -652,7 +654,7 @@ export component AppWindow inherits Window {
 
     // Above everything: the resize zones of the frameless window.
     edges := WindowEdges {
-        resizable: root.window-resizable && !root.page-fullscreen;
+        resizable: root.window-resizable && !root.page-fullscreen && !root.native-frame;
         begin(edge) => {
             root.window-begin-resize(edge);
         }

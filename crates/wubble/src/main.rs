@@ -728,6 +728,7 @@ fn run(
         .backend_name("winit".into())
         .renderer_name("femtovg-wgpu".into())
         .require_wgpu_30(gpu.slint_configuration())
+        .with_winit_window_attributes_hook(wubble_ui::window::attributes)
         .select()?;
     // Slint's platform lives in a thread-local and would drop the last handle
     // to the shared device during thread-local teardown, after wgpu-core's
