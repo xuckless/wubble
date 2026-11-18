@@ -10,6 +10,7 @@
 //! [`state::transition`]. Their effects run in `Engine::pump` and
 //! `Engine::execute`.
 
+mod extra;
 pub mod state;
 
 use std::ffi::OsString;
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use extra::ExtraBrowsers;
 use state::{Effect, Event, State};
 pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
@@ -550,9 +552,12 @@ pub struct Engine {
     /// Declared before `runtime` so views drop before CEF shuts down.
     views: Vec<(ViewId, View)>,
     next_view: usize,
+    /// Every other browser CEF created (DevTools windows), counted in `state`
+    /// like the views until each reports itself closed.
+    extra: ExtraBrowsers,
     /// CPU fallback frames of views already dropped, so the total never shrinks.
     closed_cpu_fallback: u64,
-    /// `Some` exactly while `state` is Running or ShuttingDown: an Engine only
+    /// `Some` exactly while `state` pumps (Running, ShuttingDown, Settling): an Engine only
     /// exists after CEF initialised, and `Effect::ShutdownCef` takes it.
     runtime: Option<CefRuntime>,
     state: State,
@@ -586,6 +591,7 @@ impl Engine {
         let mut engine = Self {
             views: Vec::new(),
             next_view: 0,
+            extra: ExtraBrowsers::default(),
             closed_cpu_fallback: 0,
             runtime: Some(runtime),
             state: State::Uninitialised,
@@ -619,11 +625,36 @@ impl Engine {
 
     /// Starts an orderly shutdown; keep calling [`Self::tick`] until [`Self::is_stopped`].
     pub fn request_shutdown(&mut self) {
+        // Browsers CEF created since the last pump count before the quit.
+        self.apply_extra();
         self.apply(Event::ShutdownRequested);
     }
 
+    /// The shutdown ended, cleanly or abandoned ([`Self::abandoned`]).
     pub fn is_stopped(&self) -> bool {
-        self.state == State::Stopped
+        matches!(self.state, State::Stopped | State::Abandoned { .. })
+    }
+
+    /// The shutdown gave up on browsers that never reported closed and left
+    /// CEF up rather than crash in `cef::shutdown` (`state::SHUTDOWN_TURNS`).
+    pub fn abandoned(&self) -> bool {
+        matches!(self.state, State::Abandoned { .. })
+    }
+
+    /// Browsers CEF created beside the views (DevTools windows) and has not
+    /// reported closed. Counted after the next pump.
+    pub fn extra_browsers(&self) -> usize {
+        self.extra.open()
+    }
+
+    /// The extra browsers' page titles, in creation order. For smokes.
+    pub fn extra_titles(&self) -> Vec<String> {
+        self.extra.titles()
+    }
+
+    /// Runs `script` in every extra browser's main frame. For smokes.
+    pub fn run_script_in_extras(&self, script: &str) {
+        self.extra.run_script(script);
     }
 
     /// Creates a windowless browser. The engine owns it, closes it on
@@ -637,6 +668,7 @@ impl Engine {
             config,
             self.content_filter.clone(),
             self.response_observer.clone(),
+            self.extra.client(),
         )?;
         let id = ViewId(self.next_view);
         self.next_view += 1;
@@ -750,12 +782,22 @@ impl Engine {
         outcome
     }
 
-    /// One `do_message_loop_work`, then the views' callbacks it produced.
+    /// One `do_message_loop_work`, then the callbacks it produced: extra
+    /// browsers' first, so one created in this run counts before a view's
+    /// close could end a shutdown.
     fn run_work(&mut self) -> Vec<(ViewId, WebEvent)> {
         if let Some(runtime) = &self.runtime {
             runtime.do_message_loop_work();
         }
+        self.apply_extra();
         self.reap_closed_views()
+    }
+
+    /// Reports the extra browsers created or closed to the lifecycle.
+    fn apply_extra(&mut self) {
+        for event in self.extra.drain() {
+            self.apply(event);
+        }
     }
 
     /// The only place lifecycle effects touch CEF.
@@ -772,9 +814,21 @@ impl Engine {
                 for (_, view) in &mut self.views {
                     view.close();
                 }
+                self.extra.close_all();
             }
             // Dropping the runtime calls cef::shutdown.
             Effect::ShutdownCef => self.runtime = None,
+            // cef::shutdown would crash on the browsers still alive; the
+            // process exits with CEF up instead (its subprocesses follow).
+            Effect::AbandonCef => {
+                eprintln!(
+                    "wubble-engine: {:?} after {} pump turns: browsers never reported closed; \
+                     exiting without cef::shutdown",
+                    self.state,
+                    state::SHUTDOWN_TURNS
+                );
+                std::mem::forget(self.runtime.take());
+            }
         }
     }
 

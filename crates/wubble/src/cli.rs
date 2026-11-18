@@ -62,6 +62,7 @@ struct Cli {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SmokeArg {
     Boot,
+    Quit,
     Frames(NonZeroU32),
     Nav,
     Tabs,
@@ -84,6 +85,7 @@ enum SmokeArg {
 fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
     match value.split_once('=') {
         None if value == "boot" => Ok(SmokeArg::Boot),
+        None if value == "quit" => Ok(SmokeArg::Quit),
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
@@ -106,7 +108,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
+            "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
              `boost` or `session-phase=1|2`"
                 .into(),
@@ -118,6 +120,9 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
 pub enum Smoke {
     /// Initialise CEF, print its version, shut down.
     Boot,
+    /// Inspect on a selection, DevTools windows shown and counted, one more
+    /// asked for just before the quit; the quit is clean (`quit_smoke.rs`).
+    Quit,
     /// Show `frames` accelerated frames of `url` (the bundled page if `None`).
     Frames {
         frames: NonZeroU32,
@@ -233,6 +238,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Frames(frames)), url, None) => Smoke::Frames { frames, url },
             (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N"),
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
+            (Some(SmokeArg::Quit), None, None) => Smoke::Quit,
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
@@ -429,6 +435,10 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--smoke", "boot"]).ok(),
             Some(Command::Smoke(Smoke::Boot))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "quit"]).ok(),
+            Some(Command::Smoke(Smoke::Quit))
         );
     }
 

@@ -29,6 +29,7 @@ mod persist;
 mod pixels;
 mod profile;
 mod prompt;
+mod quit_smoke;
 mod run_state;
 mod screen;
 mod session_smoke;
@@ -148,6 +149,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("smoke: cef boot FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::Quit) => match with_smoke_dir(|config, _| quit_smoke::run(config)) {
+            Ok(devtools) => {
+                println!("smoke: quit ok devtools={devtools}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: quit FAILED: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -597,7 +608,7 @@ fn install_shell_driver(
 /// Pumps until every browser is closed and CEF has shut down. Bounded by the
 /// lifecycle state, not by time: the engine closes its views and reports each
 /// one closed once CEF has let go of it.
-fn drain(engine: &mut Engine) {
+pub fn drain(engine: &mut Engine) {
     trace("shutdown requested");
     engine.request_shutdown();
     let mut ticks = 0u64;

@@ -239,6 +239,9 @@ pub struct View {
     favicons: crate::favicon::Sink,
     /// The scripts every new document runs first ([`Self::set_document_scripts`]).
     doc_scripts: cdp::DocScripts,
+    /// The client DevTools windows are created with: it reports them to the
+    /// engine (`app::extra`), which must close them before `cef::shutdown`.
+    devtools_client: cef::Client,
 }
 
 /// The second frame stream: the popup widget's newest frame and where to
@@ -264,6 +267,7 @@ impl View {
         config: ViewConfig,
         filter: Option<Arc<dyn ContentFilter>>,
         observer: Option<Arc<dyn ResponseObserver>>,
+        devtools_client: cef::Client,
     ) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
         let request_filter = filter.clone().map(crate::filter::request_filter);
@@ -308,6 +312,7 @@ impl View {
             drag: DragSource::default(),
             favicons: Default::default(),
             doc_scripts: cdp::DocScripts::default(),
+            devtools_client,
         })
     }
 
@@ -380,12 +385,18 @@ impl View {
             eprintln!("wubble-engine: DevTools is not verified on this platform yet");
             return;
         }
+        // The engine's DevTools client: the engine counts the window until it
+        // closes (`app::extra`).
+        let window = cef::WindowInfo::default();
+        let settings = cef::BrowserSettings::default();
+        let mut client = self.devtools_client.clone();
+        let at = at.map(|(x, y)| cef::Point { x, y });
         self.send(|host| {
             host.show_dev_tools(
-                Some(&cef::WindowInfo::default()),
-                None,
-                Some(&cef::BrowserSettings::default()),
-                at.map(|(x, y)| cef::Point { x, y }).as_ref(),
+                Some(&window),
+                Some(&mut client),
+                Some(&settings),
+                at.as_ref(),
             )
         });
     }
