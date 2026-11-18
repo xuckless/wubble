@@ -72,6 +72,21 @@ pub enum Command {
     },
     /// The folder's tabs stay, at the folder's position.
     DeleteFolder(FolderId),
+    /// Fold the folder's tabs away in the sidebar, or show them.
+    SetFolderCollapsed {
+        folder: FolderId,
+        collapsed: bool,
+    },
+    /// A new tab on the same page in the same container, right after it, shown.
+    DuplicateTab(TabId),
+    /// Closes every other tab of the tab's Space except the pinned ones (Chromium
+    /// `CloseOtherTabs`), and shows it.
+    CloseOthers(TabId),
+    /// Keep the tab awake while hidden: never frozen or discarded.
+    SetNeverSleep {
+        tab: TabId,
+        on: bool,
+    },
     NewSpace {
         name: String,
         tint: Rgb,
@@ -704,6 +719,36 @@ impl Model {
         fx
     }
 
+    fn duplicate_tab(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some(t) = self.tabs.get(&tab) else {
+            return vec![];
+        };
+        let (url, container) = (t.url.clone(), t.container);
+        let mut fx = self.new_tab(url, Some(container), Some(tab));
+        if let Some(Effect::CreateTab { tab: new, .. }) = fx.first().cloned()
+            && !fx.contains(&Effect::ActivateTab(new))
+        {
+            fx.extend(self.activate_tab(new));
+        }
+        fx
+    }
+
+    fn close_others(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some((si, _)) = self.place_of(tab) else {
+            return vec![];
+        };
+        let others: Vec<TabId> = self
+            .order_idx(si)
+            .into_iter()
+            .filter(|&t| t != tab && !self.is_pinned(t))
+            .collect();
+        let mut fx = self.activate_tab(tab);
+        for t in others {
+            fx.extend(self.close_tab(t));
+        }
+        fx
+    }
+
     fn activate_tab(&mut self, tab: TabId) -> Vec<Effect> {
         let Some((si, _)) = self.place_of(tab) else {
             return vec![];
@@ -1091,6 +1136,7 @@ impl Model {
                     let now = t.lifecycle;
                     (was.activity == Activity::Busy && now.activity == Activity::Idle)
                         || (was.pin == Pin::Pinned && now.pin == Pin::Unpinned)
+                        || (was.never_sleep && !now.never_sleep)
                 })
             })
             .map(|(&id, _)| id)
@@ -1180,11 +1226,25 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
                     id,
                     name,
                     tabs: vec![],
+                    collapsed: false,
                 }));
             }
             vec![]
         }
         Command::DeleteFolder(f) => m.delete_folder(f),
+        Command::SetFolderCollapsed { folder, collapsed } => {
+            if let Some(si) = m.folder_space(folder)
+                && let Some(f) = m.spaces[si].folder_mut(folder)
+            {
+                f.collapsed = collapsed;
+            }
+            vec![]
+        }
+        Command::DuplicateTab(t) => m.duplicate_tab(t),
+        Command::CloseOthers(t) => m.close_others(t),
+        Command::SetNeverSleep { tab, on } => {
+            m.lifecycle(tab, lifecycle::Event::NeverSleepChanged(on))
+        }
         Command::NewSpace {
             name,
             tint,

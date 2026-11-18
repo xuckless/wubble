@@ -46,15 +46,17 @@ impl SleepPolicy {
         }
     }
 
-    /// Target liveness for a tab that has been hidden for `hidden`.
+    /// Target liveness for a tab that has been hidden for `hidden`. A busy tab, or one the user
+    /// asked never to sleep, stays Background whatever the time or pressure.
     pub fn target(
         &self,
         hidden: Duration,
         pin: Pin,
         activity: Activity,
         pressure: Pressure,
+        never_sleep: bool,
     ) -> Liveness {
-        if activity == Activity::Busy {
+        if activity == Activity::Busy || never_sleep {
             return Liveness::Background;
         }
         let discardable = !(pin == Pin::Pinned && self.keep_pinned_alive);
@@ -74,7 +76,7 @@ mod tests {
     use super::*;
 
     fn target(secs: u64, pin: Pin, activity: Activity, pressure: Pressure) -> Liveness {
-        SleepPolicy::default().target(Duration::from_secs(secs), pin, activity, pressure)
+        SleepPolicy::default().target(Duration::from_secs(secs), pin, activity, pressure, false)
     }
 
     #[test]
@@ -95,6 +97,19 @@ mod tests {
             target(3600, Pin::Pinned, Activity::Idle, Pressure::Critical),
             Liveness::Frozen
         );
+    }
+
+    #[test]
+    fn never_sleep_stays_background_even_under_critical_pressure() {
+        let p = SleepPolicy::default();
+        let t = p.target(
+            Duration::from_secs(3600),
+            Pin::Unpinned,
+            Activity::Idle,
+            Pressure::Critical,
+            true,
+        );
+        assert_eq!(t, Liveness::Background);
     }
 
     #[test]

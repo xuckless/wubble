@@ -204,6 +204,39 @@ pub fn squash_of(s: f64) -> f64 {
     1.0 / s.sqrt()
 }
 
+// wubble change: ported from `pages/touch-kit.tsx` `SQUASH` / `squashAt` (@source touch-squash),
+// the one keyframe table the controls share (toggle landing, buttons, check boxes).
+/// The squash token as keys of `(t, sx, sy)` over [`SQUASH_MS`]:
+/// 1.30×0.78 → 0.93×1.07 → 1.03×0.98 (README › Motion tokens › Squash).
+pub const SQUASH_KEYS: [(f64, f64, f64); 5] = [
+    (0.0, 1.0, 1.0),
+    (0.28, 1.3, 0.78),
+    (0.58, 0.93, 1.07),
+    (0.8, 1.03, 0.98),
+    (1.0, 1.0, 1.0),
+];
+/// The squash token's length.
+pub const SQUASH_MS: f64 = 500.0;
+
+/// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token).
+/// Ease-out between keys; outside 0..1 it is at rest, `(1, 1)`.
+pub fn squash_at(t: f64, amp: f64) -> (f64, f64) {
+    if !(0.0..1.0).contains(&t) {
+        return (1.0, 1.0);
+    }
+    let k = &SQUASH_KEYS;
+    let mut i = 0;
+    while i < k.len() - 2 && t > k[i + 1].0 {
+        i += 1;
+    }
+    let (a, b) = (k[i], k[i + 1]);
+    let u = (t - a.0) / (b.0 - a.0);
+    let e = 1.0 - (1.0 - u) * (1.0 - u);
+    let sx = a.1 + (b.1 - a.1) * e;
+    let sy = a.2 + (b.2 - a.2) * e;
+    (1.0 + (sx - 1.0) * amp, 1.0 + (sy - 1.0) * amp)
+}
+
 // @source slint-velocity
 /// Tracks pointer velocity (px/s) over the last ~80 ms, for flings.
 /// `t` is in milliseconds (the TS uses `performance.now()`); pass your event timestamp.
@@ -292,6 +325,18 @@ mod tests {
         }
         // rests at 1 + |vel|/1500 with |vel| <= 1, i.e. within 0.0007 of 1 (same as the TS)
         assert!((st.x() - 1.0).abs() < 1.0 / 1500.0 + 1e-12);
+    }
+
+    #[test]
+    fn squash_hits_its_keys_and_rests_outside() {
+        assert_eq!(squash_at(0.28, 1.0), (1.3, 0.78));
+        assert_eq!(squash_at(0.58, 1.0), (0.93, 1.07));
+        let (x, y) = squash_at(0.8, 1.0);
+        assert!((x - 1.03).abs() < 1e-12 && (y - 0.98).abs() < 1e-12);
+        assert_eq!(squash_at(1.0, 1.0), (1.0, 1.0));
+        assert_eq!(squash_at(-0.1, 1.0), (1.0, 1.0));
+        let (x, _) = squash_at(0.28, 0.5);
+        assert!((x - 1.15).abs() < 1e-12);
     }
 
     /// The stretch and banded-spring part of the design repo's parity example, against the TS

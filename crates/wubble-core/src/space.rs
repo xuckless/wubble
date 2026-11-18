@@ -64,6 +64,8 @@ pub struct Folder {
     pub id: FolderId,
     pub name: String,
     pub tabs: Vec<TabId>,
+    /// Its tabs are hidden in the sidebar (view state; the tabs stay open).
+    pub collapsed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

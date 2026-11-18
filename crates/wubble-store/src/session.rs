@@ -114,6 +114,7 @@ impl Store {
                     id,
                     name: r.get(2)?,
                     tabs: vec![],
+                    collapsed: false,
                 }),
             ));
         }
@@ -159,6 +160,7 @@ impl Store {
                     pin: if pinned { Pin::Pinned } else { Pin::Unpinned },
                     activity: Activity::Idle,
                     hidden_since: None,
+                    never_sleep: false,
                 },
                 container: ContainerId(narrow(r.get(2)?, "container id")?),
                 opener: None,
@@ -528,6 +530,7 @@ mod tests {
                     },
                     activity: Activity::Idle,
                     hidden_since: None,
+                    never_sleep: false,
                 },
                 opener: None,
                 ..t.clone()
@@ -776,6 +779,7 @@ mod tests {
                     pin: if pinned { Pin::Pinned } else { Pin::Unpinned },
                     activity: Activity::Idle,
                     hidden_since: None,
+                    never_sleep: false,
                 },
                 container: ContainerId(container),
                 opener: None,
@@ -794,6 +798,7 @@ mod tests {
                             id: FolderId(0),
                             name: "Reading".into(),
                             tabs: vec![TabId(12)],
+                            collapsed: false,
                         }),
                         Item::Tab(TabId(11)),
                     ],

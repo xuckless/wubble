@@ -39,6 +39,8 @@ pub struct Lifecycle {
     pub activity: Activity,
     /// When the tab was hidden. Set while Background or Frozen, `None` otherwise.
     pub hidden_since: Option<Instant>,
+    /// The user asked this tab never to sleep (the tab row menu): hidden, it stays Background.
+    pub never_sleep: bool,
 }
 
 impl Lifecycle {
@@ -49,6 +51,7 @@ impl Lifecycle {
             pin: Pin::Unpinned,
             activity: Activity::Idle,
             hidden_since: None,
+            never_sleep: false,
         }
     }
 }
@@ -72,6 +75,7 @@ pub enum Event {
     },
     BusyChanged(Activity),
     PinnedChanged(Pin),
+    NeverSleepChanged(bool),
     /// The renderer process crashed or was killed. A visible tab is reloaded at
     /// once; a hidden one becomes Discarded and is restored when shown.
     RendererGone,
@@ -134,7 +138,7 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
             let hidden = now.saturating_duration_since(since);
             match (
                 s.liveness,
-                policy.target(hidden, s.pin, s.activity, pressure),
+                policy.target(hidden, s.pin, s.activity, pressure, s.never_sleep),
             ) {
                 (Background, Frozen) => (
                     Lifecycle {
@@ -159,6 +163,7 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
         ),
         (_, Event::BusyChanged(activity)) => (Lifecycle { activity, ..s }, vec![]),
         (_, Event::PinnedChanged(pin)) => (Lifecycle { pin, ..s }, vec![]),
+        (_, Event::NeverSleepChanged(never_sleep)) => (Lifecycle { never_sleep, ..s }, vec![]),
 
         (Active, Event::RendererGone) => (s, vec![Restore]),
         (Discarded, Event::RendererGone) => (s, vec![]),
@@ -201,6 +206,7 @@ mod tests {
             pin,
             activity,
             hidden_since: hidden.then(base),
+            never_sleep: false,
         }
     }
 
