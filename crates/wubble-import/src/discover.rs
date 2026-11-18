@@ -10,7 +10,7 @@
 //! zephium-browser/Zephium `ini_profiles` (MPL-2.0). Arc paths: mozilla-firefox/firefox
 //! `ChromeProfileMigrator.sys.mjs` `_getSidebarPath` (macOS) and Zephium `arc.rs` (Windows).
 
-use crate::{ImportError, Imported, Layout, Source, arc, containers, places, session};
+use crate::{ImportError, Imported, Source, arc, containers, places, session};
 use rusqlite::Connection;
 use std::path::{Component, Path, PathBuf};
 use wubble_core::space::Container;
@@ -273,16 +273,6 @@ fn read_capped(path: &Path) -> Result<Option<Vec<u8>>, ImportError> {
     }
 }
 
-/// First existing file among `names` (relative to `dir`).
-fn read_first(dir: &Path, names: &[&str]) -> Result<Option<(String, Vec<u8>)>, ImportError> {
-    for n in names {
-        if let Some(b) = read_capped(&dir.join(n))? {
-            return Ok(Some(((*n).to_owned(), b)));
-        }
-    }
-    Ok(None)
-}
-
 /// Copy `places.sqlite` and its `-wal` to a temp dir, let SQLite replay the WAL there and
 /// switch the copy to rollback-journal mode, then parse the resulting single file. The
 /// browser may hold the original open; it is never opened by us.
@@ -293,10 +283,24 @@ pub fn snapshot_places(dir: &Path) -> Result<places::Places, ImportError> {
     }
     let tmp = tempfile::tempdir()?;
     let copy = tmp.path().join("places.sqlite");
-    std::fs::copy(&db, &copy)?;
     let wal = dir.join("places.sqlite-wal");
-    if wal.is_file() {
-        std::fs::copy(&wal, tmp.path().join("places.sqlite-wal"))?;
+    let wal_copy = tmp.path().join("places.sqlite-wal");
+    // The browser may checkpoint between the two copies; if the WAL changed while we
+    // copied, take both again (bounded, no waiting).
+    let stamp = |p: &Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    };
+    for _ in 0..3 {
+        let before = stamp(&wal);
+        std::fs::copy(&db, &copy)?;
+        if before.is_some() && std::fs::copy(&wal, &wal_copy).is_err() {
+            continue;
+        }
+        if stamp(&wal) == before {
+            break;
+        }
     }
     {
         let conn = Connection::open(&copy)?;
@@ -323,17 +327,36 @@ pub fn read_profile(p: &FoundProfile) -> Result<Imported, ImportError> {
         Browser::Zen => read_capped(&p.dir.join("zen-sessions.jsonlz4"))?,
         Browser::Firefox => None,
     };
-    let layout = match (zen, read_first(&p.dir, FIREFOX_SESSIONS)?) {
-        (Some(b), _) => session::parse_zen(&b)?,
-        (None, Some((_, b))) => session::parse_firefox(&b)?,
-        (None, None) => Layout::default(),
-    };
-    Ok(Imported::new(
+    // A session file that is present but unusable (truncated, empty, encrypted) is a
+    // warning, not a failure: bookmarks, history and containers still import.
+    let mut warnings = Vec::new();
+    let mut layout = None;
+    if let Some(b) = zen {
+        match session::parse_zen(&b) {
+            Ok(l) => layout = Some(l),
+            Err(e) => warnings.push(format!("zen-sessions.jsonlz4: {e}")),
+        }
+    }
+    for name in FIREFOX_SESSIONS {
+        if layout.is_some() {
+            break;
+        }
+        let Some(b) = read_capped(&p.dir.join(name))? else {
+            continue;
+        };
+        match session::parse_firefox(&b) {
+            Ok(l) => layout = Some(l),
+            Err(e) => warnings.push(format!("{name}: {e}")),
+        }
+    }
+    let mut imported = Imported::new(
         p.browser.into(),
         containers,
-        layout,
+        layout.unwrap_or_default(),
         snapshot_places(&p.dir)?,
-    ))
+    );
+    imported.warnings = warnings;
+    Ok(imported)
 }
 
 pub fn read_arc(path: &Path) -> Result<Imported, ImportError> {
@@ -545,6 +568,39 @@ StartWithLastProfile=1
         let i = read_profile(&p).unwrap();
         assert_eq!(i.spaces.len(), 1);
         assert_eq!(i.tabs.len(), 4);
+    }
+
+    #[test]
+    fn bad_session_files_warn_and_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("containers.json"),
+            include_bytes!("../tests/fixtures/containers.json"),
+        )
+        .unwrap();
+        fs::write(dir.path().join("zen-sessions.jsonlz4"), b"").unwrap();
+        fs::write(
+            dir.path().join("sessionstore.jsonlz4"),
+            mozlz4::encode(include_bytes!("../tests/fixtures/firefox_session.json")),
+        )
+        .unwrap();
+        let p = FoundProfile {
+            browser: Browser::Zen,
+            name: "x".into(),
+            dir: dir.path().to_path_buf(),
+            default: true,
+        };
+        let i = read_profile(&p).unwrap();
+        assert_eq!(i.containers.len(), 5);
+        assert_eq!(i.tabs.len(), 4);
+        assert_eq!(i.warnings.len(), 1);
+
+        // every session file unusable: still Ok, with no layout
+        fs::remove_file(dir.path().join("sessionstore.jsonlz4")).unwrap();
+        let i = read_profile(&p).unwrap();
+        assert_eq!(i.containers.len(), 5);
+        assert!(i.tabs.is_empty());
+        assert_eq!(i.warnings.len(), 1);
     }
 
     #[test]

@@ -143,14 +143,14 @@ pub fn parse_zen(bytes: &[u8]) -> Result<Layout, ImportError> {
             .copied()
     };
     for (i, f) in raw.iter().enumerate() {
-        // Walk up; a chain longer than the folder count has looped back on itself.
+        // Cut only folders that sit on a cycle: walking up from them returns to them.
         let mut cur = parent_of(i);
         let mut steps = 0;
-        while let Some(p) = cur.filter(|_| steps <= raw.len()) {
+        while let Some(p) = cur.filter(|&p| p != i && steps <= raw.len()) {
             steps += 1;
             cur = parent_of(p);
         }
-        let looped = cur.is_some();
+        let looped = cur == Some(i);
         layout.folders.push(ImportedFolder {
             space: f["workspaceId"]
                 .as_str()
@@ -347,6 +347,17 @@ mod tests {
         assert_eq!(c(json!("rgb(1, 2, 3)")), None);
         assert_eq!(c(json!([1, 2])), None);
         assert_eq!(first_colour(&json!({})), None);
+    }
+
+    #[test]
+    fn zen_folder_leading_into_cycle_keeps_parent() {
+        let v = json!({"folders": [
+            {"id": "c", "parentId": "a", "name": "C"},
+            {"id": "a", "parentId": "b", "name": "A"},
+            {"id": "b", "parentId": "a", "name": "B"}]});
+        let f = parse_zen(&pack(&v)).unwrap().folders;
+        assert_eq!(f[0].parent, Some(1));
+        assert_eq!((f[1].parent, f[2].parent), (None, None));
     }
 
     #[test]

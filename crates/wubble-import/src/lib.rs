@@ -114,6 +114,8 @@ pub struct Imported {
     pub bookmarks: Vec<BookmarkNode>,
     /// Newest first.
     pub history: Vec<ImportedVisit>,
+    /// Files that were present but unusable; the rest of the import is still returned.
+    pub warnings: Vec<String>,
 }
 
 impl Imported {
@@ -131,6 +133,7 @@ impl Imported {
             tabs: layout.tabs,
             bookmarks: places.bookmarks,
             history: places.history,
+            warnings: Vec::new(),
         }
     }
 }

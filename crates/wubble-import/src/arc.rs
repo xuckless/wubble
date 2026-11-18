@@ -51,11 +51,16 @@ fn is_marker(v: &Value, name: &str) -> bool {
     v.as_str() == Some(name) || v.get(name).is_some()
 }
 
-/// Ids following a `kind` marker in a space's `containerIDs` / `newContainerIDs`.
+/// Ids following a `kind` marker in a space's `newContainerIDs`, or `containerIDs` when
+/// that is absent (real files may carry both with the same ids; Firefox's
+/// ArcMigrationUtils prefers the new key too).
 fn marked_ids<'a>(space: &'a Value, kind: &str) -> Vec<&'a str> {
-    ["containerIDs", "newContainerIDs"]
-        .iter()
-        .flat_map(|k| pairs(&space[k]))
+    let key = if space["newContainerIDs"].is_array() {
+        "newContainerIDs"
+    } else {
+        "containerIDs"
+    };
+    pairs(&space[key])
         .filter(|(m, _)| is_marker(m, kind))
         .filter_map(|(_, id)| id.as_str())
         .collect()
@@ -311,6 +316,22 @@ mod tests {
         let l = parse(sidebar.to_string().as_bytes()).unwrap();
         let urls: Vec<_> = l.tabs.iter().map(|t| t.url.as_str()).collect();
         assert_eq!(urls, ["https://a/", "https://b/"]);
+    }
+
+    #[test]
+    fn both_container_keys_do_not_duplicate() {
+        let sidebar = json!({"sidebar": {"containers": [
+            {"global": {}},
+            {"items": [
+                "pin", {"id": "pin"},
+                "t1", {"id": "t1", "parentID": "pin", "data": {"tab": {"savedURL": "https://a/"}}}
+            ],
+            "spaces": ["s", {"id": "s", "title": "S",
+                "containerIDs": ["pinned", "pin"],
+                "newContainerIDs": [{"pinned": {"_0": {}}}, "pin"]}]}
+        ]}});
+        let l = parse(sidebar.to_string().as_bytes()).unwrap();
+        assert_eq!(l.tabs.len(), 1);
     }
 
     #[test]
