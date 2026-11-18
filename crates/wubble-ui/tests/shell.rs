@@ -240,7 +240,7 @@ fn shell_scenarios() {
     let app = AppWindow::new().unwrap();
     app.show().unwrap();
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
-    let driver = driver::connect(&app, wubble_core::seam::Seam::new());
+    let driver = driver::wire(&app, wubble_core::seam::Seam::new()).driver;
     three_modes(&app, &driver);
     sidebar_button(&app, &driver);
     peek(&app, &driver);

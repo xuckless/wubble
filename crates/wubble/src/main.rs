@@ -36,6 +36,7 @@ use wubble_engine::view::Layout;
 use wubble_gfx::pacing::FrameStats;
 use wubble_gfx::{FrameSize, GpuContext};
 use wubble_ui::AppWindow;
+use wubble_ui::glass::GlassRegistry;
 
 /// Pumps `--smoke boot` gives CEF before shutting down. A count, not a clock.
 const SMOKE_TICKS: usize = 10;
@@ -201,15 +202,15 @@ fn install_shell_driver(
     window: &AppWindow,
     ui: persist::UiState,
     glass: &Rc<RefCell<Glass>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Rc<RefCell<GlassRegistry>>, Box<dyn std::error::Error>> {
     let seam = Seam::restored(ui.sidebar_width.into(), ui.mode);
     let glass = Rc::clone(glass);
-    wubble_ui::driver::install(window, seam, move |window, now, items| {
+    let panels = wubble_ui::driver::install(window, seam, move |window, now, items| {
         if let Ok(mut glass) = glass.try_borrow_mut() {
             glass.frame(window, now, items);
         }
     })?;
-    Ok(())
+    Ok(panels)
 }
 
 /// Pumps until every browser is closed and CEF has shut down. Bounded by the
@@ -581,12 +582,13 @@ fn run(
     connect_input(&window);
     connect_shell(&window);
     wubble_ui::window::wire(&window);
-    install_shell_driver(&window, loaded.settings.ui, &glass)?;
+    let panels = install_shell_driver(&window, loaded.settings.ui, &glass)?;
     let host = Host::new(
         engine,
         &window,
         gpu.presenter(),
         glass,
+        panels,
         loaded,
         store,
         url,

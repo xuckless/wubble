@@ -133,11 +133,20 @@ fn glass_panels_report_their_items() {
     app.set_peek(true);
     pump(1000);
     assert!(near(item(&seen, address).x, pill.x), "back with the peek");
+    // The scene draws no beam over the peek, so the pill's loading shows as the Slint sheen.
+    app.set_address_loading(true);
+    pump(200);
+    assert!(app.get_address_sheen() > 0.99, "sheen over the peek");
 
-    // The scene off again: everything absent.
+    // Back over the scene, which draws the pill and its beam: no sheen on top.
     app.set_peek(false);
     app.set_sidebar_mode(SidebarMode::Extended);
     app.set_sidebar_width(252.0);
+    pump(1);
+    assert_eq!(app.get_address_sheen(), 0.0, "no sheen over the scene");
+    app.set_address_loading(false);
+
+    // The scene off again: everything absent.
     layer.set_scene_active(false);
     pump(1);
     assert!(seen.borrow().values().all(|i| !i.present));

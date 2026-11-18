@@ -505,6 +505,11 @@ impl Renderer {
         self.cost.take()
     }
 
+    /// When [`Renderer::before_rendering`] last ran (the host's frame interval).
+    pub fn last_frame(&self) -> Option<Instant> {
+        self.last_frame
+    }
+
     /// The level the host's `Governor` chose. Takes effect on the next frame.
     pub fn set_quality(&mut self, quality: Quality) {
         self.quality = quality;

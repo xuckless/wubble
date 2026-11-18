@@ -6,8 +6,8 @@
 //! `src/wubble/slint`, owner's code, moved into that one notifier): the scene renders under the
 //! UI and its image is the window's bottom layer. The scene is fed from data only: the glass
 //! list the panels report (`wubble_ui::glass`), the active Space's tint, the address pill's
-//! `loading`, the pointer (from the host's winit filter) and the measured GPU frame cost for
-//! the quality governor.
+//! `loading`, the pointer (from the host's winit filter) and, for the quality governor, each
+//! frame's load ([`frame_load`]).
 
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,25 @@ pub const GLASS_ENV: &str = "WUBBLE_GLASS";
 
 /// The frame budget when the display's refresh rate is unknown: 120 Hz.
 const DEFAULT_BUDGET: Duration = Duration::from_micros(8_333);
+
+/// The scene's share of one display period: its GPU time is judged against this fraction of
+/// the frame, so the glass steps down while Slint and the page still fit in the rest
+/// (TODO.md Decided, "Glass cost").
+pub const SCENE_SHARE: f64 = 0.5;
+
+/// One frame's load for the governor, as a cost against one display `period`: the larger of
+/// the scene's GPU time over its share (when timestamps came back) and the frame's lateness,
+/// its interval past one period (the scene redraws every frame, so a longer interval is a
+/// dropped frame, whatever the device measures). `None` when there is neither.
+pub fn frame_load(
+    gpu: Option<Duration>,
+    interval: Option<Duration>,
+    period: Duration,
+) -> Option<Duration> {
+    let scene = gpu.map(|c| c.div_f64(SCENE_SHARE));
+    let late = interval.map(|i| i.saturating_sub(period));
+    scene.max(late)
+}
 
 /// Which glass the window has, for the whole run.
 pub enum Glass {
@@ -44,8 +63,6 @@ pub struct SceneHost {
     tint: Option<Rgb>,
     /// The address pill's `loading` last frame (the beam laps on its rising edge).
     loading: bool,
-    /// The glass list last handed to the scene.
-    items: Vec<GlassItem>,
     /// The last logical pointer position, for taps.
     pointer: Option<(f32, f32)>,
     image_error_logged: bool,
@@ -70,7 +87,7 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow) -> Glass {
     }) {
         Ok(renderer) => {
             if !renderer.measures_cost() {
-                eprintln!("wubble: glass: no GPU timestamps, quality fixed at Full");
+                eprintln!("wubble: glass: no GPU timestamps, quality follows dropped frames only");
             }
             eprintln!("wubble: glass: scene");
             window.global::<GlassLayer>().set_scene_active(true);
@@ -80,7 +97,6 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow) -> Glass {
                 budget: None,
                 tint: None,
                 loading: false,
-                items: vec![],
                 pointer: None,
                 image_error_logged: false,
             }))
@@ -133,14 +149,6 @@ impl Glass {
         matches!(self, Glass::Scene(_))
     }
 
-    /// The glass list the scene last drew (empty without the scene).
-    pub fn items(&self) -> &[GlassItem] {
-        match self {
-            Glass::Scene(s) => &s.items,
-            Glass::SlintOnly => &[],
-        }
-    }
-
     /// One rendered frame, after the shell driver's step. `glass` is the panels' new list
     /// when it changed.
     pub fn frame(&mut self, window: &AppWindow, now: Instant, glass: Option<&[GlassItem]>) {
@@ -163,6 +171,10 @@ impl Glass {
         }
         s.loading = loading;
 
+        let interval = s
+            .renderer
+            .last_frame()
+            .map(|t| now.saturating_duration_since(t));
         match s.renderer.before_rendering(window.window(), now) {
             Ok(Some(image)) => window.set_scene(image),
             Ok(None) => {}
@@ -172,7 +184,7 @@ impl Glass {
                 }
             }
         }
-        s.govern(window);
+        s.govern(window, interval);
     }
 
     /// The pointer moved, in logical px.
@@ -211,14 +223,10 @@ impl SceneHost {
             radius: i.radius,
         });
         self.renderer.scene.set_beam(beam);
-        self.items = items.to_vec();
     }
 
-    /// Feeds the governor the GPU cost of a finished frame, at the edge, and applies its level.
-    fn govern(&mut self, window: &AppWindow) {
-        let Some(cost) = self.renderer.take_cost() else {
-            return;
-        };
+    /// Feeds the governor this frame's load ([`frame_load`]), at the edge, and applies its level.
+    fn govern(&mut self, window: &AppWindow, interval: Option<Duration>) {
         let budget = *self.budget.get_or_insert_with(|| {
             window
                 .window()
@@ -229,6 +237,9 @@ impl SceneHost {
                     Duration::from_secs_f64(1000.0 / f64::from(mhz))
                 })
         });
+        let Some(cost) = frame_load(self.renderer.take_cost(), interval, budget) else {
+            return;
+        };
         let before = self.governor.quality();
         self.governor = self.governor.next(cost, budget);
         let after = self.governor.quality();
@@ -295,6 +306,45 @@ mod tests {
         for t in Tier::ALL {
             assert_eq!(tier(to_ui(t)), t);
         }
+    }
+
+    #[test]
+    fn a_frame_is_judged_by_the_scene_share_and_by_lateness() {
+        let ms = Duration::from_millis;
+        let period = ms(8);
+        // the scene's GPU time counts against its share of the frame
+        assert_eq!(frame_load(Some(ms(3)), None, period), Some(ms(6)));
+        // a frame on time is no load; one period late (a dropped frame) is a full period
+        assert_eq!(frame_load(None, Some(ms(8)), period), Some(ms(0)));
+        assert_eq!(frame_load(None, Some(ms(16)), period), Some(ms(8)));
+        // the larger signal wins
+        assert_eq!(frame_load(Some(ms(1)), Some(ms(16)), period), Some(ms(8)));
+        assert_eq!(frame_load(Some(ms(5)), Some(ms(8)), period), Some(ms(10)));
+        assert_eq!(frame_load(None, None, period), None);
+    }
+
+    #[test]
+    fn a_scene_over_its_share_degrades_the_glass_before_the_frame_drops() {
+        // 5 ms of scene in an 8.33 ms frame: the frame still fits, the glass steps down
+        let (period, scene) = (DEFAULT_BUDGET, Duration::from_millis(5));
+        let mut g = Governor::new(Quality::Full);
+        for _ in 0..wubble_gfx::scene::DOWN_COUNT {
+            g = g.next(
+                frame_load(Some(scene), Some(period), period).unwrap(),
+                period,
+            );
+        }
+        assert_eq!(g.quality(), Quality::HalfRes);
+    }
+
+    #[test]
+    fn dropped_frames_degrade_the_glass_without_timestamps() {
+        let period = DEFAULT_BUDGET;
+        let mut g = Governor::new(Quality::Full);
+        for _ in 0..wubble_gfx::scene::DOWN_COUNT {
+            g = g.next(frame_load(None, Some(period * 2), period).unwrap(), period);
+        }
+        assert_eq!(g.quality(), Quality::HalfRes);
     }
 
     #[test]

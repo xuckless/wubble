@@ -7,7 +7,7 @@
 import { Palette, Chrome, Spacing, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton } from "../components.slint";
-import { GlassTier, GlassKeys, GlassLayer } from "model.slint";
+import { GlassTier, GlassKeys } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
 export component AddressPill inherits Rectangle {
@@ -18,8 +18,9 @@ export component AddressPill inherits Rectangle {
     in property <bool> over-wgpu: false;
     // A page is loading. The design's border beam (chrome.tsx `Address`) is the scene's
     // (`set_beam` on this pill's glass rect, `lap_beam` when loading starts); this is its Slint
-    // fallback, used only without the scene: a sheen that sweeps the pill every 1.5 s and fades
-    // over 1.5 s once loading ends.
+    // fallback, used wherever the scene does not draw this pill (no scene, or the hidden
+    // sidebar's peek): a sheen that sweeps the pill every 1.5 s and fades over 1.5 s once
+    // loading ends.
     in property <bool> loading: false;
     // Beam strength: up in 120 ms, down over 1500 ms; the sheen shows its square (lingering tail).
     property <float> strength: root.loading ? 1 : 0;
@@ -30,7 +31,7 @@ export component AddressPill inherits Rectangle {
     // The sweep runs on the animation clock and only while the sheen is drawn (the element below
     // exists only then), so an idle shell requests no frames; it keeps going through the fade.
     property <float> phase: Math.mod(animation-tick() / Shell.beam-ms, 1);
-    out property <float> sheen: root.strength * root.strength;
+    out property <float> sheen: root.over-wgpu ? 0 : root.strength * root.strength;
     callback activated();
 
     height: Chrome.address;
@@ -61,7 +62,7 @@ export component AddressPill inherits Rectangle {
             }
         }
 
-        if root.sheen > 0 && !GlassLayer.scene-active: Rectangle {
+        if root.sheen > 0: Rectangle {
             border-radius: Shell.control-radius;
             clip: true;
             opacity: root.sheen;

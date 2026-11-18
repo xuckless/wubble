@@ -298,13 +298,9 @@ fn run(
     }
 }
 
-/// Connect the Slint callbacks to a new driver whose seam starts as `seam`. Separate from
-/// [`install`] so tests can drive it without a renderer.
-pub fn connect(window: &AppWindow, seam: Seam) -> Shared {
-    wire(window, seam).driver
-}
-
-/// [`connect`], with the glass registry the panels report into.
+/// Connect the Slint callbacks to a new driver whose seam starts as `seam`, and the panels'
+/// reports to a new glass registry. Separate from [`install`] so tests can drive it without a
+/// renderer.
 pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
     let driver = Rc::new(RefCell::new(Driver::new(window, seam)));
     let glass = Rc::new(RefCell::new(GlassRegistry::default()));
@@ -454,13 +450,15 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
 
 /// Wire the shell driver, its seam starting as `seam`, and register the window's one
 /// rendering notifier. On every frame, after the driver's step, `hook` gets the window, the
-/// frame time and the glass list when it changed (back to front).
+/// frame time and the glass list when it changed (back to front). Returns the registry, the
+/// list's one owner, for readers outside the frame (the pixel smoke).
 pub fn install(
     window: &AppWindow,
     seam: Seam,
     mut hook: impl FnMut(&AppWindow, Instant, Option<&[GlassItem]>) + 'static,
-) -> Result<(), SetRenderingNotifierError> {
+) -> Result<Rc<RefCell<GlassRegistry>>, SetRenderingNotifierError> {
     let Wired { driver, glass } = wire(window, seam);
+    let registry = Rc::clone(&glass);
     driver.borrow_mut().origin = Some(Instant::now());
     let weak = window.as_weak();
     window.window().set_rendering_notifier(move |state, _api| {
@@ -481,7 +479,8 @@ pub fn install(
             window.window().request_redraw();
         }
         hook(&window, now, frame.glass.as_deref());
-    })
+    })?;
+    Ok(registry)
 }
 
 #[cfg(test)]

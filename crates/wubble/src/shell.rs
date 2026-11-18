@@ -91,8 +91,9 @@ pub fn view_model(model: &Model) -> ShellView {
 /// Where a row dragged to slot `to` of the flat tab list ([`ShellView::tabs`]: the active
 /// Space's items with folder tabs inline) goes in the model. Dragged up, it goes before the
 /// row now at `to`; dragged down, after the row it passed (at `to` once it is taken out); in
-/// that row's folder if it has one, so the list reads as dropped. `None` for a tab that is not
-/// a row (pinned, another Space's, unknown).
+/// that row's folder if it has one, so the list reads as dropped. The very last slot is the
+/// end of the Space at the top level, out of any folder (a trailing folder can still be joined
+/// before its last tab). `None` for a tab that is not a row (pinned, another Space's, unknown).
 pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
     let space = model.spaces.iter().find(|s| s.id == model.active_space)?;
     // The other rows in flat order, as (before it, after it), indices as after the detach.
@@ -126,11 +127,16 @@ pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
         }
     }
     let from = from?;
-    Some(if to > from {
-        rows.get(to - 1).map_or(normal(usize::MAX), |r| r.1)
+    let row = if to > from {
+        rows.get(to - 1).map(|r| r.1)
     } else {
-        rows.get(to).map_or(normal(usize::MAX), |r| r.0)
-    })
+        rows.get(to).map(|r| r.0)
+    };
+    // `rows` lacks the dragged one: slot `rows.len()` is the last
+    Some(
+        row.filter(|_| to < rows.len())
+            .unwrap_or(normal(usize::MAX)),
+    )
 }
 
 /// What a tab is called: its title, else its host, else "New tab".
@@ -337,25 +343,26 @@ mod tests {
             moved(m.clone(), c, 0),
             ["c.test", "a.test", "b.test", "d.test", "e.test"]
         );
-        // a to the last slot: after e, in its folder
-        assert_eq!(
-            move_dest(&m, a, 4),
-            Some(Dest::Folder {
-                folder: f,
-                index: 2
-            })
-        );
-        // past the list (no row there): last, out of everything
-        assert_eq!(
-            move_dest(&m, a, 9),
-            Some(Dest::Normal {
-                space: s,
-                index: usize::MAX
-            })
-        );
+        // a to the last slot (the last `TabRows` reports): after the trailing folder, at the
+        // top level
+        let last = Some(Dest::Normal {
+            space: s,
+            index: usize::MAX,
+        });
+        assert_eq!(move_dest(&m, a, 4), last);
         assert_eq!(
             moved(m.clone(), a, 4),
             ["b.test", "c.test", "d.test", "e.test", "a.test"]
+        );
+        // d out of the trailing folder the same way
+        assert_eq!(move_dest(&m, d, 4), last);
+        // a into the trailing folder: before its last tab
+        assert_eq!(
+            move_dest(&m, a, 3),
+            Some(Dest::Folder {
+                folder: f,
+                index: 1
+            })
         );
         // e within its folder, before d
         assert_eq!(

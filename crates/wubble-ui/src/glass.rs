@@ -15,7 +15,7 @@ use crate::GlassItem;
 
 /// Where the registry is in a sweep. One explicit state, moved only by [`GlassRegistry`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Sweep {
+enum Sweep {
     Idle,
     /// The models changed; the next frame forgets the items and bumps the generation.
     Requested,
@@ -67,7 +67,8 @@ impl GlassRegistry {
         self.sweep = Sweep::Requested;
     }
 
-    pub fn sweep(&self) -> Sweep {
+    #[cfg(test)]
+    fn sweep(&self) -> Sweep {
         self.sweep
     }
 

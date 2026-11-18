@@ -36,6 +36,7 @@ use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
 use wubble_store::{ClosedTab, Transition};
+use wubble_ui::glass::GlassRegistry;
 use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 
 use crate::backdrop::Glass;
@@ -173,6 +174,8 @@ pub struct Host {
     presenter: FramePresenter,
     /// The window's glass, shared with the shell's rendering notifier.
     glass: Rc<RefCell<Glass>>,
+    /// The glass the panels report (the list's one owner), for the pixel smoke.
+    panels: Rc<RefCell<GlassRegistry>>,
     /// The one owner of tabs and Spaces.
     model: Model,
     /// The view of every live tab.
@@ -223,6 +226,7 @@ impl Host {
         window: &AppWindow,
         presenter: FramePresenter,
         glass: Rc<RefCell<Glass>>,
+        panels: Rc<RefCell<GlassRegistry>>,
         loaded: Loaded,
         store: StoreClient,
         open: Option<String>,
@@ -237,6 +241,7 @@ impl Host {
             timer: slint::Timer::default(),
             presenter,
             glass,
+            panels,
             model,
             views: BTreeMap::new(),
             pending: restore.into_iter().collect(),
@@ -538,19 +543,17 @@ impl Host {
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
     /// refracted, moving backdrop), not a flat fill.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
-        let glass = self.glass.borrow();
-        if !glass.is_scene() {
+        if !self.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
             return Ok(());
         }
         let key = window.global::<GlassKeys>().get_sidebar();
-        let side = glass
-            .items()
-            .iter()
-            .find(|i| i.key == key)
+        let side = self
+            .panels
+            .borrow()
+            .get(key)
             .cloned()
             .ok_or("the sidebar's glass never reached the scene")?;
-        drop(glass);
         // The band below the tab list and above the Space switcher: glass, no text.
         let scale = window.window().scale_factor();
         let (x, w) = (side.x + side.radius, side.width - 2.0 * side.radius);
