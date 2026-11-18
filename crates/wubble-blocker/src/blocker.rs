@@ -69,7 +69,16 @@ impl Cosmetic {
                  'readystatechange',add,{{once:true}});}}}})();\n"
             ));
         }
-        script.push_str(&self.injected_script);
+        if !self.injected_script.is_empty() {
+            // adblock emits scriptlet dependencies (uBO's `safeSelf`, ...) as
+            // top-level functions that read `scriptletGlobals`. Brave's
+            // cosmetic filters init script and uBO's injector both declare it
+            // and keep the scriptlets in one function scope, off the page's
+            // globals; a plain object is enough for uBO's property access.
+            script.push_str("(function(){const scriptletGlobals={};\n");
+            script.push_str(&self.injected_script);
+            script.push_str("\n})();\n");
+        }
         Some(script)
     }
 }
@@ -378,7 +387,32 @@ mod tests {
             injected_script: "window.scriptlet=1;".into(),
             ..Cosmetic::default()
         };
-        assert_eq!(c.page_script().as_deref(), Some("window.scriptlet=1;"));
+        assert_eq!(
+            c.page_script().as_deref(),
+            Some("(function(){const scriptletGlobals={};\nwindow.scriptlet=1;\n})();\n")
+        );
+    }
+
+    #[test]
+    fn scriptlet_dependencies_get_scriptlet_globals_in_one_scope() {
+        // uBO shape: the scriptlet calls a dependency that reads `scriptletGlobals`.
+        // safe-self.fn: `function safeSelf(){if(scriptletGlobals.safeSelf){return scriptletGlobals.safeSelf;}return scriptletGlobals.safeSelf={};}`
+        // dep-user.js:  `function depUser(){safeSelf();}`
+        let res = r#"[{"name":"safe-self.fn","kind":{"mime":"fn/javascript"},"content":"ZnVuY3Rpb24gc2FmZVNlbGYoKXtpZihzY3JpcHRsZXRHbG9iYWxzLnNhZmVTZWxmKXtyZXR1cm4gc2NyaXB0bGV0R2xvYmFscy5zYWZlU2VsZjt9cmV0dXJuIHNjcmlwdGxldEdsb2JhbHMuc2FmZVNlbGY9e307fQ=="},
+            {"name":"dep-user.js","kind":{"mime":"application/javascript"},"content":"ZnVuY3Rpb24gZGVwVXNlcigpe3NhZmVTZWxmKCk7fQ==","dependencies":["safe-self.fn"]}]"#;
+        let b = Blocker::from_lists(&["example.com##+js(dep-user)\n"])
+            .with_resources_json(res)
+            .unwrap();
+        let script = b
+            .cosmetic("https://example.com/", Shields::On)
+            .page_script()
+            .unwrap();
+        let body = script
+            .strip_prefix("(function(){const scriptletGlobals={};\n")
+            .and_then(|s| s.strip_suffix("\n})();\n"))
+            .unwrap_or_else(|| panic!("not wrapped: {script}"));
+        assert!(body.contains("function safeSelf()"), "{script}");
+        assert!(body.contains("depUser("), "{script}");
     }
 
     #[test]

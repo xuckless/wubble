@@ -56,7 +56,8 @@ pub enum RequestAction {
 
 /// The host's content filter.
 pub trait ContentFilter: Send + Sync {
-    /// Decides one request. Called on CEF's IO thread.
+    /// Decides one request. Called on CEF's IO thread; must not panic (the
+    /// release profile aborts on panic).
     fn check(&self, request: &RequestInfo<'_>) -> RequestAction;
 
     /// Script to run in a page whose main-frame load just committed

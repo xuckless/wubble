@@ -209,6 +209,9 @@ fn is_web(url: &str) -> bool {
 }
 
 impl ContentFilter for Blocking {
+    // Runs on CEF's IO thread and must not panic: the release profile aborts
+    // on panic, so welding's catch-and-allow does not hold there. Hence the
+    // poison-tolerant locks and no `expect`, `unwrap` or indexing on this path.
     fn check(&self, request: &RequestInfo<'_>) -> RequestAction {
         if request.kind == RequestKind::Document {
             self.counts().insert(request.browser_id, 0);

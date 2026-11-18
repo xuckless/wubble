@@ -714,8 +714,8 @@ pub enum RequestAction {
 }
 
 /// wubble change: decides every request before it is sent. Called on CEF's
-/// IO thread, so it must not wait on the host's UI thread. A panic allows
-/// the request.
+/// IO thread, so it must not wait on the host's UI thread. It should not
+/// panic: see [`RequestFilter::check`].
 #[derive(Clone)]
 pub struct RequestFilter(pub(crate) Arc<dyn Fn(&ResourceRequest) -> RequestAction + Send + Sync>);
 
@@ -724,8 +724,10 @@ impl RequestFilter {
         Self(Arc::new(filter))
     }
 
-    /// Runs the filter; a panic is caught and allows the request, so it
-    /// never unwinds into CEF.
+    /// Runs the filter. With unwinding, a panic is caught and allows the
+    /// request, so it never unwinds into CEF. Under `panic = "abort"`
+    /// (wubble's release profile) nothing is caught and a panic aborts the
+    /// process, so the filter itself has to be panic-free.
     pub fn check(&self, request: &ResourceRequest) -> RequestAction {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(request)))
             .unwrap_or(RequestAction::Allow)

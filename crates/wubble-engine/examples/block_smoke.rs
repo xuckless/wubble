@@ -10,7 +10,10 @@
 //! main-frame document, and the page script the filter returns on commit
 //! ran in the page; it prints `block smoke: ok`. Blocking a file that
 //! exists proves the request was cancelled rather than failing on its own.
-//! No window is shown and nothing touches the network. The deadline only
+//! The filter is a stand-in, not wubble-blocker: this checks the engine's
+//! hook only (wubble-blocker's decisions, type mapping and counters have
+//! unit tests; its `Blocking` skips non-web URLs such as this `file://`
+//! page). No window is shown and nothing touches the network. The deadline only
 //! bounds a hang; nothing here measures speed.
 
 use std::path::Path;
