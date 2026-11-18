@@ -285,6 +285,15 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    accessor). Tests: order with the other events, the size cap, the pending
    cap and room again after a drain. Not unit-tested: an unknown frame id
    (needs a live browser).
+29. **What a popup asked for.** `surface.rs`: new `NewWindowKind`
+   (foreground tab, background tab, popup, window, other) and
+   `NavigationEvent::NewWindowRequested` gains `kind` and `size` (the
+   `width`/`height` window features when both are set). `handlers.rs`: shared
+   `new_window_requested` maps `cef::WindowOpenDisposition` and
+   `cef::PopupFeatures`; the three platform `on_before_popup` call it. The popup
+   is still cancelled (one surface per producer); wubble's popup policy
+   (`wubble_core::popup`) decides what opens. Tests: the disposition mapping and
+   the size rule.
 
 ## Not changed, on purpose
 

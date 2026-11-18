@@ -31,10 +31,13 @@ pub enum Permission {
     /// Offering to save passwords; only `Block` is ever stored ("Never for
     /// this site" on the save prompt). No page asks for it.
     SavePasswords,
+    /// Opening windows and tabs without a click (`popup::decide`). Asked through the address
+    /// pill's notice, not the permission prompt.
+    Popups,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 12] = [
+    pub const ALL: [Permission; 13] = [
         Self::Camera,
         Self::Microphone,
         Self::Geolocation,
@@ -47,6 +50,7 @@ impl Permission {
         Self::KeyboardLock,
         Self::PointerLock,
         Self::SavePasswords,
+        Self::Popups,
     ];
 
     /// The stored name. Stable: never rename one.
@@ -64,6 +68,7 @@ impl Permission {
             Self::KeyboardLock => "keyboard-lock",
             Self::PointerLock => "pointer-lock",
             Self::SavePasswords => "password-save",
+            Self::Popups => "popups",
         }
     }
 
@@ -86,6 +91,7 @@ impl Permission {
             Self::KeyboardLock => "See and control your keyboard",
             Self::PointerLock => "Use and move your mouse",
             Self::SavePasswords => "Save your passwords",
+            Self::Popups => "Open pop-ups and new tabs",
         }
     }
 }

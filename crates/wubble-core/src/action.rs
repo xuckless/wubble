@@ -11,6 +11,10 @@ pub enum Action {
     CloseTab,
     ReopenClosedTab,
     NewWindow,
+    /// Close the focused window (the last Main window quits).
+    CloseWindow,
+    /// Move the focused page into a new window.
+    MoveTabToNewWindow,
     FocusAddress,
     Reload,
     HardReload,
@@ -63,11 +67,13 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 40] = [
+const FIXED: [(&str, Action); 42] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
     ("new-window", Action::NewWindow),
+    ("close-window", Action::CloseWindow),
+    ("move-tab-to-new-window", Action::MoveTabToNewWindow),
     ("focus-address", Action::FocusAddress),
     ("reload", Action::Reload),
     ("hard-reload", Action::HardReload),
@@ -253,7 +259,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 58);
+        assert_eq!(all.len(), 60);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -264,7 +270,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 58);
+        assert_eq!(ids.len(), 60);
     }
 
     #[test]

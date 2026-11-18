@@ -14,6 +14,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (8, include_str!("../sql/008_favicons.sql")),
     (9, include_str!("../sql/009_logins_vault_shape.sql")),
     (10, include_str!("../sql/010_space_icons.sql")),
+    (11, include_str!("../sql/011_windows.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -90,6 +91,7 @@ mod tests {
                 "downloads",
                 "favicons",
                 "favicon_origins",
+                "windows",
             ] {
                 let mut rows = conn
                     .query(

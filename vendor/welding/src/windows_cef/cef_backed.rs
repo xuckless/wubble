@@ -291,9 +291,9 @@ cef::wrap_life_span_handler! {
             _popup_id: ::std::os::raw::c_int,
             target_url: Option<&cef::CefString>,
             _target_frame_name: Option<&cef::CefString>,
-            _target_disposition: cef::WindowOpenDisposition,
+            target_disposition: cef::WindowOpenDisposition,
             user_gesture: ::std::os::raw::c_int,
-            _popup_features: Option<&cef::PopupFeatures>,
+            popup_features: Option<&cef::PopupFeatures>,
             _window_info: Option<&mut cef::WindowInfo>,
             _client: Option<&mut Option<cef::Client>>,
             _settings: Option<&mut cef::BrowserSettings>,
@@ -302,10 +302,13 @@ cef::wrap_life_span_handler! {
         ) -> ::std::os::raw::c_int {
             let url = target_url.map(|u| u.to_string()).unwrap_or_default();
             self.events.push(CefSurfaceEvent::Navigation(
-                crate::surface::NavigationEvent::NewWindowRequested {
+                // wubble change 29: the disposition and size go with it.
+                crate::handlers::new_window_requested(
                     url,
-                    user_gesture: user_gesture != 0,
-                },
+                    target_disposition,
+                    user_gesture != 0,
+                    popup_features,
+                ),
             ));
             1 // cancel popup creation
         }

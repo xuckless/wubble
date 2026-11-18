@@ -86,7 +86,7 @@ pub enum Choice {
 /// The open tabs, active Space first, each Space in sidebar order.
 pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
     let mut spaces: Vec<_> = model.spaces.iter().map(|s| s.id).collect();
-    spaces.sort_by_key(|&s| s != model.active_space);
+    spaces.sort_by_key(|&s| s != model.active_space());
     spaces
         .into_iter()
         .flat_map(|s| model.order(s))

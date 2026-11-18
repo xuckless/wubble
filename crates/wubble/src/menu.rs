@@ -285,7 +285,7 @@ pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         return vec![entry("Take Out of Split View", Command::Unsplit(tab))];
     }
     let room = model.visible_tabs().len() < MAX_PANES;
-    let in_space = model.order(model.active_space).contains(&tab);
+    let in_space = model.order(model.active_space()).contains(&tab);
     if !room || !in_space {
         return vec![];
     }

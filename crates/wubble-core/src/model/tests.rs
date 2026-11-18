@@ -1,6 +1,7 @@
 use super::*;
 use crate::space::{SplitGroup, even};
 use crate::tab::Tab;
+use crate::window::{Window, WindowId};
 
 const D: ContainerId = ContainerId::DEFAULT;
 
@@ -62,7 +63,7 @@ fn s0() -> SpaceId {
 }
 
 fn active(m: &Model) -> Option<TabId> {
-    m.spaces[m.space_idx(m.active_space).unwrap()].active
+    m.spaces[m.space_idx(m.active_space()).unwrap()].active
 }
 
 fn add_space(m: Model, container: ContainerId) -> (Model, SpaceId) {
@@ -213,7 +214,7 @@ fn activate_switches_space_and_forgets_openers() {
     let (m, s2) = add_space(m, D);
     let (m, _) = run(m, Command::SwitchSpace(s2));
     let (m, fx) = run(m, Command::ActivateTab(ids[0]));
-    assert_eq!(m.active_space, s0());
+    assert_eq!(m.active_space(), s0());
     assert_eq!(m.tabs[&t].opener, None);
     assert_eq!(
         fx,
@@ -323,7 +324,7 @@ fn move_across_spaces_keeps_effective_container_and_reselects_source() {
         }
         (m, ids)
     };
-    assert_eq!(m.active_space, s0());
+    assert_eq!(m.active_space(), s0());
     let to = Dest::Normal {
         space: s2,
         index: 0,
@@ -355,13 +356,13 @@ fn delete_space_closes_tabs_and_falls_back() {
     let (m, _) = run(m, Command::SwitchSpace(s2));
     let (m, fx) = run(m, Command::DeleteSpace(s2));
     assert_eq!(m.spaces.len(), 1);
-    assert_eq!(m.active_space, s0());
+    assert_eq!(m.active_space(), s0());
     assert!(fx.contains(&Effect::SpaceChanged(s0())));
     assert_eq!(m.containers.len(), 2, "shared container untouched");
     // Now delete the only tabs-owning Space's tabs with it: active falls back to next.
     let (m, s3) = add_space(m, D);
     let (m, fx) = run(m, Command::DeleteSpace(s0()));
-    assert_eq!(m.active_space, s3);
+    assert_eq!(m.active_space(), s3);
     assert!(m.tabs.is_empty());
     let closed = fx
         .iter()
@@ -663,7 +664,7 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
             1 => tab(r).map(Command::Unsplit),
             // most often from the active Space, so splits form
             _ => {
-                let order = m.order(m.active_space);
+                let order = m.order(m.active_space());
                 if bogus {
                     tab(r)
                 } else {
@@ -769,7 +770,7 @@ fn switching_to_an_empty_space_hides_the_previous_tab() {
     let (m, s3) = add_space(m, D);
     let (m, _) = run(m, Command::SwitchSpace(s3));
     let (m, fx) = run(m, Command::DeleteSpace(s3));
-    assert_eq!(m.active_space, s2);
+    assert_eq!(m.active_space(), s2);
     assert_eq!(fx, vec![Effect::SpaceChanged(s2), Effect::ShowCommandBar]);
 }
 
@@ -1083,7 +1084,7 @@ fn a_popup_from_a_hidden_tab_goes_next_to_it_and_stays_hidden() {
     );
     assert_eq!(m.order(s0()), vec![ids[0], p, ids[1], q]);
     assert_eq!(m.order(s2), vec![w]);
-    assert_eq!((m.active_space, m.visible_tab()), (s2, Some(w)));
+    assert_eq!((m.active_space(), m.visible_tab()), (s2, Some(w)));
     assert_eq!(active(&m), Some(w));
     assert_eq!(m.spaces[0].active, Some(ids[1]));
 }
@@ -1192,7 +1193,7 @@ fn new_and_from_parts_stamp_hides_with_the_given_time() {
         m.spaces.clone(),
         m.containers.clone(),
         m.tabs.values().cloned().collect(),
-        m.active_space,
+        m.windows.clone(),
         restart,
     )
     .unwrap();
@@ -1225,7 +1226,7 @@ fn rebuild(m: &Model) -> Result<Model, String> {
         m.spaces.clone(),
         m.containers.clone(),
         m.tabs.values().cloned().collect(),
-        m.active_space,
+        m.windows.clone(),
         m.clock,
     )
 }
@@ -1285,7 +1286,7 @@ fn from_parts_rejects_invalid_parts() {
         m.spaces.clone(),
         m.containers.clone(),
         tabs,
-        m.active_space,
+        m.windows.clone(),
         t0(),
     );
     assert!(r.is_err(), "placed tab missing from tabs");
@@ -1293,7 +1294,7 @@ fn from_parts_rejects_invalid_parts() {
         m.spaces.clone(),
         m.containers.clone(),
         vec![],
-        SpaceId(99),
+        vec![Window::main(WindowId(0), SpaceId(99))],
         t0(),
     );
     assert!(r.is_err(), "unknown active space");
@@ -1349,7 +1350,9 @@ fn space_helpers_wrap() {
 // ----- split view
 
 fn group(m: &Model) -> Option<SplitGroup> {
-    m.spaces[m.space_idx(m.active_space).unwrap()].split.clone()
+    m.spaces[m.space_idx(m.active_space()).unwrap()]
+        .split
+        .clone()
 }
 
 /// `n` tabs with the first two split (the second focused).
@@ -1683,7 +1686,7 @@ fn from_parts_rejects_bad_splits() {
             spaces,
             m.containers.clone(),
             tabs.clone(),
-            m.active_space,
+            m.windows.clone(),
             t0(),
         )
     };
@@ -1828,5 +1831,370 @@ fn space_tint_and_icon_change_in_place() {
     assert_eq!(
         m.spaces.iter().find(|s| s.id == s1).unwrap().icon,
         SpaceIcon::Work
+    );
+}
+
+// ----- windows
+
+use crate::window::{Geometry, Shown, WindowKind, WindowTarget};
+
+fn opened(fx: &[Effect]) -> WindowId {
+    fx.iter()
+        .find_map(|e| match e {
+            Effect::WindowOpened(w) => Some(*w),
+            _ => None,
+        })
+        .expect("a window opened")
+}
+
+/// Every tab is on screen in at most one window (the spec's invariant, apart from `check`).
+fn shown_once(m: &Model) {
+    let mut all: Vec<TabId> = m.windows.iter().flat_map(|w| m.window_tabs(w.id)).collect();
+    let n = all.len();
+    all.sort_by_key(|t| t.0);
+    all.dedup();
+    assert_eq!(all.len(), n, "a tab in two windows: {:?}", m.windows);
+}
+
+#[test]
+fn a_new_window_takes_a_space_no_window_shows_else_a_new_one() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    assert_eq!(m.focused(), w);
+    assert_eq!(m.active_space(), s1, "the free Space");
+    assert!(
+        fx.contains(&Effect::ShowCommandBar),
+        "an empty Space opens the bar"
+    );
+    // every Space is shown now: a third window makes one
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w3 = opened(&fx);
+    assert_eq!(m.spaces.len(), 3);
+    assert_eq!(m.window(w3).unwrap().space(), Some(m.spaces[2].id));
+    assert_eq!(m.windows.len(), 3);
+    // asking for a shown Space focuses the window showing it
+    let (m, fx) = run(m, Command::NewWindow { space: Some(s0()) });
+    assert_eq!(fx, vec![Effect::FocusWindow(WindowId(0))]);
+    assert_eq!((m.windows.len(), m.active_space()), (3, s0()));
+}
+
+#[test]
+fn two_main_windows_never_show_one_space() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, _) = run(m, Command::NewWindow { space: Some(s1) });
+    let mut bad = m.clone();
+    bad.windows[1].shown = Shown::Space(s0());
+    assert!(bad.check().is_err());
+    // switching to the Space the other window shows focuses that window instead
+    let (m, fx) = run(m, Command::SwitchSpace(s0()));
+    assert!(fx.contains(&Effect::FocusWindow(WindowId(0))), "{fx:?}");
+    assert_eq!(m.focused(), WindowId(0));
+    assert_eq!(m.window(WindowId(1)).unwrap().space(), Some(s1));
+}
+
+#[test]
+fn a_tab_is_on_screen_in_at_most_one_window() {
+    let (m, t) = with_tabs(3);
+    let commands = [
+        Command::NewWindow { space: None },
+        Command::MoveTabToWindow {
+            tab: t[0],
+            to: WindowTarget::Existing(WindowId(1)),
+        },
+        Command::ActivateTab(t[1]),
+        Command::SplitWith(t[2]),
+        Command::MoveTabToWindow {
+            tab: t[2],
+            to: WindowTarget::New,
+        },
+        Command::OpenPopupWindow {
+            url: "https://p.test".into(),
+            opener: t[1],
+            size: Some((400, 300)),
+        },
+        Command::ActivateTab(t[0]),
+        Command::SwitchSpace(s0()),
+        Command::OpenLittle {
+            url: "https://l.test".into(),
+            space: None,
+        },
+        Command::FocusWindow(WindowId(1)),
+        Command::CloseWindow(WindowId(2)),
+        Command::MoveTabToWindow {
+            tab: t[1],
+            to: WindowTarget::Existing(WindowId(1)),
+        },
+        Command::CloseTab(t[0]),
+    ];
+    let mut m = m;
+    for c in commands {
+        m = run_all(m, c).0;
+        shown_once(&m);
+    }
+}
+
+#[test]
+fn moving_a_tab_to_a_window_fixes_the_source_space() {
+    let (m, t) = with_tabs(3);
+    let (m, _) = run(m, Command::SplitWith(t[0]));
+    // t[2] | t[0] shown, t[0] focused
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: t[0],
+            to: WindowTarget::Existing(w),
+        },
+    );
+    assert!(fx.contains(&Effect::FocusWindow(w)) || m.focused() == w);
+    assert_eq!(m.window_tabs(w), vec![t[0]]);
+    assert_eq!(m.window_tabs(WindowId(0)), vec![t[2]], "the split's heir");
+    assert!(m.spaces[0].split.is_none(), "a split of one is no split");
+    // a tear-out makes a window on a fresh Space
+    let (m, fx) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: t[1],
+            to: WindowTarget::New,
+        },
+    );
+    let w2 = opened(&fx);
+    assert_eq!((m.focused(), m.window_tabs(w2)), (w2, vec![t[1]]));
+    assert_eq!(m.spaces.len(), 3);
+    assert!(!fx.contains(&Effect::ShowCommandBar));
+    // a Popup window refuses to be a target
+    let (m2, fx) = run(
+        m.clone(),
+        Command::OpenPopupWindow {
+            url: "https://p.test".into(),
+            opener: t[2],
+            size: None,
+        },
+    );
+    let p = opened(&fx);
+    let (m3, fx) = run(
+        m2.clone(),
+        Command::MoveTabToWindow {
+            tab: t[2],
+            to: WindowTarget::Existing(p),
+        },
+    );
+    assert!(fx.is_empty() && m3 == m2);
+}
+
+#[test]
+fn every_window_keeps_its_tabs_awake() {
+    let (m, t) = with_tabs(2);
+    let (m, _) = run(m, Command::NewWindow { space: None });
+    let (m, _) = run(
+        m,
+        Command::MoveTabToWindow {
+            tab: t[0],
+            to: WindowTarget::Existing(WindowId(1)),
+        },
+    );
+    let (m, _) = run(
+        m,
+        Command::Tick {
+            now: t0() + std::time::Duration::from_secs(3600),
+            pressure: Pressure::None,
+        },
+    );
+    for tab in [t[0], t[1]] {
+        assert_eq!(m.tabs[&tab].lifecycle.liveness, Liveness::Active, "{tab:?}");
+    }
+    assert_eq!(m.visible_tabs().len(), 2);
+}
+
+#[test]
+fn closing_windows() {
+    let (m, t) = with_tabs(1);
+    let (m, fx) = run(m, Command::CloseWindow(WindowId(0)));
+    assert_eq!(fx, vec![Effect::LastWindowClosed]);
+    assert_eq!(
+        m.windows.len(),
+        1,
+        "the last Main window stays until the host quits"
+    );
+    let (m, _) = run(m, Command::NewWindow { space: None });
+    let (m, fx) = run(m, Command::CloseWindow(WindowId(0)));
+    assert!(fx.contains(&Effect::WindowClosed(WindowId(0))));
+    assert_eq!(m.windows.len(), 1);
+    assert!(m.tabs.contains_key(&t[0]), "the Space and its tabs stay");
+    assert_ne!(m.tabs[&t[0]].lifecycle.liveness, Liveness::Active, "hidden");
+    let (_, fx) = run(m, Command::CloseWindow(WindowId(1)));
+    assert_eq!(fx, vec![Effect::LastWindowClosed]);
+}
+
+#[test]
+fn popup_and_little_windows_own_their_tab() {
+    let (m, t) = with_tabs(1);
+    let (m, fx) = run(
+        m,
+        Command::OpenPopupWindow {
+            url: "https://p.test".into(),
+            opener: t[0],
+            size: Some((400, 300)),
+        },
+    );
+    let p = opened(&fx);
+    let pt = m.window(p).unwrap().tab().unwrap();
+    assert_eq!(m.window(p).unwrap().kind, WindowKind::Popup);
+    assert_eq!(
+        m.window(p).unwrap().geometry,
+        Some(Geometry {
+            width: 400,
+            height: 300,
+            pos: None
+        })
+    );
+    assert_eq!(m.visible_tab(), Some(pt), "the popup has focus");
+    assert_eq!(m.spaces[0].active, Some(t[0]), "the Space keeps its page");
+    assert_eq!(m.order(s0()), vec![t[0], pt], "beside its opener");
+    // activating its row brings the window forward
+    let (m, _) = run(m, Command::FocusWindow(WindowId(0)));
+    let (m, fx) = run(m, Command::ActivateTab(pt));
+    assert_eq!(fx, vec![Effect::FocusWindow(p)]);
+    // a popup tab that closes takes its window
+    let (m2, fx) = run(m.clone(), Command::CloseTab(pt));
+    assert!(fx.contains(&Effect::WindowClosed(p)));
+    assert_eq!(m2.windows.len(), 1);
+    // closing the window closes the tab
+    let (m2, fx) = run(m, Command::CloseWindow(p));
+    assert!(fx.contains(&Effect::CloseTab(pt)) && fx.contains(&Effect::WindowClosed(p)));
+    assert!(!m2.tabs.contains_key(&pt));
+    // a windowed tab never joins a split
+    let (m, fx) = run(
+        m2,
+        Command::OpenLittle {
+            url: "https://l.test".into(),
+            space: None,
+        },
+    );
+    let l = opened(&fx);
+    let lt = m.window(l).unwrap().tab().unwrap();
+    let (m, _) = run(m, Command::FocusWindow(WindowId(0)));
+    let (m2, fx) = run(m.clone(), Command::SplitWith(lt));
+    assert!(fx.is_empty() && m2 == m);
+}
+
+#[test]
+fn a_little_window_promotes_into_a_space() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, fx) = run(
+        m,
+        Command::OpenLittle {
+            url: "https://l.test".into(),
+            space: None,
+        },
+    );
+    let l = opened(&fx);
+    let lt = m.window(l).unwrap().tab().unwrap();
+    assert_eq!(m.window(l).unwrap().kind, WindowKind::Little);
+    let (m, fx) = run(
+        m,
+        Command::PromoteLittle {
+            window: l,
+            space: s1,
+        },
+    );
+    assert!(fx.contains(&Effect::WindowClosed(l)), "{fx:?}");
+    assert_eq!(m.windows.len(), 1);
+    assert_eq!((m.active_space(), m.visible_tab()), (s1, Some(lt)));
+    assert_eq!(m.order(s1), vec![lt]);
+    // a Popup window is not promoted
+    let (m, fx) = run(
+        m,
+        Command::OpenPopupWindow {
+            url: "https://p.test".into(),
+            opener: lt,
+            size: None,
+        },
+    );
+    let p = opened(&fx);
+    let (m2, fx) = run(
+        m.clone(),
+        Command::PromoteLittle {
+            window: p,
+            space: s1,
+        },
+    );
+    assert!(fx.is_empty() && m2 == m);
+}
+
+#[test]
+fn deleting_a_space_another_window_shows() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run(m, Command::NewWindow { space: Some(s1) });
+    let (m, _) = run(m, Command::FocusWindow(WindowId(0)));
+    let (m, _) = run(m, Command::DeleteSpace(s1));
+    assert_eq!(
+        m.window(WindowId(1)).unwrap().space(),
+        Some(s2),
+        "takes the free one"
+    );
+    let (m, fx) = run(m, Command::DeleteSpace(s2));
+    assert!(
+        fx.contains(&Effect::WindowClosed(WindowId(1))),
+        "no Space left for it"
+    );
+    assert_eq!(m.windows.len(), 1);
+}
+
+#[test]
+fn from_parts_checks_the_windows() {
+    let (m, _) = with_tabs(2);
+    let (m, s1) = add_space(m, D);
+    let parts = |windows: Vec<Window>| {
+        Model::from_parts(
+            m.spaces.clone(),
+            m.containers.clone(),
+            m.tabs.values().cloned().collect(),
+            windows,
+            t0(),
+        )
+    };
+    assert!(parts(vec![]).is_err(), "no window");
+    assert!(
+        parts(vec![
+            Window::main(WindowId(0), s0()),
+            Window::main(WindowId(0), s1)
+        ])
+        .is_err(),
+        "duplicate id"
+    );
+    assert!(
+        parts(vec![
+            Window::main(WindowId(0), s0()),
+            Window::main(WindowId(1), s0())
+        ])
+        .is_err(),
+        "one Space twice"
+    );
+    let popup_only = Window {
+        id: WindowId(0),
+        kind: WindowKind::Popup,
+        shown: Shown::Tab(TabId(1)),
+        geometry: None,
+    };
+    assert!(parts(vec![popup_only]).is_err(), "no Main window");
+    let m2 = parts(vec![
+        Window::main(WindowId(4), s1),
+        Window::main(WindowId(2), s0()),
+    ])
+    .unwrap();
+    assert_eq!(m2.active_space(), s0());
+    let (_, fx) = run(m2, Command::NewWindow { space: None });
+    assert_eq!(
+        opened(&fx),
+        WindowId(5),
+        "ids continue past the restored ones"
     );
 }

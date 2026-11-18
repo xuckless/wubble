@@ -1799,6 +1799,20 @@ pub enum FocusDirection {
 
 // ── Navigation event ─────────────────────────────────────────────────────────
 
+/// wubble change 29: what a page asked for when it opened a window (CEF's
+/// `cef_window_open_disposition_t`, reduced to what a host can act on).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewWindowKind {
+    ForegroundTab,
+    BackgroundTab,
+    /// `window.open` with window features: Chromium's `NEW_POPUP`.
+    Popup,
+    /// A new window without features (Shift+click, `NEW_WINDOW`).
+    Window,
+    /// Anything else (picture-in-picture, save to disk, ...).
+    Other,
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum NavigationEvent {
@@ -1849,6 +1863,10 @@ pub enum NavigationEvent {
     NewWindowRequested {
         url: String,
         user_gesture: bool,
+        // wubble change 29: what the page asked for and the size it gave.
+        kind: NewWindowKind,
+        /// The `width`/`height` window features, when both were given.
+        size: Option<(u32, u32)>,
     },
     /// A `print_to_pdf` finished. `ok` is false when Chromium could not write
     /// the file; the path is the one that was asked for either way.

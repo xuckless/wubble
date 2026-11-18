@@ -13,6 +13,14 @@ use crate::surface::FindEvent;
 /// Actions with no implementation yet, each with the reason.
 pub const NOT_YET: &[(Action, &str)] = &[
     (Action::NewWindow, "one window only (TODO.md, multi-window)"),
+    (
+        Action::CloseWindow,
+        "one window only (TODO.md, multi-window)",
+    ),
+    (
+        Action::MoveTabToNewWindow,
+        "one window only (TODO.md, multi-window)",
+    ),
     (Action::NewSpace, "needs a name and tint prompt"),
     (
         Action::ToggleCompactMode,
@@ -139,6 +147,8 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::Quit => Plan::Quit,
         Action::NewWindow
+        | Action::CloseWindow
+        | Action::MoveTabToNewWindow
         | Action::NewSpace
         | Action::ToggleCompactMode
         | Action::DevTools

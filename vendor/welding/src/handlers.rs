@@ -62,6 +62,43 @@ fn stale(what: &'static str) -> WeldError {
     WeldError::PlatformUnsupported(what)
 }
 
+// ── New windows (wubble change 29) ────────────────────────────────────────
+
+/// The event for a popup CEF is about to open (welding cancels it: one
+/// surface per producer). Shared by the three platform life-span handlers.
+pub(crate) fn new_window_requested(
+    url: String,
+    disposition: cef::WindowOpenDisposition,
+    user_gesture: bool,
+    features: Option<&cef::PopupFeatures>,
+) -> NavigationEvent {
+    NavigationEvent::NewWindowRequested {
+        url,
+        user_gesture,
+        kind: new_window_kind(disposition),
+        size: features.and_then(popup_size),
+    }
+}
+
+fn new_window_kind(d: cef::WindowOpenDisposition) -> crate::surface::NewWindowKind {
+    use crate::surface::NewWindowKind as K;
+    use cef::WindowOpenDisposition as D;
+    match d {
+        D::NEW_FOREGROUND_TAB | D::SINGLETON_TAB | D::SWITCH_TO_TAB => K::ForegroundTab,
+        D::NEW_BACKGROUND_TAB => K::BackgroundTab,
+        D::NEW_POPUP => K::Popup,
+        D::NEW_WINDOW => K::Window,
+        _ => K::Other,
+    }
+}
+
+fn popup_size(f: &cef::PopupFeatures) -> Option<(u32, u32)> {
+    if f.width_set == 0 || f.height_set == 0 {
+        return None;
+    }
+    Some((u32::try_from(f.width).ok()?, u32::try_from(f.height).ok()?))
+}
+
 // ── Frame messages (wubble change 27) ─────────────────────────────────────
 
 /// A renderer process message from the context script: queued with the
@@ -1166,5 +1203,35 @@ mod request_filter_tests {
         // A suffix that is not a subdomain is another site.
         let main = Some("https://notb.test/".to_owned());
         assert_eq!(top_url("https://ads.test/x.js", false, main, "https://b.test/", ""), "https://b.test/");
+    }
+}
+
+#[cfg(test)]
+mod new_window_tests {
+    use super::{new_window_kind, popup_size};
+    use crate::surface::NewWindowKind as K;
+    use cef::WindowOpenDisposition as D;
+
+    #[test]
+    fn dispositions_map_to_kinds() {
+        assert_eq!(new_window_kind(D::NEW_FOREGROUND_TAB), K::ForegroundTab);
+        assert_eq!(new_window_kind(D::NEW_BACKGROUND_TAB), K::BackgroundTab);
+        assert_eq!(new_window_kind(D::NEW_POPUP), K::Popup);
+        assert_eq!(new_window_kind(D::NEW_WINDOW), K::Window);
+        assert_eq!(new_window_kind(D::NEW_PICTURE_IN_PICTURE), K::Other);
+    }
+
+    #[test]
+    fn size_needs_both_features() {
+        let f = |w: i32, ws: i32, h: i32, hs: i32| cef::PopupFeatures {
+            width: w,
+            width_set: ws,
+            height: h,
+            height_set: hs,
+            ..Default::default()
+        };
+        assert_eq!(popup_size(&f(400, 1, 300, 1)), Some((400, 300)));
+        assert_eq!(popup_size(&f(400, 1, 300, 0)), None);
+        assert_eq!(popup_size(&f(-1, 1, 300, 1)), None);
     }
 }

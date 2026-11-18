@@ -44,6 +44,7 @@ use wubble_core::site::SitePermissions;
 use wubble_core::sleep::Pressure;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::{Liveness, TabId};
+use wubble_core::window::WindowId;
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, Point};
@@ -103,6 +104,12 @@ pub enum Call {
         visible: bool,
     },
     ShowCommandBar,
+    /// Open, close or raise the platform window of a model window.
+    OpenWindow(WindowId),
+    CloseWindow(WindowId),
+    FocusWindow(WindowId),
+    /// The last Main window closed.
+    Quit,
     Nothing,
 }
 
@@ -130,6 +137,10 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
         // Which view is shown follows the lifecycle effects; focus and
         // frames follow `Model::visible_tab`.
         Effect::ActivateTab(_) | Effect::SpaceChanged(_) => Call::Nothing,
+        Effect::WindowOpened(w) => Call::OpenWindow(*w),
+        Effect::WindowClosed(w) => Call::CloseWindow(*w),
+        Effect::FocusWindow(w) => Call::FocusWindow(*w),
+        Effect::LastWindowClosed => Call::Quit,
         Effect::Lifecycle { tab, effect } => match effect {
             Life::Show => Call::SetVisible {
                 tab: *tab,
@@ -591,7 +602,9 @@ impl Host {
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
             }
-            Call::Nothing => {}
+            Call::Quit => quit(),
+            // A second window comes with the host's window map (TODO.md, multi-window).
+            Call::OpenWindow(_) | Call::CloseWindow(_) | Call::FocusWindow(_) | Call::Nothing => {}
         }
         None
     }
@@ -928,7 +941,7 @@ impl Host {
                 }
                 self.dispatch(Command::TitleChanged { tab, title });
             }
-            WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
+            WebEvent::PopupRequested(request) => self.dispatch(new_tab(request.url, Some(tab))),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -1248,7 +1261,7 @@ impl Host {
     }
 
     fn seen(&self) -> Seen {
-        let order = self.model.order(self.model.active_space);
+        let order = self.model.order(self.model.active_space());
         let shown = self
             .model
             .visible_tab()
@@ -1279,7 +1292,8 @@ impl Host {
             crate::TABS_SMOKE_PAGES.map(|page| nav_smoke::title_of(page).unwrap_or_default());
         let (state, action) = tabs_smoke::next(state, &self.seen(), &want);
         self.checks.tabs_smoke = Some(state);
-        let nth = |host: &Self, i: usize| host.model.order(host.model.active_space).get(i).copied();
+        let nth =
+            |host: &Self, i: usize| host.model.order(host.model.active_space()).get(i).copied();
         match action {
             Some(tabs_smoke::Action::OpenPages) => {
                 for page in [NAV_PAGE, TAB3_PAGE] {
@@ -1312,7 +1326,7 @@ impl Host {
         let Some(state) = self.checks.split_smoke.take() else {
             return;
         };
-        let order = self.model.order(self.model.active_space);
+        let order = self.model.order(self.model.active_space());
         let seen = split_smoke::Seen {
             tabs: order.len(),
             panes: self
@@ -1622,7 +1636,7 @@ impl Host {
             return;
         };
         let want = [page_url(SMOKE_PAGE), page_url(NAV_PAGE)];
-        let order = self.model.order(self.model.active_space);
+        let order = self.model.order(self.model.active_space());
         let tabs: Vec<_> = order
             .iter()
             .filter_map(|t| self.model.tabs.get(t))
@@ -2021,6 +2035,19 @@ mod tests {
             (Effect::ShowCommandBar, Call::ShowCommandBar),
             (Effect::ActivateTab(t), Call::Nothing),
             (Effect::SpaceChanged(SpaceId(0)), Call::Nothing),
+            (
+                Effect::WindowOpened(WindowId(1)),
+                Call::OpenWindow(WindowId(1)),
+            ),
+            (
+                Effect::WindowClosed(WindowId(1)),
+                Call::CloseWindow(WindowId(1)),
+            ),
+            (
+                Effect::FocusWindow(WindowId(1)),
+                Call::FocusWindow(WindowId(1)),
+            ),
+            (Effect::LastWindowClosed, Call::Quit),
         ];
         for (effect, want) in cases {
             assert_eq!(call(&effect, &m), want, "{effect:?}");
@@ -2081,7 +2108,13 @@ mod tests {
                         *v = visible;
                     }
                 }
-                Call::Load { .. } | Call::ShowCommandBar | Call::Nothing => {}
+                Call::Load { .. }
+                | Call::ShowCommandBar
+                | Call::OpenWindow(_)
+                | Call::CloseWindow(_)
+                | Call::FocusWindow(_)
+                | Call::Quit
+                | Call::Nothing => {}
             }
         }
     }
@@ -2142,7 +2175,7 @@ mod tests {
         .fold(Model::new(std::time::Instant::now()), |m, c| {
             model::apply(m, c).0
         });
-        let order = m.order(m.active_space);
+        let order = m.order(m.active_space());
         let (a, b) = (order[0], order[1]);
         let mut m = m;
         for t in m.tabs.values_mut() {

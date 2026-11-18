@@ -63,7 +63,7 @@ pub struct ShellView {
 }
 
 pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> ShellView {
-    let space = model.spaces.iter().find(|s| s.id == model.active_space);
+    let space = model.spaces.iter().find(|s| s.id == model.active_space());
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
         ids.filter_map(|id| {
             let tab = model.tabs.get(&id)?;
@@ -112,7 +112,7 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
         tabs,
         spaces,
         active_tab: visible.and_then(|t| slint_id(t.0)).unwrap_or(-1),
-        active_space: slint_id(model.active_space.0).unwrap_or(-1),
+        active_space: slint_id(model.active_space().0).unwrap_or(-1),
         host: host.into(),
         path: path.into(),
     }
@@ -125,7 +125,7 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
 /// end of the Space at the top level, out of any folder (a trailing folder can still be joined
 /// before its last tab). `None` for a tab that is not a row (pinned, another Space's, unknown).
 pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
-    let space = model.spaces.iter().find(|s| s.id == model.active_space)?;
+    let space = model.spaces.iter().find(|s| s.id == model.active_space())?;
     // The other rows in flat order, as (before it, after it), indices as after the detach.
     let mut rows = vec![];
     let mut from = None;

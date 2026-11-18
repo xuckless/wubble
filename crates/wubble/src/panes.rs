@@ -82,7 +82,7 @@ impl Panes {
         width: f64,
         height: f64,
     ) -> (bool, Vec<Command>) {
-        let space = model.active_space;
+        let space = model.active_space();
         let Some(group) = model.shown_split() else {
             self.split.reset();
             self.space = None;
@@ -362,7 +362,7 @@ mod tests {
         let [Command::ResizeSplit { space, stops }] = commands.as_slice() else {
             panic!("{commands:?}")
         };
-        assert_eq!(*space, m.active_space);
+        assert_eq!(*space, m.active_space());
         assert!((stops[0] - 0.4).abs() < 0.01, "{stops:?}");
     }
 

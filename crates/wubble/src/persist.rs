@@ -1187,7 +1187,7 @@ mod tests {
         let (client, loaded) = start(&path);
         let urls: Vec<&str> = loaded
             .model
-            .order(loaded.model.active_space)
+            .order(loaded.model.active_space())
             .iter()
             .map(|t| loaded.model.tabs[t].url.as_str())
             .collect();

@@ -264,6 +264,7 @@ pub const DEFAULTS: &[Binding] = rows![
     "Ctrl+F4", LW, Action::CloseTab, Shell;
     "Mod+Shift+T", ALL, Action::ReopenClosedTab, Shell;
     "Mod+N", ALL, Action::NewWindow, Shell;
+    "Mod+Shift+W", ALL, Action::CloseWindow, Shell;
     "Mod+L", ALL, Action::FocusAddress, PageFirst;
     "Alt+D", LW, Action::FocusAddress, PageFirst;
     "F6", LW, Action::FocusAddress, PageFirst;
@@ -813,12 +814,20 @@ mod tests {
         assert_eq!(sc(Platform::Linux, Action::SplitNext), "Ctrl+\\");
         assert_eq!(sc(Platform::Mac, Action::SplitNext), "Cmd+\\");
         assert_eq!(sc(Platform::Linux, Action::Unsplit), "Ctrl+|");
+        assert_eq!(sc(Platform::Linux, Action::CloseWindow), "Ctrl+Shift+W");
+        assert_eq!(sc(Platform::Mac, Action::CloseWindow), "Shift+Cmd+W");
+        assert_eq!(sc(Platform::Mac, Action::NewWindow), "Cmd+N");
     }
 
     #[test]
     fn every_action_is_bound_except_allow_list() {
         // Chromium binds no key to muting a tab either.
-        let unbound = [Action::NewSpace, Action::ToggleMute, Action::OpenPasswords];
+        let unbound = [
+            Action::NewSpace,
+            Action::ToggleMute,
+            Action::OpenPasswords,
+            Action::MoveTabToNewWindow,
+        ];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
             for a in Action::all() {

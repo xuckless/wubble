@@ -29,6 +29,9 @@ use crate::space::{
     SplitGroup, even,
 };
 use crate::tab::{Liveness, Tab, TabId};
+use crate::window::{Geometry, Window, WindowId, WindowTarget};
+
+mod windows;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -154,6 +157,44 @@ pub enum Command {
     },
     /// Shows an internal page: the active Space's tab already on it, else a new tab.
     OpenInternal(InternalPage),
+    /// A new Main window, focused, on `space` if no other window shows it (else that window
+    /// is focused), or on the first Space no window shows, or on a new Space.
+    NewWindow {
+        space: Option<SpaceId>,
+    },
+    /// The last Main window is not closed: [`Effect::LastWindowClosed`] asks the host to quit.
+    /// A Little or Popup window closes its tab with it.
+    CloseWindow(WindowId),
+    /// The platform focused this window.
+    FocusWindow(WindowId),
+    /// The window's size or position changed (kept for the session).
+    ResizeWindow {
+        window: WindowId,
+        geometry: Geometry,
+    },
+    /// Shows `tab` in a Main window (moved into the Space it shows) and focuses it; a tab of a
+    /// Little or Popup window leaves that window, which closes.
+    MoveTabToWindow {
+        tab: TabId,
+        to: WindowTarget,
+    },
+    /// A page's `window.open` with a size: a new tab beside `opener`, shown in a Popup window.
+    OpenPopupWindow {
+        url: String,
+        opener: TabId,
+        size: Option<(u32, u32)>,
+    },
+    /// A link from another app: a new tab in `space` (`None`: the active one) shown in a
+    /// Little window.
+    OpenLittle {
+        url: String,
+        space: Option<SpaceId>,
+    },
+    /// The Little window's tab becomes an ordinary tab of `space`, shown; the window closes.
+    PromoteLittle {
+        window: WindowId,
+        space: SpaceId,
+    },
     /// Hidden tabs are judged by this policy from the next tick on.
     SetSleepPolicy(SleepPolicy),
     /// Coarse lifecycle tick: hidden tabs are put to sleep by the sleep policy.
@@ -186,16 +227,26 @@ pub enum Effect {
         tab: TabId,
         effect: lifecycle::Effect,
     },
+    /// Open a platform window for this model window.
+    WindowOpened(WindowId),
+    /// Close this window's platform window.
+    WindowClosed(WindowId),
+    /// Raise and focus this window.
+    FocusWindow(WindowId),
+    /// The user closed the last Main window: quit.
+    LastWindowClosed,
 }
 
-/// One per window.
+/// One per app: every window's tabs and Spaces.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
     pub spaces: Vec<Space>,
     /// `containers[0]` is Default.
     pub containers: Vec<Container>,
     pub tabs: BTreeMap<TabId, Tab>,
-    pub active_space: SpaceId,
+    /// The open windows, least recently focused first: the last one is focused, and the last
+    /// Main one shows the active Space ([`Model::active_space`]). Never without a Main window.
+    pub windows: Vec<Window>,
     /// The time hides are stamped with: set at creation and by `Command::Tick`,
     /// so `apply` itself never reads a clock.
     clock: Instant,
@@ -208,7 +259,11 @@ pub struct Model {
     next_space: u32,
     next_folder: u32,
     next_container: u32,
+    next_window: u32,
 }
+
+/// The tint of the first Space and of Spaces a new window makes.
+const DEFAULT_TINT: Rgb = Rgb(0x6a, 0x8f, 0xff);
 
 impl Model {
     /// One empty Space and the Default container; `now` starts the model's clock.
@@ -216,7 +271,7 @@ impl Model {
         let space = Space {
             id: SpaceId(0),
             name: "Space 1".into(),
-            tint: Rgb(0x6a, 0x8f, 0xff),
+            tint: DEFAULT_TINT,
             icon: SpaceIcon::Personal,
             container: ContainerId::DEFAULT,
             pinned: vec![],
@@ -225,7 +280,7 @@ impl Model {
             split: None,
         };
         Self {
-            active_space: space.id,
+            windows: vec![Window::main(WindowId(0), space.id)],
             spaces: vec![space],
             containers: vec![Container {
                 id: ContainerId::DEFAULT,
@@ -239,6 +294,7 @@ impl Model {
             next_space: 1,
             next_folder: 0,
             next_container: 1,
+            next_window: 1,
         }
     }
 
@@ -259,7 +315,7 @@ impl Model {
         spaces: Vec<Space>,
         containers: Vec<Container>,
         tabs: Vec<Tab>,
-        active_space: SpaceId,
+        windows: Vec<Window>,
         now: Instant,
     ) -> Result<Model, String> {
         let next = |max: Option<u64>, floor: u64| max.map_or(floor, |m| m + 1);
@@ -277,10 +333,11 @@ impl Model {
             next_space: to_u32(next(spaces.iter().map(|s| u64::from(s.id.0)).max(), 1))?,
             next_folder: to_u32(next(next_folder, 0))?,
             next_container: to_u32(next(containers.iter().map(|c| u64::from(c.id.0)).max(), 1))?,
+            next_window: to_u32(next(windows.iter().map(|w| u64::from(w.id.0)).max(), 0))?,
             spaces,
             containers,
             tabs: tabs.into_iter().map(|t| (t.id, t)).collect(),
-            active_space,
+            windows,
             clock: now,
             pressure: Pressure::None,
             policy: SleepPolicy::default(),
@@ -354,31 +411,41 @@ impl Model {
         matches!(self.place_of(tab), Some((_, Place::Pinned(_))))
     }
 
-    /// The tab on screen: the active tab of the active Space.
+    /// The focused page of the focused window: a Little or Popup window's tab, else the active
+    /// tab of the active Space.
     pub fn visible_tab(&self) -> Option<TabId> {
-        self.space_idx(self.active_space)
-            .and_then(|si| self.spaces[si].active)
+        self.windows.last().and_then(|w| self.focused_tab(w))
     }
 
-    /// Every tab on screen, left to right: the active Space's split when its active tab is in it,
-    /// otherwise just the active tab. [`Model::visible_tab`] is the focused one among them.
+    /// Every tab on screen in any window: each window's [`Model::window_tabs`], focused window
+    /// last. Exactly these are Active.
     pub fn visible_tabs(&self) -> Vec<TabId> {
-        let Some(si) = self.space_idx(self.active_space) else {
-            return vec![];
-        };
-        let s = &self.spaces[si];
-        match (&s.split, s.active) {
-            (Some(g), Some(a)) if g.tabs.contains(&a) => g.tabs.clone(),
-            (_, a) => a.into_iter().collect(),
-        }
+        self.windows
+            .iter()
+            .flat_map(|w| self.window_tabs(w.id))
+            .collect()
     }
 
     /// The split shown in the active Space, if any.
     pub fn shown_split(&self) -> Option<&SplitGroup> {
-        let s = &self.spaces[self.space_idx(self.active_space)?];
+        self.space_split(self.space_idx(self.active_space())?)
+    }
+
+    /// The Space's split if it is shown: its active tab is one of the panes.
+    fn space_split(&self, si: usize) -> Option<&SplitGroup> {
+        let s = &self.spaces[si];
         s.split
             .as_ref()
             .filter(|g| s.active.is_some_and(|a| g.tabs.contains(&a)))
+    }
+
+    /// What a Space shows in the window that shows it, left to right: its split when its
+    /// active tab is in it, otherwise just the active tab.
+    fn space_tabs(&self, si: usize) -> Vec<TabId> {
+        match self.space_split(si) {
+            Some(g) => g.tabs.clone(),
+            None => self.spaces[si].active.into_iter().collect(),
+        }
     }
 
     /// The split `tab` is a pane of, shown or not.
@@ -396,7 +463,7 @@ impl Model {
         if self.visible_tabs().len() >= MAX_PANES {
             return None;
         }
-        let si = self.space_idx(self.active_space)?;
+        let si = self.space_idx(self.active_space())?;
         let s = &self.spaces[si];
         let order = self.order_idx(si);
         let a = order.iter().position(|&t| Some(t) == s.active)?;
@@ -411,23 +478,23 @@ impl Model {
     /// The tab `delta` steps from the visible one in the active Space's
     /// order (pinned first), wrapping at both ends.
     pub fn tab_step(&self, delta: isize) -> Option<TabId> {
-        cycle(&self.order(self.active_space), self.visible_tab(), delta)
+        cycle(&self.order(self.active_space()), self.visible_tab(), delta)
     }
 
     /// The active Space's tab at `index` (0-based) in its order, if there is one.
     pub fn nth_tab(&self, index: usize) -> Option<TabId> {
-        self.order(self.active_space).get(index).copied()
+        self.order(self.active_space()).get(index).copied()
     }
 
     /// The active Space's last tab in its order.
     pub fn last_tab(&self) -> Option<TabId> {
-        self.order(self.active_space).last().copied()
+        self.order(self.active_space()).last().copied()
     }
 
     /// The Space `delta` steps from the active one, wrapping at both ends.
     pub fn space_step(&self, delta: isize) -> Option<SpaceId> {
         let ids: Vec<SpaceId> = self.spaces.iter().map(|s| s.id).collect();
-        cycle(&ids, Some(self.active_space), delta)
+        cycle(&ids, Some(self.active_space()), delta)
     }
 
     /// The Space at `index` (0-based), if there is one.
@@ -450,9 +517,6 @@ impl Model {
         let mut folder_ids = vec![];
         if self.spaces.is_empty() {
             return Err("no spaces".into());
-        }
-        if self.space_idx(self.active_space).is_none() {
-            return Err("active space missing".into());
         }
         if self.containers.first().map(|c| c.id) != Some(ContainerId::DEFAULT) {
             return Err("containers[0] is not Default".into());
@@ -504,9 +568,11 @@ impl Model {
                 }
             }
             let order = self.order_idx(si);
+            // a tab shown in its own window is never the Space's active tab
+            let windowed = |t: &TabId| self.windowed(*t).is_some();
             match s.active {
-                Some(a) if order.contains(&a) => {}
-                None if order.is_empty() => {}
+                Some(a) if order.contains(&a) && !windowed(&a) => {}
+                None if order.iter().all(windowed) => {}
                 a => return Err(format!("space {:?} bad active {a:?}", s.id)),
             }
             if let Some(g) = &s.split {
@@ -517,7 +583,7 @@ impl Model {
                     return Err(format!("space {:?} bad stops {:?}", s.id, g.stops));
                 }
                 for (i, t) in g.tabs.iter().enumerate() {
-                    if !order.contains(t) || g.tabs[..i].contains(t) {
+                    if !order.contains(t) || g.tabs[..i].contains(t) || windowed(t) {
                         return Err(format!("space {:?} bad split pane {t:?}", s.id));
                     }
                 }
@@ -526,6 +592,7 @@ impl Model {
         if let Some(t) = self.tabs.keys().find(|t| !placed.contains_key(t)) {
             return Err(format!("tab {t:?} in map but unplaced"));
         }
+        self.check_windows()?;
         let visible = self.visible_tabs();
         for t in self.tabs.values() {
             let shown = visible.contains(&t.id);
@@ -551,7 +618,12 @@ impl Model {
 
     /// The tab to show once `tab` leaves its Space (Chromium `DetermineNewSelectedIndex`).
     fn successor(&self, si: usize, tab: TabId, use_openers: bool) -> Option<TabId> {
-        let order = self.order_idx(si);
+        // A tab shown in its own window is never a Space's active tab.
+        let order: Vec<TabId> = self
+            .order_idx(si)
+            .into_iter()
+            .filter(|&t| t == tab || self.windowed(t).is_none())
+            .collect();
         let i = order.iter().position(|&t| t == tab)?;
         if use_openers {
             let is_child = |t: &&TabId| self.tabs[*t].opener == Some(tab);
@@ -633,15 +705,41 @@ impl Model {
         container: Option<ContainerId>,
         opener: Option<TabId>,
     ) -> Vec<Effect> {
-        if container.is_some_and(|c| !self.has_container(c)) {
+        // A popup from a hidden tab must not take over the screen.
+        let show =
+            opener.is_none_or(|o| self.windows.iter().any(|w| self.focused_tab(w) == Some(o)));
+        let Some((id, si, create)) = self.place_new_tab(url, container, opener, None) else {
             return vec![];
+        };
+        let mut fx = vec![create];
+        // one opened from a Little or Popup window's page shows in the Main window
+        if show {
+            self.spaces[si].active = Some(id);
+            fx.push(Effect::ActivateTab(id));
+        }
+        fx
+    }
+
+    /// A new tab, placed but not shown: after its live `opener`, else last in `space` (`None`:
+    /// the active Space). Returns it, its Space and its `CreateTab` effect.
+    fn place_new_tab(
+        &mut self,
+        url: String,
+        container: Option<ContainerId>,
+        opener: Option<TabId>,
+        space: Option<SpaceId>,
+    ) -> Option<(TabId, usize, Effect)> {
+        if container.is_some_and(|c| !self.has_container(c)) {
+            return None;
         }
         let opener_space = opener.and_then(|o| self.place_of(o)).map(|(s, _)| s);
         let opener = opener.filter(|_| opener_space.is_some());
-        let si = opener_space
-            .unwrap_or_else(|| self.space_idx(self.active_space).expect("active space"));
-        // A popup from a hidden tab must not take over the screen.
-        let show = opener.is_none() || opener == self.visible_tab();
+        let si = match space {
+            Some(space) => self.space_idx(space)?,
+            None => opener_space
+                .unwrap_or_else(|| self.space_idx(self.active_space()).expect("active space")),
+        };
+        let opener = opener.filter(|_| opener_space == Some(si));
         let default = self.spaces[si].container;
         let id = self.fresh_tab();
         let eff = container.unwrap_or(default);
@@ -670,16 +768,12 @@ impl Model {
             },
         };
         self.attach(id, dest, si);
-        let mut fx = vec![Effect::CreateTab {
+        let create = Effect::CreateTab {
             tab: id,
             url,
             container: eff,
-        }];
-        if show {
-            self.spaces[si].active = Some(id);
-            fx.push(Effect::ActivateTab(id));
-        }
-        fx
+        };
+        Some((id, si, create))
     }
 
     fn close_tab(&mut self, tab: TabId) -> Vec<Effect> {
@@ -698,7 +792,7 @@ impl Model {
         self.forget(&[tab]);
         self.spaces[si].active = next;
         let mut fx = vec![Effect::CloseTab(tab)];
-        if was_active && self.spaces[si].id == self.active_space {
+        if was_active && self.spaces[si].id == self.active_space() {
             fx.push(self.show(next));
         }
         fx
@@ -708,15 +802,15 @@ impl Model {
         let Some((si, _)) = self.place_of(tab) else {
             return vec![];
         };
+        // A Little or Popup window's tab is shown there: bring that window forward.
+        if let Some(w) = self.windowed(tab) {
+            return self.focus(w).into_iter().collect();
+        }
         let id = self.spaces[si].id;
-        if self.spaces[si].active == Some(tab) && self.active_space == id {
+        if self.spaces[si].active == Some(tab) && self.active_space() == id {
             return vec![];
         }
-        let mut fx = vec![];
-        if self.active_space != id {
-            self.active_space = id;
-            fx.push(Effect::SpaceChanged(id));
-        }
+        let mut fx = self.set_active_space(id);
         self.spaces[si].active = Some(tab);
         for t in self.tabs.values_mut() {
             t.opener = None;
@@ -747,14 +841,14 @@ impl Model {
             if src_was_active {
                 self.spaces[src].active = src_next;
             }
-            if self.spaces[dst].active.is_none() {
+            if self.spaces[dst].active.is_none() && self.windowed(tab).is_none() {
                 self.spaces[dst].active = Some(tab);
             }
             // Only the active Space's visible tab matters to the engine.
-            let shown = self.spaces[self.space_idx(self.active_space).expect("active")].active;
-            if src_was_active && self.spaces[src].id == self.active_space {
+            let shown = self.spaces[self.space_idx(self.active_space()).expect("active")].active;
+            if src_was_active && self.spaces[src].id == self.active_space() {
                 fx.push(self.show(shown));
-            } else if self.spaces[dst].id == self.active_space && shown == Some(tab) {
+            } else if self.spaces[dst].id == self.active_space() && shown == Some(tab) {
                 fx.push(Effect::ActivateTab(tab));
             }
         }
@@ -820,13 +914,22 @@ impl Model {
         }
         let gone = self.order_idx(si);
         let mut fx: Vec<Effect> = gone.iter().map(|&t| Effect::CloseTab(t)).collect();
+        let focused = self.active_space() == space;
+        let shown_in = self.shown_by(space);
         self.spaces.remove(si);
         self.forget(&gone);
-        if self.active_space == space {
-            let ni = si.saturating_sub(1);
-            self.active_space = self.spaces[ni].id;
-            fx.push(Effect::SpaceChanged(self.active_space));
-            fx.push(self.show(self.spaces[ni].active));
+        // The window that showed it takes the nearest Space no other window shows; with none
+        // left it closes (it is not the last Main window: that one has every other Space free).
+        if let Some(wi) = shown_in {
+            match self.free_space(si.saturating_sub(1)) {
+                Some(next) => self.windows[wi].shown = crate::window::Shown::Space(next),
+                None => fx.push(Effect::WindowClosed(self.windows.remove(wi).id)),
+            }
+        }
+        if focused {
+            let active = self.active_space();
+            fx.push(Effect::SpaceChanged(active));
+            fx.push(self.show(self.spaces[self.space_idx(active).expect("active")].active));
         }
         fx
     }
@@ -835,11 +938,10 @@ impl Model {
         let Some(si) = self.space_idx(space) else {
             return vec![];
         };
-        if self.active_space == space {
+        if self.active_space() == space {
             return vec![];
         }
-        self.active_space = space;
-        let mut fx = vec![Effect::SpaceChanged(space)];
+        let mut fx = self.set_active_space(space);
         fx.push(self.show(self.spaces[si].active));
         fx
     }
@@ -910,6 +1012,11 @@ impl Model {
         if was_active {
             s.active = Some(new);
         }
+        for w in &mut self.windows {
+            if w.shown == crate::window::Shown::Tab(tab) {
+                w.shown = crate::window::Shown::Tab(new);
+            }
+        }
         self.forget(&[tab]);
         let mut fx = vec![
             Effect::CloseTab(tab),
@@ -919,7 +1026,7 @@ impl Model {
                 container,
             },
         ];
-        if was_active && self.spaces[si].id == self.active_space {
+        if was_active && self.spaces[si].id == self.active_space() {
             fx.push(Effect::ActivateTab(new));
         }
         fx
@@ -945,13 +1052,16 @@ impl Model {
     }
 
     fn split_with(&mut self, tab: TabId) -> Vec<Effect> {
-        let Some(si) = self.space_idx(self.active_space) else {
+        let Some(si) = self.space_idx(self.active_space()) else {
             return vec![];
         };
         let Some(focused) = self.spaces[si].active.filter(|&f| f != tab) else {
             return vec![];
         };
-        if !self.order_idx(si).contains(&tab) || self.is_internal(tab) || self.is_internal(focused)
+        if !self.order_idx(si).contains(&tab)
+            || self.is_internal(tab)
+            || self.is_internal(focused)
+            || self.windowed(tab).is_some()
         {
             return vec![];
         }
@@ -987,7 +1097,7 @@ impl Model {
             return fx;
         };
         // back to the page the new one goes beside
-        let si = self.space_idx(self.active_space).expect("active space");
+        let si = self.space_idx(self.active_space()).expect("active space");
         self.spaces[si].active = Some(f);
         let beside = self.split_with(tab);
         if beside.is_empty() {
@@ -1011,7 +1121,7 @@ impl Model {
             return vec![];
         }
         self.spaces[si].active = Some(heir);
-        if self.spaces[si].id == self.active_space {
+        if self.spaces[si].id == self.active_space() {
             vec![Effect::ActivateTab(heir)]
         } else {
             vec![]
@@ -1113,7 +1223,7 @@ impl Model {
     }
 
     fn open_internal(&mut self, page: InternalPage) -> Vec<Effect> {
-        let si = self.space_idx(self.active_space).expect("active space");
+        let si = self.space_idx(self.active_space()).expect("active space");
         let existing = self
             .order_idx(si)
             .into_iter()
@@ -1191,20 +1301,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             container,
         } => {
             if m.has_container(container) {
-                let id = SpaceId(m.next_space);
-                m.next_space += 1;
-                let icon = SpaceIcon::nth(m.spaces.len());
-                m.spaces.push(Space {
-                    id,
-                    name,
-                    tint,
-                    icon,
-                    container,
-                    pinned: vec![],
-                    items: vec![],
-                    active: None,
-                    split: None,
-                });
+                m.add_space(name, tint, container);
             }
             vec![]
         }
@@ -1264,6 +1361,22 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::ResizeSplit { space, stops } => m.resize_split(space, stops),
         Command::SwapPane { tab, right } => m.swap_pane(tab, right),
         Command::OpenInternal(page) => m.open_internal(page),
+        Command::NewWindow { space } => m.new_window(space),
+        Command::CloseWindow(w) => m.close_window(w),
+        Command::FocusWindow(w) => {
+            m.focus(w);
+            vec![]
+        }
+        Command::ResizeWindow { window, geometry } => {
+            if let Some(w) = m.windows.iter_mut().find(|w| w.id == window) {
+                w.geometry = Some(geometry);
+            }
+            vec![]
+        }
+        Command::MoveTabToWindow { tab, to } => m.move_tab_to_window(tab, to),
+        Command::OpenPopupWindow { url, opener, size } => m.open_popup_window(url, opener, size),
+        Command::OpenLittle { url, space } => m.open_little(url, space),
+        Command::PromoteLittle { window, space } => m.promote_little(window, space),
         Command::SetSleepPolicy(policy) => {
             m.policy = policy;
             vec![]
@@ -1277,6 +1390,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
                 .collect()
         }
     };
+    fx.extend(m.prune_windows());
     fx.extend(m.settle(&before));
     fx.extend(m.rejudge(&before));
     (m, fx)
