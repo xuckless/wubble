@@ -230,10 +230,24 @@ export global Shell {
     out property <length> preview-address: 11.5px;
     out property <duration> preview-in: 180ms;
     out property <duration> preview-out: 130ms;
+    // The Boost editor docked beside the page.
+    out property <length> boost-panel-width: 340px;
+    out property <length> boost-code-height: 150px;
+    out property <length> boost-swatch: 22px;
+    out property <length> boost-swatch-ring: 2px;
+    out property <length> boost-swatch-rim: 1px;
+    // The video controls' progress bar: the rail, a segment's least width, the knob.
+    out property <length> video-rail: 4px;
+    out property <length> video-mark-min: 2px;
+    out property <length> video-knob: 10px;
+    // The strip's widest: compact in the video's corner, the page's own controls left free.
+    out property <length> video-strip-width: 380px;
     // The find bar: an .ur-o-surface strip at the content's top right (Chromium's place), the
     // command bar's input metrics.
     out property <length> find-width: 360px;
     out property <length> find-height: 44px;
+    // The screenshot region picker: how much the page dims outside the region.
+    out property <float> shot-dim: 0.5;
     // The speaker glyph in a tab row (hand drawn on the 24 grid: the bucket has none).
     out property <length> speaker: 22px;
     // The permission prompt: an .ur-o-surface under the address pill (Chromium's bubble place),

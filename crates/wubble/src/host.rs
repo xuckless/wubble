@@ -16,6 +16,8 @@
 
 mod autofill;
 mod autoscroll;
+mod boost;
+mod builtins;
 mod busy;
 mod devtools;
 mod downloads;
@@ -31,10 +33,12 @@ mod surfaces;
 mod swipe;
 mod tab_drag;
 mod tasks;
+mod videos;
 mod window;
 pub use media::MediaObserver;
 pub use swipe::Swipe;
 
+pub use builtins::Builtin;
 pub(crate) use window::WindowHost;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -260,6 +264,11 @@ pub struct Checks {
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
     pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
+    pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
+    /// `--smoke video` and `--smoke boost`.
+    pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
+    /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
+    pub sponsor_endpoint: Option<String>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -395,6 +404,8 @@ pub struct Host {
     pub autofill_passed: bool,
     /// `--smoke media` reached its end.
     pub media_passed: bool,
+    /// `--smoke builtins`: what it checked, once it passed.
+    pub builtins_passed: Option<String>,
     /// Password autofill per tab (`host/autofill.rs`).
     autofill: autofill::Autofill,
     /// The content blocker, whose per-view counts the tab rows show.
@@ -431,6 +442,14 @@ pub struct Host {
     tasks: tasks::TasksPage,
     /// DevTools: the dock's state and its panel (`host/devtools.rs`).
     devtools: devtools::Docked,
+    /// Dark mode for pages, reader mode, link hints, screenshots (`host/builtins.rs`).
+    builtins: builtins::Builtins,
+    /// Boosts and the page kit (`host/boost.rs`).
+    boosts: boost::Boosts,
+    /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/videos.rs`).
+    videos: videos::Videos,
+    /// `--smoke video` or `--smoke boost` passed.
+    pub video_passed: Option<String>,
 }
 
 impl Host {
@@ -457,6 +476,7 @@ impl Host {
             site_permissions,
             downloads,
             favicons,
+            boosts,
         } = loaded;
         let favicons = model
             .tabs
@@ -476,6 +496,12 @@ impl Host {
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
         let begin_frames = checks.begin_frames;
+        let videos = match checks.sponsor_endpoint.clone() {
+            Some(endpoint) => {
+                videos::Videos::for_smoke(endpoint, crate::video_smoke::SMOKE_VIDEO.into())
+            }
+            None => videos::Videos::default(),
+        };
         let mut host = Self {
             engine,
             w,
@@ -550,6 +576,7 @@ impl Host {
             blocked_seen: None,
             autofill_passed: false,
             media_passed: false,
+            builtins_passed: None,
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
@@ -571,6 +598,10 @@ impl Host {
             snapshots: snapshots::Snapshots::default(),
             tasks: tasks::TasksPage::default(),
             devtools: devtools::Docked::new(dock_port),
+            builtins: builtins::Builtins::default(),
+            boosts: boost::Boosts::new(boosts),
+            videos,
+            video_passed: None,
         };
         host.replay_settings();
         if host.checks.check_pixels {
@@ -787,7 +818,7 @@ impl Host {
                     return None;
                 }
                 let config = ViewConfig {
-                    url,
+                    url: url.clone(),
                     layout: self.pane_layout(&window, tab),
                     frame_rate,
                     begin_frames: self.pace.is_some(),
@@ -800,6 +831,7 @@ impl Host {
                         if let Some(view) = self.engine.view(id) {
                             view.set_drag_source(true);
                         }
+                        self.builtins_view_opened(tab, &url);
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -824,6 +856,9 @@ impl Host {
                     .tabs
                     .get(&tab)
                     .is_some_and(|t| t.lifecycle.liveness == Liveness::Active);
+                if self.views.contains_key(&tab) {
+                    self.builtins_loading(tab, &url);
+                }
                 match self.tab_view(tab) {
                     Some(view) => view.load(&url),
                     None if live => return self.execute(Call::OpenView { tab, url }, frame_rate),
@@ -917,6 +952,10 @@ impl Host {
             .map_or(0, Vec::len);
         window.set_address_popups_blocked(i32::try_from(held).unwrap_or(i32::MAX));
         self.render_surfaces(&window);
+        self.render_builtins(&window);
+        self.media_after_change();
+        self.render_video(&window);
+        self.render_boost(&window);
         let nav = self.view().map(|view| {
             (
                 view.nav().page.clone(),
@@ -1091,6 +1130,8 @@ impl Host {
         }
         self.split_smoke_step(&window);
         self.autofill_smoke_worked();
+        self.builtin_smoke_worked();
+        self.video_smoke_worked();
         let framed = self.shown().is_some_and(|t| self.w.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
         if self.checks.block_smoke.is_some() {
@@ -1300,6 +1341,11 @@ impl Host {
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
         self.parity_web(&event);
+        self.builtins_web(tab, &event);
+        self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
+        if self.checks.video_smoke.is_some() {
+            self.video_smoke_step(crate::video_smoke::Input::Web(&event));
+        }
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -1637,6 +1683,7 @@ impl Host {
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::DevTools => self.toggle_devtools(),
             Plan::OpenBeside => self.open_beside(),
+            Plan::Builtin(builtin) => self.builtin(builtin),
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {
                 let _ = self
@@ -2641,6 +2688,10 @@ impl Host {
     /// One key from the keyboard (a raw winit key event, or `--smoke parity`'s): where it goes
     /// is `input::key_route`'s decision.
     pub(crate) fn key(&mut self, window: &AppWindow, key: &KeyInput) -> EventResult {
+        // Link hints take every key while their labels show.
+        if self.hint_key(key) {
+            return EventResult::PreventDefault;
+        }
         // Esc ends a page drag with nothing dropped, as in Chromium, or drops a tab drag.
         if key.pressed
             && key.unmodified == Key::Named(NamedKey::Escape)
@@ -2788,6 +2839,7 @@ impl Host {
         if let Some(view) = self.pane_view(pane) {
             view.mouse_move(point, &modifiers, now);
         }
+        self.media_pointer(pane, Some(point));
     }
 
     pub fn pointer_left(&mut self, pane: i32, point: Point) {
@@ -2796,6 +2848,7 @@ impl Host {
         if let Some(view) = self.pane_view(pane) {
             view.mouse_leave(point, &modifiers, now);
         }
+        self.media_pointer(pane, None);
     }
 
     /// A press in a pane that is not focused focuses it first (the design's pane focus on
@@ -2852,6 +2905,7 @@ impl Host {
     }
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
+        self.hints_scrolled();
         let modifiers = self.input.modifiers();
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {

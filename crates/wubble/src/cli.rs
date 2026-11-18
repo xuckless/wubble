@@ -75,6 +75,9 @@ enum SmokeArg {
     Autofill,
     Windows,
     Media,
+    Builtins,
+    Video,
+    Boost,
     SessionPhase(Phase),
 }
 
@@ -93,6 +96,9 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "autofill" => Ok(SmokeArg::Autofill),
         None if value == "windows" => Ok(SmokeArg::Windows),
         None if value == "media" => Ok(SmokeArg::Media),
+        None if value == "builtins" => Ok(SmokeArg::Builtins),
+        None if value == "video" => Ok(SmokeArg::Video),
+        None if value == "boost" => Ok(SmokeArg::Boost),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -101,7 +107,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
-             `settings`, `pages`, `session`, `autofill`, `windows` or `session-phase=1|2`"
+             `settings`, `pages`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
+             `boost` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -142,6 +149,14 @@ pub enum Smoke {
     /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
     /// check sizes and hashes.
     Media,
+    /// Dark mode for pages, reader mode, link hints, screenshots and the PDF viewer on
+    /// bundled pages.
+    Builtins,
+    /// A loopback video page: the video controls, speed per site, SponsorBlock against a fake
+    /// endpoint, a media key, the picture-in-picture spike.
+    Video,
+    /// Boosts on loopback pages: CSS, a tint and a document-start script; a CSP page.
+    Boost,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -230,6 +245,9 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
             (Some(SmokeArg::Media), None, None) => Smoke::Media,
+            (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
+            (Some(SmokeArg::Video), None, None) => Smoke::Video,
+            (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -369,6 +387,28 @@ mod tests {
         );
         assert!(parse(["wubble", "--smoke", "pages", "--url", "about:blank"]).is_err());
         assert!(parse(["wubble", "--smoke", "pages", "--profile", "/tmp/p"]).is_err());
+    }
+
+    #[test]
+    fn smoke_builtins() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "builtins"]).ok(),
+            Some(Command::Smoke(Smoke::Builtins))
+        );
+        assert!(parse(["wubble", "--smoke", "builtins", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
+    fn smoke_video_and_boost() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "video"]).ok(),
+            Some(Command::Smoke(Smoke::Video))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "boost"]).ok(),
+            Some(Command::Smoke(Smoke::Boost))
+        );
+        assert!(parse(["wubble", "--smoke", "video", "--url", "about:blank"]).is_err());
     }
 
     #[test]

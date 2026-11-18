@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 
 use wubble_core::apply;
+use wubble_core::boost::Boost;
 use wubble_core::download::{self, DownloadEntry};
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::HistoryEntry;
@@ -236,6 +237,8 @@ pub struct Loaded {
     /// without an origin, or without an icon, is absent). Pruned to
     /// [`FAVICON_CAP_BYTES`] first.
     pub favicons: HashMap<String, Favicon>,
+    /// Every Boost, in the user's order.
+    pub boosts: Vec<Boost>,
 }
 
 impl Default for Loaded {
@@ -246,6 +249,7 @@ impl Default for Loaded {
             site_permissions: SitePermissions::default(),
             downloads: vec![],
             favicons: HashMap::new(),
+            boosts: vec![],
         }
     }
 }
@@ -316,6 +320,9 @@ enum Request {
     AddDownload(DownloadEntry),
     UpdateDownload(DownloadEntry),
     RemoveDownload(i64),
+    /// Stores a Boost; the reply has its id (`None`: not stored).
+    PutBoost(Boost, Reply<Option<i64>>),
+    DeleteBoost(i64),
     /// One page of the history page's visits, with the icons of their sites.
     Visits {
         query: String,
@@ -559,6 +566,15 @@ impl StoreClient {
 
     pub fn remove_download(&self, id: i64) {
         self.send(Request::RemoveDownload(id));
+    }
+
+    /// Stores `boost` (a new one when its id is 0); `reply` runs on the store thread with its id.
+    pub fn put_boost(&self, boost: &Boost, reply: impl FnOnce(Option<i64>) + Send + 'static) {
+        self.send(Request::PutBoost(boost.clone(), Box::new(reply)));
+    }
+
+    pub fn delete_boost(&self, id: i64) {
+        self.send(Request::DeleteBoost(id));
     }
 
     /// `reply` runs on the store thread.
@@ -861,12 +877,14 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
     store.prune_favicons(FAVICON_CAP_BYTES).await?;
     let urls: Vec<&str> = model.tabs.values().map(|t| t.url.as_str()).collect();
     let favicons = store.favicons_for(&urls).await?;
+    let boosts = store.boosts().await?;
     let loaded = Loaded {
         model,
         settings,
         site_permissions,
         downloads,
         favicons,
+        boosts,
     };
     Ok((store, loaded))
 }
@@ -1031,6 +1049,12 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         Request::AddDownload(entry) => store.add_download(&entry).await?,
         Request::UpdateDownload(entry) => store.update_download(&entry).await?,
         Request::RemoveDownload(id) => store.remove_download(id).await?,
+        Request::PutBoost(boost, reply) => {
+            let id = store.put_boost(&boost, now_ms()).await;
+            reply(id.as_ref().ok().copied());
+            id?;
+        }
+        Request::DeleteBoost(id) => store.delete_boost(id).await?,
         Request::Visits {
             query,
             before,

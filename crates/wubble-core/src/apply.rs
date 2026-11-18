@@ -7,9 +7,12 @@ use std::collections::HashMap;
 
 use crate::archive::ArchiveAfter;
 use crate::omnibox::SearchEngine;
+use crate::pagetheme::{PageTheme, ThemeTable};
+use crate::reader::ReaderPrefs;
 use crate::routing::Rule;
 use crate::seam::SidebarMode;
 use crate::settings::{self, SettingDef};
+use crate::shot::ShotOutput;
 use crate::sleep::SleepPolicy;
 use crate::zoom::ZoomTable;
 
@@ -126,6 +129,29 @@ pub enum Applied {
     Glass(GlassSetting),
     Passwords(PasswordSettings),
     Media(MediaSettings),
+    /// Dark mode for pages: the default and the per-site table, applied to every live page.
+    PageThemes {
+        default: PageTheme,
+        sites: ThemeTable,
+    },
+    Reader(ReaderPrefs),
+    ScreenshotOutput(ShotOutput),
+    /// The link hints' letters (`hints::alphabet`).
+    HintsAlphabet(&'static str),
+    /// The video controls and the per-site speeds.
+    Video {
+        controls: bool,
+        rates: crate::video::RateTable,
+    },
+    MediaKeys(bool),
+    PipOnTabSwitch(bool),
+    /// SponsorBlock: on, asked about, and what each category does.
+    Sponsor {
+        enabled: bool,
+        asked: bool,
+        acts: crate::sponsor::ActTable,
+    },
+    BoostsEnabled(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -196,6 +222,43 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if [s::PASSWORDS_OFFER_TO_SAVE.key, s::PASSWORDS_AUTOFILL.key].contains(&k) => {
             Applied::Passwords(PasswordSettings::from_stored(stored))
         }
+        k if [s::PAGE_THEME.key, s::PAGE_THEME_SITES.key].contains(&k) => Applied::PageThemes {
+            default: PageTheme::from_id(value_of(&s::PAGE_THEME, stored))?,
+            sites: map(&s::PAGE_THEME_SITES, stored),
+        },
+        k if [
+            s::READER_DETECT.key,
+            s::READER_SIZE.key,
+            s::READER_WIDTH.key,
+            s::READER_FONT.key,
+            s::READER_THEME.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::Reader(ReaderPrefs::from_stored(stored))
+        }
+        k if k == s::SCREENSHOT_OUTPUT.key => Applied::ScreenshotOutput(ShotOutput::from_id(v)?),
+        k if k == s::HINTS_ALPHABET.key => Applied::HintsAlphabet(crate::hints::alphabet(v)),
+        k if [s::VIDEO_CONTROLS.key, s::VIDEO_RATES.key].contains(&k) => Applied::Video {
+            controls: flag(&s::VIDEO_CONTROLS, stored),
+            rates: map(&s::VIDEO_RATES, stored),
+        },
+        k if k == s::MEDIA_KEYS.key => Applied::MediaKeys(flag(def, stored)),
+        k if k == s::PIP_ON_TAB_SWITCH.key => Applied::PipOnTabSwitch(flag(def, stored)),
+        k if [
+            s::SPONSOR_ENABLED.key,
+            s::SPONSOR_ASKED.key,
+            s::SPONSOR_ACTIONS.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::Sponsor {
+                enabled: flag(&s::SPONSOR_ENABLED, stored),
+                asked: flag(&s::SPONSOR_ASKED, stored),
+                acts: map(&s::SPONSOR_ACTIONS, stored),
+            }
+        }
+        k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })
@@ -438,6 +501,65 @@ mod tests {
         assert_eq!(
             with_entry("routing.rules", &empty, "a.test -> "),
             Some("[]".into())
+        );
+    }
+
+    #[test]
+    fn builtin_rows_apply_as_one_value_each() {
+        let s = stored(&[
+            ("pages.theme", "dark"),
+            ("pages.theme_sites", r#"{"a.test":2}"#),
+            ("reader.size", "24"),
+            ("screenshot.output", "file"),
+            ("hints.alphabet", "vimium"),
+        ]);
+        let themes = Applied::PageThemes {
+            default: PageTheme::Dark,
+            sites: ThemeTable::from([("a.test".into(), 2)]),
+        };
+        assert_eq!(effect_of("pages.theme", &s), Some(themes.clone()));
+        assert_eq!(effect_of("pages.theme_sites", &s), Some(themes));
+        let Some(Applied::Reader(p)) = effect_of("reader.theme", &s) else {
+            panic!("no reader prefs")
+        };
+        assert_eq!(p.size, 24);
+        assert_eq!(
+            effect_of("screenshot.output", &s),
+            Some(Applied::ScreenshotOutput(ShotOutput::File))
+        );
+        assert_eq!(
+            effect_of("hints.alphabet", &s),
+            Some(Applied::HintsAlphabet("sadfjklewcmpgh"))
+        );
+    }
+
+    #[test]
+    fn media_rows_apply_as_one_value_each() {
+        let s = stored(&[
+            ("video.rates", r#"{"a.test":150}"#),
+            ("sponsor.enabled", "1"),
+            ("sponsor.actions", r#"{"intro":0}"#),
+        ]);
+        let video = Applied::Video {
+            controls: true,
+            rates: crate::video::RateTable::from([("a.test".into(), 150)]),
+        };
+        assert_eq!(effect_of("video.controls", &s), Some(video.clone()));
+        assert_eq!(effect_of("video.rates", &s), Some(video));
+        let sponsor = Applied::Sponsor {
+            enabled: true,
+            asked: false,
+            acts: crate::sponsor::ActTable::from([("intro".into(), 0)]),
+        };
+        assert_eq!(effect_of("sponsor.asked", &s), Some(sponsor));
+        assert_eq!(
+            effect_of("pip.on_tab_switch", &s),
+            Some(Applied::PipOnTabSwitch(false))
+        );
+        assert_eq!(effect_of("media.keys", &s), Some(Applied::MediaKeys(true)));
+        assert_eq!(
+            effect_of("boosts.enabled", &s),
+            Some(Applied::BoostsEnabled(true))
         );
     }
 

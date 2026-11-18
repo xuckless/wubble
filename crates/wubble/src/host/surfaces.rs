@@ -52,6 +52,22 @@ impl Host {
         if tab == PANEL_TAB {
             return self.on_panel_page_event(event);
         }
+        // The built-ins' answers (`host/builtins.rs`, `host/videos.rs`).
+        if matches!(
+            event,
+            PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. }
+        ) {
+            self.video_smoke_page(&event);
+            if self.media_answer(tab, &event) {
+                return;
+            }
+            self.builtins_answer(tab, &event);
+            self.builtin_smoke_step(crate::builtin_smoke::Input::Page(&event));
+            return;
+        }
+        if matches!(event, PageEvent::DownloadFinished { .. }) {
+            self.builtin_smoke_step(crate::builtin_smoke::Input::Page(&event));
+        }
         let seen = self.checks.page_smoke.is_some().then(|| event.clone());
         let visible = self.shown() == Some(tab);
         let routed = surface::route(event);
@@ -101,6 +117,8 @@ impl Host {
             Routed::Find(e) => self.apply_find(tab, e),
             Routed::Drag { data, allowed } => self.drag_started(tab, data, allowed),
             Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
+            // Picture-in-picture's fullscreen is the video's, in its own window.
+            Routed::Fullscreen(true) if self.pip_tab() == Some(tab) => {}
             Routed::Fullscreen(true) if visible => {
                 self.apply_screen(window, ScreenEvent::PageEntered(tab));
             }
@@ -111,13 +129,17 @@ impl Host {
                 }
             }
             Routed::Fullscreen(false) => {
+                self.pip_fullscreen_left(tab);
                 self.apply_screen(window, ScreenEvent::PageLeft(tab));
             }
             Routed::Muted(muted) => {
                 self.audio.entry(tab).or_default().muted = muted;
                 self.after_change();
             }
-            Routed::Audible(audible) => self.set_busy(tab, Reason::Audible, audible),
+            Routed::Audible(audible) => {
+                self.media_audible(audible);
+                self.set_busy(tab, Reason::Audible, audible);
+            }
             Routed::Frozen { frozen, ok } => self.frozen_answered(tab, frozen, ok),
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
@@ -154,7 +176,7 @@ impl Host {
                 }
             }
             Routed::Pdf { path, text } => {
-                self.downloads.finish_pdf(&path);
+                self.downloads.release(&path);
                 self.toast(window, &text);
             }
             Routed::Clipboard { frame, request } => {
@@ -357,6 +379,12 @@ impl Host {
                 MenuEffect::Run(
                     MenuCommand::Engine(_) | MenuCommand::Separator | MenuCommand::Info,
                 ) => {}
+                MenuEffect::Run(MenuCommand::SetPageTheme(host, theme)) => {
+                    self.set_site_theme(&host, theme)
+                }
+                MenuEffect::Run(MenuCommand::ShotElement(at)) => self.shot_element(tab, at),
+                MenuEffect::Run(MenuCommand::ToggleBoost(id)) => self.toggle_boost(id),
+                MenuEffect::Run(MenuCommand::EditBoost(id)) => self.edit_boost(id),
             }
         }
         answered
@@ -436,6 +464,7 @@ impl Host {
         if self.devtools.dock.tab() == Some(tab) {
             self.dock_event(DockEvent::TabGone(tab));
         }
+        self.builtins_view_gone(tab);
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }
@@ -686,8 +715,26 @@ impl Host {
     // ----- shell helpers
 
     pub(super) fn toast(&mut self, window: &AppWindow, text: &str) {
+        self.toast_replaced();
+        self.show_toast(window, text, "", false);
+    }
+
+    /// A notice with a button (`action`); `sticky`: it stays until answered. What the button
+    /// does is the caller's to remember (`host/videos.rs`).
+    pub(super) fn toast_with(&mut self, text: &str, action: &str, sticky: bool) {
+        self.toast_replaced();
+        if let Some(window) = self.w.window.upgrade() {
+            self.show_toast(&window, text, action, sticky);
+        }
+    }
+
+    fn show_toast(&mut self, window: &AppWindow, text: &str, action: &str, sticky: bool) {
         self.toast_serial = self.toast_serial.wrapping_add(1);
         window.set_toast_text(text.into());
+        window.set_toast_action(action.into());
+        window.set_toast_sticky(sticky);
+        // The one undo window: a button outlives no notice it acts on.
+        window.set_toast_action_shown(wubble_core::sponsor::TOAST_MS as i64);
         window.set_toast_serial(self.toast_serial);
     }
 

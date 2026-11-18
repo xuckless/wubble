@@ -22,6 +22,7 @@
 use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command as ModelCommand, Model};
+use wubble_core::pagetheme::PageTheme;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_core::tabmenu::{self, Facts, Run};
@@ -112,6 +113,14 @@ pub enum Command {
     /// Save a stream the page plays: the tab's detected `item`, its `choice`-th way to save
     /// (`wubble_core::media::select::choices`).
     SaveMedia { item: u32, choice: usize },
+    /// Show this site's pages in this theme (dark mode for pages).
+    SetPageTheme(String, PageTheme),
+    /// Capture the element at this point (physical px, view-relative).
+    ShotElement((i32, i32)),
+    /// Turn this Boost on or off (its store id).
+    ToggleBoost(i64),
+    /// Open the Boost editor on this Boost.
+    EditBoost(i64),
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -437,6 +446,14 @@ const ROWS: &[Row] = &[
     row!(10, "View Page Source", |c| c.page(), always, |_| {
         Command::Perform(Action::ViewSource)
     }),
+    // wubble's screenshots: the element under the pointer (an image, a link, a block).
+    row!(
+        10,
+        "Take Screenshot of Element",
+        |c| !c.editable(),
+        always,
+        |c| { Command::ShotElement(c.at()) }
+    ),
     row!(10, "Inspect", always, always, |c| {
         let (x, y) = c.at();
         Command::Inspect { x, y }
@@ -852,6 +869,32 @@ pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
     out
 }
 
+/// The site menu's page-theme rows (dark mode for pages): one per theme, the current one
+/// marked and not chosen again.
+pub fn page_theme_entries(host: &str, current: PageTheme) -> Vec<Entry> {
+    let mut out = vec![Entry {
+        label: format!("Page theme on {host}"),
+        command: Command::Separator,
+        enabled: false,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
+    }];
+    out.extend(PageTheme::ALL.into_iter().map(|theme| Entry {
+        label: if theme == current {
+            format!("\u{2713} {}", theme.label())
+        } else {
+            format!("    {}", theme.label())
+        },
+        command: Command::SetPageTheme(host.to_owned(), theme),
+        enabled: theme != current,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
+    }));
+    out
+}
+
 /// The menu of one tab, or one the shell opened.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Menu {
@@ -1087,6 +1130,44 @@ mod tests {
         assert!(e[..7].iter().all(|e| !e.enabled));
     }
 
+    #[test]
+    fn the_site_menu_offers_each_page_theme() {
+        let rows = page_theme_entries("a.test", PageTheme::Dark);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].label, "Page theme on a.test");
+        assert!(!rows[0].enabled);
+        assert_eq!(
+            rows[2].command,
+            Command::SetPageTheme("a.test".into(), PageTheme::Dark)
+        );
+        assert!(rows[2].label.starts_with('\u{2713}') && !rows[2].enabled);
+        assert!(rows[1].enabled && rows[3].enabled);
+    }
+
+    #[test]
+    fn any_page_but_a_field_offers_an_element_screenshot() {
+        let menu = ContextMenu {
+            x: 30,
+            y: 40,
+            ..Default::default()
+        };
+        let rows = entries(&menu, NavFlags::default());
+        let shot = rows
+            .iter()
+            .find(|e| e.label == "Take Screenshot of Element")
+            .unwrap();
+        assert_eq!(shot.command, Command::ShotElement((30, 40)));
+        let field = ContextMenu {
+            editable: true,
+            ..menu
+        };
+        assert!(
+            !entries(&field, NavFlags::default())
+                .iter()
+                .any(|e| e.label == "Take Screenshot of Element")
+        );
+    }
+
     fn labels(entries: &[Entry]) -> Vec<&str> {
         entries
             .iter()
@@ -1141,6 +1222,7 @@ mod tests {
                 "Print\u{2026}",
                 "-",
                 "View Page Source",
+                "Take Screenshot of Element",
                 "Inspect"
             ]
         );
@@ -1174,6 +1256,7 @@ mod tests {
                 "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
+                "Take Screenshot of Element",
                 "Inspect"
             ]
         );
@@ -1186,7 +1269,8 @@ mod tests {
             e[2].command,
             Command::CopyText("https://a.test/next".into())
         );
-        assert_eq!(e[4].command, Command::Inspect { x: 10, y: 20 });
+        assert_eq!(e[4].command, Command::ShotElement((10, 20)));
+        assert_eq!(e[5].command, Command::Inspect { x: 10, y: 20 });
     }
 
     #[test]
@@ -1209,6 +1293,7 @@ mod tests {
                 "Save Image As\u{2026}",
                 "Copy Image Address",
                 "-",
+                "Take Screenshot of Element",
                 "Inspect"
             ]
         );
@@ -1229,6 +1314,7 @@ mod tests {
                 "Search the Web for \u{201c}hello\u{201d}",
                 "Print\u{2026}",
                 "-",
+                "Take Screenshot of Element",
                 "Inspect"
             ]
         );
@@ -1351,6 +1437,7 @@ mod tests {
                 "Save Video As\u{2026}",
                 "Copy Video Address",
                 "-",
+                "Take Screenshot of Element",
                 "Inspect"
             ]
         );

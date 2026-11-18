@@ -64,6 +64,9 @@ export component Sidebar inherits Rectangle {
     callback address-popups-requested(length, length);
     in property <bool> address-media-visible: false;
     callback address-media-requested(length, length);
+    in property <bool> address-reader-available: false;
+    in property <bool> address-reader-on: false;
+    callback address-reader-requested();
     in property <[TabItem]> pinned-tabs;
     in property <[TabItem]> tabs;
     in property <[SpaceItem]> spaces;
@@ -284,6 +287,11 @@ export component Sidebar inherits Rectangle {
                 media-visible: root.address-media-visible;
                 media-requested(x, y) => {
                     root.address-media-requested(x, y);
+                }
+                reader-available: root.address-reader-available;
+                reader-on: root.address-reader-on;
+                reader-requested => {
+                    root.address-reader-requested();
                 }
                 compact: root.compact;
                 activated => {

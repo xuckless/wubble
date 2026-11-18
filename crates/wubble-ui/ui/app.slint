@@ -5,7 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
@@ -19,6 +19,10 @@ import { DownloadsPopover } from "components/downloads-popover.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
 import { PreviewCard } from "components/preview-card.slint";
+import { ShotOverlay } from "components/shot-overlay.slint";
+import { ReaderControls } from "components/reader-controls.slint";
+import { VideoControls } from "components/video-controls.slint";
+import { BoostPanel } from "components/boost-panel.slint";
 import { PopupLayer } from "components/popup-layer.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { GlowRing } from "components/glow-ring.slint";
@@ -33,7 +37,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -143,6 +147,23 @@ export component AppWindow inherits Window {
     callback address-popups-requested <=> sidebar.address-popups-requested;
     in property <bool> address-media-visible <=> sidebar.address-media-visible;
     callback address-media-requested <=> sidebar.address-media-requested;
+    // Reader mode: the pill's book (an article), the reader on, its typography (the settings'
+    // values; indexes of their words), and its controls' intents.
+    in property <bool> reader-available <=> sidebar.address-reader-available;
+    in property <bool> reader-on <=> sidebar.address-reader-on;
+    callback reader-toggled <=> sidebar.address-reader-requested;
+    in property <int> reader-size;
+    in property <int> reader-width;
+    in property <int> reader-font;
+    in property <int> reader-theme;
+    callback reader-setting(string, int);
+    // The screenshot region picker over the visible page's pane (content-area px).
+    in property <bool> shot-picking;
+    in property <length> shot-pane-x;
+    in property <length> shot-pane-width;
+    callback shot-picked(length, length, length, length);
+    callback shot-capture(bool);
+    callback shot-cancelled();
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
     in property <[TabItem]> tabs <=> sidebar.tabs;
     in property <[SpaceItem]> spaces <=> sidebar.spaces;
@@ -417,6 +438,25 @@ export component AppWindow inherits Window {
     // A brief notice (zoom level, "Esc to exit"); bump the serial to show it.
     in property <string> toast-text;
     in property <int> toast-serial;
+    // A notice with a button (`Toast`): its label, whether it waits for an answer, and a serial
+    // that takes any notice away.
+    in property <string> toast-action;
+    in property <bool> toast-sticky;
+    in property <int> toast-hide-serial;
+    in property <duration> toast-action-shown;
+    callback toast-acted();
+    callback toast-closed();
+    // The visible page's video controls (wubble_core::video) and the speed menu's rows.
+    in property <VideoView> video;
+    in property <[string]> video-rates;
+    callback video-command(string, float);
+    callback video-hovered(bool);
+    // The Boost editor (wubble_core::boost).
+    in property <BoostView> boost;
+    callback boost-text(string, string);
+    callback boost-number(string, float);
+    callback boost-tint(color);
+    callback boost-act(string);
     in property <PopupView> popup;
     in property <image> popup-frame;
 
@@ -486,6 +526,12 @@ export component AppWindow inherits Window {
     }
     changed downloads-open => {
         root.settle-focus();
+    }
+    // The screenshot overlay took the keys; closed, they go back.
+    changed shot-picking => {
+        if !root.shot-picking {
+            root.settle-focus();
+        }
     }
     changed find-focus => {
         if root.find.open && !root.overlay-open {
@@ -678,6 +724,16 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+            VideoControls {
+                video: root.video;
+                rates: root.video-rates;
+                command(name, value) => {
+                    root.video-command(name, value);
+                }
+                hovered(over) => {
+                    root.video-hovered(over);
+                }
+            }
             find-ui := FindBar {
                 x: parent.width - self.width - Spacing.s3;
                 y: Spacing.s3;
@@ -701,11 +757,68 @@ export component AppWindow inherits Window {
                 address: root.preview.address;
                 thumb: root.preview.thumb;
             }
+            ReaderControls {
+                x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
+                y: parent.height - self.height - Spacing.s4;
+                open: root.reader-on;
+                size: root.reader-size;
+                column: root.reader-width;
+                font: root.reader-font;
+                theme: root.reader-theme;
+                setting(key, value) => {
+                    root.reader-setting(key, value);
+                }
+                closed => {
+                    root.reader-toggled();
+                }
+            }
+            ShotOverlay {
+                active: root.shot-picking;
+                pane-x: root.shot-pane-x;
+                pane-width: root.shot-pane-width;
+                picked(ax, ay, bx, by) => {
+                    root.shot-picked(ax, ay, bx, by);
+                }
+                capture(full) => {
+                    root.shot-capture(full);
+                }
+                cancelled => {
+                    root.shot-cancelled();
+                }
+            }
+            BoostPanel {
+                x: parent.width - self.width - Spacing.s3;
+                y: Spacing.s3;
+                height: parent.height - 2 * Spacing.s3;
+                view: root.boost;
+                text-edited(field, text) => {
+                    root.boost-text(field, text);
+                }
+                number(field, value) => {
+                    root.boost-number(field, value);
+                }
+                tint(c) => {
+                    root.boost-tint(c);
+                }
+                act(name) => {
+                    root.boost-act(name);
+                }
+            }
             Toast {
                 x: (parent.width - self.width) / 2;
                 y: Spacing.s4;
                 text: root.toast-text;
                 serial: root.toast-serial;
+                action: root.toast-action;
+                sticky: root.toast-sticky;
+                hide-serial: root.toast-hide-serial;
+                action-shown: root.toast-action-shown;
+                acted => {
+                    root.toast-acted();
+                }
+                closed => {
+                    root.toast-closed();
+                }
             }
             // Over the page and its find bar, under the dialog: the page's error.
             error-ui := ErrorPanel {

@@ -30,6 +30,7 @@ use winit::keyboard::PhysicalKey;
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::{EngineError, RequestMode};
+use crate::cdp::{self, CdpId, EvalId};
 use crate::download::{self, Download, DownloadEffect, DownloadInput};
 use crate::drag::{self, DragSource, DragSourceInput};
 use crate::filter::{ContentFilter, ResponseObserver};
@@ -45,14 +46,6 @@ use crate::page::{
 };
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
-
-/// Script ids are unique per process, so a view never mistakes another
-/// script's answer for its probe's.
-fn next_probe_id() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
 
 /// Where a view sits in the host window (both physical pixels). The window
 /// stands in for the screen, so Blink can place popups such as `<select>`
@@ -237,13 +230,15 @@ pub struct View {
     muted: bool,
     audio: AudioProbe,
     /// Freeze requests awaiting their CDP reply.
-    cdp: crate::cdp::Pending,
+    pending: crate::cdp::Pending,
     zoom: Zoom,
     drag: DragSource,
     /// Asked for a page script on each main-frame commit.
     filter: Option<Arc<dyn ContentFilter>>,
     /// Icon downloads CEF finished, moved to `page` by [`Self::drain_events`].
     favicons: crate::favicon::Sink,
+    /// The scripts every new document runs first ([`Self::set_document_scripts`]).
+    doc_scripts: cdp::DocScripts,
 }
 
 /// The second frame stream: the popup widget's newest frame and where to
@@ -308,10 +303,11 @@ impl View {
             fullscreen: Fullscreen::default(),
             muted: false,
             audio: AudioProbe::default(),
-            cdp: Default::default(),
+            pending: Default::default(),
             zoom: Zoom::default(),
             drag: DragSource::default(),
             favicons: Default::default(),
+            doc_scripts: cdp::DocScripts::default(),
         })
     }
 
@@ -405,13 +401,13 @@ impl View {
         if !self.is_open() {
             return;
         }
-        let (id, message) = self.cdp.request(frozen);
+        let (id, message) = self.pending.request(frozen);
         if let Err(e) = self.producer.send_devtools_message(&message) {
             eprintln!(
                 "wubble-engine: view {}: freeze {frozen}: {e}",
                 self.browser_id
             );
-            self.cdp.cancel(id);
+            self.pending.cancel(id);
             self.page.push(PageEvent::Frozen { frozen, ok: false });
         }
     }
@@ -423,10 +419,10 @@ impl View {
             self.page.push(PageEvent::TargetId(Err(())));
             return;
         }
-        let (id, message) = self.cdp.request_target_id();
+        let (id, message) = self.pending.request_target_id();
         if let Err(e) = self.producer.send_devtools_message(&message) {
             eprintln!("wubble-engine: view {}: target id: {e}", self.browser_id);
-            self.cdp.cancel(id);
+            self.pending.cancel(id);
             self.page.push(PageEvent::TargetId(Err(())));
         }
     }
@@ -663,20 +659,40 @@ impl View {
                         self.emit_page(event, mode);
                     }
                 }
+                // The audible probe's answer, or one of `eval`'s: one id counter for both.
                 CefSurfaceEvent::ScriptCompleted { id, result } => {
-                    let audible = result.ok().and_then(|json| json.trim().parse().ok());
-                    self.apply_probe(ProbeInput::Answered {
-                        id: id.get(),
-                        audible,
-                    });
+                    let id = id.get();
+                    if matches!(self.audio, AudioProbe::Waiting { id: w, .. } if w == id) {
+                        let audible = result.ok().and_then(|json| json.trim().parse().ok());
+                        self.apply_probe(ProbeInput::Answered { id, audible });
+                    } else {
+                        self.page.push(PageEvent::EvalResult {
+                            id: EvalId(id),
+                            result,
+                        });
+                    }
                 }
                 _ => {}
             }
         }
-        while !self.cdp.is_empty()
-            && let Some(message) = self.producer.poll_devtools_message()
-        {
-            self.page.extend(self.cdp.reply(&message));
+        while let Some(text) = self.producer.poll_devtools_message() {
+            // the engine's own requests first (freeze, target id), then `View::cdp`'s calls
+            if let Some(event) = self.pending.reply(&text) {
+                self.page.push(event);
+            } else if let Some((id, result)) = cdp::reply(&text) {
+                match self.doc_scripts.reply(id, &result) {
+                    Some(calls) => {
+                        if let Err(e) = &result {
+                            eprintln!(
+                                "wubble-engine: view {}: page script refused: {e}",
+                                self.browser_id
+                            );
+                        }
+                        self.send_doc_calls(calls)
+                    }
+                    None => self.page.push(PageEvent::CdpReply { id, result }),
+                }
+            }
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
             self.apply_nav(NavInput::Cursor(shape.into()));
@@ -1066,7 +1082,7 @@ impl View {
         if !self.is_open() || !self.audio.idle() {
             return;
         }
-        let id = next_probe_id();
+        let id = cdp::next_id();
         match self
             .producer
             .request_script_result(welding::WebRequestId::new(id), media::AUDIBLE_PROBE)
@@ -1077,6 +1093,79 @@ impl View {
                 "wubble-engine: view {}: audible probe: {e}",
                 self.browser_id
             ),
+        }
+    }
+
+    /// Sends one DevTools protocol call to this page (`cdp.rs`); its answer
+    /// arrives as [`PageEvent::CdpReply`] with the id returned. `None` when
+    /// the view cannot take it (closing, or CEF refused the message).
+    pub fn cdp(&mut self, method: &str, params: &serde_json::Value) -> Option<CdpId> {
+        if !self.is_open() {
+            return None;
+        }
+        let id = CdpId(cdp::next_id());
+        match self
+            .producer
+            .send_devtools_message(&cdp::message(id, method, params))
+        {
+            Ok(()) => Some(id),
+            Err(e) => {
+                eprintln!("wubble-engine: view {}: {method}: {e}", self.browser_id);
+                None
+            }
+        }
+    }
+
+    /// Runs `script`, a JavaScript expression, in the page's main frame; its
+    /// value comes back as JSON text in [`PageEvent::EvalResult`] with the id
+    /// returned. `None` when there is no main frame to run it in yet.
+    pub fn eval(&mut self, script: &str) -> Option<EvalId> {
+        if !self.is_open() {
+            return None;
+        }
+        let id = cdp::next_id();
+        // A newline, so a trailing line comment cannot swallow the wrapper's `)`.
+        let script = format!("{script}\n");
+        match self
+            .producer
+            .request_script_result(welding::WebRequestId::new(id), &script)
+        {
+            Ok(()) => Some(EvalId(id)),
+            Err(e) => {
+                eprintln!("wubble-engine: view {}: script: {e}", self.browser_id);
+                None
+            }
+        }
+    }
+
+    /// Every new document of this view (each frame) runs `sources` first, before its own
+    /// scripts, replacing what an earlier call set (`cdp::DocScripts`). The page now on screen
+    /// is not touched: [`Self::run_script`] that.
+    pub fn set_document_scripts(&mut self, sources: &[String]) {
+        let calls = self.doc_scripts.set(sources);
+        self.send_doc_calls(calls);
+    }
+
+    fn send_doc_calls(&mut self, calls: Vec<cdp::DocCall>) {
+        for call in calls {
+            let (method, params) = call.method();
+            if let Some(id) = self.cdp(method, &params) {
+                self.doc_scripts.sent(id, &call);
+            }
+        }
+    }
+
+    /// Runs `script` (statements) in the page's main frame, with no answer.
+    pub fn run_script(&mut self, script: &str) {
+        if !self.is_open() {
+            return;
+        }
+        let url = self.nav.page.url.clone();
+        if let Err(e) = self.producer.execute_script(script, &url) {
+            eprintln!(
+                "wubble-engine: view {}: script not run: {e}",
+                self.browser_id
+            );
         }
     }
 
@@ -1104,19 +1193,6 @@ impl View {
     pub fn answer_clipboard(&mut self, frame: &str, text: &str, read: Option<u32>) {
         let id = read.map(|r| r.to_string()).unwrap_or_default();
         self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{id}\n{text}"));
-    }
-
-    /// Runs `script` in the page's main frame; nothing comes back but what the
-    /// page itself does (its title, say). For smokes.
-    pub fn run_script(&mut self, script: &str) {
-        if self.is_open()
-            && let Err(e) = self.producer.execute_script(script, "about:wubble-smoke")
-        {
-            eprintln!(
-                "wubble-engine: view {}: script not run: {e}",
-                self.browser_id
-            );
-        }
     }
 
     // ── Editing, IME, drags, popup frames.
@@ -1709,7 +1785,7 @@ fn new_producer(
             handle_auth_challenges: true,
             ask_download_path: true,
             request_filter,
-            // CDP for `View::set_frozen`; nothing subscribes to events, so the channel stays quiet.
+            // CDP: `View::set_frozen`, `View::cdp` (page dark mode, screenshots).
             devtools_protocol: true,
             response_observer,
             ..welding::CefSurfaceConfig::default()

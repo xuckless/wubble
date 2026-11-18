@@ -1,0 +1,232 @@
+import { Palette, Spacing, Fonts, Type, Motion, Radius } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { GlassTier, BoostView } from "model.slint";
+import { IconButton } from "nav-buttons.slint";
+import { IconPaths } from "icon.slint";
+import { Field, Segmented, TextButton } from "settings.slint";
+import { Toggle } from "controls/toggle.slint";
+import { Slider } from "controls/slider.slint";
+
+// A code area: monospace text on the track colour, several lines.
+component CodeField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    callback edited(string);
+    height: Shell.boost-code-height;
+    border-radius: Radius.sm;
+    background: Shell.track;
+    clip: true;
+    Text {
+        x: Spacing.s2;
+        y: Spacing.s2;
+        text: root.placeholder;
+        visible: input.text == "";
+        color: Palette.haze;
+        font-family: Fonts.mono;
+        font-size: Type.label.size;
+    }
+    input := TextInput {
+        x: Spacing.s2;
+        y: Spacing.s2;
+        width: parent.width - 2 * Spacing.s2;
+        height: parent.height - 2 * Spacing.s2;
+        color: Palette.ink;
+        font-family: Fonts.mono;
+        font-size: Type.label.size;
+        single-line: false;
+        wrap: word-wrap;
+        edited => {
+            root.edited(self.text);
+        }
+    }
+}
+
+component Label inherits Text {
+    color: Palette.mist;
+    font-family: Fonts.ui;
+    font-size: Type.label.size;
+    font-weight: Type.label.weight;
+}
+
+// The Boost editor (wubble_core::boost), docked at the page's right edge on thick glass: the
+// site pattern, CSS and a script (monospace), when the script runs, a tint and its strength, a
+// font, on/off, and the element zapper. Written from scratch: the design repo has no editor;
+// built from the settings page's Field, Segmented, Slider and Toggle and the house's icon and
+// text buttons. CSS applies to the page as it is typed; a script on Done (the page reloads).
+// Intents only: `text-edited(field, text)` for name, site, css, js, font; `number(field, value)`
+// for at and strength; `tint(colour)`; `act(name)` for enabled, zap, done, delete, close.
+export component BoostPanel inherits Rectangle {
+    in property <BoostView> view;
+    // The tint swatches (wubble's own palette: the Space colours).
+    in property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.amber, Palette.abyss];
+    callback text-edited(string, string);
+    callback number(string, float);
+    callback tint(color);
+    callback act(string);
+
+    visible: root.view.open;
+    width: Shell.boost-panel-width;
+
+    changed view => {
+        // The texts reload only when the host replaced them.
+        if root.loaded != root.view.serial {
+            root.loaded = root.view.serial;
+            name.text = root.view.name;
+            site.text = root.view.site;
+            css.text = root.view.css;
+            js.text = root.view.js;
+            font.text = root.view.font;
+        }
+    }
+    property <int> loaded: -1;
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        TouchArea { }
+        VerticalLayout {
+            padding: Spacing.s3;
+            spacing: Spacing.s2;
+            HorizontalLayout {
+                spacing: Spacing.s2;
+                Text {
+                    text: root.view.is-new ? "New Boost" : "Boost";
+                    color: Palette.ink;
+                    font-family: Fonts.ui;
+                    font-size: Type.heading.size;
+                    font-weight: Type.heading.weight;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Toggle {
+                    y: (parent.height - self.height) / 2;
+                    on: root.view.enabled;
+                    toggled => {
+                        root.act("enabled");
+                    }
+                }
+                IconButton {
+                    icon-path: IconPaths.close;
+                    clicked => {
+                        root.act("close");
+                    }
+                }
+            }
+            name := Field {
+                placeholder: "Name";
+                edited(t) => {
+                    root.text-edited("name", t);
+                }
+            }
+            Label {
+                text: "Sites (example.com, *.example.com, https://example.com/docs/*)";
+            }
+            site := Field {
+                placeholder: "example.com";
+                edited(t) => {
+                    root.text-edited("site", t);
+                }
+            }
+            if root.view.error != "": Text {
+                text: root.view.error;
+                color: Palette.blush;
+                font-family: Fonts.ui;
+                font-size: Type.label.size;
+            }
+            HorizontalLayout {
+                Label {
+                    text: "CSS";
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                TextButton {
+                    text: root.view.zapping ? "Click an element\u{2026}" : "Zap an element";
+                    clicked => {
+                        root.act("zap");
+                    }
+                }
+            }
+            css := CodeField {
+                placeholder: "body { font-size: 18px }";
+                edited(t) => {
+                    root.text-edited("css", t);
+                }
+            }
+            HorizontalLayout {
+                Label {
+                    text: "Script (runs with the page's rights)";
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+            js := CodeField {
+                placeholder: "document.title = 'boosted'";
+                edited(t) => {
+                    root.text-edited("js", t);
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                Segmented {
+                    labels: ["At start", "When ready"];
+                    selected: root.view.at;
+                    chosen(i) => {
+                        root.number("at", i);
+                    }
+                }
+            }
+            Label {
+                text: "Tint";
+            }
+            HorizontalLayout {
+                spacing: Spacing.s1;
+                alignment: start;
+                for c in root.swatches: Rectangle {
+                    width: Shell.boost-swatch;
+                    height: Shell.boost-swatch;
+                    border-radius: Shell.boost-swatch / 2;
+                    background: c;
+                    border-width: root.view.tint-on && root.view.tint == c ? Shell.boost-swatch-ring : Shell.boost-swatch-rim;
+                    border-color: root.view.tint-on && root.view.tint == c ? Palette.ink : Palette.ink.transparentize(0.8);
+                    TouchArea {
+                        clicked => {
+                            root.tint(c);
+                        }
+                    }
+                }
+                Slider {
+                    min: 0;
+                    max: 100;
+                    value: root.view.strength;
+                    set(v) => {
+                        root.number("strength", v);
+                    }
+                }
+            }
+            font := Field {
+                placeholder: "Font (Geist, serif, ...)";
+                edited(t) => {
+                    root.text-edited("font", t);
+                }
+            }
+            HorizontalLayout {
+                spacing: Spacing.s2;
+                alignment: end;
+                if !root.view.is-new: TextButton {
+                    text: "Delete";
+                    clicked => {
+                        root.act("delete");
+                    }
+                }
+                TextButton {
+                    text: "Done";
+                    clicked => {
+                        root.act("done");
+                    }
+                }
+            }
+        }
+    }
+}

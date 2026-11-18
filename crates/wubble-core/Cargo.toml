@@ -22,3 +22,5 @@ m3u8-rs = "6.0.1"
 dash-mpd-core = "0.1.0"
 aes = "0.9.4"
 cbc = { version = "0.2.1", features = ["alloc"] }
+# The SponsorBlock lookup's hash prefix (`sponsor`); pure Rust, already in Cargo.lock (MIT OR Apache-2.0).
+sha2 = "0.11"

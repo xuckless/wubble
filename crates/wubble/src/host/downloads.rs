@@ -35,8 +35,9 @@ pub(super) struct Downloads {
     list: Vec<DownloadEntry>,
     next_id: i64,
     inflight: HashMap<DownloadId, Inflight>,
-    /// PDFs being printed: their paths are reserved until `PdfPrinted` arrives.
-    pdfs: HashSet<PathBuf>,
+    /// Files wubble itself is writing (a print's PDF until `PdfPrinted`, a screenshot until
+    /// it is saved): their paths are reserved meanwhile.
+    reserved: HashSet<PathBuf>,
     /// Prints started this run.
     printed: usize,
     /// Entries whose progress is not yet stored (written on the tick).
@@ -58,13 +59,18 @@ impl Downloads {
     fn unique_path(&self, suggested: &str) -> Option<PathBuf> {
         let dir = self.dir.as_deref()?;
         download::unique_name(dir, suggested, |p: &Path| {
-            p.exists() || self.pdfs.contains(p) || self.inflight.values().any(|f| f.path == p)
+            p.exists() || self.reserved.contains(p) || self.inflight.values().any(|f| f.path == p)
         })
     }
 
-    /// The print to `path` ended: its name is free to reuse.
-    pub(super) fn finish_pdf(&mut self, path: &Path) {
-        self.pdfs.remove(path);
+    /// Holds `path` for a file wubble is about to write.
+    pub(super) fn reserve(&mut self, path: &Path) {
+        self.reserved.insert(path.to_path_buf());
+    }
+
+    /// The file at `path` is written (or not): its name is free to reuse.
+    pub(super) fn release(&mut self, path: &Path) {
+        self.reserved.remove(path);
     }
 
     /// Downloads listed (this run's and earlier ones) and prints started this run.
@@ -108,7 +114,7 @@ impl Downloads {
 
     /// A running download or print holds `path`.
     pub(super) fn reserved(&self, path: &Path) -> bool {
-        self.pdfs.contains(path) || self.inflight.values().any(|f| f.path == path)
+        self.reserved.contains(path) || self.inflight.values().any(|f| f.path == path)
     }
 }
 
@@ -203,8 +209,17 @@ impl Host {
     }
 
     /// Ctrl+P: saves `tab`'s page as a PDF in the downloads folder, named after its title. The
-    /// result arrives as `PageEvent::PdfPrinted`, which toasts it (`Routed::Pdf`).
+    /// result arrives as `PageEvent::PdfPrinted`, which toasts it (`Routed::Pdf`). A PDF in
+    /// Chromium's viewer is saved as itself, a download of its address: printing the viewer
+    /// gives a blank page, and CEF has no print dialog here for the viewer's own button.
     pub(super) fn print(&mut self, tab: TabId) {
+        if self.is_pdf(tab) {
+            let url = self.committed.get(&tab).cloned();
+            if let (Some(url), Some(view)) = (url, self.tab_view(tab)) {
+                view.start_download(&url);
+            }
+            return;
+        }
         let title = self
             .model
             .tabs
@@ -215,7 +230,7 @@ impl Host {
         let failure = match self.download_path(&format!("{title}.pdf")) {
             Some(path) => match self.tab_view(tab).map(|view| view.print_to_pdf(&path)) {
                 Some(Ok(())) => {
-                    self.downloads.pdfs.insert(path);
+                    self.downloads.reserve(&path);
                     self.downloads.printed += 1;
                     return;
                 }
@@ -230,7 +245,7 @@ impl Host {
     }
 
     /// A unique path in the downloads directory, created if needed.
-    fn download_path(&self, suggested: &str) -> Option<PathBuf> {
+    pub(super) fn download_path(&self, suggested: &str) -> Option<PathBuf> {
         let dir = self.downloads.dir.as_deref()?;
         if let Err(e) = std::fs::create_dir_all(dir) {
             eprintln!("wubble: downloads folder {}: {e}", dir.display());
@@ -513,10 +528,10 @@ mod tests {
     fn a_pdf_being_printed_keeps_its_name() {
         let mut d = Downloads::new(Some("/wubble-test-no-such-dir".into()), vec![]);
         let first = d.unique_path("Page.pdf").unwrap();
-        d.pdfs.insert(first.clone());
+        d.reserve(&first);
         let second = d.unique_path("Page.pdf").unwrap();
         assert_ne!(first, second);
-        d.finish_pdf(&first);
+        d.release(&first);
         assert_eq!(d.unique_path("Page.pdf"), Some(first));
     }
 

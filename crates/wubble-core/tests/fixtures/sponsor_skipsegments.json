@@ -1,0 +1,21 @@
+[
+  {
+    "videoID": "aaaaaaaaaaa",
+    "hash": "5f6b",
+    "segments": [
+      {"segment": [1.0, 2.0], "UUID": "other", "category": "sponsor", "actionType": "skip", "locked": 0, "votes": 3, "videoDuration": 60.0, "description": ""}
+    ]
+  },
+  {
+    "videoID": "dQw4w9WgXcQ",
+    "segments": [
+      {"segment": [10.0, 20.5], "UUID": "u1", "category": "sponsor", "actionType": "skip", "locked": 1, "votes": 12, "videoDuration": 212.0, "description": ""},
+      {"segment": [20.0, 30.0], "UUID": "u2", "category": "selfpromo", "actionType": "skip", "locked": 0, "votes": 2, "videoDuration": 212.0, "description": ""},
+      {"segment": [40.0, 40.0], "UUID": "zero", "category": "sponsor", "actionType": "skip", "locked": 0, "votes": 0, "videoDuration": 212.0, "description": ""},
+      {"segment": [50.0, 45.0], "UUID": "backwards", "category": "sponsor", "actionType": "skip", "locked": 0, "votes": 0, "videoDuration": 212.0, "description": ""},
+      {"segment": [-3.0, 4.0], "UUID": "negative", "category": "sponsor", "actionType": "skip", "locked": 0, "votes": 0, "videoDuration": 212.0, "description": ""},
+      {"segment": ["x", 4.0], "UUID": "text", "category": "sponsor", "actionType": "skip", "locked": 0, "votes": 0, "videoDuration": 212.0, "description": ""},
+      {"segment": [0.0, 4.0], "UUID": "u3", "category": "intro", "actionType": "skip", "locked": 0, "votes": 5, "videoDuration": 0, "description": ""}
+    ]
+  }
+]

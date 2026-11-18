@@ -4,6 +4,7 @@ mod bar;
 mod bind;
 mod block_smoke;
 mod blocking;
+mod builtin_smoke;
 mod chooser;
 mod cli;
 mod clipboard;
@@ -12,6 +13,7 @@ mod ime;
 mod input;
 mod instance;
 mod measure;
+mod media_keys;
 mod media_smoke;
 mod menu;
 mod nav_smoke;
@@ -19,6 +21,7 @@ mod page_drag;
 mod page_error;
 mod page_smoke;
 mod pages_smoke;
+mod pagescripts;
 mod panes;
 mod parity;
 mod perform;
@@ -32,11 +35,14 @@ mod session_smoke;
 mod settings_smoke;
 mod shell;
 mod shot;
+mod shot_io;
 mod split_smoke;
+mod sponsor_net;
 mod suggest_fx;
 mod surface;
 mod tabs_smoke;
 mod ui_loop;
+mod video_smoke;
 mod windows_smoke;
 
 use std::cell::RefCell;
@@ -88,6 +94,11 @@ pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
+/// `--smoke builtins`' pages: an article (reader, dark mode, link hints), a page 3000 CSS px
+/// tall (screenshots) and a one-page PDF with the word "needle" (Chromium's viewer).
+pub const ARTICLE_PAGE: &str = include_str!("../assets/article.html");
+pub const TALL_PAGE: &str = include_str!("../assets/tall.html");
+const DOC_PDF: &[u8] = include_bytes!("../assets/doc.pdf");
 
 /// `--smoke tabs`'s pages, in tab order.
 pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
@@ -95,6 +106,10 @@ pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
 /// How often hidden tabs are checked against the sleep policy. Coarse: the
 /// policy's delays are a minute and more.
 const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
+
+/// How often the pages on screen are asked about their video (`host/videos.rs`): the controls
+/// follow the video's place and time at this pace.
+const MEDIA_POLL_EVERY: Duration = Duration::from_millis(250);
 
 /// How often live tabs are asked whether they play sound (the speaker glyph;
 /// CEF has no audible callback, see `wubble_engine::media`).
@@ -386,6 +401,56 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: media FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Builtins) => {
+            match with_smoke_dir(|config, dir| run(Mode::Builtins, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    builtins_passed: Some(what),
+                    ..
+                }) => {
+                    println!("smoke: builtins ok ({what})");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: builtins FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: builtins FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(smoke @ (Smoke::Video | Smoke::Boost)) => {
+            let (mode, name) = match smoke {
+                Smoke::Video => (Mode::Video, "video"),
+                _ => (Mode::Boost, "boost"),
+            };
+            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    video_passed: Some(_),
+                    ..
+                }) => {
+                    println!("smoke: {name} ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: {name} FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: {name} FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -711,6 +776,10 @@ struct Outcome {
     autofill_passed: bool,
     /// `--smoke media` reached its end.
     media_passed: bool,
+    /// `--smoke builtins` passed, with what it saw last.
+    builtins_passed: Option<String>,
+    /// `--smoke video` or `--smoke boost` passed.
+    video_passed: Option<String>,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
     /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
     measured: Option<Result<(), String>>,
@@ -749,6 +818,12 @@ enum Mode {
     Autofill,
     /// `--smoke media`.
     Media,
+    /// `--smoke builtins`.
+    Builtins,
+    /// `--smoke video`.
+    Video,
+    /// `--smoke boost`.
+    Boost,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -1186,6 +1261,16 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_bookmark_move_requested(move |id| {
         with_host_in(win, |host| host.bookmark_move_requested(id))
     });
+    // The built-ins' own UI: the reader's glyph and controls, the screenshot overlay.
+    window.on_reader_toggled(move || with_host_in(win, Host::reader_toggled));
+    window.on_reader_setting(move |key, value| {
+        with_host_in(win, |host| host.reader_setting(&key, value))
+    });
+    window.on_shot_picked(move |ax, ay, bx, by| {
+        with_host_in(win, |host| host.shot_picked((ax, ay), (bx, by)))
+    });
+    window.on_shot_capture(move |full| with_host_in(win, |host| host.shot_overlay_capture(full)));
+    window.on_shot_cancelled(move || with_host_in(win, Host::shot_cancelled));
     window.on_bookmark_deleted(move |id| with_host_in(win, |host| host.bookmark_deleted(id)));
     window.on_bookmark_folder_requested(move || with_host_in(win, Host::bookmark_folder_requested));
     window.on_bookmark_sheet_answered(move |accept, remove, name, folder| {
@@ -1215,6 +1300,20 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     });
     window
         .on_passwords_import_requested(move || with_host_in(win, Host::passwords_import_requested));
+    // The video controls, the toast's button and the Boost editor.
+    window.on_video_command(move |name, value| {
+        with_host_in(win, |host| host.video_command(&name, value))
+    });
+    window.on_video_hovered(move |over| with_host_in(win, |host| host.video_hovered(over)));
+    window.on_toast_acted(move || with_host_in(win, Host::toast_acted));
+    window.on_toast_closed(move || with_host_in(win, Host::toast_closed));
+    window
+        .on_boost_text(move |field, text| with_host_in(win, |host| host.boost_text(&field, &text)));
+    window.on_boost_number(move |field, value| {
+        with_host_in(win, |host| host.boost_number(&field, value))
+    });
+    window.on_boost_tint(move |colour| with_host_in(win, |host| host.boost_tint(colour)));
+    window.on_boost_act(move |name| with_host_in(win, |host| host.boost_act(&name)));
 }
 
 fn run(
@@ -1233,6 +1332,10 @@ fn run(
     // `--smoke media`'s fixtures, on a loopback port.
     let media_port = matches!(mode, Mode::Media)
         .then(media_smoke::serve)
+        .transpose()?;
+    // `--smoke video`'s and `--smoke boost`'s pages and fake endpoint, on a loopback port.
+    let video_server = matches!(mode, Mode::Video | Mode::Boost)
+        .then(video_smoke::serve)
         .transpose()?;
     let db = Profile {
         dir: profile.into(),
@@ -1287,6 +1390,9 @@ fn run(
         autofill_smoke: None,
         windows_smoke: None,
         media_smoke: None,
+        builtin_smoke: None,
+        video_smoke: None,
+        sponsor_endpoint: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -1395,6 +1501,44 @@ fn run(
                 ..none
             },
         ),
+        Mode::Builtins => {
+            // A file:// PDF: Chromium's viewer, as for a downloaded one.
+            let pdf = profile.join("doc.pdf");
+            std::fs::write(&pdf, DOC_PDF)?;
+            (
+                Some(page_url(ARTICLE_PAGE)),
+                Checks {
+                    builtin_smoke: Some(builtin_smoke::BuiltinSmoke::new(
+                        page_url(TALL_PAGE),
+                        format!("file://{}", pdf.display()),
+                    )),
+                    ..none
+                },
+            )
+        }
+        Mode::Video | Mode::Boost => {
+            let (port, requests) = video_server.clone().ok_or("no smoke server")?;
+            let base = format!("http://127.0.0.1:{port}");
+            let (page, smoke) = if matches!(mode, Mode::Video) {
+                (
+                    "video.html",
+                    video_smoke::VideoSmoke::video(base.clone(), requests),
+                )
+            } else {
+                (
+                    "boost.html",
+                    video_smoke::VideoSmoke::boost(base.clone(), requests),
+                )
+            };
+            (
+                Some(format!("{base}/{page}")),
+                Checks {
+                    video_smoke: Some(smoke),
+                    sponsor_endpoint: Some(base),
+                    ..none
+                },
+            )
+        }
         Mode::Session(phase) => (
             None,
             Checks {
@@ -1486,7 +1630,11 @@ fn run(
     // Smokes drive the lifecycle themselves, never by wall-clock time.
     let lifecycle = slint::Timer::default();
     let audible = slint::Timer::default();
+    let media = slint::Timer::default();
     if browsing {
+        media.start(slint::TimerMode::Repeated, MEDIA_POLL_EVERY, || {
+            with_host(Host::poll_media)
+        });
         lifecycle.start(slint::TimerMode::Repeated, LIFECYCLE_TICK, || {
             with_host(|host| host.tick(Instant::now()))
         });
@@ -1530,6 +1678,7 @@ fn run(
         });
     drop(lifecycle);
     drop(audible);
+    drop(media);
     drop(window);
     let mut host = HOST.take().ok_or("the host went missing")?;
     host.shutdown(ui);
@@ -1551,6 +1700,8 @@ fn run(
         blocked_seen: host.blocked_seen,
         autofill_passed: host.autofill_passed,
         media_passed: host.media_passed,
+        builtins_passed: host.builtins_passed.take(),
+        video_passed: host.video_passed.take(),
         measured,
     })
 }

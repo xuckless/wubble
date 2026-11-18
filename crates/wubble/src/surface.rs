@@ -455,6 +455,8 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::CertificateError { id, url, code } => Routed::Cert { id, url, code },
         PageEvent::FrameMessage { frame, text } => Routed::Frame { frame, text },
         PageEvent::Probe { frame, report } => Routed::Probe { frame, report },
+        // The built-ins' answers: `host/builtins.rs` takes them before routing.
+        PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. } => Routed::Ignore,
         PageEvent::LoadFailed { url, code, .. } => {
             Routed::Error(ErrorEvent::LoadFailed { url, code })
         }

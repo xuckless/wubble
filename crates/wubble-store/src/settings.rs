@@ -13,8 +13,11 @@ use std::collections::HashMap;
 use wubble_core::apply::GlassSetting;
 use wubble_core::archive::ArchiveAfter;
 use wubble_core::omnibox::SearchEngine;
+use wubble_core::pagetheme::PageTheme;
+use wubble_core::reader::{ReaderFont, ReaderTheme, ReaderWidth};
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
+use wubble_core::shot::ShotOutput;
 use wubble_core::zoom::ZoomTable;
 
 use crate::{Result, Store};
@@ -78,21 +81,37 @@ impl Codec for Option<SearchEngine> {
     }
 }
 
-impl Codec for SidebarMode {
-    fn encode(&self) -> String {
-        self.id().into()
-    }
-    fn decode(s: &str) -> Option<Self> {
-        SidebarMode::from_id(s)
-    }
+/// A choice stored as its word (`id`, `from_id`).
+macro_rules! word_codec {
+    ($($ty:ty),* $(,)?) => {$(
+        impl Codec for $ty {
+            fn encode(&self) -> String {
+                self.id().into()
+            }
+            fn decode(s: &str) -> Option<Self> {
+                <$ty>::from_id(s)
+            }
+        }
+    )*};
 }
 
-impl Codec for GlassSetting {
+word_codec!(
+    SidebarMode,
+    GlassSetting,
+    PageTheme,
+    ReaderWidth,
+    ReaderFont,
+    ReaderTheme,
+    ShotOutput,
+);
+
+/// A word of a choice the store has no type for (the core table checks it).
+impl Codec for String {
     fn encode(&self) -> String {
-        self.id().into()
+        self.clone()
     }
     fn decode(s: &str) -> Option<Self> {
-        GlassSetting::from_id(s)
+        Some(s.to_owned())
     }
 }
 
@@ -102,16 +121,6 @@ impl Codec for ArchiveAfter {
     }
     fn decode(s: &str) -> Option<Self> {
         ArchiveAfter::from_id(s)
-    }
-}
-
-/// Text as it is (a choice's word, a folder path); the setting's kind validates it.
-impl Codec for String {
-    fn encode(&self) -> String {
-        self.clone()
-    }
-    fn decode(s: &str) -> Option<Self> {
-        Some(s.to_owned())
     }
 }
 
@@ -228,6 +237,27 @@ settings! {
     MediaAskEachTime: bool = defs::MEDIA_ASK_EACH_TIME;
     MediaConcurrency: u32 = defs::MEDIA_CONCURRENCY;
     MediaMinBytes: u32 = defs::MEDIA_MIN_BYTES;
+    PageThemeDefault: PageTheme = defs::PAGE_THEME;
+    /// Per-site page themes (`wubble_core::pagetheme`): hosts at the default are absent.
+    PageThemeSites: ZoomTable = defs::PAGE_THEME_SITES;
+    ReaderDetect: bool = defs::READER_DETECT;
+    ReaderSize: u32 = defs::READER_SIZE;
+    ReaderWidthSetting: ReaderWidth = defs::READER_WIDTH;
+    ReaderFontSetting: ReaderFont = defs::READER_FONT;
+    ReaderThemeSetting: ReaderTheme = defs::READER_THEME;
+    ScreenshotOutput: ShotOutput = defs::SCREENSHOT_OUTPUT;
+    HintsAlphabet: String = defs::HINTS_ALPHABET;
+    VideoControls: bool = defs::VIDEO_CONTROLS;
+    /// Per-site video speed (`wubble_core::video`): sites at normal speed are absent.
+    VideoRates: ZoomTable = defs::VIDEO_RATES;
+    MediaKeys: bool = defs::MEDIA_KEYS;
+    PipOnTabSwitch: bool = defs::PIP_ON_TAB_SWITCH;
+    /// Off until the user turns it on: a request wubble makes itself.
+    SponsorEnabled: bool = defs::SPONSOR_ENABLED;
+    SponsorAsked: bool = defs::SPONSOR_ASKED;
+    /// Category to skip 0 / show 1 / off 2 (`wubble_core::sponsor`).
+    SponsorActions: ZoomTable = defs::SPONSOR_ACTIONS;
+    BoostsEnabled: bool = defs::BOOSTS_ENABLED;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

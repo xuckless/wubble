@@ -357,6 +357,10 @@ pub const DEFAULTS: &[Binding] = rows![
     // Shift+Esc is free, so the same chord serves
     "Shift+Escape", ALL, Action::OpenTasks, Shell;
     "Mod+D", ALL, Action::BookmarkPage, Shell;
+    // Built-ins. Link hints take a modifier, never a bare letter, so typing in a field is safe.
+    "Alt+F", ALL, Action::LinkHints, Shell;
+    "Mod+Alt+R", ALL, Action::ToggleReader, Shell;
+    "Mod+Shift+S", ALL, Action::ScreenshotRegion, Shell;
     "Ctrl+Q", LINUX, Action::Quit, Shell;
     "Ctrl+Shift+Q", WIN, Action::Quit, Shell;
     "Cmd+Q", MAC, Action::Quit, Shell;
@@ -834,6 +838,10 @@ mod tests {
             Action::TidyTabs,
             Action::UndoTidyTabs,
             Action::CloseDuplicateTabs,
+            Action::CyclePageTheme,
+            Action::ScreenshotVisible,
+            Action::ScreenshotFullPage,
+            Action::NewBoost,
         ];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
@@ -865,6 +873,27 @@ mod tests {
             Keymap::defaults(Platform::Mac).action_for(ch("Cmd+Shift+T")),
             Some((Action::ReopenClosedTab, Route::Shell))
         );
+    }
+
+    #[test]
+    fn builtin_chords_are_shell_chords() {
+        for (p, hints, reader, shot) in [
+            (Platform::Linux, "Alt+F", "Ctrl+Alt+R", "Ctrl+Shift+S"),
+            (Platform::Mac, "Alt+F", "Cmd+Alt+R", "Cmd+Shift+S"),
+        ] {
+            let km = Keymap::defaults(p);
+            for (chord, action) in [
+                (hints, Action::LinkHints),
+                (reader, Action::ToggleReader),
+                (shot, Action::ScreenshotRegion),
+            ] {
+                assert_eq!(
+                    km.action_for(ch(chord)),
+                    Some((action, Route::Shell)),
+                    "{p:?}"
+                );
+            }
+        }
     }
 
     #[test]

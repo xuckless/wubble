@@ -8,8 +8,10 @@ use wubble_core::pages::InternalPage;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 
+use wubble_core::shot::ShotRequest;
 use wubble_core::window::WindowTarget;
 
+use crate::host::Builtin;
 use crate::surface::FindEvent;
 
 /// Actions with no implementation yet, each with the reason.
@@ -62,6 +64,8 @@ pub enum Plan {
     CloseTabs(Vec<TabId>),
     /// F12: DevTools docked or detached for the visible tab (`wubble_core::devtools`).
     DevTools,
+    /// A built-in on the visible page (`host/builtins.rs`).
+    Builtin(Builtin),
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -81,6 +85,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
     };
     let view = |op| visible.map_or(Plan::Nothing, |_| Plan::View(op));
     let find = |event| visible.map_or(Plan::Nothing, |_| Plan::Find(event));
+    let builtin = |b| visible.map_or(Plan::Nothing, |_| Plan::Builtin(b));
     match action {
         Action::NewTab => Plan::Model(Command::OpenCommandBar),
         Action::CloseTab => on_visible(Command::CloseTab),
@@ -168,6 +173,13 @@ pub fn plan(action: Action, model: &Model) -> Plan {
                     opener: Some(opener),
                 })
             }),
+        Action::CyclePageTheme => builtin(Builtin::CyclePageTheme),
+        Action::LinkHints => builtin(Builtin::LinkHints),
+        Action::ToggleReader => builtin(Builtin::ToggleReader),
+        Action::ScreenshotRegion => builtin(Builtin::Shot(ShotRequest::Region)),
+        Action::ScreenshotVisible => builtin(Builtin::Shot(ShotRequest::Visible)),
+        Action::ScreenshotFullPage => builtin(Builtin::Shot(ShotRequest::FullPage)),
+        Action::NewBoost => builtin(Builtin::NewBoost),
         Action::Quit => Plan::Quit,
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
@@ -309,6 +321,23 @@ mod tests {
             plan(Action::CopyUrl, &m),
             Plan::Copy("https://2.test/".into())
         );
+        for (action, want) in [
+            (Action::CyclePageTheme, Builtin::CyclePageTheme),
+            (Action::LinkHints, Builtin::LinkHints),
+            (Action::ToggleReader, Builtin::ToggleReader),
+            (Action::ScreenshotRegion, Builtin::Shot(ShotRequest::Region)),
+            (
+                Action::ScreenshotVisible,
+                Builtin::Shot(ShotRequest::Visible),
+            ),
+            (
+                Action::ScreenshotFullPage,
+                Builtin::Shot(ShotRequest::FullPage),
+            ),
+            (Action::NewBoost, Builtin::NewBoost),
+        ] {
+            assert_eq!(plan(action, &m), Plan::Builtin(want), "{action:?}");
+        }
     }
 
     #[test]
@@ -327,6 +356,11 @@ mod tests {
             Action::ToggleMute,
             Action::Print,
             Action::CopyUrl,
+            Action::LinkHints,
+            Action::ToggleReader,
+            Action::ScreenshotRegion,
+            Action::CyclePageTheme,
+            Action::NewBoost,
         ] {
             assert_eq!(plan(action, &m), Plan::Nothing, "{action:?}");
         }
