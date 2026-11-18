@@ -222,13 +222,32 @@ export struct PopupView {
     origin-y: length,
 }
 
-// The x of the sidebar's column edges, in window coordinates: the window lights, the right end of
-// the header's buttons, the address pill's two sides, the tab rows, the new-tab row.
+// Where the sidebar's parts sit, in window coordinates (the alignment the tests pin). Each pair is
+// a part's left and right edge: the visible box (what the glass under it covers; its contents are
+// clipped to it) and the box the contents are laid out in, the window lights (and their top), the
+// header's buttons, the address pill (and its vertical middle, and the centre of its glyph), the
+// tab rows, the new-tab row, the Space tiles and the downloads button (and its top).
 export struct SideEdges {
+    start: length,
+    end: length,
+    content-end: length,
     lights: length,
+    lights-end: length,
+    lights-y: length,
+    nav: length,
     nav-end: length,
     pill: length,
     pill-end: length,
+    pill-y: length,
+    glyph-x: length,
+    glyph-y: length,
     rows: length,
+    rows-end: length,
     new-tab: length,
+    new-tab-end: length,
+    spaces: length,
+    spaces-end: length,
+    downloads: length,
+    downloads-end: length,
+    downloads-y: length,
 }

@@ -43,6 +43,10 @@ export component Sidebar inherits Rectangle {
     in property <float> indicator-stretch: 1;
     in property <float> indicator-origin: 0.3;
     in property <bool> compact: false;       // the 56px icon rail
+    // The width the contents are laid out at (chrome.tsx: the box follows the contents spring, a
+    // beat behind the seam). The sidebar itself is as wide as its glass and clips them, as the
+    // design's web view covers what reaches past the seam.
+    in property <length> content-width: root.width;
     // The wgpu scene draws the glass of the pill and the favourites (and the sidebar's own,
     // in app.slint).
     in property <bool> glass-over-wgpu: false;
@@ -58,21 +62,38 @@ export component Sidebar inherits Rectangle {
     out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
     // Where the column's edges fall, in window coordinates (the alignment the tests pin).
     out property <SideEdges> edges: {
+        start: root.absolute-position.x,
+        end: root.absolute-position.x + root.width,
+        content-end: root.absolute-position.x + root.content-width,
         lights: lights.absolute-position.x,
+        lights-end: lights.absolute-position.x + lights.width,
+        lights-y: lights.absolute-position.y,
+        nav: nav.absolute-position.x,
         nav-end: nav.absolute-position.x + nav.width,
         pill: pill.absolute-position.x,
         pill-end: pill.absolute-position.x + pill.width,
+        pill-y: pill.absolute-position.y + pill.height / 2,
+        glyph-x: pill.glyph-x,
+        glyph-y: pill.glyph-y,
         rows: rows.absolute-position.x,
+        rows-end: rows.absolute-position.x + rows.width,
         new-tab: new-tab.absolute-position.x,
+        new-tab-end: new-tab.absolute-position.x + new-tab.width,
+        spaces: strip.absolute-position.x,
+        spaces-end: strip.absolute-position.x + strip.width,
+        downloads: downloads.absolute-position.x,
+        downloads-end: downloads.absolute-position.x + downloads.width,
+        downloads-y: downloads.absolute-position.y,
     };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
     out property <Origin> address-below: { x: pill.absolute-position.x, y: pill.absolute-position.y + pill.height };
-    // There are downloads to list: the download button shows beside the sidebar button.
+    // There are downloads to list: the download button shows in the footer.
     in property <bool> has-downloads: false;
     callback downloads-requested();
-    // The download button's bottom left, in window coordinates: the popover opens there.
-    out property <Origin> downloads-anchor: { x: downloads.absolute-position.x, y: downloads.absolute-position.y + downloads.height };
+    // Right of the download button, level with its top, in window coordinates: the popover opens
+    // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
+    out property <Origin> downloads-anchor: { x: downloads.absolute-position.x + downloads.width + Shell.prompt-gap, y: downloads.absolute-position.y };
     in property <bool> rows-shown: true;     // flip to replay the row entrance
     // the tab list's scroller
     in property <length> scroll-y;
@@ -134,6 +155,7 @@ export component Sidebar inherits Rectangle {
     }
 
     VerticalLayout {
+        width: root.content-width;
         padding-left: root.floating ? Shell.peek-pad-start : Shell.side-pad;
         padding-right: root.floating ? Shell.peek-pad-end : Shell.side-pad;
         padding-top: root.floating ? Shell.peek-pad-y : Shell.side-pad;
@@ -169,16 +191,6 @@ export component Sidebar inherits Rectangle {
                 can-go-forward: root.can-go-forward;
                 action(id) => {
                     root.action(id);
-                }
-            }
-            // wubble: the downloads button (icons.tsx `download`), left of the nav buttons.
-            downloads := IconButton {
-                visible: !root.compact && root.has-downloads;
-                x: nav.x - self.width - Shell.nav-gap;
-                y: (parent.height - self.height) / 2;
-                icon-path: IconPaths.download;
-                clicked => {
-                    root.downloads-requested();
                 }
             }
         }
@@ -329,14 +341,30 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // Space switcher (.wb-spaces): the drawn icons, in a row, or a column on the rail, with
-        // the capsule that follows the active one and stretches between them
+        // .wb-side-bottom: the Space switcher (.wb-spaces): the drawn icons, in a row, or a column
+        // on the rail, with the capsule that follows the active one and stretches between them;
+        // and at the far end the secondary action (the design's Source button, wubble's the
+        // downloads button), under the column on the rail (.wb-side-bottom-rail)
         switcher := Rectangle {
             property <length> pitch: Shell.space-tile + Shell.space-gap;
             property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            height: root.compact ? self.span : Shell.space-tile;
+            height: root.compact ? self.span + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
 
-            Rectangle {
+            // icons.tsx `download`
+            downloads := IconButton {
+                visible: root.has-downloads;
+                width: Shell.side-bottom-button;
+                height: Shell.side-bottom-button;
+                border-radius: Shell.control-radius;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
+                y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
+                icon-path: IconPaths.download;
+                clicked => {
+                    root.downloads-requested();
+                }
+            }
+
+            strip := Rectangle {
                 x: root.compact ? (parent.width - self.width) / 2 : 0px;
                 width: root.compact ? Shell.space-tile : parent.span;
                 // along the axis: stretched about `origin`; across it: squashed
