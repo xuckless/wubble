@@ -7,17 +7,19 @@
 //! (cef `tests/cefclient/browser/client_handler.cc`, BSD-3-Clause), reading
 //! the image with `GetAsBitmap` as RGBA with straight alpha.
 //!
-//! `is_favicon` is true, so no cookies are sent or stored (Chrome's rule).
+//! `is_favicon` is true, so no cookies are sent or stored (Chrome's rule): a
+//! deliberate deviation from "the page's cookies apply", recorded in TODO.md.
 
 use std::sync::{Arc, Mutex};
+
+use wubble_core::favicon::valid_rgba;
 
 use cef::{
     AlphaType, ColorType, DownloadImageCallback, ImplBinaryValue, ImplDownloadImageCallback,
     ImplImage, WrapDownloadImageCallback, rc::Rc,
 };
 
-/// Largest icon side kept, in pixels. Also the `DownloadImage` DIP bound.
-pub const MAX_ICON_PX: u32 = 64;
+pub use wubble_core::favicon::MAX_ICON_PX;
 
 /// A page icon as raw pixels: straight (non-premultiplied) RGBA, row-major,
 /// `rgba.len() == width * height * 4`, both sides in `1..=MAX_ICON_PX`.
@@ -34,13 +36,8 @@ pub struct FaviconImage {
 /// `1..=MAX_ICON_PX` and exactly `width * height * 4` bytes. Nothing is
 /// resampled; an icon CEF could not shrink is dropped.
 pub(crate) fn accept(url: &str, width: i32, height: i32, rgba: Vec<u8>) -> Option<FaviconImage> {
-    let side = |v: i32| {
-        u32::try_from(v)
-            .ok()
-            .filter(|v| (1..=MAX_ICON_PX).contains(v))
-    };
-    let (width, height) = (side(width)?, side(height)?);
-    (rgba.len() == (width * height * 4) as usize).then(|| FaviconImage {
+    let (width, height) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+    valid_rgba(width, height, rgba.len()).then(|| FaviconImage {
         url: url.to_string(),
         width,
         height,

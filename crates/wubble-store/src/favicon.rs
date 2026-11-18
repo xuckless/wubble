@@ -11,15 +11,13 @@
 
 use std::collections::HashMap;
 
+use wubble_core::favicon::valid_rgba;
 use wubble_core::url::origin_key;
 
 use crate::*;
 
 /// Most origins looked up per statement.
 const CHUNK: usize = 100;
-
-/// Largest icon side stored; the engine never hands out more.
-const MAX_SIDE: u32 = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Favicon {
@@ -36,10 +34,7 @@ impl Store {
     /// (`about:`, `file:`, ...) store nothing. A blob whose length is not
     /// `width * height * 4`, or a side outside `1..=64`, is [`Error::Invalid`].
     pub async fn put_favicon(&mut self, page_url: &str, icon: &Favicon, now_ms: i64) -> Result<()> {
-        let valid = (1..=MAX_SIDE).contains(&icon.width)
-            && (1..=MAX_SIDE).contains(&icon.height)
-            && icon.rgba.len() == (icon.width * icon.height * 4) as usize;
-        if !valid {
+        if !valid_rgba(icon.width, icon.height, icon.rgba.len()) {
             return Err(Error::Invalid(format!(
                 "favicon {}: {}x{} with {} bytes",
                 icon.icon_url,

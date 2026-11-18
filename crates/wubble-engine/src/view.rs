@@ -304,7 +304,14 @@ impl View {
 
     /// Opens DevTools in its own native window (a non-windowless `WindowInfo`;
     /// DevTools is the allowed non-Slint exception). Focuses it if open.
+    /// Linux only until it is verified on macOS and Windows (a default
+    /// `WindowInfo` on a windowless browser may need a parent there): elsewhere
+    /// it logs and does nothing.
     pub fn open_devtools(&mut self) {
+        if !cfg!(target_os = "linux") {
+            eprintln!("wubble-engine: DevTools is not verified on this platform yet");
+            return;
+        }
         self.send(|host| {
             host.show_dev_tools(
                 Some(&cef::WindowInfo::default()),

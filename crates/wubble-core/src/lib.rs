@@ -3,6 +3,7 @@
 //! Everything here must stay unit-testable without a GPU or a browser process.
 
 pub mod action;
+pub mod favicon;
 pub mod import;
 pub mod keys;
 pub mod lifecycle;
