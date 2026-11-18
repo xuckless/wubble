@@ -12,12 +12,21 @@
 use crate::origin::Origin;
 use zeroize::Zeroizing;
 
-#[derive(Debug)]
 pub struct ImportRow {
     pub origin: Origin,
     pub form_action_origin: Option<Origin>,
     pub username: String,
     pub password: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for ImportRow {
+    /// Redacts username and password, like `NewLogin`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportRow")
+            .field("origin", &self.origin)
+            .field("form_action_origin", &self.form_action_origin)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -48,6 +57,7 @@ enum Col {
     Username,
     Password,
     FormAction,
+    HttpRealm,
 }
 
 fn column(header: &str) -> Option<Col> {
@@ -56,6 +66,7 @@ fn column(header: &str) -> Option<Col> {
         "username" | "login_username" => Some(Col::Username),
         "password" | "login_password" => Some(Col::Password),
         "formactionorigin" => Some(Col::FormAction),
+        "httprealm" => Some(Col::HttpRealm),
         _ => None,
     }
 }
@@ -65,13 +76,19 @@ pub fn parse_csv(input: &str) -> Result<Import, ImportError> {
     let mut reader = csv::ReaderBuilder::new().from_reader(input.as_bytes());
     let csv_err = |e: csv::Error| ImportError::Csv(e.to_string());
 
-    let mut index: [Option<usize>; 4] = [None; 4];
+    let mut index: [Option<usize>; 5] = [None; 5];
     for (i, h) in reader.headers().map_err(csv_err)?.iter().enumerate() {
         if let Some(col) = column(h) {
             let slot = &mut index[col as usize];
             if slot.is_some() {
                 return Err(ImportError::ConflictingColumns(
-                    ["url", "username", "password", "formactionorigin"][col as usize],
+                    [
+                        "url",
+                        "username",
+                        "password",
+                        "formactionorigin",
+                        "httprealm",
+                    ][col as usize],
                 ));
             }
             *slot = Some(i);
@@ -90,12 +107,21 @@ pub fn parse_csv(input: &str) -> Result<Import, ImportError> {
         need(index[Col::Password as usize], "password")?,
     );
     let form = index[Col::FormAction as usize];
+    let realm = index[Col::HttpRealm as usize];
 
     for record in records {
         let record = record.map_err(csv_err)?;
         let line = record.position().map_or(0, |p| p.line());
         let get = |i: usize| record.get(i).unwrap_or("");
         let password = get(pass);
+        if realm.is_some_and(|i| !get(i).is_empty()) {
+            // HTTP auth (Basic/Digest) is not a form login; Firefox never fills it in forms.
+            import.skipped.push(Skipped {
+                line,
+                reason: "HTTP auth login",
+            });
+            continue;
+        }
         if password.is_empty() {
             import.skipped.push(Skipped {
                 line,
@@ -141,6 +167,24 @@ mod tests {
         assert_eq!(imp.rows[1].username, "");
         assert_eq!(&*imp.rows[1].password, "multi\nline");
         assert!(imp.rows[1].form_action_origin.is_none());
+    }
+
+    #[test]
+    fn http_auth_rows_are_skipped_and_debug_is_redacted() {
+        let csv = "url,username,password,httpRealm,formActionOrigin\n\
+https://a.test,admin,pw-secret,Admin,\n\
+https://b.test,bob-user,pw2,,https://b.test\n";
+        let imp = parse_csv(csv).unwrap();
+        assert_eq!(
+            imp.skipped,
+            vec![Skipped {
+                line: 2,
+                reason: "HTTP auth login"
+            }]
+        );
+        assert_eq!(imp.rows.len(), 1);
+        let shown = format!("{imp:?}");
+        assert!(!shown.contains("bob-user") && !shown.contains("pw2"));
     }
 
     #[test]

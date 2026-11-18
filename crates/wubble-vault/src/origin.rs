@@ -64,11 +64,6 @@ impl Origin {
     pub fn port(&self) -> u16 {
         self.port
     }
-
-    /// Whether a login saved for `self` may be filled on `page`.
-    pub fn matches(&self, page: &Origin) -> bool {
-        self == page
-    }
 }
 
 impl fmt::Display for Origin {
@@ -111,7 +106,7 @@ mod tests {
         ];
         for (saved, page, want) in cases {
             let (s, p) = (Origin::parse(saved).unwrap(), Origin::parse(page).unwrap());
-            assert_eq!(s.matches(&p), want, "{saved} vs {page}");
+            assert_eq!(s == p, want, "{saved} vs {page}");
         }
     }
 

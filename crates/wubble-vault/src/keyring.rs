@@ -28,10 +28,21 @@ pub trait KeyRing {
 }
 
 /// The real keyring (Keychain, Credential Manager, Secret Service).
+///
+/// If the platform store cannot be initialised (for example Secret Service is not
+/// up yet) the failure is cached for the life of the process: `get` and `set` keep
+/// failing and the vault stays Unavailable until wubble restarts.
 pub struct OsKeyRing;
 
 impl OsKeyRing {
     fn entry(service: &str, account: &str) -> Result<keyring::Entry, KeyRingError> {
+        // keyring 4 initialises the credential store once per process and caches
+        // a failure, so a retry cannot succeed until the process restarts.
+        if let Err(e) = keyring::Entry::store_status() {
+            return Err(KeyRingError(format!(
+                "credential store failed to initialise ({e}); restart wubble to retry"
+            )));
+        }
         keyring::Entry::new(service, account).map_err(|e| KeyRingError(e.to_string()))
     }
 }

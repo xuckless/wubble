@@ -35,17 +35,14 @@ pub struct MemoryStore {
     rows: std::collections::BTreeMap<RecordId, StoredRecord>,
 }
 
+#[cfg(test)]
 impl MemoryStore {
-    pub fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
     /// Mutable access to a row, for tamper tests.
-    pub fn row_mut(&mut self, id: &RecordId) -> Option<&mut StoredRecord> {
+    pub(crate) fn row_mut(&mut self, id: &RecordId) -> Option<&mut StoredRecord> {
         self.rows.get_mut(id)
     }
 }

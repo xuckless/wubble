@@ -9,7 +9,6 @@ CREATE TABLE logins (
     form_action_origin TEXT,
     username_enc       BLOB NOT NULL,
     password_enc       BLOB NOT NULL,
-    enc_version        INTEGER NOT NULL DEFAULT 1,
     created_ms         INTEGER NOT NULL,
     last_used_ms       INTEGER,
     times_used         INTEGER NOT NULL DEFAULT 0

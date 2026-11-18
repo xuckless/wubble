@@ -45,7 +45,8 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         &self.store
     }
 
-    pub fn store_mut(&mut self) -> &mut S {
+    #[cfg(test)]
+    fn store_mut(&mut self) -> &mut S {
         &mut self.store
     }
 
@@ -88,7 +89,9 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
                 if let Err(e) = self.keyring.set(service, account, &*key) {
                     return Event::KeyringFailed(e.to_string());
                 }
-                // Re-read so a concurrent creator's key wins consistently.
+                // Read back to confirm the store kept our key. This does not make
+                // creation atomic: there must be one Vault per profile (the profile
+                // lock enforces it), or two creators could each keep a different key.
                 match read(&self.keyring) {
                     Event::KeyMissing => Event::KeyringFailed("key not stored".into()),
                     event => event,
@@ -139,22 +142,25 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         Ok(self.store.delete(id)?)
     }
 
-    /// Logins for a page: exact origin match only (see `origin`). Passwords are not decrypted.
+    /// Logins for a page: exact origin match only (`LoginStore::by_origin` is the one
+    /// place the rule lives). Passwords are not decrypted. A row that does not decrypt
+    /// (for example saved under a key the keyring has since lost) is skipped so it
+    /// cannot hide the readable ones; `list` still shows it.
     pub fn find_for_origin(&self, page: &Origin) -> Result<Vec<Candidate>, VaultError> {
         let key = self.key()?;
-        self.store
+        Ok(self
+            .store
             .by_origin(page)?
             .into_iter()
-            .filter(|r| r.origin.matches(page))
-            .map(|r| {
-                let username = open_string(key, &r, Field::Username, &r.username_enc)?;
-                Ok(Candidate {
+            .filter_map(|r| {
+                let username = open_string(key, &r, Field::Username, &r.username_enc).ok()?;
+                Some(Candidate {
                     id: r.id,
                     username: username.to_string(),
                     form_action_origin: r.form_action_origin,
                 })
             })
-            .collect()
+            .collect())
     }
 
     /// Metadata only, no plaintext. Works while locked.
@@ -376,10 +382,6 @@ mod tests {
         let row = v.store_mut().row_mut(&b).unwrap();
         std::mem::swap(&mut row.username_enc, &mut row.password_enc);
         assert!(v.reveal(&b).is_err());
-        assert!(
-            v.find_for_origin(&Origin::parse("https://a.test").unwrap())
-                .is_err()
-        );
         // Bit flip.
         let mut v = unlocked();
         let id = v.save(login("https://a.test", "u", "p"), 1).unwrap();
@@ -390,6 +392,22 @@ mod tests {
         let id = v.save(login("https://a.test", "u", "p"), 1).unwrap();
         v.store_mut().row_mut(&id).unwrap().origin = Origin::parse("https://evil.test").unwrap();
         assert!(v.reveal(&id).is_err());
+    }
+
+    #[test]
+    fn unreadable_row_does_not_hide_good_ones() {
+        let mut v = unlocked();
+        let page = Origin::parse("https://a.test").unwrap();
+        let old = v.save(login("https://a.test", "old", "p"), 1).unwrap();
+        // Rows saved under a key that is now gone: swap in a vault with a new key.
+        let mut v2 = unlocked();
+        v2.store = std::mem::take(&mut v.store);
+        let new = v2.save(login("https://a.test", "new", "p"), 2).unwrap();
+        let found = v2.find_for_origin(&page).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, new);
+        assert!(v2.reveal(&old).is_err());
+        assert_eq!(v2.list().unwrap().len(), 2);
     }
 
     #[test]
