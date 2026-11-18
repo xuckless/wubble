@@ -15,6 +15,7 @@
 //! element by an arbitrary path, so the web view keeps its rounded-rect clip; `path` is still
 //! returned for renderers that can (a wgpu mask, or a Path filled with the page snapshot).
 
+use crate::bow::{Curve, EdgeTable, cubics, edge_table};
 use crate::motion::{Spring, band, band_clamp, clamp, spring, step};
 
 // @source slint-seam
@@ -32,6 +33,25 @@ pub enum SidebarMode {
 // wubble change: the sidebar toggle, as `cycleSidebar` in browser/chrome.tsx: hidden opens the
 // extended sidebar, anything else (the rail too) hides it. The rail is reached by the seam.
 impl SidebarMode {
+    /// The stored word (`settings::SIDEBAR_MODE`'s choices).
+    pub fn id(self) -> &'static str {
+        match self {
+            SidebarMode::Extended => "extended",
+            SidebarMode::Rail => "rail",
+            SidebarMode::Hidden => "hidden",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        [
+            SidebarMode::Extended,
+            SidebarMode::Rail,
+            SidebarMode::Hidden,
+        ]
+        .into_iter()
+        .find(|m| m.id() == id)
+    }
+
     pub fn toggled(self) -> Self {
         if self == SidebarMode::Hidden {
             SidebarMode::Extended
@@ -228,18 +248,13 @@ impl Seam {
         moving
     }
 
-    /// How far a point at height y rides the bowed string (0 at the ends, `bend` at the grab point).
-    pub fn ride(&self, y: f64, h: f64) -> f64 {
-        let u = clamp(
-            if y < self.gy {
-                y / self.gy
-            } else {
-                (h - y) / (h - self.gy)
-            },
-            0.0,
-            1.0,
-        );
-        self.bend.x * u * u * (3.0 - 2.0 * u)
+    /// wubble change: how far the string is displaced at each height of the window (`h` high,
+    /// window coordinates; the web view's frame is inset by [`INSET`], corner radius `r`), the
+    /// same curve `clip` draws. The sidebar's sections, its glass edge and the page's edge
+    /// follow it. Empty while the string is straight.
+    pub fn edge(&self, h: f64, r: f64) -> EdgeTable {
+        let (top, bot) = (INSET + r, h - INSET - r);
+        edge_table(Curve::Seam, self.bend.x, self.gy, top, bot, h)
     }
 
     // @source slint-seam-clip
@@ -248,31 +263,17 @@ impl Seam {
     /// path strings formatted exactly like the TS (`toFixed(2)`), usable as Slint `Path.commands`.
     pub fn clip(&self, a: f64, lw: f64, lh: f64, r: f64, gy_local: f64) -> (String, String) {
         let f = to_fixed2;
-        let b = a + self.bend.x;
         let g = clamp(gy_local, r + 4.0, lh - r - 4.0);
         let (top, bot) = (r, lh - r);
-        let lower = format!(
-            "C{} {} {} {} {} {}",
-            f(a),
-            f(g + (bot - g) * 0.5),
-            f(b),
-            f(g + (bot - g) * 0.55),
-            f(b),
-            f(g)
-        );
-        let upper = format!(
-            "C{} {} {} {} {} {}",
-            f(b),
-            f(top + (g - top) * 0.45),
-            f(a),
-            f(top + (g - top) * 0.5),
-            f(a),
-            f(top)
-        );
+        // wubble change: the control points come from `bow::Curve` (one owner with the edge
+        // table); the string is the same, bottom to top.
+        let mut points = Curve::Seam.points(a, self.bend.x, top, g, bot);
+        points.reverse();
+        let strings = cubics(&points);
         let (jw, jh, jr) = (js_num(lw - r), js_num(lh - r), js_num(r));
         let (lw_, lh_) = (js_num(lw), js_num(lh));
         let path = format!(
-            "M{} 0 L{jw} 0 Q{lw_} 0 {lw_} {jr} L{lw_} {jh} Q{lw_} {lh_} {jw} {lh_} L{} {lh_} Q{} {lh_} {} {} {lower} {upper} Q{} 0 {} 0 Z",
+            "M{} 0 L{jw} 0 Q{lw_} 0 {lw_} {jr} L{lw_} {jh} Q{lw_} {lh_} {jw} {lh_} L{} {lh_} Q{} {lh_} {} {} {strings} Q{} 0 {} 0 Z",
             f(a + r),
             f(a + r),
             f(a),
@@ -281,7 +282,7 @@ impl Seam {
             f(a),
             f(a + r)
         );
-        let seam = format!("M{} {} {lower} {upper}", f(a), f(bot));
+        let seam = format!("M{} {} {strings}", f(a), f(bot));
         (path, seam)
     }
 }
@@ -314,17 +315,23 @@ fn js_num(x: f64) -> String {
 mod tests {
     use super::*;
 
-    /// A point rides the bowed string: not at all at the ends, by `bend` at the grab height.
+    /// wubble: the edge table is the string `clip` draws, in window coordinates: displaced by
+    /// the bend at the grab height and not at all at the ends.
     #[test]
-    fn ride_is_zero_at_the_ends_and_bend_at_the_grab() {
-        let mut seam = Seam::new();
-        seam.gy = 300.0;
-        seam.bend = spring(40.0);
-        assert_eq!(seam.ride(0.0, 800.0), 0.0);
-        assert_eq!(seam.ride(800.0, 800.0), 0.0);
-        assert_eq!(seam.ride(300.0, 800.0), 40.0);
-        let (above, below) = (seam.ride(150.0, 800.0), seam.ride(550.0, 800.0));
-        assert!(above > 0.0 && above < 40.0 && (above - below).abs() < 1e-9);
+    fn the_edge_is_the_drawn_string() {
+        let mut s = Seam::new();
+        s.gy = 300.0;
+        s.bend = spring(40.0);
+        let (h, r) = (800.0, 14.0);
+        let e = s.edge(h, r);
+        assert!((e.at(300.0) - 40.0).abs() < 1e-3, "{}", e.at(300.0));
+        assert_eq!(e.at(INSET), 0.0);
+        assert_eq!(e.at(h - INSET), 0.0);
+        // the string's joint, "… {b} {g} C…", sits at a + bend, g in the seam's frame
+        let (_, line) = s.clip(100.0, 900.0, h - 2.0 * INSET, r, s.gy - INSET);
+        assert!(line.contains("140.00 292.00 C"), "{line}");
+        s.bend = spring(0.0);
+        assert!(s.edge(h, r).offset.is_empty());
     }
 
     #[test]
@@ -476,7 +483,7 @@ mod tests {
         let want = numbers(&ts["trace"]);
         assert_eq!(want.len(), (30 + 25) * 3);
         assert_eq!(trace, want);
-        assert_eq!(s.ride(500.0, h), ts["ride"].as_f64().unwrap());
+        // wubble change: `ride` is gone (the sections follow `bow::EdgeTable`).
         let (path, seam) = s.clip(3.5, 900.0, 700.0, 20.0, 333.0);
         assert_eq!(path, ts["path"].as_str().unwrap());
         assert_eq!(seam, ts["seam"].as_str().unwrap());

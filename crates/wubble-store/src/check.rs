@@ -391,4 +391,31 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn a_v9_database_gives_each_space_the_icon_it_was_drawn_with() {
+        use wubble_core::space::SpaceIcon;
+        run(async {
+            let mut s = Store::connect(":memory:").await.unwrap();
+            migrate::migrate(&mut s.conn, &MIGRATIONS[..9])
+                .await
+                .unwrap();
+            s.conn
+                .execute_batch(
+                    "INSERT INTO containers(id, name, position) VALUES (0, 'Default', 0);
+                     INSERT INTO spaces(id, name, position, tint, container_id) VALUES
+                        (0, 'A', 0, '#010203', 0), (1, 'B', 1, NULL, 0), (2, 'C', 2, NULL, 0);",
+                )
+                .await
+                .unwrap();
+            migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
+            let m = s.load_session(std::time::Instant::now()).await.unwrap();
+            let icons: Vec<SpaceIcon> = m.spaces.iter().map(|s| s.icon).collect();
+            assert_eq!(
+                icons,
+                [SpaceIcon::Personal, SpaceIcon::Work, SpaceIcon::Study]
+            );
+            assert_eq!(m.spaces[0].tint, wubble_core::space::Rgb(1, 2, 3));
+        });
+    }
 }

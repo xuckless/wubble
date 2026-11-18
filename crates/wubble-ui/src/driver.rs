@@ -27,9 +27,11 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
+use wubble_core::bow::{BOWED, Curve, EdgeTable};
 use wubble_core::motion::DT_CAP;
 use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
+use wubble_core::split::{Bow, string_rect_of};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
@@ -71,8 +73,8 @@ pub struct Driver {
     scroll: Scroller,
     row_y: Rc<VecModel<f32>>,
     row_scale: Rc<VecModel<f32>>,
-    /// The seam's ride table (`seam-ride`): what each height rides of the bowed string.
-    ride: Rc<VecModel<f32>>,
+    /// The seam's edge table (`seam-edge`): how far the bowed string is displaced at each height.
+    edge: Rc<VecModel<f32>>,
     /// The scroller's millisecond clock: real time from this origin once installed; without
     /// one (tests) it is the sum of the frame deltas passed to [`Driver::advance`].
     origin: Option<Instant>,
@@ -113,10 +115,10 @@ impl Driver {
     fn new(window: &AppWindow, seam: Seam) -> Self {
         let row_y = Rc::new(VecModel::<f32>::default());
         let row_scale = Rc::new(VecModel::<f32>::default());
-        let ride = Rc::new(VecModel::<f32>::default());
+        let edge = Rc::new(VecModel::<f32>::default());
         window.set_row_y(ModelRc::from(row_y.clone()));
         window.set_row_scale(ModelRc::from(row_scale.clone()));
-        window.set_seam_ride(ModelRc::from(ride.clone()));
+        window.set_seam_edge(ModelRc::from(edge.clone()));
         let (ids, row) = model_rows(window);
         let space = active_space(window);
         window.set_selected_row(slint_index(row));
@@ -130,7 +132,7 @@ impl Driver {
             scroll: Scroller::new(),
             row_y,
             row_scale,
-            ride,
+            edge,
             origin: None,
             clock_ms: 0.0,
             last: None,
@@ -220,28 +222,39 @@ impl Driver {
         window.set_sidebar_opacity(1f64.min(w / SEAM::rail).powf(2.0) as f32);
         window.set_sidebar_rail(w < 140.0);
         window.set_sidebar_saved(self.seam.saved as f32);
-        let bowed = self.seam.held || self.seam.bend.x.abs() > 0.05;
+        let bowed = self.seam.held || self.seam.bend.x.abs() > BOWED;
         window.set_seam_bowed(bowed);
+        let r = f64::from(window.global::<Radius>().get_md());
+        let (lw, lh) = (w_win - INSET * 2.0, h_win - INSET * 2.0);
+        let edge = if bowed {
+            self.seam.edge(h_win, r)
+        } else {
+            EdgeTable::default()
+        };
         if bowed {
             // The string runs along the web view's left edge, in the web view's frame (inset on
             // every side); app.slint decides where that edge is, from the width set above.
             let a = f64::from(window.get_content_x()) - INSET;
-            let r = f64::from(window.global::<Radius>().get_md());
-            let (lw, lh) = (w_win - INSET * 2.0, h_win - INSET * 2.0);
             let (_path, line) = self.seam.clip(a, lw, lh, r, self.seam.gy - INSET);
             window.set_seam_path(line.into());
         } else {
             window.set_seam_path(Default::default());
         }
-        // the sidebar's sections ride the string (design browser/chrome.tsx `[data-ride]`)
-        sync(
-            &self.ride,
-            if bowed {
-                self.ride_table(window, h_win)
-            } else {
-                vec![]
-            },
-        );
+        // The sidebar's sections ride the string (design browser/chrome.tsx `[data-ride]`); its
+        // glass edge and the page's edge follow it (scene, page mask: the host reads the table).
+        window.set_seam_edge_step(edge.step as f32);
+        // Slint-only glass draws the sidebar's bowed outline (the scene bows its own glass).
+        window.set_sidebar_outline(if edge.is_straight() || w < 0.5 {
+            Default::default()
+        } else {
+            let bow = Bow {
+                bend: self.seam.bend.x,
+                gy: self.seam.gy - INSET,
+            };
+            let radius = f64::from(window.global::<Radius>().get_lg());
+            string_rect_of(Curve::Seam, 0.0, w, lh, radius, None, Some(bow)).into()
+        });
+        sync(&self.edge, edge.offset);
 
         // the tab list's scroller (scroller.rs)
         self.scroll.measure(
@@ -257,14 +270,6 @@ impl Driver {
         }
         window.set_thumb_visible(r.thumb_visible);
         moving
-    }
-
-    /// `Seam::ride` sampled every `ride-step` of the window's height `h`, from the top.
-    fn ride_table(&self, window: &AppWindow, h: f64) -> Vec<f32> {
-        let step = f64::from(window.get_ride_step()).max(1.0);
-        (0..=(h / step).ceil() as usize)
-            .map(|i| self.seam.ride(i as f64 * step, h) as f32)
-            .collect()
     }
 
     /// One rendered frame at `now`. Returns true while another frame is needed; once idle it
@@ -414,6 +419,16 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
                 seam::SidebarMode::Rail
             };
             s.set_mode(w, mode);
+            None
+        })
+    });
+    let (d, w) = hook();
+    window.on_sidebar_mode_requested(move |mode| {
+        run(&d, &w, |s, w| {
+            if s.seam.held {
+                s.seam.release();
+            }
+            s.set_mode(w, mode.into());
             None
         })
     });

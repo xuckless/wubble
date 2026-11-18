@@ -1,5 +1,20 @@
 //! URL text helpers.
 
+/// Only web pages are history and bookmarks; internal and file URLs never are.
+pub fn is_recordable(url: &str) -> bool {
+    ["http://", "https://"]
+        .iter()
+        .any(|p| url.len() > p.len() && url[..p.len()].eq_ignore_ascii_case(p))
+}
+
+/// Match key: lowercase, scheme and a leading `www.` removed (Places autofill idea), so
+/// typing `exa` finds `https://www.example.com/`.
+pub fn url_key(url: &str) -> String {
+    let lower = url.trim().to_lowercase();
+    let rest = lower.split_once("://").map_or(lower.as_str(), |(_, r)| r);
+    rest.strip_prefix("www.").unwrap_or(rest).to_string()
+}
+
 /// Appends `input` to `out` with every byte outside RFC 3986's unreserved set
 /// percent-encoded, so the result is safe in a query value or a `data:` body.
 pub fn percent_encode_into(input: &str, out: &mut String) {
@@ -78,6 +93,21 @@ pub fn view_source(page_url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_key_strips_scheme_and_www() {
+        assert_eq!(url_key("https://www.Example.com/A"), "example.com/a");
+        assert_eq!(url_key("exa"), "exa");
+        assert_eq!(url_key("www.go"), "go");
+    }
+
+    #[test]
+    fn only_web_urls_are_recordable() {
+        assert!(is_recordable("HTTP://a.com"));
+        assert!(!is_recordable("https://"));
+        assert!(!is_recordable("wubble://history"));
+        assert!(!is_recordable("about:blank"));
+    }
 
     #[test]
     fn origin_keys() {

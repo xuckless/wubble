@@ -18,21 +18,23 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
+use wubble_core::apply;
 use wubble_core::download::{self, DownloadEntry};
 use wubble_core::model::{Command, Model};
-use wubble_core::omnibox::{self, HistoryEntry};
+use wubble_core::omnibox::HistoryEntry;
+use wubble_core::pages::{BookmarkEdit, BookmarkRow, HistoryRow, InternalPage};
 use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
-use wubble_core::zoom::ZoomTable;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon,
-    KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting,
-    SidebarWidth, SiteZoom, Store, Transition,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, HistoryDeleted,
+    Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
 };
+use wubble_vault::{KeyRing, OsKeyRing, StoreLogins, Vault, VaultAnswer, VaultCommand};
 
 use crate::blocking::BlockerSettings;
+use crate::host::now_ms;
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
@@ -75,7 +77,10 @@ pub fn should_save(s: SaveState) -> bool {
 pub fn changes_session(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Tick { .. } | Command::BusyChanged { .. } | Command::OpenCommandBar
+        Command::Tick { .. }
+            | Command::BusyChanged { .. }
+            | Command::OpenCommandBar
+            | Command::SetSleepPolicy(_)
     )
 }
 
@@ -84,7 +89,9 @@ pub fn changes_session(command: &Command) -> bool {
 /// another fragment of it (a restored tab reloading, an in-page link).
 pub fn visit_to_record(previous: Option<&str>, new: &str) -> bool {
     let page = |url: &str| url.split_once('#').map_or(url, |(page, _)| page).to_owned();
-    wubble_store::is_recordable(new) && previous.map(page) != Some(page(new))
+    wubble_store::is_recordable(new)
+        && InternalPage::from_url(new).is_none()
+        && previous.map(page) != Some(page(new))
 }
 
 /// The tab whose navigation the command bar started, until that navigation
@@ -124,33 +131,44 @@ pub struct UiState {
     pub mode: SidebarMode,
 }
 
-/// The typed settings the host reads at start.
+/// The settings read at start. Everything but what is needed before the host exists (the
+/// shell's sidebar, the blocker) reaches the host as text rows, which it replays through
+/// `apply::effect_of`, the same path a change on the settings page takes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// `None`: not chosen yet (first run).
-    pub engine: Option<omnibox::SearchEngine>,
-    pub live_suggestions: bool,
     pub ui: UiState,
-    /// Opaque entries, decoded by `input::keymap`.
-    pub keybinding_overrides: Vec<String>,
-    /// Per-site zoom (`wubble_core::zoom`).
-    pub site_zoom: ZoomTable,
     pub blocker: BlockerSettings,
+    /// Every stored setting row, `key -> text` (`Store::all_settings`).
+    pub stored: HashMap<String, String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            engine: SearchEngineChoice::default(),
-            live_suggestions: LiveSuggestions::default(),
             ui: UiState {
                 sidebar_width: SidebarWidth::default(),
                 mode: SidebarModeSetting::default(),
             },
-            keybinding_overrides: KeybindingOverrides::default(),
-            site_zoom: SiteZoom::default(),
             blocker: BlockerSettings::default(),
+            stored: HashMap::new(),
         }
+    }
+}
+
+impl Settings {
+    /// The page features CEF takes as start switches (`restart` rows).
+    pub fn page_features(&self) -> wubble_engine::app::PageFeatures {
+        use wubble_core::settings as defs;
+        let on = |def| apply::value_of(def, &self.stored) == "1";
+        wubble_engine::app::PageFeatures {
+            overlay_scrollbars: on(&defs::OVERLAY_SCROLLBARS),
+            middle_click_autoscroll: on(&defs::MIDDLE_CLICK_AUTOSCROLL),
+        }
+    }
+
+    /// Whether the wgpu glass scene runs (`settings::GLASS_SCENE`, read before the window).
+    pub fn glass_scene(&self) -> bool {
+        apply::value_of(&wubble_core::settings::GLASS_SCENE, &self.stored) == "1"
     }
 }
 
@@ -224,8 +242,21 @@ enum Request {
     },
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
-    SetEngine(omnibox::SearchEngine),
-    SetSiteZoom(ZoomTable),
+    /// One settings row, validated by the client (`apply::accepts`) and again by the store.
+    SetSetting {
+        key: &'static str,
+        value: String,
+    },
+    /// Every stored setting row, after the writes queued before it.
+    ReadSettings(Reply<HashMap<String, String>>),
+    /// Expire visits by the stored retention.
+    ExpireHistory {
+        now_ms: i64,
+    },
+    ForgetSitePermission {
+        origin: String,
+        kind: Permission,
+    },
     SetSitePermission {
         origin: String,
         kind: Permission,
@@ -235,6 +266,46 @@ enum Request {
     AddDownload(DownloadEntry),
     UpdateDownload(DownloadEntry),
     RemoveDownload(i64),
+    /// One page of the history page's visits, with the icons of their sites.
+    Visits {
+        query: String,
+        before: Option<(i64, i64)>,
+        limit: usize,
+        reply: Reply<VisitsPage>,
+    },
+    /// Forgets history, then replies with what went.
+    ClearHistory(HistoryClear, Reply<HistoryDeleted>),
+    /// One command of the vault, which this thread owns (answered by `serve`).
+    Vault {
+        command: VaultCommand,
+        reply: Reply<VaultAnswer>,
+    },
+    /// Applies one bookmark edit (`None`: only reads), and replies with every row (`None`: the
+    /// store refused or failed).
+    Bookmarks(Option<(BookmarkEdit, i64)>, Reply<Option<BookmarksPage>>),
+}
+
+/// What a history delete names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryClear {
+    /// Visits at `[from, to)` ms.
+    Range(i64, i64),
+    /// A page and all its visits.
+    Url(String),
+}
+
+/// One page of the history page.
+#[derive(Debug, Default)]
+pub struct VisitsPage {
+    pub rows: Vec<HistoryRow>,
+    pub icons: HashMap<String, Favicon>,
+}
+
+/// Every bookmark row, with the icons of the links.
+#[derive(Debug, Default)]
+pub struct BookmarksPage {
+    pub rows: Vec<BookmarkRow>,
+    pub icons: HashMap<String, Favicon>,
 }
 
 /// The host's handle on the store thread. If the database could not be
@@ -249,11 +320,19 @@ impl StoreClient {
     /// Starts the store thread on the database at `path`. The receiver gets
     /// the loaded session and settings, or why there are none.
     pub fn spawn(path: PathBuf) -> (StoreClient, mpsc::Receiver<Result<Loaded, String>>) {
+        Self::spawn_with(path, OsKeyRing)
+    }
+
+    /// [`StoreClient::spawn`] with the keyring the vault uses (a smoke injects a fake one).
+    pub fn spawn_with<K: KeyRing + Send + 'static>(
+        path: PathBuf,
+        keyring: K,
+    ) -> (StoreClient, mpsc::Receiver<Result<Loaded, String>>) {
         let (tx, rx) = mpsc::channel();
         let (loaded_tx, loaded_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("wubble-store".into())
-            .spawn(move || serve(&path, rx, loaded_tx));
+            .spawn(move || serve(&path, keyring, rx, loaded_tx));
         let thread = match thread {
             Ok(thread) => Some(thread),
             Err(e) => {
@@ -339,13 +418,33 @@ impl StoreClient {
         self.send(Request::PopClosed(Box::new(reply)));
     }
 
-    pub fn set_engine(&self, engine: omnibox::SearchEngine) {
-        self.send(Request::SetEngine(engine));
+    /// Writes one settings row; the one write path of every setting the host changes. A key
+    /// that is no setting or a value its kind refuses is not sent: `false`.
+    pub fn set_setting(&self, key: &str, value: &str) -> bool {
+        let Some(def) = wubble_core::settings::find(key).filter(|d| d.kind.accepts(value)) else {
+            return false;
+        };
+        self.send(Request::SetSetting {
+            key: def.key,
+            value: value.into(),
+        });
+        true
     }
 
-    /// The whole per-site zoom table (one settings row).
-    pub fn set_site_zoom(&self, table: ZoomTable) {
-        self.send(Request::SetSiteZoom(table));
+    /// `reply` runs on the store thread, after every request sent before this one.
+    pub fn read_settings(&self, reply: impl FnOnce(HashMap<String, String>) + Send + 'static) {
+        self.send(Request::ReadSettings(Box::new(reply)));
+    }
+
+    pub fn expire_history(&self, now_ms: i64) {
+        self.send(Request::ExpireHistory { now_ms });
+    }
+
+    pub fn forget_site_permission(&self, origin: &str, kind: Permission) {
+        self.send(Request::ForgetSitePermission {
+            origin: origin.into(),
+            kind,
+        });
     }
 
     pub fn set_site_permission(
@@ -375,6 +474,48 @@ impl StoreClient {
         self.send(Request::RemoveDownload(id));
     }
 
+    /// `reply` runs on the store thread.
+    pub fn visits(
+        &self,
+        query: &str,
+        before: Option<(i64, i64)>,
+        limit: usize,
+        reply: impl FnOnce(VisitsPage) + Send + 'static,
+    ) {
+        self.send(Request::Visits {
+            query: query.into(),
+            before,
+            limit,
+            reply: Box::new(reply),
+        });
+    }
+
+    /// `reply` runs on the store thread, after the delete.
+    pub fn clear_history(
+        &self,
+        what: HistoryClear,
+        reply: impl FnOnce(HistoryDeleted) + Send + 'static,
+    ) {
+        self.send(Request::ClearHistory(what, Box::new(reply)));
+    }
+
+    /// `reply` runs on the store thread, which may wait on the OS keyring for an unlock.
+    pub fn vault(&self, command: VaultCommand, reply: impl FnOnce(VaultAnswer) + Send + 'static) {
+        self.send(Request::Vault {
+            command,
+            reply: Box::new(reply),
+        });
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn bookmarks(
+        &self,
+        edit: Option<(BookmarkEdit, i64)>,
+        reply: impl FnOnce(Option<BookmarksPage>) + Send + 'static,
+    ) {
+        self.send(Request::Bookmarks(edit, Box::new(reply)));
+    }
+
     /// Lets the thread finish what is queued, close the database and end.
     /// Blocks until it has; a thread that already ended returns at once.
     pub fn shutdown(self) {
@@ -388,9 +529,23 @@ impl StoreClient {
     }
 }
 
-/// The store thread: open, load, then serve requests until the client is gone.
-fn serve(path: &Path, rx: mpsc::Receiver<Request>, loaded: mpsc::Sender<Result<Loaded, String>>) {
-    let mut store = match pollster::block_on(open_and_load(path)) {
+/// The name the profile's vault key is filed under: the profile directory's, as `db` sits in it.
+pub fn profile_name(db: &Path) -> String {
+    db.parent()
+        .and_then(|dir| dir.file_name())
+        .map_or_else(|| "default".into(), |n| n.to_string_lossy().into_owned())
+}
+
+/// The store thread: open, load, then serve requests until the client is gone. The thread owns
+/// the vault over the store (`StoreLogins`), so the unlocked key stays here; every other
+/// request reaches the store through `vault.store_mut().store_mut()`.
+fn serve<K: KeyRing>(
+    path: &Path,
+    keyring: K,
+    rx: mpsc::Receiver<Request>,
+    loaded: mpsc::Sender<Result<Loaded, String>>,
+) {
+    let store = match pollster::block_on(open_and_load(path)) {
         Ok((store, value)) => {
             let _ = loaded.send(Ok(value));
             store
@@ -400,10 +555,15 @@ fn serve(path: &Path, rx: mpsc::Receiver<Request>, loaded: mpsc::Sender<Result<L
             return;
         }
     };
+    let mut vault = Vault::new(keyring, StoreLogins::new(store), &profile_name(path));
     while let Ok(first) = rx.recv() {
         let batch: Vec<Request> = std::iter::once(first).chain(rx.try_iter()).collect();
         for request in latest_save_only(batch) {
-            if let Err(e) = pollster::block_on(handle(&mut store, request)) {
+            if let Request::Vault { command, reply } = request {
+                reply(vault.run(command, now_ms()));
+            } else if let Err(e) =
+                pollster::block_on(handle(vault.store_mut().store_mut(), request))
+            {
                 eprintln!("wubble: store: {e}");
             }
         }
@@ -427,19 +587,16 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
     let mut store = Store::open(path).await?;
     let model = store.load_session(std::time::Instant::now()).await?;
     let settings = Settings {
-        engine: store.setting::<SearchEngineChoice>().await?,
-        live_suggestions: store.setting::<LiveSuggestions>().await?,
         ui: UiState {
             sidebar_width: store.setting::<SidebarWidth>().await?,
             mode: store.setting::<SidebarModeSetting>().await?,
         },
-        keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
-        site_zoom: store.setting::<SiteZoom>().await?,
         blocker: BlockerSettings {
             enabled: store.setting::<BlockerEnabled>().await?,
             exceptions: store.setting::<BlockerExceptions>().await?,
             lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
         },
+        stored: store.all_settings().await?,
     };
     let site_permissions = store.site_permissions().await?.into_iter().collect();
     // No download of the last run is alive any more.
@@ -522,12 +679,20 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 }
             }
         }
-        Request::SetEngine(engine) => {
-            store
-                .set_setting::<SearchEngineChoice>(Some(engine))
-                .await?;
+        Request::SetSetting { key, value } => store.set_text(key, &value).await?,
+        Request::ReadSettings(reply) => match store.all_settings().await {
+            Ok(rows) => reply(rows),
+            Err(e) => {
+                reply(HashMap::new());
+                return Err(e);
+            }
+        },
+        Request::ExpireHistory { now_ms } => {
+            store.expire_history(now_ms).await?;
         }
-        Request::SetSiteZoom(table) => store.set_setting::<SiteZoom>(table).await?,
+        Request::ForgetSitePermission { origin, kind } => {
+            store.forget_site_permission(&origin, kind).await?;
+        }
         Request::SetSitePermission {
             origin,
             kind,
@@ -541,6 +706,54 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         Request::AddDownload(entry) => store.add_download(&entry).await?,
         Request::UpdateDownload(entry) => store.update_download(&entry).await?,
         Request::RemoveDownload(id) => store.remove_download(id).await?,
+        Request::Visits {
+            query,
+            before,
+            limit,
+            reply,
+        } => {
+            let rows = store.list_visits(limit, before, &query).await;
+            let page = match &rows {
+                Ok(rows) => {
+                    let urls: Vec<&str> = rows.iter().map(|r| r.url.as_str()).collect();
+                    VisitsPage {
+                        icons: store.favicons_for(&urls).await.unwrap_or_default(),
+                        rows: rows.clone(),
+                    }
+                }
+                Err(_) => VisitsPage::default(),
+            };
+            reply(page);
+            rows?;
+        }
+        Request::ClearHistory(what, reply) => {
+            let deleted = match what {
+                HistoryClear::Range(from, to) => store.delete_history_range(from, to).await,
+                HistoryClear::Url(url) => store.delete_history_url(&url).await,
+            };
+            reply(deleted.as_ref().copied().unwrap_or_default());
+            deleted?;
+        }
+        // The vault is not the store's: `serve` answers it.
+        Request::Vault { .. } => {}
+        Request::Bookmarks(edit, reply) => {
+            let rows = match edit {
+                Some((edit, now_ms)) => store.apply_bookmark_edit(&edit, now_ms).await,
+                None => store.all_bookmarks().await,
+            };
+            let page = match &rows {
+                Ok(rows) => {
+                    let urls: Vec<&str> = rows.iter().filter_map(|r| r.url.as_deref()).collect();
+                    Some(BookmarksPage {
+                        icons: store.favicons_for(&urls).await.unwrap_or_default(),
+                        rows: rows.clone(),
+                    })
+                }
+                Err(_) => None,
+            };
+            reply(page);
+            rows?;
+        }
     }
     Ok(())
 }
@@ -664,6 +877,7 @@ mod tests {
             (Some("https://a.test/#one"), "https://a.test/#two", false),
             (Some("https://a.test/#one"), "https://a.test/", false),
             (None, "about:blank", false),
+            (None, "wubble://settings", false),
             (None, "data:text/html,x", false),
             (Some("data:text/html,x"), "file:///tmp/x", false),
         ];
@@ -745,9 +959,13 @@ mod tests {
             mode: SidebarMode::Rail,
         };
         client.save(&model, ui);
-        client.set_engine(omnibox::SearchEngine::Google);
-        let zoom = ZoomTable::from([("a.test".to_string(), 125)]);
-        client.set_site_zoom(zoom.clone());
+        assert!(client.set_setting("search.engine", "google"));
+        assert!(client.set_setting("zoom.sites", r#"{"a.test":125}"#));
+        assert!(
+            !client.set_setting("zoom.default", "9000"),
+            "refused before sending"
+        );
+        assert!(!client.set_setting("no.such", "1"));
         client.record_visit("https://a.test/", "", 5, Transition::Typed);
         client.update_title("https://a.test/", "A");
         client.push_closed(closed("https://gone.test/"));
@@ -790,9 +1008,11 @@ mod tests {
             };
             assert_eq!(tab.lifecycle.liveness, want);
         }
-        assert_eq!(loaded.settings.engine, Some(omnibox::SearchEngine::Google));
+        let stored = &loaded.settings.stored;
+        assert_eq!(stored["search.engine"], "google");
+        assert_eq!(stored["zoom.sites"], r#"{"a.test":125}"#);
+        assert!(!stored.contains_key("zoom.default"));
         assert_eq!(loaded.settings.ui, ui);
-        assert_eq!(loaded.settings.site_zoom, zoom);
         assert_eq!(
             loaded
                 .site_permissions
@@ -810,6 +1030,89 @@ mod tests {
         let (pop_tx, pop_rx) = mpsc::channel();
         client.pop_closed(move |tab| pop_tx.send(tab).unwrap());
         assert_eq!(pop_rx.recv().unwrap(), Some(closed("https://gone.test/")));
+        client.shutdown();
+    }
+
+    #[test]
+    fn the_page_requests_round_trip_on_the_store_thread() {
+        use wubble_vault::FakeKeyRing;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p/wubble.db");
+        let (client, loaded) = StoreClient::spawn_with(path, FakeKeyRing::default());
+        loaded.recv().unwrap().unwrap();
+        client.record_visit("https://a.test/", "Apple", 100, Transition::Link);
+        client.record_visit("https://b.test/", "Bread", 200, Transition::Link);
+        client.put_favicon("https://a.test/", &icon("https://a.test/i.png", 7), 100);
+
+        let (tx, rx) = mpsc::channel();
+        let t = tx.clone();
+        client.visits("app", None, 10, move |page| t.send(page).unwrap());
+        let page = rx.recv().unwrap();
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].url, "https://a.test/");
+        assert!(page.icons.contains_key("https://a.test/"));
+
+        // Clearing a range answers after the delete, and the next read sees it.
+        let (dtx, drx) = mpsc::channel();
+        client.clear_history(HistoryClear::Range(0, 150), move |d| dtx.send(d).unwrap());
+        assert_eq!(drx.recv().unwrap().visits, 1);
+        client.visits("", None, 10, move |page| tx.send(page).unwrap());
+        assert_eq!(rx.recv().unwrap().rows.len(), 1);
+
+        // A bookmark edit answers with every row; a refused one answers nothing.
+        let (btx, brx) = mpsc::channel();
+        let add = BookmarkEdit::Add {
+            parent: None,
+            title: "A".into(),
+            url: "https://a.test/".into(),
+        };
+        let t = btx.clone();
+        client.bookmarks(Some((add, 5)), move |p| t.send(p).unwrap());
+        assert_eq!(brx.recv().unwrap().unwrap().rows.len(), 1);
+        let bad = BookmarkEdit::Delete { id: 999 };
+        let t = btx.clone();
+        client.bookmarks(Some((bad, 6)), move |p| t.send(p).unwrap());
+        assert_eq!(brx.recv().unwrap().map(|p| p.rows.len()), Some(1));
+        let refuse = BookmarkEdit::Add {
+            parent: None,
+            title: "x".into(),
+            url: "javascript:1".into(),
+        };
+        client.bookmarks(Some((refuse, 7)), move |p| btx.send(p).unwrap());
+        assert!(brx.recv().unwrap().is_none());
+
+        // The vault lives on the same thread: unlock, add, list, reveal.
+        let (vtx, vrx) = mpsc::channel();
+        let ask = |command: VaultCommand| {
+            let t = vtx.clone();
+            client.vault(command, move |a| t.send(a).unwrap());
+            vrx.recv().unwrap()
+        };
+        assert!(matches!(
+            ask(VaultCommand::List),
+            VaultAnswer::Status(wubble_core::pages::VaultStatus::Locked)
+        ));
+        assert!(matches!(
+            ask(VaultCommand::Unlock),
+            VaultAnswer::Status(wubble_core::pages::VaultStatus::Unlocked)
+        ));
+        assert!(matches!(
+            ask(VaultCommand::Add {
+                site: "a.test".into(),
+                username: "me".into(),
+                password: zeroize::Zeroizing::new("pw".into()),
+            }),
+            VaultAnswer::Done
+        ));
+        let VaultAnswer::Entries(rows) = ask(VaultCommand::List) else {
+            panic!("no list")
+        };
+        assert_eq!(rows[0].username.as_deref(), Some("me"));
+        let id = wubble_vault::RecordId(rows[0].id.clone());
+        let VaultAnswer::Revealed(pw) = ask(VaultCommand::Reveal(id)) else {
+            panic!("no password")
+        };
+        assert_eq!(&*pw, "pw");
         client.shutdown();
     }
 
@@ -914,5 +1217,30 @@ mod tests {
         assert!(loaded.favicons.is_empty());
         client.shutdown();
         const _: () = assert!(FAVICON_CAP_BYTES >= 64 * 64 * 4);
+    }
+
+    #[test]
+    fn a_setting_written_is_read_back_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, loaded) = start(&dir.path().join("wubble.db"));
+        assert!(loaded.settings.stored.is_empty());
+        assert!(client.set_setting("blocker.enabled", "0"));
+        let (tx, rx) = mpsc::channel();
+        client.read_settings(move |rows| tx.send(rows).unwrap());
+        assert_eq!(rx.recv().unwrap()["blocker.enabled"], "0");
+        client.set_site_permission("https://a.test", Permission::Camera, Decision::Allow, 5);
+        client.forget_site_permission("https://a.test", Permission::Camera);
+        client.shutdown();
+        let (client, loaded) = start(&dir.path().join("wubble.db"));
+        assert!(!loaded.settings.blocker.enabled);
+        assert_eq!(
+            loaded
+                .site_permissions
+                .get("https://a.test", Permission::Camera),
+            None
+        );
+        let features = loaded.settings.page_features();
+        assert!(features.overlay_scrollbars && features.middle_click_autoscroll);
+        client.shutdown();
     }
 }

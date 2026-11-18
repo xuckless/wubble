@@ -1,0 +1,489 @@
+// The native pages beside settings (wubble://history, bookmarks, downloads, passwords): each a
+// function of the model its host fills (wubble_core::pages view-models), on the shared PageFrame.
+// Every change is an intent through a callback; the host acts and redraws. The design repo has
+// nothing for these pages (no list row, sheet or tree), so they are written from scratch from
+// the settings page's widgets (Field, TextButton, Card, SectionHeader) and the sheet chrome.
+
+import { Palette, Spacing, Fonts, Type, Radius, Chrome } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { PressableButton } from "../components.slint";
+import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState } from "model.slint";
+import { Icon, IconPaths } from "icon.slint";
+import { IconButton } from "nav-buttons.slint";
+import { PageFrame, Field, TextButton, SectionHeader, Card } from "settings.slint";
+import { DownloadRow } from "download-row.slint";
+import { SheetFrame } from "sheet-frame.slint";
+import { Segmented } from "settings.slint";
+
+// The favicon of a row, or the neutral globe.
+component RowIcon inherits Rectangle {
+    in property <image> favicon;
+    in property <string> fallback: IconPaths.globe;
+    width: Shell.icon;
+    if root.favicon.width > 0: Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: root.favicon;
+        width: Shell.page-favicon;
+        height: Shell.page-favicon;
+    }
+    if root.favicon.width == 0: Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        path: root.fallback;
+    }
+}
+
+// A row's text: the title, then the address in the mono face.
+component RowText inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> detail;
+    spacing: Spacing.s3;
+    horizontal-stretch: 1;
+    Text {
+        horizontal-stretch: 1;
+        text: root.title;
+        color: Palette.ink;
+        font-family: Fonts.ui;
+        font-size: Type.body.size;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.detail;
+        color: Palette.haze;
+        font-family: Fonts.mono;
+        font-size: Type.label.size;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// What a page shows when there is nothing to list.
+component EmptyNote inherits Text {
+    color: Palette.haze;
+    font-family: Fonts.ui;
+    font-size: Type.body.size;
+    wrap: word-wrap;
+}
+
+// A row that opens its address: click opens it here, middle-click in a new tab.
+component OpenRow inherits Rectangle {
+    callback opened();
+    callback opened-new-tab();
+    height: Shell.page-row;
+    border-radius: Radius.sm;
+    background: ta.has-hover ? Shell.icon-button-hover : transparent;
+    ta := TouchArea {
+        clicked => {
+            root.opened();
+        }
+        pointer-event(e) => {
+            if e.button == PointerEventButton.middle && e.kind == PointerEventKind.up {
+                root.opened-new-tab();
+            }
+        }
+    }
+    @children
+}
+
+// ───────────────────────────────────────────────────────────────────────────── history
+
+export component HistoryPage inherits Rectangle {
+    in property <bool> open;
+    // Day headers and visits, newest first.
+    in property <[HistoryLineItem]> lines;
+    // A search is running: the empty note says no match.
+    in property <bool> searching;
+    in property <bool> has-more;
+    callback query-changed(string);
+    callback opened(string);
+    callback opened-new-tab(string);
+    callback deleted(string);
+    callback more();
+    // The range's index in `ranges`.
+    callback cleared(int);
+
+    property <[string]> ranges: ["Last hour", "Last 24 hours", "All time"];
+    property <bool> clearing: false;
+    property <int> range: 0;
+
+    public function take-focus() {
+        frame.take-focus();
+    }
+
+    frame := PageFrame {
+        open: root.open;
+        title: "History";
+        placeholder: "Search history";
+        query-changed(q) => {
+            root.query-changed(q);
+        }
+
+        HorizontalLayout {
+            padding-top: Spacing.s4;
+            alignment: end;
+            TextButton {
+                text: "Clear browsing data";
+                clicked => {
+                    root.range = 0;
+                    root.clearing = true;
+                }
+            }
+        }
+        if root.lines.length == 0: EmptyNote {
+                text: root.searching ? "No visits match" : "No history yet";
+        }
+        for line in root.lines: VerticalLayout {
+            padding-top: line.header ? Spacing.s6 : 0px;
+            if line.header: SectionHeader {
+                text: line.label;
+            }
+            if !line.header: OpenRow {
+                opened => {
+                    root.opened(line.url);
+                }
+                opened-new-tab => {
+                    root.opened-new-tab(line.url);
+                }
+                HorizontalLayout {
+                    padding-left: Spacing.s3;
+                    padding-right: Spacing.s1;
+                    spacing: Spacing.s3;
+                    RowIcon {
+                        favicon: line.favicon;
+                    }
+                    RowText {
+                        title: line.title;
+                        detail: line.url;
+                    }
+                    IconButton {
+                        icon-path: IconPaths.trash;
+                        clicked => {
+                            root.deleted(line.url);
+                        }
+                    }
+                }
+            }
+        }
+        if root.has-more: HorizontalLayout {
+            padding-top: Spacing.s4;
+            alignment: center;
+            TextButton {
+                text: "Show more";
+                clicked => {
+                    root.more();
+                }
+            }
+        }
+    }
+
+    SheetFrame {
+        open: root.clearing;
+        title: "Clear browsing data";
+        message: "Forgets the visits in the range. Bookmarks and downloads stay.";
+        accept-text: "Clear";
+        cancel-text: "Cancel";
+        accepted => {
+            root.clearing = false;
+            root.cleared(root.range);
+        }
+        cancelled => {
+            root.clearing = false;
+        }
+        Segmented {
+            labels: root.ranges;
+            selected: root.range;
+            chosen(i) => {
+                root.range = i;
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────── bookmarks
+
+export component BookmarksPage inherits PageFrame {
+    // The tree's visible lines, or the matching links while searching.
+    in property <[BookmarkLineItem]> lines;
+    in property <bool> searching;
+    callback opened(string);
+    callback opened-new-tab(string);
+    // A folder's chevron: expand or collapse.
+    callback toggled(int);
+    callback rename-requested(int);
+    callback move-requested(int);
+    callback deleted(int);
+    callback folder-requested();
+
+    title: "Bookmarks";
+    placeholder: "Search bookmarks";
+
+    HorizontalLayout {
+        padding-top: Spacing.s4;
+        alignment: end;
+        TextButton {
+            text: "New folder";
+            clicked => {
+                root.folder-requested();
+            }
+        }
+    }
+    if root.lines.length == 0: EmptyNote {
+        text: root.searching ? "No bookmarks match" : "No bookmarks yet. Press Ctrl+D on a page to add one.";
+    }
+    for line in root.lines: bookmark-row := OpenRow {
+        opened => {
+            if line.is-folder {
+                root.toggled(line.id);
+            } else {
+                root.opened(line.url);
+            }
+        }
+        opened-new-tab => {
+            if !line.is-folder {
+                root.opened-new-tab(line.url);
+            }
+        }
+        HorizontalLayout {
+            padding-left: Spacing.s3 + line.depth * Shell.page-indent;
+            padding-right: Spacing.s1;
+            spacing: Spacing.s3;
+            if line.is-folder: Rectangle {
+                width: Shell.icon;
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    path: line.expanded ? IconPaths.chevron-down : IconPaths.forward;
+                }
+            }
+            RowIcon {
+                favicon: line.favicon;
+                fallback: line.is-folder ? IconPaths.folder : IconPaths.globe;
+            }
+            RowText {
+                title: line.title;
+                detail: line.is-folder ? "" : line.path != "" ? line.path : line.url;
+            }
+            TextButton {
+                text: "Rename";
+                clicked => {
+                    root.rename-requested(line.id);
+                }
+            }
+            if !line.is-folder: TextButton {
+                text: "Move";
+                clicked => {
+                    root.move-requested(line.id);
+                }
+            }
+            IconButton {
+                icon-path: IconPaths.trash;
+                clicked => {
+                    root.deleted(line.id);
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────── downloads
+
+export component DownloadsPage inherits PageFrame {
+    // The host's one downloads model, the popover's too.
+    in property <[DownloadItem]> items;
+    callback action(int, DownloadAction);
+    callback clear-finished();
+
+    title: "Downloads";
+    searchable: false;
+
+    HorizontalLayout {
+        padding-top: Spacing.s4;
+        alignment: end;
+        TextButton {
+            text: "Clear finished";
+            clicked => {
+                root.clear-finished();
+            }
+        }
+    }
+    if root.items.length == 0: EmptyNote {
+        text: "No downloads";
+    }
+    for item in root.items: DownloadRow {
+        height: Shell.download-row;
+        item: item;
+        action(id, a) => {
+            root.action(id, a);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────── passwords
+
+export component PasswordsPage inherits Rectangle {
+    in property <bool> open;
+    in property <PasswordsView> view;
+    // Nothing while locked: the host sends no rows.
+    in property <[LoginItem]> logins;
+    callback query-changed(string);
+    callback unlock();
+    callback reveal(string);
+    callback hide();
+    callback copy(string);
+    callback deleted(string);
+    callback added(string, string, string);
+    callback import-requested();
+
+    property <bool> adding: false;
+
+    public function take-focus() {
+        frame.take-focus();
+    }
+
+    function close-sheet() {
+        site.text = "";
+        username.text = "";
+        password.text = "";
+        root.adding = false;
+    }
+
+    frame := PageFrame {
+        open: root.open;
+        title: "Passwords";
+        placeholder: "Search passwords";
+        query-changed(q) => {
+            root.query-changed(q);
+        }
+
+        Card {
+            VerticalLayout {
+                padding-top: Spacing.s3;
+                padding-bottom: Spacing.s3;
+                spacing: Spacing.s2;
+                Text {
+                    text: root.view.title;
+                    color: Palette.ink;
+                    font-family: Fonts.ui;
+                    font-size: Type.heading.size;
+                    font-weight: Type.heading.weight;
+                }
+                Text {
+                    visible: self.text != "";
+                    text: root.view.body;
+                    color: Palette.mist;
+                    font-family: Fonts.ui;
+                    font-size: Type.body.size;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: Spacing.s2;
+                    alignment: start;
+                    if root.view.state == VaultState.locked: TextButton {
+                        text: "Unlock";
+                        clicked => {
+                            root.unlock();
+                        }
+                    }
+                    if root.view.state != VaultState.locked: TextButton {
+                        text: "Add";
+                        clicked => {
+                            root.adding = true;
+                        }
+                    }
+                    if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable: TextButton {
+                        text: "Import CSV";
+                        clicked => {
+                            root.import-requested();
+                        }
+                    }
+                }
+                Text {
+                    visible: self.text != "";
+                    text: root.view.notice;
+                    color: Palette.mist;
+                    font-family: Fonts.ui;
+                    font-size: Type.label.size;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        if root.view.state == VaultState.unlocked && root.logins.length == 0: EmptyNote {
+            text: "No saved passwords";
+        }
+        for login in root.logins: login-row := Rectangle {
+            height: Shell.page-row;
+            HorizontalLayout {
+                padding-left: Spacing.s3;
+                padding-right: Spacing.s1;
+                spacing: Spacing.s3;
+                RowText {
+                    title: login.site;
+                    detail: login.has-revealed ? login.revealed : login.username;
+                }
+                TextButton {
+                    text: login.has-revealed ? "Hide" : "Show";
+                    clicked => {
+                        if login.has-revealed {
+                            root.hide();
+                        } else {
+                            root.reveal(login.id);
+                        }
+                    }
+                }
+                TextButton {
+                    text: "Copy";
+                    clicked => {
+                        root.copy(login.id);
+                    }
+                }
+                IconButton {
+                    icon-path: IconPaths.trash;
+                    clicked => {
+                        root.deleted(login.id);
+                    }
+                }
+            }
+        }
+    }
+
+    SheetFrame {
+        open: root.adding;
+        title: "Add a password";
+        accept-text: "Save";
+        cancel-text: "Cancel";
+        accepted => {
+            if site.text != "" && password.text != "" {
+                root.added(site.text, username.text, password.text);
+                root.close-sheet();
+            }
+        }
+        cancelled => {
+            root.close-sheet();
+        }
+        site := Field {
+            height: Shell.sheet-input;
+            placeholder: "Site, e.g. https://example.com";
+            escaped => {
+                root.close-sheet();
+            }
+        }
+        username := Field {
+            height: Shell.sheet-input;
+            placeholder: "Username";
+            escaped => {
+                root.close-sheet();
+            }
+        }
+        password := Field {
+            height: Shell.sheet-input;
+            placeholder: "Password";
+            secret: true;
+            escaped => {
+                root.close-sheet();
+            }
+        }
+    }
+}

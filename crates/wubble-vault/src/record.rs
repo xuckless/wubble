@@ -84,11 +84,13 @@ impl From<&StoredRecord> for Meta {
     }
 }
 
-impl From<&Meta> for wubble_core::pages::LoginEntry {
+impl From<&Meta> for wubble_core::pages::LoginView {
+    /// Without a username: that is encrypted ([`crate::Vault::entries`] decrypts it).
     fn from(m: &Meta) -> Self {
-        wubble_core::pages::LoginEntry {
+        wubble_core::pages::LoginView {
             id: m.id.0.clone(),
             origin: m.origin.to_string(),
+            username: None,
             created_ms: m.created_ms,
             last_used_ms: m.last_used_ms,
             times_used: m.times_used,

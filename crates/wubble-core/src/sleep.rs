@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::lifecycle::{Activity, Pin};
 use crate::tab::Liveness;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SleepPolicy {
     pub freeze_after: Duration,
     pub discard_after: Duration,
@@ -35,6 +35,17 @@ pub enum Pressure {
 }
 
 impl SleepPolicy {
+    /// The policy the settings ask for (`settings::SLEEP_*`). Discarding never comes before
+    /// freezing: a discard delay below the freeze delay is raised to it.
+    pub fn from_settings(freeze_after_s: u32, discard_after_s: u32, keep_pinned: bool) -> Self {
+        let freeze_after = Duration::from_secs(u64::from(freeze_after_s));
+        Self {
+            freeze_after,
+            discard_after: Duration::from_secs(u64::from(discard_after_s)).max(freeze_after),
+            keep_pinned_alive: keep_pinned,
+        }
+    }
+
     /// Target liveness for a tab that has been hidden for `hidden`.
     pub fn target(
         &self,
@@ -84,6 +95,15 @@ mod tests {
             target(3600, Pin::Pinned, Activity::Idle, Pressure::Critical),
             Liveness::Frozen
         );
+    }
+
+    #[test]
+    fn from_settings_keeps_discard_after_freeze() {
+        let p = SleepPolicy::from_settings(60, 900, true);
+        assert_eq!(p, SleepPolicy::default());
+        let p = SleepPolicy::from_settings(600, 60, false);
+        assert_eq!(p.discard_after, Duration::from_secs(600));
+        assert!(!p.keep_pinned_alive);
     }
 
     #[test]

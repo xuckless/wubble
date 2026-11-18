@@ -7,6 +7,8 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
+use chrono::NaiveDate;
+
 use crate::settings::{self, Section, SettingKind};
 
 const MIN_MS: i64 = 60_000;
@@ -28,7 +30,7 @@ pub struct HistoryRow {
 pub enum DayLabel {
     Today,
     Yesterday,
-    Date { year: i32, month: u8, day: u8 },
+    Date(NaiveDate),
 }
 
 /// The visits of one local day, newest first.
@@ -46,31 +48,17 @@ fn local_day(ms: i64, tz_offset_min: i32) -> i64 {
     (ms + i64::from(tz_offset_min) * MIN_MS).div_euclid(DAY_MS)
 }
 
-/// (year, month 1..=12, day 1..=31) of a day count since 1970-01-01.
-///
-/// Source: Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" `civil_from_days`
-/// (http://howardhinnant.github.io/date_algorithms.html), public domain.
-fn civil_from_days(days: i64) -> (i32, u8, u8) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year as i32, month as u8, day as u8)
-}
-
 fn day_label(day: i64, today: i64) -> DayLabel {
     if day == today {
         DayLabel::Today
     } else if day == today - 1 {
         DayLabel::Yesterday
     } else {
-        let (year, month, day) = civil_from_days(day);
-        DayLabel::Date { year, month, day }
+        // Days from 0001-01-01 (CE day 1) are the epoch day count plus 719_163.
+        i32::try_from(day + 719_163)
+            .ok()
+            .and_then(NaiveDate::from_num_days_from_ce_opt)
+            .map_or(DayLabel::Today, DayLabel::Date)
     }
 }
 
@@ -78,22 +66,11 @@ fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
     haystack.to_lowercase().contains(needle_lower)
 }
 
-/// The history page: visits matching `query` (case-insensitive substring of title or url; empty
-/// keeps all), newest first, grouped by local day.
-pub fn history_page(
-    rows: &[HistoryRow],
-    query: &str,
-    tz_offset_min: i32,
-    now_ms: i64,
-) -> Vec<DayGroup> {
-    let needle = query.trim().to_lowercase();
+/// The history page: visits newest first, grouped by local day. Searching is the store's job
+/// (`list_visits`), so a search reaches rows older than any loaded page.
+pub fn history_page(rows: &[HistoryRow], tz_offset_min: i32, now_ms: i64) -> Vec<DayGroup> {
     let today = local_day(now_ms, tz_offset_min);
-    let mut hits: Vec<&HistoryRow> = rows
-        .iter()
-        .filter(|r| {
-            needle.is_empty() || contains_ci(&r.title, &needle) || contains_ci(&r.url, &needle)
-        })
-        .collect();
+    let mut hits: Vec<&HistoryRow> = rows.iter().collect();
     hits.sort_by_key(|r| Reverse(r.visit_ms));
     let mut groups: Vec<DayGroup> = Vec::new();
     for r in hits {
@@ -108,6 +85,65 @@ pub fn history_page(
         }
     }
     groups
+}
+
+impl DayLabel {
+    /// A group header: "Today", "Yesterday", "Mon, 3 Nov 2026".
+    pub fn text(self) -> String {
+        match self {
+            DayLabel::Today => "Today".to_owned(),
+            DayLabel::Yesterday => "Yesterday".to_owned(),
+            DayLabel::Date(date) => date.format("%a, %-d %b %Y").to_string(),
+        }
+    }
+}
+
+/// One line of the history page's flat list: a day header or a visit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryLine {
+    Day { label: String },
+    Visit(HistoryRow),
+}
+
+/// The day groups as the flat list a Slint model shows (headers are rows, as in [`flatten`]).
+pub fn history_lines(groups: &[DayGroup]) -> Vec<HistoryLine> {
+    let mut out = Vec::new();
+    for g in groups {
+        out.push(HistoryLine::Day {
+            label: g.label.text(),
+        });
+        out.extend(g.rows.iter().cloned().map(HistoryLine::Visit));
+    }
+    out
+}
+
+/// What "Clear browsing data" removes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearRange {
+    LastHour,
+    LastDay,
+    All,
+}
+
+impl ClearRange {
+    pub const ALL: [ClearRange; 3] = [ClearRange::LastHour, ClearRange::LastDay, ClearRange::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ClearRange::LastHour => "Last hour",
+            ClearRange::LastDay => "Last 24 hours",
+            ClearRange::All => "All time",
+        }
+    }
+
+    /// The `[from, to)` span for the store's range delete.
+    pub fn bounds(self, now_ms: i64) -> (i64, i64) {
+        match self {
+            ClearRange::LastHour => (now_ms - 60 * MIN_MS, i64::MAX),
+            ClearRange::LastDay => (now_ms - DAY_MS, i64::MAX),
+            ClearRange::All => (i64::MIN, i64::MAX),
+        }
+    }
 }
 
 // -------------------------------------------------------------- bookmarks
@@ -193,139 +229,387 @@ pub fn flatten<'a>(tree: &'a [BookmarkItem], expanded: &HashSet<i64>) -> Vec<Fla
     out
 }
 
-// -------------------------------------------------------------- downloads
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DownloadState {
-    Waiting,
-    Running,
-    Paused,
-    Failed,
-    Done,
-    Cancelled,
+/// A bookmark change as a value: the page and the sheet build it, the store thread applies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BookmarkEdit {
+    Add {
+        parent: Option<i64>,
+        title: String,
+        url: String,
+    },
+    AddFolder {
+        parent: Option<i64>,
+        title: String,
+    },
+    Rename {
+        id: i64,
+        title: String,
+    },
+    Move {
+        id: i64,
+        to: Option<i64>,
+        index: u32,
+    },
+    Delete {
+        id: i64,
+    },
 }
 
-impl DownloadState {
-    fn active(self) -> bool {
-        matches!(self, Self::Waiting | Self::Running | Self::Paused)
+/// The bookmark of `url`, if any (compared by [`crate::url::url_key`], so `www.` and the
+/// scheme do not matter): the address pill's star.
+pub fn bookmark_for_url(rows: &[BookmarkRow], url: &str) -> Option<i64> {
+    let key = |u: &str| crate::url::url_key(u).trim_end_matches('/').to_owned();
+    let want = key(url);
+    rows.iter()
+        .find(|r| r.url.as_deref().is_some_and(|u| key(u) == want))
+        .map(|r| r.id)
+}
+
+/// The title a new bookmark starts with: the page's, else its address.
+pub fn default_title(tab_title: &str, url: &str) -> String {
+    let t = tab_title.trim();
+    if t.is_empty() {
+        url.to_owned()
+    } else {
+        t.to_owned()
     }
 }
 
-/// A download as the host knows it (there is no downloads table: the host fills this from the
-/// engine's download state machine).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadRow {
-    /// Ascending in start order.
-    pub id: u64,
-    pub name: String,
-    pub url: String,
-    pub state: DownloadState,
-    pub received: u64,
-    pub total: Option<u64>,
+/// Adding the visible page under `folder`; `None` for an address that is not a web page or that
+/// is already bookmarked (the sheet then offers removing it).
+pub fn add_current(
+    rows: &[BookmarkRow],
+    tab_title: &str,
+    url: &str,
+    folder: Option<i64>,
+) -> Option<BookmarkEdit> {
+    (crate::url::is_recordable(url) && bookmark_for_url(rows, url).is_none()).then(|| {
+        BookmarkEdit::Add {
+            parent: folder,
+            title: default_title(tab_title, url),
+            url: url.to_owned(),
+        }
+    })
 }
 
+/// Moving `id` to the end of `folder`.
+pub fn move_to_end(rows: &[BookmarkRow], id: i64, folder: Option<i64>) -> BookmarkEdit {
+    let siblings = rows
+        .iter()
+        .filter(|r| r.parent == folder && r.id != id)
+        .count();
+    BookmarkEdit::Move {
+        id,
+        to: folder,
+        index: u32::try_from(siblings).unwrap_or(u32::MAX),
+    }
+}
+
+/// One entry of the folder picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadItem {
-    pub id: u64,
-    pub name: String,
-    pub url: String,
-    pub state: DownloadState,
-    /// 0..=100; `None` while the total is unknown.
-    pub percent: Option<u8>,
-    /// Second line of the row: "3.2 MB of 10.0 MB", "Paused", ...
+pub struct FolderChoice {
+    /// `None` is the top level.
+    pub id: Option<i64>,
     pub label: String,
+    pub depth: usize,
 }
 
-fn size(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
+/// The folders a bookmark can go in, depth first, the top level first. With `moving` set, that
+/// folder and everything below it is left out (a folder cannot move into itself).
+pub fn folder_choices(rows: &[BookmarkRow], moving: Option<i64>) -> Vec<FolderChoice> {
+    fn walk(
+        items: &[BookmarkItem],
+        depth: usize,
+        moving: Option<i64>,
+        out: &mut Vec<FolderChoice>,
+    ) {
+        for item in items.iter().filter(|i| i.is_folder && Some(i.id) != moving) {
+            out.push(FolderChoice {
+                id: Some(item.id),
+                label: item.title.clone(),
+                depth,
+            });
+            walk(&item.children, depth + 1, moving, out);
+        }
     }
-    let mut v = bytes as f64 / 1024.0;
-    let mut unit = 0;
-    while v >= 1024.0 && unit < UNITS.len() - 1 {
-        v /= 1024.0;
-        unit += 1;
-    }
-    format!("{v:.1} {}", UNITS[unit])
+    let mut out = vec![FolderChoice {
+        id: None,
+        label: "Bookmarks".to_owned(),
+        depth: 0,
+    }];
+    walk(&bookmark_tree(rows), 1, moving, &mut out);
+    out
 }
 
-fn download_item(r: &DownloadRow) -> DownloadItem {
-    let percent = match (r.state, r.total) {
-        (DownloadState::Done, _) => Some(100),
-        (_, Some(t)) if t > 0 => Some((r.received.min(t) * 100 / t) as u8),
-        _ => None,
-    };
-    let progress = match r.total {
-        Some(t) => format!("{} of {}", size(r.received), size(t)),
-        None => size(r.received),
-    };
-    let label = match r.state {
-        DownloadState::Waiting => "Waiting".to_owned(),
-        DownloadState::Running => progress,
-        DownloadState::Paused => format!("Paused, {progress}"),
-        DownloadState::Failed => "Failed".to_owned(),
-        DownloadState::Cancelled => "Cancelled".to_owned(),
-        DownloadState::Done => size(r.total.unwrap_or(r.received)),
-    };
-    DownloadItem {
-        id: r.id,
-        name: r.name.clone(),
-        url: r.url.clone(),
-        state: r.state,
-        percent,
-        label,
+/// The links matching `query` (case-insensitive title or url), each with its folder path as the
+/// subtitle; the tree is not shown while searching. An empty query gives nothing.
+pub fn filter_tree(rows: &[BookmarkRow], query: &str) -> Vec<(BookmarkRow, String)> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
     }
-}
-
-/// Active downloads first, then finished ones; each group newest first.
-pub fn downloads_list(rows: &[DownloadRow]) -> Vec<DownloadItem> {
-    let mut sorted: Vec<&DownloadRow> = rows.iter().collect();
-    sorted.sort_by_key(|r| (!r.state.active(), Reverse(r.id)));
-    sorted.into_iter().map(download_item).collect()
+    let by_id: HashMap<i64, &BookmarkRow> = rows.iter().map(|r| (r.id, r)).collect();
+    let path = |r: &BookmarkRow| {
+        let mut parts = Vec::new();
+        let mut at = r.parent;
+        while let Some(p) = at.and_then(|id| by_id.get(&id)) {
+            parts.push(p.title.as_str());
+            at = p.parent;
+            if parts.len() > rows.len() {
+                break;
+            }
+        }
+        parts.reverse();
+        parts.join(" / ")
+    };
+    rows.iter()
+        .filter(|r| {
+            r.url
+                .as_deref()
+                .is_some_and(|u| contains_ci(&r.title, &needle) || contains_ci(u, &needle))
+        })
+        .map(|r| (r.clone(), path(r)))
+        .collect()
 }
 
 // -------------------------------------------------------------- passwords
 
-/// A saved login's metadata. No username and no password: both are encrypted and need the key.
+/// A saved login as the page lists it: where, and as whom. The password is never here; it is
+/// asked for on an explicit click.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoginEntry {
+pub struct LoginView {
     pub id: String,
     pub origin: String,
+    /// `None` where the row does not open with the current key.
+    pub username: Option<String>,
     pub created_ms: i64,
     pub last_used_ms: Option<i64>,
     pub times_used: u32,
 }
 
-/// Logins whose origin contains `query` (case-insensitive; empty keeps all), by site then age.
-pub fn passwords_list(rows: &[LoginEntry], query: &str) -> Vec<LoginEntry> {
+impl LoginView {
+    /// The origin without its scheme: what the row shows as the site.
+    pub fn site(&self) -> &str {
+        self.origin
+            .split_once("://")
+            .map_or(self.origin.as_str(), |(_, rest)| rest)
+    }
+}
+
+/// Logins whose site or username contains `query` (case-insensitive; empty keeps all), by site
+/// then age.
+pub fn passwords_list(rows: &[LoginView], query: &str) -> Vec<LoginView> {
     let needle = query.trim().to_lowercase();
-    let site = |e: &LoginEntry| {
-        let o = e.origin.to_lowercase();
-        o.split_once("://")
-            .map_or(o.clone(), |(_, rest)| rest.to_owned())
-    };
-    let mut out: Vec<LoginEntry> = rows
+    let mut out: Vec<LoginView> = rows
         .iter()
-        .filter(|e| needle.is_empty() || contains_ci(&e.origin, &needle))
+        .filter(|e| {
+            needle.is_empty()
+                || contains_ci(&e.origin, &needle)
+                || e.username
+                    .as_deref()
+                    .is_some_and(|u| contains_ci(u, &needle))
+        })
         .cloned()
         .collect();
-    out.sort_by_cached_key(|e| (site(e), e.created_ms, e.id.clone()));
+    out.sort_by_cached_key(|e| (e.site().to_lowercase(), e.created_ms, e.id.clone()));
     out
 }
 
+/// Whether the saved passwords can be shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultStatus {
+    /// Not unlocked: nothing is listed.
+    Locked,
+    Unlocked,
+    /// The OS keyring cannot be used; the reason is its own text.
+    Unavailable(String),
+    /// The key is new or lost and `rows` saved logins no longer open with it.
+    Unreadable {
+        rows: usize,
+    },
+}
+
+/// The status card's title and body.
+pub fn status_text(status: &VaultStatus) -> (&'static str, String) {
+    match status {
+        VaultStatus::Locked => (
+            "Passwords are locked",
+            "Unlock them with your system keyring to see saved logins.".to_owned(),
+        ),
+        VaultStatus::Unlocked => ("Saved passwords", String::new()),
+        VaultStatus::Unavailable(why) => (
+            "Passwords are unavailable",
+            format!("The system keyring cannot be used: {why}"),
+        ),
+        VaultStatus::Unreadable { rows } => (
+            "Saved passwords cannot be read",
+            format!(
+                "{rows} saved login{} no longer open with the key in your system keyring. \
+                 They stay on disk, and new logins can still be saved.",
+                if *rows == 1 { "" } else { "s" }
+            ),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------- blocker
+
+/// The address pill's blocker badge for the visible page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockerBadge {
+    pub count: u32,
+    /// The site is on the exceptions list: blocking is off there.
+    pub site_allowed: bool,
+    /// The badge shows: something was blocked, or blocking is off for the site.
+    pub visible: bool,
+}
+
+pub fn blocker_state(count: u32, page_url: &str, exceptions: &[String]) -> BlockerBadge {
+    let site_allowed = crate::zoom::host_of(page_url).is_some_and(|h| exceptions.contains(&h));
+    BlockerBadge {
+        count,
+        site_allowed,
+        visible: count > 0 || site_allowed,
+    }
+}
+
+// ---------------------------------------------------------- internal pages
+
+/// A page the shell draws itself (native Slint, never a web page), shown in a tab whose URL is
+/// [`InternalPage::url`]. The tab's URL is the one owner: the session restores it as any tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InternalPage {
+    Settings,
+    History,
+    Bookmarks,
+    Downloads,
+    Passwords,
+}
+
+impl InternalPage {
+    pub const ALL: [InternalPage; 5] = [
+        InternalPage::Settings,
+        InternalPage::History,
+        InternalPage::Bookmarks,
+        InternalPage::Downloads,
+        InternalPage::Passwords,
+    ];
+
+    pub fn url(self) -> &'static str {
+        match self {
+            InternalPage::Settings => "wubble://settings",
+            InternalPage::History => "wubble://history",
+            InternalPage::Bookmarks => "wubble://bookmarks",
+            InternalPage::Downloads => "wubble://downloads",
+            InternalPage::Passwords => "wubble://passwords",
+        }
+    }
+
+    /// The tab row's title.
+    pub fn title(self) -> &'static str {
+        match self {
+            InternalPage::Settings => "Settings",
+            InternalPage::History => "History",
+            InternalPage::Bookmarks => "Bookmarks",
+            InternalPage::Downloads => "Downloads",
+            InternalPage::Passwords => "Passwords",
+        }
+    }
+
+    /// The page a URL names; a trailing slash and the scheme's case do not matter.
+    pub fn from_url(url: &str) -> Option<InternalPage> {
+        let url = url.trim().trim_end_matches('/');
+        Self::ALL
+            .into_iter()
+            .find(|p| p.url().eq_ignore_ascii_case(url))
+    }
+}
+
 // --------------------------------------------------------------- settings
+
+/// The control a settings row shows, picked by the setting's kind ([`control_for`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Control {
+    /// On / off.
+    Toggle,
+    /// One of these stored words (a search engine's id, a choice's word).
+    Segmented(&'static [&'static str]),
+    /// A whole number, stepped within the range.
+    Stepper { min: u32, max: u32 },
+    /// A number dragged within the range.
+    Slider { min: f32, max: f32 },
+    /// A list of strings: rows with remove, and a field to add.
+    ListEditor,
+    /// A map of key to number: rows with remove.
+    MapEditor,
+}
+
+/// The search engines' stored ids, the words of the engine's segmented control.
+const ENGINE_IDS: [&str; crate::omnibox::ENGINES.len()] = {
+    let mut ids = [""; crate::omnibox::ENGINES.len()];
+    let mut i = 0;
+    while i < ids.len() {
+        ids[i] = crate::omnibox::ENGINES[i].id;
+        i += 1;
+    }
+    ids
+};
+
+/// The control for a kind. Exhaustive, with no catch-all: a new kind does not compile until it
+/// has a control, and a new row of an existing kind needs no UI code at all.
+pub fn control_for(kind: SettingKind) -> Control {
+    match kind {
+        SettingKind::Bool => Control::Toggle,
+        SettingKind::Count { min, max } => Control::Stepper { min, max },
+        SettingKind::Float { min, max } => Control::Slider { min, max },
+        SettingKind::SearchEngine => Control::Segmented(&ENGINE_IDS),
+        SettingKind::Choice(words) => Control::Segmented(words),
+        SettingKind::List => Control::ListEditor,
+        SettingKind::Map => Control::MapEditor,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingRow {
     pub key: &'static str,
     pub label: &'static str,
     pub kind: SettingKind,
+    pub control: Control,
     /// Storage text: the stored value if valid, else the default.
     pub value: String,
     /// The value differs from the default.
     pub changed: bool,
     pub restart: bool,
+    /// A list or map row's entries, decoded once here; empty for other kinds.
+    pub entries: Vec<Entry>,
+}
+
+/// One removable entry of a list: what it shows, and what removing it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub label: String,
+    pub key: String,
+}
+
+/// A list or map row's entries: a list item is its own key, a map entry is named by its key.
+fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> Vec<Entry> {
+    match def.kind {
+        SettingKind::List => crate::apply::list(def, stored)
+            .into_iter()
+            .map(|item| Entry {
+                label: item.clone(),
+                key: item,
+            })
+            .collect(),
+        SettingKind::Map => crate::apply::map(def, stored)
+            .into_iter()
+            .map(|(key, v)| Entry {
+                label: format!("{key}: {v}"),
+                key,
+            })
+            .collect(),
+        _ => vec![],
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -334,35 +618,117 @@ pub struct SectionView {
     pub rows: Vec<SettingRow>,
 }
 
+/// The order the page lists its sections in; `Hidden` is never listed.
+pub const SECTION_ORDER: [Section; 4] = [
+    Section::General,
+    Section::Privacy,
+    Section::Appearance,
+    Section::Performance,
+];
+
 /// The settings page from the stored `key -> text` rows. A missing or invalid value shows the
 /// default, as the store reads it. `Hidden` settings are left out; sections keep the table order
 /// and an empty section is not listed.
 pub fn settings_page(stored: &HashMap<String, String>) -> Vec<SectionView> {
-    const ORDER: [Section; 3] = [Section::General, Section::Privacy, Section::Appearance];
-    ORDER
+    settings_page_from(settings::ALL, stored)
+}
+
+/// [`settings_page`] over any table: the page is generated from the definitions alone.
+pub fn settings_page_from(
+    defs: &[&settings::SettingDef],
+    stored: &HashMap<String, String>,
+) -> Vec<SectionView> {
+    SECTION_ORDER
         .iter()
         .filter_map(|&section| {
-            let rows: Vec<SettingRow> = settings::ALL
+            let rows: Vec<SettingRow> = defs
                 .iter()
                 .filter(|d| d.section == section)
                 .map(|d| {
-                    let value = stored
-                        .get(d.key)
-                        .filter(|v| d.kind.accepts(v))
-                        .map_or(d.default, String::as_str);
+                    let value = crate::apply::value_of(d, stored);
                     SettingRow {
                         key: d.key,
                         label: d.label,
                         kind: d.kind,
+                        control: control_for(d.kind),
                         value: value.to_owned(),
                         changed: value != d.default,
                         restart: d.restart,
+                        entries: entries_of(d, stored),
                     }
                 })
                 .collect();
             (!rows.is_empty()).then_some(SectionView { section, rows })
         })
         .collect()
+}
+
+/// The rows whose label or key contains `query` (case-insensitive; blank keeps all). A section
+/// left with no row is dropped.
+pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
+    let needle = query.trim().to_lowercase();
+    sections
+        .iter()
+        .filter_map(|s| {
+            let rows: Vec<SettingRow> = s
+                .rows
+                .iter()
+                .filter(|r| {
+                    needle.is_empty() || contains_ci(r.label, &needle) || r.key.contains(&needle)
+                })
+                .cloned()
+                .collect();
+            (!rows.is_empty()).then_some(SectionView {
+                section: s.section,
+                rows,
+            })
+        })
+        .collect()
+}
+
+// ------------------------------------------------------------------ sites
+
+/// Per-site data the user can delete: saved zoom levels and permission decisions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SitesView {
+    /// By host; each named by its host.
+    pub zoom: Vec<Entry>,
+    /// By origin then permission; each named by [`permission_key`].
+    pub permissions: Vec<Entry>,
+}
+
+/// What names a remembered decision on the page: stable while the list changes under it.
+pub fn permission_key(origin: &str, kind: crate::site::Permission) -> String {
+    format!("{origin}|{}", kind.as_str())
+}
+
+/// The origin and permission a [`permission_key`] names.
+pub fn parse_permission_key(key: &str) -> Option<(&str, crate::site::Permission)> {
+    let (origin, kind) = key.rsplit_once('|')?;
+    Some((origin, crate::site::Permission::parse(kind)?))
+}
+
+/// The Sites section from the zoom table and the remembered decisions.
+pub fn sites_view(
+    zoom: &crate::zoom::ZoomTable,
+    permissions: &crate::site::SitePermissions,
+) -> SitesView {
+    SitesView {
+        zoom: zoom
+            .iter()
+            .map(|(h, p)| Entry {
+                label: format!("{h}: {p}%"),
+                key: h.clone(),
+            })
+            .collect(),
+        permissions: permissions
+            .iter()
+            .map(|(o, k, d)| Entry {
+                label: format!("{o}: {} ({d:?})", k.ask_text()),
+                key: permission_key(o, k),
+            })
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -383,19 +749,6 @@ mod tests {
     }
 
     #[test]
-    fn civil_from_days_known_values() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(-1), (1969, 12, 31));
-        assert_eq!(civil_from_days(19_782), (2024, 2, 29)); // leap day
-        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
-        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-        assert_eq!(civil_from_days(-719_468), (0, 3, 1));
-        assert_eq!(civil_from_days(47_482), (2100, 1, 1));
-        assert_eq!(civil_from_days(47_541), (2100, 3, 1)); // 2100 is not a leap year
-        assert_eq!(civil_from_days(local_day(NOW, 0)), (2024, 3, 1));
-    }
-
-    #[test]
     fn history_groups_by_day_newest_first() {
         let rows = [
             visit("https://a.test/", "A", NOW - HOUR),
@@ -403,18 +756,14 @@ mod tests {
             visit("https://c.test/", "C", NOW - 2 * HOUR),
             visit("https://d.test/", "D", NOW - 24 * 3 * HOUR),
         ];
-        let g = history_page(&rows, "", 0, NOW);
+        let g = history_page(&rows, 0, NOW);
         let labels: Vec<_> = g.iter().map(|g| g.label).collect();
         assert_eq!(
             labels,
             [
                 DayLabel::Today,
                 DayLabel::Yesterday,
-                DayLabel::Date {
-                    year: 2024,
-                    month: 2,
-                    day: 27
-                }
+                DayLabel::Date(NaiveDate::from_ymd_opt(2024, 2, 27).unwrap())
             ]
         );
         let urls: Vec<_> = g[0].rows.iter().map(|r| r.url.as_str()).collect();
@@ -428,55 +777,24 @@ mod tests {
         let late = NOW - 12 * HOUR - HOUR / 2;
         let rows = [visit("https://a.test/", "A", late)];
         let now = NOW; // Mar 1 12:00 UTC
-        assert_eq!(history_page(&rows, "", 60, now)[0].label, DayLabel::Today);
-        assert_eq!(
-            history_page(&rows, "", 0, now)[0].label,
-            DayLabel::Yesterday
-        );
-        assert_eq!(
-            history_page(&rows, "", -60, now)[0].label,
-            DayLabel::Yesterday
-        );
+        assert_eq!(history_page(&rows, 60, now)[0].label, DayLabel::Today);
+        assert_eq!(history_page(&rows, 0, now)[0].label, DayLabel::Yesterday);
+        assert_eq!(history_page(&rows, -60, now)[0].label, DayLabel::Yesterday);
         // Exactly local midnight belongs to the new day; one ms before to the old one.
         let midnight = 19_783 * DAY_MS;
         let rows = [
             visit("https://a.test/", "A", midnight),
             visit("https://b.test/", "B", midnight - 1),
         ];
-        let g = history_page(&rows, "", 0, NOW);
+        let g = history_page(&rows, 0, NOW);
         assert_eq!(g.len(), 2);
         assert_eq!(g[0].rows[0].url, "https://a.test/");
         // Month and leap boundaries print as dates.
         let far = [visit("https://a.test/", "A", 951_782_400_000)]; // 2000-02-29
         assert_eq!(
-            history_page(&far, "", 0, NOW)[0].label,
-            DayLabel::Date {
-                year: 2000,
-                month: 2,
-                day: 29
-            }
+            history_page(&far, 0, NOW)[0].label,
+            DayLabel::Date(NaiveDate::from_ymd_opt(2000, 2, 29).unwrap())
         );
-    }
-
-    #[test]
-    fn history_search_is_case_insensitive_over_title_and_url() {
-        let rows = [
-            visit("https://rust-lang.org/", "Rust Language", NOW),
-            visit("https://example.com/Docs", "Example", NOW - HOUR),
-            visit("https://other.test/", "Other", NOW - 2 * HOUR),
-        ];
-        let titles = |q: &str| -> Vec<String> {
-            history_page(&rows, q, 0, NOW)
-                .into_iter()
-                .flat_map(|g| g.rows)
-                .map(|r| r.title)
-                .collect()
-        };
-        assert_eq!(titles("RUST"), ["Rust Language"]);
-        assert_eq!(titles("docs"), ["Example"]);
-        assert_eq!(titles("  "), ["Rust Language", "Example", "Other"]);
-        assert!(titles("nothing").is_empty());
-        assert!(history_page(&[], "", 0, NOW).is_empty());
     }
 
     fn bm(id: i64, parent: Option<i64>, folder: bool, pos: u32, title: &str) -> BookmarkRow {
@@ -555,59 +873,11 @@ mod tests {
         assert_eq!(line(&HashSet::from([2])).len(), 2);
     }
 
-    fn dl(id: u64, state: DownloadState, received: u64, total: Option<u64>) -> DownloadRow {
-        DownloadRow {
-            id,
-            name: format!("f{id}"),
-            url: format!("https://x.test/{id}"),
-            state,
-            received,
-            total,
-        }
-    }
-
-    #[test]
-    fn downloads_active_first_then_newest_first() {
-        use DownloadState::*;
-        let rows = [
-            dl(1, Done, 10, Some(10)),
-            dl(2, Running, 5, Some(10)),
-            dl(3, Failed, 0, None),
-            dl(4, Paused, 1, Some(10)),
-            dl(5, Cancelled, 0, None),
-            dl(6, Waiting, 0, None),
-        ];
-        let ids: Vec<u64> = downloads_list(&rows).iter().map(|d| d.id).collect();
-        assert_eq!(ids, [6, 4, 2, 5, 3, 1]);
-    }
-
-    #[test]
-    fn download_percent_and_labels() {
-        use DownloadState::*;
-        let item = |r| download_item(&r);
-        assert_eq!(item(dl(1, Running, 5, Some(10))).percent, Some(50));
-        assert_eq!(item(dl(1, Running, 5, None)).percent, None);
-        assert_eq!(item(dl(1, Running, 5, Some(0))).percent, None);
-        assert_eq!(item(dl(1, Running, 50, Some(10))).percent, Some(100));
-        assert_eq!(item(dl(1, Done, 7, None)).percent, Some(100));
-        assert_eq!(
-            item(dl(1, Running, 3 << 20, Some(10 << 20))).label,
-            "3.0 MB of 10.0 MB"
-        );
-        assert_eq!(item(dl(1, Running, 512, None)).label, "512 B");
-        assert_eq!(
-            item(dl(1, Paused, 1024, Some(2048))).label,
-            "Paused, 1.0 KB of 2.0 KB"
-        );
-        assert_eq!(item(dl(1, Done, 2048, Some(2048))).label, "2.0 KB");
-        assert_eq!(item(dl(1, Failed, 0, None)).label, "Failed");
-        assert_eq!(item(dl(1, Running, 1 << 40, None)).label, "1.0 TB");
-    }
-
-    fn entry(id: &str, origin: &str, created: i64) -> LoginEntry {
-        LoginEntry {
+    fn entry(id: &str, origin: &str, created: i64) -> LoginView {
+        LoginView {
             id: id.into(),
             origin: origin.into(),
+            username: Some(format!("user{id}")),
             created_ms: created,
             last_used_ms: None,
             times_used: 0,
@@ -629,6 +899,25 @@ mod tests {
         assert_eq!(ids("A.TEST"), ["3", "2", "4"]);
         assert_eq!(ids(":8443"), ["4"]);
         assert!(ids("zzz").is_empty());
+        assert_eq!(ids("USER2"), ["2"]);
+    }
+
+    #[test]
+    fn status_text_names_each_state() {
+        let t = |s| status_text(&s);
+        assert_eq!(t(VaultStatus::Locked).0, "Passwords are locked");
+        assert_eq!(t(VaultStatus::Unlocked).0, "Saved passwords");
+        let (title, body) = t(VaultStatus::Unavailable("no daemon".into()));
+        assert_eq!(title, "Passwords are unavailable");
+        assert!(body.contains("no daemon"));
+        let (title, body) = t(VaultStatus::Unreadable { rows: 1 });
+        assert_eq!(title, "Saved passwords cannot be read");
+        assert!(body.starts_with("1 saved login no longer"));
+        assert!(
+            t(VaultStatus::Unreadable { rows: 3 })
+                .1
+                .starts_with("3 saved logins")
+        );
     }
 
     fn stored(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -642,10 +931,7 @@ mod tests {
     fn settings_page_groups_sections_and_skips_hidden() {
         let page = settings_page(&HashMap::new());
         let sections: Vec<_> = page.iter().map(|s| s.section).collect();
-        assert_eq!(
-            sections,
-            [Section::General, Section::Privacy, Section::Appearance]
-        );
+        assert_eq!(sections, SECTION_ORDER);
         let keys: Vec<_> = page.iter().flat_map(|s| &s.rows).map(|r| r.key).collect();
         assert!(!keys.contains(&"ui.sidebar_width") && !keys.contains(&"keys.overrides"));
         // Every non-hidden setting appears exactly once.
@@ -688,5 +974,309 @@ mod tests {
         assert_eq!(row("history.retention_days").value, "0");
         assert!(row("search.engine").changed);
         assert!(!row("ui.sidebar_mode").restart);
+    }
+
+    #[test]
+    fn every_kind_has_a_control() {
+        let kinds = [
+            (SettingKind::Bool, Control::Toggle),
+            (
+                SettingKind::Count { min: 1, max: 9 },
+                Control::Stepper { min: 1, max: 9 },
+            ),
+            (
+                SettingKind::Float { min: 0.5, max: 2.0 },
+                Control::Slider { min: 0.5, max: 2.0 },
+            ),
+            (SettingKind::SearchEngine, Control::Segmented(&ENGINE_IDS)),
+            (
+                SettingKind::Choice(&["a", "b"]),
+                Control::Segmented(&["a", "b"]),
+            ),
+            (SettingKind::List, Control::ListEditor),
+            (SettingKind::Map, Control::MapEditor),
+        ];
+        for (kind, want) in kinds {
+            assert_eq!(control_for(kind), want, "{kind:?}");
+        }
+    }
+
+    /// A table the app does not ship: every kind becomes a row with its control, with no UI
+    /// code for any of them.
+    #[test]
+    fn a_page_is_generated_from_any_table() {
+        use settings::SettingDef;
+        const fn def(key: &'static str, kind: SettingKind, default: &'static str) -> SettingDef {
+            SettingDef {
+                key,
+                kind,
+                default,
+                label: key,
+                section: Section::General,
+                restart: false,
+            }
+        }
+        const DEFS: [SettingDef; 8] = [
+            def("t.bool", SettingKind::Bool, "1"),
+            def("t.count", SettingKind::Count { min: 0, max: 9 }, "3"),
+            def("t.float", SettingKind::Float { min: 0.0, max: 1.0 }, "0.5"),
+            def("t.engine", SettingKind::SearchEngine, ""),
+            def("t.choice", SettingKind::Choice(&["x", "y"]), "x"),
+            def("t.list", SettingKind::List, "[]"),
+            def("t.map", SettingKind::Map, "{}"),
+            SettingDef {
+                section: Section::Hidden,
+                ..def("t.hidden", SettingKind::Bool, "0")
+            },
+        ];
+        let defs: Vec<&SettingDef> = DEFS.iter().collect();
+        let page = settings_page_from(
+            &defs,
+            &stored(&[
+                ("t.count", "7"),
+                ("t.list", r#"["a.test"]"#),
+                ("t.map", r#"{"b.test":90}"#),
+            ]),
+        );
+        assert_eq!(page.len(), 1);
+        let rows = &page[0].rows;
+        assert_eq!(rows.len(), 7);
+        for (row, d) in rows.iter().zip(&DEFS) {
+            assert_eq!(row.control, control_for(d.kind), "{}", d.key);
+        }
+        assert_eq!((rows[1].value.as_str(), rows[1].changed), ("7", true));
+        // List and map rows come decoded: what each entry shows and what removing it names.
+        let entry = |label: &str, key: &str| Entry {
+            label: label.into(),
+            key: key.into(),
+        };
+        assert_eq!(rows[5].entries, [entry("a.test", "a.test")]);
+        assert_eq!(rows[6].entries, [entry("b.test: 90", "b.test")]);
+        assert!(rows[0].entries.is_empty());
+    }
+
+    #[test]
+    fn filter_matches_label_or_key_and_drops_empty_sections() {
+        let page = settings_page(&HashMap::new());
+        let keys = |q: &str| -> Vec<&str> {
+            filter(&page, q)
+                .iter()
+                .flat_map(|s| s.rows.iter().map(|r| r.key))
+                .collect()
+        };
+        assert_eq!(keys("BLOCK ADS"), ["blocker.enabled"]);
+        assert_eq!(keys("glass.quality"), ["glass.quality"]);
+        assert_eq!(filter(&page, "zoom").len(), 1);
+        assert!(filter(&page, "no such setting").is_empty());
+        assert_eq!(filter(&page, "  "), page);
+    }
+
+    #[test]
+    fn day_labels_read_as_dates() {
+        assert_eq!(DayLabel::Today.text(), "Today");
+        assert_eq!(DayLabel::Yesterday.text(), "Yesterday");
+        let d = |y, m, day| DayLabel::Date(NaiveDate::from_ymd_opt(y, m, day).unwrap()).text();
+        assert_eq!(d(1970, 1, 1), "Thu, 1 Jan 1970");
+        assert_eq!(d(2026, 11, 3), "Tue, 3 Nov 2026");
+        assert_eq!(d(2024, 2, 29), "Thu, 29 Feb 2024");
+        assert_eq!(d(1969, 12, 31), "Wed, 31 Dec 1969");
+    }
+
+    #[test]
+    fn history_lines_put_a_header_before_each_day() {
+        let row = |ms| HistoryRow {
+            url: format!("https://x.test/{ms}"),
+            title: String::new(),
+            visit_ms: ms,
+            visit_id: ms,
+        };
+        let now = 3 * DAY_MS + 5;
+        let groups = history_page(&[row(now), row(now - 1), row(DAY_MS)], 0, now);
+        let lines = history_lines(&groups);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(
+            lines[0],
+            HistoryLine::Day {
+                label: "Today".into()
+            }
+        );
+        assert!(matches!(&lines[1], HistoryLine::Visit(r) if r.visit_ms == now));
+        assert!(matches!(&lines[3], HistoryLine::Day { label } if label == "Fri, 2 Jan 1970"));
+        assert!(history_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn clear_ranges_reach_back_from_now() {
+        assert_eq!(
+            ClearRange::LastHour.bounds(10 * MIN_MS * 60),
+            (9 * 60 * MIN_MS, i64::MAX)
+        );
+        assert_eq!(ClearRange::LastDay.bounds(2 * DAY_MS), (DAY_MS, i64::MAX));
+        assert_eq!(ClearRange::All.bounds(5), (i64::MIN, i64::MAX));
+        assert_eq!(ClearRange::ALL.len(), 3);
+    }
+
+    fn link(id: i64, parent: Option<i64>, pos: u32, title: &str, url: &str) -> BookmarkRow {
+        BookmarkRow {
+            url: Some(url.into()),
+            ..bm(id, parent, false, pos, title)
+        }
+    }
+
+    fn sample() -> Vec<BookmarkRow> {
+        vec![
+            bm(1, None, true, 0, "News"),
+            bm(2, Some(1), true, 0, "World"),
+            link(3, Some(2), 0, "Wire", "https://www.wire.test/a"),
+            link(4, None, 1, "Home", "https://home.test/"),
+        ]
+    }
+
+    #[test]
+    fn bookmark_for_url_ignores_scheme_and_www() {
+        let rows = sample();
+        assert_eq!(bookmark_for_url(&rows, "http://wire.test/a"), Some(3));
+        assert_eq!(bookmark_for_url(&rows, "https://wire.test/b"), None);
+    }
+
+    #[test]
+    fn add_current_refuses_duplicates_and_non_pages() {
+        let rows = sample();
+        assert_eq!(add_current(&rows, "T", "https://home.test", None), None);
+        assert_eq!(add_current(&rows, "T", "about:blank", None), None);
+        assert_eq!(add_current(&rows, "T", "wubble://history", None), None);
+        assert_eq!(
+            add_current(&rows, " ", "https://new.test/", Some(1)),
+            Some(BookmarkEdit::Add {
+                parent: Some(1),
+                title: "https://new.test/".into(),
+                url: "https://new.test/".into()
+            })
+        );
+    }
+
+    #[test]
+    fn move_to_end_counts_the_new_siblings() {
+        let rows = sample();
+        assert_eq!(
+            move_to_end(&rows, 4, Some(1)),
+            BookmarkEdit::Move {
+                id: 4,
+                to: Some(1),
+                index: 1
+            }
+        );
+        // Moving within the same folder does not count itself.
+        assert_eq!(
+            move_to_end(&rows, 4, None),
+            BookmarkEdit::Move {
+                id: 4,
+                to: None,
+                index: 1
+            }
+        );
+    }
+
+    #[test]
+    fn folder_choices_are_depth_first_without_the_moved_subtree() {
+        let rows = sample();
+        let labels = |m| -> Vec<(String, usize)> {
+            folder_choices(&rows, m)
+                .into_iter()
+                .map(|c| (c.label, c.depth))
+                .collect()
+        };
+        assert_eq!(
+            labels(None),
+            [
+                ("Bookmarks".into(), 0),
+                ("News".into(), 1),
+                ("World".into(), 2)
+            ]
+        );
+        assert_eq!(labels(Some(2)).len(), 2);
+        assert_eq!(labels(Some(1)).len(), 1);
+    }
+
+    #[test]
+    fn filter_tree_lists_matching_links_with_their_path() {
+        let rows = sample();
+        assert!(filter_tree(&rows, "  ").is_empty());
+        let hits = filter_tree(&rows, "WIRE");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0.id, 3);
+        assert_eq!(hits[0].1, "News / World");
+        assert_eq!(filter_tree(&rows, "home")[0].1, "");
+        // Folders are not matches.
+        assert!(filter_tree(&rows, "news").is_empty());
+    }
+
+    #[test]
+    fn blocker_badge_shows_for_a_count_or_an_allowed_site() {
+        let ex = vec!["a.test".to_owned()];
+        assert!(!blocker_state(0, "https://b.test/", &ex).visible);
+        assert!(blocker_state(2, "https://b.test/", &ex).visible);
+        let s = blocker_state(0, "https://A.test/x", &ex);
+        assert!(s.site_allowed && s.visible);
+        assert!(!blocker_state(0, "about:blank", &ex).visible);
+    }
+
+    #[test]
+    fn internal_pages_round_trip_their_url() {
+        for p in InternalPage::ALL {
+            assert_eq!(InternalPage::from_url(p.url()), Some(p));
+            assert_eq!(InternalPage::from_url(&format!("{}/", p.url())), Some(p));
+            assert!(!p.title().is_empty());
+        }
+        assert_eq!(
+            InternalPage::from_url("WUBBLE://settings"),
+            Some(InternalPage::Settings)
+        );
+        assert_eq!(
+            InternalPage::from_url("wubble://History/"),
+            Some(InternalPage::History)
+        );
+        assert_eq!(InternalPage::from_url("https://settings"), None);
+        assert_eq!(InternalPage::from_url("wubble://nope"), None);
+    }
+
+    #[test]
+    fn sites_view_lists_zoom_and_decisions_in_order() {
+        use crate::site::{Decision, Permission, SitePermissions};
+        let zoom = crate::zoom::ZoomTable::from([("b.test".into(), 125), ("a.test".into(), 90)]);
+        let mut perms = SitePermissions::default();
+        perms.set("https://b.test", Permission::Camera, Decision::Allow);
+        perms.set("https://a.test", Permission::Microphone, Decision::Block);
+        perms.set("https://a.test", Permission::Camera, Decision::Allow);
+        let v = sites_view(&zoom, &perms);
+        let zoom: Vec<(&str, &str)> = v
+            .zoom
+            .iter()
+            .map(|e| (e.key.as_str(), e.label.as_str()))
+            .collect();
+        assert_eq!(
+            zoom,
+            [("a.test", "a.test: 90%"), ("b.test", "b.test: 125%")]
+        );
+        // Each decision is named by its origin and kind, not its place in the list.
+        let origins: Vec<(&str, Permission)> = v
+            .permissions
+            .iter()
+            .map(|e| parse_permission_key(&e.key).unwrap())
+            .collect();
+        assert_eq!(
+            v.permissions[0].label,
+            "https://a.test: Use your camera (Allow)"
+        );
+        assert_eq!(parse_permission_key("https://a.test|nope"), None);
+        assert_eq!(parse_permission_key("https://a.test"), None);
+        assert_eq!(
+            origins,
+            [
+                ("https://a.test", Permission::Camera),
+                ("https://a.test", Permission::Microphone),
+                ("https://b.test", Permission::Camera)
+            ]
+        );
     }
 }

@@ -22,10 +22,11 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use crate::lifecycle::{self, Activity, Lifecycle, Pin};
+use crate::pages::InternalPage;
 use crate::sleep::{Pressure, SleepPolicy};
 use crate::space::{
-    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceId, SplitGroup,
-    even,
+    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
+    SplitGroup, even,
 };
 use crate::tab::{Liveness, Tab, TabId};
 
@@ -79,6 +80,15 @@ pub enum Command {
     RenameSpace {
         space: SpaceId,
         name: String,
+    },
+    /// The Space's colour (the backdrop's dye follows it).
+    SetSpaceTint {
+        space: SpaceId,
+        tint: Rgb,
+    },
+    SetSpaceIcon {
+        space: SpaceId,
+        icon: SpaceIcon,
     },
     SetSpaceContainer {
         space: SpaceId,
@@ -142,6 +152,10 @@ pub enum Command {
         tab: TabId,
         right: bool,
     },
+    /// Shows an internal page: the active Space's tab already on it, else a new tab.
+    OpenInternal(InternalPage),
+    /// Hidden tabs are judged by this policy from the next tick on.
+    SetSleepPolicy(SleepPolicy),
     /// Coarse lifecycle tick: hidden tabs are put to sleep by the sleep policy.
     /// `now` also becomes the model's clock, the time later hides are stamped with.
     Tick {
@@ -188,6 +202,8 @@ pub struct Model {
     /// The memory pressure of the last `Command::Tick`. With `clock` it lets a
     /// hidden tab that becomes eligible for sleep between ticks be judged at once.
     pressure: Pressure,
+    /// When hidden tabs go to sleep (the settings' sleep rows).
+    policy: SleepPolicy,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
@@ -201,6 +217,7 @@ impl Model {
             id: SpaceId(0),
             name: "Space 1".into(),
             tint: Rgb(0x6a, 0x8f, 0xff),
+            icon: SpaceIcon::Personal,
             container: ContainerId::DEFAULT,
             pinned: vec![],
             items: vec![],
@@ -217,11 +234,17 @@ impl Model {
             tabs: BTreeMap::new(),
             clock: now,
             pressure: Pressure::None,
+            policy: SleepPolicy::default(),
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
             next_container: 1,
         }
+    }
+
+    /// The sleep policy hidden tabs are judged by.
+    pub fn policy(&self) -> SleepPolicy {
+        self.policy
     }
 
     /// The model's clock: the time it was started with or last ticked to.
@@ -260,6 +283,7 @@ impl Model {
             active_space,
             clock: now,
             pressure: Pressure::None,
+            policy: SleepPolicy::default(),
         };
         m.check()?;
         Ok(m)
@@ -927,7 +951,8 @@ impl Model {
         let Some(focused) = self.spaces[si].active.filter(|&f| f != tab) else {
             return vec![];
         };
-        if !self.order_idx(si).contains(&tab) {
+        if !self.order_idx(si).contains(&tab) || self.is_internal(tab) || self.is_internal(focused)
+        {
             return vec![];
         }
         let s = &mut self.spaces[si];
@@ -1025,7 +1050,7 @@ impl Model {
         let Some(t) = self.tabs.get_mut(&tab) else {
             return vec![];
         };
-        let (next, fx) = step(tab, t.lifecycle, event);
+        let (next, fx) = step(&self.policy, tab, t.lifecycle, event);
         t.lifecycle = next;
         fx
     }
@@ -1038,7 +1063,7 @@ impl Model {
         let mut fx = vec![];
         for (&tab, &state) in before {
             if !self.tabs.contains_key(&tab) {
-                fx.extend(step(tab, state, lifecycle::Event::Closed).1);
+                fx.extend(step(&self.policy, tab, state, lifecycle::Event::Closed).1);
             }
         }
         let ids: Vec<TabId> = self.tabs.keys().copied().collect();
@@ -1080,6 +1105,25 @@ impl Model {
             .collect()
     }
 
+    /// Whether the tab shows an internal page (no web view; never a split pane).
+    pub fn is_internal(&self, tab: TabId) -> bool {
+        self.tabs
+            .get(&tab)
+            .is_some_and(|t| InternalPage::from_url(&t.url).is_some())
+    }
+
+    fn open_internal(&mut self, page: InternalPage) -> Vec<Effect> {
+        let si = self.space_idx(self.active_space).expect("active space");
+        let existing = self
+            .order_idx(si)
+            .into_iter()
+            .find(|t| InternalPage::from_url(&self.tabs[t].url) == Some(page));
+        match existing {
+            Some(tab) => self.activate_tab(tab),
+            None => self.new_tab(page.url().to_owned(), None, None),
+        }
+    }
+
     fn set_url(&mut self, tab: TabId, url: &str) -> bool {
         match self.tabs.get_mut(&tab) {
             Some(t) => {
@@ -1091,9 +1135,14 @@ impl Model {
     }
 }
 
-/// The one call into `lifecycle::transition`, under the one sleep policy.
-fn step(tab: TabId, state: Lifecycle, event: lifecycle::Event) -> (Lifecycle, Vec<Effect>) {
-    let (next, fx) = lifecycle::transition(&SleepPolicy::default(), state, event);
+/// The one call into `lifecycle::transition`, under the model's sleep policy.
+fn step(
+    policy: &SleepPolicy,
+    tab: TabId,
+    state: Lifecycle,
+    event: lifecycle::Event,
+) -> (Lifecycle, Vec<Effect>) {
+    let (next, fx) = lifecycle::transition(policy, state, event);
     let fx = fx
         .into_iter()
         .map(|effect| Effect::Lifecycle { tab, effect })
@@ -1144,10 +1193,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             if m.has_container(container) {
                 let id = SpaceId(m.next_space);
                 m.next_space += 1;
+                let icon = SpaceIcon::nth(m.spaces.len());
                 m.spaces.push(Space {
                     id,
                     name,
                     tint,
+                    icon,
                     container,
                     pinned: vec![],
                     items: vec![],
@@ -1163,6 +1214,18 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
+        Command::SetSpaceTint { space, tint } => {
+            if let Some(si) = m.space_idx(space) {
+                m.spaces[si].tint = tint;
+            }
+            vec![]
+        }
+        Command::SetSpaceIcon { space, icon } => {
+            if let Some(si) = m.space_idx(space) {
+                m.spaces[si].icon = icon;
+            }
+            vec![]
+        }
         Command::SetSpaceContainer { space, container } => m.set_space_container(space, container),
         Command::DeleteSpace(s) => m.delete_space(s),
         Command::SwitchSpace(s) => m.switch_space(s),
@@ -1174,13 +1237,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
         Command::DeleteContainer(c) => m.delete_container(c),
         Command::ReopenInContainer { tab, container } => m.reopen_in_container(tab, container),
-        Command::Navigate { tab, url } => {
-            if m.set_url(tab, &url) {
-                vec![Effect::Navigate { tab, url }]
-            } else {
-                vec![]
-            }
-        }
+        // A web tab keeps its view and history: an internal page typed into it opens in its own tab.
+        Command::Navigate { tab, url } => match InternalPage::from_url(&url) {
+            Some(page) if m.tabs.contains_key(&tab) && !m.is_internal(tab) => m.open_internal(page),
+            _ if m.set_url(tab, &url) => vec![Effect::Navigate { tab, url }],
+            _ => vec![],
+        },
         Command::UrlChanged { tab, url } => {
             m.set_url(tab, &url);
             vec![]
@@ -1201,6 +1263,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::Unsplit(t) => m.unsplit(t),
         Command::ResizeSplit { space, stops } => m.resize_split(space, stops),
         Command::SwapPane { tab, right } => m.swap_pane(tab, right),
+        Command::OpenInternal(page) => m.open_internal(page),
+        Command::SetSleepPolicy(policy) => {
+            m.policy = policy;
+            vec![]
+        }
         Command::Tick { now, pressure } => {
             m.clock = now;
             m.pressure = pressure;

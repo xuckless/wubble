@@ -19,7 +19,9 @@ use turso::Connection;
 use wubble_core::import::{BookmarkNode as Imp, Imported, Placement, Source};
 use wubble_core::lifecycle::{Activity, Lifecycle, Pin as TabPin};
 use wubble_core::model::Model;
-use wubble_core::space::{Container, ContainerId, Folder, FolderId, Item, Space, SpaceId};
+use wubble_core::space::{
+    Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId,
+};
 use wubble_core::tab::{Liveness, Tab, TabId};
 
 use crate::bookmarks::{BookmarkKind, find_folder, find_link, insert_node, valid_link_url};
@@ -177,6 +179,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             id: SpaceId(next_space),
             name: sp.name.clone(),
             tint: sp.tint.unwrap_or(default_tint),
+            icon: SpaceIcon::nth(next_space as usize),
             container: container_of(sp.container),
             pinned: vec![],
             items: vec![],

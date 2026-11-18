@@ -28,11 +28,16 @@ import { Wobble } from "wobble.slint";
 import { SideEdges } from "model.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
-// resized (design browser/chrome.tsx: every `[data-ride]` section is translated by
-// `seam.ride(centre y, H)`). `ride` is that ride sampled per `Shell.ride-step` of window height.
+// resized (design browser/chrome.tsx: every `[data-ride]` section is translated by the string's
+// offset at its centre height). `ride` is the string's offset sampled every `step` of window
+// height (wubble_core::bow::EdgeTable), the same table the glass edge and the page edge follow;
+// linear between samples, as `EdgeTable::at`.
 component Ride inherits Rectangle {
     in property <[length]> ride;
-    out property <length> dx: root.ride.length == 0 ? 0px : root.ride[Math.round((root.absolute-position.y + root.height / 2) / Shell.ride-step)];
+    in property <length> step;
+    property <float> u: root.step > 0 ? (root.absolute-position.y + root.height / 2) / root.step : -1;
+    property <int> i: Math.max(0, Math.min(root.ride.length - 2, Math.floor(root.u)));
+    out property <length> dx: root.ride.length < 2 || root.u < 0 || root.u > root.ride.length - 1 ? 0px : root.ride[root.i] + (root.ride[root.i + 1] - root.ride[root.i]) * (root.u - root.i);
     HorizontalLayout {
         padding-left: root.dx;
         padding-right: -root.dx;
@@ -41,10 +46,18 @@ component Ride inherits Rectangle {
 }
 
 export component Sidebar inherits Rectangle {
-    // the seam's ride table (app.slint `seam-ride`)
+    // the seam's edge table and its pitch (app.slint `seam-edge`)
     in property <[length]> ride;
+    in property <length> ride-step;
     in property <string> address-host;
     in property <string> address-path;
+    in property <bool> address-bookmarkable: false;
+    in property <bool> address-bookmarked: false;
+    in property <bool> address-blocker-visible: false;
+    in property <bool> address-blocker-allowed: false;
+    in property <int> address-blocked: 0;
+    callback address-bookmark-requested();
+    callback address-blocker-requested(length, length);
     in property <[TabItem]> pinned-tabs;
     in property <[TabItem]> tabs;
     in property <[SpaceItem]> spaces;
@@ -99,6 +112,8 @@ export component Sidebar inherits Rectangle {
         downloads: downloads.absolute-position.x,
         downloads-end: downloads.absolute-position.x + downloads.width,
         downloads-y: downloads.absolute-position.y,
+        settings: settings.absolute-position.x,
+        settings-end: settings.absolute-position.x + settings.width,
     };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
@@ -106,6 +121,8 @@ export component Sidebar inherits Rectangle {
     // There are downloads to list: the download button shows in the footer.
     in property <bool> has-downloads: false;
     callback downloads-requested();
+    // The footer's settings button: opens wubble://settings.
+    callback settings-requested();
     // Right of the download button, level with its top, in window coordinates: the popover opens
     // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
     out property <Origin> downloads-anchor: { x: downloads.absolute-position.x + downloads.width + Shell.prompt-gap, y: downloads.absolute-position.y };
@@ -180,6 +197,7 @@ export component Sidebar inherits Rectangle {
         // .wb-side-top: 30 high, lights 10 in (centred on the rail)
         Ride {
             ride: root.ride;
+            step: root.ride-step;
             Rectangle {
                 height: Shell.side-top;
                 lights := WindowLights {
@@ -215,6 +233,7 @@ export component Sidebar inherits Rectangle {
 
         Ride {
             ride: root.ride;
+            step: root.ride-step;
             pill := AddressPill {
                 // the ride's row would otherwise hold it at its hidden glass row's width, wider
                 // than the rail
@@ -225,6 +244,17 @@ export component Sidebar inherits Rectangle {
                 loading: root.address-loading;
                 host: root.address-host;
                 path: root.address-path;
+                bookmarkable: root.address-bookmarkable;
+                bookmarked: root.address-bookmarked;
+                blocker-visible: root.address-blocker-visible;
+                blocker-allowed: root.address-blocker-allowed;
+                blocked: root.address-blocked;
+                bookmark-requested => {
+                    root.address-bookmark-requested();
+                }
+                blocker-requested(x, y) => {
+                    root.address-blocker-requested(x, y);
+                }
                 compact: root.compact;
                 activated => {
                     root.address-activated();
@@ -234,6 +264,7 @@ export component Sidebar inherits Rectangle {
 
         if root.pinned-tabs.length > 0: Ride {
             ride: root.ride;
+            step: root.ride-step;
             FavGrid {
                 tabs: root.pinned-tabs;
                 active-tab-id: root.active-tab-id;
@@ -250,6 +281,7 @@ export component Sidebar inherits Rectangle {
         // .wb-space-name
         if !root.compact && root.space-index >= 0 && root.space-index < root.spaces.length: Ride {
             ride: root.ride;
+            step: root.ride-step;
             Rectangle {
                 height: Shell.space-name-height;
                 Text {
@@ -272,6 +304,7 @@ export component Sidebar inherits Rectangle {
         Ride {
             vertical-stretch: 1;
             ride: root.ride;
+            step: root.ride-step;
             VerticalLayout {
                 vertical-stretch: 1;
                 spacing: Chrome.rowGap;
@@ -386,19 +419,31 @@ export component Sidebar inherits Rectangle {
         switcher := Rectangle {
             property <length> pitch: Shell.space-tile + Shell.space-gap;
             property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            height: root.compact ? self.span + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
+            height: root.compact ? self.span + Shell.side-bottom-gap-rail + settings.height + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
 
-            // icons.tsx `download`
+            // icons.tsx `download`, left of the settings button (above it on the rail)
             downloads := IconButton {
                 visible: root.has-downloads;
                 width: Shell.side-bottom-button;
                 height: Shell.side-bottom-button;
                 border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width - settings.width - Shell.space-gap;
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.download;
                 clicked => {
                     root.downloads-requested();
+                }
+            }
+            // wubble: the settings entry, always at the far end
+            settings := IconButton {
+                width: Shell.side-bottom-button;
+                height: Shell.side-bottom-button;
+                border-radius: Shell.control-radius;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
+                y: root.compact ? parent.span + Shell.side-bottom-gap-rail + (downloads.visible ? downloads.height + Shell.side-bottom-gap-rail : 0px) : 0px;
+                icon-path: IconPaths.settings;
+                clicked => {
+                    root.settings-requested();
                 }
             }
 
@@ -443,7 +488,6 @@ export component Sidebar inherits Rectangle {
                             root.space-switched(space.id);
                         }
                     }
-                    // the model has no icon per Space yet: the three drawn icons in turn
                     Wobble {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
@@ -455,7 +499,7 @@ export component Sidebar inherits Rectangle {
                             height: parent.height;
                             // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
                             stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                            kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
+                            kind: space.icon;
                             tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
                         }
                     }

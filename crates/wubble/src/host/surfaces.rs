@@ -258,6 +258,7 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
+                MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
         }
@@ -494,9 +495,12 @@ impl Host {
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
         let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
         if let Some(host) = url.as_deref().and_then(zoom::host_of) {
-            let table = std::mem::take(&mut self.site_zoom);
-            self.site_zoom = zoom::next_table(table, &host, percent);
-            self.store.set_site_zoom(self.site_zoom.clone());
+            let table = zoom::next_table(self.site_zoom.clone(), &host, percent, self.zoom_default);
+            // Applied as the setting: the table becomes `site_zoom` there.
+            self.write_setting(
+                wubble_core::settings::SITE_ZOOM.key,
+                &wubble_store::text_of::<wubble_store::SiteZoom>(&table),
+            );
         }
         if let Some(window) = self.window.upgrade() {
             self.toast(&window, &format!("{percent}%"));
@@ -505,7 +509,7 @@ impl Host {
 
     /// A tab committed `url`: show it at the zoom stored for its site.
     pub(super) fn restore_zoom(&mut self, tab: TabId, url: &str) {
-        let want = zoom::wanted(&self.site_zoom, url);
+        let want = zoom::wanted(&self.site_zoom, url, self.zoom_default);
         if let Some(view) = self.tab_view(tab)
             && view.zoom_percent() != want
         {

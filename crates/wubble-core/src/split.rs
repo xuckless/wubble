@@ -28,6 +28,7 @@
 //! and a held or twanging seam draws `string_line` as a `Path` (see demo.slint / driver.rs).
 
 // wubble change: import order (rustfmt).
+use crate::bow::{Curve, cubics};
 use crate::motion::{Spring, band, band_clamp, clamp, spring, step};
 use crate::seam::to_fixed2 as f;
 
@@ -64,59 +65,47 @@ pub struct Bow {
 
 // @source slint-string-rect
 /// Edge from (x, top) down to (x, bot), bowed to x + b at height g. Two cubics, straight when b = 0.
+// wubble change: the control points come from `bow::Curve` (one owner with the edge table).
 fn curves_down(x: f64, b: f64, top: f64, g: f64, bot: f64) -> String {
-    format!(
-        "C{} {} {} {} {} {} C{} {} {} {} {} {}",
-        f(x),
-        f(top + (g - top) * 0.5),
-        f(x + b),
-        f(top + (g - top) * 0.55),
-        f(x + b),
-        f(g),
-        f(x + b),
-        f(g + (bot - g) * 0.45),
-        f(x),
-        f(g + (bot - g) * 0.5),
-        f(x),
-        f(bot)
-    )
+    cubics(&Curve::Split.points(x, b, top, g, bot))
 }
-fn edge_down(x: f64, b: f64, top: f64, g: f64, bot: f64) -> String {
-    format!("L{} {} {}", f(x), f(top), curves_down(x, b, top, g, bot))
+fn edge_down(curve: Curve, x: f64, b: f64, top: f64, g: f64, bot: f64) -> String {
+    let points = curve.points(x, b, top, g, bot);
+    format!("L{} {} {}", f(x), f(top), cubics(&points))
 }
 /// The same edge traversed bottom to top.
-fn edge_up(x: f64, b: f64, bot: f64, g: f64, top: f64) -> String {
-    format!(
-        "L{} {} C{} {} {} {} {} {} C{} {} {} {} {} {}",
-        f(x),
-        f(bot),
-        f(x),
-        f(g + (bot - g) * 0.5),
-        f(x + b),
-        f(g + (bot - g) * 0.45),
-        f(x + b),
-        f(g),
-        f(x + b),
-        f(top + (g - top) * 0.55),
-        f(x),
-        f(top + (g - top) * 0.5),
-        f(x),
-        f(top)
-    )
+fn edge_up(curve: Curve, x: f64, b: f64, bot: f64, g: f64, top: f64) -> String {
+    let mut points = curve.points(x, b, top, g, bot);
+    points.reverse();
+    format!("L{} {} {}", f(x), f(bot), cubics(&points))
 }
 
 /// A rounded rect from x0 to x1 (height h, corner radius r) whose left and/or right edge is a
 /// bowed string. Positive bend bows right. Same string as `stringRect` in split.ts.
 pub fn string_rect(x0: f64, x1: f64, h: f64, r: f64, l: Option<Bow>, rt: Option<Bow>) -> String {
+    string_rect_of(Curve::Split, x0, x1, h, r, l, rt)
+}
+
+/// wubble change: [`string_rect`] with either design string (the sidebar glass's outline bows
+/// along the sidebar seam's).
+pub fn string_rect_of(
+    curve: Curve,
+    x0: f64,
+    x1: f64,
+    h: f64,
+    r: f64,
+    l: Option<Bow>,
+    rt: Option<Bow>,
+) -> String {
     let (top, bot) = (r, h - r);
     let g = |b: Option<Bow>| clamp(b.map(|b| b.gy).unwrap_or(h / 2.0), top + 4.0, bot - 4.0);
     let rr = 0f64.max(r.min((x1 - x0) / 2.0));
     let right = match rt {
-        Some(b) if b.bend.abs() > 0.01 => edge_down(x1, b.bend, top, g(rt), bot),
+        Some(b) if b.bend.abs() > 0.01 => edge_down(curve, x1, b.bend, top, g(rt), bot),
         _ => format!("L{} {}", f(x1), f(bot)),
     };
     let left = match l {
-        Some(b) if b.bend.abs() > 0.01 => edge_up(x0, b.bend, bot, g(l), top),
+        Some(b) if b.bend.abs() > 0.01 => edge_up(curve, x0, b.bend, bot, g(l), top),
         _ => format!("L{} {}", f(x0), f(top)),
     };
     format!(

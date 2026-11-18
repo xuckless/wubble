@@ -17,7 +17,7 @@ use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 use slint::winit_030::winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
 use wubble_core::action::Action;
-use wubble_core::keys::{self, Chord, Key as ChordKey, Keymap, Override, Platform, Route};
+use wubble_core::keys::{self, Chord, Key as ChordKey, Keymap, Platform, Route};
 use wubble_engine::input::{Buttons, KeyId, KeyInput, Modifiers, MouseButton};
 
 /// Where keyboard focus is, as far as routing a key cares.
@@ -222,17 +222,10 @@ impl PendingKeys {
 /// stored entry is a `keys::overrides_to_json` list; one that does not parse
 /// is skipped with a log line, so a bad setting never blocks startup.
 pub fn keymap(platform: Platform, stored: &[String]) -> Keymap {
-    let overrides: Vec<Override> = stored
-        .iter()
-        .filter_map(|entry| match keys::overrides_from_json(entry) {
-            Ok(list) => Some(list),
-            Err(e) => {
-                eprintln!("wubble: ignoring a keybinding override that does not parse: {e}");
-                None
-            }
-        })
-        .flatten()
-        .collect();
+    let (overrides, bad) = keys::overrides_from_entries(stored);
+    if bad > 0 {
+        eprintln!("wubble: ignoring {bad} keybinding override entries that do not parse");
+    }
     Keymap::defaults(platform).with_overrides(&overrides)
 }
 

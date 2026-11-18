@@ -59,6 +59,8 @@ pub enum Command {
     OpenBeside,
     /// Run an action, as from a key.
     Perform(Action),
+    /// Block, or stop blocking, on this site (the blocker's exceptions).
+    ToggleBlocker(String),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -302,6 +304,29 @@ pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     }
 }
 
+/// The address pill's blocker menu: what was blocked, and the switch for this site.
+pub fn blocker_entries(count: u32, host: &str, allowed: bool) -> Vec<Entry> {
+    vec![
+        Entry {
+            label: format!(
+                "Blocked {count} request{}",
+                if count == 1 { "" } else { "s" }
+            ),
+            command: Command::Separator,
+            enabled: false,
+        },
+        Entry {
+            label: if allowed {
+                format!("Turn on blocking on {host}")
+            } else {
+                format!("Turn off blocking on {host}")
+            },
+            command: Command::ToggleBlocker(host.to_owned()),
+            enabled: true,
+        },
+    ]
+}
+
 /// The menu of one tab, or one the shell opened.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Menu {
@@ -426,6 +451,21 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
 mod tests {
     use super::*;
     use wubble_engine::page::EditFlags;
+
+    #[test]
+    fn the_blocker_menu_names_the_count_and_the_switch() {
+        let on = blocker_entries(1, "a.test", false);
+        assert_eq!(on[0].label, "Blocked 1 request");
+        assert!(!on[0].enabled);
+        assert_eq!(on[1].label, "Turn off blocking on a.test");
+        assert_eq!(on[1].command, Command::ToggleBlocker("a.test".into()));
+        let off = blocker_entries(0, "a.test", true);
+        assert_eq!(off[0].label, "Blocked 0 requests");
+        assert_eq!(
+            off[1].label,
+            "Turn on blocking on host".replace("host", "a.test")
+        );
+    }
 
     fn labels(entries: &[Entry]) -> Vec<&str> {
         entries

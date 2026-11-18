@@ -295,6 +295,22 @@ impl DownloadEntry {
     }
 }
 
+/// The ids of the entries that are done with (not active): what "Clear finished" removes.
+pub fn finished_ids(entries: &[DownloadEntry]) -> Vec<i64> {
+    entries
+        .iter()
+        .filter(|e| !e.state.is_active())
+        .map(|e| e.id)
+        .collect()
+}
+
+impl DownloadEntry {
+    /// The file can be opened: the download completed.
+    pub fn can_open(&self) -> bool {
+        self.state == DownloadState::Complete
+    }
+}
+
 /// Every entry the engine still had is failed: run at start, when no
 /// download of the last run is alive.
 pub fn lost_all(entries: Vec<DownloadEntry>) -> Vec<DownloadEntry> {
@@ -532,6 +548,24 @@ mod tests {
             state,
             started_ms: 0,
         }
+    }
+
+    #[test]
+    fn finished_ids_skip_active_entries() {
+        use DownloadState::*;
+        let with = |id, state| DownloadEntry { id, ..entry(state) };
+        let list = [
+            with(1, Running),
+            with(2, Complete),
+            with(3, Paused),
+            with(4, Failed("x".into())),
+            with(5, Cancelled),
+            with(6, Interrupted("x".into())),
+        ];
+        assert_eq!(finished_ids(&list), [2, 4, 5]);
+        assert!(entry(Complete).can_open());
+        assert!(!entry(Cancelled).can_open());
+        assert!(!entry(Running).can_open());
     }
 
     #[test]

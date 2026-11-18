@@ -20,6 +20,7 @@
 //! Design copied from Chromium `components/os_crypt` and Firefox's logins store;
 //! see `THIRD_PARTY_NOTICES.md`. No CEF, wgpu or Slint here.
 
+pub mod command;
 pub mod crypto;
 pub mod generate;
 pub mod import;
@@ -31,6 +32,7 @@ pub mod store;
 pub mod store_adapter;
 pub mod vault;
 
+pub use command::{VaultAnswer, VaultCommand};
 pub use generate::{GenError, GeneratorOptions, generate};
 pub use import::{ApplyReport, Import, ImportError, ImportRow, apply, parse_csv};
 pub use keyring::{FakeKeyRing, KeyRing, OsKeyRing};

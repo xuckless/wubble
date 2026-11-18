@@ -51,6 +51,16 @@ pub struct BarRow {
     pub target: RowTarget,
 }
 
+impl BarRow {
+    /// The page whose favicon the row shows: a history row's URL.
+    pub fn icon_url(&self) -> Option<&str> {
+        match (&self.target, self.kind) {
+            (RowTarget::Omni(Target::Url(u)), CommandKind::History) => Some(u),
+            _ => None,
+        }
+    }
+}
+
 /// Everything the rows are ranked over.
 pub struct BarInputs<'a> {
     pub tabs: &'a [OpenTab],
@@ -231,6 +241,25 @@ mod tests {
             },
         );
         (m, t)
+    }
+
+    #[test]
+    fn only_history_rows_name_an_icon_by_their_url() {
+        let row = |kind, target| BarRow {
+            kind,
+            title: String::new(),
+            subtitle: String::new(),
+            shortcut: String::new(),
+            target,
+        };
+        let url = RowTarget::Omni(Target::Url("https://a.test/".into()));
+        assert_eq!(
+            row(CommandKind::History, url.clone()).icon_url(),
+            Some("https://a.test/")
+        );
+        assert_eq!(row(CommandKind::Action, url).icon_url(), None);
+        let act = RowTarget::Omni(Target::Action(Action::Reload));
+        assert_eq!(row(CommandKind::History, act).icon_url(), None);
     }
 
     fn rows(engine: Option<SearchEngine>, tabs: &[OpenTab], query: &str) -> Vec<BarRow> {

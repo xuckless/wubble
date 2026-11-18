@@ -24,9 +24,6 @@ export global Shell {
     out property <length> move-threshold: 4px;
     // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
     out property <length> side-top: 30px;
-    // wubble: the pitch of the seam's ride table (`seam-ride`, one sample per this many px of
-    // window height), fine enough that a section rides within a pixel of the string
-    out property <length> ride-step: 2px;
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
     out property <duration> light-fill-ms: 200ms;
     out property <duration> light-glyph-ms: 150ms;
@@ -199,4 +196,50 @@ export global Shell {
     // The prompt's "remember" check box: a 1 px rim, a 1.6 px tick.
     out property <length> check-rim: 1px;
     out property <length> check-tick: 1.6px;
+
+    // The settings page (wubble://settings). Controls from the design repo's touch kit,
+    // `src/wubble/pages/touch.css`: .tp-seg (padding 4, radius 14; segment 38 high, radius 10,
+    // label 14 / 500), .tp-sl (track 44 high, rail 8 radius 4 at white 12 %, knob 26), and
+    // .tp-tg (92 x 52, knob 42, inset 5), the toggle at half that size to sit in a row. The page
+    // column and row metrics are wubble's: the design repo has no settings page.
+    out property <length> settings-width: 720px;
+    out property <length> settings-row: 52px;
+    out property <length> settings-gap: 28px;
+    out property <length> seg-pad: 4px;
+    out property <length> seg-radius: 14px;
+    out property <length> seg-height: 38px;
+    out property <length> seg-inner-radius: 10px;
+    out property <length> seg-width: 104px;
+    out property <length> seg-label: 14px;
+    out property <length> toggle-width: 46px;
+    out property <length> toggle-height: 26px;
+    out property <length> toggle-knob: 21px;
+    out property <length> toggle-inset: 2.5px;
+    out property <color> track: rgba(255, 255, 255, 0.12);
+    out property <length> slider-height: 44px;
+    out property <length> slider-rail: 8px;
+    out property <length> slider-knob: 26px;
+    out property <length> slider-width: 220px;
+    out property <length> field-height: 36px;
+    out property <length> stepper-field: 88px;
+    out property <length> swatch: 22px;
+    out property <duration> control-ms: 240ms;   // .tp-seg-ind background .24s
+    out property <duration> seg-label-ms: 200ms; // .tp-seg-btn color .2s
+    // .tp-tg-knob box-shadow 0 3px 8px / .4; .tp-seg-ind 0 4px 12px / .35; .tp-sl-knob 0 6px 14px / .5
+    out property <length> toggle-shadow-blur: 8px;
+    out property <length> toggle-shadow-y: 3px;
+    out property <color> toggle-shadow: rgba(0, 0, 0, 0.4);
+    out property <length> seg-shadow-blur: 12px;
+    out property <length> seg-shadow-y: 4px;
+    out property <color> seg-shadow: rgba(0, 0, 0, 0.35);
+    out property <length> slider-shadow-blur: 14px;
+    out property <length> slider-shadow-y: 6px;
+    out property <color> slider-shadow: rgba(0, 0, 0, 0.5);
+    // a section's card on the page's glass, and the ring round the chosen Space colour
+    out property <color> settings-card: rgba(255, 255, 255, 0.04);
+    out property <length> swatch-ring: 2px;
+    // the history, bookmarks and passwords rows (wubble's: the design repo has no list page)
+    out property <length> page-row: 44px;
+    out property <length> page-indent: 20px;
+    out property <length> page-favicon: 16px;
 }

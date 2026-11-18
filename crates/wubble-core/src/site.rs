@@ -111,6 +111,11 @@ impl SitePermissions {
         self.0.remove(&(origin.to_string(), kind));
     }
 
+    /// Every remembered decision, by origin then kind.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Permission, Decision)> {
+        self.0.iter().map(|((o, k), d)| (o.as_str(), *k, *d))
+    }
+
     pub fn get(&self, origin: &str, kind: Permission) -> Option<Decision> {
         self.0.get(&(origin.to_string(), kind)).copied()
     }

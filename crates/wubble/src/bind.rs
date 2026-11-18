@@ -3,7 +3,7 @@
 //! re-render (a title, the loading flag, the lifecycle tick every few
 //! seconds) does not rebuild every row and drop its hover, press or drag.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use slint::{Color, Model, ModelRc, VecModel};
@@ -21,7 +21,7 @@ fn color(Rgb(r, g, b): Rgb) -> Color {
 
 /// `rows` into the model `current` already is, when it is one of ours;
 /// otherwise (the first render) a new one through `set`.
-fn sync<T: Clone + PartialEq + 'static>(
+pub(crate) fn sync<T: Clone + PartialEq + 'static>(
     current: ModelRc<T>,
     rows: Vec<T>,
     set: impl FnOnce(ModelRc<T>),
@@ -54,6 +54,7 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
             audible: r.audible,
             muted: r.muted,
             in_split: r.in_split,
+            blocked: i32::try_from(r.blocked).unwrap_or(i32::MAX),
         })
         .collect()
 }
@@ -74,6 +75,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             id: s.id,
             name: s.name.as_str().into(),
             tint: color(s.tint),
+            icon: s.icon.id().into(),
         })
         .collect();
     sync(window.get_spaces(), spaces, |m| window.set_spaces(m));
@@ -92,7 +94,11 @@ pub fn render_history(window: &AppWindow, page: Option<&Page>) {
     window.set_can_go_forward(page.is_some_and(|p| p.can_go_forward));
 }
 
-pub fn render_bar(window: &AppWindow, rows: &[BarRow]) {
+pub fn render_bar(
+    window: &AppWindow,
+    rows: &[BarRow],
+    icons: &HashMap<String, wubble_store::Favicon>,
+) {
     let rows = rows
         .iter()
         .map(|r| CommandResult {
@@ -100,6 +106,11 @@ pub fn render_bar(window: &AppWindow, rows: &[BarRow]) {
             title: r.title.as_str().into(),
             subtitle: r.subtitle.as_str().into(),
             shortcut: r.shortcut.as_str().into(),
+            icon: r
+                .icon_url()
+                .and_then(|u| icons.get(u))
+                .map(|f| favicon_image(f.width, f.height, &f.rgba))
+                .unwrap_or_default(),
         })
         .collect();
     sync(window.get_command_results(), rows, |m| {

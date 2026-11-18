@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use turso::Connection;
 use wubble_core::omnibox::Bookmark;
-use wubble_core::pages::BookmarkRow;
+use wubble_core::pages::{BookmarkEdit, BookmarkRow};
 
 use crate::{Error, Result, Store, narrow, scalar, url_key};
 
@@ -347,6 +347,36 @@ impl Store {
         Ok(out)
     }
 
+    /// Applies one page edit, then returns every row, so the page is redrawn from what is stored.
+    pub async fn apply_bookmark_edit(
+        &mut self,
+        edit: &BookmarkEdit,
+        now_ms: i64,
+    ) -> Result<Vec<BookmarkRow>> {
+        let id = |i: &i64| BookmarkId(*i);
+        match edit {
+            BookmarkEdit::Add { parent, title, url } => {
+                self.add_bookmark(parent.as_ref().map(id), title, url, now_ms)
+                    .await?;
+            }
+            BookmarkEdit::AddFolder { parent, title } => {
+                self.add_folder(parent.as_ref().map(id), title, now_ms)
+                    .await?;
+            }
+            BookmarkEdit::Rename { id: i, title } => {
+                self.rename_bookmark(id(i), title, now_ms).await?;
+            }
+            BookmarkEdit::Move { id: i, to, index } => {
+                self.move_bookmark(id(i), to.as_ref().map(id), *index, now_ms)
+                    .await?;
+            }
+            BookmarkEdit::Delete { id: i } => {
+                self.delete_bookmark(id(i)).await?;
+            }
+        }
+        self.all_bookmarks().await
+    }
+
     /// Every bookmark and folder in one query, for the bookmarks page
     /// (`wubble_core::pages::bookmark_tree` builds the tree).
     pub async fn all_bookmarks(&self) -> Result<Vec<BookmarkRow>> {
@@ -533,6 +563,90 @@ mod tests {
             }
             assert_eq!(s.bookmark_count().await.unwrap(), 1);
             consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn apply_bookmark_edit_returns_the_fresh_rows() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let rows = s
+                .apply_bookmark_edit(
+                    &BookmarkEdit::AddFolder {
+                        parent: None,
+                        title: "F".into(),
+                    },
+                    1,
+                )
+                .await
+                .unwrap();
+            let f = rows[0].id;
+            let rows = s
+                .apply_bookmark_edit(
+                    &BookmarkEdit::Add {
+                        parent: Some(f),
+                        title: "A".into(),
+                        url: "https://a.test".into(),
+                    },
+                    2,
+                )
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 2);
+            let a = rows.iter().find(|r| !r.is_folder).unwrap().id;
+            let rows = s
+                .apply_bookmark_edit(
+                    &BookmarkEdit::Rename {
+                        id: a,
+                        title: "B".into(),
+                    },
+                    3,
+                )
+                .await
+                .unwrap();
+            assert!(rows.iter().any(|r| r.title == "B"));
+            let rows = s
+                .apply_bookmark_edit(
+                    &BookmarkEdit::Move {
+                        id: a,
+                        to: None,
+                        index: 0,
+                    },
+                    4,
+                )
+                .await
+                .unwrap();
+            assert_eq!(rows.iter().find(|r| r.id == a).unwrap().parent, None);
+            // Refused edits are errors, not changes.
+            assert!(
+                s.apply_bookmark_edit(
+                    &BookmarkEdit::Move {
+                        id: f,
+                        to: Some(f),
+                        index: 0
+                    },
+                    5
+                )
+                .await
+                .is_err()
+            );
+            assert!(
+                s.apply_bookmark_edit(
+                    &BookmarkEdit::Add {
+                        parent: None,
+                        title: "x".into(),
+                        url: "javascript:1".into()
+                    },
+                    5,
+                )
+                .await
+                .is_err()
+            );
+            let rows = s
+                .apply_bookmark_edit(&BookmarkEdit::Delete { id: f }, 6)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
         });
     }
 

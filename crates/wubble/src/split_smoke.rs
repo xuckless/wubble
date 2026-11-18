@@ -1,8 +1,10 @@
 //! `--smoke split`: two tabs on the bundled page, split side by side; once the split rests,
 //! each pane must hold its own live view painting at its pane's size and show its page in the
 //! window; then the seam between them is dragged [`DRAG`] px left and let go (the shell's seam
-//! callbacks), and both views must repaint at the new sizes; then the split is undone and one
-//! view stays. Every wait is "until the host sees X",
+//! callbacks), and both views must repaint at the new sizes; then the seam is pulled again, and
+//! both panes must show their frame cut along the bowed string (the page edge mask) until it is
+//! let go and rests straight again; then the split is undone and one view stays. Every wait is
+//! "until the host sees X",
 //! bounded by a count of CEF work runs, never by time.
 
 use wubble_gfx::FrameSize;
@@ -11,6 +13,8 @@ use crate::nav_smoke::MAX_WORK_RUNS;
 
 /// How far the smoke drags the seam left, logical px.
 pub const DRAG: f32 = 80.0;
+/// How far the smoke pulls the seam left again to bend the string, logical px.
+pub const BEND: f32 = 150.0;
 /// The left pane must narrow by more than this (physical px) for the drag to count: most of
 /// [`DRAG`] at any scale of at least 1.
 const NARROWED: u32 = 60;
@@ -33,6 +37,8 @@ pub struct Seen {
     pub visible_views: usize,
     /// The split's strings rest and nothing they settled waits.
     pub at_rest: bool,
+    /// Panes showing their frame cut along a bowed string.
+    pub masked: usize,
 }
 
 impl Seen {
@@ -63,8 +69,12 @@ pub enum Stage {
     Released {
         left: u32,
     },
-    /// The resize checked; next, unsplit.
+    /// The resize checked; next, pull the seam again to bend it.
     Resized,
+    /// The seam pulled, waiting for both panes' edges to bow with it.
+    Bending,
+    /// Let go, waiting for the string to rest straight and the masks to go.
+    Straightening,
     /// Unsplit, waiting for one page alone.
     Unsplit,
     Done,
@@ -100,6 +110,8 @@ pub enum Action {
     Release,
     /// The panes rest at their new sizes, both painting at them: (left, right) physical px.
     Resized(u32, u32),
+    /// Grab the seam and pull it [`BEND`] px toward the left pane (held).
+    Bend,
     /// Take the focused page out of the split.
     Unsplit,
     Pass,
@@ -128,7 +140,11 @@ pub fn next(s: SplitSmoke, seen: &Seen) -> (SplitSmoke, Option<Action>) {
             Stage::Resized,
             Action::Resized(seen.panes[0].want.width, seen.panes[1].want.width),
         )),
-        Stage::Resized => Some((Stage::Unsplit, Action::Unsplit)),
+        Stage::Resized => Some((Stage::Bending, Action::Bend)),
+        Stage::Bending if seen.masked == 2 => Some((Stage::Straightening, Action::Release)),
+        Stage::Straightening if seen.showing(2) && seen.masked == 0 => {
+            Some((Stage::Unsplit, Action::Unsplit))
+        }
         Stage::Unsplit if seen.tabs == 2 && seen.showing(1) => Some((Stage::Done, Action::Pass)),
         _ => None,
     };
@@ -170,6 +186,7 @@ mod tests {
             panes,
             visible_views,
             at_rest: true,
+            masked: 0,
         }
     }
 
@@ -207,7 +224,36 @@ mod tests {
         assert_eq!(a, None);
         let (s, a) = next(s, &seen(2, vec![pane(416, true), pane(576, true)], 2));
         assert_eq!(a, Some(Action::Resized(416, 576)));
-        let (s, a) = next(s, &seen(2, vec![pane(416, true), pane(576, true)], 2));
+        let two = seen(2, vec![pane(416, true), pane(576, true)], 2);
+        let (s, a) = next(s, &two);
+        assert_eq!(a, Some(Action::Bend));
+        // one edge bowed is not both
+        let (s, a) = next(
+            s,
+            &Seen {
+                masked: 1,
+                ..two.clone()
+            },
+        );
+        assert_eq!(a, None);
+        let (s, a) = next(
+            s,
+            &Seen {
+                masked: 2,
+                ..two.clone()
+            },
+        );
+        assert_eq!(a, Some(Action::Release));
+        // still bowed (twanging): not yet
+        let (s, a) = next(
+            s,
+            &Seen {
+                masked: 2,
+                ..two.clone()
+            },
+        );
+        assert_eq!(a, None);
+        let (s, a) = next(s, &two);
         assert_eq!(a, Some(Action::Unsplit));
         // two views still visible: not yet
         let (s, a) = next(s, &seen(2, vec![pane(1000, true)], 2));

@@ -534,6 +534,12 @@ impl View {
         self.apply(ViewEvent::Layout(layout));
     }
 
+    /// The frame size CEF paints at or was last asked for: the one owner of
+    /// a pane's wanted size. `None` once closing.
+    pub fn wanted_frame(&self) -> Option<FrameSize> {
+        target(self.state).map(Layout::frame_size)
+    }
+
     /// The newest frame CEF painted since the last call, if it is to be
     /// shown. Always `None` while hidden.
     pub fn take_frame(&mut self) -> Option<NativeFrame> {
@@ -896,10 +902,6 @@ impl View {
 
     pub fn zoom_out(&mut self) {
         self.zoom_step(welding::ZoomCommand::Out);
-    }
-
-    pub fn zoom_reset(&mut self) {
-        self.zoom_step(welding::ZoomCommand::Reset);
     }
 
     /// Clamped to 25..=500 %.
