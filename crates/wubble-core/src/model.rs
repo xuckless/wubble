@@ -18,7 +18,7 @@
 //! Placement is stored once, in the `Space` lists; `tabs` holds data only, so a tab
 //! cannot be in two places. What types cannot express is checked by [`Model::check`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use crate::lifecycle::{self, Activity, Keep, Lifecycle, Pin};
@@ -83,6 +83,22 @@ pub enum Command {
     },
     /// The folder's tabs stay, at the folder's position.
     DeleteFolder(FolderId),
+    /// Fold the folder's tabs away in the sidebar, or show them.
+    SetFolderCollapsed {
+        folder: FolderId,
+        collapsed: bool,
+    },
+    /// A new tab on the same page in the same container, right after it, shown.
+    DuplicateTab(TabId),
+    /// Closes every other tab of the tab's Space except the pinned ones (Chromium
+    /// `CloseOtherTabs`), and shows it.
+    CloseOthers(TabId),
+    /// Keep the tab awake while hidden: never frozen or discarded. A frozen tab wakes at
+    /// once; a discarded one reloads when shown.
+    SetNeverSleep {
+        tab: TabId,
+        on: bool,
+    },
     NewSpace {
         name: String,
         tint: Rgb,
@@ -294,6 +310,8 @@ pub struct Model {
     policy: SleepPolicy,
     /// Sites whose tabs never sleep (the `sleep.never_sites` row).
     never_sites: Vec<String>,
+    /// Tabs the user asked never to sleep (the tab row menu); not stored.
+    never_tabs: BTreeSet<TabId>,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
@@ -332,6 +350,7 @@ impl Model {
             wall_ms: 0,
             policy: SleepPolicy::default(),
             never_sites: vec![],
+            never_tabs: BTreeSet::new(),
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
@@ -348,6 +367,12 @@ impl Model {
     /// The sites whose tabs never sleep.
     pub fn never_sites(&self) -> &[String] {
         &self.never_sites
+    }
+
+    /// Whether the user asked `tab` itself never to sleep (its Space or site may keep it
+    /// awake as well: [`Lifecycle::keep`] is the outcome).
+    pub fn is_never_sleep(&self, tab: TabId) -> bool {
+        self.never_tabs.contains(&tab)
     }
 
     /// The model's clock: the time it was started with or last ticked to.
@@ -390,6 +415,7 @@ impl Model {
             wall_ms: 0,
             policy: SleepPolicy::default(),
             never_sites: vec![],
+            never_tabs: BTreeSet::new(),
         };
         m.check()?;
         Ok(m)
@@ -742,6 +768,7 @@ impl Model {
     fn forget(&mut self, gone: &[TabId]) {
         for t in gone {
             self.tabs.remove(t);
+            self.never_tabs.remove(t);
         }
         for t in self.tabs.values_mut() {
             if t.opener.is_some_and(|o| gone.contains(&o)) {
@@ -851,6 +878,36 @@ impl Model {
         let mut fx = vec![Effect::CloseTab(tab)];
         if was_active && self.spaces[si].id == self.active_space() {
             fx.push(self.show(next));
+        }
+        fx
+    }
+
+    fn duplicate_tab(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some(t) = self.tabs.get(&tab) else {
+            return vec![];
+        };
+        let (url, container) = (t.url.clone(), t.container);
+        let mut fx = self.new_tab(url, Some(container), Some(tab));
+        if let Some(Effect::CreateTab { tab: new, .. }) = fx.first().cloned()
+            && !fx.contains(&Effect::ActivateTab(new))
+        {
+            fx.extend(self.activate_tab(new));
+        }
+        fx
+    }
+
+    fn close_others(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some((si, _)) = self.place_of(tab) else {
+            return vec![];
+        };
+        let others: Vec<TabId> = self
+            .order_idx(si)
+            .into_iter()
+            .filter(|&t| t != tab && !self.is_pinned(t))
+            .collect();
+        let mut fx = self.activate_tab(tab);
+        for t in others {
+            fx.extend(self.close_tab(t));
         }
         fx
     }
@@ -1263,6 +1320,7 @@ impl Model {
             let space_on = self.spaces[si].never_sleep;
             for t in self.order_idx(si) {
                 let on = space_on
+                    || self.never_tabs.contains(&t)
                     || (!self.never_sites.is_empty()
                         && host_in(&self.never_sites, &self.tabs[&t].url));
                 want.push((t, if on { Keep::Awake } else { Keep::Normal }));
@@ -1340,6 +1398,7 @@ impl Model {
                         id,
                         name: g.name.clone(),
                         tabs: g.tabs.clone(),
+                        collapsed: false,
                     });
                     items.retain(|i| !matches!(i, Item::Tab(t) if g.tabs[1..].contains(t)));
                 }
@@ -1392,6 +1451,7 @@ impl Model {
                             id: f.id,
                             name: f.name.clone(),
                             tabs,
+                            collapsed: f.collapsed,
                         }));
                     }
                 }
@@ -1481,11 +1541,30 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
                     id,
                     name,
                     tabs: vec![],
+                    collapsed: false,
                 }));
             }
             vec![]
         }
         Command::DeleteFolder(f) => m.delete_folder(f),
+        Command::SetFolderCollapsed { folder, collapsed } => {
+            if let Some(si) = m.folder_space(folder)
+                && let Some(f) = m.spaces[si].folder_mut(folder)
+            {
+                f.collapsed = collapsed;
+            }
+            vec![]
+        }
+        Command::DuplicateTab(t) => m.duplicate_tab(t),
+        Command::CloseOthers(t) => m.close_others(t),
+        Command::SetNeverSleep { tab, on } => {
+            if on && m.tabs.contains_key(&tab) {
+                m.never_tabs.insert(tab);
+            } else {
+                m.never_tabs.remove(&tab);
+            }
+            vec![]
+        }
         Command::NewSpace {
             name,
             tint,

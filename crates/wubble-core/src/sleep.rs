@@ -46,7 +46,8 @@ impl SleepPolicy {
         }
     }
 
-    /// Target liveness for a tab that has been hidden for `hidden`.
+    /// Target liveness for a tab that has been hidden for `hidden`. A busy tab, or one the user
+    /// asked never to sleep, stays Background whatever the time or pressure.
     pub fn target(
         &self,
         hidden: Duration,

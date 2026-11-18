@@ -198,6 +198,22 @@ pub fn surface_of(g: &GlassRect) -> GlassSurface {
     }
 }
 
+/// Film rim fade in and out, seconds (the design's `wubble.css` `.wb-film`: 200 ms in,
+/// 150 ms out; the Slint fallback `GlassPanel` uses the same).
+pub const FILM_IN: f64 = 0.2;
+pub const FILM_OUT: f64 = 0.15;
+
+/// wubble: the film rim's level `dt` seconds after `prev`, easing linearly toward 1 while
+/// `touched` and toward 0 otherwise, as the CSS opacity transition does. Never at rest unless
+/// touched.
+pub fn film_level(prev: f64, touched: bool, dt: f64) -> f64 {
+    if touched {
+        (prev + dt / FILM_IN).min(1.0)
+    } else {
+        (prev - dt / FILM_OUT).max(0.0)
+    }
+}
+
 /// `waveUniforms`: the newest (at most 4) waves as (x, y, age/life, reach).
 pub(super) fn wave_uniforms(waves: &[Wave]) -> ([[f32; 4]; 4], i32) {
     let n = waves.len().min(4);
@@ -334,6 +350,8 @@ pub struct Scene {
     fluid_aspect: f32,
     pub(super) time: f32,
     pub(super) glass: Vec<GlassSurface>,
+    /// wubble: whether each surface is touched; its `film` eases toward it ([`film_level`]).
+    touched: Vec<bool>,
     /// The border beam: where it runs, and what it looks like this frame (the shell owns its
     /// lifecycle: `wubble_core::beam`).
     beam: Option<BeamRect>,
@@ -374,6 +392,7 @@ impl Scene {
             fluid_aspect: 0.0,
             time: 0.0,
             glass: vec![],
+            touched: vec![],
             beam: None,
             beam_shape: None,
             ripples: vec![],
@@ -397,20 +416,45 @@ impl Scene {
 
     /// The chrome's glass panels, back to front; at most [`MAX_GLASS`] are
     /// kept. Call on every layout or hover/press/focus change. Surface `i`
-    /// keeps the press waves still running in the old surface `i`.
+    /// keeps the press waves still running in the old surface `i`, and (wubble) its film
+    /// level, which then eases toward the new touch state in [`Scene::advance`].
     pub fn set_glass(&mut self, rects: &[GlassRect]) {
         let mut old = std::mem::take(&mut self.glass).into_iter();
+        self.touched.clear();
         self.glass = rects
             .iter()
             .take(MAX_GLASS)
             .map(|g| {
-                let waves = old.next().map(|s| s.waves).unwrap_or_default();
-                GlassSurface {
-                    waves,
-                    ..surface_of(g)
-                }
+                let new = surface_of(g);
+                self.touched.push(new.film > 0.0);
+                let (waves, film) = old.next().map_or((vec![], 0.0), |s| (s.waves, s.film));
+                GlassSurface { waves, film, ..new }
             })
             .collect();
+    }
+
+    /// wubble: whether anything in the scene still moves on its own besides the ambient
+    /// drift: tap waves, ripples, the beam lap, the palette crossfade, the light catching up
+    /// with the pointer, a film rim easing. The run state (`run.rs`) keeps full rate while it does.
+    pub fn animating(&self) -> bool {
+        let film = self
+            .glass
+            .iter()
+            .zip(&self.touched)
+            .any(|(g, &t)| g.film != if t { 1.0 } else { 0.0 });
+        let palette = self
+            .palette
+            .iter()
+            .zip(&self.palette_target)
+            .any(|(a, b)| a.iter().zip(b).any(|(x, y)| (x - y).abs() > 1e-3));
+        let light = (self.light[0] - self.light_target[0]).abs() > 0.5
+            || (self.light[1] - self.light_target[1]).abs() > 0.5;
+        film || palette
+            || light
+            || !self.ripples.is_empty()
+            || !self.ops.is_empty()
+            || self.glass.iter().any(|g| !g.waves.is_empty())
+            || self.beam_shape.is_some()
     }
 
     /// Where the border beam runs (the address bar), or `None` to remove it. It is drawn
@@ -586,6 +630,9 @@ impl Scene {
         self.time += dt;
         for g in &mut self.glass {
             age_waves(&mut g.waves, dt.into());
+        }
+        for (g, &t) in self.glass.iter_mut().zip(&self.touched) {
+            g.film = film_level(g.film, t, dt.into());
         }
         // palette crossfade (Space switch): ~600 ms
         let k = 1.0 - (-dt * 5.0).exp();
@@ -810,6 +857,12 @@ mod tests {
         hovered.hover = true;
         s.set_glass(&[rect(0.0, 0.0, 100.0, 100.0), hovered]);
         assert_eq!(s.glass[1].waves.len(), 1);
+        // wubble: the film rim eases in from where it was (200 ms) instead of snapping
+        assert_eq!(s.glass[1].film, 0.0);
+        assert!(s.animating());
+        s.advance(0.1);
+        assert!((s.glass[1].film - 0.5).abs() < 1e-6);
+        s.advance(0.2);
         assert_eq!(s.glass[1].film, 1.0);
         assert!(
             s.ripples.is_empty(),
@@ -824,6 +877,34 @@ mod tests {
         let many = vec![rect(0.0, 0.0, 10.0, 10.0); MAX_GLASS + 5];
         s.set_glass(&many);
         assert_eq!(s.glass.len(), MAX_GLASS);
+    }
+
+    #[test]
+    fn film_eases_in_and_out_and_clamps() {
+        assert_eq!(film_level(0.0, true, 0.1), 0.5);
+        assert_eq!(film_level(0.9, true, 1.0), 1.0);
+        assert!((film_level(1.0, false, 0.075) - 0.5).abs() < 1e-12);
+        assert_eq!(film_level(0.1, false, 1.0), 0.0);
+        assert_eq!(film_level(0.0, false, 0.0), 0.0);
+        // monotone toward the target
+        let mut f = 0.0;
+        for _ in 0..30 {
+            let n = film_level(f, true, 1.0 / 120.0);
+            assert!(n >= f);
+            f = n;
+        }
+    }
+
+    #[test]
+    fn a_settled_scene_is_not_animating() {
+        let mut s = sized();
+        assert!(s.animating(), "the resize seeds are queued");
+        s.fluid_ops(0.0);
+        assert!(!s.animating());
+        s.set_glass(&[rect(0.0, 0.0, 100.0, 100.0)]);
+        assert!(!s.animating(), "untouched glass rests at film 0");
+        s.tap(10.0, 10.0);
+        assert!(s.animating());
     }
 
     #[test]

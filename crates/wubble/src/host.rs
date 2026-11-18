@@ -24,8 +24,10 @@ mod parity;
 mod preview;
 mod settings;
 mod surfaces;
+mod swipe;
 mod tab_drag;
 mod window;
+pub use swipe::Swipe;
 
 pub(crate) use window::WindowHost;
 
@@ -214,6 +216,10 @@ struct Bar {
     history: Vec<HistoryEntry>,
     /// The icons of those hits' origins, by hit URL; the history rows draw them.
     icons: HashMap<String, wubble_store::Favicon>,
+    /// The bookmarked links, from the same reply.
+    bookmarks: Vec<omnibox::Bookmark>,
+    /// The engine's live suggestions for the query (`suggest_fx`; empty unless the setting is on).
+    suggestions: Vec<String>,
     /// Bumped per query; a history reply for an older one is dropped.
     generation: u64,
 }
@@ -322,6 +328,8 @@ pub struct Host {
     drag_point: Point,
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
+    /// The live suggestion fetch (debounce, worker); sends nothing unless `live_suggestions`.
+    suggest: crate::suggest_fx::SuggestFx,
     /// Which commit is a typed visit.
     typed_nav: TypedNav,
     /// Each tab's last committed URL: a commit that only changes the
@@ -451,6 +459,8 @@ impl Host {
                 rows: vec![],
                 history: vec![],
                 icons: HashMap::new(),
+                bookmarks: vec![],
+                suggestions: vec![],
                 generation: 0,
             },
             focus_view: None,
@@ -479,6 +489,11 @@ impl Host {
             drag_point: Point { x: 0.0, y: 0.0 },
             search_engine: None,
             live_suggestions: false,
+            suggest: crate::suggest_fx::SuggestFx::new(crate::suggest_fx::Http::new(), |e| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.suggest_event(e));
+                });
+            }),
             typed_nav: TypedNav::default(),
             committed,
             failure: None,
@@ -1361,6 +1376,7 @@ impl Host {
 
     pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
         self.bar.mode = mode;
+        self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
         self.bar_query(window, &query);
     }
@@ -1370,6 +1386,7 @@ impl Host {
     pub fn bar_query(&mut self, window: &AppWindow, query: &str) {
         self.bar.query = query.into();
         self.bar.generation += 1;
+        self.suggest_event(wubble_core::suggest::FetchEvent::Typed(query.into()));
         self.render_bar(window);
         if query.trim().is_empty() {
             return;
@@ -1389,24 +1406,50 @@ impl Host {
         }
         self.bar.history = hits.entries;
         self.bar.icons = hits.icons;
+        self.bar.bookmarks = hits.bookmarks;
         if let Some(window) = self.w.window.upgrade() {
             self.render_bar(&window);
         }
     }
 
+    /// One event of the live suggestion fetch; re-renders the rows when its list changed.
+    pub fn suggest_event(&mut self, event: wubble_core::suggest::FetchEvent) {
+        let settings = wubble_core::suggest::SuggestSettings {
+            engine: self.search_engine.unwrap_or(SearchEngine::DuckDuckGo),
+            live: if self.live_suggestions && self.search_engine.is_some() {
+                wubble_core::suggest::LiveSuggestions::On
+            } else {
+                wubble_core::suggest::LiveSuggestions::Off
+            },
+        };
+        if let Some(list) = self.suggest.event(event, &settings)
+            && list != self.bar.suggestions
+        {
+            self.bar.suggestions = list;
+            if let Some(window) = self.w.window.upgrade() {
+                self.render_bar(&window);
+            }
+        }
+    }
+
     fn render_bar(&mut self, window: &AppWindow) {
         let tabs = bar::open_tabs(&self.model);
-        let suggestions = bar::live_suggestions(self.live_suggestions, &self.bar.query);
         let inputs = BarInputs {
             tabs: &tabs,
             history: &self.bar.history,
+            bookmarks: &self.bar.bookmarks,
             engine: self.search_engine,
             keymap: &self.keymap,
-            suggestions: &suggestions,
+            suggestions: &self.bar.suggestions,
             now_ms: now_ms(),
         };
         self.bar.rows = bar::bar_rows(&inputs, &self.bar.query);
-        crate::bind::render_bar(window, &self.bar.rows, &self.bar.icons);
+        crate::bind::render_bar(window, &self.bar.rows, &self.bar.icons, &self.favicons);
+    }
+
+    /// The bar closed (Esc, a click outside, or a chosen row): nothing more may be fetched.
+    pub fn bar_closed(&mut self) {
+        self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
     }
 
     pub fn bar_chosen(&mut self, index: i32) {
@@ -1417,6 +1460,8 @@ impl Host {
             let target = row.target.clone();
             self.choose(&target);
         }
+        // after reading the row: clearing the suggestions re-renders the rows
+        self.bar_closed();
     }
 
     fn choose(&mut self, target: &RowTarget) {
@@ -2360,6 +2405,14 @@ impl Host {
             return EventResult::Propagate;
         };
         self.clipboard.open(window.window());
+        if let Some(e) = crate::run_state::event_of(event, || {
+            window
+                .window()
+                .with_winit_window(|w| w.is_minimized())
+                .flatten()
+        }) {
+            self.w.glass.borrow_mut().run_event(e, &window);
+        }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {

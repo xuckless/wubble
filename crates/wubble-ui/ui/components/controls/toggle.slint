@@ -1,0 +1,108 @@
+// The design's toggle (`pages/touch.tsx` Toggle, .tp-tg in touch.css; @source touch-toggle,
+// xuckless/the-wallpaper-project @ 6c840da) at half size to sit in a settings row: the knob
+// rides the follow spring and squashes against the wall it hits, the accent blooms out of it,
+// hold widens it, a drag follows 1:1 and a fling decides the side. Physics:
+// `wubble_core::controls::Toggle` through `Controls`. Its look is the settings page's .tp-tg-sm
+// (`pages/touch.css`, @ 21838b8): a .wb-thin chip body and a raised knob, mist, ink when on.
+
+import { Palette, Motion } from "../../tokens.slint";
+import { Shell } from "../../app-tokens.slint";
+import { Controls, ControlView } from "registry.slint";
+import { FilmRim } from "../glow-ring.slint";
+import { Raised, Chip } from "../raised.slint";
+
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    in property <color> accent: Palette.sky;
+    callback toggled();
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    // the design's travel is 40 px on a 92 px track
+    property <length> travel: root.width - Shell.toggle-knob - 2 * Shell.toggle-inset;
+    property <float> k: root.travel / Shell.toggle-design-travel;
+    property <int> gen: Controls.generation;
+
+    init => {
+        root.slot = Controls.acquire(0, root.on ? 1 : 0);
+    }
+    changed on => {
+        Controls.set-value(root.slot, root.on ? 1 : 0);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    width: Shell.toggle-width;
+    height: Shell.toggle-height;
+    border-radius: self.height / 2;
+    accessible-role: switch;
+    accessible-checked: root.on;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    Chip {
+        radius: root.height / 2;
+    }
+    // the accent fill, a mask that grows out of the knob's centre (`inset(v r v l)` of the TS)
+    property <length> c: Shell.toggle-inset + root.v.x * root.k * Shell.control-unit + Shell.toggle-knob / 2;
+    Rectangle {
+        x: root.c * (1 - root.v.fill);
+        y: root.height / 2 * (1 - root.v.fill);
+        width: root.width * root.v.fill;
+        height: root.height * root.v.fill;
+        border-radius: self.height / 2;
+        background: root.accent;
+    }
+    Raised {
+        x: Shell.toggle-inset + root.v.x * root.k * Shell.control-unit;
+        y: Shell.toggle-inset;
+        width: Shell.toggle-knob;
+        height: Shell.toggle-knob;
+        radius: self.width / 2;
+        fill: root.on ? Palette.ink : Palette.mist;
+        highlight: Shell.knob-highlight;
+        drop-shadow-blur: Shell.toggle-shadow-blur;
+        drop-shadow-offset-y: Shell.toggle-shadow-y;
+        drop-shadow-color: Shell.toggle-shadow;
+        transform-origin: { x: self.width * root.v.origin, y: self.height / 2 };
+        transform-scale-x: root.v.scale-x;
+        transform-scale-y: root.v.scale-y;
+        animate background {
+            duration: Shell.control-ms;
+            easing: Motion.easeOut;
+        }
+    }
+    FilmRim {
+        radius: root.border-radius;
+        touched: ta.has-hover || ta.pressed || fs.has-focus;
+    }
+    fs := FocusScope {
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                Controls.press(root.slot, self.mouse-x / root.k);
+            }
+            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                let landed = Controls.release(root.slot);
+                if landed >= 0 && (landed > 0.5) != root.on {
+                    root.toggled();
+                }
+            }
+        }
+        moved => {
+            if self.pressed {
+                Controls.drag(root.slot, self.mouse-x / root.k);
+            }
+        }
+    }
+}

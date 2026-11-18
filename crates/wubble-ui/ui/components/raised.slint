@@ -6,7 +6,7 @@
 // is cut to below the tile, where CSS shows it (a box-shadow never shows through its element's
 // own translucent fill). A card drawn in slices (a row each) rounds only its ends.
 
-import { Radius } from "../tokens.slint";
+import { Radius, Glass } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 
 export component Raised inherits Rectangle {
@@ -66,4 +66,15 @@ export component Raised inherits Rectangle {
         }
     }
     @children
+}
+
+// .wb-thin (wubble.css): the body of the settings page's chips (the search, a field, the toggle,
+// the segmented track)
+export component Chip inherits Raised {
+    fill: Glass.thin.fill;
+    highlight: Glass.rimTop;
+    rim: Glass.rimAll;
+    shadow-y: Glass.thin.shadowY;
+    shadow-blur: Glass.thin.shadowBlur;
+    shadow: Shell.thin-shadow;
 }

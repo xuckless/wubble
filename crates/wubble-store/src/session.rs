@@ -116,6 +116,7 @@ impl Store {
                     id,
                     name: r.get(2)?,
                     tabs: vec![],
+                    collapsed: false,
                 }),
             ));
         }
@@ -982,6 +983,7 @@ mod tests {
                             id: FolderId(0),
                             name: "Reading".into(),
                             tabs: vec![TabId(12)],
+                            collapsed: false,
                         }),
                         Item::Tab(TabId(11)),
                     ],

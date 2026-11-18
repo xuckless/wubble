@@ -20,9 +20,11 @@
 //! menu the shell opened itself ([`Menu::Shell`]): nothing to answer.
 
 use wubble_core::action::Action;
-use wubble_core::model::Model;
+use wubble_core::keys::Keymap;
+use wubble_core::model::{Command as ModelCommand, Model};
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
+use wubble_core::tabmenu::{self, Facts, Run};
 use wubble_core::window::{Shown, WindowId, WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
@@ -57,6 +59,12 @@ pub enum MediaOp {
     Controls,
 }
 
+/// A model command from the tab row's table (`wubble_core::tabmenu`). Those rows carry ids and
+/// flags only, never a float, so their equality is total.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabCommand(pub ModelCommand);
+impl Eq for TabCommand {}
+
 /// What choosing an entry does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -82,6 +90,10 @@ pub enum Command {
     OpenBeside,
     /// Run an action, as from a key.
     Perform(Action),
+    /// A model command (the tab row menu's rows, `wubble_core::tabmenu`).
+    Model(TabCommand),
+    /// Flip this tab's mute.
+    ToggleMute(TabId),
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
     /// Show the tab in another window, or a new one.
@@ -106,6 +118,12 @@ pub struct Entry {
     pub label: String,
     pub command: Command,
     pub enabled: bool,
+    /// An `IconPaths` name drawn before the label; empty for none.
+    pub icon: &'static str,
+    /// The key that does the same, as the keymap prints it; empty for none.
+    pub shortcut: String,
+    /// Destructive (closes something): drawn in the danger colour.
+    pub danger: bool,
 }
 
 /// What the menu needs besides the click: the page's navigation (from the
@@ -436,6 +454,9 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
                     label: word.clone(),
                     command: Command::Engine(id),
                     enabled: true,
+                    icon: "",
+                    shortcut: String::new(),
+                    danger: false,
                 },
             )
         });
@@ -446,6 +467,9 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
                 label: (r.label)(&ctx),
                 command: (r.command)(&ctx),
                 enabled: (r.enabled)(&ctx),
+                icon: "",
+                shortcut: String::new(),
+                danger: false,
             },
         )
     });
@@ -457,6 +481,9 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
                 label: String::new(),
                 command: Command::Separator,
                 enabled: false,
+                icon: "",
+                shortcut: String::new(),
+                danger: false,
             });
         }
         last = Some(group);
@@ -465,26 +492,64 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
     out
 }
 
-/// The split entries of `tab`'s row (the design has no tab menu; these are its command-bar
-/// rows, `browser/command.tsx`, for the row's tab): the focused page splits with the next tab or
-/// a page chosen beside it; another tab of the Space goes beside the focused page; a pane leaves
-/// its split.
-pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
-    let mut out = split_entries(model, tab);
-    if !out.is_empty() {
+/// The tab row's menu: the rows of `wubble_core::tabmenu::ROWS` that apply to `tab`, in table
+/// order, with the split entries in the table's split slot and each row's shortcut from the
+/// keymap where an action does the same.
+pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> Vec<Entry> {
+    let key = |a: Action| {
+        keymap
+            .shortcut_for(a)
+            .map(|c| c.to_string())
+            .unwrap_or_default()
+    };
+    let visible = model.visible_tab() == Some(tab);
+    let mut out = vec![];
+    for e in tabmenu::entries(model, tab, facts) {
+        let (command, shortcut) = match e.run {
+            Run::SplitEntries(t) => {
+                out.extend(split_entries(model, t));
+                continue;
+            }
+            Run::WindowEntries(t) => {
+                out.extend(window_entries(model, t));
+                continue;
+            }
+            Run::SleepEntries(t) => {
+                out.extend(sleep_entries(model, t));
+                continue;
+            }
+            Run::Separator => (Command::Separator, String::new()),
+            Run::ToggleMute(t) => (
+                Command::ToggleMute(t),
+                if visible {
+                    key(Action::ToggleMute)
+                } else {
+                    String::new()
+                },
+            ),
+            Run::Model(c) => {
+                let shortcut = match &c {
+                    ModelCommand::CloseTab(_) if visible => key(Action::CloseTab),
+                    ModelCommand::PinTab(_) | ModelCommand::UnpinTab(_) if visible => {
+                        key(Action::TogglePinTab)
+                    }
+                    _ => String::new(),
+                };
+                (Command::Model(TabCommand(c)), shortcut)
+            }
+        };
+        let separator = command == Command::Separator;
         out.push(Entry {
-            label: String::new(),
-            command: Command::Separator,
-            enabled: false,
+            label: e.label,
+            command,
+            enabled: !separator,
+            icon: e.icon,
+            shortcut,
+            danger: e.danger,
         });
     }
-    out.extend(window_entries(model, tab));
-    out.push(Entry {
-        label: String::new(),
-        command: Command::Separator,
-        enabled: false,
-    });
-    out.extend(sleep_entries(model, tab));
+    // the split slot may have been empty: no doubled divider
+    out.dedup_by(|a, b| a.command == Command::Separator && b.command == Command::Separator);
     out
 }
 
@@ -496,6 +561,9 @@ pub fn sleep_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         label,
         command,
         enabled: true,
+        icon: "awake",
+        shortcut: String::new(),
+        danger: false,
     };
     let mut out = vec![];
     if let Some(space) = model
@@ -551,6 +619,9 @@ pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         label,
         command: Command::MoveToWindow(tab, to),
         enabled: true,
+        icon: "move",
+        shortcut: String::new(),
+        danger: false,
     };
     let own = model.window_of(tab);
     let others = model.windows.iter().filter(|w| {
@@ -580,6 +651,9 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
         label,
         command,
         enabled: true,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
     };
     let active = model.active_space();
     match w.shown {
@@ -612,20 +686,33 @@ pub fn popup_entries(count: usize, site: Option<&str>) -> Vec<Entry> {
         },
         command: Command::OpenBlockedPopups,
         enabled: true,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
     }];
     out.extend(site.map(|site| Entry {
         label: format!("Always Allow Pop-ups on {site}"),
         command: Command::AllowPopups(site.to_owned()),
         enabled: true,
+        icon: "shield",
+        shortcut: String::new(),
+        danger: false,
     }));
     out
 }
 
+/// The split entries of `tab`'s row (the design has no tab menu; these are its command-bar
+/// rows, `browser/command.tsx`, for the row's tab): the focused page splits with the next tab or
+/// a page chosen beside it; another tab of the Space goes beside the focused page; a pane leaves
+/// its split.
 fn split_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     let entry = |label: &str, command| Entry {
         label: label.into(),
         command,
         enabled: true,
+        icon: "split",
+        shortcut: String::new(),
+        danger: false,
     };
     if model.split_of(tab).is_some() {
         return vec![entry("Take Out of Split View", Command::Unsplit(tab))];
@@ -660,6 +747,9 @@ pub fn blocker_entries(count: u32, host: &str, allowed: bool) -> Vec<Entry> {
             ),
             command: Command::Separator,
             enabled: false,
+            icon: "",
+            shortcut: String::new(),
+            danger: false,
         },
         Entry {
             label: if allowed {
@@ -669,6 +759,9 @@ pub fn blocker_entries(count: u32, host: &str, allowed: bool) -> Vec<Entry> {
             },
             command: Command::ToggleBlocker(host.to_owned()),
             enabled: true,
+            icon: "shield",
+            shortcut: String::new(),
+            danger: false,
         },
     ]
 }
@@ -723,7 +816,7 @@ pub enum MenuEvent {
     ViewGone,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MenuEffect {
     Answer {
         id: RequestId,
@@ -757,6 +850,9 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
                     label: String::new(),
                     command: Command::Separator,
                     enabled: false,
+                    icon: "",
+                    shortcut: String::new(),
+                    danger: false,
                 });
             }
             entries.extend(extra);
@@ -1215,6 +1311,39 @@ mod tests {
         assert_eq!(answered, [RequestId(1), RequestId(2), RequestId(3)]);
     }
 
+    #[test]
+    fn a_tab_row_menu_maps_the_core_table_with_shortcuts_and_split_entries() {
+        let keymap = Keymap::defaults(wubble_core::keys::Platform::Linux);
+        let m = tabs(3);
+        let visible = m.visible_tab().unwrap();
+        let e = tab_entries(&m, visible, Facts::default(), &keymap);
+        let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
+        assert!(labels.contains(&"Pin Tab") && labels.contains(&"Duplicate Tab"));
+        assert!(
+            labels.contains(&"Open Beside\u{2026}"),
+            "split entries spliced in"
+        );
+        let close = e.iter().find(|e| e.label == "Close Tab").unwrap();
+        assert!(close.danger && !close.shortcut.is_empty());
+        assert_eq!(
+            close.command,
+            Command::Model(TabCommand(ModelCommand::CloseTab(visible)))
+        );
+        let mute = e.iter().find(|e| e.label == "Mute Tab").unwrap();
+        assert_eq!(mute.command, Command::ToggleMute(visible));
+        // dividers never lead, trail or double
+        assert!(e.first().unwrap().command != Command::Separator);
+        assert!(e.last().unwrap().command != Command::Separator);
+        assert!(
+            e.windows(2).all(
+                |w| !(w[0].command == Command::Separator && w[1].command == Command::Separator)
+            )
+        );
+        // a hidden tab gets no shortcuts (they act on the visible one)
+        let hidden = tab_entries(&m, TabId(1), Facts::default(), &keymap);
+        assert!(hidden.iter().all(|e| e.shortcut.is_empty()));
+    }
+
     fn tabs(n: usize) -> Model {
         use wubble_core::model::{Command as Cmd, apply};
         (0..n).fold(Model::new(std::time::Instant::now()), |m, i| {
@@ -1295,10 +1424,14 @@ mod tests {
         );
         // the window showing its Space is not offered; the other one is
         assert_eq!(rows(&m, 1), [new(1), to_first]);
-        // the tab menu's window rows come after a separator, before the sleep rows
-        let all = tab_entries(&m, TabId(1));
-        let at = all.len() - sleep_entries(&m, TabId(1)).len() - 2;
-        assert_eq!(all[at].command, rows(&m, 1)[1].1);
+        // the tab menu carries them (the table's window slot)
+        let all = tab_entries(
+            &m,
+            TabId(1),
+            Facts::default(),
+            &Keymap::defaults(wubble_core::keys::Platform::Linux),
+        );
+        assert!(all.iter().any(|e| e.command == rows(&m, 1)[1].1));
     }
 
     #[test]
@@ -1341,9 +1474,14 @@ mod tests {
                 ),
             ]
         );
-        // the tab menu carries them last
-        let all = tab_entries(&m, TabId(1));
-        assert_eq!(all.last().map(|e| &e.command), Some(&rows(&m)[1].1));
+        // the tab menu carries them (the table's sleep slot)
+        let all = tab_entries(
+            &m,
+            TabId(1),
+            Facts::default(),
+            &Keymap::defaults(wubble_core::keys::Platform::Linux),
+        );
+        assert!(all.iter().any(|e| e.command == rows(&m)[1].1));
     }
 
     #[test]
@@ -1418,7 +1556,7 @@ mod tests {
 
     #[test]
     fn the_shell_s_menu_runs_its_entry_and_answers_nothing() {
-        let entries = tab_entries(&tabs(3), TabId(1));
+        let entries = split_entries(&tabs(3), TabId(1));
         let (open, fx) = transition(
             Menu::Closed,
             MenuEvent::ShellRequested {
@@ -1454,7 +1592,7 @@ mod tests {
             page,
             MenuEvent::ShellRequested {
                 at: (0, 0),
-                entries: tab_entries(&tabs(1), TabId(1)),
+                entries: split_entries(&tabs(1), TabId(1)),
             },
         );
         assert_eq!(

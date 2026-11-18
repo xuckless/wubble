@@ -32,6 +32,7 @@ import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll }
+export { Controls, ControlView } from "components/controls/registry.slint";
 export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
 
 export component AppWindow inherits Window {
@@ -213,6 +214,7 @@ export component AppWindow inherits Window {
     callback seam-release();
     callback seam-double-clicked();
     callback scroll-wheel <=> sidebar.scroll-wheel;
+    callback space-swipe <=> sidebar.space-swipe;
     callback scroll-touch-down <=> sidebar.scroll-touch-down;
     callback scroll-touch-move <=> sidebar.scroll-touch-move;
     callback scroll-touch-up <=> sidebar.scroll-touch-up;

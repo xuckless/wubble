@@ -209,6 +209,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
                     id,
                     name: f.name.clone(),
                     tabs: vec![],
+                    collapsed: false,
                 }));
                 slots[i] = Some((f.space, id));
                 sum.folders_added += 1;

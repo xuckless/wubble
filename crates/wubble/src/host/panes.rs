@@ -630,7 +630,10 @@ impl Host {
         };
         let scale = window.window().scale_factor();
         let at = ((x * scale).round() as i32, (y * scale).round() as i32);
-        let entries = menu::tab_entries(&self.model, tab);
+        let facts = wubble_core::tabmenu::Facts {
+            muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+        };
+        let entries = menu::tab_entries(&self.model, tab, facts, &self.keymap);
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

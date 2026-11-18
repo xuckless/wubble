@@ -7921,6 +7921,7 @@ dependencies = [
  "slint",
  "smithay-clipboard",
  "tempfile",
+ "ureq",
  "wubble-blocker",
  "wubble-core",
  "wubble-engine",

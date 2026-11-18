@@ -578,7 +578,7 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
         }
     };
     let index = r.below(8);
-    let cmd = match r.below(23) {
+    let cmd = match r.below(24) {
         0 => return (Command::OpenCommandBar, false),
         1 | 2 => {
             let c = if r.below(3) == 0 { container(r) } else { None };
@@ -689,6 +689,23 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
                 space(r).map(|space| Command::ResizeSplit { space, stops })
             }
         }
+        23 => match r.below(4) {
+            0 => tab(r).map(Command::DuplicateTab),
+            1 => tab(r).map(Command::CloseOthers),
+            2 => tab(r).map(|tab| Command::SetNeverSleep {
+                tab,
+                on: r.below(2) == 0,
+            }),
+            _ => if bogus {
+                Some(FolderId(BOGUS))
+            } else {
+                r.pick(&folders)
+            }
+            .map(|folder| Command::SetFolderCollapsed {
+                folder,
+                collapsed: r.below(2) == 0,
+            }),
+        },
         20 => {
             let pressure = [Pressure::None, Pressure::Moderate, Pressure::Critical][r.below(3)];
             let now = m.clock + Duration::from_secs(r.below(2000) as u64);
@@ -2551,4 +2568,99 @@ fn set_layout_stays_valid_after_a_close_or_a_new_tab() {
         },
     );
     assert_eq!(unchanged, m);
+}
+
+#[test]
+fn duplicate_opens_the_same_page_after_it_and_shows_it() {
+    let (m, ids) = with_tabs(3);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, fx) = run(m, Command::DuplicateTab(ids[0]));
+    let Effect::CreateTab {
+        tab,
+        ref url,
+        container,
+    } = fx[0]
+    else {
+        panic!("{fx:?}")
+    };
+    assert_eq!((url.as_str(), container), ("https://a.test", D));
+    assert_eq!(m.order(s0()), vec![ids[0], tab, ids[1], ids[2]]);
+    assert_eq!(m.visible_tab(), Some(tab));
+}
+
+#[test]
+fn close_others_keeps_the_pinned_and_shows_the_tab() {
+    let (m, ids) = with_tabs(4);
+    let (m, _) = run(m, Command::PinTab(ids[0]));
+    let (m, fx) = run(m, Command::CloseOthers(ids[2]));
+    assert_eq!(m.order(s0()), vec![ids[0], ids[2]]);
+    assert_eq!(m.visible_tab(), Some(ids[2]));
+    assert!(fx.contains(&Effect::CloseTab(ids[1])) && fx.contains(&Effect::CloseTab(ids[3])));
+    assert!(!fx.contains(&Effect::CloseTab(ids[0])));
+}
+
+#[test]
+fn never_sleep_keeps_a_hidden_tab_background_until_turned_off() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(
+        m,
+        Command::SetNeverSleep {
+            tab: ids[0],
+            on: true,
+        },
+    );
+    let later = t0() + Duration::from_secs(24 * 3600);
+    let (m, _) = run(
+        m,
+        Command::Tick {
+            now: later,
+            wall_ms: 0,
+            pressure: Pressure::Critical,
+        },
+    );
+    assert_eq!(m.tabs[&ids[0]].lifecycle.liveness, Liveness::Background);
+    // turned off, it is judged at once by the last tick
+    let (m, _) = run(
+        m,
+        Command::SetNeverSleep {
+            tab: ids[0],
+            on: false,
+        },
+    );
+    assert_eq!(m.tabs[&ids[0]].lifecycle.liveness, Liveness::Discarded);
+}
+
+#[test]
+fn a_folder_collapses_and_expands() {
+    let (m, _) = with_tabs(1);
+    let (m, _) = run(
+        m,
+        Command::NewFolder {
+            space: s0(),
+            name: "f".into(),
+        },
+    );
+    let f = FolderId(0);
+    let (m, _) = run(
+        m,
+        Command::SetFolderCollapsed {
+            folder: f,
+            collapsed: true,
+        },
+    );
+    let collapsed = |m: &Model| {
+        m.spaces[0]
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Folder(x) if x.collapsed))
+    };
+    assert!(collapsed(&m));
+    let (m, _) = run(
+        m,
+        Command::SetFolderCollapsed {
+            folder: f,
+            collapsed: false,
+        },
+    );
+    assert!(!collapsed(&m));
 }

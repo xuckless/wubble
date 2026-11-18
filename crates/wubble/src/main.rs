@@ -25,12 +25,14 @@ mod persist;
 mod pixels;
 mod profile;
 mod prompt;
+mod run_state;
 mod screen;
 mod session_smoke;
 mod settings_smoke;
 mod shell;
 mod shot;
 mod split_smoke;
+mod suggest_fx;
 mod surface;
 mod tabs_smoke;
 mod ui_loop;
@@ -984,6 +986,12 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
             with_host_in(win, |host| host.move_tab(tab, to));
         }
     });
+    let swipe = RefCell::new(host::Swipe::default());
+    window.on_space_swipe(move |dx, dy| {
+        with_host_in(win, |host| {
+            host.space_swipe(&mut swipe.borrow_mut(), dx, dy)
+        });
+    });
     window.on_space_switched(move |id| {
         if let Some(s) = shell::space_id(id) {
             command(Cmd::SwitchSpace(s));
@@ -1013,6 +1021,7 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     window.on_tab_track(move |id, kind, x, y| {
         with_host_in(win, |host| host.tab_track(id, kind, x, y))
     });
+    window.on_command_dismissed(move || with_host_in(win, |host| host.bar_closed()));
     let weak = window.as_weak();
     window.on_beside_requested(move || {
         if let Some(window) = weak.upgrade() {

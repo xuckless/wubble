@@ -6,7 +6,7 @@
 //! unless the user turns them on.
 
 pub use crate::omnibox::SearchEngine;
-use crate::omnibox::suggest_url;
+use crate::omnibox::{Intent, classify, suggest_url};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiveSuggestions {
@@ -32,6 +32,7 @@ pub enum Source {
 
 /// Anything that could be a (partial) address stays on this machine, even
 /// when `classify` would still call it a search (`192.168.0`, `http://`).
+/// Input `classify` calls a URL (`about:blank`, `[::1]`) never gets here.
 fn looks_like_address(q: &str) -> bool {
     q.contains(['.', '/', '@'])
         || q.contains("://")
@@ -45,7 +46,10 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
         return Vec::new();
     }
     let mut out = vec![Source::Local];
-    if settings.live == LiveSuggestions::On && !looks_like_address(query) {
+    if settings.live == LiveSuggestions::On
+        && matches!(classify(query), Intent::Search(_))
+        && !looks_like_address(query)
+    {
         out.push(Source::Remote {
             url: suggest_url(settings.engine, query),
         });
@@ -66,6 +70,165 @@ pub fn parse_opensearch(body: &str) -> Result<Vec<String>, MalformedSuggestions>
         .iter()
         .map(|s| s.as_str().map(str::to_owned).ok_or(MalformedSuggestions))
         .collect()
+}
+
+/// ms of quiet typing before a remote request goes out.
+pub const DEBOUNCE_MS: u64 = 150;
+
+/// Where the remote fetch is. At most one request is in flight (a blocking fetch cannot be
+/// aborted): the next one waits for its reply, and a reply for an older query is dropped.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Phase {
+    #[default]
+    Idle,
+    /// Waiting out the debounce for `url`; nothing in flight.
+    Debouncing { url: String },
+    /// Request `req` is out.
+    InFlight { req: u64 },
+    /// Request `req` is out and the user is still typing `url`.
+    InFlightDebouncing { req: u64, url: String },
+    /// Request `req` is out and `url` is due: it goes when `req` comes back.
+    InFlightQueued { req: u64, url: String },
+}
+
+/// The fetch machine's state: the phase and the number of the latest query.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Fetch {
+    pub phase: Phase,
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FetchEvent {
+    /// The command bar's text changed.
+    Typed(String),
+    /// The debounce armed for query `seq` ran out.
+    DebounceElapsed(u64),
+    /// Request `seq` came back: the body, or `None` on any failure.
+    Reply { seq: u64, body: Option<String> },
+    /// The bar closed.
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FetchEffect {
+    /// Call back with `DebounceElapsed(seq)` after [`DEBOUNCE_MS`] (replaces any earlier one).
+    ArmDebounce { seq: u64 },
+    /// Fetch `url` and reply with `Reply { seq, .. }`.
+    Request { seq: u64, url: String },
+    /// The live suggestions for the current query.
+    Show(Vec<String>),
+    /// No live suggestions.
+    Clear,
+}
+
+/// The live-suggestion fetch. Which input may leave the machine is [`sources`]'s rule alone:
+/// address-like input and the `Off` setting never produce a [`FetchEffect::Request`].
+pub fn transition(
+    s: Fetch,
+    e: FetchEvent,
+    settings: &SuggestSettings,
+) -> (Fetch, Vec<FetchEffect>) {
+    use FetchEffect::*;
+    use Phase::*;
+    let in_flight = |p: &Phase| match p {
+        InFlight { req } | InFlightDebouncing { req, .. } | InFlightQueued { req, .. } => {
+            Some(*req)
+        }
+        Idle | Debouncing { .. } => None,
+    };
+    match e {
+        FetchEvent::Typed(q) => {
+            let seq = s.seq + 1;
+            let remote = sources(&q, settings).into_iter().find_map(|src| match src {
+                Source::Remote { url } => Some(url),
+                Source::Local => None,
+            });
+            let req = in_flight(&s.phase);
+            match (remote, req) {
+                (None, None) => (Fetch { phase: Idle, seq }, vec![Clear]),
+                (None, Some(req)) => (
+                    Fetch {
+                        phase: InFlight { req },
+                        seq,
+                    },
+                    vec![Clear],
+                ),
+                (Some(url), None) => (
+                    Fetch {
+                        phase: Debouncing { url },
+                        seq,
+                    },
+                    vec![ArmDebounce { seq }],
+                ),
+                (Some(url), Some(req)) => (
+                    Fetch {
+                        phase: InFlightDebouncing { req, url },
+                        seq,
+                    },
+                    vec![ArmDebounce { seq }],
+                ),
+            }
+        }
+        FetchEvent::DebounceElapsed(d) if d == s.seq => match s.phase {
+            Debouncing { url } => (
+                Fetch {
+                    phase: InFlight { req: d },
+                    seq: d,
+                },
+                vec![Request { seq: d, url }],
+            ),
+            InFlightDebouncing { req, url } => (
+                Fetch {
+                    phase: InFlightQueued { req, url },
+                    seq: d,
+                },
+                vec![],
+            ),
+            phase => (Fetch { phase, seq: d }, vec![]),
+        },
+        FetchEvent::DebounceElapsed(_) => (s, vec![]),
+        FetchEvent::Reply { seq: r, body } if in_flight(&s.phase) == Some(r) => {
+            let seq = s.seq;
+            match s.phase {
+                InFlightQueued { url, .. } => (
+                    Fetch {
+                        phase: InFlight { req: seq },
+                        seq,
+                    },
+                    vec![Request { seq, url }],
+                ),
+                InFlightDebouncing { url, .. } => (
+                    Fetch {
+                        phase: Debouncing { url },
+                        seq,
+                    },
+                    vec![],
+                ),
+                _ => {
+                    let phase = Idle;
+                    if r != seq {
+                        return (Fetch { phase, seq }, vec![]);
+                    }
+                    let list = body
+                        .and_then(|b| parse_opensearch(&b).ok())
+                        .unwrap_or_default();
+                    (Fetch { phase, seq }, vec![Show(list)])
+                }
+            }
+        }
+        FetchEvent::Reply { .. } => (s, vec![]),
+        FetchEvent::Closed => {
+            let phase = in_flight(&s.phase).map_or(Idle, |req| InFlight { req });
+            (
+                Fetch {
+                    phase,
+                    seq: s.seq + 1,
+                },
+                vec![Clear],
+            )
+        }
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +276,11 @@ mod tests {
             "foo/bar",
             "foo.",
             "user@host.com",
+            "about:blank",
+            "about:config",
+            "view-source:x",
+            "[::1]",
+            "[::1]:8080",
         ] {
             assert_eq!(
                 sources(q, &settings(LiveSuggestions::On)),
@@ -133,5 +301,142 @@ mod tests {
             parse_opensearch(r#"["ru",[1,2]]"#),
             Err(MalformedSuggestions)
         );
+    }
+
+    fn run(s: Fetch, events: Vec<FetchEvent>, live: LiveSuggestions) -> (Fetch, Vec<FetchEffect>) {
+        let mut all = vec![];
+        let mut s = s;
+        for e in events {
+            let (n, fx) = transition(s, e, &settings(live));
+            s = n;
+            all.extend(fx);
+        }
+        (s, all)
+    }
+
+    fn requests(fx: &[FetchEffect]) -> Vec<(u64, String)> {
+        fx.iter()
+            .filter_map(|e| match e {
+                FetchEffect::Request { seq, url } => Some((*seq, url.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    use FetchEvent::*;
+
+    #[test]
+    fn typing_is_debounced_into_one_request() {
+        let (s, fx) = run(
+            Fetch::default(),
+            vec![
+                Typed("r".into()),
+                Typed("ru".into()),
+                Typed("rus".into()),
+                DebounceElapsed(1),
+                DebounceElapsed(2),
+                DebounceElapsed(3),
+            ],
+            LiveSuggestions::On,
+        );
+        assert_eq!(
+            requests(&fx),
+            vec![(3, "https://duckduckgo.com/ac/?type=list&q=rus".into())]
+        );
+        let (_, fx) = run(
+            s,
+            vec![Reply {
+                seq: 3,
+                body: Some(r#"["rus",["rust"]]"#.into()),
+            }],
+            LiveSuggestions::On,
+        );
+        assert_eq!(fx, vec![FetchEffect::Show(vec!["rust".into()])]);
+    }
+
+    #[test]
+    fn a_stale_reply_is_dropped_and_the_queued_query_goes_out() {
+        let (s, fx) = run(
+            Fetch::default(),
+            vec![
+                Typed("ru".into()),
+                DebounceElapsed(1),
+                Typed("rust".into()),
+                DebounceElapsed(2),
+            ],
+            LiveSuggestions::On,
+        );
+        assert_eq!(requests(&fx).len(), 1, "one in flight");
+        let (s, fx) = run(
+            s,
+            vec![Reply {
+                seq: 1,
+                body: Some(r#"["ru",["ruby"]]"#.into()),
+            }],
+            LiveSuggestions::On,
+        );
+        assert!(!fx.iter().any(|e| matches!(e, FetchEffect::Show(_))));
+        assert_eq!(requests(&fx)[0].0, 2);
+        let (s, fx) = run(s, vec![Reply { seq: 2, body: None }], LiveSuggestions::On);
+        assert_eq!(fx, vec![FetchEffect::Show(vec![])]);
+        assert_eq!(s.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn address_like_input_and_off_never_request() {
+        for (q, live) in [
+            ("github.com/x", LiveSuggestions::On),
+            ("https://bank.example", LiveSuggestions::On),
+            ("rust", LiveSuggestions::Off),
+        ] {
+            let (_, fx) = run(
+                Fetch::default(),
+                vec![Typed(q.into()), DebounceElapsed(1)],
+                live,
+            );
+            assert!(requests(&fx).is_empty(), "{q}");
+            assert_eq!(fx, vec![FetchEffect::Clear]);
+        }
+    }
+
+    #[test]
+    fn closing_clears_and_drops_the_answer() {
+        let (s, fx) = run(
+            Fetch::default(),
+            vec![Typed("rust".into()), DebounceElapsed(1), Closed],
+            LiveSuggestions::On,
+        );
+        assert_eq!(fx.last(), Some(&FetchEffect::Clear));
+        let (s, fx) = run(
+            s,
+            vec![Reply {
+                seq: 1,
+                body: Some(r#"["rust",["rust"]]"#.into()),
+            }],
+            LiveSuggestions::On,
+        );
+        assert!(fx.is_empty());
+        assert_eq!(s.phase, Phase::Idle);
+        // a debounce armed before the close does nothing
+        let (_, fx) = run(
+            Fetch::default(),
+            vec![Typed("rust".into()), Closed, DebounceElapsed(1)],
+            LiveSuggestions::On,
+        );
+        assert!(requests(&fx).is_empty());
+        // a query queued behind an in-flight request is dropped by the close
+        let (_, fx) = run(
+            Fetch::default(),
+            vec![
+                Typed("rust".into()),
+                DebounceElapsed(1),
+                Typed("rust slint".into()),
+                DebounceElapsed(2),
+                Closed,
+                Reply { seq: 1, body: None },
+            ],
+            LiveSuggestions::On,
+        );
+        assert_eq!(requests(&fx).len(), 1);
     }
 }

@@ -2,6 +2,7 @@
 
 slint::include_modules!();
 
+pub mod controls;
 pub mod driver;
 pub mod glass;
 pub mod pages;
@@ -102,6 +103,10 @@ mod tests {
             label: label.into(),
             enabled: true,
             separator,
+            // the tab row menu's look: an icon, a shortcut, a danger row
+            icon: if separator { "" } else { "close" }.into(),
+            shortcut: if separator { "" } else { "Ctrl+W" }.into(),
+            danger: label == "Reload",
         }
     }
 

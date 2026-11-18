@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
-use super::quality::{BackdropClock, MAX_DT, Quality};
+use super::quality::{BackdropClock, Quality};
 use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
 use crate::import::poll_once;
 use crate::{GfxError, GpuContext, bytes};
@@ -531,6 +531,11 @@ impl Renderer {
         ))
     }
 
+    /// Whether the scene moves on its own beyond the ambient drift ([`Scene::animating`]).
+    pub fn animating(&self) -> bool {
+        self.scene.animating()
+    }
+
     /// The texture Slint shows, once the first frame has a size.
     pub fn output(&self) -> Option<&wgpu::Texture> {
         self.sized.as_ref().map(|s| &s.out.tex)
@@ -538,8 +543,9 @@ impl Renderer {
 
     /// Call from the window's rendering notifier on `BeforeRendering`, before
     /// Slint draws: sizes the scene to the window, advances it by the time
-    /// since the last call (capped at [`MAX_DT`]), renders it and asks for
-    /// the next frame (the liquid always drifts). Returns the image to show at
+    /// since the last call (capped at `max_dt`: `MAX_DT`, or `run::max_dt` of the run
+    /// state) and renders it. wubble change: it no longer asks for the next frame; the host
+    /// does, by the run state (`run.rs`, [`Renderer::animating`]). Returns the image to show at
     /// the back of the window, a new one every frame (`Ok(None)` only before
     /// the first): set it every frame, even when the output texture is the same.
     /// wubble change: Slint caches what a rounded clip draws (the window's
@@ -551,6 +557,7 @@ impl Renderer {
         &mut self,
         window: &slint::Window,
         now: Instant,
+        max_dt: f32,
     ) -> Result<Option<slint::Image>, GfxError> {
         let dpr = window.scale_factor();
         let size = window.size().to_logical(dpr);
@@ -558,8 +565,7 @@ impl Renderer {
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        self.render_under_ui(size.width, size.height, dpr, dt.min(MAX_DT));
-        window.request_redraw();
+        self.render_under_ui(size.width, size.height, dpr, dt.min(max_dt));
         self.output()
             .map(|t| slint::Image::try_from(t.clone()).map_err(|e| GfxError::Image(e.to_string())))
             .transpose()

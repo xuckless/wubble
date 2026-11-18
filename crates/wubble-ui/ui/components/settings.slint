@@ -9,8 +9,9 @@
 // the sections, each a display-font heading over a card of rows (label, note, control). The
 // controls are the design's touch kit at the settings row's size (`pages/touch.css` .tp-tg-sm,
 // .tp-seg in .st-seg, .tp-sl in .st-slider) and the swatches with their ring (.st-swatches).
-// Their springs (the liquid indicator, the rubber-banded knob, the travelling ring) are not
-// ported: Slint `animate` moves them. Written for wubble, the design having none: the stepper,
+// The toggle and the slider are the springy ports in `controls/` (`wubble_core::controls`);
+// the other springs (the liquid indicator, the travelling ring) are not ported: Slint `animate`
+// moves them. Written for wubble, the design having none: the stepper,
 // the list editor and the chord recorder row. Reused: the port's PressableButton, SpaceIcon and
 // WubbleScroller, wubble's IconButton, Icon and Raised.
 
@@ -21,71 +22,9 @@ import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, Space
 import { PageScroll } from "page-scroll.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
-import { Raised } from "raised.slint";
-
-// .wb-thin: the body of the page's chips (the search, a field, the toggle, the segmented track)
-export component Chip inherits Raised {
-    fill: Glass.thin.fill;
-    highlight: Glass.rimTop;
-    rim: Glass.rimAll;
-    shadow-y: Glass.thin.shadowY;
-    shadow-blur: Glass.thin.shadowBlur;
-    shadow: Shell.thin-shadow;
-}
-
-// .tp-tg-sm: the accent fades in over the chip when on; the knob slides and turns ink.
-export component Toggle inherits Rectangle {
-    in property <bool> on;
-    in property <color> accent: Palette.sky;
-    callback toggled();
-
-    width: Shell.toggle-width;
-    height: Shell.toggle-height;
-    accessible-role: switch;
-    accessible-checked: root.on;
-    accessible-action-default => {
-        root.toggled();
-    }
-
-    Chip {
-        radius: root.height / 2;
-    }
-    Rectangle {
-        border-radius: root.height / 2;
-        background: root.accent;
-        opacity: root.on ? 1 : 0;
-        animate opacity {
-            duration: Shell.control-ms;
-            easing: Motion.easeOut;
-        }
-    }
-    Raised {
-        x: root.on ? root.width - self.width - Shell.toggle-inset : Shell.toggle-inset;
-        y: Shell.toggle-inset;
-        width: Shell.toggle-knob;
-        height: Shell.toggle-knob;
-        radius: self.width / 2;
-        fill: root.on ? Palette.ink : Palette.mist;
-        highlight: Shell.knob-highlight;
-        drop-shadow-blur: Shell.toggle-shadow-blur;
-        drop-shadow-offset-y: Shell.toggle-shadow-y;
-        drop-shadow-color: Shell.toggle-shadow;
-        animate x {
-            duration: Shell.control-ms;
-            easing: Motion.easeSpring;
-        }
-        animate background {
-            duration: Shell.control-ms;
-            easing: Motion.easeOut;
-        }
-    }
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.toggled();
-        }
-    }
-}
+import { Raised, Chip } from "raised.slint";
+import { Toggle } from "controls/toggle.slint";
+import { Slider } from "controls/slider.slint";
 
 // .tp-seg in .st-seg: a chip with one segment per word, each as wide as its label; the chosen
 // one is the ink tile with the dark label.
@@ -291,78 +230,6 @@ export component Stepper inherits HorizontalLayout {
     }
     changed value => {
         number.text = root.value;
-    }
-}
-
-// .tp-sl in .st-slider: the value above the rail's end, the rail, the accent fill and the knob;
-// the value is set on release.
-export component Slider inherits VerticalLayout {
-    in property <float> value;
-    in property <float> min;
-    in property <float> max: 1;
-    in property <color> accent: Palette.sky;
-    callback set(float);
-
-    width: Shell.slider-width;
-    property <float> span: Math.max(0.0001, root.max - root.min);
-    property <float> held: (root.min + Math.clamp(ta.mouse-x / root.width, 0, 1) * root.span);
-    property <float> shown: ta.pressed ? root.held : root.value;
-    property <float> t: Math.clamp((root.shown - root.min) / root.span, 0, 1);
-
-    // .tp-sl-label output, pulled 6 into the slider (.st-slider .tp-sl-label margin-bottom -6)
-    Text {
-        height: self.preferred-height - Shell.slider-value-into;
-        text: Math.round(root.shown * 100) / 100;
-        color: Palette.ink;
-        font-family: Fonts.ui;
-        font-size: Shell.slider-value-font;
-        font-weight: 500;
-        horizontal-alignment: right;
-        vertical-alignment: top;
-    }
-    Rectangle {
-        height: Shell.slider-height;
-        Raised {
-            y: (parent.height - self.height) / 2;
-            height: Shell.slider-rail;
-            radius: self.height / 2;
-            fill: Shell.track;
-            highlight: Shell.rail-highlight;
-        }
-        Rectangle {
-            x: 0px;
-            y: (parent.height - self.height) / 2;
-            width: root.t * parent.width;
-            height: Shell.slider-rail;
-            border-radius: self.height / 2;
-            background: root.accent;
-        }
-        Rectangle {
-            x: root.t * (parent.width - self.width);
-            y: (parent.height - self.height) / 2;
-            width: Shell.slider-knob;
-            height: Shell.slider-knob;
-            border-radius: self.width / 2;
-            background: Palette.ink;
-            // the held knob swells to 1.1 (touch.tsx SLIDER.holdScale)
-            transform-origin: { x: self.width / 2, y: self.height / 2 };
-            transform-scale: ta.pressed ? 1.1 : 1;
-            animate transform-scale {
-                duration: Motion.overlapIn;
-                easing: Motion.easeSpring;
-            }
-            drop-shadow-blur: Shell.slider-shadow-blur;
-            drop-shadow-offset-y: Shell.slider-shadow-y;
-            drop-shadow-color: Shell.slider-shadow;
-        }
-        ta := TouchArea {
-            mouse-cursor: self.pressed ? grabbing : grab;
-            pointer-event(e) => {
-                if e.kind == PointerEventKind.up {
-                    root.set(root.held);
-                }
-            }
-        }
     }
 }
 

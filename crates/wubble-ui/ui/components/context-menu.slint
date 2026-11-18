@@ -2,6 +2,7 @@ import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, OverlapLayer } from "../components.slint";
 import { GlassTier, MenuEntry } from "model.slint";
+import { Icon, IconPaths } from "icon.slint";
 
 // The page's context menu; fills its parent (the window) so a click anywhere outside the panel
 // dismisses it (and is consumed, as Chromium's menu consumes it). Written from scratch: the
@@ -145,8 +146,12 @@ export component ContextMenu inherits Rectangle {
                     background: Palette.rim;
                 }
                 if !entry.separator: Rectangle {
+                    // Icon, label, shortcut; a danger row in coral with a coral highlight
+                    // (the design's `.tp-mrow.danger`, `.tp-menu-hl.danger`: coral at .12).
+                    property <bool> lit: entry.enabled && (row-touch.has-hover || i == root.current);
+                    property <length> lead: entry.icon != "" ? Shell.menu-row-pad + Shell.icon + Spacing.s2 : Shell.menu-row-pad;
                     border-radius: Shell.menu-row-radius;
-                    background: entry.enabled && (row-touch.has-hover || i == root.current) ? Shell.command-selected : transparent;
+                    background: !self.lit ? transparent : entry.danger ? Palette.coral.with-alpha(0.12) : Shell.command-selected;
                     animate background {
                         duration: Shell.menu-hover-ms;
                         easing: Motion.easeOut;
@@ -157,14 +162,29 @@ export component ContextMenu inherits Rectangle {
                             root.chosen(i);
                         }
                     }
-                    Text {
+                    if entry.icon != "": Icon {
                         x: Shell.menu-row-pad;
-                        width: parent.width - 2 * Shell.menu-row-pad;
+                        y: (parent.height - self.height) / 2;
+                        path: IconPaths.named(entry.icon);
+                        tint: entry.danger ? Palette.coral : entry.enabled ? Palette.mist : Palette.haze;
+                    }
+                    shortcut := Text {
+                        x: parent.width - Shell.menu-row-pad - self.width;
+                        height: parent.height;
+                        text: entry.shortcut;
+                        vertical-alignment: center;
+                        color: Palette.haze;
+                        font-family: Fonts.mono;
+                        font-size: Type.label.size;
+                    }
+                    Text {
+                        x: parent.lead;
+                        width: shortcut.x - parent.lead - (entry.shortcut != "" ? Spacing.s2 : 0px);
                         height: parent.height;
                         text: entry.label;
                         vertical-alignment: center;
                         overflow: elide;
-                        color: entry.enabled ? Palette.ink : Palette.haze;
+                        color: !entry.enabled ? Palette.haze : entry.danger ? Palette.coral : Palette.ink;
                         font-family: Fonts.ui;
                         font-size: Type.body.size;
                     }

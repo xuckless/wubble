@@ -144,11 +144,16 @@ export struct Origin {
 // ── The page's own UI (wubble surface.rs, menu.rs): the visible tab's surfaces, written by the
 // host after every change (one writer); the components only read them and report intents.
 
-// One context-menu row; `separator` rows are dividers.
+// One context-menu row; `separator` rows are dividers. `icon` names an `IconPaths` glyph (empty:
+// none), `shortcut` is the key that does the same (empty: none), `danger` rows close something
+// and draw in coral (the design's `MENU_ROWS`, pages/touch.tsx).
 export struct MenuEntry {
     label: string,
     enabled: bool,
     separator: bool,
+    icon: string,
+    shortcut: string,
+    danger: bool,
 }
 
 // A context menu (the page's or a tab row's): where the pointer was, in window coordinates,

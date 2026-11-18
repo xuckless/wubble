@@ -313,6 +313,8 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
+                MenuEffect::Run(MenuCommand::Model(command)) => self.dispatch(command.0),
+                MenuEffect::Run(MenuCommand::ToggleMute(t)) => self.toggle_mute(t),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
                 MenuEffect::Run(MenuCommand::SpaceNeverSleep(space, on)) => {
                     self.dispatch(Command::SetSpaceNeverSleep { space, on });
@@ -760,6 +762,9 @@ fn menu_view(menu: &Menu, scale: f32, origin: (f32, f32)) -> MenuView {
                     label: e.label.as_str().into(),
                     enabled: e.enabled,
                     separator: e.command == MenuCommand::Separator,
+                    icon: e.icon.into(),
+                    shortcut: e.shortcut.as_str().into(),
+                    danger: e.danger,
                 })
                 .collect(),
         ),

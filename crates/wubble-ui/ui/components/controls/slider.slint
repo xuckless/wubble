@@ -1,0 +1,120 @@
+// The design's elastic slider (`pages/touch.tsx` ElasticSlider, .tp-sl in touch.css; @source
+// touch-slider, xuckless/the-wallpaper-project @ 6c840da): held, the knob follows 1:1 and
+// rubber-bands past both ends with the rail stretching after it; a press away from the knob
+// sends it there on a catch-up spring; it stretches along its travel with speed and swells
+// while held; released, the follow spring. Physics: `wubble_core::controls::Slider` through
+// `Controls`. The design's value bubble is left out: the value sits above the rail's end, as the
+// settings page's .st-slider shows it (`pages/settings.css`, @ 21838b8). Same API (`value` in
+// `min`..`max`, `set` on release).
+
+import { Palette, Fonts } from "../../tokens.slint";
+import { Shell } from "../../app-tokens.slint";
+import { Controls, ControlView } from "registry.slint";
+import { FilmRim } from "../glow-ring.slint";
+import { Raised } from "../raised.slint";
+
+export component Slider inherits VerticalLayout {
+    in property <float> value;
+    in property <float> min;
+    in property <float> max: 1;
+    in property <color> accent: Palette.sky;
+    callback set(float);
+
+    width: Shell.slider-width;
+
+    property <float> span: Math.max(0.0001, root.max - root.min);
+    property <float> percent: Math.clamp((root.value - root.min) / root.span, 0, 1) * 100;
+    // the knob's centre travels over the width less one knob
+    property <length> travel: root.width - Shell.slider-knob;
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <length> kx: root.v.x * Shell.control-unit;
+    property <int> gen: Controls.generation;
+
+    init => {
+        root.slot = Controls.acquire(1, root.percent);
+        Controls.resize(root.slot, root.travel);
+    }
+    changed percent => {
+        Controls.set-value(root.slot, root.percent);
+    }
+    changed travel => {
+        Controls.resize(root.slot, root.travel);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    // the value shown: the knob's while held, else the setting's
+    property <float> shown: ta.pressed ? root.min + Math.clamp(root.kx / root.travel, 0, 1) * root.span : root.value;
+
+    // .tp-sl-label output, pulled 6 into the slider (.st-slider .tp-sl-label margin-bottom -6)
+    Text {
+        height: self.preferred-height - Shell.slider-value-into;
+        text: Math.round(root.shown * 100) / 100;
+        color: Palette.ink;
+        font-family: Fonts.ui;
+        font-size: Shell.slider-value-font;
+        font-weight: 500;
+        horizontal-alignment: right;
+        vertical-alignment: top;
+    }
+    Rectangle {
+        height: Shell.slider-height;
+        // the rail, stretched to the knob when it is banded past an end
+        Raised {
+            x: Shell.slider-knob / 2 + Math.min(0px, root.kx);
+            y: (parent.height - self.height) / 2;
+            width: Math.max(root.travel, root.kx) - Math.min(0px, root.kx);
+            height: Shell.slider-rail;
+            radius: self.height / 2;
+            fill: Shell.track;
+            highlight: Shell.rail-highlight;
+        }
+        Rectangle {
+            x: Shell.slider-knob / 2;
+            y: (parent.height - self.height) / 2;
+            width: Math.max(0px, root.kx);
+            height: Shell.slider-rail;
+            border-radius: self.height / 2;
+            background: root.accent;
+        }
+        knob := Rectangle {
+            x: root.kx;
+            y: (parent.height - self.height) / 2;
+            width: Shell.slider-knob;
+            height: Shell.slider-knob;
+            border-radius: self.width / 2;
+            background: Palette.ink;
+            drop-shadow-blur: Shell.slider-shadow-blur;
+            drop-shadow-offset-y: Shell.slider-shadow-y;
+            drop-shadow-color: Shell.slider-shadow;
+            transform-origin: { x: self.width * root.v.origin, y: self.height / 2 };
+            transform-scale-x: root.v.scale-x;
+            transform-scale-y: root.v.scale-y;
+            FilmRim {
+                radius: parent.border-radius;
+                touched: ta.has-hover || ta.pressed;
+            }
+        }
+        ta := TouchArea {
+            mouse-cursor: self.pressed ? grabbing : grab;
+            pointer-event(e) => {
+                if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                    Controls.press(root.slot, self.mouse-x - Shell.slider-knob / 2);
+                }
+                if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                    let landed = Controls.release(root.slot);
+                    if landed >= 0 {
+                        root.set(root.min + landed / 100 * root.span);
+                    }
+                }
+            }
+            moved => {
+                if self.pressed {
+                    Controls.drag(root.slot, self.mouse-x - Shell.slider-knob / 2);
+                }
+            }
+        }
+    }
+}
