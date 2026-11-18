@@ -151,10 +151,7 @@ mod web_event_tests {
             Some(CefSurfaceEvent::Navigation(NavigationEvent::TitleChanged { title }))
                 if title == "last"
         ));
-        assert!(matches!(
-            events.poll(),
-            Some(CefSurfaceEvent::BrowserClosed)
-        ));
+        assert!(matches!(events.poll(), Some(CefSurfaceEvent::BrowserClosed)));
         assert!(events.poll().is_none());
     }
 
@@ -724,7 +721,7 @@ impl CefSurfaceConfig {
         match self.background_color {
             Some([r, g, b]) => {
                 0xFF00_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
-            }
+            },
             None => 0,
         }
     }

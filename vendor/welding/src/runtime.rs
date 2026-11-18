@@ -325,7 +325,7 @@ mod cef_backed {
                 Err(error) => {
                     eprintln!("welding: {error}");
                     1
-                }
+                },
             }
         }
 
@@ -440,7 +440,7 @@ mod cef_backed {
         match sandbox {
             CefSandboxMode::UnsandboxedTrustedContent | CefSandboxMode::Sandboxed => {
                 std::ptr::null_mut()
-            }
+            },
         }
     }
 
@@ -645,9 +645,7 @@ mod pump_scheduler_tests {
         let seen = Arc::clone(&last);
         let mut config = CefRuntimeConfig::new("/cef", CefSandboxMode::UnsandboxedTrustedContent);
         assert!(config.pump_scheduler.is_none());
-        config.pump_scheduler = Some(PumpScheduler::new(move |ms| {
-            seen.store(ms, Ordering::SeqCst)
-        }));
+        config.pump_scheduler = Some(PumpScheduler::new(move |ms| seen.store(ms, Ordering::SeqCst)));
         let copy = config.clone();
         assert!(format!("{copy:?}").contains("PumpScheduler"));
         (copy.pump_scheduler.expect("cloned").0)(33);

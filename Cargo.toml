@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-# Vendored third-party code keeps its upstream formatting and lints; it is
-# built as a path dependency, tested with `cargo test -p welding`.
+# Vendored third-party code is not linted by `clippy --workspace`; its own
+# rustfmt.toml keeps `cargo fmt --all` off it. Built as a path dependency,
+# tested with `cargo test -p welding`.
 exclude = ["vendor/welding"]
 
 [workspace.package]
