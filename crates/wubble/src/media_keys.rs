@@ -59,7 +59,8 @@ pub struct NowPlaying {
 
 impl NowPlaying {
     /// The kit's `meta` object, its strings capped.
-    pub fn from_json(v: &serde_json::Value, playing: bool) -> NowPlaying {
+    /// The kit's `meta` (`kit.js` `snapshot()`): playing only when it says `paused: false`.
+    pub fn from_json(v: &serde_json::Value) -> NowPlaying {
         let text = |k: &str| -> String {
             v.get(k)
                 .and_then(serde_json::Value::as_str)
@@ -78,7 +79,7 @@ impl NowPlaying {
             } else {
                 String::new()
             },
-            playing,
+            playing: v.get("paused").and_then(serde_json::Value::as_bool) == Some(false),
         }
     }
 }
@@ -112,6 +113,15 @@ impl Keys {
             controls,
             shown: None,
         })
+    }
+
+    /// Nothing plays: the system's controls show it stopped (once).
+    pub fn stop(&mut self) {
+        if self.shown.take().is_some()
+            && let Err(e) = self.controls.set_playback(MediaPlayback::Stopped)
+        {
+            eprintln!("wubble: media controls: {e:?}");
+        }
     }
 
     /// Shows `now` (only if it changed).
@@ -176,14 +186,16 @@ mod tests {
             "title": "t".repeat(300), "artist": "A", "album": 5,
             "art": "http://plain.test/a.png"
         });
-        let now = NowPlaying::from_json(&v, true);
+        let now = NowPlaying::from_json(&v);
         assert_eq!(now.title.len(), 256);
         assert_eq!((now.artist.as_str(), now.album.as_str()), ("A", ""));
         assert_eq!(now.art, "");
         let v = serde_json::json!({"art": "https://img.test/a.png"});
-        assert_eq!(
-            NowPlaying::from_json(&v, false).art,
-            "https://img.test/a.png"
-        );
+        assert_eq!(NowPlaying::from_json(&v).art, "https://img.test/a.png");
+        // A paused video shows paused, and so does a meta that does not say.
+        let playing = |v: serde_json::Value| NowPlaying::from_json(&v).playing;
+        assert!(playing(serde_json::json!({"paused": false})));
+        assert!(!playing(serde_json::json!({"paused": true})));
+        assert!(!playing(serde_json::json!({})));
     }
 }

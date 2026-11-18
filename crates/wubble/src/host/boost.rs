@@ -1,10 +1,11 @@
 //! The host's half of Boosts and of the page kit. Every view gets three document-start scripts
 //! (`View::set_document_scripts`): the page kit (`assets/kit.js`, which the video controls,
-//! SponsorBlock and the media keys also use) and the two scripts of the Boosts that match the
-//! page it is about to show (`wubble_core::boost::page_scripts`). They are matched here, in Rust,
-//! for each navigation target; the scripts carry the URL they were matched for and do nothing on
-//! any other document. A document that started before its scripts were in place (a link the
-//! host only hears about once it committed, a view's first page) gets them when it commits.
+//! SponsorBlock and the media keys also use) and the two scripts of the Boosts
+//! (`wubble_core::boost::page_scripts`). Those carry every enabled Boost with its pattern, and
+//! the kit picks the ones of the document it runs in, so the scripts are the same for every page
+//! and change only with the table: a link, a redirect or a page's own navigation starts with its
+//! Boosts in place. A document that started before the scripts were registered (a view's first
+//! page) gets them when it commits.
 //!
 //! The editor panel (`boost-panel.slint`) edits one Boost (a draft) at a time; its CSS shows on
 //! the page as it is typed, a script on Done (the page reloads). The stored Boosts here are the
@@ -59,21 +60,16 @@ struct Editor {
 pub(super) type Saved = Option<i64>;
 
 impl Host {
-    /// The scripts a document at `url` starts with.
-    fn page_scripts(&self, url: &str) -> Vec<String> {
+    /// The scripts every document starts with.
+    fn page_scripts(&self) -> Vec<String> {
         let b = &self.boosts;
-        let boosts = if b.enabled {
-            boost::matching(&b.all, url)
-        } else {
-            vec![]
-        };
-        let [css, js] = boost::page_scripts(&boosts, url);
+        let [css, js] = boost::page_scripts(if b.enabled { &b.all } else { &[] });
         vec![KIT.to_owned(), css, js]
     }
 
-    /// Gives `tab`'s view the scripts for the document at `url`, if it has others.
-    fn sync_page_scripts(&mut self, tab: TabId, url: &str) {
-        let scripts = self.page_scripts(url);
+    /// Gives `tab`'s view the scripts, if it has others.
+    fn sync_page_scripts(&mut self, tab: TabId) {
+        let scripts = self.page_scripts();
         if self.boosts.given.get(&tab) == Some(&scripts) {
             return;
         }
@@ -93,30 +89,15 @@ impl Host {
         }
     }
 
-    /// A view opened on `url`: nothing was registered with it yet.
-    pub(super) fn boosts_view_opened(&mut self, tab: TabId, url: &str) {
+    /// A view opened: nothing was registered with it yet.
+    pub(super) fn boosts_view_opened(&mut self, tab: TabId) {
         self.boosts.given.remove(&tab);
-        self.sync_page_scripts(tab, url);
+        self.sync_page_scripts(tab);
     }
 
-    /// `tab` is about to load `url`.
-    pub(super) fn boosts_loading(&mut self, tab: TabId, url: &str) {
-        self.sync_page_scripts(tab, url);
-    }
-
-    /// `tab` committed `url`: its scripts now name it, and run if the document began without
-    /// them.
-    pub(super) fn boosts_committed(&mut self, tab: TabId, url: &str) {
-        self.sync_page_scripts(tab, url);
-        self.run_page_scripts(tab);
-    }
-
-    /// `tab`'s new document began loading: it runs its scripts unless it already did.
-    pub(super) fn boosts_started(&mut self, tab: TabId) {
-        let url = self.tab_view(tab).map(|v| v.nav().page.url.clone());
-        if let Some(url) = url {
-            self.sync_page_scripts(tab, &url);
-        }
+    /// `tab` committed a document or began loading it: it runs its scripts unless it already did
+    /// (its first page may have started before they were registered).
+    pub(super) fn boosts_document(&mut self, tab: TabId) {
         self.run_page_scripts(tab);
     }
 
@@ -137,10 +118,7 @@ impl Host {
     fn boosts_changed(&mut self) {
         let tabs: Vec<TabId> = self.views.keys().copied().collect();
         for tab in tabs {
-            let url = self.tab_view(tab).map(|v| v.nav().page.url.clone());
-            if let Some(url) = url {
-                self.sync_page_scripts(tab, &url);
-            }
+            self.sync_page_scripts(tab);
         }
     }
 
@@ -386,20 +364,27 @@ impl Host {
 
     /// The kit's poll reported the picker: `selector` was zapped (hidden from now on), or the
     /// picker ended without one.
+    /// The selector is the page's to answer, so only a picker the host started counts, and only
+    /// a plain selector (`boost::zap_rule`) is written into the Boost.
     pub(super) fn boost_zapped(&mut self, tab: TabId, on: bool, selector: Option<&str>) {
-        let Some(editor) = self.boosts.editor.as_mut().filter(|e| e.tab == tab) else {
+        let Some(editor) = self
+            .boosts
+            .editor
+            .as_mut()
+            .filter(|e| e.tab == tab && e.zapping)
+        else {
             return;
         };
         if on {
             return;
         }
         editor.zapping = false;
-        if let Some(selector) = selector.filter(|s| !s.is_empty() && s.len() < 1_000) {
+        if let Some(rule) = selector.and_then(boost::zap_rule) {
             let css = &mut editor.draft.css;
             if !css.is_empty() && !css.ends_with('\n') {
                 css.push('\n');
             }
-            css.push_str(&format!("{selector} {{ display: none !important; }}\n"));
+            css.push_str(&rule);
             self.boosts.serial = self.boosts.serial.wrapping_add(1);
             self.show_draft_css();
         }
@@ -506,7 +491,7 @@ mod tests {
             "setActionHandler",
             "k.css",
             "k.ready",
-            "k.at",
+            "k.matches",
             "k.zap",
             "DOMPath.ts",
             "adoptedStyleSheets",

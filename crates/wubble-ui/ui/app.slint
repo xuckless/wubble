@@ -378,6 +378,7 @@ export component AppWindow inherits Window {
     in property <string> toast-action;
     in property <bool> toast-sticky;
     in property <int> toast-hide-serial;
+    in property <duration> toast-action-shown;
     callback toast-acted();
     callback toast-closed();
     // The visible page's video controls (wubble_core::video) and the speed menu's rows.
@@ -706,6 +707,7 @@ export component AppWindow inherits Window {
                 action: root.toast-action;
                 sticky: root.toast-sticky;
                 hide-serial: root.toast-hide-serial;
+                action-shown: root.toast-action-shown;
                 acted => {
                     root.toast-acted();
                 }

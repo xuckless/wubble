@@ -27,20 +27,22 @@ pub struct SponsorNet {
 }
 
 impl SponsorNet {
-    /// Starts the thread; each answer goes to `done(tab, video, segments)` on that thread.
-    pub fn spawn(done: impl Fn(TabId, String, Vec<Segment>) + Send + 'static) -> Option<Self> {
+    /// Starts the thread; each answer goes to `done(tab, video, segments)` on that thread: the
+    /// segments (none for a video the database does not know), or why there was no answer (no
+    /// network, a timeout, a server error), which the caller may ask again later.
+    pub fn spawn(
+        done: impl Fn(TabId, String, Result<Vec<Segment>, String>) + Send + 'static,
+    ) -> Option<Self> {
         let (tx, rx) = mpsc::channel::<Job>();
         let started = std::thread::Builder::new()
             .name("wubble-sponsor".into())
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
-                    let segments = match fetch(&job.endpoint, &job.video) {
-                        Ok(body) => sponsor::parse(&body, &job.video),
-                        Err(e) => {
-                            eprintln!("wubble: sponsor segments: {e}");
-                            vec![]
-                        }
-                    };
+                    let segments = fetch(&job.endpoint, &job.video)
+                        .map(|body| sponsor::parse(&body, &job.video));
+                    if let Err(e) = &segments {
+                        eprintln!("wubble: sponsor segments: {e}");
+                    }
                     done(job.tab, job.video, segments);
                 }
             });

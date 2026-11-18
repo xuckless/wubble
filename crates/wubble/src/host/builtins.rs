@@ -141,14 +141,13 @@ impl Host {
     pub(super) fn builtins_view_opened(&mut self, tab: TabId, url: &str) {
         self.builtins.applied.remove(&tab);
         self.sync_page_theme(tab, Some(url));
-        self.boosts_view_opened(tab, url);
+        self.boosts_view_opened(tab);
     }
 
     /// `tab` is about to load `url`: its theme goes first, so the page never shows in the
     /// other one.
     pub(super) fn builtins_loading(&mut self, tab: TabId, url: &str) {
         self.sync_page_theme(tab, Some(url));
-        self.boosts_loading(tab, url);
     }
 
     /// The tab's view is gone (closed, discarded): forget what it was told.
@@ -176,11 +175,11 @@ impl Host {
         match event {
             WebEvent::UrlChanged(url) => {
                 self.sync_page_theme(tab, Some(url));
-                self.boosts_committed(tab, url);
+                self.boosts_document(tab);
             }
             WebEvent::LoadStarted => {
                 self.media_page_changed(tab);
-                self.boosts_started(tab);
+                self.boosts_document(tab);
                 self.builtins.pdf.remove(&tab);
                 self.reader_event(tab, ReaderEvent::PageStarted);
                 if self.hints_tab() == Some(tab) {

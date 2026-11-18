@@ -11,14 +11,16 @@
 //! 4. loop on, mute toggled;
 //! 5. SponsorBlock against the server's fake endpoint: the request carries only the 4-hex prefix
 //!    (no video id), no cookie and no referer; the page jumps over the segment and the host shows
-//!    the notice; undo (paused) goes back before the segment and the jump is withdrawn
+//!    the notice; after a reload (a new document of the same video, its kit without jumps) the
+//!    new document reports the jump again; undo (paused) goes back before the segment and the jump is withdrawn
 //!    (`smoke: sponsor ok`);
 //! 6. a media key (Toggle) through the host's path pauses the playing video.
 //!
 //! `--smoke boost`: a Boost stored through the editor's path (`http://127.0.0.1/boost*`: CSS, a
 //! tint, a document-start script) colours `boost.html` and sets its title; `other.html` stays as
-//! it is; `boost-csp.html` (`style-src 'none'`) still gets the CSS; the Boost turned off, the
-//! page reloads as it was.
+//! it is; `boost-csp.html` (`style-src 'none'`), reached by the page's own navigation (as a link
+//! is), still gets the CSS and its script ran at document start; the Boost turned off, the page
+//! reloads as it was.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -51,6 +53,11 @@ const VIDEO_PAGE: &str = "<!doctype html><title>video</title>\
 const BOOST_PAGE: &str = "<!doctype html><title>plain</title>\
     <body style=\"background:rgb(250,250,250)\"><p>A page to boost.</p>";
 
+/// Plays from just before the segment, so the wait is short; muted, since an unmuted video does
+/// not play without a user gesture.
+const PLAY_BEFORE_JUMP: &str = "(k=>(k.cmd('muted',true),k.cmd('rate',1),k.cmd('seek',0.5),k.cmd('play'),1))\
+     (window[Symbol.for('wubble.kit')])";
+
 /// Also marks the document, so the check after the reload can tell the new one from it.
 const RATE_CHECK: &str =
     "(window.wubbleMark=1,{check:'rate',rate:document.querySelector('video').playbackRate})";
@@ -78,6 +85,9 @@ pub enum Step {
     Loop,
     Mute { before: bool },
     Skipping,
+    SponsorReloading,
+    SponsorLoading,
+    SkippingAgain,
     Undone,
     KeyPlaying,
     KeyPaused,
@@ -95,6 +105,7 @@ pub enum Step {
     DisabledChecked,
 }
 
+#[derive(Clone)]
 pub struct MediaSmoke {
     step: Step,
     runs: u32,
@@ -135,6 +146,8 @@ pub struct Seen {
     pub jumps: usize,
     /// The "skipped" notice is up.
     pub notice: bool,
+    /// Jumps the page reported taking since the last snapshot.
+    pub fired: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -304,25 +317,29 @@ pub fn next(mut s: MediaSmoke, input: Input) -> (MediaSmoke, Vec<Action>) {
             let before = video.is_some_and(|v| v.muted);
             to(s, Mute { before }, vec![Action::Video("mute", 0.0)])
         }
-        (Mute { before }, Snapshot(_)) if video.as_ref().is_some_and(|v| v.muted != before) => {
-            // Muted again: an unmuted video does not play without a user gesture. From just before
-            // the segment, so the wait is short.
-            let play = "(k=>(k.cmd('muted',true),k.cmd('rate',1),k.cmd('seek',0.5),k.cmd('play'),1))\
-                (window[Symbol.for('wubble.kit')])";
-            to(
-                s,
-                Skipping,
-                vec![
-                    Action::Setting("sponsor.enabled", "1"),
-                    Action::Eval(play.into()),
-                ],
-            )
-        }
+        (Mute { before }, Snapshot(_)) if video.as_ref().is_some_and(|v| v.muted != before) => to(
+            s,
+            Skipping,
+            vec![
+                Action::Setting("sponsor.enabled", "1"),
+                Action::Eval(PLAY_BEFORE_JUMP.into()),
+            ],
+        ),
         (Skipping, Snapshot(seen)) if seen.notice => {
             let requests = s.requests.lock().map(|r| r.clone()).unwrap_or_default();
             if let Err(e) = private_lookup(&requests) {
                 return fail(s, e);
             }
+            to(s, SponsorReloading, vec![Action::Reload])
+        }
+        (SponsorReloading, Web(WebEvent::LoadStarted)) => to(s, SponsorLoading, vec![]),
+        (SponsorLoading, Web(e)) if loaded(e) => to(
+            s,
+            SkippingAgain,
+            vec![Action::Eval(PLAY_BEFORE_JUMP.into())],
+        ),
+        // The first notice may still be up: the new document's own report of the jump counts.
+        (SkippingAgain, Snapshot(seen)) if seen.fired > 0 => {
             let pause = "window[Symbol.for('wubble.kit')].cmd('pause')";
             to(s, Undone, vec![Action::Eval(pause.into()), Action::Undo])
         }
@@ -380,8 +397,10 @@ pub fn next(mut s: MediaSmoke, input: Input) -> (MediaSmoke, Vec<Action>) {
             if v["bg"] == BOOSTED_BG || v["title"] == "boosted" {
                 return fail(s, format!("a page the Boost does not match changed: {v}"));
             }
-            let csp = url(&s, "boost-csp.html");
-            to(s, CspLoaded, vec![Action::Load(csp)])
+            // The page navigates itself, as a link click does: the host hears of it only once
+            // it committed.
+            let go = format!("location.href = {:?}", url(&s, "boost-csp.html"));
+            to(s, CspLoaded, vec![Action::Eval(go)])
         }
         (CspLoaded, Web(e)) if loaded(e) => {
             to(s, CspChecked, vec![Action::Eval(BOOST_CHECK.into())])
@@ -390,6 +409,12 @@ pub fn next(mut s: MediaSmoke, input: Input) -> (MediaSmoke, Vec<Action>) {
             let v = check(e, "boost").unwrap_or_default();
             if v["bg"] != BOOSTED_BG {
                 return fail(s, format!("style-src 'none' kept the Boost's CSS out: {v}"));
+            }
+            if v["at"] != "loading" {
+                return fail(
+                    s,
+                    format!("a page's own navigation ran the Boost late: {v}"),
+                );
             }
             match s.boost {
                 Some(id) => to(s, Disabling, vec![Action::ToggleBoost(id)]),
@@ -600,15 +625,57 @@ mod tests {
         let (s, a) = next(s, Input::Page(&wrong));
         assert_eq!(
             a,
-            vec![Action::Load("http://127.0.0.1:1/boost-csp.html".into())]
+            vec![Action::Eval(
+                "location.href = \"http://127.0.0.1:1/boost-csp.html\"".into()
+            )]
         );
         let (s, _) = next(s, Input::Web(&done));
+        let late = answer(
+            r#"{"check":"boost","bg":"rgb(1, 2, 3)","title":"boosted","after":"fixed","at":"interactive"}"#,
+        );
+        let (_, a) = next(s.clone(), Input::Page(&late));
+        assert!(matches!(&a[..], [Action::Fail(_)]), "a late script fails");
         let (s, a) = next(s, Input::Page(&right));
         assert_eq!(a, vec![Action::ToggleBoost(4)]);
         let (s, _) = next(s, Input::BoostSaved(4));
         let (s, _) = next(s, Input::Web(&done));
         let (_, a) = next(s, Input::Page(&wrong));
         assert_eq!(a, vec![Action::Pass("boost".into())]);
+    }
+
+    #[test]
+    fn the_sponsor_skip_must_happen_again_after_a_reload() {
+        let mut s = MediaSmoke::video(String::new(), Requests::default());
+        s.step = Step::Skipping;
+        let notice = |fired| Seen {
+            notice: true,
+            fired,
+            ..seen(Some(playing()))
+        };
+        // The fake endpoint saw no lookup in this test: the check fails, which proves it runs.
+        let (_, a) = next(s.clone(), Input::Snapshot(&notice(1)));
+        assert!(matches!(&a[..], [Action::Fail(_)]));
+        if let Ok(mut r) = s.requests.lock() {
+            let prefix = wubble_core::sponsor::hash_prefix(SMOKE_VIDEO);
+            r.push(format!("get /api/skipsegments/{prefix}?c http/1.1\n"));
+        }
+        let (s, a) = next(s, Input::Snapshot(&notice(1)));
+        assert_eq!(a, vec![Action::Reload]);
+        let (s, _) = next(s, Input::Web(&WebEvent::LoadStarted));
+        let done = WebEvent::LoadingChanged {
+            loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+        };
+        let (s, a) = next(s, Input::Web(&done));
+        assert_eq!(a, vec![Action::Eval(PLAY_BEFORE_JUMP.into())]);
+        // The first skip's notice still up is not a new skip.
+        let (s, a) = next(s, Input::Snapshot(&notice(0)));
+        assert!(a.is_empty());
+        assert_eq!(s.step, Step::SkippingAgain);
+        let (s, a) = next(s, Input::Snapshot(&notice(1)));
+        assert_eq!(a.last(), Some(&Action::Undo));
+        assert_eq!(s.step, Step::Undone);
     }
 
     #[test]

@@ -176,9 +176,6 @@ export global Shell {
     out property <duration> toast-in: 400ms;
     out property <duration> toast-out: 190ms;
     out property <duration> toast-shown: 1500ms;
-    // A notice with a button (SponsorBlock's undo) stays as long as it can be undone
-    // (`wubble_core::sponsor::TOAST_MS`).
-    out property <duration> toast-action-shown: 6000ms;
     // The Boost editor docked beside the page.
     out property <length> boost-panel-width: 340px;
     out property <length> boost-code-height: 150px;
@@ -189,6 +186,8 @@ export global Shell {
     out property <length> video-rail: 4px;
     out property <length> video-mark-min: 2px;
     out property <length> video-knob: 10px;
+    // The strip's widest: compact in the video's corner, the page's own controls left free.
+    out property <length> video-strip-width: 380px;
     // The find bar: an .ur-o-surface strip at the content's top right (Chromium's place), the
     // command bar's input metrics.
     out property <length> find-width: 360px;

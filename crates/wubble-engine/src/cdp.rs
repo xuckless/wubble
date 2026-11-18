@@ -97,7 +97,8 @@ impl DocCall {
 /// message and dropped (`reply` ignores events).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DocScripts {
-    /// `Page.enable` went out (its id, until answered).
+    /// `Page.enable` went out (its id, until answered). Set when it is sent, not when it is
+    /// asked for, so a call the channel refused is asked for again by the next `set`.
     enabled: bool,
     enabling: Option<u64>,
     /// The identifiers of the scripts in place.
@@ -113,7 +114,7 @@ impl DocScripts {
             *wanted = false;
         }
         let mut calls = vec![];
-        if !std::mem::replace(&mut self.enabled, true) {
+        if !self.enabled {
             calls.push(DocCall::Enable);
         }
         calls.extend(self.registered.drain(..).map(DocCall::Remove));
@@ -124,7 +125,10 @@ impl DocScripts {
     /// `call` went out as `id`.
     pub fn sent(&mut self, id: CdpId, call: &DocCall) {
         match call {
-            DocCall::Enable => self.enabling = Some(id.0),
+            DocCall::Enable => {
+                self.enabled = true;
+                self.enabling = Some(id.0);
+            }
             DocCall::Add(_) => {
                 self.adding.insert(id.0, true);
             }
@@ -202,6 +206,17 @@ mod tests {
         let (method, params) = DocCall::Add("x".into()).method();
         assert_eq!(method, "Page.addScriptToEvaluateOnNewDocument");
         assert_eq!(params, json!({"source": "x"}));
+    }
+
+    #[test]
+    fn an_enable_that_never_went_out_is_asked_for_again() {
+        let mut d = DocScripts::default();
+        // The channel refused every call: none was `sent`.
+        assert_eq!(d.set(&["a".into()])[0], DocCall::Enable);
+        let calls = d.set(&["a".into()]);
+        assert_eq!(calls[0], DocCall::Enable);
+        d.sent(CdpId(1), &calls[0]);
+        assert_eq!(d.set(&["a".into()]), vec![DocCall::Add("a".into())]);
     }
 
     #[test]

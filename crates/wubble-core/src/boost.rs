@@ -1,7 +1,10 @@
 //! Boosts: the user's own CSS, JavaScript, tint and font for a site, as data. A [`Boost`] names
 //! its site with a [`Pattern`]; [`matching`] picks the Boosts for a page in the order they apply,
-//! and [`css_of`] / [`page_scripts`] turn them into what the page is given. Matching happens here
-//! only: the page scripts carry the URL they were matched for and run on no other document.
+//! and [`css_of`] / [`page_scripts`] turn them into what the page is given. The page scripts are
+//! the same for every document: they carry each Boost with its pattern as data ([`Pattern::js`]),
+//! and the page kit's `matches` (`kit.js`, the same rules as [`Pattern::matches`]) picks the
+//! Boosts of the document it runs in, so they run at document start whichever way the page was
+//! reached (a link, a redirect, a script).
 //!
 //! The pattern grammar is a subset of Chrome's extension match patterns
 //! (`scheme://host/path`), design reference only: Chromium `extensions/common/url_pattern.cc`
@@ -60,8 +63,15 @@ pub struct Boost {
 }
 
 impl Boost {
-    /// A new, empty Boost for `host`'s pages.
+    /// A new, empty Boost for `host`'s pages; a port (`localhost:8080`) is the page's, not the
+    /// pattern's, and is dropped.
     pub fn for_host(host: &str) -> Self {
+        let host = match host.rsplit_once(':') {
+            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                name
+            }
+            _ => host,
+        };
         Self {
             id: 0,
             name: host.to_owned(),
@@ -176,6 +186,23 @@ impl Pattern {
         scheme_ok && host_ok && glob(&self.path, &path)
     }
 
+    /// The pattern as data for the page kit's `matches` (`kit.js`): `s` the scheme (`web` for
+    /// http and https), `h` the kind of host (`any`, `domain`, `exact`) and `n` its name, `p` the
+    /// glob over path and query.
+    pub fn js(&self) -> serde_json::Value {
+        let scheme = match self.scheme {
+            Scheme::Web => "web",
+            Scheme::Http => "http",
+            Scheme::Https => "https",
+        };
+        let (kind, name) = match &self.host {
+            Host::Any => ("any", ""),
+            Host::Domain(d) => ("domain", d.as_str()),
+            Host::Exact(h) => ("exact", h.as_str()),
+        };
+        serde_json::json!({ "s": scheme, "h": kind, "n": name, "p": self.path })
+    }
+
     /// How narrow the pattern is: an exact host over a domain over any host, a longer host and
     /// then a longer literal path narrower.
     fn specificity(&self) -> (u8, usize, usize) {
@@ -226,19 +253,39 @@ fn glob(pattern: &str, text: &str) -> bool {
 /// The enabled Boosts for the page at `url`, in the order they apply: broader patterns first, so
 /// a narrower one's CSS wins; then the user's order, then the oldest first.
 pub fn matching<'a>(boosts: &'a [Boost], url: &str) -> Vec<&'a Boost> {
-    let mut hits: Vec<(&Boost, Pattern)> = boosts
+    ordered(boosts)
+        .into_iter()
+        .filter(|(_, p)| p.matches(url))
+        .map(|(b, _)| b)
+        .collect()
+}
+
+/// Every enabled Boost with a pattern, in the order they apply on a page they all match.
+fn ordered(boosts: &[Boost]) -> Vec<(&Boost, Pattern)> {
+    let mut all: Vec<(&Boost, Pattern)> = boosts
         .iter()
         .filter(|b| b.enabled)
         .filter_map(|b| Pattern::parse(&b.site).map(|p| (b, p)))
-        .filter(|(_, p)| p.matches(url))
         .collect();
-    hits.sort_by(|(a, pa), (b, pb)| {
+    all.sort_by(|(a, pa), (b, pb)| {
         pa.specificity()
             .cmp(&pb.specificity())
             .then(a.order.cmp(&b.order))
             .then(a.id.cmp(&b.id))
     });
-    hits.into_iter().map(|(b, _)| b).collect()
+    all
+}
+
+/// The rule the zap picker adds for `selector` (`kit.js` `zap`), if it is a plain selector of
+/// the kind the picker makes (`#id`, `tag.class`, `tag:nth-child(n)`, ` > `, CSS escapes). The
+/// selector comes from the page, which can answer anything: braces, `;`, `@`, quotes or a
+/// comment could close the rule and smuggle in declarations (a `url()` that tracks), so any
+/// other character refuses it.
+pub fn zap_rule(selector: &str) -> Option<String> {
+    let selector = selector.trim();
+    let plain = |c: char| c.is_ascii_alphanumeric() || " #.>:()-_\\".contains(c) || !c.is_ascii();
+    (!selector.is_empty() && selector.len() < 1_000 && selector.chars().all(plain))
+        .then(|| format!("{selector} {{ display: none !important; }}\n"))
 }
 
 /// The CSS a Boost gives its pages: the user's, then the tint over everything, then the font.
@@ -285,50 +332,42 @@ fn css_string(text: &str) -> String {
     out
 }
 
-/// A JavaScript string literal of `text` (JSON is a subset).
-fn js_string(text: &str) -> String {
-    serde_json::Value::String(text.to_owned()).to_string()
-}
-
-/// `url` as the page script compares it with `location.href`: parsed, without its fragment.
-pub fn document_key(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(mut u) => {
-            u.set_fragment(None);
-            u.into()
-        }
-        Err(_) => url.split('#').next().unwrap_or_default().to_owned(),
-    }
-}
-
-/// The two scripts that apply `boosts` (from [`matching`]) to the document at `url`, after the
-/// page kit (`kit.js`) defined `window[Symbol.for("wubble.kit")]`:
+/// The two scripts that apply `boosts` (every stored one) to whichever document they run in,
+/// after the page kit (`kit.js`) defined `window[Symbol.for("wubble.kit")]`:
 ///
-/// 1. the CSS, as data: one adopted style sheet, which no `style-src` policy blocks;
-/// 2. the scripts, each in its own `try`, at document start or at `DOMContentLoaded`.
+/// 1. the CSS, as data: each enabled Boost's with its pattern, in [`matching`]'s order; the ones
+///    `k.matches` the document go into one adopted style sheet, which no `style-src` policy
+///    blocks;
+/// 2. the scripts, each behind its pattern and in its own `try`, at document start or at
+///    `DOMContentLoaded`.
 ///
-/// Each runs once per document (a flag on the kit) and only on the document at `url`, so a
-/// script registered for one page never touches another, and running it again is harmless.
-/// They are two scripts so a syntax error in a user's script cannot cost the page its CSS.
-pub fn page_scripts(boosts: &[&Boost], url: &str) -> [String; 2] {
-    let key = js_string(&document_key(url));
-    let css: Vec<String> = boosts.iter().map(|b| css_of(b)).collect();
-    let css = js_string(&css.join("\n"));
-    let open =
-        |flag: &str| format!("(function(k){{if(!k||k.{flag}||!k.at({key}))return;k.{flag}=true;\n");
+/// Each runs once per document (a flag on the kit), so running it again is harmless. They are two
+/// scripts so a syntax error in a user's script cannot cost the page its CSS.
+pub fn page_scripts(boosts: &[Boost]) -> [String; 2] {
+    let all = ordered(boosts);
+    let open = |flag: &str| format!("(function(k){{if(!k||k.{flag})return;k.{flag}=true;\n");
     let close = "\n})(window[Symbol.for('wubble.kit')]);";
-    let styles = format!("{}k.css({css});{close}", open("boostedCss"));
+    let rows = serde_json::Value::Array(
+        all.iter()
+            .map(|(b, p)| serde_json::json!([p.js(), css_of(b)]))
+            .collect(),
+    );
+    let styles = format!(
+        "{}k.css({rows}.filter(function(r){{return k.matches(r[0]);}})\
+         .map(function(r){{return r[1];}}).join('\\n'));{close}",
+        open("boostedCss")
+    );
     let mut scripts = open("boostedJs");
-    for b in boosts.iter().filter(|b| !b.js.trim().is_empty()) {
+    for (b, p) in all.iter().filter(|(b, _)| !b.js.trim().is_empty()) {
         let body = format!(
             "try{{(function(){{\n{}\n}})();}}catch(e){{console.error('wubble boost {}:',e);}}",
             b.js, b.id
         );
-        match b.js_at {
-            At::Start => scripts.push_str(&body),
-            At::End => scripts.push_str(&format!("k.ready(function(){{{body}}});")),
-        }
-        scripts.push('\n');
+        let body = match b.js_at {
+            At::Start => body,
+            At::End => format!("k.ready(function(){{{body}}});"),
+        };
+        scripts.push_str(&format!("if(k.matches({})){{{body}}}\n", p.js()));
     }
     scripts.push_str(close);
     [styles, scripts]
@@ -482,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn page_scripts_carry_their_document_and_escape_sources() {
+    fn page_scripts_carry_every_boost_behind_its_pattern() {
         let a = Boost {
             id: 3,
             css: "body{background:rgb(1,2,3)}".into(),
@@ -494,37 +533,102 @@ mod tests {
             css: "p{}".into(),
             js: "go()".into(),
             js_at: At::End,
-            ..Boost::for_host("a.test")
+            ..Boost::for_host("https://b.test/x/*")
         };
         let empty = Boost {
             id: 5,
             ..Boost::for_host("a.test")
         };
-        let [css, js] = page_scripts(&[&a, &b, &empty], "https://a.test/p?q#frag");
-        assert!(css.contains("k.at(\"https://a.test/p?q\")"), "{css}");
-        assert!(css.contains("k.boostedCss"));
-        assert!(
-            css.contains(r#"k.css("body{background:rgb(1,2,3)}\np{}\n")"#),
-            "{css}"
+        let off = Boost {
+            id: 6,
+            js: "never()".into(),
+            enabled: false,
+            ..Boost::for_host("a.test")
+        };
+        let [css, js] = page_scripts(&[b.clone(), a.clone(), empty, off]);
+        // No document's URL in them: one pair serves every navigation, however it began.
+        assert!(css.contains("k.boostedCss") && !css.contains("k.at("));
+        // Broader first: the domain Boost's rows before the exact host's.
+        let rows = css.find(
+            r#"[{"h":"domain","n":"a.test","p":"*","s":"web"},"body{background:rgb(1,2,3)}"]"#,
         );
+        let later = css.find(r#"[{"h":"exact","n":"b.test","p":"/x/*","s":"https"},"p{}"]"#);
+        assert!(rows.is_some() && later.is_some() && rows < later, "{css}");
+        assert!(css.contains("k.matches(r[0])"));
         assert!(js.contains("k.boostedJs"));
+        assert!(
+            js.contains(r#"if(k.matches({"h":"domain","n":"a.test","p":"*","s":"web"})){try{"#)
+        );
         assert!(js.contains("document.title = \"it's </script>\";"));
-        assert!(js.contains("k.ready(function(){try{(function(){\ngo()\n})();}"));
+        assert!(js.contains(r#"if(k.matches({"h":"exact","n":"b.test","p":"/x/*","s":"https"})){k.ready(function(){try{(function(){
+go()
+})();}"#), "{js}");
         assert!(js.contains("wubble boost 3"));
         assert!(
             !js.contains("wubble boost 5"),
             "a Boost without a script adds none"
         );
-        // Nothing matches: the scripts still mark the document, with nothing to apply.
-        let [css, js] = page_scripts(&[], "https://a.test/");
-        assert!(css.contains("k.css(\"\")") && js.contains("k.boostedJs=true;"));
+        assert!(!js.contains("never()"), "a Boost turned off adds nothing");
+        // No Boosts: the scripts still mark the document, with nothing to apply.
+        let [css, js] = page_scripts(&[]);
+        assert!(css.contains("k.css([].filter") && js.contains("k.boostedJs=true;"));
     }
 
     #[test]
-    fn document_keys_drop_the_fragment_and_normalise() {
-        assert_eq!(document_key("https://A.test/x#y"), "https://a.test/x");
-        assert_eq!(document_key("https://a.test"), "https://a.test/");
-        assert_eq!(document_key("not a url#x"), "not a url");
+    fn patterns_reach_the_kit_as_data() {
+        let js = |t: &str| Pattern::parse(t).map(|p| p.js().to_string());
+        assert_eq!(
+            js("*://*/*").as_deref(),
+            Some(r#"{"h":"any","n":"","p":"/*","s":"web"}"#)
+        );
+        assert_eq!(
+            js("http://Bücher.de").as_deref(),
+            Some(r#"{"h":"exact","n":"xn--bcher-kva.de","p":"/*","s":"http"}"#)
+        );
+        assert_eq!(
+            js("*.example.com").as_deref(),
+            Some(r#"{"h":"domain","n":"example.com","p":"*","s":"web"}"#)
+        );
+    }
+
+    #[test]
+    fn a_new_boost_for_a_ported_host_is_a_valid_pattern() {
+        for (host, site) in [
+            ("localhost:8080", "localhost"),
+            ("127.0.0.1:3000", "127.0.0.1"),
+            ("example.com", "example.com"),
+        ] {
+            let b = Boost::for_host(host);
+            assert_eq!(b.site, site);
+            let p = Pattern::parse(&b.site).unwrap_or_else(|| panic!("{host}"));
+            assert!(p.matches(&format!("http://{host}/x")), "{host}");
+        }
+    }
+
+    #[test]
+    fn zapped_selectors_must_be_plain() {
+        assert_eq!(
+            zap_rule("div.ad > p:nth-child(2)").as_deref(),
+            Some("div.ad > p:nth-child(2) { display: none !important; }\n")
+        );
+        assert!(
+            zap_rule(r"#\31 23 > span.a\:b").is_some(),
+            "CSS.escape output"
+        );
+        assert!(zap_rule("div.größe").is_some());
+        for bad in [
+            "",
+            "   ",
+            "x{} * {background:url(https://t.example/?a)}",
+            "x;color:red",
+            "@import url(x)",
+            "a[href=\"x\"]",
+            "a /* rest",
+            "a\n{}",
+        ] {
+            assert_eq!(zap_rule(bad), None, "{bad:?}");
+        }
+        assert_eq!(zap_rule(&"a".repeat(1_000)), None);
     }
 
     #[test]

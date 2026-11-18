@@ -608,6 +608,8 @@ impl Host {
         window.set_toast_text(text.into());
         window.set_toast_action(action.into());
         window.set_toast_sticky(sticky);
+        // The one undo window: a button outlives no notice it acts on.
+        window.set_toast_action_shown(wubble_core::sponsor::TOAST_MS as i64);
         window.set_toast_serial(self.toast_serial);
     }
 

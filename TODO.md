@@ -258,7 +258,7 @@ After daily-drive
 - [ ] Little window for links opened from other apps
 - [x] Boosts: per-site CSS/JS/colour tweaks (see Decided "Boosts"; `--smoke boost`)
 - [ ] Hover previews, tab tidy/auto-group
-- [~] Picture-in-picture on tab switch: `pip.on_tab_switch` and the state machine done; the window comes with the windows lane
+- [~] Picture-in-picture on tab switch: `pip.on_tab_switch` and the state machine done; the window comes with the windows lane (the setting stays hidden until then; it acts only on a video playing with sound)
 - [ ] Sync (deferred)
 
 ## Built in instead of extensions (owner, 2026-11-18)

@@ -10,7 +10,7 @@
 // - media session: the page's own handlers (`navigator.mediaSession.setActionHandler`) are kept
 //   so the media keys can call them (`act`), and its metadata is read for the system's controls.
 // - Boosts: `css` (one adopted style sheet, so no `style-src` policy blocks it), `ready`
-//   (DOMContentLoaded), `at` (the document a Boost script was matched for).
+//   (DOMContentLoaded), `matches` (whether this document is one of a Boost's pattern).
 // - zap: an element picker; its selector is a port of Chromium DevTools' `DOMPath.ts`
 //   `cssPath` (front_end/panels/elements/DOMPath.ts, BSD-3-Clause), shortened.
 //
@@ -107,8 +107,9 @@
     if (v && jumps.length && !v.paused) check(v);
     const out = { v: null, fired, zap: zapState(), fs: !!document.fullscreenElement };
     fired = [];
+    // While there is media, playing or not: the system's controls show it paused too.
     const media = v || document.querySelector("video, audio");
-    if (media && !media.paused) out.meta = meta();
+    if (media) { out.meta = meta(); out.meta.paused = media.paused; }
     if (v) {
       const r = v.getBoundingClientRect();
       out.v = {
@@ -182,8 +183,24 @@
       f();
     }
   };
-  k.at = function (url) {
-    return location.href.split("#")[0] === url;
+  // A Boost's pattern (`wubble_core::boost::Pattern::js`) against this document, by the same
+  // rules as `Pattern::matches`: the top document only, http(s), the host exact or a domain and
+  // its subdomains, a glob over path and query.
+  function glob(p, text) {
+    const re = p.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*");
+    return new RegExp("^" + re + "$", "s").test(text);
+  }
+  k.matches = function (p) {
+    if (window !== window.top || !p) return false;
+    const scheme = location.protocol.slice(0, -1);
+    if (scheme !== "http" && scheme !== "https") return false;
+    if (p.s !== "web" && p.s !== scheme) return false;
+    const h = location.hostname;
+    if (p.h === "exact" && h !== p.n) return false;
+    if (p.h === "domain" && h !== p.n && !h.endsWith("." + p.n)) return false;
+    const href = location.href.split("#")[0];
+    const q = href.indexOf("?");
+    return glob(String(p.p), location.pathname + (q < 0 ? "" : href.slice(q)));
   };
 
   // ----- zap: pick an element, get a selector for it

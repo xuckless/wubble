@@ -29,6 +29,10 @@ use crate::sponsor_net::SponsorNet;
 /// Rounds of the poll after which an unanswered snapshot is given up (`Media::round`).
 const POLL_GIVE_UP: u64 = 8;
 
+/// How long a SponsorBlock lookup that got no answer (offline, a timeout, a server error) waits
+/// before it is asked again (ms).
+const SPONSOR_RETRY_MS: u64 = 30_000;
+
 /// The kit's snapshot, as the poll asks for it.
 const SNAPSHOT: &str =
     "(function(){var k=window[Symbol.for('wubble.kit')];return k?k.snapshot():null})()";
@@ -80,6 +84,9 @@ enum PipCall {
     Spike,
 }
 
+/// The jumps the page carries out: id, from, to (`kit.js` `jumps`).
+type JumpTable = Vec<(usize, f64, f64)>;
+
 /// SponsorBlock for the video one tab plays.
 #[derive(Default)]
 struct SponsorTab {
@@ -87,10 +94,54 @@ struct SponsorTab {
     /// `None` until the lookup answered.
     segments: Option<Vec<Segment>>,
     requested: bool,
+    /// A lookup that got no answer is not asked again before this (ms).
+    retry_at: u64,
     plan: Plan,
     skips: Skips,
-    /// The jumps the page was last given.
-    sent: Option<Vec<(usize, f64, f64)>>,
+    /// The jumps last given to the page, and the document that answered the snapshot they
+    /// followed (`VideoState::doc`): a later document (a reload, the same URL again) starts
+    /// without them.
+    sent: Option<(f64, JumpTable)>,
+}
+
+impl SponsorTab {
+    /// Whether to look the segments up now (then a lookup is under way).
+    fn wants_lookup(&mut self, now: u64) -> bool {
+        if self.segments.is_some() || self.requested || now < self.retry_at {
+            return false;
+        }
+        self.requested = true;
+        true
+    }
+
+    /// The lookup got no answer: asked again after a while.
+    fn lookup_failed(&mut self, now: u64) {
+        self.requested = false;
+        self.retry_at = now + SPONSOR_RETRY_MS;
+    }
+
+    /// The jump table the page should carry out.
+    fn table(&self) -> JumpTable {
+        self.skips
+            .table(&self.plan)
+            .iter()
+            .map(|j| (j.id, j.from, j.to))
+            .collect()
+    }
+
+    /// The table, if document `doc` (the one that answered the snapshot) does not have it yet.
+    /// An answer of a document since replaced changes nothing.
+    fn unsent(&mut self, doc: f64) -> Option<JumpTable> {
+        let table = self.table();
+        match &self.sent {
+            Some((d, _)) if doc < *d => None,
+            Some((d, t)) if doc == *d && *t == table => None,
+            _ => {
+                self.sent = Some((doc, table.clone()));
+                Some(table)
+            }
+        }
+    }
 }
 
 pub(super) struct Media {
@@ -371,7 +422,7 @@ impl Host {
         let video = json.get("v").and_then(VideoState::from_json);
         self.media
             .playing
-            .insert(tab, video.as_ref().is_some_and(|v| !v.paused));
+            .insert(tab, video.as_ref().is_some_and(VideoState::plays_aloud));
         let url = self
             .model
             .tabs
@@ -403,14 +454,16 @@ impl Host {
             let selector = zap.get("selector").and_then(Value::as_str);
             self.boost_zapped(tab, on, selector);
         }
-        if let Some(meta) = json.get("meta")
-            && self.key_target() == Some(tab)
+        if self.key_target() == Some(tab)
             && let Some(keys) = self.media.keys.as_mut()
         {
-            keys.show(&NowPlaying::from_json(meta, true));
+            match json.get("meta").filter(|m| m.is_object()) {
+                Some(meta) => keys.show(&NowPlaying::from_json(meta)),
+                None => keys.stop(),
+            }
         }
         if self.checks.media_smoke.is_some() {
-            let seen = self.media_smoke_seen();
+            let seen = self.media_smoke_seen(fired.len());
             self.media_smoke_step(smoke::Input::Snapshot(&seen));
         }
     }
@@ -570,7 +623,9 @@ impl Host {
         self.media.over_video = false;
         self.media.over_controls = false;
         if let Some(from) = last {
-            let playing = self.media.playing.get(&from).copied().unwrap_or(false);
+            // Playing with sound the tab makes: not a muted or silent clip.
+            let playing = self.media.playing.get(&from).copied().unwrap_or(false)
+                && self.audio.get(&from).is_some_and(|a| a.audible);
             let auto = self.media.pip_auto && self.media.pip_window.available();
             self.pip_event(PipInput::TabSwitched {
                 from,
@@ -601,13 +656,27 @@ impl Host {
             .and_then(|t| self.tab_view(t))
             .map_or(100, |v| v.zoom_percent());
         let (x, y) = self.content_origin(window);
+        // The pane's viewport: the controls never reach over another pane or off the page.
+        let pane = video::Rect {
+            x: f64::from(x),
+            y: f64::from(y),
+            w: self
+                .pane_rects(window)
+                .into_iter()
+                .find(|p| Some(p.tab) == tab)
+                .map_or(0.0, |p| p.width),
+            h: f64::from(window.get_content_height()) - f64::from(y),
+        };
         let overlay = tab.and_then(|t| self.media.overlays.get(&t));
         let view = match (overlay, tab) {
-            (Some(o), Some(tab)) if self.media.controls => o.video().map(|v| {
-                let r = v.rect.on_window(zoom, (f64::from(x), f64::from(y)));
+            (Some(o), Some(tab)) if self.media.controls => o.video().and_then(|v| {
+                let r = v
+                    .rect
+                    .on_window(zoom, (f64::from(x), f64::from(y)))
+                    .intersect(&pane)?;
                 let marks = self.sponsor_marks(tab, v.duration);
                 let nearest = video::nearest_rate(v.rate);
-                VideoView {
+                Some(VideoView {
                     open: o.shown(),
                     x: r.x as f32,
                     y: r.y as f32,
@@ -626,7 +695,7 @@ impl Host {
                     can_pip: self.media.pip_window.available(),
                     can_save: self.media.save.is_some(),
                     marks: slint::ModelRc::new(slint::VecModel::from(marks)),
-                }
+                })
             }),
             _ => None,
         };
@@ -673,21 +742,21 @@ impl Host {
                 ..SponsorTab::default()
             };
         }
-        if entry.segments.is_none() {
-            if let Some(found) = self.media.found.get(&id) {
-                entry.segments = Some(found.clone());
-            } else if !entry.requested {
-                entry.requested = true;
-                if self.media.net.is_none() {
-                    self.media.net = SponsorNet::spawn(|tab, video, segments| {
-                        let _ = slint::invoke_from_event_loop(move || {
-                            crate::with_host(|host| host.sponsor_found(tab, video, segments));
-                        });
+        if entry.segments.is_none()
+            && let Some(found) = self.media.found.get(&id)
+        {
+            entry.segments = Some(found.clone());
+        }
+        if entry.wants_lookup(now) {
+            if self.media.net.is_none() {
+                self.media.net = SponsorNet::spawn(|tab, video, segments| {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        crate::with_host(|host| host.sponsor_found(tab, video, segments));
                     });
-                }
-                if let Some(net) = &self.media.net {
-                    net.lookup(tab, &id, &self.media.endpoint);
-                }
+                });
+            }
+            if let Some(net) = &self.media.net {
+                net.lookup(tab, &id, &self.media.endpoint);
             }
         }
         let entry = self.media.sponsor_tabs.entry(tab).or_default();
@@ -698,23 +767,15 @@ impl Host {
         if plan != entry.plan {
             entry.plan = plan;
         }
-        let table: Vec<(usize, f64, f64)> = entry
-            .skips
-            .table(&entry.plan)
-            .iter()
-            .map(|j| (j.id, j.from, j.to))
-            .collect();
         let mut notice = None;
         for &f in fired {
             if let Some(n) = entry.skips.fired(&entry.plan, f, now) {
                 notice = Some(n.text());
             }
         }
-        let send = entry.sent.as_ref() != Some(&table);
-        if send {
-            entry.sent = Some(table.clone());
-        }
-        if send && let Some(view) = self.tab_view(tab) {
+        if let Some(table) = entry.unsent(video.doc)
+            && let Some(view) = self.tab_view(tab)
+        {
             view.eval(&jumps_script(&table));
         }
         if let Some(text) = notice
@@ -725,14 +786,27 @@ impl Host {
         }
     }
 
-    /// The lookup thread's answer for `video` in `tab`.
-    fn sponsor_found(&mut self, tab: TabId, video: String, segments: Vec<Segment>) {
-        if let Some(entry) = self.media.sponsor_tabs.get_mut(&tab)
-            && entry.video == video
-        {
-            entry.segments = Some(segments.clone());
+    /// The lookup thread's answer for `video` in `tab`. Only a real answer is kept for the run;
+    /// a lookup that got none is asked again later.
+    fn sponsor_found(&mut self, tab: TabId, video: String, segments: Result<Vec<Segment>, String>) {
+        let entry = self
+            .media
+            .sponsor_tabs
+            .get_mut(&tab)
+            .filter(|e| e.video == video);
+        match segments {
+            Ok(segments) => {
+                if let Some(entry) = entry {
+                    entry.segments = Some(segments.clone());
+                }
+                self.media.found.insert(video, segments);
+            }
+            Err(_) => {
+                if let Some(entry) = entry {
+                    entry.lookup_failed(now_ms() as u64);
+                }
+            }
         }
-        self.media.found.insert(video, segments);
     }
 
     /// The progress bar's segments of `tab`'s video.
@@ -767,13 +841,9 @@ impl Host {
         let Some(from) = entry.skips.undo(now) else {
             return;
         };
-        let table: Vec<(usize, f64, f64)> = entry
-            .skips
-            .table(&entry.plan)
-            .iter()
-            .map(|j| (j.id, j.from, j.to))
-            .collect();
-        entry.sent = Some(table.clone());
+        let table = entry.table();
+        let doc = entry.sent.as_ref().map_or(0.0, |(d, _)| *d);
+        entry.sent = Some((doc, table.clone()));
         if let Some(view) = self.tab_view(tab) {
             // `eval` takes one expression.
             view.eval(&format!(
@@ -942,7 +1012,7 @@ impl Host {
 
     // ----- `--smoke video`
 
-    fn media_smoke_seen(&self) -> smoke::Seen {
+    fn media_smoke_seen(&self, fired: usize) -> smoke::Seen {
         let tab = self.model.visible_tab();
         let video = tab
             .and_then(|t| self.media.overlays.get(&t))
@@ -951,8 +1021,9 @@ impl Host {
         let sponsor = tab.and_then(|t| self.media.sponsor_tabs.get(&t));
         smoke::Seen {
             video,
-            jumps: sponsor.map_or(0, |s| s.sent.as_ref().map_or(0, Vec::len)),
-            notice: matches!(self.media.toast, Some(ToastAct::Undo(_))),
+            jumps: sponsor.map_or(0, |s| s.sent.as_ref().map_or(0, |(_, t)| t.len())),
+            notice: sponsor.is_some_and(|s| s.skips.notice(now_ms() as u64).is_some()),
+            fired,
         }
     }
 
@@ -1040,6 +1111,52 @@ mod tests {
         assert_eq!(rate_label(1.5), "1.5\u{d7}");
         assert_eq!(rate_label(1.0), "1\u{d7}");
         assert_eq!(rate_label(0.25), "0.25\u{d7}");
+    }
+
+    fn tab_with_a_jump() -> SponsorTab {
+        let segments = vec![Segment {
+            uuid: "a".into(),
+            category: "sponsor".into(),
+            from: 1.0,
+            to: 5.0,
+            video_duration: 0.0,
+        }];
+        SponsorTab {
+            video: "v".into(),
+            plan: sponsor::plan(&segments, &ActTable::new(), 60.0),
+            segments: Some(segments),
+            ..SponsorTab::default()
+        }
+    }
+
+    #[test]
+    fn a_new_document_is_given_the_jumps_again() {
+        let mut t = tab_with_a_jump();
+        let table = t.unsent(100.0).expect("the first document gets the table");
+        assert_eq!(table, vec![(0, 1.0, 5.0)]);
+        assert_eq!(t.unsent(100.0), None, "given once");
+        // A reload, or the same URL entered again: the new kit starts without jumps.
+        assert_eq!(t.unsent(200.0), Some(table.clone()));
+        assert_eq!(t.unsent(200.0), None);
+        // A late answer of the replaced document changes nothing.
+        assert_eq!(t.unsent(100.0), None);
+        // The table changes (an undo): the same document gets the new one.
+        t.skips.fired(&t.plan, 0, 0);
+        t.skips.undo(1);
+        assert_eq!(t.unsent(200.0), Some(vec![]));
+    }
+
+    #[test]
+    fn a_lookup_without_an_answer_is_asked_again_later() {
+        let mut t = SponsorTab::default();
+        assert!(t.wants_lookup(1_000));
+        assert!(!t.wants_lookup(1_001), "one at a time");
+        t.lookup_failed(2_000);
+        assert!(!t.wants_lookup(2_000 + SPONSOR_RETRY_MS - 1));
+        assert!(t.wants_lookup(2_000 + SPONSOR_RETRY_MS));
+        // An answer, even "no segments", is not asked again.
+        let mut answered = tab_with_a_jump();
+        assert!(!answered.wants_lookup(u64::MAX));
     }
 
     #[test]

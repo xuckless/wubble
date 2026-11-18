@@ -34,6 +34,20 @@ impl Rect {
         x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
     }
 
+    /// The part of the rectangle inside `other`, if any.
+    pub fn intersect(&self, other: &Rect) -> Option<Rect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.w).min(other.x + other.w);
+        let bottom = (self.y + self.h).min(other.y + other.h);
+        (right > x && bottom > y).then_some(Rect {
+            x,
+            y,
+            w: right - x,
+            h: bottom - y,
+        })
+    }
+
     /// The rectangle in the window's logical px: the page is shown at `zoom_percent`, its pane
     /// starts at `origin` (logical px).
     pub fn on_window(&self, zoom_percent: u32, origin: (f64, f64)) -> Rect {
@@ -94,6 +108,13 @@ impl VideoState {
             muted: flag("muted"),
             doc: finite(num("doc").unwrap_or(0.0)).unwrap_or(0.0),
         })
+    }
+
+    /// Whether it plays with its sound on: what picture-in-picture on a tab switch waits for
+    /// (Chrome's automatic picture-in-picture asks for audible playback), not a muted or
+    /// decorative clip.
+    pub fn plays_aloud(&self) -> bool {
+        !self.paused && !self.muted
     }
 
     /// How far along the video is, 0 to 1 (0 for a live stream).
@@ -732,6 +753,48 @@ mod tests {
             }
         );
         assert!(r.contains((10.0, 20.0)) && !r.contains((110.0, 20.0)));
+    }
+
+    #[test]
+    fn a_video_is_clipped_to_its_pane() {
+        let pane = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        // Wider than the left pane of a split, and taller than the viewport.
+        let video = Rect {
+            x: 100.0,
+            y: 200.0,
+            w: 500.0,
+            h: 400.0,
+        };
+        assert_eq!(
+            video.intersect(&pane),
+            Some(Rect {
+                x: 100.0,
+                y: 200.0,
+                w: 300.0,
+                h: 100.0,
+            })
+        );
+        let below = Rect { y: 300.0, ..video };
+        assert_eq!(below.intersect(&pane), None, "scrolled out of view");
+    }
+
+    #[test]
+    fn only_a_playing_video_with_sound_plays_aloud() {
+        let v = VideoState::default();
+        assert!(v.plays_aloud());
+        assert!(
+            !VideoState {
+                muted: true,
+                ..v.clone()
+            }
+            .plays_aloud()
+        );
+        assert!(!VideoState { paused: true, ..v }.plays_aloud());
     }
 
     #[test]
