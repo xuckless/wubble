@@ -46,3 +46,15 @@ its "Decided" table before proposing architecture.
 - Keep `TODO.md` current: tick items you finish, record new decisions in its "Decided" table.
 - Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths.
 - Commit only when asked; one logical change per commit.
+
+## Orchestrating a batch
+
+`.claude/workflows/lane-batch.js` runs a batch of roadmap items in parallel lanes:
+(research) → implement → correctness review + simplicity review → refix, then merges
+the lanes into one integration branch and runs the full check round.
+
+- A lane is a git worktree under `~/Dev/wubble-wt/` on its own branch; items in a lane run in order, lanes run in parallel. Put items that touch the same files in the same lane.
+- The lead creates the integration branch and the lane worktrees, launches the workflow, then reviews the integration diff before merging to `main` and pushing.
+- Each stage uses the cheapest model that can do it: Sonnet medium by default, Opus medium for items marked `hard`, per-stage overrides (including Haiku) via the item's `models`.
+- Research is opt-in per item (`research: true`) for spikes and unknown APIs.
+- All lanes share `CARGO_TARGET_DIR=~/Dev/wubble/target`, so builds queue instead of competing.
