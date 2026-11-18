@@ -167,6 +167,7 @@ impl Store {
                 container: ContainerId(narrow(r.get(2)?, "container id")?),
                 opener: None,
                 last_active_ms: r.get(8)?,
+                busy: Default::default(),
             });
         }
         for (space, mut items) in spaces.iter_mut().zip(top) {
@@ -635,6 +636,7 @@ mod tests {
                     hidden_since: None,
                 },
                 opener: None,
+                busy: Default::default(),
                 ..t.clone()
             })
             .collect();
@@ -968,6 +970,7 @@ mod tests {
                 container: ContainerId(container),
                 opener: None,
                 last_active_ms: 0,
+                busy: Default::default(),
             };
             let spaces = vec![
                 Space {

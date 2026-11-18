@@ -377,6 +377,7 @@ export enum InternalPageKind {
     downloads,
     passwords,
     archive,
+    tasks,
 }
 
 // The tab hover preview card (`PreviewCard`): what it says and where its row is (window px).
@@ -386,6 +387,28 @@ export struct PreviewView {
     address: string,
     thumb: image,
     y: length,
+}
+
+// One row of the Task manager (wubble_core::tasks::TaskRow): a tab (`tab` >= 0) or another
+// of wubble's processes (`tab` -1). Text is formatted by the host.
+export struct TaskItem {
+    tab: int,
+    // 0: no process (a discarded tab, an internal page).
+    pid: int,
+    title: string,
+    state: string,
+    memory: string,
+    cpu: string,
+    busy: string,
+    never-sleep: bool,
+    can-discard: bool,
+    can-end: bool,
+}
+
+export enum TaskAction {
+    end,
+    discard,
+    never-sleep,
 }
 
 // One line of the history page: a day header (`header`, `label`) or a visit.

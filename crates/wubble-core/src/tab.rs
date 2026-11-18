@@ -1,5 +1,6 @@
 //! Tab identity and lifecycle.
 
+use crate::busy::Busy;
 use crate::lifecycle::Lifecycle;
 use crate::space::ContainerId;
 
@@ -32,4 +33,6 @@ pub struct Tab {
     /// Unix milliseconds of the last time the tab was on screen; 0 until known. Stamped by the
     /// model when the tab is hidden, kept in the session, read by the auto-archive rule.
     pub last_active_ms: i64,
+    /// Why the tab must stay awake (the one owner; `lifecycle.activity` follows it). Not stored.
+    pub busy: Busy,
 }

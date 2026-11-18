@@ -99,7 +99,7 @@ fn popup_size(f: &cef::PopupFeatures) -> Option<(u32, u32)> {
     Some((u32::try_from(f.width).ok()?, u32::try_from(f.height).ok()?))
 }
 
-// ── Frame messages (wubble change 27) ─────────────────────────────────────
+// ── Frame messages (wubble changes 27, 34) ─────────────────────────────────
 
 /// A renderer process message from the context script: queued with the
 /// browser's own view of the sending frame (id, URL, main or not), so a page
@@ -121,9 +121,15 @@ pub(crate) fn frame_message_received(
         frame_id: cef_string(frame.identifier()),
         frame_url: cef_string(frame.url()),
         is_main: frame.is_main() != 0,
+        pid: sender_pid(args.int(1)),
         text,
     });
     true
+}
+
+/// The renderer pid argument (wubble change 34): 0 when absent or not a pid.
+pub(crate) fn sender_pid(raw: std::os::raw::c_int) -> u32 {
+    u32::try_from(raw).unwrap_or(0)
 }
 
 /// Sends `text` to the context script's registered function in `frame_id`.
@@ -1260,5 +1266,17 @@ mod new_window_tests {
         assert_eq!(popup_size(&f(400, 1, 300, 1)), Some((400, 300)));
         assert_eq!(popup_size(&f(400, 1, 300, 0)), None);
         assert_eq!(popup_size(&f(-1, 1, 300, 1)), None);
+    }
+}
+
+#[cfg(test)]
+mod frame_message_tests {
+    use super::sender_pid;
+
+    #[test]
+    fn the_sender_pid_is_kept_and_a_bad_one_is_zero() {
+        assert_eq!(sender_pid(4242), 4242);
+        assert_eq!(sender_pid(0), 0);
+        assert_eq!(sender_pid(-1), 0);
     }
 }

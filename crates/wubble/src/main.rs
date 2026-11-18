@@ -80,6 +80,9 @@ pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
 /// The third page of `--smoke tabs`.
 pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
+/// `--smoke tabs`'s freeze check: a page whose title counts its timer's ticks.
+pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
+
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
@@ -839,6 +842,7 @@ impl WindowFactory {
                 gpu.presenter(),
                 gpu.presenter(),
                 gpu.presenter(),
+                gpu.presenter(),
             ],
             glass,
             panels,
@@ -1067,6 +1071,9 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     window.on_find_edited(move |q| {
         with_host_in(win, |host| host.find_event(FindEvent::Query(q.into())))
     });
+    window.on_task_action(move |tab, pid, action| {
+        with_host_in(win, |host| host.task_action(tab, pid, action))
+    });
     window.on_find_step(move |forward| {
         let event = if forward {
             FindEvent::Next
@@ -1243,6 +1250,7 @@ fn run(
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);
     let measuring = matches!(mode, Mode::Measure { .. });
     let measure_out = match &mode {
@@ -1372,6 +1380,15 @@ fn run(
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
     });
+    // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
+    // settings turn it on, on a free loopback port.
+    let mut loaded = loaded;
+    if smoke_page {
+        loaded.settings.stored.insert(
+            wubble_core::settings::DEVTOOLS_REMOTE_PORT.key.into(),
+            page_smoke::free_port()?.to_string(),
+        );
+    }
     let blocking = blocking::Blocking::new();
     let engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),

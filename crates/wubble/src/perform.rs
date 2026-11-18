@@ -52,8 +52,6 @@ pub enum Plan {
     Fullscreen,
     /// Put the text on the clipboard.
     Copy(String),
-    /// Open DevTools on the visible page.
-    DevTools,
     /// Mod+D: the bookmark sheet for the visible page.
     BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
@@ -62,6 +60,8 @@ pub enum Plan {
     UndoTidy,
     /// Close these tabs (each goes on the recently-closed list).
     CloseTabs(Vec<TabId>),
+    /// F12: DevTools docked or detached for the visible tab (`wubble_core::devtools`).
+    DevTools,
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -133,18 +133,6 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             Some(t) if model.split_of(t).is_some() => Plan::Model(Command::Unsplit(t)),
             _ => Plan::Nothing,
         },
-        Action::DevTools => visible.map_or(Plan::Nothing, |_| Plan::DevTools),
-        // Chromium's Ctrl+U: the page's source in a new tab beside it.
-        Action::ViewSource => visible
-            .and_then(|t| model.tabs.get(&t).map(|tab| (t, tab)))
-            .filter(|(_, tab)| !tab.url.is_empty() && !tab.url.starts_with("view-source:"))
-            .map_or(Plan::Nothing, |(t, tab)| {
-                Plan::Model(Command::NewTab {
-                    url: format!("view-source:{}", tab.url),
-                    container: None,
-                    opener: Some(t),
-                })
-            }),
         Action::OpenSettings => Plan::Model(Command::OpenInternal(InternalPage::Settings)),
         Action::OpenHistory => Plan::Model(Command::OpenInternal(InternalPage::History)),
         Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
@@ -163,10 +151,23 @@ pub fn plan(action: Action, model: &Model) -> Plan {
                 Plan::CloseTabs(dupes)
             }
         }
+        Action::OpenTasks => Plan::Model(Command::OpenInternal(InternalPage::Tasks)),
         Action::BookmarkPage => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
+        Action::DevTools => visible.map_or(Plan::Nothing, |_| Plan::DevTools),
+        // Chromium's Ctrl+U: the page's source in a new tab beside it
+        Action::ViewSource => visible
+            .and_then(|t| model.tabs.get(&t))
+            .and_then(|t| Some((t.id, wubble_core::url::view_source(&t.url)?)))
+            .map_or(Plan::Nothing, |(opener, url)| {
+                Plan::Model(Command::NewTab {
+                    url,
+                    container: None,
+                    opener: Some(opener),
+                })
+            }),
         Action::Quit => Plan::Quit,
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
@@ -227,6 +228,50 @@ mod tests {
         listed.sort();
         listed.dedup();
         assert_eq!(listed.len(), n, "NOT_YET lists an action twice");
+    }
+
+    #[test]
+    fn devtools_and_view_source_are_planned() {
+        let m = with_tabs(1);
+        assert_eq!(plan(Action::DevTools, &m), Plan::DevTools);
+        assert_eq!(
+            plan(Action::DevTools, &Model::new(std::time::Instant::now())),
+            Plan::Nothing
+        );
+        assert_eq!(
+            plan(Action::ViewSource, &m),
+            Plan::Model(Command::NewTab {
+                url: "view-source:https://0.test/".into(),
+                container: None,
+                opener: Some(TabId(1)),
+            })
+        );
+        // nothing to show the source of
+        assert_eq!(
+            plan(Action::ViewSource, &Model::new(std::time::Instant::now())),
+            Plan::Nothing
+        );
+        let (blank, _) = apply(
+            Model::new(std::time::Instant::now()),
+            Command::NewTab {
+                url: "about:blank".into(),
+                container: None,
+                opener: None,
+            },
+        );
+        assert_eq!(plan(Action::ViewSource, &blank), Plan::Nothing);
+        let (source, _) = apply(
+            m,
+            Command::NewTab {
+                url: "view-source:https://0.test/".into(),
+                container: None,
+                opener: None,
+            },
+        );
+        assert_eq!(plan(Action::ViewSource, &source), Plan::Nothing);
+        for action in [Action::DevTools, Action::ViewSource] {
+            assert!(not_yet(action).is_none(), "{action:?}");
+        }
     }
 
     #[test]

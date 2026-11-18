@@ -306,13 +306,16 @@ pub enum FrameChannel {
     Clipboard,
     /// `zoom.js`: [`PageEvent::WheelZoom`].
     Zoom,
+    /// `probes.js`: [`PageEvent::Probe`].
+    Probes,
 }
 
 impl FrameChannel {
-    const ALL: [(FrameChannel, &'static str); 3] = [
+    const ALL: [(FrameChannel, &'static str); 4] = [
         (FrameChannel::Autofill, "autofill"),
         (FrameChannel::Clipboard, "clipboard"),
         (FrameChannel::Zoom, "zoom"),
+        (FrameChannel::Probes, "probes"),
     ];
 
     pub fn name(self) -> &'static str {
@@ -345,6 +348,9 @@ pub struct FrameInfo {
     /// The frame's URL when the message arrived.
     pub url: String,
     pub is_main: bool,
+    /// The renderer process the frame runs in, as it reported itself (welding change 34); 0
+    /// when unknown. Several tabs may share one.
+    pub pid: u32,
 }
 
 /// What the host learns about a page beyond navigation, in order.
@@ -496,6 +502,17 @@ pub enum PageEvent {
     /// The answer of `View::probe_audible` changed: a media element of the
     /// main document plays with sound (or stopped).
     Audible(bool),
+    /// The page answered `View::set_frozen` (CDP `Page.setWebLifecycleState`): `ok` false when
+    /// Chromium refused (the page is not the active top-level page, say).
+    Frozen {
+        frozen: bool,
+        ok: bool,
+    },
+    /// The page answered `View::request_target_id` with its CDP target id (`Err`: refused).
+    TargetId(Result<String, ()>),
+    /// The main frame committed a new document (not a same-document navigation): what the old
+    /// documents' frames reported through frame messages is stale.
+    Committed,
     Console {
         level: LogLevel,
         message: String,
@@ -531,6 +548,13 @@ pub enum PageEvent {
     FrameMessage {
         frame: FrameInfo,
         text: wubble_core::secret::Secret,
+    },
+    /// A busy probe's report from `frame` (wubble-helper `probes.js` on
+    /// [`FrameChannel::Probes`]): what in the frame must keep its tab awake.
+    /// The first one, empty, tells which renderer the frame runs in.
+    Probe {
+        frame: FrameInfo,
+        report: String,
     },
 }
 

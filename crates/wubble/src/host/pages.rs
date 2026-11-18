@@ -39,6 +39,7 @@ pub(super) fn kind_of(page: Option<InternalPage>) -> InternalPageKind {
         Some(InternalPage::Downloads) => InternalPageKind::Downloads,
         Some(InternalPage::Passwords) => InternalPageKind::Passwords,
         Some(InternalPage::Archive) => InternalPageKind::Archive,
+        Some(InternalPage::Tasks) => InternalPageKind::Tasks,
     }
 }
 
@@ -351,6 +352,10 @@ impl Host {
         if self.pages.shown != page {
             if self.pages.shown == Some(InternalPage::Passwords) {
                 self.passwords_left();
+            }
+            let tasks = Some(InternalPage::Tasks);
+            if (self.pages.shown == tasks) != (page == tasks) {
+                self.tasks_shown(page == tasks);
             }
             self.pages.shown = page;
             match page {

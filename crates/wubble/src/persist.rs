@@ -86,14 +86,15 @@ pub fn should_save(s: SaveState) -> bool {
     s.changes > 0 && (s.changes >= SAVE_AFTER_CHANGES || s.quiet)
 }
 
-/// Whether `command` can change what `save_session` stores. Ticks and
-/// loading only move lifecycle state, which is not stored (tabs come back
-/// Discarded); opening the bar changes nothing.
+/// Whether `command` can change what `save_session` stores. Ticks, busy
+/// reasons and discards only move lifecycle state, which is not stored (tabs
+/// come back Discarded, idle); opening the bar changes nothing.
 pub fn changes_session(command: &Command) -> bool {
     !matches!(
         command,
         Command::Tick { .. }
-            | Command::BusyChanged { .. }
+            | Command::Busy { .. }
+            | Command::DiscardNow(_)
             | Command::OpenCommandBar
             | Command::SetSleepPolicy(_)
             | Command::SetNeverSleepSites(_)
@@ -181,10 +182,21 @@ impl Settings {
     /// The page features CEF takes as start switches (`restart` rows).
     pub fn page_features(&self) -> wubble_engine::app::PageFeatures {
         use wubble_core::settings as defs;
-        let on = |def| apply::value_of(def, &self.stored) == "1";
+        let value = |def| apply::value_of(def, &self.stored);
+        let on = |def| value(def) == "1";
+        let count = |def| value(def).parse().unwrap_or(0);
         wubble_engine::app::PageFeatures {
             overlay_scrollbars: on(&defs::OVERLAY_SCROLLBARS),
             middle_click_autoscroll: on(&defs::MIDDLE_CLICK_AUTOSCROLL),
+            back_forward_cache: defs::BackForwardCache::from_word(value(
+                &defs::MEMORY_BACK_FORWARD_CACHE,
+            ))
+            .unwrap_or(defs::BackForwardCache::Default),
+            max_decoded_image_mb: count(&defs::MEMORY_MAX_DECODED_IMAGE_MB),
+            site_isolation: on(&defs::PROCESS_SITE_ISOLATION),
+            renderer_limit: count(&defs::PROCESS_RENDERER_LIMIT),
+            spare_renderer: on(&defs::PROCESS_SPARE_RENDERER),
+            remote_debugging_port: defs::remote_port(count(&defs::DEVTOOLS_REMOTE_PORT)),
         }
     }
 
@@ -1141,7 +1153,12 @@ mod tests {
                 wall_ms: 0,
                 pressure: Pressure::None,
             },
-            Command::BusyChanged { tab: t, busy: true },
+            Command::Busy {
+                tab: t,
+                reason: wubble_core::busy::Reason::Loading,
+                on: true,
+            },
+            Command::DiscardNow(t),
             Command::OpenCommandBar,
         ];
         for c in &quiet {

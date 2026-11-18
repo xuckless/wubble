@@ -1,6 +1,6 @@
 // Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
-// `src/wubble/slint/split.rs`, copied verbatim up to the `slint-source-seam` block, except the
-// marked `wubble change`s. The Source panel's string (`SourceSeam`) is not part of wubble yet;
+// `src/wubble/slint/split.rs`, copied verbatim through the `slint-source-seam` block, except the
+// marked `wubble change`s. The Source panel's string (`SourceSeam`) docks DevTools (`devtools.rs`);
 // the model half (`SpaceTabs`, `SplitGroup`, `even`) lives in `space.rs` and `model.rs` as
 // `Model::apply` commands.
 
@@ -29,7 +29,8 @@
 
 // wubble change: import order (rustfmt).
 use crate::bow::{Curve, cubics};
-use crate::motion::{Spring, band, band_clamp, clamp, spring, step};
+// wubble change: `K` is imported for `SourceSeam`.
+use crate::motion::{K, Spring, band, band_clamp, clamp, spring, step};
 use crate::seam::to_fixed2 as f;
 
 // @source slint-split
@@ -507,6 +508,111 @@ impl Split {
     }
 }
 
+// @source slint-source-seam
+/// The Source panel's edge is a string too (`source-seam` in chrome.tsx): same held / release /
+/// bend springs and band as the sidebar. Held: 1:1 with rubber band past 320–720 (and 60% of the
+/// window); pulled under 200 it gives way toward closed, and released there it closes.
+#[derive(Clone, Debug)]
+pub struct SourceSeam {
+    /// the panel's resting width while open
+    pub want: f64,
+    pub held: bool,
+    pub px: f64,
+    pub py: f64,
+    pub bend: Spring,
+    pub gy: f64,
+    /// the panel's width (`srcW` in the TS)
+    pub w: Spring,
+    pub open: bool,
+}
+
+impl Default for SourceSeam {
+    fn default() -> Self {
+        SourceSeam {
+            want: 480.0,
+            held: false,
+            px: 0.0,
+            py: 0.0,
+            bend: spring(0.0),
+            gy: 0.0,
+            w: spring(0.0),
+            open: false,
+        }
+    }
+}
+
+impl SourceSeam {
+    const INSET: f64 = 8.0; // chrome.inset
+
+    /// Pointer down on the grab (window px). The TS sets gy straight to the pointer (no clamp).
+    pub fn grab(&mut self, px: f64, py: f64) {
+        self.held = true;
+        self.px = px;
+        self.py = py;
+        self.gy = py;
+    }
+
+    pub fn drag(&mut self, px: f64, py: f64) {
+        if self.held {
+            self.px = px;
+            self.py = py;
+        }
+    }
+
+    /// Returns true if the release closed the panel (the owner clears its `source` state).
+    pub fn release(&mut self) -> bool {
+        if !self.held {
+            return false;
+        }
+        self.held = false;
+        if self.w.x < 200.0 {
+            self.open = false;
+            true
+        } else {
+            self.want = clamp(self.w.x, 320.0, 720.0);
+            false
+        }
+    }
+
+    /// Arrow keys: ±24 px with a twang (ArrowLeft widens: dir = 1).
+    pub fn nudge(&mut self, dir: f64, h: f64) {
+        self.want = clamp(self.want + dir * 24.0, 320.0, 720.0);
+        self.bend.v -= dir * 220.0;
+        self.gy = h / 2.0;
+    }
+
+    /// `w_win`, `h_win`: the window's inner size. Returns true while anything moves.
+    pub fn step(&mut self, dt: f64, w_win: f64, h_win: f64) -> bool {
+        let target = if self.open { self.want } else { 0.0 };
+        if self.held {
+            let raw = w_win - Self::INSET - self.px;
+            let want = if raw < 200.0 {
+                band(raw, K_BAND)
+            } else {
+                band_clamp(raw, 320.0, 720f64.min(w_win * 0.6), K_BAND)
+            };
+            step(&mut self.w, want, K::seamHeld[0], K::seamHeld[1], dt);
+            self.bend.x = band(self.px - (w_win - Self::INSET - self.w.x - 4.0), 70.0);
+            self.bend.v = 0.0;
+            self.gy += (clamp(self.py, 18.0, h_win - 18.0) - self.gy) * 1f64.min(dt * 30.0);
+            true
+        } else {
+            let a = step(
+                &mut self.w,
+                target,
+                K::seamRelease[0],
+                K::seamRelease[1],
+                dt,
+            );
+            let b = step(&mut self.bend, 0.0, K::seamBend[0], K::seamBend[1], dt);
+            a || b
+        }
+    }
+}
+
+/// SEAM.bandK (seam.ts), used by the Source string.
+const K_BAND: f64 = 34.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,5 +859,58 @@ mod tests {
             assert!(p.x0 >= 0.0 && p.x1 <= 600.0, "{p:?}");
             last = p.x1;
         }
+    }
+
+    fn run(s: &mut SourceSeam, frames: usize) {
+        for _ in 0..frames {
+            s.step(1.0 / 60.0, 1200.0, 700.0);
+        }
+    }
+
+    #[test]
+    fn the_source_panel_opens_to_its_width_and_holds_within_its_band() {
+        let mut s = SourceSeam {
+            open: true,
+            ..SourceSeam::default()
+        };
+        run(&mut s, 240);
+        assert!((s.w.x - 480.0).abs() < 1.0, "{}", s.w.x);
+        // held far left: the width rubber-bands past 720 (and 60% of 1200), never snaps
+        s.grab(1000.0, 300.0);
+        s.drag(100.0, 300.0);
+        run(&mut s, 240);
+        assert!(s.w.x > 700.0 && s.w.x < 800.0, "{}", s.w.x);
+        assert!(!s.release());
+        assert!((s.want - 720.0).abs() < 1.0, "{}", s.want);
+    }
+
+    #[test]
+    fn pulled_under_200_a_release_closes_the_panel() {
+        let mut s = SourceSeam {
+            open: true,
+            ..SourceSeam::default()
+        };
+        run(&mut s, 240);
+        s.grab(700.0, 300.0);
+        s.drag(1150.0, 300.0);
+        run(&mut s, 240);
+        assert!(s.w.x < 200.0, "{}", s.w.x);
+        assert!(s.release());
+        assert!(!s.open);
+        run(&mut s, 480);
+        assert!(s.w.x.abs() < 1.0);
+        // a release with nothing held does nothing
+        assert!(!s.release());
+    }
+
+    #[test]
+    fn arrow_keys_nudge_by_24_within_the_band() {
+        let mut s = SourceSeam::default();
+        s.nudge(1.0, 700.0);
+        assert_eq!(s.want, 504.0);
+        for _ in 0..20 {
+            s.nudge(-1.0, 700.0);
+        }
+        assert_eq!(s.want, 320.0);
     }
 }

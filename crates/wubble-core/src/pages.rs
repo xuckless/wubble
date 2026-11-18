@@ -485,16 +485,19 @@ pub enum InternalPage {
     Downloads,
     Passwords,
     Archive,
+    /// The Task manager: tabs and processes with memory, CPU and state.
+    Tasks,
 }
 
 impl InternalPage {
-    pub const ALL: [InternalPage; 6] = [
+    pub const ALL: [InternalPage; 7] = [
         InternalPage::Settings,
         InternalPage::History,
         InternalPage::Bookmarks,
         InternalPage::Downloads,
         InternalPage::Passwords,
         InternalPage::Archive,
+        InternalPage::Tasks,
     ];
 
     pub fn url(self) -> &'static str {
@@ -505,6 +508,7 @@ impl InternalPage {
             InternalPage::Downloads => "wubble://downloads",
             InternalPage::Passwords => "wubble://passwords",
             InternalPage::Archive => "wubble://archive",
+            InternalPage::Tasks => "wubble://tasks",
         }
     }
 
@@ -517,6 +521,7 @@ impl InternalPage {
             InternalPage::Downloads => "Downloads",
             InternalPage::Passwords => "Passwords",
             InternalPage::Archive => "Archive",
+            InternalPage::Tasks => "Task manager",
         }
     }
 

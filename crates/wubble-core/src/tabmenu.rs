@@ -7,6 +7,7 @@
 //! roadmap's (pin, duplicate, move to Space, split with, move to a window, mute, never sleep,
 //! never sleep for the Space or site, close others, close), written new. "Close other tabs" keeps pinned tabs, as Chromium's `CloseOtherTabs` does.
 
+use crate::busy::Reason;
 use crate::model::{Command, Dest, Model};
 use crate::tab::TabId;
 
@@ -155,10 +156,14 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
                 Run::ToggleMute(tab),
             )),
             Some(Row::NeverSleep) => {
-                let on = model.is_never_sleep(tab);
+                let on = model.tabs[&tab].busy.contains(Reason::NeverSleep);
                 out.push(mk(
                     if on { "Allow Sleep" } else { "Never Sleep" }.into(),
-                    Run::Model(Command::SetNeverSleep { tab, on: !on }),
+                    Run::Model(Command::Busy {
+                        tab,
+                        reason: Reason::NeverSleep,
+                        on: !on,
+                    }),
                 ));
             }
             Some(Row::CloseOthers) => {
@@ -225,7 +230,11 @@ mod tests {
                 Run::WindowEntries(t),
                 Run::Separator,
                 Run::ToggleMute(t),
-                Run::Model(Command::SetNeverSleep { tab: t, on: true }),
+                Run::Model(Command::Busy {
+                    tab: t,
+                    reason: Reason::NeverSleep,
+                    on: true,
+                }),
                 Run::SleepEntries(t),
                 Run::Separator,
                 Run::Model(Command::CloseOthers(t)),
@@ -241,7 +250,14 @@ mod tests {
         // alone: no close-others
         assert!(!runs(&m, t).contains(&Run::Model(Command::CloseOthers(t))));
         let (m, _) = apply(m, Command::PinTab(t));
-        let (m, _) = apply(m, Command::SetNeverSleep { tab: t, on: true });
+        let (m, _) = apply(
+            m,
+            Command::Busy {
+                tab: t,
+                reason: Reason::NeverSleep,
+                on: true,
+            },
+        );
         let e = entries(&m, t, Facts { muted: true });
         let labels: Vec<&str> = e.iter().map(|e| e.label.as_str()).collect();
         assert!(labels.contains(&"Unpin Tab"));

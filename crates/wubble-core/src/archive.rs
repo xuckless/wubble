@@ -171,7 +171,14 @@ mod tests {
         let (p, _) = apply(m.clone(), Command::PinTab(a));
         assert_eq!(due24(&p, late), vec![]);
         // busy
-        let (busy, _) = apply(m.clone(), Command::BusyChanged { tab: a, busy: true });
+        let (busy, _) = apply(
+            m.clone(),
+            Command::Busy {
+                tab: a,
+                reason: crate::busy::Reason::Loading,
+                on: true,
+            },
+        );
         assert_eq!(due24(&busy, late), vec![]);
         // audible
         assert_eq!(

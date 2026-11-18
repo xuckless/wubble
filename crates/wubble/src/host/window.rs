@@ -37,8 +37,9 @@ pub(crate) struct WindowHost {
     pub(super) window: slint::Weak<AppWindow>,
     /// One ring of textures per pane on screen (each pane has its own frame size), and the tab
     /// each slot presents; a tab keeps its slot while it stays on screen.
-    pub(super) presenters: [FramePresenter; MAX_PANES],
-    pub(super) slots: [Option<TabId>; MAX_PANES],
+    /// The last one is the DevTools panel's (`PANEL_TAB`).
+    pub(super) presenters: [FramePresenter; MAX_PANES + 1],
+    pub(super) slots: [Option<TabId>; MAX_PANES + 1],
     /// The popup widget's frames: a ring of their own, since a popup's size
     /// differs from the page's and changes with every popup.
     pub(super) popup_presenter: FramePresenter,
@@ -68,18 +69,18 @@ impl WindowHost {
         id: WindowId,
         kind: WindowKind,
         handle: AppWindow,
-        presenters: [FramePresenter; MAX_PANES + 1],
+        presenters: [FramePresenter; MAX_PANES + 2],
         glass: Rc<RefCell<Glass>>,
         panels: Rc<RefCell<GlassRegistry>>,
     ) -> Self {
-        let [a, b, c, popup_presenter] = presenters;
+        let [a, b, c, popup_presenter, panel_presenter] = presenters;
         Self {
             id,
             kind,
             window: handle.as_weak(),
             handle,
-            presenters: [a, b, c],
-            slots: [None; MAX_PANES],
+            presenters: [a, b, c, panel_presenter],
+            slots: [None; MAX_PANES + 1],
             popup_presenter,
             glass,
             panels,

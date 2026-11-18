@@ -318,6 +318,15 @@ pub enum Routed {
     Fullscreen(bool),
     Muted(bool),
     Audible(bool),
+    /// The main frame committed a new document.
+    Committed,
+    /// The page answered a freeze or thaw (`View::set_frozen`).
+    Frozen {
+        frozen: bool,
+        ok: bool,
+    },
+    /// The page's CDP target id, for the docked DevTools frontend.
+    TargetId(Result<String, ()>),
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
     /// CEF gave up on these requests: every surface showing one closes.
@@ -342,11 +351,15 @@ pub enum Routed {
     Console(String),
     /// The page's icon, downloaded (`host/surfaces.rs`, `show_favicon`).
     Favicon(wubble_engine::favicon::FaviconImage),
-    /// The autofill content script in one of the page's frames
-    /// (`host/autofill.rs`).
+    /// Autofill's message from one of the page's frames (`host/autofill.rs`).
     Frame {
         frame: wubble_engine::page::FrameInfo,
         text: wubble_core::secret::Secret,
+    },
+    /// A busy probe's report from one of the page's frames (`host/busy.rs`).
+    Probe {
+        frame: wubble_engine::page::FrameInfo,
+        report: String,
     },
     /// A page saved as PDF, or not: the toast says which.
     Pdf {
@@ -402,6 +415,9 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
+        PageEvent::Frozen { frozen, ok } => Routed::Frozen { frozen, ok },
+        PageEvent::TargetId(id) => Routed::TargetId(id),
+        PageEvent::Committed => Routed::Committed,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
         PageEvent::PermissionRequested {
             id,
@@ -438,6 +454,7 @@ pub fn route(event: PageEvent) -> Routed {
         },
         PageEvent::CertificateError { id, url, code } => Routed::Cert { id, url, code },
         PageEvent::FrameMessage { frame, text } => Routed::Frame { frame, text },
+        PageEvent::Probe { frame, report } => Routed::Probe { frame, report },
         PageEvent::LoadFailed { url, code, .. } => {
             Routed::Error(ErrorEvent::LoadFailed { url, code })
         }

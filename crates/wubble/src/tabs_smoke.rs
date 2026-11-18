@@ -1,9 +1,18 @@
 //! `--smoke tabs`: three tabs on bundled pages, switch between them, put the
-//! hidden ones to sleep, restore one, close one, and check after each step
-//! that the model and the engine agree. Every wait is "until the host sees
-//! X", bounded by a count of CEF work runs, never by time.
+//! hidden ones to sleep, restore one (showing its snapshot until it paints),
+//! close one, then freeze a hidden page and check its timers stop while a
+//! hidden control page's keep running, and run again once thawed. After each
+//! step the model and the engine must agree. Every wait is "until the host
+//! sees X", bounded by a count of CEF work runs, never by time.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use wubble_core::tab::TabId;
 
 use crate::nav_smoke::MAX_WORK_RUNS;
+
+/// The timers page's titles start with this, then count `setInterval` ticks.
+pub const TIMER_TITLE: &str = "timer ";
 
 /// What the host sees after a run of CEF work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -20,6 +29,12 @@ pub struct Seen {
     pub shown_is_visible: bool,
     /// The shell shows a frame of a tab that is not the visible one.
     pub stale_frame: bool,
+    /// The visible tab's pane shows a frame it painted (not its snapshot).
+    pub painted: bool,
+    /// The visible tab's pane showed its snapshot until its first frame replaced it.
+    pub restored_from_snapshot: bool,
+    /// Each tab's last freeze answer (frozen, ok), in sidebar order.
+    pub frozen: Vec<Option<(bool, bool)>>,
 }
 
 impl Seen {
@@ -33,28 +48,82 @@ impl Seen {
     fn agrees(&self, n: usize) -> bool {
         self.views == n && self.live_tabs == n && self.one_visible()
     }
+
+    fn title(&self, i: usize) -> &str {
+        self.titles.get(i).map_or("", String::as_str)
+    }
+
+    /// Tab `i` shows the timers page and has ticked at least once.
+    fn ticking(&self, i: usize) -> bool {
+        self.title(i)
+            .strip_prefix(TIMER_TITLE)
+            .is_some_and(|n| n != "0")
+    }
+
+    fn frozen(&self, i: usize) -> Option<(bool, bool)> {
+        self.frozen.get(i).copied().flatten()
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The frozen tab and the control tab of the freeze check, in sidebar order.
+const FROZEN: usize = 2;
+const CONTROL: usize = 3;
+/// Title changes of the control tab that must pass while the frozen one shows none.
+const CONTROL_TICKS: u32 = 3;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stage {
     Start,
     /// Waiting for every tab's title.
     Titles,
-    /// Activated tab `i`, waiting for it to be the one visible view.
+    /// Activated tab `i`, waiting for it to be the one visible view, painted.
     Switched(usize),
     /// Hidden tabs discarded, waiting for their views to close.
     Discarded,
-    /// A discarded tab activated, waiting for its view.
+    /// A discarded tab activated, waiting for its view and for its snapshot to give way to its
+    /// first frame.
     Restored,
     /// A tab closed, waiting for its view to close.
     Closed,
+    /// Two hidden timers pages opened, waiting for both to tick.
+    Timers,
+    /// Asked to freeze the first, waiting for Chromium's answer.
+    Freezing,
+    /// Chromium answered, but posted the freeze to the renderer only as it did: a tick already
+    /// under way may still land. Waiting for the control tab to change once (`control` was its
+    /// title at the answer) before the frozen tab's title counts.
+    Settling {
+        control: String,
+    },
+    /// The first is frozen at title `frozen`; the control has changed `ticks` times, last to
+    /// `control`.
+    Frozen {
+        frozen: String,
+        control: String,
+        ticks: u32,
+    },
+    /// Asked to thaw the first, frozen at title `frozen`, waiting for it to tick again.
+    Thawing {
+        frozen: String,
+    },
     Done,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TabsSmoke {
     pub stage: Stage,
     runs: u32,
+    /// What the host told the smoke as it happened; the host keeps none of it itself.
+    pub heard: Heard,
+}
+
+/// Host events the smoke needs and the host has no other use for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Heard {
+    /// Each tab's last freeze answer (frozen, ok).
+    pub frozen: BTreeMap<TabId, (bool, bool)>,
+    /// Tabs whose snapshot stand-in a real frame replaced.
+    pub replaced: BTreeSet<TabId>,
 }
 
 impl Default for TabsSmoke {
@@ -62,6 +131,7 @@ impl Default for TabsSmoke {
         Self {
             stage: Stage::Start,
             runs: 0,
+            heard: Heard::default(),
         }
     }
 }
@@ -75,35 +145,112 @@ pub enum Action {
     /// A lifecycle tick far enough ahead that every hidden tab is discarded.
     DiscardHidden,
     Close(usize),
+    /// Open the timers page twice, then show the first tab again: both stay hidden.
+    OpenTimers,
+    /// Freeze (true) or thaw tab `i`'s page.
+    Freeze(usize, bool),
     Pass,
     Fail(String),
 }
 
 /// `want` are the three pages' titles, in tab order.
 pub fn next(s: TabsSmoke, seen: &Seen, want: &[&str]) -> (TabsSmoke, Option<Action>) {
-    let to = |stage| TabsSmoke { stage, runs: 0 };
-    let step = match s.stage {
-        Stage::Start => Some((Stage::Titles, Action::OpenPages)),
-        Stage::Titles if seen.titles == want => Some((Stage::Switched(0), Action::Activate(0))),
-        Stage::Switched(0) if seen.agrees(3) => Some((Stage::Switched(1), Action::Activate(1))),
-        Stage::Switched(_) if seen.agrees(3) => Some((Stage::Discarded, Action::DiscardHidden)),
-        Stage::Discarded if seen.agrees(1) => Some((Stage::Restored, Action::Activate(0))),
-        Stage::Restored if seen.agrees(2) => Some((Stage::Closed, Action::Close(0))),
-        Stage::Closed if seen.agrees(1) && seen.titles.len() == 2 => {
-            Some((Stage::Done, Action::Pass))
+    use Stage::*;
+    let fail = |why: String| Some((Done, Some(Action::Fail(why))));
+    let step: Option<(Stage, Option<Action>)> = match &s.stage {
+        Start => Some((Titles, Some(Action::OpenPages))),
+        Titles if seen.titles == want => Some((Switched(0), Some(Action::Activate(0)))),
+        Switched(0) if seen.agrees(3) && seen.painted => {
+            Some((Switched(1), Some(Action::Activate(1))))
         }
+        Switched(_) if seen.agrees(3) && seen.painted => {
+            Some((Discarded, Some(Action::DiscardHidden)))
+        }
+        Discarded if seen.agrees(1) => Some((Restored, Some(Action::Activate(0)))),
+        Restored if seen.agrees(2) && seen.restored_from_snapshot => {
+            Some((Closed, Some(Action::Close(0))))
+        }
+        Closed if seen.agrees(1) && seen.titles.len() == 2 => {
+            Some((Timers, Some(Action::OpenTimers)))
+        }
+        Timers if seen.one_visible() && seen.ticking(FROZEN) && seen.ticking(CONTROL) => {
+            Some((Freezing, Some(Action::Freeze(FROZEN, true))))
+        }
+        Freezing => match seen.frozen(FROZEN) {
+            Some((true, true)) => Some((
+                Settling {
+                    control: seen.title(CONTROL).to_owned(),
+                },
+                None,
+            )),
+            Some((true, false)) => fail("Page.setWebLifecycleState frozen was refused".into()),
+            _ => None,
+        },
+        Settling { control } if seen.title(CONTROL) != control => Some((
+            Frozen {
+                frozen: seen.title(FROZEN).to_owned(),
+                control: seen.title(CONTROL).to_owned(),
+                ticks: 0,
+            },
+            None,
+        )),
+        Frozen { frozen, .. } if seen.title(FROZEN) != frozen => fail(format!(
+            "the frozen tab ran its timers: {frozen:?} became {:?}",
+            seen.title(FROZEN)
+        )),
+        Frozen {
+            frozen,
+            control,
+            ticks,
+        } if seen.title(CONTROL) != control => {
+            let ticks = ticks + 1;
+            if ticks >= CONTROL_TICKS {
+                Some((
+                    Thawing {
+                        frozen: frozen.clone(),
+                    },
+                    Some(Action::Freeze(FROZEN, false)),
+                ))
+            } else {
+                Some((
+                    Frozen {
+                        frozen: frozen.clone(),
+                        control: seen.title(CONTROL).to_owned(),
+                        ticks,
+                    },
+                    None,
+                ))
+            }
+        }
+        Thawing { frozen } => match seen.frozen(FROZEN) {
+            Some((false, false)) => fail("Page.setWebLifecycleState active was refused".into()),
+            Some((false, true)) if seen.title(FROZEN) != frozen => Some((Done, Some(Action::Pass))),
+            _ => None,
+        },
         _ => None,
     };
     match step {
-        Some((stage, action)) => (to(stage), Some(action)),
-        None if s.stage == Stage::Done => (s, None),
-        None if s.runs >= MAX_WORK_RUNS => (
-            to(Stage::Done),
-            Some(Action::Fail(format!(
+        Some((stage, action)) => (
+            TabsSmoke {
+                stage,
+                runs: 0,
+                ..s
+            },
+            action,
+        ),
+        None if s.stage == Done => (s, None),
+        None if s.runs >= MAX_WORK_RUNS => {
+            let why = format!(
                 "stuck at {:?} after {MAX_WORK_RUNS} runs of CEF work: {seen:?}",
                 s.stage
-            ))),
-        ),
+            );
+            let s = TabsSmoke {
+                stage: Done,
+                runs: 0,
+                ..s
+            };
+            (s, Some(Action::Fail(why)))
+        }
         None => (
             TabsSmoke {
                 runs: s.runs + 1,
@@ -128,22 +275,46 @@ mod tests {
             visible_views: 1,
             shown_is_visible: true,
             stale_frame: false,
+            painted: true,
+            restored_from_snapshot: false,
+            frozen: vec![],
         }
     }
 
+    fn run_from(s: TabsSmoke, inputs: &[Seen]) -> (TabsSmoke, Vec<Action>) {
+        inputs.iter().fold((s, vec![]), |(s, mut all), seen| {
+            let (s, action) = next(s, seen, &WANT);
+            all.extend(action);
+            (s, all)
+        })
+    }
+
     fn run(inputs: &[Seen]) -> (TabsSmoke, Vec<Action>) {
-        inputs
-            .iter()
-            .fold((TabsSmoke::default(), vec![]), |(s, mut all), seen| {
-                let (s, action) = next(s, seen, &WANT);
-                all.extend(action);
-                (s, all)
-            })
+        run_from(TabsSmoke::default(), inputs)
+    }
+
+    fn timers(a: &str, b: &str, frozen: Option<(bool, bool)>) -> Seen {
+        let titles = ["b", "c", a, b];
+        Seen {
+            frozen: vec![None, None, frozen, None],
+            ..seen(&titles, 3, 3)
+        }
+    }
+
+    fn at(stage: Stage) -> TabsSmoke {
+        TabsSmoke {
+            stage,
+            ..TabsSmoke::default()
+        }
     }
 
     #[test]
     fn happy_path() {
         let three = seen(&WANT, 3, 3);
+        let restored = Seen {
+            restored_from_snapshot: true,
+            ..seen(&WANT, 2, 2)
+        };
         let (s, actions) = run(&[
             seen(&["a"], 1, 1),
             seen(&["a", "b", ""], 3, 3),
@@ -153,9 +324,23 @@ mod tests {
             // Discarded views close a few runs later.
             seen(&WANT, 3, 1),
             seen(&WANT, 1, 1),
+            // The view is back, its snapshot not yet replaced.
             seen(&WANT, 2, 2),
+            restored,
             seen(&["b", "c"], 2, 1),
             seen(&["b", "c"], 1, 1),
+            timers("timer 0", "timer 0", None),
+            timers("timer 1", "timer 2", None),
+            timers("timer 2", "timer 3", Some((true, true))),
+            // A tick under way as the freeze was answered lands: not a failure.
+            timers("timer 3", "timer 3", Some((true, true))),
+            timers("timer 3", "timer 4", Some((true, true))),
+            timers("timer 3", "timer 4", Some((true, true))),
+            timers("timer 3", "timer 5", Some((true, true))),
+            timers("timer 3", "timer 6", Some((true, true))),
+            timers("timer 3", "timer 7", Some((true, true))),
+            timers("timer 3", "timer 8", Some((false, true))),
+            timers("timer 4", "timer 9", Some((false, true))),
         ]);
         assert_eq!(s.stage, Stage::Done);
         assert_eq!(
@@ -167,9 +352,68 @@ mod tests {
                 Action::DiscardHidden,
                 Action::Activate(0),
                 Action::Close(0),
+                Action::OpenTimers,
+                Action::Freeze(FROZEN, true),
+                Action::Freeze(FROZEN, false),
                 Action::Pass,
             ]
         );
+    }
+
+    #[test]
+    fn a_frozen_tab_that_ticks_fails() {
+        let (s, actions) = run_from(
+            at(Stage::Freezing),
+            &[
+                timers("timer 2", "timer 3", Some((true, true))),
+                // The baseline is taken once the control ticks after the answer.
+                timers("timer 3", "timer 4", Some((true, true))),
+                timers("timer 4", "timer 4", Some((true, true))),
+            ],
+        );
+        assert_eq!(s.stage, Stage::Done);
+        assert!(
+            matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("ran its timers")),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_tick_landing_right_after_the_freeze_answer_does_not_fail() {
+        let (s, actions) = run_from(
+            at(Stage::Freezing),
+            &[
+                timers("timer 2", "timer 3", Some((true, true))),
+                timers("timer 3", "timer 3", Some((true, true))),
+            ],
+        );
+        assert_eq!(
+            (s.stage, actions),
+            (
+                Stage::Settling {
+                    control: "timer 3".into()
+                },
+                vec![]
+            )
+        );
+    }
+
+    #[test]
+    fn a_refused_freeze_fails_with_the_reason() {
+        let (_, actions) = run_from(
+            at(Stage::Freezing),
+            &[timers("timer 2", "timer 3", Some((true, false)))],
+        );
+        assert!(
+            matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("refused")),
+            "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_restore_waits_for_the_snapshot_to_give_way() {
+        let (s, actions) = run_from(at(Stage::Restored), &[seen(&WANT, 2, 2), seen(&WANT, 2, 2)]);
+        assert_eq!((s.stage, actions), (Stage::Restored, vec![]));
     }
 
     #[test]
@@ -186,7 +430,18 @@ mod tests {
             stale_frame: true,
             ..seen(&WANT, 3, 3)
         };
-        let (s, actions) = run(&[seen(&[], 0, 0), seen(&WANT, 3, 3), both, wrong, stale]);
+        let unpainted = Seen {
+            painted: false,
+            ..seen(&WANT, 3, 3)
+        };
+        let (s, actions) = run(&[
+            seen(&[], 0, 0),
+            seen(&WANT, 3, 3),
+            both,
+            wrong,
+            stale,
+            unpainted,
+        ]);
         assert_eq!(s.stage, Stage::Switched(0));
         assert_eq!(actions, [Action::OpenPages, Action::Activate(0)]);
     }

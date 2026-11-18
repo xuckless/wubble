@@ -13,6 +13,9 @@ use welding::{CefRuntime, CefSandboxMode};
 const AUTOFILL: (&str, &str) = ("autofill", include_str!("autofill.js"));
 /// `zoom.js`: Ctrl+wheel zoom, when the page leaves the wheel alone.
 const ZOOM: (&str, &str) = ("zoom", include_str!("zoom.js"));
+/// `probes.js`: what in the frame must keep its tab awake (browser side
+/// `crates/wubble/src/host/busy.rs`).
+const PROBES: (&str, &str) = ("probes", include_str!("probes.js"));
 /// `clipboard.js`: the page clipboard through the window, only when the browser
 /// passed [`CLIPBOARD_SWITCH`] (browser side `crates/wubble/src/clipboard.rs`).
 const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
@@ -54,7 +57,7 @@ fn main() {
     // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
     let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
     let clipboard = std::env::args().any(|a| a.strip_prefix("--") == Some(CLIPBOARD_SWITCH));
-    let scripts: Vec<_> = [AUTOFILL, ZOOM]
+    let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES]
         .into_iter()
         .chain(clipboard.then_some(CLIPBOARD))
         .collect();
@@ -88,12 +91,13 @@ mod tests {
 
     #[test]
     fn every_script_is_one_function_expression_on_its_channel() {
-        let script = compose(&[AUTOFILL, ZOOM, CLIPBOARD]);
+        let script = compose(&[AUTOFILL, ZOOM, PROBES, CLIPBOARD]);
         assert!(script.starts_with("(function (send, register) {"));
         assert!(script.trim_end().ends_with("})"));
         assert!(script.contains("[\"autofill\", "));
         assert!(script.contains("[\"clipboard\", "));
         assert!(script.contains("[\"zoom\", "));
+        assert!(script.contains("[\"probes\", "));
         // No script ends in a statement terminator inside the array.
         assert!(!script.contains("});,"));
     }

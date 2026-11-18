@@ -297,6 +297,100 @@ pub const PASSWORDS_AUTOFILL: SettingDef = SettingDef {
     restart: false,
 };
 
+/// Chromium's back/forward cache, which keeps whole left pages alive in the renderer:
+/// Chromium's default, a small cache (`BackForwardCache:cache_size/2`) or off
+/// (`disable-back-forward-cache`). A CEF start switch (`wubble_engine::app::PageFeatures`).
+pub const MEMORY_BACK_FORWARD_CACHE: SettingDef = SettingDef {
+    key: "memory.back_forward_cache",
+    kind: SettingKind::Choice(&BackForwardCache::WORDS),
+    default: "default",
+    label: "Back/forward cache",
+    section: Section::Performance,
+    restart: true,
+};
+/// `max-decoded-image-size-mb`: caps one decoded image, not the image cache's total (Chromium
+/// has no switch for that). 0 keeps Chromium's default.
+pub const MEMORY_MAX_DECODED_IMAGE_MB: SettingDef = SettingDef {
+    key: "memory.max_decoded_image_mb",
+    kind: SettingKind::Count { min: 0, max: 4096 },
+    default: "0",
+    label: "Largest decoded image (MB, 0 default)",
+    section: Section::Performance,
+    restart: true,
+};
+/// Site isolation (one renderer per site). Off (`disable-site-isolation-trials`) saves
+/// processes and weakens the defence against Spectre-style attacks.
+pub const PROCESS_SITE_ISOLATION: SettingDef = SettingDef {
+    key: "process.site_isolation",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Site isolation (off saves memory, weakens security)",
+    section: Section::Performance,
+    restart: true,
+};
+/// `renderer-process-limit`: past it Chromium reuses renderers. 0 lets Chromium decide.
+pub const PROCESS_RENDERER_LIMIT: SettingDef = SettingDef {
+    key: "process.renderer_limit",
+    kind: SettingKind::Count { min: 0, max: 100 },
+    default: "0",
+    label: "Renderer process limit (0 automatic)",
+    section: Section::Performance,
+    restart: true,
+};
+/// Chromium keeps a spare renderer started for the next navigation
+/// (`SpareRendererForSitePerProcess`); off saves one process.
+pub const PROCESS_SPARE_RENDERER: SettingDef = SettingDef {
+    key: "process.spare_renderer",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Keep a spare renderer ready",
+    section: Section::Performance,
+    restart: true,
+};
+
+/// Chromium's remote debugging endpoint (`remote-debugging-port`), on 127.0.0.1 only. Off by
+/// default: with a port set, any program on this computer can read and drive every open tab.
+/// Docked DevTools is the frontend page served by that endpoint, so it needs the port; without
+/// one, DevTools opens in its own window. Ports 1 to 1023 are privileged and count as off.
+pub const DEVTOOLS_REMOTE_PORT: SettingDef = SettingDef {
+    key: "devtools.remote_port",
+    kind: SettingKind::Count { min: 0, max: 65535 },
+    default: "0",
+    label: "Debugging port, 1024 to 65535 (0 off). Warning: any program on this computer can read and control every open tab. Docks DevTools beside the page",
+    section: Section::Privacy,
+    restart: true,
+};
+
+/// The port `DEVTOOLS_REMOTE_PORT`'s value asks for: `None` for 0 (off) and for the privileged
+/// ports 1 to 1023, and for anything past 65535.
+pub fn remote_port(raw: u32) -> Option<u16> {
+    u16::try_from(raw).ok().filter(|p| *p >= 1024)
+}
+
+/// What `MEMORY_BACK_FORWARD_CACHE` asks of Chromium.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackForwardCache {
+    /// Chromium's own size.
+    Default,
+    /// At most two left pages per tab.
+    Small,
+    Off,
+}
+
+impl BackForwardCache {
+    /// The stored words, in the variants' order.
+    pub const WORDS: [&'static str; 3] = ["default", "small", "off"];
+    const ALL: [BackForwardCache; 3] = [Self::Default, Self::Small, Self::Off];
+
+    pub fn word(self) -> &'static str {
+        Self::WORDS[self as usize]
+    }
+
+    pub fn from_word(word: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.word() == word)
+    }
+}
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -320,6 +414,12 @@ pub const ALL: &[&SettingDef] = &[
     &ROUTING_RULES,
     &GLASS_QUALITY,
     &GLASS_SCENE,
+    &MEMORY_BACK_FORWARD_CACHE,
+    &MEMORY_MAX_DECODED_IMAGE_MB,
+    &PROCESS_SITE_ISOLATION,
+    &PROCESS_RENDERER_LIMIT,
+    &PROCESS_SPARE_RENDERER,
+    &DEVTOOLS_REMOTE_PORT,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
 ];
@@ -339,6 +439,20 @@ mod tests {
             assert!(!d.key.is_empty() && !d.label.is_empty());
             assert!(ALL[..i].iter().all(|o| o.key != d.key), "dup {}", d.key);
         }
+    }
+
+    #[test]
+    fn the_debugging_port_is_off_by_default_and_ignores_privileged_ports() {
+        assert_eq!(remote_port(0), None);
+        assert_eq!(remote_port(1), None);
+        assert_eq!(remote_port(1023), None);
+        assert_eq!(remote_port(1024), Some(1024));
+        assert_eq!(remote_port(65535), Some(65535));
+        assert_eq!(remote_port(65536), None);
+        let d = &DEVTOOLS_REMOTE_PORT;
+        assert!(d.restart && d.default == "0");
+        assert_eq!(d.kind, SettingKind::Count { min: 0, max: 65535 });
+        assert_eq!(remote_port(d.default.parse().unwrap()), None);
     }
 
     #[test]
@@ -372,7 +486,24 @@ mod tests {
             assert_eq!(d.section, Section::Performance, "{}", d.key);
         }
         const { assert!(OVERLAY_SCROLLBARS.restart && MIDDLE_CLICK_AUTOSCROLL.restart) };
+        // The memory and process rows are start switches whose defaults leave Chromium as is.
+        for d in [
+            &MEMORY_BACK_FORWARD_CACHE,
+            &MEMORY_MAX_DECODED_IMAGE_MB,
+            &PROCESS_SITE_ISOLATION,
+            &PROCESS_RENDERER_LIMIT,
+            &PROCESS_SPARE_RENDERER,
+        ] {
+            assert!(d.restart && d.section == Section::Performance, "{}", d.key);
+        }
         assert_eq!(find("glass.quality"), Some(&GLASS_QUALITY));
+        for word in BackForwardCache::WORDS {
+            assert_eq!(
+                BackForwardCache::from_word(word).map(BackForwardCache::word),
+                Some(word)
+            );
+        }
+        assert_eq!(BackForwardCache::from_word("huge"), None);
         assert_eq!(find("nope"), None);
     }
 

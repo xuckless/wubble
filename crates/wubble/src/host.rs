@@ -16,6 +16,8 @@
 
 mod autofill;
 mod autoscroll;
+mod busy;
+mod devtools;
 mod downloads;
 mod drag;
 mod pages;
@@ -23,9 +25,11 @@ mod panes;
 mod parity;
 mod preview;
 mod settings;
+mod snapshots;
 mod surfaces;
 mod swipe;
 mod tab_drag;
+mod tasks;
 mod window;
 pub use swipe::Swipe;
 
@@ -43,6 +47,8 @@ use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
 use wubble_core::archive::{self, ArchiveAfter};
+use wubble_core::busy::Reason;
+use wubble_core::devtools::PANEL_TAB;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
@@ -50,7 +56,6 @@ use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::site::{Permission, SitePermissions};
-use wubble_core::sleep::Pressure;
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::window::WindowId;
@@ -83,8 +88,8 @@ use crate::split_smoke::{self, SplitSmoke};
 use crate::surface::{FindEvent, Surfaces};
 use crate::tabs_smoke::{self, Seen, TabsSmoke};
 use crate::{
-    NAV_PAGE, SMOKE_MAX_IDLE_RUNS, SMOKE_PAGE, TAB3_PAGE, Wake, deliver, display_refresh_mhz,
-    page_url, physical, quit, with_host,
+    NAV_PAGE, SMOKE_MAX_IDLE_RUNS, SMOKE_PAGE, TAB3_PAGE, TIMERS_PAGE, Wake, deliver,
+    display_refresh_mhz, page_url, physical, quit, with_host,
 };
 
 /// Pop-ups a tab holds back at most; later ones are dropped.
@@ -111,9 +116,15 @@ pub enum Call {
         tab: TabId,
         visible: bool,
     },
+    /// Freeze or thaw the tab's page (`View::set_frozen`, CDP).
+    SetFrozen {
+        tab: TabId,
+        frozen: bool,
+    },
+    /// Keep a small picture of the tab's last frame (`host/snapshots.rs`).
+    CaptureSnapshot(TabId),
+    ReleaseSnapshot(TabId),
     ShowCommandBar,
-    /// Keep a small copy of the tab's last frame (the hover preview's thumbnail).
-    Capture(TabId),
     /// Open, close or raise the platform window of a model window.
     OpenWindow(WindowId),
     CloseWindow(WindowId),
@@ -123,9 +134,9 @@ pub enum Call {
     Nothing,
 }
 
-/// The engine work an effect stands for. Freeze has no CEF call (CEF 156
-/// has no freeze API; hiding already throttles) and snapshots have no UI
-/// yet, so those are recorded no-ops (TODO.md "Tabs in the host").
+/// The engine work an effect stands for. Freeze goes through the DevTools
+/// protocol (CEF 156 has no freeze API; `wubble_engine::cdp`); snapshots are
+/// the host's own GPU textures (`host/snapshots.rs`).
 /// An internal page (`InternalPage`, wubble://) has no view: the shell draws it, so creating
 /// or restoring its tab opens none. Only a tab already on an internal page navigates to one
 /// (the model opens it in its own tab otherwise), so there is no view to load into.
@@ -174,9 +185,12 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
                         url: t.url.clone(),
                     })
             }
-            Life::CaptureSnapshot => Call::Capture(*tab),
-            // Thumbnails go with their tab (`dispatch` forgets closed tabs).
-            Life::Freeze | Life::Unfreeze | Life::ReleaseSnapshot => Call::Nothing,
+            Life::Freeze | Life::Unfreeze => Call::SetFrozen {
+                tab: *tab,
+                frozen: *effect == Life::Freeze,
+            },
+            Life::CaptureSnapshot => Call::CaptureSnapshot(*tab),
+            Life::ReleaseSnapshot => Call::ReleaseSnapshot(*tab),
         },
     }
 }
@@ -400,6 +414,16 @@ pub struct Host {
     tidy_undo: Option<(SpaceId, Vec<Item>)>,
     /// The tab hover preview and the thumbnails it shows.
     preview: preview::Preview,
+    /// Probed busy reasons per frame (`host/busy.rs`).
+    busy: busy::BusyFrames,
+    /// The memory pressure source and its gauge, read on the lifecycle tick.
+    pressure: busy::PressureGauge,
+    /// Pictures of hidden tabs (`host/snapshots.rs`).
+    snapshots: snapshots::Snapshots,
+    /// The Task manager page's meter (`host/tasks.rs`).
+    tasks: tasks::TasksPage,
+    /// DevTools: the dock's state and its panel (`host/devtools.rs`).
+    devtools: devtools::Docked,
 }
 
 impl Host {
@@ -439,6 +463,7 @@ impl Host {
             .collect();
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
+        let dock_port = settings.page_features().remote_debugging_port;
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
@@ -531,6 +556,11 @@ impl Host {
             routing_rules: vec![],
             tidy_undo: None,
             preview: preview::Preview::new(),
+            busy: busy::BusyFrames::default(),
+            pressure: busy::PressureGauge::system(),
+            snapshots: snapshots::Snapshots::default(),
+            tasks: tasks::TasksPage::default(),
+            devtools: devtools::Docked::new(dock_port),
         };
         host.replay_settings();
         if host.checks.check_pixels {
@@ -796,6 +826,13 @@ impl Host {
                 }
                 self.pace(PaceEvent::Wake);
             }
+            Call::SetFrozen { tab, frozen } => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.set_frozen(frozen);
+                }
+            }
+            Call::CaptureSnapshot(tab) => self.capture_snapshot(tab),
+            Call::ReleaseSnapshot(tab) => self.snapshots.release(tab),
             // In the window showing the active Space, where what is chosen opens. Later,
             // outside the host: opening the bar calls back into it.
             Call::ShowCommandBar => {
@@ -805,7 +842,6 @@ impl Host {
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
             }
-            Call::Capture(tab) => self.capture_thumbnail(tab),
             Call::Quit => quit(),
             Call::OpenWindow(id) => self.open_window(id),
             Call::CloseWindow(id) => self.close_window(id),
@@ -837,6 +873,7 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
+        self.dock_follows_tab();
         // Another tab's frame (and cursor) must not stay on screen while
         // input already goes to the tabs shown now: blank until they paint.
         let kept = self.framed_tabs();
@@ -850,6 +887,7 @@ impl Host {
                 }
             }
         }
+        self.stand_in_snapshots(&window);
         self.settle_panes(&window);
         // one keyboard focus: the focused window's page
         if self.w.id == self.model.focused() {
@@ -918,18 +956,22 @@ impl Host {
     }
 
     fn tab_view(&mut self, tab: TabId) -> Option<&mut View> {
+        if tab == PANEL_TAB {
+            return self.panel_view();
+        }
         let id = *self.views.get(&tab)?;
         self.engine.view(id)
     }
 
-    /// Tells the model whether the tab is busy: its page is loading, or it
-    /// holds a download the engine runs (which a discard would end).
+    /// Tells the model whether the tab's page is loading and whether it holds
+    /// a download the engine runs (which a discard would end).
     fn report_busy(&mut self, tab: TabId) {
         let loading = self
             .tab_view(tab)
             .is_some_and(|v| matches!(v.nav().phase, Phase::Loading { .. }));
-        let busy = loading || self.downloads.holds(tab);
-        self.dispatch(Command::BusyChanged { tab, busy });
+        let download = self.downloads.holds(tab);
+        self.set_busy(tab, Reason::Loading, loading);
+        self.set_busy(tab, Reason::Download, download);
     }
 
     /// The page of the window the host is in that gets keys: in the focused window, the
@@ -943,6 +985,14 @@ impl Host {
         self.tab_view(self.shown()?)
     }
 
+    /// The view that gets keys: the DevTools panel's after a press in it, else the page's.
+    fn focused_view(&mut self) -> Option<&mut View> {
+        if self.keys_to_panel().is_some() {
+            return self.panel_view();
+        }
+        self.view()
+    }
+
     /// The visible tab's view, else any live tab's: for work that needs a view but none in
     /// particular (a retried download started from an internal page).
     fn any_view(&mut self) -> Option<&mut View> {
@@ -954,6 +1004,9 @@ impl Host {
     }
 
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
+        if self.devtools.view == Some(view) {
+            return Some(PANEL_TAB);
+        }
         self.views
             .iter()
             .find_map(|(&tab, &id)| (id == view).then_some(tab))
@@ -1021,6 +1074,7 @@ impl Host {
                 framed,
                 popup_framed,
                 view_width,
+                panel: self.dock_seen(),
             });
         }
         self.parity_step(crate::parity::Input::Worked);
@@ -1047,6 +1101,15 @@ impl Host {
             self.views.remove(&tab);
             self.view_gone(tab);
             self.dispatch(Command::CloseTab(tab));
+        }
+        // the frontend closed itself
+        if self
+            .devtools
+            .view
+            .is_some_and(|id| !self.engine.has_view(id))
+        {
+            self.devtools.view = None;
+            self.panel_closed();
         }
     }
 
@@ -1199,6 +1262,9 @@ impl Host {
         let Some(tab) = self.tab_of(view) else {
             return;
         };
+        if tab == PANEL_TAB {
+            return self.on_panel_event(event);
+        }
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
@@ -1252,6 +1318,7 @@ impl Host {
             }
             WebEvent::RendererGone => {
                 self.apply_error(tab, ErrorEvent::Crashed);
+                self.busy_view_gone(tab);
                 self.dispatch(Command::RendererGone(tab));
             }
             WebEvent::KeyUnhandled(key) => {
@@ -1535,12 +1602,8 @@ impl Host {
                 }
             }
             Plan::Copy(text) => self.copy(&text),
-            Plan::DevTools => {
-                if let Some(view) = self.model.visible_tab().and_then(|t| self.tab_view(t)) {
-                    view.inspect(None);
-                }
-            }
             Plan::BookmarkPage => self.bookmark_page(),
+            Plan::DevTools => self.toggle_devtools(),
             Plan::OpenBeside => self.open_beside(),
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {
@@ -1664,10 +1727,11 @@ impl Host {
     /// the store has it (a failed write keeps the tab).
     fn archive_tick(&mut self, now: i64) {
         let audible: HashSet<TabId> = self
-            .audio
-            .iter()
-            .filter(|(_, a)| a.audible)
-            .map(|(t, _)| *t)
+            .model
+            .tabs
+            .values()
+            .filter(|t| t.busy.contains(Reason::Audible))
+            .map(|t| t.id)
             .collect();
         for tab in archive::due(&self.model, self.archive_after, now, &audible) {
             let Some(t) = self.model.tabs.get(&tab) else {
@@ -1776,11 +1840,13 @@ impl Host {
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
         self.follow_frame_rate();
+        self.devtools_tick();
+        let pressure = self.read_pressure();
         let wall_ms = now_ms();
         self.dispatch(Command::Tick {
             now,
             wall_ms,
-            pressure: Pressure::None,
+            pressure,
         });
         self.archive_tick(wall_ms);
         self.save = self.save.ticked();
@@ -1818,12 +1884,14 @@ impl Host {
         }
     }
 
-    fn seen(&self) -> Seen {
+    fn seen(&self, heard: &tabs_smoke::Heard) -> Seen {
         let order = self.model.order(self.model.active_space());
-        let shown = self
-            .shown()
+        let visible = self.shown();
+        let shown = visible
             .and_then(|t| self.views.get(&t))
             .is_some_and(|&id| self.engine.is_visible(id));
+        let painted = visible
+            .is_some_and(|t| self.w.frames.contains_key(&t) && !self.snapshots.standing_in(t));
         Seen {
             titles: order
                 .iter()
@@ -1838,6 +1906,19 @@ impl Host {
                 let kept = self.framed_tabs();
                 self.w.frames.keys().any(|t| !kept.contains(t))
             },
+            painted,
+            restored_from_snapshot: visible.is_some_and(|t| heard.replaced.contains(&t)),
+            frozen: order.iter().map(|t| heard.frozen.get(t).copied()).collect(),
+        }
+    }
+
+    /// Chromium answered a freeze or thaw of `tab`'s page.
+    pub(super) fn frozen_answered(&mut self, tab: TabId, frozen: bool, ok: bool) {
+        if !ok {
+            eprintln!("wubble: tab {}: freeze {frozen} refused", tab.0);
+        }
+        if let Some(smoke) = self.checks.tabs_smoke.as_mut() {
+            smoke.heard.frozen.insert(tab, (frozen, ok));
         }
     }
 
@@ -1965,12 +2046,16 @@ impl Host {
     }
 
     fn tabs_smoke_step(&mut self) {
+        let Some(heard) = self.checks.tabs_smoke.as_ref().map(|s| &s.heard) else {
+            return;
+        };
+        let seen = self.seen(heard);
         let Some(state) = self.checks.tabs_smoke.take() else {
             return;
         };
         let want =
             crate::TABS_SMOKE_PAGES.map(|page| nav_smoke::title_of(page).unwrap_or_default());
-        let (state, action) = tabs_smoke::next(state, &self.seen(), &want);
+        let (state, action) = tabs_smoke::next(state, &seen, &want);
         self.checks.tabs_smoke = Some(state);
         let nth =
             |host: &Self, i: usize| host.model.order(host.model.active_space()).get(i).copied();
@@ -1991,6 +2076,20 @@ impl Host {
             Some(tabs_smoke::Action::Close(i)) => {
                 if let Some(tab) = nth(self, i) {
                     self.dispatch(Command::CloseTab(tab));
+                }
+            }
+            Some(tabs_smoke::Action::OpenTimers) => {
+                for _ in 0..2 {
+                    self.dispatch(new_tab(page_url(TIMERS_PAGE), None));
+                }
+                if let Some(tab) = nth(self, 0) {
+                    self.dispatch(Command::ActivateTab(tab));
+                }
+            }
+            // Straight to the engine: a lifecycle tick would freeze the control tab too.
+            Some(tabs_smoke::Action::Freeze(i, frozen)) => {
+                if let Some(view) = nth(self, i).and_then(|tab| self.tab_view(tab)) {
+                    view.set_frozen(frozen);
                 }
             }
             Some(tabs_smoke::Action::Pass) => {
@@ -2165,6 +2264,7 @@ impl Host {
             Some(InternalPage::Downloads) => window.get_downloads().row_count(),
             Some(InternalPage::Passwords) => window.get_logins().row_count(),
             Some(InternalPage::Archive) => window.get_archive_lines().row_count(),
+            Some(InternalPage::Tasks) => window.get_tasks().row_count(),
             Some(InternalPage::Settings) | None => 0,
         };
         let seen = pages_smoke::Seen {
@@ -2183,6 +2283,7 @@ impl Host {
                 InternalPage::Downloads => Action::OpenDownloads,
                 InternalPage::Passwords => Action::OpenPasswords,
                 InternalPage::Archive => Action::OpenArchive,
+                InternalPage::Tasks => Action::OpenTasks,
                 InternalPage::Settings => Action::OpenSettings,
             }),
             // The page's own button callback, as a click sends it: later, outside the host.
@@ -2286,6 +2387,7 @@ impl Host {
                     self.find_event(FindEvent::Query(query.into()));
                 }
                 page_smoke::Action::ZoomIn => self.perform(Action::ZoomIn),
+                page_smoke::Action::ToggleDevTools => self.perform(Action::DevTools),
                 page_smoke::Action::Pass(percent) => {
                     self.page_zoom = Some(percent);
                     quit();
@@ -2368,7 +2470,11 @@ impl Host {
     /// window has focus and the web content is the shell's focused item.
     /// A view that stops being visible loses focus first.
     pub fn sync_focus(&mut self, window: &AppWindow) {
-        let target = self.shown().and_then(|t| self.views.get(&t)).copied();
+        let target = if let Some(panel) = self.keys_to_panel() {
+            Some(panel)
+        } else {
+            self.shown().and_then(|t| self.views.get(&t)).copied()
+        };
         if target != self.focus_view {
             if let Some(view) = self.focus_view.and_then(|id| self.engine.view(id)) {
                 view.focus(false);
@@ -2383,9 +2489,9 @@ impl Host {
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| s.menu.keeps_page_focus());
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
-        let view_open = self.view().is_some();
+        let view_open = self.focused_view().is_some();
         if let Some(focused) = self.input.focus_change(focused, view_open)
-            && let Some(view) = self.view()
+            && let Some(view) = self.focused_view()
         {
             view.focus(focused);
             // Slint enables IME only for its own text fields (and disables
@@ -2676,12 +2782,18 @@ impl Host {
         if pressed && let Some(window) = self.w.window.upgrade() {
             self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
         }
-        if pressed
-            && let Some(tab) = crate::shell::tab_id(pane)
-            && self.shown() != Some(tab)
-            && self.model.window_tabs(self.w.id).contains(&tab)
-        {
-            self.dispatch(Command::ActivateTab(tab));
+        if pressed && let Some(tab) = crate::shell::tab_id(pane) {
+            // keys follow the pane that was pressed: the DevTools panel or a page
+            let panel = tab == PANEL_TAB;
+            if self.devtools.focused != panel && self.shown_tabs().contains(&tab) {
+                self.devtools.focused = panel;
+                if let Some(window) = self.w.window.upgrade() {
+                    self.sync_focus(&window);
+                }
+            }
+            if self.shown() != Some(tab) && self.model.window_tabs(self.w.id).contains(&tab) {
+                self.dispatch(Command::ActivateTab(tab));
+            }
         }
         let sent = if pressed {
             vec![button]
@@ -2803,6 +2915,7 @@ fn new_tab(url: String, opener: Option<TabId>) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wubble_core::sleep::Pressure;
     use wubble_core::space::{ContainerId, SpaceId};
 
     fn one_tab() -> (Model, TabId) {
@@ -2881,10 +2994,22 @@ mod tests {
                     url: "https://a.test/".into(),
                 },
             ),
-            (Life::Freeze, Call::Nothing),
-            (Life::Unfreeze, Call::Nothing),
-            (Life::CaptureSnapshot, Call::Capture(t)),
-            (Life::ReleaseSnapshot, Call::Nothing),
+            (
+                Life::Freeze,
+                Call::SetFrozen {
+                    tab: t,
+                    frozen: true,
+                },
+            ),
+            (
+                Life::Unfreeze,
+                Call::SetFrozen {
+                    tab: t,
+                    frozen: false,
+                },
+            ),
+            (Life::CaptureSnapshot, Call::CaptureSnapshot(t)),
+            (Life::ReleaseSnapshot, Call::ReleaseSnapshot(t)),
         ];
         for (effect, want) in cases {
             let effect = Effect::Lifecycle { tab: t, effect };
@@ -2909,8 +3034,10 @@ mod tests {
                     }
                 }
                 Call::Load { .. }
+                | Call::SetFrozen { .. }
+                | Call::CaptureSnapshot(_)
+                | Call::ReleaseSnapshot(_)
                 | Call::ShowCommandBar
-                | Call::Capture(_)
                 | Call::OpenWindow(_)
                 | Call::CloseWindow(_)
                 | Call::FocusWindow(_)

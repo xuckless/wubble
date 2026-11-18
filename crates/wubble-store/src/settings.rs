@@ -106,6 +106,15 @@ impl Codec for ArchiveAfter {
 }
 
 /// A JSON array of strings; entries are opaque to the store.
+impl Codec for defs::BackForwardCache {
+    fn encode(&self) -> String {
+        self.word().into()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        Self::from_word(s)
+    }
+}
+
 impl Codec for Vec<String> {
     fn encode(&self) -> String {
         serde_json::to_string(self).expect("a string list always serialises")
@@ -183,6 +192,14 @@ settings! {
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
     /// Read before the window exists: off, the shell runs Slint-only glass.
     GlassScene: bool = defs::GLASS_SCENE;
+    /// The memory and process rows: CEF start switches, read before the engine starts.
+    MemoryBackForwardCache: defs::BackForwardCache = defs::MEMORY_BACK_FORWARD_CACHE;
+    MemoryMaxDecodedImageMb: u32 = defs::MEMORY_MAX_DECODED_IMAGE_MB;
+    ProcessSiteIsolation: bool = defs::PROCESS_SITE_ISOLATION;
+    ProcessRendererLimit: u32 = defs::PROCESS_RENDERER_LIMIT;
+    ProcessSpareRenderer: bool = defs::PROCESS_SPARE_RENDERER;
+    /// A CEF start switch: read before the engine starts.
+    DevtoolsRemotePort: u32 = defs::DEVTOOLS_REMOTE_PORT;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
 }

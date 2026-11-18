@@ -18,9 +18,10 @@
 //! Placement is stored once, in the `Space` lists; `tabs` holds data only, so a tab
 //! cannot be in two places. What types cannot express is checked by [`Model::check`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Instant;
 
+use crate::busy::{Busy, Reason};
 use crate::lifecycle::{self, Activity, Keep, Lifecycle, Pin};
 use crate::pages::InternalPage;
 use crate::routing::host_in;
@@ -93,12 +94,6 @@ pub enum Command {
     /// Closes every other tab of the tab's Space except the pinned ones (Chromium
     /// `CloseOtherTabs`), and shows it.
     CloseOthers(TabId),
-    /// Keep the tab awake while hidden: never frozen or discarded. A frozen tab wakes at
-    /// once; a discarded one reloads when shown.
-    SetNeverSleep {
-        tab: TabId,
-        on: bool,
-    },
     NewSpace {
         name: String,
         tint: Rgb,
@@ -148,13 +143,16 @@ pub enum Command {
         tab: TabId,
         title: String,
     },
-    /// Whether the tab is busy: its page is loading or it holds a running
-    /// download (the host decides). A busy tab is not frozen or discarded
-    /// until that ends.
-    BusyChanged {
+    /// One reason the tab is busy started (`on`) or ended. A tab with any reason is not
+    /// frozen or discarded until the last one ends (`busy::Busy`).
+    Busy {
         tab: TabId,
-        busy: bool,
+        reason: Reason,
+        on: bool,
     },
+    /// Discard a hidden tab now (Task manager). Refused for a visible or busy tab, and for a
+    /// pinned one the policy keeps alive.
+    DiscardNow(TabId),
     /// The tab's renderer process died.
     RendererGone(TabId),
     /// Put `tab` (of the active Space) beside the focused page: opens a split of the two, or
@@ -310,8 +308,6 @@ pub struct Model {
     policy: SleepPolicy,
     /// Sites whose tabs never sleep (the `sleep.never_sites` row).
     never_sites: Vec<String>,
-    /// Tabs the user asked never to sleep (the tab row menu); not stored.
-    never_tabs: BTreeSet<TabId>,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
@@ -350,7 +346,6 @@ impl Model {
             wall_ms: 0,
             policy: SleepPolicy::default(),
             never_sites: vec![],
-            never_tabs: BTreeSet::new(),
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
@@ -367,12 +362,6 @@ impl Model {
     /// The sites whose tabs never sleep.
     pub fn never_sites(&self) -> &[String] {
         &self.never_sites
-    }
-
-    /// Whether the user asked `tab` itself never to sleep (its Space or site may keep it
-    /// awake as well: [`Lifecycle::keep`] is the outcome).
-    pub fn is_never_sleep(&self, tab: TabId) -> bool {
-        self.never_tabs.contains(&tab)
     }
 
     /// The model's clock: the time it was started with or last ticked to.
@@ -415,7 +404,6 @@ impl Model {
             wall_ms: 0,
             policy: SleepPolicy::default(),
             never_sites: vec![],
-            never_tabs: BTreeSet::new(),
         };
         m.check()?;
         Ok(m)
@@ -768,7 +756,6 @@ impl Model {
     fn forget(&mut self, gone: &[TabId]) {
         for t in gone {
             self.tabs.remove(t);
-            self.never_tabs.remove(t);
         }
         for t in self.tabs.values_mut() {
             if t.opener.is_some_and(|o| gone.contains(&o)) {
@@ -834,6 +821,7 @@ impl Model {
             container: eff,
             opener,
             last_active_ms: 0,
+            busy: Busy::NONE,
         };
         self.tabs.insert(id, tab);
         // New tabs follow their opener, otherwise go last; pinned openers do not count.
@@ -1103,6 +1091,7 @@ impl Model {
                     pin: old.lifecycle.pin,
                     ..Lifecycle::new()
                 },
+                busy: Busy::NONE,
                 ..old.clone()
             },
         );
@@ -1272,6 +1261,49 @@ impl Model {
         vec![]
     }
 
+    /// Adds or removes one busy reason; the lifecycle hears only when the tab turns busy or idle.
+    fn set_busy(&mut self, tab: TabId, reason: Reason, on: bool) -> Vec<Effect> {
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return vec![];
+        };
+        t.busy = t.busy.with(reason, on);
+        let activity = if t.busy.is_empty() {
+            Activity::Idle
+        } else {
+            Activity::Busy
+        };
+        if activity == t.lifecycle.activity {
+            return vec![];
+        }
+        self.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
+    }
+
+    /// A hidden, idle tab judged as if memory were critical: the policy discards it unless it is
+    /// pinned and kept alive, which is refused here rather than frozen.
+    fn discard_now(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some(l) = self.tabs.get(&tab).map(|t| t.lifecycle) else {
+            return vec![];
+        };
+        let target = self.policy.target(
+            std::time::Duration::ZERO,
+            l.pin,
+            l.activity,
+            l.keep,
+            Pressure::Critical,
+        );
+        if target != Liveness::Discarded {
+            return vec![];
+        }
+        let now = self.clock;
+        self.lifecycle(
+            tab,
+            lifecycle::Event::Tick {
+                now,
+                pressure: Pressure::Critical,
+            },
+        )
+    }
+
     /// Runs `event` through the tab's lifecycle and returns its effects.
     fn lifecycle(&mut self, tab: TabId, event: lifecycle::Event) -> Vec<Effect> {
         let Some(t) = self.tabs.get_mut(&tab) else {
@@ -1320,7 +1352,6 @@ impl Model {
             let space_on = self.spaces[si].never_sleep;
             for t in self.order_idx(si) {
                 let on = space_on
-                    || self.never_tabs.contains(&t)
                     || (!self.never_sites.is_empty()
                         && host_in(&self.never_sites, &self.tabs[&t].url));
                 want.push((t, if on { Keep::Awake } else { Keep::Normal }));
@@ -1557,14 +1588,6 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
         Command::DuplicateTab(t) => m.duplicate_tab(t),
         Command::CloseOthers(t) => m.close_others(t),
-        Command::SetNeverSleep { tab, on } => {
-            if on && m.tabs.contains_key(&tab) {
-                m.never_tabs.insert(tab);
-            } else {
-                m.never_tabs.remove(&tab);
-            }
-            vec![]
-        }
         Command::NewSpace {
             name,
             tint,
@@ -1620,10 +1643,8 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
-        Command::BusyChanged { tab, busy } => {
-            let activity = if busy { Activity::Busy } else { Activity::Idle };
-            m.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
-        }
+        Command::Busy { tab, reason, on } => m.set_busy(tab, reason, on),
+        Command::DiscardNow(tab) => m.discard_now(tab),
         Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),
         Command::SplitWith(t) => m.split_with(t),
         Command::OpenBeside { url } => m.open_beside(url),
@@ -1680,7 +1701,10 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
                     }
                 }
             }
-            let ids: Vec<TabId> = m.tabs.keys().copied().collect();
+            // Oldest hidden first, so a critical sweep discards in that order (Firefox
+            // `TabUnloader.sys.mjs` sorts by last access).
+            let mut ids: Vec<TabId> = m.tabs.keys().copied().collect();
+            ids.sort_by_key(|t| (m.tabs[t].lifecycle.hidden_since, *t));
             ids.into_iter()
                 .flat_map(|t| m.lifecycle(t, lifecycle::Event::Tick { now, pressure }))
                 .collect()

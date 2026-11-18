@@ -1,4 +1,5 @@
-// The native pages beside settings (wubble://history, bookmarks, downloads, passwords): each a
+// The native pages beside settings (wubble://history, bookmarks, downloads, passwords, tasks):
+// each a
 // function of the model its host fills (wubble_core::pages view-models), on the shared PageFrame.
 // Every change is an intent through a callback; the host acts and redraws. The design repo has
 // nothing for these pages (no list row, sheet or tree), so they are written from scratch from
@@ -7,7 +8,7 @@
 import { Palette, Spacing, Fonts, Type, Radius, Chrome } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { PressableButton } from "../components.slint";
-import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState } from "model.slint";
+import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
 import { PageFrame, Field, TextButton, SectionHeader, Card } from "settings.slint";
@@ -492,6 +493,100 @@ export component PasswordsPage inherits Rectangle {
             secret: true;
             escaped => {
                 root.close-sheet();
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────── task manager
+
+// A row's small grey column (state, memory, CPU).
+component TaskCell inherits Text {
+    color: Palette.haze;
+    font-family: Fonts.mono;
+    font-size: Type.label.size;
+    vertical-alignment: center;
+    horizontal-alignment: right;
+    overflow: elide;
+}
+
+// wubble://tasks: tabs and processes with memory, CPU, state and why a tab stays awake. Written
+// from scratch (the design repo has no task manager) from the downloads page's parts.
+export component TasksPage inherits PageFrame {
+    in property <[TaskItem]> items;
+    in property <string> total;
+    callback action(int, int, TaskAction);
+
+    title: "Task manager";
+    searchable: false;
+
+    HorizontalLayout {
+        padding-top: Spacing.s4;
+        padding-bottom: Spacing.s2;
+        Text {
+            horizontal-stretch: 1;
+            text: root.total;
+            color: Palette.haze;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+        }
+    }
+    for item in root.items: Rectangle {
+        height: Shell.page-row;
+        border-radius: Radius.sm;
+        background: ta.has-hover ? Shell.icon-button-hover : transparent;
+        ta := TouchArea { }
+        HorizontalLayout {
+            spacing: Spacing.s3;
+            padding-left: Spacing.s2;
+            padding-right: Spacing.s2;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text {
+                    text: item.title;
+                    color: Palette.ink;
+                    font-family: Fonts.ui;
+                    font-size: Type.body.size;
+                    overflow: elide;
+                }
+                if item.busy != "": Text {
+                    text: item.busy;
+                    color: Palette.haze;
+                    font-family: Fonts.ui;
+                    font-size: Type.label.size;
+                    overflow: elide;
+                }
+            }
+            TaskCell {
+                width: Shell.task-state;
+                text: item.state;
+            }
+            TaskCell {
+                width: Shell.task-memory;
+                text: item.memory;
+            }
+            TaskCell {
+                width: Shell.task-cpu;
+                text: item.cpu;
+            }
+            if item.tab >= 0: TextButton {
+                text: item.never-sleep ? "Allow sleep" : "Never sleep";
+                clicked => {
+                    root.action(item.tab, item.pid, TaskAction.never-sleep);
+                }
+            }
+            if item.can-discard: TextButton {
+                text: "Discard";
+                clicked => {
+                    root.action(item.tab, item.pid, TaskAction.discard);
+                }
+            }
+            if item.can-end: TextButton {
+                text: "End";
+                clicked => {
+                    root.action(item.tab, item.pid, TaskAction.end);
+                }
             }
         }
     }

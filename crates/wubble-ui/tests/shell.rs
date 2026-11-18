@@ -586,6 +586,7 @@ fn pane(id: i32, x0: f32, x1: f32) -> SplitPane {
         x0,
         x1,
         focused: id == 1,
+        closable: true,
         ..Default::default()
     }
 }

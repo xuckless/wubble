@@ -35,10 +35,12 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    ArchiveAfterSetting, BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality,
-    GlassScene, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll,
-    OverlayScrollbars, PasswordsAutofill, PasswordsOfferToSave, RoutingRules, SearchEngineChoice,
-    Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    ArchiveAfterSetting, BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate,
+    DevtoolsRemotePort, GlassQuality, GlassScene, HistoryRetentionDays, KeybindingOverrides,
+    LiveSuggestions, MemoryBackForwardCache, MemoryMaxDecodedImageMb, MiddleClickAutoscroll,
+    OverlayScrollbars, PasswordsAutofill, PasswordsOfferToSave, ProcessRendererLimit,
+    ProcessSiteIsolation, ProcessSpareRenderer, RoutingRules, SearchEngineChoice, Setting,
+    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
     SleepKeepPinned, SleepNeverSites, ZoomDefault, text_of,
 };
 

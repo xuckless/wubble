@@ -236,6 +236,8 @@ pub struct View {
     fullscreen: Fullscreen,
     muted: bool,
     audio: AudioProbe,
+    /// Freeze requests awaiting their CDP reply.
+    cdp: crate::cdp::Pending,
     zoom: Zoom,
     drag: DragSource,
     /// Asked for a page script on each main-frame commit.
@@ -304,6 +306,7 @@ impl View {
             fullscreen: Fullscreen::default(),
             muted: false,
             audio: AudioProbe::default(),
+            cdp: Default::default(),
             zoom: Zoom::default(),
             drag: DragSource::default(),
             favicons: Default::default(),
@@ -369,6 +372,12 @@ impl View {
     /// `WindowInfo` on a windowless browser may need a parent there): elsewhere
     /// it logs and does nothing.
     pub fn open_devtools(&mut self) {
+        self.open_devtools_at(None);
+    }
+
+    /// [`Self::open_devtools`], revealing the element under `at` (CSS pixels of the page) in
+    /// the Elements panel (`ShowDevTools`'s `inspect_element_at`).
+    pub fn open_devtools_at(&mut self, at: Option<(i32, i32)>) {
         if !cfg!(target_os = "linux") {
             eprintln!("wubble-engine: DevTools is not verified on this platform yet");
             return;
@@ -378,13 +387,46 @@ impl View {
                 Some(&cef::WindowInfo::default()),
                 None,
                 Some(&cef::BrowserSettings::default()),
-                None,
+                at.map(|(x, y)| cef::Point { x, y }).as_ref(),
             )
         });
     }
 
     pub fn close_devtools(&mut self) {
         self.send(|host| host.close_dev_tools());
+    }
+
+    /// Freezes the page (no JS, no timers) or thaws it, through CDP `Page.setWebLifecycleState`
+    /// (`cdp.rs`). [`PageEvent::Frozen`] follows with Chromium's answer. Freezing also hides
+    /// the page; thawing does not show it ([`Self::set_visible`] does).
+    pub fn set_frozen(&mut self, frozen: bool) {
+        if !self.is_open() {
+            return;
+        }
+        let (id, message) = self.cdp.request(frozen);
+        if let Err(e) = self.producer.send_devtools_message(&message) {
+            eprintln!(
+                "wubble-engine: view {}: freeze {frozen}: {e}",
+                self.browser_id
+            );
+            self.cdp.cancel(id);
+            self.page.push(PageEvent::Frozen { frozen, ok: false });
+        }
+    }
+
+    /// Asks the page for its CDP target id (`Target.getTargetInfo`); [`PageEvent::TargetId`]
+    /// follows. The docked DevTools frontend names its page by it.
+    pub fn request_target_id(&mut self) {
+        if !self.is_open() {
+            self.page.push(PageEvent::TargetId(Err(())));
+            return;
+        }
+        let (id, message) = self.cdp.request_target_id();
+        if let Err(e) = self.producer.send_devtools_message(&message) {
+            eprintln!("wubble-engine: view {}: target id: {e}", self.browser_id);
+            self.cdp.cancel(id);
+            self.page.push(PageEvent::TargetId(Err(())));
+        }
     }
 
     pub fn has_devtools(&mut self) -> bool {
@@ -606,9 +648,16 @@ impl View {
                     frame_id,
                     frame_url,
                     is_main,
+                    pid,
                     text,
                 } => {
-                    if let Some(event) = frame_message(frame_id, frame_url, is_main, text) {
+                    let frame = crate::page::FrameInfo {
+                        id: frame_id,
+                        url: frame_url,
+                        is_main,
+                        pid,
+                    };
+                    if let Some(event) = frame_message(frame, text) {
                         self.emit_page(event, mode);
                     }
                 }
@@ -621,6 +670,11 @@ impl View {
                 }
                 _ => {}
             }
+        }
+        while !self.cdp.is_empty()
+            && let Some(message) = self.producer.poll_devtools_message()
+        {
+            self.page.extend(self.cdp.reply(&message));
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
             self.apply_nav(NavInput::Cursor(shape.into()));
@@ -686,7 +740,10 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
-            Route::PageCommitted(url) => self.inject_page_script(&url),
+            Route::PageCommitted(url) => {
+                self.inject_page_script(&url);
+                self.page.push(PageEvent::Committed);
+            }
         }
     }
 
@@ -1047,19 +1104,6 @@ impl View {
         self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{id}\n{text}"));
     }
 
-    /// Opens DevTools in a window of CEF's own; with `at` (physical px,
-    /// view-relative), inspecting the element there as Chromium's "Inspect" does.
-    pub fn inspect(&mut self, at: Option<(i32, i32)>) {
-        let scale = self.producer.scale_factor().max(f32::EPSILON);
-        let at = at.map(|(x, y)| cef::Point {
-            x: (x as f32 / scale).round() as i32,
-            y: (y as f32 / scale).round() as i32,
-        });
-        let window = cef::WindowInfo::default();
-        let settings = cef::BrowserSettings::default();
-        self.send(|host| host.show_dev_tools(Some(&window), None, Some(&settings), at.as_ref()));
-    }
-
     /// Runs `script` in the page's main frame; nothing comes back but what the
     /// page itself does (its title, say). For smokes.
     pub fn run_script(&mut self, script: &str) {
@@ -1318,24 +1362,19 @@ enum Route {
 /// welding's frame message as the host's event, by its channel: the frame as
 /// CEF named it. `None` for a message on no channel or a clipboard request
 /// that is not one.
-fn frame_message(
-    frame_id: String,
-    frame_url: String,
-    is_main: bool,
-    text: String,
-) -> Option<PageEvent> {
+fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEvent> {
     let (channel, body) = FrameChannel::split(&text)?;
     Some(match channel {
         FrameChannel::Autofill => PageEvent::FrameMessage {
-            frame: crate::page::FrameInfo {
-                id: frame_id,
-                url: frame_url,
-                is_main,
-            },
+            frame,
             text: wubble_core::secret::Secret::from(body.to_owned()),
         },
+        FrameChannel::Probes => PageEvent::Probe {
+            frame,
+            report: body.to_owned(),
+        },
         FrameChannel::Clipboard => PageEvent::Clipboard {
-            frame: frame_id,
+            frame: frame.id,
             request: clipboard_request(body)?,
         },
         FrameChannel::Zoom => PageEvent::WheelZoom {
@@ -1665,6 +1704,8 @@ fn new_producer(
             handle_auth_challenges: true,
             ask_download_path: true,
             request_filter,
+            // CDP for `View::set_frozen`; nothing subscribes to events, so the channel stays quiet.
+            devtools_protocol: true,
             ..welding::CefSurfaceConfig::default()
         },
     };
@@ -1981,34 +2022,35 @@ mod tests {
 
     #[test]
     fn a_frame_message_carries_cefs_frame() {
-        let event = frame_message(
-            "7-3".into(),
-            "https://a.test/f".into(),
-            false,
-            "autofill\n{}".into(),
-        )
-        .unwrap();
+        let info = crate::page::FrameInfo {
+            id: "7-3".into(),
+            url: "https://a.test/f".into(),
+            is_main: false,
+            pid: 4242,
+        };
+        let event = frame_message(info.clone(), "autofill\n{}".into()).unwrap();
         let PageEvent::FrameMessage { frame, text } = &event else {
             panic!("{event:?}");
         };
-        assert_eq!(
-            frame,
-            &crate::page::FrameInfo {
-                id: "7-3".into(),
-                url: "https://a.test/f".into(),
-                is_main: false,
-            }
-        );
+        assert_eq!(frame, &info);
         assert_eq!(text.expose(), "{}");
         assert!(event.request().is_none());
         // The text never shows in diagnostics.
-        let secret = frame_message("1".into(), "u".into(), true, "autofill\npw-value".into());
+        let secret = frame_message(info, "autofill\npw-value".into());
         assert!(!format!("{secret:?}").contains("pw-value"));
     }
 
     #[test]
     fn clipboard_messages_become_clipboard_requests() {
-        let at = |text: &str| frame_message("7".into(), "u".into(), true, text.into());
+        let at = |text: &str| {
+            let frame = crate::page::FrameInfo {
+                id: "7".into(),
+                url: "u".into(),
+                is_main: true,
+                pid: 0,
+            };
+            frame_message(frame, text.into())
+        };
         let request = |text: &str| match at(text) {
             Some(PageEvent::Clipboard { frame, request }) => {
                 assert_eq!(frame, "7");
@@ -2054,6 +2096,7 @@ mod tests {
             FrameChannel::Autofill,
             FrameChannel::Clipboard,
             FrameChannel::Zoom,
+            FrameChannel::Probes,
         ] {
             assert_eq!(
                 FrameChannel::split(&channel.join("x\ny")),

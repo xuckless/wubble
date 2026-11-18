@@ -994,6 +994,17 @@ mod tests {
     }
 
     #[test]
+    fn inspect_carries_the_pointer_and_view_source_is_for_the_bare_page() {
+        let e = entries(&page(), NavFlags::default());
+        let inspect = e.iter().find(|e| e.label == "Inspect").unwrap();
+        assert_eq!(inspect.command, Command::Inspect { x: 10, y: 20 });
+        let source = e.iter().find(|e| e.label == "View Page Source").unwrap();
+        assert_eq!(source.command, Command::Perform(Action::ViewSource));
+        let e = entries(&link(), NavFlags::default());
+        assert!(e.iter().all(|e| e.label != "View Page Source"));
+    }
+
+    #[test]
     fn a_link_offers_new_tab_and_copy() {
         let e = entries(&link(), NavFlags::default());
         assert_eq!(

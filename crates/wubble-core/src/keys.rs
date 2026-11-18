@@ -353,6 +353,9 @@ pub const DEFAULTS: &[Binding] = rows![
     "Cmd+Alt+B", MAC, Action::OpenBookmarks, Shell;
     "Ctrl+J", LW, Action::OpenDownloads, Shell;
     "Cmd+Shift+J", MAC, Action::OpenDownloads, Shell;
+    // Chromium's Task manager chord on Linux and Windows; Chromium binds none on macOS, where
+    // Shift+Esc is free, so the same chord serves
+    "Shift+Escape", ALL, Action::OpenTasks, Shell;
     "Mod+D", ALL, Action::BookmarkPage, Shell;
     "Ctrl+Q", LINUX, Action::Quit, Shell;
     "Ctrl+Shift+Q", WIN, Action::Quit, Shell;

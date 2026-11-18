@@ -284,6 +284,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             container: container_of(t.container),
             opener: None,
             last_active_ms: 0,
+            busy: Default::default(),
         });
         match (pinned, folder) {
             (true, _) => space.pinned.push(id),
