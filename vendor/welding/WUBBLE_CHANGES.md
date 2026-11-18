@@ -1,7 +1,7 @@
 # wubble changes to welding
 
 Vendored from crates.io `welding` 0.15.0 (repository merely-made/wgpu-weld),
-MPL-2.0. Copied unmodified: `build.rs`, `Cargo.toml` (the registry's
+MPL-2.0, retargeted to `cef` 156.6 (change 7). Copied unmodified: `build.rs`, `Cargo.toml` (the registry's
 normalised manifest), `README.md`, `src/`. Added: `LICENSE` (the MPL-2.0 text;
 the published crate ships none), `rustfmt.toml` and this file. Every modified
 file keeps its MPL-2.0 header and stays under MPL-2.0 (section 3.3).
@@ -51,6 +51,17 @@ Every change is marked `wubble change` in the source.
    `WeldDisplayHandler::on_favicon_urlchange` on Linux, macOS and Windows
    (`*/cef_backed.rs`). welding had no source for either: `can_go_back` /
    `can_go_forward` were only queryable, favicons not reported at all.
+7. **`cef` 154.5.0 -> 156.6.0** (CEF 156.0.30, Chromium 156.0.8078.96).
+   `Cargo.toml` `[dependencies.cef]` version only. CEF 156.0.30 is the first
+   build whose shared-texture OSR hands over real, tiled dmabufs on NVIDIA
+   and sends each frame only after its GPU work completes (CEF #4237,
+   #4313). No source change: the 154.5 -> 156.6 binding diff is additive for
+   welding (no `Impl*` trait signature changed; `Settings` and
+   `BrowserSettings` are built with `..Default::default()`), and the import
+   path already passes CEF's DRM modifier through. Upstream has no release
+   for CEF 156 (2026-11-18: crates.io `welding` max 0.15.0 with `cef ^154.5`;
+   wgpu-weld `main` at 9edccc08 still pins `cef` 154.5.0), so there was
+   nothing to take.
 6. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`frame_timing_defaults_match_upstream`; `BrowserClosed`,
    `LoadingStateChanged` and `FaviconUrlsChanged` added to

@@ -38,8 +38,8 @@ wgpu = "30"
 # Forked: welding 0.15.0 (MPL-2.0) vendored with wubble's changes, see
 # vendor/welding/WUBBLE_CHANGES.md. Its slint/wgpu/cef pins still apply.
 welding = { path = "vendor/welding", features = ["cef-runtime"] }
-# Pinned by welding 0.15 (cef ^154.5); only one cef-dll-sys may be linked. Bump together.
-cef = "154.5"
+# Pinned with the vendored welding fork (cef 156.6, its change 7); only one cef-dll-sys may be linked. Bump together.
+cef = "156.6"
 # welding's size type (`PhysicalSize`); not re-exported by welding. Same version welding and winit use.
 dpi = "0.1.2"
 serde_json = "1"

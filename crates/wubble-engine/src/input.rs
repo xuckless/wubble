@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, PhysicalKey};
 
-/// `cef_event_flags_t` (cef-dll-sys 154).
+/// `cef_event_flags_t` (cef-dll-sys 156).
 mod flag {
     pub const SHIFT: u32 = 1 << 1;
     pub const CONTROL: u32 = 1 << 2;

@@ -121,12 +121,11 @@ struct Linux;
 
 #[cfg(target_os = "linux")]
 impl Platform for Linux {
-    /// Skia on Vulkan in the GPU process. Without it, on NVIDIA's proprietary
-    /// driver (615, Wayland and X11 alike) Chromium's GL path cannot draw into
-    /// the dmabuf shared images that windowless shared-texture mode exports
-    /// ("Unable to initialize SkSurface" / "OzoneImageBacking::ProduceSkiaGanesh
-    /// failed to create GL representation") and no accelerated paint arrives.
-    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("enable-features", Some("Vulkan"))];
+    /// No entries: CEF 156.0.30's defaults hand over real, tiled dmabufs on
+    /// NVIDIA's proprietary driver (CEF #4237, #4313). `enable-features=Vulkan`,
+    /// which CEF 154 needed there, makes every 156 frame empty, so it is gone.
+    /// Each entry added here gets a comment saying which bug it works around.
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
 
     /// `$XDG_DATA_HOME/wubble/cef`, else `$HOME/.local/share/wubble/cef`.
     /// Relative values are ignored, as the XDG Base Directory spec requires.
@@ -462,12 +461,9 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_enables_vulkan_for_shared_textures() {
+    fn linux_adds_no_chromium_switches() {
         let cef = cef_config(&config("/opt/wubble", "/c"));
-        assert_eq!(
-            cef.command_line_switches,
-            vec![("enable-features".to_string(), Some("Vulkan".to_string()))]
-        );
+        assert!(cef.command_line_switches.is_empty());
     }
 
     #[cfg(target_os = "linux")]
