@@ -70,7 +70,7 @@ pub fn should_save(s: SaveState) -> bool {
 pub fn changes_session(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Tick { .. } | Command::LoadingChanged { .. } | Command::OpenCommandBar
+        Command::Tick { .. } | Command::BusyChanged { .. } | Command::OpenCommandBar
     )
 }
 
@@ -551,10 +551,7 @@ mod tests {
                 now: Instant::now(),
                 pressure: Pressure::None,
             },
-            Command::LoadingChanged {
-                tab: t,
-                loading: true,
-            },
+            Command::BusyChanged { tab: t, busy: true },
             Command::OpenCommandBar,
         ];
         for c in &quiet {

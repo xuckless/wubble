@@ -1,6 +1,8 @@
-//! The error panel over a tab's page: a failed load, a refused certificate,
+//! The error panel over a tab's page: a failed load, a certificate error,
 //! a crashed renderer. One enum with a pure transition; the host executes
-//! the effects (reload, back, proceed).
+//! the effects (reload, back, the certificate answer). A certificate panel
+//! holds the engine's request open: Proceed answers it (the same request,
+//! so a POST keeps its body), every other way out refuses it, exactly once.
 //!
 //! Drawn as a Slint panel over the page rather than a bundled HTML error
 //! page (TODO.md Decided): welding has no custom scheme or load-HTML call,
@@ -13,6 +15,7 @@
 //! behaviour and wording only.
 
 use wubble_core::neterror;
+use wubble_engine::page::RequestId;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PageError {
@@ -22,10 +25,11 @@ pub enum PageError {
         url: String,
         code: i32,
     },
-    /// The engine was told to refuse the certificate; the user may proceed.
+    /// The engine waits on `request` for the user's choice.
     Cert {
         url: String,
         code: i32,
+        request: RequestId,
     },
     Crashed,
 }
@@ -36,18 +40,20 @@ pub enum ErrorEvent {
         url: String,
         code: i32,
     },
-    /// A certificate error the host refused (not in the session's
-    /// exceptions).
-    CertRefused {
+    /// A certificate error not in the session's exceptions; the engine
+    /// waits on `request`.
+    CertError {
         url: String,
         code: i32,
+        request: RequestId,
     },
     /// The renderer process ended.
     Crashed,
     /// The tab committed `url`.
     Committed(String),
-    /// The tab started loading (a reload, a new navigation, the engine's
-    /// own reload after a crash).
+    /// The tab went from not loading to loading: a reload or a new
+    /// navigation (the engine does not reload a crashed page by itself for
+    /// this host, so a crash panel stays until the user acts).
     LoadStarted,
     // The panel's buttons.
     Reload,
@@ -64,29 +70,59 @@ pub enum ErrorEffect {
     Back,
     /// Nowhere to go back to: leave for an empty page.
     Blank,
-    /// Add (host, code) to the session's exceptions, then load `url` again.
-    AllowAndLoad {
+    /// Add (host, code) to the session's exceptions.
+    Allow {
         host: String,
         code: i32,
-        url: String,
+    },
+    /// The engine's held certificate request, answered.
+    AnswerCert {
+        request: RequestId,
+        proceed: bool,
     },
 }
 
 pub fn transition(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
+    // A held request leaving the panel any way but Proceed is refused; a
+    // gone view's requests were answered by welding.
+    let held = match (&state, &event) {
+        (PageError::Cert { request, .. }, e) if *e != ErrorEvent::ViewGone => Some(*request),
+        _ => None,
+    };
+    let (next, mut effects) = step(state, event);
+    if let Some(request) = held {
+        let kept = matches!(&next, PageError::Cert { request: r, .. } if *r == request);
+        let answered = effects
+            .iter()
+            .any(|e| matches!(e, ErrorEffect::AnswerCert { request: r, .. } if *r == request));
+        if !kept && !answered {
+            effects.insert(
+                0,
+                ErrorEffect::AnswerCert {
+                    request,
+                    proceed: false,
+                },
+            );
+        }
+    }
+    (next, effects)
+}
+
+fn step(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorEffect>) {
     use ErrorEvent as E;
     use PageError as S;
     let open = state != S::None;
     match (state, event) {
         // A refused certificate fails its load too: the panel already says why.
         (
-            S::Cert { url, code },
+            s @ S::Cert { .. },
             E::LoadFailed {
                 url: failed,
                 code: c,
             },
-        ) if failed == url && neterror::is_cert(c) => (S::Cert { url, code }, vec![]),
+        ) if s.url() == Some(&failed) && neterror::is_cert(c) => (s, vec![]),
         (_, E::LoadFailed { url, code }) => (S::Load { url, code }, vec![]),
-        (_, E::CertRefused { url, code }) => (S::Cert { url, code }, vec![]),
+        (_, E::CertError { url, code, request }) => (S::Cert { url, code, request }, vec![]),
         (_, E::Crashed) => (S::Crashed, vec![]),
         // Chromium commits the error document at the failed URL; anything
         // else committing means the page moved on.
@@ -105,10 +141,19 @@ pub fn transition(state: PageError, event: ErrorEvent) -> (PageError, Vec<ErrorE
                 ErrorEffect::Blank
             }],
         ),
-        (S::Cert { url, code }, E::Proceed) if neterror::overridable(code) => {
+        (S::Cert { url, code, request }, E::Proceed) if neterror::overridable(code) => {
             match wubble_core::zoom::host_of(&url) {
-                Some(host) => (S::None, vec![ErrorEffect::AllowAndLoad { host, code, url }]),
-                None => (S::Cert { url, code }, vec![]),
+                Some(host) => (
+                    S::None,
+                    vec![
+                        ErrorEffect::Allow { host, code },
+                        ErrorEffect::AnswerCert {
+                            request,
+                            proceed: true,
+                        },
+                    ],
+                ),
+                None => (S::Cert { url, code, request }, vec![]),
             }
         }
         (_, E::ViewGone) => (S::None, vec![]),
@@ -156,7 +201,7 @@ pub fn error_text(error: &PageError) -> Option<ErrorText> {
                 cert: false,
             }
         }
-        PageError::Cert { url, code } => {
+        PageError::Cert { url, code, .. } => {
             let (title, summary) = neterror::describe(*code, &host(url));
             ErrorText {
                 title: title.into(),
@@ -188,16 +233,25 @@ mod tests {
     use ErrorEvent as E;
 
     const URL: &str = "https://a.test/x";
+    const REQ: RequestId = RequestId(9);
 
     fn cert(code: i32) -> PageError {
         transition(
             PageError::None,
-            E::CertRefused {
+            E::CertError {
                 url: URL.into(),
                 code,
+                request: REQ,
             },
         )
         .0
+    }
+
+    fn refuse() -> ErrorEffect {
+        ErrorEffect::AnswerCert {
+            request: REQ,
+            proceed: false,
+        }
     }
 
     #[test]
@@ -207,7 +261,8 @@ mod tests {
             s,
             PageError::Cert {
                 url: URL.into(),
-                code: -202
+                code: -202,
+                request: REQ,
             }
         );
         let later = E::LoadFailed {
@@ -220,16 +275,21 @@ mod tests {
     }
 
     #[test]
-    fn proceed_allows_and_loads_again() {
+    fn proceed_allows_and_answers_the_held_request() {
         assert_eq!(
             transition(cert(-202), E::Proceed),
             (
                 PageError::None,
-                vec![ErrorEffect::AllowAndLoad {
-                    host: "a.test".into(),
-                    code: -202,
-                    url: URL.into()
-                }]
+                vec![
+                    ErrorEffect::Allow {
+                        host: "a.test".into(),
+                        code: -202,
+                    },
+                    ErrorEffect::AnswerCert {
+                        request: REQ,
+                        proceed: true
+                    }
+                ]
             )
         );
         // Revoked: no way through.
@@ -251,14 +311,50 @@ mod tests {
     fn go_back_or_leave() {
         assert_eq!(
             transition(cert(-202), E::GoBack { can_go_back: true }),
-            (PageError::None, vec![ErrorEffect::Back])
+            (PageError::None, vec![refuse(), ErrorEffect::Back])
         );
         assert_eq!(
             transition(cert(-202), E::GoBack { can_go_back: false }),
-            (PageError::None, vec![ErrorEffect::Blank])
+            (PageError::None, vec![refuse(), ErrorEffect::Blank])
         );
         assert_eq!(
             transition(PageError::None, E::GoBack { can_go_back: true }),
+            (PageError::None, vec![])
+        );
+    }
+
+    #[test]
+    fn every_other_way_out_refuses_the_held_request_once() {
+        let other = E::CertError {
+            url: "https://b.test/".into(),
+            code: -202,
+            request: RequestId(10),
+        };
+        for event in [
+            E::LoadStarted,
+            E::Committed("https://b.test/".into()),
+            E::Crashed,
+            E::Reload,
+            E::LoadFailed {
+                url: "https://b.test/".into(),
+                code: -105,
+            },
+            other,
+        ] {
+            let (_, effects) = transition(cert(-202), event.clone());
+            assert_eq!(
+                effects.iter().filter(|e| **e == refuse()).count(),
+                1,
+                "{event:?}"
+            );
+        }
+        // Staying on the panel answers nothing; a gone view's requests
+        // were answered by welding.
+        for event in [E::Committed(URL.into()), E::Proceed] {
+            assert!(transition(cert(-206), event).1.is_empty());
+        }
+        assert_eq!(
+            transition(cert(-202), E::ViewGone),
             (PageError::None, vec![])
         );
     }
@@ -301,6 +397,9 @@ mod tests {
         );
     }
 
+    /// The engine does not reload a crashed page for this host
+    /// (`nav::transition`, `RendererTerminated { reload: false }`): the
+    /// panel stays until the user reloads or navigates.
     #[test]
     fn a_crash_shows_until_the_page_loads_again() {
         let (s, _) = transition(PageError::None, E::Crashed);

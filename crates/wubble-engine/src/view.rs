@@ -497,10 +497,15 @@ impl View {
 
     fn apply_route(&mut self, routed: Route, mode: RequestMode) {
         match routed {
+            Route::Crashed => {
+                eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
+                // A host that asks about requests draws its own crash page,
+                // whose Reload recovers; reloading here would hide it.
+                self.apply_nav(NavInput::RendererTerminated {
+                    reload: mode == RequestMode::DefaultNow,
+                });
+            }
             Route::Nav(input) => {
-                if input == NavInput::RendererTerminated {
-                    eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
-                }
                 if matches!(input, NavInput::Address(_)) {
                     self.apply_probe(ProbeInput::Navigated);
                 }
@@ -1070,6 +1075,8 @@ enum Route {
     DragStarted(PageEvent),
     /// Zoom is per host and may change on navigation without a callback.
     ObserveZoom,
+    /// The renderer process ended.
+    Crashed,
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1098,7 +1105,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             urls.into_iter().next().unwrap_or_default(),
         ))),
         E::NewWindowRequested { url, .. } => one(Route::Nav(NavInput::Popup(url))),
-        E::ContentProcessTerminated { .. } => one(Route::Nav(NavInput::RendererTerminated)),
+        E::ContentProcessTerminated { .. } => one(Route::Crashed),
         // ERR_ABORTED (-3) is a navigation replaced by another one.
         E::LoadError {
             url,

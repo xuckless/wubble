@@ -77,7 +77,9 @@ impl Store {
         Ok(())
     }
 
-    /// The newest `limit` entries, newest first.
+    /// The newest `limit` entries, newest first. A row this build cannot
+    /// read (a state a newer build added, a size out of range) is skipped,
+    /// like an unknown permission kind: one row must not cost the session.
     pub async fn downloads(&self, limit: usize) -> Result<Vec<DownloadEntry>> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut rows = self
@@ -89,7 +91,11 @@ impl Store {
             .await?;
         let mut out = vec![];
         while let Some(r) = rows.next().await? {
-            out.push(read(&r)?);
+            match read(&r) {
+                Ok(entry) => out.push(entry),
+                Err(Error::Corrupt(_)) => {}
+                Err(e) => return Err(e),
+            }
         }
         Ok(out)
     }
@@ -190,17 +196,30 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_state_is_corrupt() {
+    fn unreadable_rows_are_skipped() {
         pollster::block_on(async {
             let mut s = Store::open_in_memory().await.unwrap();
-            s.add_download(&entry(1, DownloadState::Running))
+            for id in 1..=3 {
+                s.add_download(&entry(id, DownloadState::Complete))
+                    .await
+                    .unwrap();
+            }
+            s.conn
+                .execute("UPDATE downloads SET state = 'teleported' WHERE id = 1", ())
                 .await
                 .unwrap();
             s.conn
-                .execute("UPDATE downloads SET state = 'teleported'", ())
+                .execute("UPDATE downloads SET received = -1 WHERE id = 2", ())
                 .await
                 .unwrap();
-            assert!(matches!(s.downloads(10).await, Err(Error::Corrupt(_))));
+            let ids: Vec<i64> = s
+                .downloads(10)
+                .await
+                .unwrap()
+                .iter()
+                .map(|e| e.id)
+                .collect();
+            assert_eq!(ids, [3]);
         });
     }
 }

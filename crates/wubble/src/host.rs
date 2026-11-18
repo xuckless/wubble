@@ -39,7 +39,7 @@ use wubble_core::tab::{Liveness, TabId};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, Point};
-use wubble_engine::nav::{Cursor, WebEvent};
+use wubble_engine::nav::{Cursor, Phase, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
@@ -120,7 +120,8 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
                 visible: false,
             },
             Life::Discard | Life::ReleaseTexture => Call::CloseView(*tab),
-            // A live view reloads itself after a crash (`nav::transition`).
+            // A live view's crash shows the error panel, whose Reload
+            // recovers (`page_error`); this opens a view only where none is.
             Life::Restore => model
                 .tabs
                 .get(tab)
@@ -418,6 +419,9 @@ impl Host {
                 }
             }
             Call::CloseView(tab) => {
+                if self.views.contains_key(&tab) {
+                    self.downloads_closing(tab);
+                }
                 if let Some(id) = self.views.remove(&tab) {
                     self.engine.close_view(id);
                     self.view_gone(tab);
@@ -466,6 +470,16 @@ impl Host {
     fn tab_view(&mut self, tab: TabId) -> Option<&mut View> {
         let id = *self.views.get(&tab)?;
         self.engine.view(id)
+    }
+
+    /// Tells the model whether the tab is busy: its page is loading, or it
+    /// holds a download the engine runs (which a discard would end).
+    fn report_busy(&mut self, tab: TabId) {
+        let loading = self
+            .tab_view(tab)
+            .is_some_and(|v| matches!(v.nav().phase, Phase::Loading { .. }));
+        let busy = loading || self.downloads.holds(tab);
+        self.dispatch(Command::BusyChanged { tab, busy });
     }
 
     /// The visible tab's view, the only one that gets frames and input.
@@ -700,13 +714,12 @@ impl Host {
                 self.dispatch(Command::TitleChanged { tab, title });
             }
             WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
+            WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
-                if loading {
-                    self.apply_error(tab, ErrorEvent::LoadStarted);
-                } else {
+                if !loading {
                     self.typed_nav.ended(tab);
                 }
-                self.dispatch(Command::LoadingChanged { tab, loading });
+                self.report_busy(tab);
             }
             WebEvent::RendererGone => {
                 self.apply_error(tab, ErrorEvent::Crashed);

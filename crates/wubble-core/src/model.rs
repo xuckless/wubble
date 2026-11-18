@@ -108,11 +108,12 @@ pub enum Command {
         tab: TabId,
         title: String,
     },
-    /// The engine reports whether the tab's page is loading. A loading tab is
-    /// busy: it is not frozen or discarded until the load ends.
-    LoadingChanged {
+    /// Whether the tab is busy: its page is loading or it holds a running
+    /// download (the host decides). A busy tab is not frozen or discarded
+    /// until that ends.
+    BusyChanged {
         tab: TabId,
-        loading: bool,
+        busy: bool,
     },
     /// The tab's renderer process died.
     RendererGone(TabId),
@@ -976,12 +977,8 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
-        Command::LoadingChanged { tab, loading } => {
-            let activity = if loading {
-                Activity::Busy
-            } else {
-                Activity::Idle
-            };
+        Command::BusyChanged { tab, busy } => {
+            let activity = if busy { Activity::Busy } else { Activity::Idle };
             m.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
         }
         Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),

@@ -168,18 +168,24 @@ export struct ErrorView {
     cert: bool,
 }
 
+// `wubble_core::download::DownloadState`, one to one; the row derives its buttons from it.
+export enum DownloadStatus {
+    running,
+    paused,
+    interrupted,
+    complete,
+    cancelled,
+    failed,
+}
+
 // One row of the downloads popover (wubble host/downloads.rs). `progress` 0 to 1, below 0 when
-// the size is unknown; the `can-*` flags say which buttons the state allows.
+// the size is unknown.
 export struct DownloadItem {
     id: int,
     name: string,
     detail: string,
     progress: float,
-    active: bool,
-    can-pause: bool,
-    can-resume: bool,
-    can-retry: bool,
-    done: bool,
+    status: DownloadStatus,
 }
 
 export enum DownloadAction {

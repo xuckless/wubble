@@ -190,7 +190,9 @@ pub enum DownloadEffect {
     PauseEngine,
     ResumeEngine,
     CancelEngine,
-    /// Start the same URL again as a new download.
+    /// Start the same URL again as a new download, which replaces this
+    /// entry: the host forgets this one only once the new one has started,
+    /// so a retry that cannot start keeps it.
     StartAgain,
     /// Drop the entry from the list and the store.
     Forget,
@@ -220,8 +222,9 @@ pub fn transition(
             (S::Running, vec![Fx::ResumeEngine, Fx::Save])
         }
         (_, E::Cancel) if active => (S::Cancelled, vec![Fx::CancelEngine, Fx::Save]),
-        (s @ (S::Cancelled | S::Failed(_)), E::Retry) => (s, vec![Fx::StartAgain, Fx::Forget]),
-        (s, E::Remove) if active => (s, vec![Fx::CancelEngine, Fx::Forget]),
+        (s @ (S::Cancelled | S::Failed(_)), E::Retry) => (s, vec![Fx::StartAgain]),
+        // Removing a running download ends it first: nothing of it stays.
+        (_, E::Remove) if active => (S::Cancelled, vec![Fx::CancelEngine, Fx::Forget]),
         (s, E::Remove) => (s, vec![Fx::Forget]),
         (s, _) => (s, vec![]),
     }
@@ -455,9 +458,9 @@ mod tests {
             }
             E::Cancel if active => (S::Cancelled, vec![Fx::CancelEngine, Fx::Save]),
             E::Retry if matches!(s, S::Cancelled | S::Failed(_)) => {
-                (s.clone(), vec![Fx::StartAgain, Fx::Forget])
+                (s.clone(), vec![Fx::StartAgain])
             }
-            E::Remove if active => (s.clone(), vec![Fx::CancelEngine, Fx::Forget]),
+            E::Remove if active => (S::Cancelled, vec![Fx::CancelEngine, Fx::Forget]),
             E::Remove => (s.clone(), vec![Fx::Forget]),
             _ => same,
         }
@@ -474,6 +477,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn removing_a_running_download_ends_it() {
+        let (s, fx) = transition(DownloadState::Running, DownloadEvent::Remove);
+        assert!(!s.is_active(), "its in-flight state must be released");
+        assert_eq!(
+            fx,
+            vec![DownloadEffect::CancelEngine, DownloadEffect::Forget]
+        );
+    }
+
+    #[test]
+    fn a_retry_does_not_forget_the_entry_by_itself() {
+        let failed = DownloadState::Failed("x".into());
+        let (s, fx) = transition(failed.clone(), DownloadEvent::Retry);
+        assert_eq!((s, fx), (failed, vec![DownloadEffect::StartAgain]));
     }
 
     #[test]

@@ -67,6 +67,10 @@ impl From<CursorShape> for Cursor {
 pub enum WebEvent {
     UrlChanged(String),
     TitleChanged(String),
+    /// The view went from not loading to loading: a new navigation or a
+    /// reload. Sent just before its `LoadingChanged`; a `LoadingChanged`
+    /// that only moves the history flags mid-load comes without it.
+    LoadStarted,
     LoadingChanged {
         loading: bool,
         can_go_back: bool,
@@ -79,7 +83,9 @@ pub enum WebEvent {
     PopupRequested {
         url: String,
     },
-    /// The renderer process died. The view reloads the page once by itself.
+    /// The renderer process died. Unless the host draws its own crash page
+    /// ([`NavInput::RendererTerminated`]), the view reloads the page once by
+    /// itself.
     RendererGone,
     /// The page left this key-down alone (CEF `OnKeyEvent`): a page-first
     /// shortcut may run now.
@@ -132,7 +138,11 @@ pub enum NavInput {
         can_go_back: bool,
         can_go_forward: bool,
     },
-    RendererTerminated,
+    /// `reload`: reload the page once by itself; false when the host shows
+    /// a crash page whose Reload recovers instead.
+    RendererTerminated {
+        reload: bool,
+    },
     Popup(String),
     Cursor(Cursor),
     // From the host.
@@ -216,15 +226,17 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             };
             let changed = (loading, page.can_go_back, page.can_go_forward)
                 != (now_loading, can_go_back, can_go_forward);
-            let effects = if changed {
-                vec![Emit(WebEvent::LoadingChanged {
+            let mut effects = vec![];
+            if now_loading && !loading {
+                effects.push(Emit(WebEvent::LoadStarted));
+            }
+            if changed {
+                effects.push(Emit(WebEvent::LoadingChanged {
                     loading: now_loading,
                     can_go_back,
                     can_go_forward,
-                })]
-            } else {
-                vec![]
-            };
+                }));
+            }
             let page = Page {
                 can_go_back,
                 can_go_forward,
@@ -232,9 +244,9 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             };
             return (NavState { phase: next, page }, effects);
         }
-        NavInput::RendererTerminated if phase != Phase::Crashed => {
+        NavInput::RendererTerminated { reload } if phase != Phase::Crashed => {
             let mut effects = vec![Emit(WebEvent::RendererGone)];
-            if phase != (Phase::Loading { recovering: true }) {
+            if reload && phase != (Phase::Loading { recovering: true }) {
                 effects.extend([NavEffect::Reload, NavEffect::Repaint]);
             }
             let state = NavState {
@@ -315,6 +327,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![
+                E::Emit(WebEvent::LoadStarted),
                 E::Emit(WebEvent::LoadingChanged {
                     loading: true,
                     can_go_back: false,
@@ -356,7 +369,10 @@ mod tests {
     fn a_crash_is_reported_once_and_reloaded_once() {
         let (state, effects) = run(
             at(Phase::Loaded),
-            vec![I::RendererTerminated, I::RendererTerminated],
+            vec![
+                I::RendererTerminated { reload: true },
+                I::RendererTerminated { reload: true },
+            ],
         );
         assert_eq!(state, at(Phase::Crashed));
         assert_eq!(
@@ -379,9 +395,9 @@ mod tests {
         let (state, effects) = run(
             at(Phase::Loaded),
             vec![
-                I::RendererTerminated,
+                I::RendererTerminated { reload: true },
                 loading(true, true, false),
-                I::RendererTerminated,
+                I::RendererTerminated { reload: true },
             ],
         );
         assert_eq!(state.phase, Phase::Crashed);
@@ -391,6 +407,7 @@ mod tests {
                 E::Emit(WebEvent::RendererGone),
                 E::Reload,
                 E::Repaint,
+                E::Emit(WebEvent::LoadStarted),
                 E::Emit(WebEvent::LoadingChanged {
                     loading: true,
                     can_go_back: true,
@@ -406,18 +423,54 @@ mod tests {
         let (state, _) = run(
             at(Phase::Loaded),
             vec![
-                I::RendererTerminated,
+                I::RendererTerminated { reload: true },
                 loading(true, true, false),
                 loading(false, true, false),
             ],
         );
         assert_eq!(state.phase, Phase::Loaded);
-        let (state, effects) = transition(state, I::RendererTerminated);
+        let (state, effects) = transition(state, I::RendererTerminated { reload: true });
         assert_eq!(state.phase, Phase::Crashed);
         assert_eq!(
             effects,
             vec![E::Emit(WebEvent::RendererGone), E::Reload, E::Repaint]
         );
+    }
+
+    #[test]
+    fn history_flags_mid_load_are_no_new_load() {
+        let (state, effects) = run(
+            NavState::default(),
+            vec![loading(true, false, false), loading(true, true, false)],
+        );
+        assert_eq!(state.phase, Phase::Loading { recovering: false });
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| **e == E::Emit(WebEvent::LoadStarted))
+                .count(),
+            1
+        );
+        assert_eq!(
+            effects.last(),
+            Some(&E::Emit(WebEvent::LoadingChanged {
+                loading: true,
+                can_go_back: true,
+                can_go_forward: false
+            }))
+        );
+    }
+
+    #[test]
+    fn a_host_crash_page_gets_no_reload() {
+        let (state, effects) =
+            transition(at(Phase::Loaded), I::RendererTerminated { reload: false });
+        assert_eq!(state.phase, Phase::Crashed);
+        assert_eq!(effects, vec![E::Emit(WebEvent::RendererGone)]);
+        // The crash page's Reload starts a load that ends the crash.
+        let (state, effects) = transition(state, loading(true, true, false));
+        assert_eq!(state.phase, Phase::Loading { recovering: true });
+        assert_eq!(effects[0], E::Emit(WebEvent::LoadStarted));
     }
 
     #[test]

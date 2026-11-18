@@ -9,6 +9,7 @@
 //! `chrome/browser/ui/login/login_prompt` ("Sign in", "<host> requires a
 //! username and password"), BSD-3-Clause; strings only.
 
+use std::collections::VecDeque;
 use std::fmt;
 
 use wubble_core::site::{self, Decision, Permission, SitePermissions, Verdict};
@@ -82,7 +83,12 @@ impl PermissionRequest {
 pub enum PermissionPrompt {
     #[default]
     None,
-    Open(PermissionRequest),
+    /// `shown` is asked; requests made meanwhile wait in `queued`, in order
+    /// (Chromium's `PermissionRequestManager` queues them too).
+    Open {
+        shown: PermissionRequest,
+        queued: VecDeque<PermissionRequest>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,44 +126,71 @@ impl PermissionAnswer {
 }
 
 /// Every answer this step gives (a request with a remembered verdict is
-/// answered at once; a newer prompt denies the one it replaces).
+/// answered at once; one made while a prompt is open waits its turn).
 pub fn permission(
     state: PermissionPrompt,
     event: PermissionEvent,
     table: &SitePermissions,
 ) -> (PermissionPrompt, Vec<PermissionAnswer>) {
     use PermissionEvent::*;
+    use PermissionPrompt::Open;
     match (state, event) {
-        (state, Requested(new)) => match new.verdict(table) {
-            Verdict::Grant => (state, vec![PermissionAnswer::new(&new, true)]),
-            Verdict::Deny => (state, vec![PermissionAnswer::new(&new, false)]),
-            Verdict::Ask => {
-                let replaced = match &state {
-                    PermissionPrompt::Open(old) => vec![PermissionAnswer::new(old, false)],
-                    PermissionPrompt::None => vec![],
-                };
-                (PermissionPrompt::Open(new), replaced)
+        (state, Requested(new)) => match (new.verdict(table), state) {
+            (Verdict::Grant, state) => (state, vec![PermissionAnswer::new(&new, true)]),
+            (Verdict::Deny, state) => (state, vec![PermissionAnswer::new(&new, false)]),
+            (Verdict::Ask, PermissionPrompt::None) => next_prompt(VecDeque::from([new]), table),
+            (Verdict::Ask, Open { shown, mut queued }) => {
+                queued.push_back(new);
+                (Open { shown, queued }, vec![])
             }
         },
-        (PermissionPrompt::Open(r), Answer { allow, remember }) => {
-            let mut answer = PermissionAnswer::new(&r, allow);
-            if remember && let (Some(site), Some(asked)) = (r.site(), r.asked()) {
+        (Open { shown, queued }, Answer { allow, remember }) => {
+            let mut answer = PermissionAnswer::new(&shown, allow);
+            let mut table = table.clone();
+            if remember && let (Some(site), Some(asked)) = (shown.site(), shown.asked()) {
                 let decision = if allow {
                     Decision::Allow
                 } else {
                     Decision::Block
                 };
+                for &kind in &asked {
+                    table.set(&site, kind, decision);
+                }
                 answer.remember = Some((site, asked, decision));
             }
-            (PermissionPrompt::None, vec![answer])
+            // What was just remembered answers the waiting ones it covers.
+            let (next, more) = next_prompt(queued, &table);
+            (next, [vec![answer], more].concat())
         }
-        (PermissionPrompt::Open(r), Dismissed(ids)) if !ids.contains(&r.id) => {
-            (PermissionPrompt::Open(r), vec![])
+        (Open { shown, mut queued }, Dismissed(ids)) => {
+            queued.retain(|r| !ids.contains(&r.id));
+            if ids.contains(&shown.id) {
+                next_prompt(queued, table)
+            } else {
+                (Open { shown, queued }, vec![])
+            }
         }
-        (_, Dismissed(_) | ViewGone) | (PermissionPrompt::None, Answer { .. }) => {
+        (_, ViewGone) | (PermissionPrompt::None, Answer { .. } | Dismissed(_)) => {
             (PermissionPrompt::None, vec![])
         }
     }
+}
+
+/// The first of `queued` that still needs asking, shown; those before it
+/// that a remembered decision now covers are answered.
+fn next_prompt(
+    mut queued: VecDeque<PermissionRequest>,
+    table: &SitePermissions,
+) -> (PermissionPrompt, Vec<PermissionAnswer>) {
+    let mut answers = vec![];
+    while let Some(r) = queued.pop_front() {
+        match r.verdict(table) {
+            Verdict::Grant => answers.push(PermissionAnswer::new(&r, true)),
+            Verdict::Deny => answers.push(PermissionAnswer::new(&r, false)),
+            Verdict::Ask => return (PermissionPrompt::Open { shown: r, queued }, answers),
+        }
+    }
+    (PermissionPrompt::None, answers)
 }
 
 /// What the prompt says: the site, and one line per kind.
@@ -313,7 +346,7 @@ mod tests {
     fn a_request_opens_and_answers_once() {
         let t = SitePermissions::default();
         let (s, a) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
-        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open(_)));
+        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
         let answer = PermissionEvent::Answer {
             allow: true,
             remember: false,
@@ -404,7 +437,7 @@ mod tests {
             ask(3, &[CameraStream, MicStream]),
             &t,
         );
-        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open(_)));
+        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
         // A remembered answer leaves an open prompt alone.
         let (s2, a) = permission(s.clone(), ask(4, &[CameraStream]), &t);
         assert_eq!((s2, a), (s, vec![granted(4, &[CameraStream])]));
@@ -428,13 +461,58 @@ mod tests {
         }
     }
 
+    fn shown(s: &PermissionPrompt) -> Option<u32> {
+        match s {
+            PermissionPrompt::Open { shown, .. } => Some(shown.id.0),
+            PermissionPrompt::None => None,
+        }
+    }
+
     #[test]
-    fn a_newer_prompt_denies_the_old_one() {
+    fn a_newer_request_waits_for_the_shown_one() {
+        let t = SitePermissions::default();
+        let allow = PermissionEvent::Answer {
+            allow: true,
+            remember: false,
+        };
+        let (s, _) = permission(PermissionPrompt::None, ask(1, &[Notifications]), &t);
+        let (s, a) = permission(s, ask(2, &[Geolocation]), &t);
+        assert_eq!((shown(&s), a), (Some(1), vec![]));
+        let (s, a) = permission(s, allow.clone(), &t);
+        assert_eq!(
+            (shown(&s), a),
+            (Some(2), vec![granted(1, &[Notifications])])
+        );
+        let (s, a) = permission(s, allow, &t);
+        assert_eq!((shown(&s), a), (None, vec![granted(2, &[Geolocation])]));
+    }
+
+    #[test]
+    fn a_remembered_answer_covers_the_waiting_ones() {
         let t = SitePermissions::default();
         let (s, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
-        let (s, a) = permission(s, ask(2, &[Geolocation]), &t);
-        assert_eq!(a, vec![granted(1, &[])]);
-        assert!(matches!(s, PermissionPrompt::Open(r) if r.id == RequestId(2)));
+        let (s, _) = permission(s, ask(2, &[CameraStream]), &t);
+        let (s, _) = permission(s, ask(3, &[Geolocation]), &t);
+        let remember = PermissionEvent::Answer {
+            allow: false,
+            remember: true,
+        };
+        let (s, a) = permission(s, remember, &t);
+        let ids: Vec<u32> = a.iter().map(|a| a.id.0).collect();
+        assert_eq!(ids, [1, 2]);
+        assert!(a.iter().all(|a| a.granted.is_empty()));
+        assert_eq!(shown(&s), Some(3));
+    }
+
+    #[test]
+    fn dismissing_the_shown_one_shows_the_next() {
+        let t = SitePermissions::default();
+        let (s, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
+        let (s, _) = permission(s, ask(2, &[Geolocation]), &t);
+        let (s, _) = permission(s, ask(3, &[MicStream]), &t);
+        let gone = PermissionEvent::Dismissed(vec![RequestId(1), RequestId(2)]);
+        let (s, a) = permission(s, gone, &t);
+        assert_eq!((shown(&s), a), (Some(3), vec![]));
     }
 
     #[test]

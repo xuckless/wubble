@@ -200,7 +200,8 @@ mod tests {
         settle();
         assert!(app.get_web_focused());
 
-        // ── Permission prompt: Escape blocks without remembering.
+        // ── Permission prompt: never takes the keyboard, so no keystroke meant
+        // for the page answers it (keyjacking); only its buttons do.
         let permits = Rc::new(std::cell::RefCell::new(vec![]));
         let p = permits.clone();
         app.on_permission_answered(move |allow, remember| p.borrow_mut().push((allow, remember)));
@@ -213,8 +214,10 @@ mod tests {
             serial: 4,
         });
         settle();
+        assert!(app.get_web_focused());
+        press(app, Key::Return);
         press(app, Key::Escape);
-        assert_eq!(*permits.borrow(), vec![(false, false)]);
+        assert!(permits.borrow().is_empty());
         app.set_permission(PermissionView::default());
         settle();
         assert!(app.get_web_focused());

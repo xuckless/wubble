@@ -856,11 +856,14 @@ mod tests {
             menu: menu_open,
             find: find_open,
             popup: Some(Rect::default()),
-            permission: PermissionPrompt::Open(PermissionRequest {
-                id: RequestId(3),
-                origin: "https://a.test".into(),
-                kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
-            }),
+            permission: PermissionPrompt::Open {
+                shown: PermissionRequest {
+                    id: RequestId(3),
+                    origin: "https://a.test".into(),
+                    kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
+                },
+                queued: Default::default(),
+            },
             auth: Auth::Open(AuthRequest {
                 id: RequestId(4),
                 host: "a.test".into(),

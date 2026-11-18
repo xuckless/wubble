@@ -155,14 +155,19 @@ impl Host {
     }
 
     /// A certificate error: proceeds at once past one the user allowed this
-    /// session; otherwise refuses it and shows the panel.
+    /// session; otherwise the panel holds the request for the user.
     fn certificate(&mut self, tab: TabId, id: RequestId, url: String, code: i32) {
-        let proceed = zoom::host_of(&url).is_some_and(|h| self.cert_exceptions.allowed(&h, code));
-        if let Some(view) = self.tab_view(tab) {
-            view.answer_certificate(id, proceed);
-        }
-        if !proceed {
-            self.apply_error(tab, ErrorEvent::CertRefused { url, code });
+        if zoom::host_of(&url).is_some_and(|h| self.cert_exceptions.allowed(&h, code)) {
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_certificate(id, true);
+            }
+        } else {
+            let event = ErrorEvent::CertError {
+                url,
+                code,
+                request: id,
+            };
+            self.apply_error(tab, event);
         }
     }
 
@@ -171,8 +176,9 @@ impl Host {
         let (next, effects) = page_error::transition(std::mem::take(&mut s.error), event);
         s.error = next;
         for effect in effects {
-            if let ErrorEffect::AllowAndLoad { host, code, .. } = &effect {
+            if let ErrorEffect::Allow { host, code } = &effect {
                 self.cert_exceptions.allow(host, *code);
+                continue;
             }
             let Some(view) = self.tab_view(tab) else {
                 continue;
@@ -181,7 +187,10 @@ impl Host {
                 ErrorEffect::Reload => view.reload(),
                 ErrorEffect::Back => view.back(),
                 ErrorEffect::Blank => view.load("about:blank"),
-                ErrorEffect::AllowAndLoad { url, .. } => view.load(&url),
+                ErrorEffect::AnswerCert { request, proceed } => {
+                    view.answer_certificate(request, proceed);
+                }
+                ErrorEffect::Allow { .. } => {}
             }
         }
     }
@@ -616,7 +625,7 @@ fn auth_view(r: &prompt::AuthRequest) -> DialogView {
 fn permission_view(p: &PermissionPrompt) -> PermissionView {
     match p {
         PermissionPrompt::None => PermissionView::default(),
-        PermissionPrompt::Open(r) => {
+        PermissionPrompt::Open { shown: r, .. } => {
             let (title, lines) = prompt::permission_text(r);
             PermissionView {
                 open: true,

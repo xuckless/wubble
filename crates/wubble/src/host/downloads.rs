@@ -3,15 +3,27 @@
 //! machine), out to the engine, the store and the shell. The list here is
 //! the one owner of what the popover shows; the store is its persistence.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
 use wubble_core::tab::TabId;
 use wubble_engine::page::{DownloadId, PageEvent};
-use wubble_ui::{AppWindow, DownloadAction, DownloadItem};
+use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
 
 use super::{Host, now_ms};
+
+/// A download the engine still runs, from its path being given until its
+/// entry ends.
+#[derive(Debug)]
+struct Inflight {
+    tab: TabId,
+    /// Reserved, so two at once never get the same name before either file
+    /// exists.
+    path: PathBuf,
+    /// Its list entry, once started.
+    entry: Option<i64>,
+}
 
 /// Downloads of this run and the last ones.
 #[derive(Debug, Default)]
@@ -22,11 +34,7 @@ pub(super) struct Downloads {
     /// Newest first.
     list: Vec<DownloadEntry>,
     next_id: i64,
-    /// The engine's downloads still running, by entry id.
-    live: BTreeMap<i64, (TabId, DownloadId)>,
-    /// Paths given to downloads that have not ended, so two at once never
-    /// get the same name before either file exists.
-    reserved: HashMap<DownloadId, PathBuf>,
+    inflight: HashMap<DownloadId, Inflight>,
     /// Entries whose progress is not yet stored (written on the tick).
     unsaved: BTreeSet<i64>,
 }
@@ -43,9 +51,28 @@ impl Downloads {
     }
 
     fn entry_of(&self, download: DownloadId) -> Option<i64> {
-        self.live
+        self.inflight.get(&download)?.entry
+    }
+
+    /// The engine's download behind entry `id`, while it runs.
+    fn running(&self, id: i64) -> Option<(DownloadId, TabId)> {
+        self.inflight
             .iter()
-            .find_map(|(&id, &(_, d))| (d == download).then_some(id))
+            .find_map(|(&d, f)| (f.entry == Some(id)).then_some((d, f.tab)))
+    }
+
+    /// Entries the engine still runs for `tab`.
+    fn running_in(&self, tab: TabId) -> Vec<i64> {
+        self.inflight
+            .values()
+            .filter(|f| f.tab == tab)
+            .filter_map(|f| f.entry)
+            .collect()
+    }
+
+    /// The tab holds a download the engine runs: it must not be discarded.
+    pub fn holds(&self, tab: TabId) -> bool {
+        self.inflight.values().any(|f| f.tab == tab)
     }
 
     fn get(&self, id: i64) -> Option<&DownloadEntry> {
@@ -67,7 +94,12 @@ impl Host {
                     self.toast(window, "Cannot download: no downloads folder");
                 }
                 if let Some(path) = &path {
-                    self.downloads.reserved.insert(download, path.clone());
+                    let reserved = Inflight {
+                        tab,
+                        path: path.clone(),
+                        entry: None,
+                    };
+                    self.downloads.inflight.insert(download, reserved);
                 }
                 if let Some(view) = self.tab_view(tab) {
                     view.answer_download_path(id, path.as_deref());
@@ -94,12 +126,20 @@ impl Host {
                     started_ms: now_ms(),
                 };
                 d.next_id += 1;
-                d.live.insert(entry.id, (tab, download));
+                d.inflight
+                    .entry(download)
+                    .or_insert_with(|| Inflight {
+                        tab,
+                        path: entry.path.clone(),
+                        entry: None,
+                    })
+                    .entry = Some(entry.id);
                 self.store.add_download(&entry);
                 let text = format!("Downloading {}", entry.name);
                 self.downloads.list.insert(0, entry);
                 self.toast(window, &text);
                 self.render_downloads(window);
+                self.report_busy(tab);
             }
             PageEvent::DownloadProgress {
                 download,
@@ -118,11 +158,14 @@ impl Host {
             PageEvent::DownloadFailed { download, error } => {
                 self.engine_download(download, DownloadEvent::Interrupted(error))
             }
-            PageEvent::DownloadCancelled(download) => {
+            PageEvent::DownloadCancelled(download) => match self.downloads.entry_of(download) {
+                Some(id) => self.apply_download(id, DownloadEvent::Cancelled),
                 // Cancelled before it started: only its reservation exists.
-                self.downloads.reserved.remove(&download);
-                self.engine_download(download, DownloadEvent::Cancelled)
-            }
+                None => {
+                    self.downloads.inflight.remove(&download);
+                    self.report_busy(tab);
+                }
+            },
             _ => {}
         }
     }
@@ -134,9 +177,9 @@ impl Host {
             eprintln!("wubble: downloads folder {}: {e}", dir.display());
             return None;
         }
-        let reserved = &self.downloads.reserved;
+        let inflight = &self.downloads.inflight;
         download::unique_name(dir, suggested, |p: &Path| {
-            p.exists() || reserved.values().any(|r| r == p)
+            p.exists() || inflight.values().any(|f| f.path == p)
         })
     }
 
@@ -164,18 +207,28 @@ impl Host {
         self.apply_download(id, event);
     }
 
-    /// The tab's view closed: its downloads report nothing more.
+    /// The tab's view is about to be closed by us (the tab closed, or its
+    /// renderer is gone while hidden): CEF would carry on with its downloads
+    /// unseen, so they are cancelled, and the user told why. A busy tab is
+    /// never discarded by the sleep policy (`report_busy`).
+    pub(super) fn downloads_closing(&mut self, tab: TabId) {
+        let ids = self.downloads.running_in(tab);
+        for &id in &ids {
+            self.apply_download(id, DownloadEvent::Cancel);
+        }
+        if !ids.is_empty()
+            && let Some(window) = self.window.upgrade()
+        {
+            self.toast(&window, "Download cancelled: its tab closed");
+        }
+    }
+
+    /// The tab's view closed by itself: its downloads report nothing more.
     pub(super) fn downloads_lost(&mut self, tab: TabId) {
-        let ids: Vec<i64> = self
-            .downloads
-            .live
-            .iter()
-            .filter(|(_, (t, _))| *t == tab)
-            .map(|(&id, _)| id)
-            .collect();
-        for id in ids {
+        for id in self.downloads.running_in(tab) {
             self.apply_download(id, DownloadEvent::Lost);
         }
+        self.downloads.inflight.retain(|_, f| f.tab != tab);
     }
 
     fn apply_download(&mut self, id: i64, event: DownloadEvent) {
@@ -189,7 +242,7 @@ impl Host {
         if progress {
             self.downloads.unsaved.insert(id);
         }
-        let live = self.downloads.live.get(&id).copied();
+        let running = self.downloads.running(id);
         for effect in effects {
             match effect {
                 DownloadEffect::Save => {
@@ -199,7 +252,7 @@ impl Host {
                 DownloadEffect::PauseEngine
                 | DownloadEffect::ResumeEngine
                 | DownloadEffect::CancelEngine => {
-                    let Some((tab, download)) = live else {
+                    let Some((download, tab)) = running else {
                         continue;
                     };
                     let Some(view) = self.tab_view(tab) else {
@@ -213,27 +266,34 @@ impl Host {
                 }
                 DownloadEffect::StartAgain => {
                     // Any live view can start it; the visible tab's is at hand.
+                    // The new download replaces this entry; without a view
+                    // the entry stays for a later retry.
                     if let Some(view) = self.view() {
                         view.start_download(&entry.url);
+                        self.forget_download(id);
                     } else if let Some(window) = self.window.upgrade() {
                         self.toast(&window, "Open a page to retry the download");
                     }
                 }
-                DownloadEffect::Forget => {
-                    self.downloads.list.retain(|e| e.id != id);
-                    self.downloads.unsaved.remove(&id);
-                    self.store.remove_download(id);
-                }
+                DownloadEffect::Forget => self.forget_download(id),
             }
         }
+        // The one place an entry's engine download ends.
         if !entry.state.is_active()
-            && let Some((_, download)) = self.downloads.live.remove(&id)
+            && let Some((download, tab)) = running
         {
-            self.downloads.reserved.remove(&download);
+            self.downloads.inflight.remove(&download);
+            self.report_busy(tab);
         }
         if let Some(window) = self.window.upgrade() {
             self.render_downloads(&window);
         }
+    }
+
+    fn forget_download(&mut self, id: i64) {
+        self.downloads.list.retain(|e| e.id != id);
+        self.downloads.unsaved.remove(&id);
+        self.store.remove_download(id);
     }
 
     /// Writes progress not yet stored (the lifecycle tick and shutdown).
@@ -259,11 +319,14 @@ fn item(e: &DownloadEntry) -> DownloadItem {
         name: e.name.as_str().into(),
         detail: e.detail().into(),
         progress: e.fraction().unwrap_or(-1.0),
-        active: e.state.is_active(),
-        can_pause: e.state == S::Running,
-        can_resume: matches!(e.state, S::Paused | S::Interrupted(_)),
-        can_retry: matches!(e.state, S::Cancelled | S::Failed(_)),
-        done: e.state == S::Complete,
+        status: match e.state {
+            S::Running => DownloadStatus::Running,
+            S::Paused => DownloadStatus::Paused,
+            S::Interrupted(_) => DownloadStatus::Interrupted,
+            S::Complete => DownloadStatus::Complete,
+            S::Cancelled => DownloadStatus::Cancelled,
+            S::Failed(_) => DownloadStatus::Failed,
+        },
     }
 }
 
@@ -310,16 +373,13 @@ mod tests {
     }
 
     #[test]
-    fn rows_offer_what_the_state_allows() {
+    fn rows_carry_the_state_and_progress() {
         let row = item(&entry(1, DownloadState::Running));
-        assert!(row.can_pause && !row.can_resume && !row.can_retry && row.active && !row.done);
-        assert_eq!(row.progress, 0.25);
+        assert_eq!((row.status, row.progress), (DownloadStatus::Running, 0.25));
         let row = item(&entry(1, DownloadState::Interrupted("x".into())));
-        assert!(row.can_resume && !row.can_pause);
-        let row = item(&entry(1, DownloadState::Failed("x".into())));
-        assert!(row.can_retry && !row.active);
+        assert_eq!(row.status, DownloadStatus::Interrupted);
         let row = item(&entry(1, DownloadState::Complete));
-        assert!(row.done && !row.can_retry && row.progress == 1.0);
+        assert_eq!((row.status, row.progress), (DownloadStatus::Complete, 1.0));
         let unknown = DownloadEntry {
             total: None,
             ..entry(1, DownloadState::Running)

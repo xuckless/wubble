@@ -1,6 +1,7 @@
 import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
-import { GlassPanel, PressableButton } from "../components.slint";
+import { GlassPanel } from "../components.slint";
+import { SheetButton } from "sheet-button.slint";
 import { ErrorView, GlassTier } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
@@ -92,21 +93,15 @@ export component ErrorPanel inherits Rectangle {
             HorizontalLayout {
                 alignment: start;
                 spacing: Spacing.s2;
-                PressableButton {
+                SheetButton {
                     text: root.error.primary;
-                    height: Shell.sheet-button;
-                    padding-x: Shell.sheet-button-pad;
-                    border-radius: Shell.sheet-button-radius;
-                    background: self.hovered ? Palette.rim : Palette.shell;
+                    primary: true;
                     clicked => {
                         root.primary();
                     }
                 }
-                if root.error.secondary != "": PressableButton {
+                if root.error.secondary != "": SheetButton {
                     text: root.error.secondary;
-                    height: Shell.sheet-button;
-                    padding-x: Shell.sheet-button-pad;
-                    border-radius: Shell.sheet-button-radius;
                     clicked => {
                         root.secondary();
                     }

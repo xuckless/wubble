@@ -1,6 +1,7 @@
 import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
-import { GlassPanel, PressableButton } from "../components.slint";
+import { GlassPanel } from "../components.slint";
+import { SheetButton } from "sheet-button.slint";
 import { DialogView, GlassTier } from "model.slint";
 
 // A JS dialog (alert, confirm, prompt, beforeunload) as a sheet over the page; fills its parent
@@ -198,21 +199,15 @@ export component DialogSheet inherits Rectangle {
             HorizontalLayout {
                 alignment: end;
                 spacing: Spacing.s2;
-                if root.dialog.cancel != "": PressableButton {
+                if root.dialog.cancel != "": SheetButton {
                     text: root.dialog.cancel;
-                    height: Shell.sheet-button;
-                    padding-x: Shell.sheet-button-pad;
-                    border-radius: Shell.sheet-button-radius;
                     clicked => {
                         root.cancel();
                     }
                 }
-                PressableButton {
+                SheetButton {
                     text: root.dialog.accept;
-                    height: Shell.sheet-button;
-                    padding-x: Shell.sheet-button-pad;
-                    border-radius: Shell.sheet-button-radius;
-                    background: self.hovered ? Palette.rim : Palette.shell;
+                    primary: true;
                     clicked => {
                         root.confirm();
                     }

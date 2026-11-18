@@ -1060,7 +1060,7 @@ fn hidden_loading_tab() -> (Model, Vec<TabId>) {
 }
 
 fn loading(tab: TabId, loading: bool) -> Command {
-    Command::LoadingChanged { tab, loading }
+    Command::BusyChanged { tab, busy: loading }
 }
 
 /// Regression for the tabs smoke flake: the one tick came while the hidden tab was

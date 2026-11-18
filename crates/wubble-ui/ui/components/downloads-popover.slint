@@ -1,7 +1,7 @@
 import { Palette, Motion, Spacing, Fonts, Type, Chrome } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton, OverlapLayer } from "../components.slint";
-import { GlassTier, DownloadItem, DownloadAction } from "model.slint";
+import { GlassTier, DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
 // The downloads list, opened from the sidebar's download button: one row per download, newest
@@ -82,6 +82,9 @@ export component DownloadsPopover inherits Rectangle {
                 y: i * Shell.download-row;
                 height: Shell.download-row;
                 Rectangle {
+                    // Still has bytes to come (`DownloadState::is_active`).
+                    property <bool> active: item.status == DownloadStatus.running || item.status == DownloadStatus.paused || item.status == DownloadStatus.interrupted;
+                    property <bool> done: item.status == DownloadStatus.complete;
                     border-radius: Shell.menu-row-radius;
                     background: row-touch.has-hover ? Shell.command-selected : transparent;
                     animate background {
@@ -98,7 +101,7 @@ export component DownloadsPopover inherits Rectangle {
                             Icon {
                                 y: (parent.height - self.height) / 2;
                                 path: IconPaths.download;
-                                tint: item.done ? Palette.mint : item.active ? Palette.ink : Palette.haze;
+                                tint: done ? Palette.mint : active ? Palette.ink : Palette.haze;
                             }
                         }
                         VerticalLayout {
@@ -121,8 +124,8 @@ export component DownloadsPopover inherits Rectangle {
                             }
                             // The progress track, while there are bytes to come.
                             Rectangle {
-                                visible: item.active;
-                                height: item.active ? Shell.download-track : 0px;
+                                visible: active;
+                                height: active ? Shell.download-track : 0px;
                                 border-radius: Shell.download-track / 2;
                                 background: Palette.rim;
                                 Rectangle {
@@ -138,37 +141,37 @@ export component DownloadsPopover inherits Rectangle {
                                 }
                             }
                         }
-                        if item.can-pause: PressableButton {
+                        if item.status == DownloadStatus.running: PressableButton {
                             text: "Pause";
                             clicked => {
                                 root.action(item.id, DownloadAction.pause);
                             }
                         }
-                        if item.can-resume: PressableButton {
+                        if item.status == DownloadStatus.paused || item.status == DownloadStatus.interrupted: PressableButton {
                             text: "Resume";
                             clicked => {
                                 root.action(item.id, DownloadAction.resume);
                             }
                         }
-                        if item.active: PressableButton {
+                        if active: PressableButton {
                             text: "Cancel";
                             clicked => {
                                 root.action(item.id, DownloadAction.cancel);
                             }
                         }
-                        if item.can-retry: PressableButton {
+                        if item.status == DownloadStatus.cancelled || item.status == DownloadStatus.failed: PressableButton {
                             text: "Retry";
                             clicked => {
                                 root.action(item.id, DownloadAction.retry);
                             }
                         }
-                        if item.done: PressableButton {
+                        if done: PressableButton {
                             text: "Show";
                             clicked => {
                                 root.action(item.id, DownloadAction.reveal);
                             }
                         }
-                        if !item.active: PressableButton {
+                        if !active: PressableButton {
                             width: Chrome.controls;
                             padding-x: (Chrome.controls - Shell.icon) / 2;
                             clicked => {
