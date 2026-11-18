@@ -159,6 +159,14 @@ fn active_tint(window: &AppWindow) -> Option<Rgb> {
 }
 
 impl Glass {
+    /// The scene's last frame as RGBA8 (width, height, pixels), for the frames smoke only: a
+    /// readback that waits for the GPU.
+    pub fn readback(&self) -> Option<(u32, u32, Vec<u8>)> {
+        match self {
+            Glass::Scene(s) => s.renderer.readback(),
+            Glass::SlintOnly => None,
+        }
+    }
     pub fn is_scene(&self) -> bool {
         matches!(self, Glass::Scene(_))
     }
@@ -190,6 +198,7 @@ impl Glass {
             .last_frame()
             .map(|t| now.saturating_duration_since(t));
         match s.renderer.before_rendering(window.window(), now) {
+            // every frame: see `Renderer::before_rendering`
             Ok(Some(image)) => window.set_scene(image),
             Ok(None) => {}
             Err(e) => {

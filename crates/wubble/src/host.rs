@@ -772,7 +772,7 @@ impl Host {
     }
 
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill.
+    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
         if !self.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
@@ -796,7 +796,14 @@ impl Host {
             height: physical(h, scale),
         };
         let sample = pixels::check_varied(shot, region)?;
-        println!("smoke: glass ok distinct={}", sample.distinct);
+        // What the window shows there is the scene's frame of this render, not an older one.
+        let (_, _, scene) = self
+            .glass
+            .borrow()
+            .readback()
+            .ok_or("the scene has no frame")?;
+        let diff = pixels::check_shows_scene(shot, &scene, region)?;
+        println!("smoke: glass ok distinct={} diff={diff}", sample.distinct);
         Ok(())
     }
 
