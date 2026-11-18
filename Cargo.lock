@@ -7887,6 +7887,7 @@ dependencies = [
  "serde_json",
  "slint",
  "tempfile",
+ "ureq",
  "wubble-blocker",
  "wubble-core",
  "wubble-engine",

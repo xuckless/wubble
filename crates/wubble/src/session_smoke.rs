@@ -285,6 +285,7 @@ mod tests {
             icons: rgba
                 .map(|r| HashMap::from([(ICON_PAGE.to_string(), stored(r))]))
                 .unwrap_or_default(),
+            bookmarks: vec![],
         };
         assert!(icon_restored(&hits(
             vec![entry.clone()],

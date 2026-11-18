@@ -27,6 +27,7 @@ mod session_smoke;
 mod settings_smoke;
 mod shell;
 mod split_smoke;
+mod suggest_fx;
 mod surface;
 mod tabs_smoke;
 mod ui_loop;

@@ -203,8 +203,10 @@ pub const FAVICON_CAP_BYTES: u64 = 4 << 20;
 #[derive(Debug, Default)]
 pub struct Hits {
     pub entries: Vec<HistoryEntry>,
-    /// Keyed by the hit's URL.
+    /// Keyed by the hit's URL (history hits and matching bookmarks).
     pub icons: HashMap<String, Favicon>,
+    /// Every bookmarked link; the bar ranks them with the rest.
+    pub bookmarks: Vec<wubble_core::omnibox::Bookmark>,
 }
 
 /// What the store thread hands over at start.
@@ -836,7 +838,36 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                     failure = Some(e);
                     Vec::new()
                 });
-            let urls: Vec<&str> = entries.iter().map(|h| h.url.as_str()).collect();
+            let bookmarks: Vec<wubble_core::omnibox::Bookmark> = store
+                .all_bookmarks()
+                .await
+                .unwrap_or_else(|e| {
+                    failure = failure.take().or(Some(e));
+                    Vec::new()
+                })
+                .into_iter()
+                .filter_map(|b| {
+                    Some(wubble_core::omnibox::Bookmark {
+                        url: b.url?,
+                        title: b.title,
+                    })
+                })
+                .collect();
+            // icons only for the bookmarks the query can match, not the whole tree
+            let lower = prefix.to_lowercase();
+            let urls: Vec<&str> = entries
+                .iter()
+                .map(|h| h.url.as_str())
+                .chain(
+                    bookmarks
+                        .iter()
+                        .filter(|b| {
+                            b.url.to_lowercase().contains(&lower)
+                                || b.title.to_lowercase().contains(&lower)
+                        })
+                        .map(|b| b.url.as_str()),
+                )
+                .collect();
             let icons = match store.favicons_for(&urls).await {
                 Ok(icons) => icons,
                 Err(e) => {
@@ -844,7 +875,11 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                     HashMap::new()
                 }
             };
-            reply(Hits { entries, icons });
+            reply(Hits {
+                entries,
+                icons,
+                bookmarks,
+            });
             if let Some(e) = failure {
                 return Err(e);
             }

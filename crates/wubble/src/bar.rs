@@ -9,7 +9,7 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{
-    self, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchEngine, Target,
+    self, Bookmark, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchEngine, Target,
 };
 use wubble_core::tab::TabId;
 use wubble_ui::CommandKind;
@@ -52,10 +52,20 @@ pub struct BarRow {
 }
 
 impl BarRow {
-    /// The page whose favicon the row shows: a history row's URL.
+    /// The page whose stored favicon the row shows: a history or bookmark row's URL.
     pub fn icon_url(&self) -> Option<&str> {
         match (&self.target, self.kind) {
-            (RowTarget::Omni(Target::Url(u)), CommandKind::History) => Some(u),
+            (RowTarget::Omni(Target::Url(u)), CommandKind::History | CommandKind::Bookmark) => {
+                Some(u)
+            }
+            _ => None,
+        }
+    }
+
+    /// The open tab whose favicon the row shows (a switch-to-tab row).
+    pub fn icon_tab(&self) -> Option<TabId> {
+        match self.target {
+            RowTarget::Omni(Target::OpenTab(t)) => Some(t),
             _ => None,
         }
     }
@@ -65,11 +75,12 @@ impl BarRow {
 pub struct BarInputs<'a> {
     pub tabs: &'a [OpenTab],
     pub history: &'a [HistoryEntry],
+    /// Bookmarked links.
+    pub bookmarks: &'a [Bookmark],
     /// `None` until the first-run choice.
     pub engine: Option<SearchEngine>,
     pub keymap: &'a Keymap,
-    /// Live engine suggestions, already fetched (always empty for now, see
-    /// [`live_suggestions`]).
+    /// Live engine suggestions, already fetched (`suggest_fx`).
     pub suggestions: &'a [String],
     pub now_ms: i64,
 }
@@ -97,21 +108,6 @@ pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
             url: t.url.clone(),
         })
         .collect()
-}
-
-/// The seam for live engine suggestions. Fetching is not implemented: with
-/// the setting on this logs once and the bar keeps to local results.
-// TODO(remote suggestions): fetch `omnibox::suggest_url(engine, query)` off
-// the UI thread (debounced, stale replies dropped) and pass the parsed list
-// as `BarInputs::suggestions`. TODO.md "Suggestion fetch effect".
-pub fn live_suggestions(enabled: bool, _query: &str) -> Vec<String> {
-    static LOGGED: std::sync::Once = std::sync::Once::new();
-    if enabled {
-        LOGGED.call_once(|| {
-            eprintln!("wubble: live suggestions are on, but fetching is not implemented yet");
-        });
-    }
-    vec![]
 }
 
 fn kind(k: Kind) -> CommandKind {
@@ -159,7 +155,7 @@ pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
     let cands = Candidates {
         tabs: inputs.tabs,
         history: inputs.history,
-        bookmarks: &[],
+        bookmarks: inputs.bookmarks,
         suggestions: inputs.suggestions,
     };
     // Before the choice the engine only names the search rows, which are
@@ -244,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn only_history_rows_name_an_icon_by_their_url() {
+    fn history_and_bookmark_rows_name_an_icon_by_url_and_tab_rows_by_tab() {
         let row = |kind, target| BarRow {
             kind,
             title: String::new(),
@@ -257,9 +253,19 @@ mod tests {
             row(CommandKind::History, url.clone()).icon_url(),
             Some("https://a.test/")
         );
+        assert_eq!(
+            row(CommandKind::Bookmark, url.clone()).icon_url(),
+            Some("https://a.test/")
+        );
         assert_eq!(row(CommandKind::Action, url).icon_url(), None);
         let act = RowTarget::Omni(Target::Action(Action::Reload));
         assert_eq!(row(CommandKind::History, act).icon_url(), None);
+        let tab = RowTarget::Omni(Target::OpenTab(TabId(3)));
+        assert_eq!(
+            row(CommandKind::OpenTab, tab.clone()).icon_tab(),
+            Some(TabId(3))
+        );
+        assert_eq!(row(CommandKind::OpenTab, tab).icon_url(), None);
     }
 
     fn rows(engine: Option<SearchEngine>, tabs: &[OpenTab], query: &str) -> Vec<BarRow> {
@@ -268,6 +274,7 @@ mod tests {
             &BarInputs {
                 tabs,
                 history: &[],
+                bookmarks: &[],
                 engine,
                 keymap: &keymap,
                 suggestions: &[],
@@ -381,24 +388,48 @@ mod tests {
     }
 
     #[test]
-    fn live_suggestions_never_change_the_rows() {
-        for enabled in [false, true] {
-            assert_eq!(live_suggestions(enabled, "cats"), Vec::<String>::new());
-        }
-        let off = rows(DDG, &[], "cats");
+    fn live_suggestions_follow_the_local_rows() {
         let keymap = Keymap::defaults(Platform::Linux);
         let on = bar_rows(
             &BarInputs {
                 tabs: &[],
                 history: &[],
+                bookmarks: &[],
                 engine: DDG,
                 keymap: &keymap,
-                suggestions: &live_suggestions(true, "cats"),
+                suggestions: &["cats and dogs".into()],
                 now_ms: 0,
             },
             "cats",
         );
-        assert_eq!(on, off);
+        assert_eq!(on[0].target, RowTarget::Omni(Target::Search("cats".into())));
+        assert!(
+            on.iter()
+                .any(|r| r.target == RowTarget::Omni(Target::Search("cats and dogs".into())))
+        );
+    }
+
+    #[test]
+    fn bookmarks_are_candidates() {
+        let keymap = Keymap::defaults(Platform::Linux);
+        let bookmarks = [Bookmark {
+            url: "https://docs.rs/".into(),
+            title: "Docs".into(),
+        }];
+        let r = bar_rows(
+            &BarInputs {
+                tabs: &[],
+                history: &[],
+                bookmarks: &bookmarks,
+                engine: DDG,
+                keymap: &keymap,
+                suggestions: &[],
+                now_ms: 0,
+            },
+            "docs",
+        );
+        let row = r.iter().find(|r| r.kind == CommandKind::Bookmark).unwrap();
+        assert_eq!(row.icon_url(), Some("https://docs.rs/"));
     }
 
     #[test]
@@ -415,6 +446,7 @@ mod tests {
             &BarInputs {
                 tabs: &[],
                 history: &history,
+                bookmarks: &[],
                 engine: DDG,
                 keymap: &keymap,
                 suggestions: &[],

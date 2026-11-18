@@ -98,6 +98,7 @@ pub fn render_bar(
     window: &AppWindow,
     rows: &[BarRow],
     icons: &HashMap<String, wubble_store::Favicon>,
+    tab_icons: &BTreeMap<TabId, slint::Image>,
 ) {
     let rows = rows
         .iter()
@@ -107,9 +108,13 @@ pub fn render_bar(
             subtitle: r.subtitle.as_str().into(),
             shortcut: r.shortcut.as_str().into(),
             icon: r
-                .icon_url()
-                .and_then(|u| icons.get(u))
-                .map(|f| favicon_image(f.width, f.height, &f.rgba))
+                .icon_tab()
+                .and_then(|t| tab_icons.get(&t).cloned())
+                .or_else(|| {
+                    r.icon_url()
+                        .and_then(|u| icons.get(u))
+                        .map(|f| favicon_image(f.width, f.height, &f.rgba))
+                })
                 .unwrap_or_default(),
         })
         .collect();
