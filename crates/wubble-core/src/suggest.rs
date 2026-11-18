@@ -5,21 +5,8 @@
 //! Live suggestions send keystrokes to the search engine, so they are off
 //! unless the user turns them on.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchEngine {
-    Google,
-    DuckDuckGo,
-}
-
-impl SearchEngine {
-    /// Endpoint returning OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
-    fn suggest_endpoint(self) -> &'static str {
-        match self {
-            Self::Google => "https://suggestqueries.google.com/complete/search?client=firefox&q=",
-            Self::DuckDuckGo => "https://duckduckgo.com/ac/?type=list&q=",
-        }
-    }
-}
+pub use crate::omnibox::SearchEngine;
+use crate::omnibox::{Intent, classify, suggest_url};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiveSuggestions {
@@ -50,18 +37,12 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
         return Vec::new();
     }
     let mut out = vec![Source::Local];
-    if settings.live == LiveSuggestions::On && !looks_like_address(query) {
-        let mut url = String::from(settings.engine.suggest_endpoint());
-        crate::url::percent_encode_into(query, &mut url);
-        out.push(Source::Remote { url });
+    if settings.live == LiveSuggestions::On && matches!(classify(query), Intent::Search(_)) {
+        out.push(Source::Remote {
+            url: suggest_url(settings.engine, query),
+        });
     }
     out
-}
-
-/// Addresses being typed are never sent to a search engine.
-fn looks_like_address(query: &str) -> bool {
-    !query.contains(char::is_whitespace)
-        && (query.contains("://") || query.contains('.') || query.starts_with("localhost"))
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -132,6 +132,7 @@ Daily-drive set
 - [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container
 - [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; glass, results wiring and actions remain)
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
+- [x] Command bar brain (`wubble_core::omnibox`): `classify` (Chromium Parse rules), one search-engine table, `rank` over tabs/history/bookmarks/actions; wiring to Slint results remains
 - [ ] Suggestion fetch effect (run `Source::Remote` requests, debounce, cancel stale) and the settings toggle for the flag
 - [ ] Compact mode: sidebar/toolbar hide and reveal; the stretchy seam ("Room to play") for sidebar width
 - [ ] URL pill (Thin glass): host in Ink, rest in Haze
