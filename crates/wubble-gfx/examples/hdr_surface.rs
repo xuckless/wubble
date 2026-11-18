@@ -106,7 +106,10 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
-    drawn: u32,
+    /// Redraws attempted; the exit counts these, so a window that never gets
+    /// a frame (minimised, other workspace) still ends.
+    attempts: u32,
+    presented: u32,
 }
 
 impl State {
@@ -233,19 +236,26 @@ impl State {
             config,
             pipeline,
             bind_group,
-            drawn: 0,
+            attempts: 0,
+            presented: 0,
         }
     }
 
-    fn render(&mut self) {
+    /// Draws one frame; false when the surface is lost and the spike must end.
+    fn render(&mut self) -> bool {
+        self.attempts += 1;
         let texture = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return true;
             }
-            _ => return,
+            wgpu::CurrentSurfaceTexture::Lost => {
+                eprintln!("hdr surface: surface lost");
+                return false;
+            }
+            _ => return true,
         };
         let view = texture.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -269,7 +279,8 @@ impl State {
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
         self.queue.present(texture);
-        self.drawn += 1;
+        self.presented += 1;
+        true
     }
 }
 
@@ -309,9 +320,11 @@ impl ApplicationHandler for App {
                 state.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                state.render();
-                if state.drawn >= FRAMES {
-                    println!("hdr surface: presented {} frames", state.drawn);
+                if !state.render() || state.attempts >= FRAMES {
+                    println!(
+                        "hdr surface: presented {} of {} frames",
+                        state.presented, state.attempts
+                    );
                     event_loop.exit();
                 } else {
                     state.window.request_redraw();

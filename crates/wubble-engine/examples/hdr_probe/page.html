@@ -20,6 +20,8 @@
 <canvas id="cv" width="40" height="40"></canvas>
 <img id="img" src="pq-hdr.avif">
 <video id="vid" src="pq-hdr.mp4" muted loop autoplay playsinline></video>
+<!-- 8-bit control for the 10-bit clip above: same PQ greys and tags; the 10-bit one renders black (TODO.md) -->
+<video id="pq8" src="pq-hdr-8bit.mp4" muted loop autoplay playsinline style="position:absolute;left:10px;top:280px;width:160px;height:90px"></video>
 <video id="sdr" src="sdr.mp4" muted loop autoplay playsinline style="position:absolute;left:200px;top:180px;width:160px;height:90px"></video>
 <script>
 const out = {};

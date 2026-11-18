@@ -256,9 +256,6 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
         .iter()
         .chain(Current::CHROMIUM_SWITCHES)
         .map(|(name, value)| ((*name).into(), value.map(Into::into)))
-        .chain(probe_switches(
-            std::env::var("WUBBLE_PROBE_SWITCHES").ok().as_deref(),
-        ))
         .collect();
     cef.pump_scheduler = config.pump_scheduler.clone();
     cef
@@ -353,7 +350,12 @@ pub struct Engine {
 impl Engine {
     /// Initialises CEF. Call once per process, on the UI thread.
     pub fn start(config: EngineConfig) -> Result<Self, EngineError> {
-        let cef = cef_config(&config);
+        let mut cef = cef_config(&config);
+        // Read here, not in `cef_config`, so that stays pure and its tests
+        // do not depend on the caller's environment.
+        cef.command_line_switches.extend(probe_switches(
+            std::env::var("WUBBLE_PROBE_SWITCHES").ok().as_deref(),
+        ));
         if let Some(helper) = cef
             .browser_subprocess_path
             .as_ref()
