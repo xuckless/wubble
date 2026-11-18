@@ -1,14 +1,16 @@
 //! The only code that writes the shell's models: each call replaces them
 //! wholesale from a derived value (tab counts are small).
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use slint::{Color, ModelRc, VecModel};
 use wubble_core::space::Rgb;
+use wubble_core::tab::TabId;
 use wubble_ui::{AppWindow, CommandResult, SpaceItem, TabItem};
 
 use crate::bar::BarRow;
-use crate::shell::{ShellView, TabRow};
+use crate::shell::{self, ShellView, TabRow};
 
 fn color(Rgb(r, g, b): Rgb) -> Color {
     Color::from_rgb_u8(r, g, b)
@@ -18,15 +20,18 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::from(Rc::new(VecModel::from(items)))
 }
 
-fn tab_items(rows: &[TabRow]) -> ModelRc<TabItem> {
+fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> ModelRc<TabItem> {
     model(
         rows.iter()
             .map(|r| TabItem {
                 id: r.id,
                 title: r.title.as_str().into(),
                 url: r.url.as_str().into(),
-                // No favicon is fetched yet: the row shows the neutral glyph.
-                favicon: Default::default(),
+                // None yet: the row shows the neutral glyph.
+                favicon: shell::tab_id(r.id)
+                    .and_then(|id| favicons.get(&id))
+                    .cloned()
+                    .unwrap_or_default(),
                 audible: r.audible,
                 muted: r.muted,
                 in_split: r.in_split,
@@ -35,9 +40,9 @@ fn tab_items(rows: &[TabRow]) -> ModelRc<TabItem> {
     )
 }
 
-pub fn render(window: &AppWindow, v: &ShellView) {
-    window.set_pinned_tabs(tab_items(&v.pinned));
-    window.set_tabs(tab_items(&v.tabs));
+pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slint::Image>) {
+    window.set_pinned_tabs(tab_items(&v.pinned, favicons));
+    window.set_tabs(tab_items(&v.tabs, favicons));
     window.set_spaces(model(
         v.spaces
             .iter()

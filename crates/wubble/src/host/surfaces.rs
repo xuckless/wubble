@@ -111,6 +111,7 @@ impl Host {
             Routed::Error(e) => self.apply_error(tab, e),
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
+            Routed::Favicon(icon) => self.show_favicon(tab, icon),
             Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);

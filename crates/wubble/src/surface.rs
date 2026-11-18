@@ -335,6 +335,8 @@ pub enum Routed {
     Download(PageEvent),
     /// A console line, for the debug log.
     Console(String),
+    /// The page's icon, downloaded (`host/surfaces.rs`, `show_favicon`).
+    Favicon(wubble_engine::favicon::FaviconImage),
     Ignore,
 }
 
@@ -425,8 +427,9 @@ pub fn route(event: PageEvent) -> Routed {
             line,
         } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
         PageEvent::DragStarted { .. } => Routed::Ignore,
+        PageEvent::FaviconImage(icon) => Routed::Favicon(icon),
         // Nothing in the shell prints yet.
-        PageEvent::FaviconImage(_) | PageEvent::PdfPrinted { .. } => Routed::Ignore,
+        PageEvent::PdfPrinted { .. } => Routed::Ignore,
     }
 }
 

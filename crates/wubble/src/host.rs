@@ -283,6 +283,9 @@ pub struct Host {
     ime: Ime,
     /// Sound per live tab, as its view reported it.
     audio: AudioMap,
+    /// Each tab's page icon, as its view last downloaded it; shown on its row. Kept in memory
+    /// only (the store's favicon cache is not wired yet).
+    favicons: BTreeMap<TabId, slint::Image>,
     /// Per-site zoom; stored through the store, applied on each commit.
     site_zoom: ZoomTable,
     /// Bumped per notice and per find-bar focus request.
@@ -379,6 +382,7 @@ impl Host {
             screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
+            favicons: BTreeMap::new(),
             site_zoom,
             toast_serial: 0,
             find_focus: 0,
@@ -519,8 +523,32 @@ impl Host {
         }
         self.settle_panes(&window);
         self.sync_focus(&window);
-        crate::bind::render(&window, &crate::shell::view_model(&self.model, &self.audio));
+        let tabs = &self.model.tabs;
+        self.favicons.retain(|tab, _| tabs.contains_key(tab));
+        crate::bind::render(
+            &window,
+            &crate::shell::view_model(&self.model, &self.audio),
+            &self.favicons,
+        );
         self.render_surfaces(&window);
+    }
+
+    /// Shows `icon` on `tab`'s row if it is still its page's icon (a late image of the previous
+    /// page is dropped).
+    pub(super) fn show_favicon(&mut self, tab: TabId, icon: wubble_engine::favicon::FaviconImage) {
+        if self
+            .tab_view(tab)
+            .is_none_or(|view| view.nav().page.favicon != icon.url)
+        {
+            return;
+        }
+        let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+            &icon.rgba,
+            icon.width,
+            icon.height,
+        );
+        self.favicons.insert(tab, slint::Image::from_rgba8(pixels));
+        self.after_change();
     }
 
     fn tab_view(&mut self, tab: TabId) -> Option<&mut View> {
@@ -777,8 +805,13 @@ impl Host {
                     self.perform(action);
                 }
             }
-            // No favicons in the shell yet.
-            WebEvent::FaviconChanged(_) => {}
+            // A page without an icon shows the neutral glyph; a new icon replaces the old one
+            // once it has downloaded (`show_favicon`).
+            WebEvent::FaviconChanged(url) => {
+                if url.is_empty() && self.favicons.remove(&tab).is_some() {
+                    self.after_change();
+                }
+            }
         }
     }
 
