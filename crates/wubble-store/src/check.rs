@@ -50,6 +50,11 @@ const CHECKS: &[(&str, &str)] = &[
          (SELECT 1 FROM tabs t WHERE t.id = s.active_tab_id AND t.space_id = s.id)",
     ),
     (
+        "split pane that is not a tab of its space",
+        "SELECT p.space_id FROM split_panes p WHERE NOT EXISTS \
+         (SELECT 1 FROM tabs t WHERE t.id = p.tab_id AND t.space_id = p.space_id)",
+    ),
+    (
         "session whose active space is missing",
         "SELECT s.id FROM session s WHERE s.active_space_id IS NOT NULL AND NOT EXISTS \
          (SELECT 1 FROM spaces p WHERE p.id = s.active_space_id)",
@@ -278,6 +283,11 @@ mod tests {
             .await;
             detects("UPDATE spaces SET active_tab_id = 99", "active tab").await;
             detects("UPDATE session SET active_space_id = 99", "active space").await;
+            detects(
+                "INSERT INTO split_panes(space_id, position, tab_id, stop) VALUES (0, 0, 99, 0.5)",
+                "split pane",
+            )
+            .await;
             detects(
                 "INSERT INTO tab_folders(id, space_id, name, position) VALUES (5, 99, 'x', 0)",
                 "folder in missing space",

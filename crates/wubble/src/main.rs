@@ -10,6 +10,7 @@ mod menu;
 mod nav_smoke;
 mod page_error;
 mod page_smoke;
+mod panes;
 mod perform;
 mod persist;
 mod pixels;
@@ -18,6 +19,7 @@ mod prompt;
 mod screen;
 mod session_smoke;
 mod shell;
+mod split_smoke;
 mod surface;
 mod tabs_smoke;
 
@@ -36,6 +38,7 @@ use profile::Profile;
 use session_smoke::SessionSmoke;
 use slint::ComponentHandle;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
+use split_smoke::SplitSmoke;
 use tabs_smoke::TabsSmoke;
 use wubble_core::seam::Seam;
 use wubble_engine::app::{self, Engine, EngineConfig, EngineError, PumpScheduler};
@@ -152,6 +155,29 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Smoke(Smoke::Split) => {
+            match with_smoke_dir(|config, dir| run(Mode::Split, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    split_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: split ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: split FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: split FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Page) => {
             match with_smoke_dir(|config, dir| run(Mode::Page, config, dir)) {
                 Ok(Outcome {
@@ -250,6 +276,11 @@ fn install_shell_driver(
     let panels = wubble_ui::driver::install(window, seam, move |window, now, items| {
         if let Ok(mut glass) = glass.try_borrow_mut() {
             glass.frame(window, now, items);
+        }
+        // The split's strings, stepped with the rest of the shell. Inside rendering the host
+        // may be busy (a pump renders); then this frame skips them and asks for the next.
+        if split_frame(window, now) {
+            window.window().request_redraw();
         }
     })?;
     Ok(panels)
@@ -351,6 +382,8 @@ struct Outcome {
     session_passed: bool,
     /// The zoom `--smoke page` passed with.
     page_zoom: Option<u32>,
+    /// `--smoke split` reached its end.
+    split_passed: bool,
 }
 
 /// What the window is for.
@@ -366,6 +399,8 @@ enum Mode {
     Nav,
     /// `--smoke tabs`.
     Tabs,
+    /// `--smoke split`.
+    Split,
     /// `--smoke page`.
     Page,
     /// One phase of `--smoke session`.
@@ -398,6 +433,17 @@ fn with_host(f: impl FnOnce(&mut Host)) {
         }
         Err(_) => eprintln!("wubble: host busy, input or pump request dropped"),
     });
+}
+
+/// The split's frame from the rendering notifier: whether another frame is needed. A busy host
+/// (rendering inside a pump) skips this one and asks for the next; no host needs none.
+fn split_frame(window: &AppWindow, now: Instant) -> bool {
+    HOST.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut host) => host
+            .as_mut()
+            .is_some_and(|host| host.split_frame(window, now)),
+        Err(_) => true,
+    })
 }
 
 /// Hands a pump request to the host.
@@ -465,17 +511,28 @@ pub fn page_url(html: &str) -> String {
 /// Hands the shell's web-content callbacks and raw window events to the host.
 fn connect_input(window: &AppWindow) {
     let point = |x: f32, y: f32| Point { x, y };
-    window.on_web_pointer_moved(move |x, y| with_host(|host| host.pointer_moved(point(x, y))));
-    window.on_web_pointer_left(move |x, y| with_host(|host| host.pointer_left(point(x, y))));
-    window.on_web_pointer_pressed(move |button, x, y| {
-        with_host(|host| host.pointer_button(button, true, point(x, y)))
+    window.on_web_pointer_moved(move |pane, x, y| {
+        with_host(|host| host.pointer_moved(pane, point(x, y)))
     });
-    window.on_web_pointer_released(move |button, x, y| {
-        with_host(|host| host.pointer_button(button, false, point(x, y)))
+    window.on_web_pointer_left(move |pane, x, y| {
+        with_host(|host| host.pointer_left(pane, point(x, y)))
     });
-    window.on_web_pointer_cancelled(|| with_host(Host::pointer_cancelled));
-    window
-        .on_web_scrolled(move |x, y, dx, dy| with_host(|host| host.scrolled(point(x, y), dx, dy)));
+    window.on_web_pointer_pressed(move |pane, button, x, y| {
+        with_host(|host| host.pointer_button(pane, button, true, point(x, y)))
+    });
+    window.on_web_pointer_released(move |pane, button, x, y| {
+        with_host(|host| host.pointer_button(pane, button, false, point(x, y)))
+    });
+    window.on_web_pointer_cancelled(|pane| with_host(|host| host.pointer_cancelled(pane)));
+    window.on_web_scrolled(move |pane, x, y, dx, dy| {
+        with_host(|host| host.scrolled(pane, point(x, y), dx, dy))
+    });
+    // The split's seams and the panes' close buttons.
+    window.on_split_grab(|j, x, y| with_host(|host| host.split_grab(j, x, y)));
+    window.on_split_drag(|x, y| with_host(|host| host.split_drag(x, y)));
+    window.on_split_release(|| with_host(Host::split_release));
+    window.on_split_even(|| with_host(Host::split_even));
+    window.on_pane_close(|id| with_host(|host| host.pane_close(id)));
     let weak = window.as_weak();
     window.on_web_focus_changed(move |_| {
         if let Some(window) = weak.upgrade() {
@@ -534,6 +591,13 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
+    window.on_tab_context(|id, x, y| with_host(|host| host.tab_context(id, x, y)));
+    let weak = window.as_weak();
+    window.on_beside_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            with_host(|host| host.bar_for_beside(&window));
+        }
+    });
     window.on_tab_mute_toggled(|id| {
         if let Some(tab) = shell::tab_id(id) {
             with_host(|host| host.toggle_mute(tab));
@@ -613,6 +677,7 @@ fn run(
         tabs_smoke: None,
         session_smoke: None,
         page_smoke: None,
+        split_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
     // Smokes download into their throwaway profile.
@@ -647,6 +712,13 @@ fn run(
             Some(bundled()),
             Checks {
                 tabs_smoke: Some(TabsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Split => (
+            Some(bundled()),
+            Checks {
+                split_smoke: Some(SplitSmoke::default()),
                 ..none
             },
         ),
@@ -692,7 +764,12 @@ fn run(
     let host = Host::new(
         engine,
         &window,
-        [gpu.presenter(), gpu.presenter()],
+        [
+            gpu.presenter(),
+            gpu.presenter(),
+            gpu.presenter(),
+            gpu.presenter(),
+        ],
         glass,
         panels,
         loaded,
@@ -730,6 +807,7 @@ fn run(
         failure: host.failure.take().map(Into::into),
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
+        split_passed: host.split_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
     })

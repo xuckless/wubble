@@ -4,7 +4,7 @@
 
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
-use wubble_core::space::SpaceId;
+use wubble_core::space::{MAX_PANES, SpaceId};
 use wubble_core::tab::TabId;
 
 use crate::surface::FindEvent;
@@ -50,6 +50,8 @@ pub enum Plan {
     Fullscreen,
     /// Put the text on the clipboard.
     Copy(String),
+    /// Open the command bar to choose a page to put beside the focused one.
+    OpenBeside,
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -110,6 +112,16 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| !t.url.is_empty())
             .map_or(Plan::Nothing, |t| Plan::Copy(t.url.clone())),
+        // the design's `split_next`: the next tab down, else a page chosen in the bar
+        Action::SplitNext => match model.split_candidate() {
+            Some(t) => Plan::Model(Command::SplitWith(t)),
+            None if visible.is_some() && model.visible_tabs().len() < MAX_PANES => Plan::OpenBeside,
+            None => Plan::Nothing,
+        },
+        Action::Unsplit => match visible {
+            Some(t) if model.split_of(t).is_some() => Plan::Model(Command::Unsplit(t)),
+            _ => Plan::Nothing,
+        },
         Action::Quit => Plan::Quit,
         Action::NewWindow
         | Action::NewSpace
@@ -247,5 +259,27 @@ mod tests {
         assert_eq!(plan(Action::SelectSpace(3), &m), Plan::Nothing);
         assert_eq!(plan(Action::NextSpace, &m), switch(1));
         assert_eq!(plan(Action::PrevSpace, &m), switch(1));
+    }
+
+    #[test]
+    fn split_actions() {
+        let m = with_tabs(1);
+        assert_eq!(plan(Action::SplitNext, &m), Plan::OpenBeside);
+        assert_eq!(plan(Action::Unsplit, &m), Plan::Nothing);
+        let m = with_tabs(3);
+        // the last tab is visible: the next one down wraps to the first
+        assert_eq!(
+            plan(Action::SplitNext, &m),
+            Plan::Model(Command::SplitWith(TabId(1)))
+        );
+        let (m, _) = apply(m, Command::SplitWith(TabId(1)));
+        assert_eq!(
+            plan(Action::Unsplit, &m),
+            Plan::Model(Command::Unsplit(TabId(1)))
+        );
+        let (m, _) = apply(m, Command::SplitWith(TabId(2)));
+        assert_eq!(plan(Action::SplitNext, &m), Plan::Nothing, "full");
+        let empty = Model::new(std::time::Instant::now());
+        assert_eq!(plan(Action::SplitNext, &empty), Plan::Nothing);
     }
 }

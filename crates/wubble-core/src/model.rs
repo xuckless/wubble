@@ -23,7 +23,10 @@ use std::time::Instant;
 
 use crate::lifecycle::{self, Activity, Lifecycle, Pin};
 use crate::sleep::{Pressure, SleepPolicy};
-use crate::space::{Container, ContainerId, Folder, FolderId, Item, Rgb, Space, SpaceId};
+use crate::space::{
+    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceId, SplitGroup,
+    even,
+};
 use crate::tab::{Liveness, Tab, TabId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +120,28 @@ pub enum Command {
     },
     /// The tab's renderer process died.
     RendererGone(TabId),
+    /// Put `tab` (of the active Space) beside the focused page: opens a split of the two, or
+    /// adds a pane after the focused one (at most [`MAX_PANES`]); the shares even out and `tab`
+    /// takes focus. The design's `split_with` (browser/model.ts).
+    SplitWith(TabId),
+    /// A new tab loading `url`, put beside the focused page (the design's `open_beside`).
+    OpenBeside {
+        url: String,
+    },
+    /// Take the tab out of its split; it stays open. A split of one is no split. If it was the
+    /// focused page, focus passes to the page that grows into its place.
+    Unsplit(TabId),
+    /// Where the Space's seams rest (from the split physics). Refused unless they fit its panes.
+    ResizeSplit {
+        space: SpaceId,
+        stops: Vec<f64>,
+    },
+    /// Swap the tab with its neighbour in its split (`right`: the one to its right). The seams
+    /// stay where they are.
+    SwapPane {
+        tab: TabId,
+        right: bool,
+    },
     /// Coarse lifecycle tick: hidden tabs are put to sleep by the sleep policy.
     /// `now` also becomes the model's clock, the time later hides are stamped with.
     Tick {
@@ -180,6 +205,7 @@ impl Model {
             pinned: vec![],
             items: vec![],
             active: None,
+            split: None,
         };
         Self {
             active_space: space.id,
@@ -310,6 +336,54 @@ impl Model {
             .and_then(|si| self.spaces[si].active)
     }
 
+    /// Every tab on screen, left to right: the active Space's split when its active tab is in it,
+    /// otherwise just the active tab. [`Model::visible_tab`] is the focused one among them.
+    pub fn visible_tabs(&self) -> Vec<TabId> {
+        let Some(si) = self.space_idx(self.active_space) else {
+            return vec![];
+        };
+        let s = &self.spaces[si];
+        match (&s.split, s.active) {
+            (Some(g), Some(a)) if g.tabs.contains(&a) => g.tabs.clone(),
+            (_, a) => a.into_iter().collect(),
+        }
+    }
+
+    /// The split shown in the active Space, if any.
+    pub fn shown_split(&self) -> Option<&SplitGroup> {
+        let s = &self.spaces[self.space_idx(self.active_space)?];
+        s.split
+            .as_ref()
+            .filter(|g| s.active.is_some_and(|a| g.tabs.contains(&a)))
+    }
+
+    /// The split `tab` is a pane of, shown or not.
+    pub fn split_of(&self, tab: TabId) -> Option<&SplitGroup> {
+        self.spaces
+            .iter()
+            .filter_map(|s| s.split.as_ref())
+            .find(|g| g.tabs.contains(&tab))
+    }
+
+    /// The tab "split with next tab" puts beside the focused page: the next one down in the
+    /// active Space's order, wrapping, that is not already in its split (the design's
+    /// `split_next`). `None` when there is none, or the shown split is full.
+    pub fn split_candidate(&self) -> Option<TabId> {
+        if self.visible_tabs().len() >= MAX_PANES {
+            return None;
+        }
+        let si = self.space_idx(self.active_space)?;
+        let s = &self.spaces[si];
+        let order = self.order_idx(si);
+        let a = order.iter().position(|&t| Some(t) == s.active)?;
+        let in_split = |t: &TabId| s.split.as_ref().is_some_and(|g| g.tabs.contains(t));
+        order[a + 1..]
+            .iter()
+            .chain(&order[..a])
+            .copied()
+            .find(|t| !in_split(t))
+    }
+
     /// The tab `delta` steps from the visible one in the active Space's
     /// order (pinned first), wrapping at both ends.
     pub fn tab_step(&self, delta: isize) -> Option<TabId> {
@@ -411,13 +485,26 @@ impl Model {
                 None if order.is_empty() => {}
                 a => return Err(format!("space {:?} bad active {a:?}", s.id)),
             }
+            if let Some(g) = &s.split {
+                if !(2..=MAX_PANES).contains(&g.tabs.len()) {
+                    return Err(format!("space {:?} split of {}", s.id, g.tabs.len()));
+                }
+                if !SplitGroup::stops_fit(&g.stops, g.tabs.len()) {
+                    return Err(format!("space {:?} bad stops {:?}", s.id, g.stops));
+                }
+                for (i, t) in g.tabs.iter().enumerate() {
+                    if !order.contains(t) || g.tabs[..i].contains(t) {
+                        return Err(format!("space {:?} bad split pane {t:?}", s.id));
+                    }
+                }
+            }
         }
         if let Some(t) = self.tabs.keys().find(|t| !placed.contains_key(t)) {
             return Err(format!("tab {t:?} in map but unplaced"));
         }
-        let visible = self.visible_tab();
+        let visible = self.visible_tabs();
         for t in self.tabs.values() {
-            let shown = Some(t.id) == visible;
+            let shown = visible.contains(&t.id);
             if shown != (t.lifecycle.liveness == Liveness::Active) {
                 return Err(format!(
                     "tab {:?} visible={shown} but {:?}",
@@ -576,8 +663,10 @@ impl Model {
             return vec![];
         };
         let was_active = self.spaces[si].active == Some(tab);
+        // A closed pane leaves its split; the page that grows into its place takes focus.
+        let heir = self.leave_split(tab);
         let next = if was_active {
-            self.successor(si, tab, true)
+            heir.or_else(|| self.successor(si, tab, true))
         } else {
             self.spaces[si].active
         };
@@ -617,8 +706,10 @@ impl Model {
             return vec![];
         };
         let src_was_active = self.spaces[src].active == Some(tab);
+        // A pane moved to another Space leaves its split there.
+        let heir = (src != dst).then(|| self.leave_split(tab)).flatten();
         let src_next = (src_was_active && src != dst)
-            .then(|| self.successor(src, tab, false))
+            .then(|| heir.or_else(|| self.successor(src, tab, false)))
             .flatten();
         self.detach(tab);
         self.attach(tab, to, dst);
@@ -782,6 +873,9 @@ impl Model {
             }
         };
         s.pinned.iter_mut().for_each(swap);
+        if let Some(g) = &mut s.split {
+            g.tabs.iter_mut().for_each(swap);
+        }
         for item in &mut s.items {
             match item {
                 Item::Tab(t) => swap(t),
@@ -807,6 +901,125 @@ impl Model {
         fx
     }
 
+    /// Takes `tab` out of its split (the design's `unsplit`): the seam on its far side goes with
+    /// it, and a split of one is no split. Returns the heir, the pane that grows into its place,
+    /// while any pane is left.
+    fn leave_split(&mut self, tab: TabId) -> Option<TabId> {
+        let s = self
+            .spaces
+            .iter_mut()
+            .find(|s| s.split.as_ref().is_some_and(|g| g.tabs.contains(&tab)))?;
+        let g = s.split.as_mut()?;
+        let i = g.tabs.iter().position(|&t| t == tab)?;
+        g.tabs.remove(i);
+        g.stops.remove(i.min(g.stops.len() - 1));
+        let heir = g.tabs.get(i.min(g.tabs.len().saturating_sub(1))).copied();
+        if g.tabs.len() < 2 {
+            s.split = None;
+        }
+        heir
+    }
+
+    fn split_with(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some(si) = self.space_idx(self.active_space) else {
+            return vec![];
+        };
+        let Some(focused) = self.spaces[si].active.filter(|&f| f != tab) else {
+            return vec![];
+        };
+        if !self.order_idx(si).contains(&tab) {
+            return vec![];
+        }
+        let s = &mut self.spaces[si];
+        match &mut s.split {
+            Some(g) if g.tabs.contains(&focused) => {
+                if g.tabs.len() >= MAX_PANES || g.tabs.contains(&tab) {
+                    return vec![];
+                }
+                let at = g.tabs.iter().position(|&t| t == focused).unwrap_or(0) + 1;
+                g.tabs.insert(at, tab);
+                g.stops = even(g.tabs.len());
+            }
+            // a hidden split is replaced, as in the design
+            _ => {
+                s.split = Some(SplitGroup {
+                    tabs: vec![focused, tab],
+                    stops: even(2),
+                })
+            }
+        }
+        // the new page takes focus
+        s.active = Some(tab);
+        vec![Effect::ActivateTab(tab)]
+    }
+
+    /// A new tab beside the focused page (the design's `open_beside`). Into an empty Space, or
+    /// beside a full split, it is a plain new tab shown alone.
+    fn open_beside(&mut self, url: String) -> Vec<Effect> {
+        let focused = self.visible_tab();
+        let mut fx = self.new_tab(url, None, None);
+        let (Some(Effect::CreateTab { tab, .. }), Some(f)) = (fx.first().cloned(), focused) else {
+            return fx;
+        };
+        // back to the page the new one goes beside
+        let si = self.space_idx(self.active_space).expect("active space");
+        self.spaces[si].active = Some(f);
+        let beside = self.split_with(tab);
+        if beside.is_empty() {
+            self.spaces[si].active = Some(tab);
+        } else {
+            fx.retain(|e| *e != Effect::ActivateTab(tab));
+            fx.extend(beside);
+        }
+        fx
+    }
+
+    fn unsplit(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some((si, _)) = self.place_of(tab) else {
+            return vec![];
+        };
+        let was_active = self.spaces[si].active == Some(tab);
+        let Some(heir) = self.leave_split(tab) else {
+            return vec![];
+        };
+        if !was_active {
+            return vec![];
+        }
+        self.spaces[si].active = Some(heir);
+        if self.spaces[si].id == self.active_space {
+            vec![Effect::ActivateTab(heir)]
+        } else {
+            vec![]
+        }
+    }
+
+    fn resize_split(&mut self, space: SpaceId, stops: Vec<f64>) -> Vec<Effect> {
+        if let Some(g) = self
+            .space_idx(space)
+            .and_then(|si| self.spaces[si].split.as_mut())
+            .filter(|g| SplitGroup::stops_fit(&stops, g.tabs.len()))
+        {
+            g.stops = stops;
+        }
+        vec![]
+    }
+
+    fn swap_pane(&mut self, tab: TabId, right: bool) -> Vec<Effect> {
+        let Some(g) = self
+            .spaces
+            .iter_mut()
+            .find_map(|s| s.split.as_mut().filter(|g| g.tabs.contains(&tab)))
+        else {
+            return vec![];
+        };
+        let i = g.tabs.iter().position(|&t| t == tab).unwrap_or(0);
+        let j = if right { i + 1 } else { i.wrapping_sub(1) };
+        if j < g.tabs.len() {
+            g.tabs.swap(i, j);
+        }
+        vec![]
+    }
+
     /// Runs `event` through the tab's lifecycle and returns its effects.
     fn lifecycle(&mut self, tab: TabId, event: lifecycle::Event) -> Vec<Effect> {
         let Some(t) = self.tabs.get_mut(&tab) else {
@@ -818,9 +1031,9 @@ impl Model {
     }
 
     /// Brings every lifecycle in line with the model after a command:
-    /// tabs `gone` since `before` are closed, every tab but the visible one
-    /// is hidden and the visible one shown. Each transition is a no-op for a
-    /// tab already in that state.
+    /// tabs `gone` since `before` are closed, every tab not on screen is
+    /// hidden and each one on screen (every pane of a shown split) shown.
+    /// Each transition is a no-op for a tab already in that state.
     fn settle(&mut self, before: &BTreeMap<TabId, Lifecycle>) -> Vec<Effect> {
         let mut fx = vec![];
         for (&tab, &state) in before {
@@ -829,12 +1042,12 @@ impl Model {
             }
         }
         let ids: Vec<TabId> = self.tabs.keys().copied().collect();
-        let visible = self.visible_tab();
+        let visible = self.visible_tabs();
         let now = self.clock;
-        for &tab in ids.iter().filter(|&&t| Some(t) != visible) {
+        for &tab in ids.iter().filter(|t| !visible.contains(t)) {
             fx.extend(self.lifecycle(tab, lifecycle::Event::Hidden { now }));
         }
-        if let Some(tab) = visible {
+        for tab in visible {
             fx.extend(self.lifecycle(tab, lifecycle::Event::Shown));
         }
         fx
@@ -891,7 +1104,7 @@ fn step(tab: TabId, state: Lifecycle, event: lifecycle::Event) -> (Lifecycle, Ve
 /// The only way to change a [`Model`].
 ///
 /// Tab lifecycles are settled at the end: whatever the command, the result has
-/// exactly one visible, Active tab (if any), every other tab hidden, and the
+/// exactly the tabs on screen ([`Model::visible_tabs`]) Active, every other tab hidden, and the
 /// lifecycle effects of getting there appended as [`Effect::Lifecycle`]
 /// (closed tabs first, then hides, then the show, then the sleep of any hidden
 /// tab the command made eligible for it).
@@ -939,6 +1152,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
                     pinned: vec![],
                     items: vec![],
                     active: None,
+                    split: None,
                 });
             }
             vec![]
@@ -982,6 +1196,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             m.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
         }
         Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),
+        Command::SplitWith(t) => m.split_with(t),
+        Command::OpenBeside { url } => m.open_beside(url),
+        Command::Unsplit(t) => m.unsplit(t),
+        Command::ResizeSplit { space, stops } => m.resize_split(space, stops),
+        Command::SwapPane { tab, right } => m.swap_pane(tab, right),
         Command::Tick { now, pressure } => {
             m.clock = now;
             m.pressure = pressure;

@@ -52,6 +52,46 @@ pub struct Space {
     pub items: Vec<Item>,
     /// `Some` exactly when the Space has a tab; remembered while another Space is shown.
     pub active: Option<TabId>,
+    /// Pages shown side by side; shown while `active` is one of them, remembered otherwise.
+    pub split: Option<SplitGroup>,
+}
+
+/// Most pages side by side (the design's `SPLIT.maxPanes`).
+pub const MAX_PANES: usize = crate::split::SPLIT::maxPanes;
+
+/// 2 to [`MAX_PANES`] tabs of one Space, left to right, and where the seams between them rest.
+/// The design's split group (browser/model.ts). `stops` are the only stored layout: seam
+/// positions as fractions of the width, strictly increasing in (0, 1), one fewer than `tabs`;
+/// the panes' shares are derived from them ([`SplitGroup::ratios`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitGroup {
+    pub tabs: Vec<TabId>,
+    pub stops: Vec<f64>,
+}
+
+impl SplitGroup {
+    /// Each pane's share of the width, left to right. Sums to 1 by construction.
+    pub fn ratios(&self) -> Vec<f64> {
+        let edges: Vec<f64> = std::iter::once(0.0)
+            .chain(self.stops.iter().copied())
+            .chain(std::iter::once(1.0))
+            .collect();
+        edges.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
+    /// Whether `stops` fit `n` panes: n - 1 of them, strictly increasing inside (0, 1).
+    pub fn stops_fit(stops: &[f64], n: usize) -> bool {
+        stops.len() + 1 == n
+            && stops.iter().all(|s| s.is_finite() && *s > 0.0 && *s < 1.0)
+            && stops.windows(2).all(|w| w[0] < w[1])
+    }
+}
+
+/// `even(n)`: n - 1 stops at equal shares. Source: the design repo, `slint/split.rs` `even`.
+pub fn even(n: usize) -> Vec<f64> {
+    (0..n.saturating_sub(1))
+        .map(|j| (j as f64 + 1.0) / n as f64)
+        .collect()
 }
 
 impl Space {
@@ -163,6 +203,22 @@ mod tests {
             ),
             Rgb(47, 95, 196)
         );
+    }
+
+    #[test]
+    fn ratios_are_derived_from_stops_and_sum_to_one() {
+        let g = SplitGroup {
+            tabs: vec![TabId(1), TabId(2), TabId(3)],
+            stops: vec![0.25, 0.75],
+        };
+        assert_eq!(g.ratios(), vec![0.25, 0.5, 0.25]);
+        assert_eq!(g.ratios().iter().sum::<f64>(), 1.0);
+        assert_eq!(even(3), vec![1.0 / 3.0, 2.0 / 3.0]);
+        assert!(SplitGroup::stops_fit(&even(3), 3));
+        assert!(!SplitGroup::stops_fit(&[0.5], 3));
+        assert!(!SplitGroup::stops_fit(&[0.6, 0.4], 3));
+        assert!(!SplitGroup::stops_fit(&[0.0], 2));
+        assert!(!SplitGroup::stops_fit(&[f64::NAN], 2));
     }
 
     #[test]

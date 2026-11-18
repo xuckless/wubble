@@ -29,6 +29,7 @@ fn tab_items(rows: &[TabRow]) -> ModelRc<TabItem> {
                 favicon: Default::default(),
                 audible: r.audible,
                 muted: r.muted,
+                in_split: r.in_split,
             })
             .collect(),
     )

@@ -1,6 +1,6 @@
 // Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
 // `src/wubble/slint/components.slint`, copied verbatim except the marked `wubble change`s.
-// wubble change: SplitView is not copied (split view is out of scope), and `Sidebar` lives in
+// wubble change: `SplitView` shows live pages (see its block), and `Sidebar` lives in
 // components/sidebar.slint (it gains wubble's address pill, favourites, new-tab row and Space
 // capsule, built on the pieces here).
 //
@@ -258,6 +258,8 @@ export component TabRow inherits Rectangle {
     callback close();
     // wubble change: the speaker glyph, shown while the page plays sound or is muted.
     callback mute();
+    // wubble change: a right click, pointer in window px (the tab's context menu).
+    callback context(length, length);
 
     height: Chrome.row;
     border-radius: Radius.sm;
@@ -272,6 +274,8 @@ export component TabRow inherits Rectangle {
     touch := TouchArea {
         pointer-event(e) => {
             if (e.button == PointerEventButton.middle && e.kind == PointerEventKind.down) { root.close(); return; } // middle click closes
+            // wubble change: right click opens the tab's menu
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) { root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); return; }
             if (e.button != PointerEventButton.left) { return; }
             if (e.kind == PointerEventKind.down) { root.press(self.absolute-position.y + self.mouse-y); }
             if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
@@ -328,6 +332,18 @@ export component TabRow inherits Rectangle {
                 size: Shell.icon - 2px;
                 path: root.tab.muted ? IconPaths.speaker-muted : IconPaths.speaker;
                 tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
+            }
+        }
+        // wubble change: the split glyph of a pane of the Space's split (tabs.tsx `wb-tab-split`:
+        // 22 px, haze, the icon at 13 px), gone while the row is hovered.
+        if !root.compact && root.tab.in-split && !touch.has-hover && !close-touch.has-hover: Rectangle {
+            width: 22px;
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                size: 13px;
+                path: IconPaths.split;
+                tint: Palette.haze;
             }
         }
         // wubble change: the close button's slot stays in the layout (as .wb-tab-x, which only
@@ -464,6 +480,144 @@ export component WubbleScroller inherits Rectangle {
                 if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.thumb-up(); }
             }
             moved => { if (self.pressed) { root.thumb-move(self.absolute-position.y + self.mouse-y); } }
+        }
+    }
+}
+
+// @source slint-split-view
+// Split view (wubble_core::split): 2–3 pages side by side, divided by rubber strings. Rust owns every
+// position: `panes` (x0..x1 in this element's coordinates, from Split::panes) and `seams` (centre
+// x and the bowed string from string_line while held or twanging). Each pane is a rounded rect;
+// Slint can't clip by the bowed `string_rect` path, so a pane's edge stays straight while the
+// string itself is drawn over the gap.
+// wubble change: a pane shows its page's live frame and takes the page's input instead of a
+// title; one page alone is one pane filling the view (no close button, no ring). The focus is the
+// TS's accent ring (`ring`, browser/webview.tsx `.wb-split-ring`, 1.5 px) instead of the port's
+// 1 px sky border, and a press in a pane is the page's (the host focuses the pane first), so there
+// is no `pane-focus`.
+export struct SplitPane {
+    id: int,
+    x0: length,
+    x1: length,
+    // wubble change: the page's frame and the part of it to show, in image pixels from the top
+    // left (CEF can paint a pixel more than the pane at fractional scales; that pixel is cropped).
+    frame: image,
+    clip-width: int,
+    clip-height: int,
+    focused: bool,
+}
+
+export struct SplitSeam {
+    x: length,
+    path: string,     // string_line(...) while bowed, "" when straight
+}
+
+export component SplitView inherits Rectangle {
+    in property <[SplitPane]> panes;
+    in property <[SplitSeam]> seams;
+    // wubble change: the focus ring (string_rect round the focused pane, "" for a single page),
+    // stroked in the Space's accent; the corner radius; the page's pointer shape.
+    in property <string> ring;
+    in property <color> accent: Palette.sky;
+    in property <length> radius: 14px;
+    in property <MouseCursor> cursor;
+    callback seam-grab(int, length, length);   // seam index, pointer in this element's px
+    callback seam-drag(length, length);
+    callback seam-release();
+    callback seam-even();                      // double-click: even shares
+    callback pane-close(int);                  // pane id
+    // wubble change: the page's input, per pane: (pane id, ..., pane-relative px)
+    callback pointer-moved(int, length, length);
+    callback pointer-left(int, length, length);
+    callback pointer-pressed(int, PointerEventButton, length, length);
+    callback pointer-released(int, PointerEventButton, length, length);
+    callback pointer-cancelled(int);
+    callback scrolled(int, length, length, length, length);
+
+    for p in root.panes: Rectangle {
+        x: p.x0;
+        width: p.x1 - p.x0;
+        border-radius: root.radius;
+        clip: true;
+        background: Palette.web;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: p.frame;
+            source-clip-width: p.clip-width;
+            source-clip-height: p.clip-height;
+            image-fit: fill;
+        }
+        touch := TouchArea {
+            mouse-cursor: root.cursor;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    root.pointer-pressed(p.id, event.button, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.up {
+                    root.pointer-released(p.id, event.button, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.move {
+                    root.pointer-moved(p.id, self.mouse-x, self.mouse-y);
+                } else {
+                    root.pointer-cancelled(p.id);
+                }
+            }
+            scroll-event(event) => {
+                root.scrolled(p.id, self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                accept
+            }
+            changed has-hover => {
+                if !self.has-hover {
+                    root.pointer-left(p.id, self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+        if root.panes.length > 1: PressableButton {
+            x: parent.width - self.width - Spacing.s2;
+            y: Spacing.s2;
+            width: 28px;
+            // wubble change: its own height; unset, it would take the pane's whole height
+            height: 28px;
+            text: "×";
+            clicked => { root.pane-close(p.id); }
+        }
+    }
+    if root.ring != "": Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: root.ring;
+        fill: transparent;
+        stroke: root.accent;
+        stroke-width: 1.5px;
+    }
+    for s[j] in root.seams: Rectangle {
+        Path {
+            width: root.width;
+            height: root.height;
+            viewbox-x: 0;
+            viewbox-y: 0;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            commands: s.path;
+            visible: s.path != "";
+            fill: transparent;
+            stroke: Palette.sky;
+            stroke-width: 1px;
+            opacity: 0.6;
+        }
+        TouchArea {
+            x: s.x - 6px;
+            width: 12px;
+            mouse-cursor: col-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { root.seam-grab(j, self.x + self.mouse-x, self.mouse-y); }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.seam-release(); }
+            }
+            moved => { if (self.pressed) { root.seam-drag(self.x + self.mouse-x, self.mouse-y); } }
+            double-clicked => { root.seam-even(); }
         }
     }
 }

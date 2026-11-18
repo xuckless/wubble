@@ -15,7 +15,14 @@
 //! Every request is answered exactly once: choosing, dismissing and a newer
 //! request each answer; CEF dropping the menu or the view going answer
 //! nothing (welding already gave the default).
+//!
+//! A tab row's menu ([`tab_entries`]) runs through the same machine as a
+//! menu the shell opened itself ([`Menu::Shell`]): nothing to answer.
 
+use wubble_core::action::Action;
+use wubble_core::model::Model;
+use wubble_core::space::MAX_PANES;
+use wubble_core::tab::TabId;
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -44,6 +51,14 @@ pub enum Command {
     OpenInNewTab(String),
     /// Put the text on the clipboard.
     CopyText(String),
+    /// Put the tab beside the focused page (split view).
+    SplitWith(TabId),
+    /// Take the tab out of its split.
+    Unsplit(TabId),
+    /// Open the command bar to choose a page beside the focused one.
+    OpenBeside,
+    /// Run an action, as from a key.
+    Perform(Action),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -254,7 +269,40 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
     out
 }
 
-/// The menu of one tab.
+/// The split entries of `tab`'s row (the design has no tab menu; these are its command-bar
+/// rows, `browser/command.tsx`, for the row's tab): the focused page splits with the next tab or
+/// a page chosen beside it; another tab of the Space goes beside the focused page; a pane leaves
+/// its split.
+pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let entry = |label: &str, command| Entry {
+        label: label.into(),
+        command,
+        enabled: true,
+    };
+    if model.split_of(tab).is_some() {
+        return vec![entry("Take Out of Split View", Command::Unsplit(tab))];
+    }
+    let room = model.visible_tabs().len() < MAX_PANES;
+    let in_space = model.order(model.active_space).contains(&tab);
+    if !room || !in_space {
+        return vec![];
+    }
+    if model.visible_tab() == Some(tab) {
+        let mut out = vec![];
+        if model.split_candidate().is_some() {
+            out.push(entry(
+                "Split View with the Next Tab",
+                Command::Perform(Action::SplitNext),
+            ));
+        }
+        out.push(entry("Open Beside\u{2026}", Command::OpenBeside));
+        out
+    } else {
+        vec![entry("Open in Split View", Command::SplitWith(tab))]
+    }
+}
+
+/// The menu of one tab, or one the shell opened.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Menu {
     #[default]
@@ -262,6 +310,12 @@ pub enum Menu {
     Open {
         id: RequestId,
         /// The pointer, physical pixels relative to the view.
+        at: (i32, i32),
+        entries: Vec<Entry>,
+    },
+    /// The shell's own menu (a tab row's): no request to answer.
+    Shell {
+        /// The pointer, physical pixels in the window.
         at: (i32, i32),
         entries: Vec<Entry>,
     },
@@ -274,6 +328,8 @@ pub enum MenuEvent {
         menu: Box<ContextMenu>,
         nav: NavFlags,
     },
+    /// The shell opens its own menu.
+    ShellRequested { at: (i32, i32), entries: Vec<Entry> },
     /// The user picked entry `i`.
     Chosen(usize),
     /// Outside click, Escape, or the tab hiding it.
@@ -302,7 +358,7 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
             // CEF holds one menu at a time; a newer one replaces the old.
             let mut effects = match state {
                 Menu::Open { id: old, .. } => vec![dismiss(old)],
-                Menu::Closed => vec![],
+                Menu::Closed | Menu::Shell { .. } => vec![],
             };
             let entries = entries(&menu, nav);
             if entries.is_empty() {
@@ -333,8 +389,26 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
             }
         }
         (Menu::Open { id, .. }, Dismiss) => (Menu::Closed, vec![dismiss(id)]),
+        (state, ShellRequested { at, entries }) => {
+            let effects = match state {
+                Menu::Open { id, .. } => vec![dismiss(id)],
+                Menu::Closed | Menu::Shell { .. } => vec![],
+            };
+            if entries.is_empty() {
+                return (Menu::Closed, effects);
+            }
+            (Menu::Shell { at, entries }, effects)
+        }
+        (Menu::Shell { at, entries }, Chosen(i)) => {
+            match entries.get(i).filter(|e| e.enabled).map(|e| &e.command) {
+                None | Some(Command::Separator) => (Menu::Shell { at, entries }, vec![]),
+                Some(command) => (Menu::Closed, vec![MenuEffect::Run(command.clone())]),
+            }
+        }
         (_, Reset | ViewGone) => (Menu::Closed, vec![]),
-        (Menu::Closed, Chosen(_) | Dismiss) => (Menu::Closed, vec![]),
+        (Menu::Closed | Menu::Shell { .. }, Dismiss) | (Menu::Closed, Chosen(_)) => {
+            (Menu::Closed, vec![])
+        }
     }
 }
 
@@ -577,5 +651,98 @@ mod tests {
         }
         // 4 and 5 were answered by CEF / welding, not by the menu.
         assert_eq!(answered, [RequestId(1), RequestId(2), RequestId(3)]);
+    }
+
+    fn tabs(n: usize) -> Model {
+        use wubble_core::model::{Command as Cmd, apply};
+        (0..n).fold(Model::new(std::time::Instant::now()), |m, i| {
+            apply(
+                m,
+                Cmd::NewTab {
+                    url: format!("https://{i}.test/"),
+                    container: None,
+                    opener: None,
+                },
+            )
+            .0
+        })
+    }
+
+    #[test]
+    fn a_tab_row_offers_the_split_entries_that_apply() {
+        use wubble_core::model::{Command as Cmd, apply};
+        let commands = |m: &Model, t: u64| -> Vec<Command> {
+            tab_entries(m, TabId(t))
+                .into_iter()
+                .map(|e| e.command)
+                .collect()
+        };
+        let m = tabs(1);
+        assert_eq!(commands(&m, 1), [Command::OpenBeside]);
+        let m = tabs(3);
+        assert_eq!(
+            commands(&m, 3),
+            [Command::Perform(Action::SplitNext), Command::OpenBeside]
+        );
+        assert_eq!(commands(&m, 1), [Command::SplitWith(TabId(1))]);
+        let (m, _) = apply(m, Cmd::SplitWith(TabId(1)));
+        assert_eq!(commands(&m, 1), [Command::Unsplit(TabId(1))]);
+        assert_eq!(commands(&m, 3), [Command::Unsplit(TabId(3))]);
+        let (m, _) = apply(m, Cmd::SplitWith(TabId(2)));
+        assert_eq!(commands(&m, 2), [Command::Unsplit(TabId(2))]);
+        // a full split takes no more
+        let (m, _) = apply(m, Cmd::Unsplit(TabId(2)));
+        let (m, _) = apply(m, Cmd::SplitWith(TabId(2)));
+        assert!(commands(&m, 99).is_empty());
+    }
+
+    #[test]
+    fn the_shell_s_menu_runs_its_entry_and_answers_nothing() {
+        let entries = tab_entries(&tabs(3), TabId(1));
+        let (open, fx) = transition(
+            Menu::Closed,
+            MenuEvent::ShellRequested {
+                at: (5, 6),
+                entries: entries.clone(),
+            },
+        );
+        assert!(fx.is_empty());
+        assert_eq!(
+            open,
+            Menu::Shell {
+                at: (5, 6),
+                entries
+            }
+        );
+        let (closed, fx) = transition(open.clone(), MenuEvent::Chosen(0));
+        assert_eq!(closed, Menu::Closed);
+        assert_eq!(fx, [MenuEffect::Run(Command::SplitWith(TabId(1)))]);
+        assert_eq!(transition(open.clone(), MenuEvent::Chosen(9)).0, open);
+        assert_eq!(transition(open, MenuEvent::Dismiss), (Menu::Closed, vec![]));
+        // nothing to show: no menu
+        let (state, fx) = transition(
+            Menu::Closed,
+            MenuEvent::ShellRequested {
+                at: (0, 0),
+                entries: vec![],
+            },
+        );
+        assert_eq!((state, fx), (Menu::Closed, vec![]));
+        // the shell's menu replaces a page's, which is answered
+        let (page, _) = transition(Menu::Closed, requested(1, page()));
+        let (_, fx) = transition(
+            page,
+            MenuEvent::ShellRequested {
+                at: (0, 0),
+                entries: tab_entries(&tabs(1), TabId(1)),
+            },
+        );
+        assert_eq!(
+            fx,
+            [MenuEffect::Answer {
+                id: RequestId(1),
+                command: None
+            }]
+        );
     }
 }

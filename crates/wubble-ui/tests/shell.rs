@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
 use slint::{
-    ComponentHandle, LogicalPosition, LogicalSize, ModelRc,
+    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc,
     platform::{PointerEventButton, WindowEvent},
 };
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
 use wubble_core::tabs::SpaceSwitcher;
 use wubble_ui::driver::{self, Driver};
-use wubble_ui::{AppWindow, PopupView, SidebarMode, SpaceItem};
+use wubble_ui::{AppWindow, PopupView, SidebarMode, SpaceItem, SplitPane, SplitSeam};
 
 const DT: f32 = 0.016;
 
@@ -239,7 +239,7 @@ fn sidebar_button(app: &AppWindow, driver: &Shared) {
 fn popup_input(app: &AppWindow) {
     let got = std::rc::Rc::new(std::cell::Cell::new(None));
     let sink = got.clone();
-    app.on_web_pointer_pressed(move |_, x, y| sink.set(Some((x, y))));
+    app.on_web_pointer_pressed(move |pane, _, x, y| sink.set(Some((pane, x, y))));
     app.set_popup(PopupView {
         shown: true,
         // Drawn 100 px further left and 20 px lower than the engine put it.
@@ -254,7 +254,7 @@ fn popup_input(app: &AppWindow) {
     pointer(app, 1010.0, 110.0);
     button(app, 1010.0, 110.0, true);
     button(app, 1010.0, 110.0, false);
-    assert_eq!(got.get(), Some((1110.0, 90.0)));
+    assert_eq!(got.get(), Some((app.get_active_tab_id(), 1110.0, 90.0)));
     app.set_popup(PopupView::default());
     pump(1);
     pointer(app, 900.0, 300.0);
@@ -273,4 +273,81 @@ fn shell_scenarios() {
     seam_drag(&app, &driver);
     space_capsule(&app, &driver);
     popup_input(&app);
+    split_panes(&app, &driver);
+}
+
+fn pane(id: i32, x0: f32, x1: f32) -> SplitPane {
+    SplitPane {
+        id,
+        x0,
+        x1,
+        focused: id == 1,
+        ..Default::default()
+    }
+}
+
+/// One page is one pane filling the content area; three panes keep their rects, and every press
+/// reaches the page under it with that pane's id and pane-relative coordinates. A seam's strip
+/// takes the pointer over the gap.
+fn split_panes(app: &AppWindow, driver: &Shared) {
+    settle(app, driver);
+    let pressed = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+    let sink = pressed.clone();
+    app.on_web_pointer_pressed(move |pane, _, x, y| sink.borrow_mut().push((pane, x, y)));
+    let grabbed = std::rc::Rc::new(std::cell::Cell::new(None));
+    let sink = grabbed.clone();
+    app.on_split_grab(move |j, x, _| sink.set(Some((j, x))));
+    let (cx, cy, w) = (
+        app.get_content_x(),
+        app.get_content_y(),
+        app.get_content_width(),
+    );
+    let click = |x: f32, y: f32| {
+        pointer(app, x, y);
+        button(app, x, y, true);
+        button(app, x, y, false);
+    };
+
+    app.set_panes(ModelRc::from([pane(1, 0.0, w)].as_slice()));
+    pump(1);
+    click(cx + 30.0, cy + 40.0);
+    assert_eq!(pressed.borrow().last(), Some(&(1, 30.0, 40.0)));
+
+    let third = 300.0;
+    let panes = [
+        pane(1, 0.0, third - 4.0),
+        pane(2, third + 4.0, 2.0 * third - 4.0),
+        pane(3, 2.0 * third + 4.0, w),
+    ];
+    app.set_panes(ModelRc::from(panes.as_slice()));
+    let seams = [third, 2.0 * third].map(|x| SplitSeam {
+        x,
+        path: Default::default(),
+    });
+    app.set_seams(ModelRc::from(seams.as_slice()));
+    pump(1);
+    assert_eq!(app.get_panes().iter().collect::<Vec<_>>(), panes.to_vec());
+    click(cx + 2.0 * third + 14.0, cy + 50.0);
+    assert_eq!(pressed.borrow().last(), Some(&(3, 10.0, 50.0)));
+    click(cx + third - 14.0, cy + 300.0);
+    assert_eq!(pressed.borrow().last(), Some(&(1, third - 14.0, 300.0)));
+    // the close button of the first pane is the shell's
+    let closed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let sink = closed.clone();
+    app.on_pane_close(move |id| sink.set(id));
+    click(cx + third - 4.0 - 8.0 - 14.0, cy + 8.0 + 14.0);
+    assert_eq!(closed.get(), 1);
+    // the strip over the second seam
+    let n = pressed.borrow().len();
+    click(cx + 2.0 * third + 1.0, cy + 300.0);
+    assert_eq!(grabbed.get(), Some((1, 2.0 * third + 1.0)));
+    assert_eq!(
+        pressed.borrow().len(),
+        n,
+        "the seam's press is not the page's"
+    );
+
+    app.set_panes(ModelRc::default());
+    app.set_seams(ModelRc::default());
+    pump(1);
 }

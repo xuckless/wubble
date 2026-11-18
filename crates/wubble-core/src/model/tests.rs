@@ -1,4 +1,6 @@
 use super::*;
+use crate::space::{SplitGroup, even};
+use crate::tab::Tab;
 
 const D: ContainerId = ContainerId::DEFAULT;
 
@@ -575,7 +577,7 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
         }
     };
     let index = r.below(8);
-    let cmd = match r.below(21) {
+    let cmd = match r.below(23) {
         0 => return (Command::OpenCommandBar, false),
         1 | 2 => {
             let c = if r.below(3) == 0 { container(r) } else { None };
@@ -654,6 +656,38 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
                 title: "t".into(),
             },
         }),
+        21 => match r.below(4) {
+            0 => {
+                return (Command::OpenBeside { url: "b".into() }, false);
+            }
+            1 => tab(r).map(Command::Unsplit),
+            // most often from the active Space, so splits form
+            _ => {
+                let order = m.order(m.active_space);
+                if bogus {
+                    tab(r)
+                } else {
+                    r.pick(&order).or_else(|| tab(r))
+                }
+                .map(Command::SplitWith)
+            }
+        },
+        22 => {
+            if r.below(2) == 0 {
+                tab(r).map(|tab| Command::SwapPane {
+                    tab,
+                    right: r.below(2) == 0,
+                })
+            } else {
+                let n = r.below(4) + 1;
+                let stops = if r.below(2) == 0 {
+                    crate::space::even(n)
+                } else {
+                    (1..n).map(|_| r.below(11) as f64 / 10.0).collect()
+                };
+                space(r).map(|space| Command::ResizeSplit { space, stops })
+            }
+        }
         20 => {
             let pressure = [Pressure::None, Pressure::Moderate, Pressure::Critical][r.below(3)];
             let now = m.clock + Duration::from_secs(r.below(2000) as u64);
@@ -669,6 +703,7 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
 
 #[test]
 fn random_sequences_keep_invariants() {
+    let mut most_panes = 0;
     for seed in 1..=200u64 {
         let mut r = Xorshift(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
         let mut m = Model::new(t0());
@@ -716,9 +751,11 @@ fn random_sequences_keep_invariants() {
                 (removed, added),
                 "{label}: effects vs tab set"
             );
+            most_panes = most_panes.max(after.visible_tabs().len());
             m = after;
         }
     }
+    assert_eq!(most_panes, MAX_PANES, "the sequences reach a full split");
 }
 
 #[test]
@@ -1307,4 +1344,374 @@ fn space_helpers_wrap() {
     assert_eq!(m.nth_space(0), Some(s0()));
     assert_eq!(m.nth_space(1), Some(s1));
     assert_eq!(m.nth_space(2), None);
+}
+
+// ----- split view
+
+fn group(m: &Model) -> Option<SplitGroup> {
+    m.spaces[m.space_idx(m.active_space).unwrap()].split.clone()
+}
+
+/// `n` tabs with the first two split (the second focused).
+fn split_of_two(n: usize) -> (Model, Vec<TabId>) {
+    let (m, ids) = with_tabs(n);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(ids[1]));
+    (m, ids)
+}
+
+#[test]
+fn split_with_opens_beside_the_focused_page_and_focuses_the_new_one() {
+    let (m, ids) = with_tabs(4);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, fx) = run(m, Command::SplitWith(ids[1]));
+    assert_eq!(fx, vec![Effect::ActivateTab(ids[1])]);
+    assert_eq!(
+        group(&m),
+        Some(SplitGroup {
+            tabs: vec![ids[0], ids[1]],
+            stops: vec![0.5]
+        })
+    );
+    assert_eq!(m.visible_tab(), Some(ids[1]));
+    assert_eq!(m.visible_tabs(), vec![ids[0], ids[1]]);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Active);
+    assert_eq!(liveness(&m, ids[1]), Liveness::Active);
+    // a third pane goes after the focused one and the shares even out
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(ids[2]));
+    let g = group(&m).unwrap();
+    assert_eq!(g.tabs, vec![ids[0], ids[2], ids[1]]);
+    assert_eq!(g.stops, even(3));
+    // never a fourth
+    let (m2, fx) = run(m.clone(), Command::SplitWith(ids[3]));
+    assert_eq!((m2, fx), (m.clone(), vec![]));
+    assert_eq!(m.split_candidate(), None);
+}
+
+#[test]
+fn split_with_refuses_itself_a_member_and_another_spaces_tab() {
+    let (m, ids) = split_of_two(3);
+    for t in [ids[1], ids[0]] {
+        let (m2, fx) = run(m.clone(), Command::SplitWith(t));
+        assert_eq!((m2, fx), (m.clone(), vec![]), "{t:?}");
+    }
+    let (m, s2) = add_space(m, D);
+    let (m, other) = open(m, None);
+    let (m, _) = run(
+        m,
+        Command::MoveTab {
+            tab: other,
+            to: Dest::Normal {
+                space: s2,
+                index: 0,
+            },
+        },
+    );
+    let (m2, fx) = run(m.clone(), Command::SplitWith(other));
+    assert_eq!((m2, fx), (m, vec![]));
+}
+
+#[test]
+fn unsplit_passes_focus_to_the_heir_and_a_split_of_one_is_none() {
+    // the design's model_actions case
+    let (m, ids) = with_tabs(4);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(ids[1]));
+    assert_eq!(m.split_candidate(), Some(ids[2]));
+    let (m, _) = run(m, Command::SplitWith(ids[2]));
+    assert_eq!(group(&m).unwrap().tabs, ids[..3].to_vec());
+    assert_eq!(active(&m), Some(ids[2]));
+    let (m, fx) = run(m, Command::Unsplit(ids[2]));
+    assert_eq!(fx, vec![Effect::ActivateTab(ids[1])]);
+    assert_eq!(group(&m).unwrap().tabs, ids[..2].to_vec());
+    assert_eq!(active(&m), Some(ids[1]));
+    // the tab stays open, hidden
+    assert!(m.tabs.contains_key(&ids[2]));
+    assert_ne!(liveness(&m, ids[2]), Liveness::Active);
+    let (m, fx) = run(m, Command::Unsplit(ids[0]));
+    assert_eq!(fx, vec![]);
+    assert_eq!(group(&m), None);
+    assert_eq!(m.visible_tabs(), vec![ids[1]]);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    // nothing to take out
+    let (m2, fx) = run(m.clone(), Command::Unsplit(ids[1]));
+    assert_eq!((m2, fx), (m, vec![]));
+}
+
+#[test]
+fn unsplit_keeps_the_far_seam() {
+    let (m, ids) = with_tabs(3);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(ids[1]));
+    let (m, _) = run(m, Command::SplitWith(ids[2]));
+    let (m, _) = run(
+        m,
+        Command::ResizeSplit {
+            space: s0(),
+            stops: vec![0.2, 0.7],
+        },
+    );
+    let (m0, _) = run(m.clone(), Command::Unsplit(ids[0]));
+    assert_eq!(group(&m0).unwrap().stops, vec![0.7]);
+    let (m1, _) = run(m.clone(), Command::Unsplit(ids[1]));
+    assert_eq!(group(&m1).unwrap().stops, vec![0.2]);
+    let (m2, _) = run(m, Command::Unsplit(ids[2]));
+    assert_eq!(group(&m2).unwrap().stops, vec![0.2]);
+}
+
+#[test]
+fn closing_panes_shrinks_the_split_then_unsplits() {
+    let (m, ids) = with_tabs(4);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, _) = run(m, Command::SplitWith(ids[1]));
+    let (m, _) = run(m, Command::SplitWith(ids[2]));
+    // the focused pane closes: its heir in the split takes focus, not the next tab down
+    let (m, _) = run(m, Command::CloseTab(ids[2]));
+    assert_eq!(group(&m).unwrap().tabs, vec![ids[0], ids[1]]);
+    assert_eq!(active(&m), Some(ids[1]));
+    // closing the last-but-one pane unsplits
+    let (m, _) = run(m, Command::CloseTab(ids[0]));
+    assert_eq!(group(&m), None);
+    assert_eq!(m.visible_tabs(), vec![ids[1]]);
+}
+
+#[test]
+fn moving_a_pane_to_another_space_takes_it_out() {
+    let (m, ids) = split_of_two(3);
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run(
+        m,
+        Command::MoveTab {
+            tab: ids[1],
+            to: Dest::Normal {
+                space: s2,
+                index: 0,
+            },
+        },
+    );
+    assert_eq!(group(&m), None);
+    assert_eq!(active(&m), Some(ids[0]));
+    // moving within the Space keeps it
+    let (m, ids) = split_of_two(3);
+    let (m, _) = run(
+        m,
+        Command::MoveTab {
+            tab: ids[1],
+            to: Dest::Pinned {
+                space: s0(),
+                index: 0,
+            },
+        },
+    );
+    assert_eq!(group(&m).unwrap().tabs, vec![ids[0], ids[1]]);
+}
+
+#[test]
+fn deleting_a_space_and_reopening_a_pane_keep_splits_valid() {
+    let (m, ids) = split_of_two(3);
+    let (m, _) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: ids[0],
+            container: ContainerId(0),
+        },
+    );
+    let (m, _) = run(m, Command::NewContainer { name: "c".into() });
+    let (m, fx) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: ids[0],
+            container: ContainerId(1),
+        },
+    );
+    let Some(Effect::CreateTab { tab: new, .. }) = fx.get(1).cloned() else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(group(&m).unwrap().tabs, vec![new, ids[1]]);
+    assert_eq!(liveness(&m, ids[1]), Liveness::Active);
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run(m, Command::SwitchSpace(s2));
+    let (m, _) = run(m, Command::DeleteSpace(s0()));
+    assert!(m.spaces.iter().all(|s| s.split.is_none()));
+}
+
+#[test]
+fn resize_split_takes_only_stops_that_fit() {
+    let (m, _) = split_of_two(3);
+    for bad in [vec![], vec![0.2, 0.6], vec![0.0], vec![1.0], vec![f64::NAN]] {
+        let (m2, fx) = run(
+            m.clone(),
+            Command::ResizeSplit {
+                space: s0(),
+                stops: bad.clone(),
+            },
+        );
+        assert_eq!((m2, fx), (m.clone(), vec![]), "{bad:?}");
+    }
+    let (m, _) = run(
+        m,
+        Command::ResizeSplit {
+            space: s0(),
+            stops: vec![0.3],
+        },
+    );
+    assert_eq!(group(&m).unwrap().stops, vec![0.3]);
+    assert_eq!(group(&m).unwrap().ratios(), vec![0.3, 0.7]);
+}
+
+#[test]
+fn swap_pane_swaps_neighbours_and_keeps_seams_and_focus() {
+    let (m, ids) = split_of_two(3);
+    let (m, _) = run(
+        m,
+        Command::ResizeSplit {
+            space: s0(),
+            stops: vec![0.3],
+        },
+    );
+    let (m, _) = run(
+        m,
+        Command::SwapPane {
+            tab: ids[0],
+            right: true,
+        },
+    );
+    assert_eq!(group(&m).unwrap().tabs, vec![ids[1], ids[0]]);
+    assert_eq!(group(&m).unwrap().stops, vec![0.3]);
+    assert_eq!(active(&m), Some(ids[1]));
+    // nothing to its left
+    let (m2, fx) = run(
+        m.clone(),
+        Command::SwapPane {
+            tab: ids[1],
+            right: false,
+        },
+    );
+    assert_eq!((m2, fx), (m, vec![]));
+}
+
+#[test]
+fn activating_outside_the_split_hides_every_pane_and_back_shows_them() {
+    let (m, ids) = split_of_two(3);
+    let (m, fx) = run_all(m, Command::ActivateTab(ids[2]));
+    let hidden: Vec<TabId> = lifecycle_effects(&fx)
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Lifecycle {
+                tab,
+                effect: Life::Hide,
+            } => Some(*tab),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(hidden, vec![ids[0], ids[1]]);
+    assert_eq!(m.visible_tabs(), vec![ids[2]]);
+    // the split is remembered
+    assert_eq!(group(&m).unwrap().tabs, vec![ids[0], ids[1]]);
+    // a long time later, under pressure, the hidden panes are discarded like any tab
+    let now = m.clock() + Duration::from_secs(3600 * 24);
+    let (m, _) = run(
+        m,
+        Command::Tick {
+            now,
+            pressure: Pressure::Critical,
+        },
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+    assert_eq!(liveness(&m, ids[2]), Liveness::Active);
+    // focusing one pane brings the whole split back: both restore
+    let (m, fx) = run_all(m, Command::ActivateTab(ids[0]));
+    for t in [ids[0], ids[1]] {
+        assert!(fx.contains(&life(t, Life::Restore)), "{t:?}: {fx:?}");
+        assert!(fx.contains(&life(t, Life::Show)), "{t:?}: {fx:?}");
+        assert_eq!(liveness(&m, t), Liveness::Active);
+    }
+    // visible panes never sleep
+    let now = m.clock() + Duration::from_secs(3600 * 24);
+    let (m, _) = run(
+        m,
+        Command::Tick {
+            now,
+            pressure: Pressure::Critical,
+        },
+    );
+    assert_eq!(liveness(&m, ids[1]), Liveness::Active);
+}
+
+#[test]
+fn split_candidate_wraps_and_skips_panes() {
+    let (m, ids) = with_tabs(3);
+    assert_eq!(m.split_candidate(), Some(ids[0]), "wraps from the last");
+    let (m, _) = run(m, Command::ActivateTab(ids[1]));
+    let (m, _) = run(m, Command::SplitWith(ids[2]));
+    assert_eq!(m.split_candidate(), Some(ids[0]));
+    let (m, _) = with_tabs(1);
+    assert_eq!(m.split_candidate(), None);
+    assert_eq!(Model::new(t0()).split_candidate(), None);
+}
+
+#[test]
+fn open_beside_adds_a_new_page_to_the_split() {
+    let (m, ids) = with_tabs(1);
+    let (m, fx) = run(
+        m,
+        Command::OpenBeside {
+            url: "https://b.test".into(),
+        },
+    );
+    let Effect::CreateTab { tab: new, .. } = fx[0] else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(fx[1..], [Effect::ActivateTab(new)]);
+    assert_eq!(group(&m).unwrap().tabs, vec![ids[0], new]);
+    // into an empty Space it is a plain new tab
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run(m, Command::SwitchSpace(s2));
+    let (m, _) = run(m, Command::OpenBeside { url: "u".into() });
+    assert_eq!(group(&m), None);
+    assert_eq!(m.visible_tabs().len(), 1);
+}
+
+#[test]
+fn from_parts_rejects_bad_splits() {
+    let (m, ids) = split_of_two(4);
+    let mut spaces = m.spaces.clone();
+    let tabs: Vec<Tab> = m.tabs.values().cloned().collect();
+    let parts = |spaces: Vec<Space>| {
+        Model::from_parts(
+            spaces,
+            m.containers.clone(),
+            tabs.clone(),
+            m.active_space,
+            t0(),
+        )
+    };
+    assert!(parts(spaces.clone()).is_ok());
+    let bad = [
+        SplitGroup {
+            tabs: vec![ids[0]],
+            stops: vec![],
+        },
+        SplitGroup {
+            tabs: vec![ids[0], ids[1], ids[2], ids[3]],
+            stops: even(4),
+        },
+        SplitGroup {
+            tabs: vec![ids[0], ids[1]],
+            stops: vec![0.5, 0.6],
+        },
+        SplitGroup {
+            tabs: vec![ids[0], ids[0]],
+            stops: vec![0.5],
+        },
+        SplitGroup {
+            tabs: vec![ids[0], TabId(99)],
+            stops: vec![0.5],
+        },
+    ];
+    for g in bad {
+        spaces[0].split = Some(g.clone());
+        assert!(parts(spaces.clone()).is_err(), "{g:?}");
+    }
 }

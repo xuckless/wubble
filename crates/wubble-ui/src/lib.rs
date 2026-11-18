@@ -81,7 +81,7 @@ mod tests {
         app.on_menu_dismissed(count(&dismissed));
         let page_presses = Rc::new(Cell::new(0));
         let p = page_presses.clone();
-        app.on_web_pointer_pressed(move |_, _, _| p.set(p.get() + 1));
+        app.on_web_pointer_pressed(move |_, _, _, _| p.set(p.get() + 1));
 
         // ── Menu: arrow keys skip the divider, Enter chooses, Escape and an
         // outside click dismiss.

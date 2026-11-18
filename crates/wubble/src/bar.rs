@@ -28,6 +28,8 @@ pub enum BarMode {
     NewTab,
     /// Ctrl+L: load in this tab.
     Navigate(TabId),
+    /// Split view: the page chosen goes beside the focused one.
+    Beside,
 }
 
 /// What a row stands for: an omnibox result, or (first run only) a search
@@ -182,13 +184,17 @@ pub fn target_command(
             opener: None,
         },
         BarMode::Navigate(tab) => Command::Navigate { tab, url },
+        BarMode::Beside => Command::OpenBeside { url },
     };
     Some(match target {
         RowTarget::Omni(Target::Url(url)) => Choice::Model(load(url.clone())),
         RowTarget::Omni(Target::Search(q)) => {
             Choice::Model(load(omnibox::fill(engine?.info().search, q)))
         }
-        RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(Command::ActivateTab(*tab)),
+        RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(match mode {
+            BarMode::Beside => Command::SplitWith(*tab),
+            _ => Command::ActivateTab(*tab),
+        }),
         RowTarget::Omni(Target::Action(a)) => Choice::Perform(*a),
         RowTarget::PickEngine(e) => Choice::SetEngine(*e),
     })
@@ -445,6 +451,20 @@ mod tests {
                 BarMode::NewTab,
                 DDG,
                 Some(Choice::Perform(Action::ReopenClosedTab)),
+            ),
+            (
+                &url,
+                BarMode::Beside,
+                DDG,
+                Some(Choice::Model(Command::OpenBeside {
+                    url: "https://a.test/".into(),
+                })),
+            ),
+            (
+                &RowTarget::Omni(Target::OpenTab(TabId(9))),
+                BarMode::Beside,
+                DDG,
+                Some(Choice::Model(Command::SplitWith(TabId(9)))),
             ),
             (
                 &RowTarget::PickEngine(SearchEngine::Google),

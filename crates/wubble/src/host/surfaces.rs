@@ -9,6 +9,7 @@ use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
 use slint::winit_030::winit::event::Ime as WinitIme;
 use std::path::PathBuf;
 
+use wubble_core::model::Command;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
@@ -45,7 +46,19 @@ impl Host {
         };
         let seen = self.checks.page_smoke.is_some().then(|| event.clone());
         let visible = self.model.visible_tab() == Some(tab);
-        match surface::route(event) {
+        let routed = surface::route(event);
+        // A page beside the focused one that asks something takes the focus, so its question
+        // shows instead of blocking it unseen.
+        if !visible
+            && self.model.visible_tabs().contains(&tab)
+            && matches!(
+                routed,
+                Routed::Dialog(DialogEvent::Requested(_)) | Routed::Auth(AuthEvent::Requested(_))
+            )
+        {
+            self.dispatch(Command::ActivateTab(tab));
+        }
+        match routed {
             Routed::Dialog(e) => {
                 self.apply_dialog(tab, e);
             }
@@ -83,7 +96,9 @@ impl Host {
                 self.audio.entry(tab).or_default().audible = audible;
                 self.after_change();
             }
-            Routed::ImeBounds(rect) if visible => place_candidates(window, rect),
+            Routed::ImeBounds(rect) if visible => {
+                place_candidates(window, self.focus_origin(window), rect)
+            }
             Routed::Dismissed(ids) => {
                 self.apply_dialog(tab, DialogEvent::Dismissed(ids.clone()));
                 self.apply_permission(tab, PermissionEvent::Dismissed(ids.clone()));
@@ -233,6 +248,10 @@ impl Host {
                     self.dispatch(new_tab(url, Some(tab)));
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
+                MenuEffect::Run(MenuCommand::SplitWith(t)) => self.dispatch(Command::SplitWith(t)),
+                MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
+                MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
+                MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
         }
@@ -304,7 +323,7 @@ impl Host {
     fn left_visible(&mut self, window: &AppWindow, tab: TabId) {
         if matches!(
             self.surfaces.get(&tab).map(|s| &s.menu),
-            Some(Menu::Open { .. })
+            Some(Menu::Open { .. } | Menu::Shell { .. })
         ) {
             self.apply_menu(tab, MenuEvent::Dismiss);
         }
@@ -332,7 +351,7 @@ impl Host {
             .unwrap_or_default();
         if self.drawn.tab != tab || self.drawn.menu != current.menu {
             let scale = window.window().scale_factor();
-            window.set_menu(menu_view(&current.menu, scale));
+            window.set_menu(menu_view(&current.menu, scale, self.focus_origin(window)));
         }
         if self.drawn.tab != tab || self.drawn.permission != current.permission {
             window.set_permission(permission_view(&current.permission));
@@ -344,7 +363,7 @@ impl Host {
         });
         window.set_page_error(error_view(&current.error));
         window.set_find(find_view(&current.find, self.find_focus));
-        window.set_popup(popup_view(window, current.popup));
+        window.set_popup(popup_view(window, self.focus_origin(window), current.popup));
         if current.popup.is_none() {
             window.set_popup_frame(slint::Image::default());
         }
@@ -544,13 +563,11 @@ impl Host {
 }
 
 /// Puts the IME candidate window next to the composition (CEF reports it
-/// only while composing; physical pixels relative to the view).
-fn place_candidates(window: &AppWindow, rect: Rect) {
+/// only while composing; physical pixels relative to the view, whose top
+/// left is `origin` in the window).
+fn place_candidates(window: &AppWindow, origin: (f32, f32), rect: Rect) {
     let scale = f64::from(window.window().scale_factor());
-    let (x, y) = (
-        f64::from(window.get_content_x()),
-        f64::from(window.get_content_y()),
-    );
+    let (x, y) = (f64::from(origin.0), f64::from(origin.1));
     let at = LogicalPosition::new(x + f64::from(rect.x) / scale, y + f64::from(rect.y) / scale);
     let size = LogicalSize::new(
         f64::from(rect.width) / scale,
@@ -565,24 +582,28 @@ pub(super) fn model<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
     slint::ModelRc::from(std::rc::Rc::new(slint::VecModel::from(items)))
 }
 
-fn menu_view(menu: &Menu, scale: f32) -> MenuView {
-    match menu {
-        Menu::Closed => MenuView::default(),
-        Menu::Open { at, entries, .. } => MenuView {
-            open: true,
-            x: at.0 as f32 / scale,
-            y: at.1 as f32 / scale,
-            entries: model(
-                entries
-                    .iter()
-                    .map(|e| MenuEntry {
-                        label: e.label.as_str().into(),
-                        enabled: e.enabled,
-                        separator: e.command == MenuCommand::Separator,
-                    })
-                    .collect(),
-            ),
-        },
+/// The menu in window coordinates: a page's is placed from its view's top left (`origin`), the
+/// shell's is already in the window's.
+fn menu_view(menu: &Menu, scale: f32, origin: (f32, f32)) -> MenuView {
+    let (at, entries, origin) = match menu {
+        Menu::Closed => return MenuView::default(),
+        Menu::Open { at, entries, .. } => (at, entries, origin),
+        Menu::Shell { at, entries } => (at, entries, (0.0, 0.0)),
+    };
+    MenuView {
+        open: true,
+        x: origin.0 + at.0 as f32 / scale,
+        y: origin.1 + at.1 as f32 / scale,
+        entries: model(
+            entries
+                .iter()
+                .map(|e| MenuEntry {
+                    label: e.label.as_str().into(),
+                    enabled: e.enabled,
+                    separator: e.command == MenuCommand::Separator,
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -662,10 +683,11 @@ fn find_view(find: &FindBar, focus: i32) -> FindView {
     }
 }
 
-/// The popup in window coordinates, kept inside the window. Input maps
-/// back through `origin`, the engine's own rect: CEF hit-tests the popup
-/// there, wherever the layer was moved to fit.
-fn popup_view(window: &AppWindow, popup: Option<Rect>) -> PopupView {
+/// The popup in window coordinates (its view's top left is `view` in the
+/// window), kept inside the window. Input maps back through `origin`, the
+/// engine's own rect: CEF hit-tests the popup there, wherever the layer was
+/// moved to fit.
+fn popup_view(window: &AppWindow, view: (f32, f32), popup: Option<Rect>) -> PopupView {
     let Some(r) = popup else {
         return PopupView::default();
     };
@@ -673,8 +695,8 @@ fn popup_view(window: &AppWindow, popup: Option<Rect>) -> PopupView {
     let size = window.window().size();
     let physical = |logical: f32| (logical * scale).round() as i32;
     let at = Rect {
-        x: physical(window.get_content_x()) + r.x,
-        y: physical(window.get_content_y()) + r.y,
+        x: physical(view.0) + r.x,
+        y: physical(view.1) + r.y,
         ..r
     };
     let bounds = Rect {

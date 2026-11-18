@@ -18,6 +18,8 @@ pub struct TabRow {
     pub url: String,
     pub audible: bool,
     pub muted: bool,
+    /// The tab is a pane of its Space's split, shown or not (the design's `split?.includes`).
+    pub in_split: bool,
 }
 
 /// What a tab's page does with sound, as its view last reported
@@ -64,6 +66,7 @@ pub fn view_model(model: &Model, audio: &AudioMap) -> ShellView {
                 url: tab.url.clone(),
                 audible: sound.audible,
                 muted: sound.muted,
+                in_split: model.split_of(id).is_some(),
             })
         })
         .collect()
@@ -170,6 +173,11 @@ fn slint_id(id: impl TryInto<i32>) -> Option<i32> {
     id.try_into().ok()
 }
 
+/// A tab's id in Slint (a pane's id is its tab's); -1 if it does not fit.
+pub fn pane_id(tab: TabId) -> i32 {
+    slint_id(tab.0).unwrap_or(-1)
+}
+
 /// A tab id from Slint; negative ids name nothing.
 pub fn tab_id(id: i32) -> Option<TabId> {
     u64::try_from(id).ok().map(TabId)
@@ -268,6 +276,25 @@ mod tests {
         assert_eq!(v.active_space, 1);
         let names: Vec<_> = v.spaces.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Space 1", "Work"]);
+    }
+
+    #[test]
+    fn rows_show_split_panes_also_while_the_split_is_hidden() {
+        let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
+        let (m, b) = new_tab(m, "https://b.test/");
+        let (m, c) = new_tab(m, "https://c.test/");
+        let (m, _) = apply(m, Command::ActivateTab(a));
+        let (m, _) = apply(m, Command::SplitWith(b));
+        let split = |m: &Model| -> Vec<bool> {
+            view_model(m, &AudioMap::new())
+                .tabs
+                .iter()
+                .map(|r| r.in_split)
+                .collect()
+        };
+        assert_eq!(split(&m), [true, true, false]);
+        let (m, _) = apply(m, Command::ActivateTab(c));
+        assert_eq!(split(&m), [true, true, false]);
     }
 
     #[test]

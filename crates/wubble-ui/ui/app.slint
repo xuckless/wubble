@@ -4,7 +4,7 @@
 
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
-import { Seam, GlassPanel } from "components.slint";
+import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
 import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
@@ -22,7 +22,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus }
+export { SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -40,15 +40,15 @@ export component AppWindow inherits Window {
     // The living backdrop and the glass (wubble_gfx::scene), rendered by the host each frame
     // into one opaque wgpu texture; shown at the very back while GlassLayer.scene-active.
     in property <image> scene;
-    // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
-    in property <image> web-frame;
-    // The part of web-frame to show, in image pixels from the top left. CEF
-    // can paint a pixel more than the rectangle at fractional scales; that
-    // pixel is cropped rather than the whole frame resampled.
-    in property <int> web-frame-clip-width;
-    in property <int> web-frame-clip-height;
-    // The rectangle the web frame fills, in logical pixels. The host sizes
-    // the browser from these and the window's scale factor.
+    // The pages on screen, left to right (one, or the panes of a split): each one's frame,
+    // supplied by wubble-gfx as a wgpu-backed image, and where it sits in the content area. The
+    // host writes them; a pane's id is its tab's.
+    in property <[SplitPane]> panes;
+    // The split's seams and the focused pane's ring (wubble_core::split), "" for one page.
+    in property <[SplitSeam]> seams;
+    in property <string> focus-ring;
+    // The rectangle the panes share, in logical pixels. The host sizes the
+    // pages from these and the window's scale factor.
     out property <length> content-width: content.width;
     out property <length> content-height: content.height;
     // Its top left in the window (its layout fills the window from 0,0); the
@@ -56,20 +56,26 @@ export component AppWindow inherits Window {
     out property <length> content-x: content.x;
     out property <length> content-y: content.y;
 
-    // Input over the web content, in view-relative logical pixels. The host
-    // forwards it to the page; nothing here interprets it.
+    // Input over the web content: the pane's id, then pane-relative logical
+    // pixels. The host forwards it to that pane's page; nothing here interprets it.
     // The page's pointer shape: an index into `cursors`.
     in property <int> web-cursor;
     // The web content has keyboard focus (the host sends it keys only then).
     out property <bool> web-focused: web-focus.has-focus;
-    callback web-pointer-moved(x: length, y: length);
-    callback web-pointer-left(x: length, y: length);
-    callback web-pointer-pressed(button: PointerEventButton, x: length, y: length);
-    callback web-pointer-released(button: PointerEventButton, x: length, y: length);
+    callback web-pointer-moved(pane: int, x: length, y: length);
+    callback web-pointer-left(pane: int, x: length, y: length);
+    callback web-pointer-pressed(pane: int, button: PointerEventButton, x: length, y: length);
+    callback web-pointer-released(pane: int, button: PointerEventButton, x: length, y: length);
     // The pointer grab ended without a release.
-    callback web-pointer-cancelled();
-    callback web-scrolled(x: length, y: length, delta-x: length, delta-y: length);
+    callback web-pointer-cancelled(pane: int);
+    callback web-scrolled(pane: int, x: length, y: length, delta-x: length, delta-y: length);
     callback web-focus-changed(focused: bool);
+    // The split's seams (index, pointer in content px) and a pane's close button.
+    callback split-grab(int, length, length);
+    callback split-drag(length, length);
+    callback split-release();
+    callback split-even();
+    callback pane-close(int);
 
     // Window frame. Intents only; wubble_ui::window acts on them.
     callback window-close-requested <=> sidebar.window-close-requested;
@@ -161,6 +167,8 @@ export component AppWindow inherits Window {
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;
     callback tab-mute-toggled <=> sidebar.tab-mute-toggled;
+    // A tab row's right click: (tab id, pointer in window px).
+    callback tab-context <=> sidebar.tab-context;
     // A row was dragged to a new slot: (tab id, its new index in `tabs`).
     callback tab-moved(int, int);
     out property <CommandBarState> command-bar-state <=> bar.state;
@@ -175,6 +183,8 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
+    // The bar opens to choose a page to put beside the focused one (split view).
+    callback beside-requested();
 
     public function request-new-tab() {
         root.command-origin = sidebar.new-tab-origin;
@@ -191,6 +201,12 @@ export component AppWindow inherits Window {
         root.command-origin = sidebar.address-origin;
         bar.dispatch(CommandBarEvent.open);
         root.address-focus-requested();
+    }
+
+    public function request-beside() {
+        root.command-origin = sidebar.address-origin;
+        bar.dispatch(CommandBarEvent.open);
+        root.beside-requested();
     }
 
     // ── The page's own UI (wubble surface.rs, menu.rs, screen.rs): the visible tab's surfaces,
@@ -366,45 +382,56 @@ export component AppWindow inherits Window {
             height: parent.height - 2 * parent.gap;
             border-radius: root.page-fullscreen ? 0px : Radius.md;
             clip: true;
-            background: Palette.web;
-            Image {
-                width: 100%;
-                height: 100%;
-                source: root.web-frame;
-                source-clip-width: root.web-frame-clip-width;
-                source-clip-height: root.web-frame-clip-height;
-                image-fit: fill;
-            }
-            // Over the frame and under the command bar, so the bar takes
-            // its own pointer events and the page only gets the rest.
+            // Between split panes the window's glass shows (the design's `.wb-split` web view).
+            background: root.panes.length > 1 ? transparent : Palette.web;
+            // Over the frames and under the command bar, so the bar takes
+            // its own pointer events and the pages only get the rest.
             web-focus := FocusScope {
                 width: 100%;
                 height: 100%;
                 changed has-focus => {
                     root.web-focus-changed(self.has-focus);
                 }
-                TouchArea {
-                    mouse-cursor: root.cursors[root.web-cursor];
-                    pointer-event(event) => {
-                        if event.kind == PointerEventKind.down {
-                            web-focus.focus();
-                            root.web-pointer-pressed(event.button, self.mouse-x, self.mouse-y);
-                        } else if event.kind == PointerEventKind.up {
-                            root.web-pointer-released(event.button, self.mouse-x, self.mouse-y);
-                        } else if event.kind == PointerEventKind.move {
-                            root.web-pointer-moved(self.mouse-x, self.mouse-y);
-                        } else {
-                            root.web-pointer-cancelled();
-                        }
+                SplitView {
+                    panes: root.panes;
+                    seams: root.seams;
+                    ring: root.focus-ring;
+                    accent: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : Palette.sky;
+                    radius: root.page-fullscreen ? 0px : Radius.md;
+                    cursor: root.cursors[root.web-cursor];
+                    pointer-pressed(pane, button, x, y) => {
+                        web-focus.focus();
+                        root.web-pointer-pressed(pane, button, x, y);
                     }
-                    scroll-event(event) => {
-                        root.web-scrolled(self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
-                        accept
+                    pointer-released(pane, button, x, y) => {
+                        root.web-pointer-released(pane, button, x, y);
                     }
-                    changed has-hover => {
-                        if !self.has-hover {
-                            root.web-pointer-left(self.mouse-x, self.mouse-y);
-                        }
+                    pointer-moved(pane, x, y) => {
+                        root.web-pointer-moved(pane, x, y);
+                    }
+                    pointer-left(pane, x, y) => {
+                        root.web-pointer-left(pane, x, y);
+                    }
+                    pointer-cancelled(pane) => {
+                        root.web-pointer-cancelled(pane);
+                    }
+                    scrolled(pane, x, y, dx, dy) => {
+                        root.web-scrolled(pane, x, y, dx, dy);
+                    }
+                    seam-grab(j, x, y) => {
+                        root.split-grab(j, x, y);
+                    }
+                    seam-drag(x, y) => {
+                        root.split-drag(x, y);
+                    }
+                    seam-release => {
+                        root.split-release();
+                    }
+                    seam-even => {
+                        root.split-even();
+                    }
+                    pane-close(id) => {
+                        root.pane-close(id);
                     }
                 }
             }
@@ -564,21 +591,22 @@ export component AppWindow inherits Window {
         }
     }
 
-    // The page's popup widget may leave the page's rectangle (not the window's).
+    // The page's popup widget may leave the page's rectangle (not the window's). It belongs to
+    // the focused page, whose pane id is the active tab's.
     PopupLayer {
         popup: root.popup;
         frame: root.popup-frame;
         pointer-moved(x, y) => {
-            root.web-pointer-moved(x, y);
+            root.web-pointer-moved(root.active-tab-id, x, y);
         }
         pointer-pressed(button, x, y) => {
-            root.web-pointer-pressed(button, x, y);
+            root.web-pointer-pressed(root.active-tab-id, button, x, y);
         }
         pointer-released(button, x, y) => {
-            root.web-pointer-released(button, x, y);
+            root.web-pointer-released(root.active-tab-id, button, x, y);
         }
         scrolled(x, y, dx, dy) => {
-            root.web-scrolled(x, y, dx, dy);
+            root.web-scrolled(root.active-tab-id, x, y, dx, dy);
         }
     }
 
@@ -618,8 +646,8 @@ export component AppWindow inherits Window {
     // The context menu, over the whole window: a click anywhere else dismisses it.
     menu-ui := ContextMenu {
         open: root.menu.open;
-        anchor-x: content.x + root.menu.x;
-        anchor-y: content.y + root.menu.y;
+        anchor-x: root.menu.x;
+        anchor-y: root.menu.y;
         entries: root.menu.entries;
         chosen(i) => {
             root.menu-chosen(i);

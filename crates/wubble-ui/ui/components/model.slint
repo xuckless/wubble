@@ -10,6 +10,8 @@ export struct TabItem {
     // wubble: the page plays sound (the engine's audible probe) / the tab is muted.
     audible: bool,
     muted: bool,
+    // wubble: a pane of the Space's split (the design's tab-row split glyph).
+    in-split: bool,
 }
 
 export struct SpaceItem {
@@ -124,7 +126,8 @@ export struct MenuEntry {
     separator: bool,
 }
 
-// The context menu: where the pointer was (relative to the web view), and its rows.
+// A context menu (the page's or a tab row's): where the pointer was, in window coordinates,
+// and its rows.
 export struct MenuView {
     open: bool,
     x: length,

@@ -40,12 +40,16 @@ pub enum Action {
     CopyUrl,
     /// Mute or unmute the visible tab (also the sidebar's speaker glyph).
     ToggleMute,
+    /// Put the next tab down beside the focused page, or open a page beside it.
+    SplitNext,
+    /// Take the focused page out of its split.
+    Unsplit,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 31] = [
+const FIXED: [(&str, Action); 33] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -76,6 +80,8 @@ const FIXED: [(&str, Action); 31] = [
     ("toggle-pin-tab", Action::TogglePinTab),
     ("copy-url", Action::CopyUrl),
     ("toggle-mute", Action::ToggleMute),
+    ("split-next", Action::SplitNext),
+    ("unsplit", Action::Unsplit),
     ("quit", Action::Quit),
 ];
 
@@ -126,7 +132,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 7] = [
+pub const PALETTE: [ActionInfo; 9] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -157,6 +163,17 @@ pub const PALETTE: [ActionInfo; 7] = [
         title: "Mute Tab",
         keywords: "sound audio unmute",
     },
+    // the design's command-bar rows (browser/command.tsx)
+    ActionInfo {
+        action: Action::SplitNext,
+        title: "Split View with the Next Tab",
+        keywords: "side by side beside pane open",
+    },
+    ActionInfo {
+        action: Action::Unsplit,
+        title: "Take This Page out of the Split",
+        keywords: "unsplit side by side pane",
+    },
     ActionInfo {
         action: Action::ToggleCompactMode,
         title: "Toggle Compact Mode",
@@ -171,7 +188,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 49);
+        assert_eq!(all.len(), 51);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -182,7 +199,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 49);
+        assert_eq!(ids.len(), 51);
     }
 
     #[test]

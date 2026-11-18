@@ -10,6 +10,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("../sql/004_sidebar_mode.sql")),
     (5, include_str!("../sql/005_site_permissions.sql")),
     (6, include_str!("../sql/006_downloads.sql")),
+    (7, include_str!("../sql/007_splits.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -126,7 +127,7 @@ mod tests {
     /// A database of the previous schema, with data, reaches the latest
     /// with its rows intact and the new tables empty.
     #[test]
-    fn a_v4_database_with_data_migrates_to_v6() {
+    fn a_v4_database_with_data_migrates_to_the_latest() {
         pollster::block_on(async {
             let mut conn = mem().await;
             migrate(&mut conn, &MIGRATIONS[..4]).await.unwrap();
@@ -143,13 +144,14 @@ mod tests {
             .await
             .unwrap();
             migrate(&mut conn, MIGRATIONS).await.unwrap();
-            assert_eq!(schema_version(&conn).await.unwrap(), 6);
+            assert_eq!(schema_version(&conn).await.unwrap(), latest(MIGRATIONS));
             for (sql, want) in [
                 ("SELECT count(*) FROM settings WHERE value = 'rail'", 1),
                 ("SELECT count(*) FROM tabs WHERE url = 'https://a.test/'", 1),
                 ("SELECT count(*) FROM bookmarks WHERE title = 'A'", 1),
                 ("SELECT count(*) FROM site_permissions", 0),
                 ("SELECT count(*) FROM downloads", 0),
+                ("SELECT count(*) FROM split_panes", 0),
             ] {
                 assert_eq!(count(&conn, sql).await, want, "{sql}");
             }
