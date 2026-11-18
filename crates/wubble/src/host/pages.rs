@@ -321,8 +321,7 @@ fn utc_offset_min() -> i32 {
 impl Host {
     /// The internal page the visible tab shows.
     pub(super) fn shown_page(&self) -> Option<InternalPage> {
-        self.model
-            .visible_tab()
+        self.shown()
             .and_then(|t| self.model.tabs.get(&t))
             .and_then(|t| InternalPage::from_url(&t.url))
     }
@@ -366,7 +365,7 @@ impl Host {
     }
 
     fn render_pill(&mut self, window: &AppWindow) {
-        let tab = self.model.visible_tab();
+        let tab = self.shown();
         let url = tab
             .and_then(|t| self.model.tabs.get(&t))
             .map(|t| t.url.clone())
@@ -387,7 +386,7 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return;
         };
         let url = self
@@ -512,7 +511,7 @@ impl Host {
 
     /// A history or bookmark row clicked: the page's own tab goes there.
     pub(crate) fn page_opened(&mut self, url: &str) {
-        if let Some(tab) = self.model.visible_tab() {
+        if let Some(tab) = self.shown() {
             self.dispatch(Command::Navigate {
                 tab,
                 url: url.to_owned(),
@@ -522,7 +521,7 @@ impl Host {
 
     /// Middle-click: a new tab beside it.
     pub(crate) fn page_opened_new_tab(&mut self, url: &str) {
-        let opener = self.model.visible_tab();
+        let opener = self.shown();
         self.dispatch(Command::NewTab {
             url: url.to_owned(),
             container: None,
@@ -641,11 +640,7 @@ impl Host {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let Some(tab) = self
-            .model
-            .visible_tab()
-            .and_then(|t| self.model.tabs.get(&t))
-        else {
+        let Some(tab) = self.shown().and_then(|t| self.model.tabs.get(&t)) else {
             return;
         };
         if window.get_dialog().open || !wubble_core::url::is_recordable(&tab.url) {

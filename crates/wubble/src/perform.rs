@@ -8,19 +8,12 @@ use wubble_core::pages::InternalPage;
 use wubble_core::space::{MAX_PANES, SpaceId};
 use wubble_core::tab::TabId;
 
+use wubble_core::window::WindowTarget;
+
 use crate::surface::FindEvent;
 
 /// Actions with no implementation yet, each with the reason.
 pub const NOT_YET: &[(Action, &str)] = &[
-    (Action::NewWindow, "one window only (TODO.md, multi-window)"),
-    (
-        Action::CloseWindow,
-        "one window only (TODO.md, multi-window)",
-    ),
-    (
-        Action::MoveTabToNewWindow,
-        "one window only (TODO.md, multi-window)",
-    ),
     (Action::NewSpace, "needs a name and tint prompt"),
     (
         Action::ToggleCompactMode,
@@ -146,13 +139,17 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::Quit => Plan::Quit,
-        Action::NewWindow
-        | Action::CloseWindow
-        | Action::MoveTabToNewWindow
-        | Action::NewSpace
-        | Action::ToggleCompactMode
-        | Action::DevTools
-        | Action::ViewSource => Plan::NotYet,
+        Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
+        Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
+        Action::MoveTabToNewWindow => visible.map_or(Plan::Nothing, |tab| {
+            Plan::Model(Command::MoveTabToWindow {
+                tab,
+                to: WindowTarget::New,
+            })
+        }),
+        Action::NewSpace | Action::ToggleCompactMode | Action::DevTools | Action::ViewSource => {
+            Plan::NotYet
+        }
     }
 }
 
@@ -286,6 +283,28 @@ mod tests {
         assert_eq!(plan(Action::SelectSpace(3), &m), Plan::Nothing);
         assert_eq!(plan(Action::NextSpace, &m), switch(1));
         assert_eq!(plan(Action::PrevSpace, &m), switch(1));
+    }
+
+    #[test]
+    fn window_actions() {
+        let m = with_tabs(1);
+        assert_eq!(
+            plan(Action::NewWindow, &m),
+            Plan::Model(Command::NewWindow { space: None })
+        );
+        assert_eq!(
+            plan(Action::CloseWindow, &m),
+            Plan::Model(Command::CloseWindow(m.focused()))
+        );
+        assert_eq!(
+            plan(Action::MoveTabToNewWindow, &m),
+            Plan::Model(Command::MoveTabToWindow {
+                tab: TabId(1),
+                to: WindowTarget::New
+            })
+        );
+        let empty = Model::new(std::time::Instant::now());
+        assert_eq!(plan(Action::MoveTabToNewWindow, &empty), Plan::Nothing);
     }
 
     #[test]

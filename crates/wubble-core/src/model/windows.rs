@@ -50,6 +50,11 @@ impl Model {
         }
     }
 
+    /// The page of window `id` that gets keys: its own tab, or its Space's active tab.
+    pub fn window_tab(&self, id: WindowId) -> Option<TabId> {
+        self.window(id).and_then(|w| self.focused_tab(w))
+    }
+
     /// The split a window shows, if any.
     pub fn window_split(&self, id: WindowId) -> Option<&SplitGroup> {
         self.space_split(self.space_idx(self.window(id)?.space()?)?)

@@ -23,7 +23,7 @@ struct Cli {
     /// switch, sleep, restore and close tabs on bundled pages, then exit), `split` (two
     /// bundled pages side by side, each checked, then unsplit and exit), `page`
     /// (a bundled page's select popup, alert, context menu, find and zoom,
-    /// then exit), `block` (a bundled page's blocked requests are counted, then exit), `settings` (open and flip a setting), `pages` (open history, bookmarks, downloads and passwords on a seeded profile), `session` (open two tabs, quit, start again and check they come back) or `autofill` (fill, submit and save on a loopback sign-in page).
+    /// then exit), `block` (a bundled page's blocked requests are counted, then exit), `settings` (open and flip a setting), `pages` (open history, bookmarks, downloads and passwords on a seeded profile), `session` (open two tabs, quit, start again and check they come back), `autofill` (fill, submit and save on a loopback sign-in page) or `windows` (move a tab into a second window, check both, close it).
     /// `session-phase=1|2` is one half of `session`, run by it.
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke, conflicts_with = "measure")]
     smoke: Option<SmokeArg>,
@@ -68,6 +68,7 @@ enum SmokeArg {
     Pages,
     Session,
     Autofill,
+    Windows,
     SessionPhase(Phase),
 }
 
@@ -83,6 +84,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "pages" => Ok(SmokeArg::Pages),
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
+        None if value == "windows" => Ok(SmokeArg::Windows),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -91,7 +93,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
-             `pages`, `session`, `autofill` or `session-phase=1|2`"
+             `pages`, `session`, `autofill`, `windows` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -110,6 +112,8 @@ pub enum Smoke {
     Nav,
     /// Three tabs on bundled pages: switch, sleep, restore, close.
     Tabs,
+    /// A second window: a tab moved into it, both windows' pixels, the window closed.
+    Windows,
     /// Two bundled pages side by side: two live views at their panes' sizes, each pane's
     /// pixels, then unsplit.
     Split,
@@ -210,6 +214,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
+            (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -329,8 +334,8 @@ mod tests {
     #[test]
     fn a_url_does_not_combine_with_a_smoke() {
         for smoke in [
-            "boot", "nav", "tabs", "split", "page", "block", "settings", "pages", "frames=3",
-            "session",
+            "boot", "nav", "tabs", "split", "page", "block", "settings", "pages", "windows",
+            "frames=3", "session",
         ] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),

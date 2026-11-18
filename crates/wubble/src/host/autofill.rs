@@ -293,7 +293,7 @@ impl Host {
     /// The key chip or a menu row: -1 opens the menu, -2 closes it, a row
     /// index chooses it.
     pub fn autofill_menu(&mut self, index: i32) {
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return;
         };
         let event = match index {
@@ -309,7 +309,7 @@ impl Host {
 
     /// A button of the save prompt.
     pub fn autofill_answer(&mut self, answer: AutofillAnswer) {
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return;
         };
         let answer = match answer {
@@ -328,14 +328,13 @@ impl Host {
             return;
         }
         let view = self
-            .model
-            .visible_tab()
+            .shown()
             .and_then(|t| self.autofill.tabs.get(&t))
             .map(autofill::view)
             .unwrap_or_default();
         let chip = view.chip
             && matches!(
-                self.model.visible_tab().and_then(|t| self.autofill.tabs.get(&t)),
+                self.shown().and_then(|t| self.autofill.tabs.get(&t)),
                 Some(AutofillState::Offer(o)) if o.candidates.len() == 1
                     && o.candidates[0].username == autofill_smoke::SEEDED_USER
             );
@@ -360,7 +359,7 @@ impl Host {
                     self.autofill_menu(0);
                 }
                 autofill_smoke::Action::Submit => {
-                    let pane = self.model.visible_tab().map_or(-1, crate::shell::pane_id);
+                    let pane = self.shown().map_or(-1, crate::shell::pane_id);
                     let at = autofill_smoke::SUBMIT_AT;
                     let left = slint::platform::PointerEventButton::Left;
                     self.pointer_moved(pane, at);
@@ -370,8 +369,7 @@ impl Host {
                 autofill_smoke::Action::Save => self.autofill_answer(AutofillAnswer::Save),
                 autofill_smoke::Action::ReadBack => {
                     let Some(origin) = self
-                        .model
-                        .visible_tab()
+                        .shown()
                         .and_then(|t| self.page_url(t))
                         .and_then(|u| Origin::parse(&u).ok())
                     else {

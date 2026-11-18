@@ -31,10 +31,8 @@ use crate::panes::Panes;
 /// One window's share of the host.
 pub(crate) struct WindowHost {
     pub(super) id: WindowId,
-    #[expect(dead_code, reason = "read once a second window can open")]
     pub(super) kind: WindowKind,
     /// The strong handle: the window lives as long as this.
-    #[expect(dead_code, reason = "read once a second window can open")]
     pub(super) handle: AppWindow,
     pub(super) window: slint::Weak<AppWindow>,
     /// One ring of textures per pane on screen (each pane has its own frame size), and the tab
@@ -61,6 +59,11 @@ pub(crate) struct WindowHost {
 }
 
 impl WindowHost {
+    /// Another handle on the window.
+    pub(crate) fn handle(&self) -> AppWindow {
+        self.handle.clone_strong()
+    }
+
     pub(crate) fn new(
         id: WindowId,
         kind: WindowKind,

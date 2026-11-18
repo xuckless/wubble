@@ -10,6 +10,7 @@ use wubble_core::pages::InternalPage;
 use wubble_core::space::{Item, Rgb, SpaceIcon, SpaceId};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
+use wubble_core::window::WindowId;
 
 /// One tab row or pinned tile.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,8 +63,19 @@ pub struct ShellView {
     pub path: String,
 }
 
-pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> ShellView {
-    let space = model.spaces.iter().find(|s| s.id == model.active_space());
+/// The shell of `window`: its Space's rows (the active Space for a Little or Popup window, whose
+/// sidebar is hidden) and its page's address.
+pub fn view_model(
+    model: &Model,
+    window: WindowId,
+    audio: &AudioMap,
+    blocked: &BlockedMap,
+) -> ShellView {
+    let space_id = model
+        .window(window)
+        .and_then(|w| w.space())
+        .unwrap_or_else(|| model.active_space());
+    let space = model.spaces.iter().find(|s| s.id == space_id);
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
         ids.filter_map(|id| {
             let tab = model.tabs.get(&id)?;
@@ -102,7 +114,7 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
             })
         })
         .collect();
-    let visible = model.visible_tab();
+    let visible = model.window_tab(window);
     let address = visible
         .and_then(|t| model.tabs.get(&t))
         .map_or("", |t| t.url.as_str());
@@ -112,7 +124,7 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
         tabs,
         spaces,
         active_tab: visible.and_then(|t| slint_id(t.0)).unwrap_or(-1),
-        active_space: slint_id(model.active_space().0).unwrap_or(-1),
+        active_space: slint_id(space_id.0).unwrap_or(-1),
         host: host.into(),
         path: path.into(),
     }
@@ -125,7 +137,9 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
 /// end of the Space at the top level, out of any folder (a trailing folder can still be joined
 /// before its last tab). `None` for a tab that is not a row (pinned, another Space's, unknown).
 pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
-    let space = model.spaces.iter().find(|s| s.id == model.active_space())?;
+    // the row's own Space: the one the window it was dragged in shows
+    let (space, _) = model.location(tab)?;
+    let space = model.spaces.iter().find(|s| s.id == space)?;
     // The other rows in flat order, as (before it, after it), indices as after the detach.
     let mut rows = vec![];
     let mut from = None;
@@ -228,6 +242,7 @@ mod tests {
     fn an_empty_model_shows_nothing_active() {
         let v = view_model(
             &Model::new(std::time::Instant::now()),
+            wubble_core::window::WindowId(0),
             &AudioMap::new(),
             &BlockedMap::new(),
         );
@@ -266,7 +281,7 @@ mod tests {
                 to: Dest::Folder { folder, index: 0 },
             },
         );
-        let v = view_model(&m, &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
         assert_eq!(titles(&v.pinned), ["a.test"]);
         assert_eq!(titles(&v.tabs), ["c.test", "b.test"]);
         assert_eq!(v.active_tab, i32::try_from(c.0).unwrap());
@@ -286,7 +301,7 @@ mod tests {
         );
         let (m, _) = apply(m, Command::SwitchSpace(SpaceId(1)));
         let (m, _) = new_tab(m, "https://w.test/");
-        let v = view_model(&m, &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
         assert_eq!(titles(&v.tabs), ["w.test"]);
         assert_eq!(v.tabs[0].url, "https://w.test/");
         assert_eq!(v.spaces[1].tint, Rgb(1, 2, 3));
@@ -303,7 +318,7 @@ mod tests {
         let (m, _) = apply(m, Command::ActivateTab(a));
         let (m, _) = apply(m, Command::SplitWith(b));
         let split = |m: &Model| -> Vec<bool> {
-            view_model(m, &AudioMap::new(), &BlockedMap::new())
+            view_model(m, m.focused(), &AudioMap::new(), &BlockedMap::new())
                 .tabs
                 .iter()
                 .map(|r| r.in_split)
@@ -334,10 +349,10 @@ mod tests {
                 },
             ),
         ]);
-        let v = view_model(&m, &audio, &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &audio, &BlockedMap::new());
         let sound: Vec<_> = v.tabs.iter().map(|r| (r.audible, r.muted)).collect();
         assert_eq!(sound, [(true, false), (false, true)]);
-        let quiet = view_model(&m, &AudioMap::new(), &BlockedMap::new());
+        let quiet = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
         assert!(quiet.tabs.iter().all(|r| !r.audible && !r.muted));
     }
 
@@ -345,7 +360,12 @@ mod tests {
     fn rows_carry_their_tab_s_blocked_count() {
         let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
         let (m, _b) = new_tab(m, "https://b.test/");
-        let v = view_model(&m, &AudioMap::new(), &BlockedMap::from([(a, 4)]));
+        let v = view_model(
+            &m,
+            m.focused(),
+            &AudioMap::new(),
+            &BlockedMap::from([(a, 4)]),
+        );
         let counts: Vec<_> = v.tabs.iter().map(|r| r.blocked).collect();
         assert_eq!(counts, [4, 0]);
     }
@@ -357,7 +377,7 @@ mod tests {
             "https://example.com/x",
         );
         assert_eq!(
-            view_model(&m, &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
+            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
             "example.com"
         );
         let (m, _) = apply(
@@ -368,12 +388,12 @@ mod tests {
             },
         );
         assert_eq!(
-            view_model(&m, &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
+            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[0].title,
             "Example"
         );
         let (m, _) = new_tab(m, "");
         assert_eq!(
-            view_model(&m, &AudioMap::new(), &BlockedMap::new()).tabs[1].title,
+            view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[1].title,
             "New tab"
         );
     }
@@ -417,7 +437,7 @@ mod tests {
             .0;
         }
         let (m, _) = apply(m, Command::PinTab(p));
-        let v = view_model(&m, &AudioMap::new(), &BlockedMap::new());
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
         assert_eq!(
             titles(&v.tabs),
             ["a.test", "b.test", "c.test", "d.test", "e.test"]
@@ -428,7 +448,7 @@ mod tests {
     fn moved(m: Model, tab: TabId, to: usize) -> Vec<String> {
         let dest = move_dest(&m, tab, to).expect("a row");
         let (m, _) = apply(m, Command::MoveTab { tab, to: dest });
-        view_model(&m, &AudioMap::new(), &BlockedMap::new())
+        view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new())
             .tabs
             .into_iter()
             .map(|r| r.title)

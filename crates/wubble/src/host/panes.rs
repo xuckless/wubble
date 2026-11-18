@@ -12,6 +12,7 @@ use wubble_core::space::MAX_PANES;
 use wubble_core::split::SPLIT;
 use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
+use wubble_core::window::WindowId;
 use wubble_engine::view::{Layout, ScreenArea};
 use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
@@ -74,10 +75,11 @@ fn sync_rows<T: Clone + PartialEq + 'static>(
 /// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's
 /// other panes stay shown to CEF while one of them is fullscreen, so CEF will not repaint them
 /// when it ends: their frames must outlive it.
-fn framed_tabs(model: &Model, screen: &Screen) -> Vec<TabId> {
-    let mut tabs = model.visible_tabs();
+fn framed_tabs(model: &Model, screen: &Screen, window: WindowId) -> Vec<TabId> {
+    let mut tabs = model.window_tabs(window);
     if let Screen::Page { tab, .. } = *screen
         && !tabs.contains(&tab)
+        && model.window_of(tab) == Some(window)
     {
         tabs.push(tab);
     }
@@ -86,14 +88,14 @@ fn framed_tabs(model: &Model, screen: &Screen) -> Vec<TabId> {
 
 impl Host {
     pub(super) fn framed_tabs(&self) -> Vec<TabId> {
-        framed_tabs(&self.model, &self.screen)
+        framed_tabs(&self.model, &self.screen, self.w.id)
     }
 
     /// The tabs on screen, left to right: a fullscreen page alone, else the model's.
     pub(super) fn shown_tabs(&self) -> Vec<TabId> {
         match self.screen {
-            Screen::Page { tab, .. } => vec![tab],
-            _ => self.model.visible_tabs(),
+            Screen::Page { tab, .. } if self.model.window_of(tab) == Some(self.w.id) => vec![tab],
+            _ => self.model.window_tabs(self.w.id),
         }
     }
 
@@ -102,8 +104,13 @@ impl Host {
         let (width, _) = content_size(window);
         let scale = window.window().scale_factor();
         let rects = match self.screen {
-            Screen::Page { tab, .. } => vec![PageRect { tab, x: 0.0, width }],
-            _ => self.w.panes.rects(&self.model.visible_tabs(), width),
+            Screen::Page { tab, .. } if self.model.window_of(tab) == Some(self.w.id) => {
+                vec![PageRect { tab, x: 0.0, width }]
+            }
+            _ => self
+                .w
+                .panes
+                .rects(&self.model.window_tabs(self.w.id), width),
         };
         rects.into_iter().map(|r| r.on_pixels(scale)).collect()
     }
@@ -145,8 +152,7 @@ impl Host {
     /// candidates are placed from there.
     pub(super) fn focus_origin(&self, window: &AppWindow) -> (f32, f32) {
         let x = self
-            .model
-            .visible_tab()
+            .shown()
             .and_then(|t| self.pane_rects(window).into_iter().find(|r| r.tab == t))
             .map_or(0.0, |r| r.x as f32);
         (window.get_content_x() + x, window.get_content_y())
@@ -156,7 +162,10 @@ impl Host {
     /// outside rendering. Returns whether they move.
     fn step_strings(&mut self, window: &AppWindow, dt: f64) -> bool {
         let (width, height) = content_size(window);
-        let (moving, commands) = self.w.panes.frame(&self.model, dt, width, height);
+        let (moving, commands) = self
+            .w
+            .panes
+            .frame(&self.model, self.w.id, dt, width, height);
         if !commands.is_empty() {
             let first = self.w.split_commands.is_empty();
             self.w.split_commands.extend(commands);
@@ -174,7 +183,7 @@ impl Host {
         let dt = self.w.panes_last.replace(now).map_or(0.0, |prev| {
             now.duration_since(prev).as_secs_f64().min(DT_CAP)
         });
-        let strings = self.model.shown_split().is_some() && self.step_strings(window, dt);
+        let strings = self.model.window_split(self.w.id).is_some() && self.step_strings(window, dt);
         self.lay_out_views(window);
         let stretching = self.step_stretch(window, dt);
         let bowed = self.mask_panes(window);
@@ -202,7 +211,7 @@ impl Host {
     pub(super) fn settle_panes(&mut self, window: &AppWindow) {
         self.step_strings(window, 0.0);
         self.layout_panes(window);
-        if self.model.shown_split().is_some() {
+        if self.model.window_split(self.w.id).is_some() {
             window.window().request_redraw();
         }
     }
@@ -360,7 +369,7 @@ impl Host {
     /// seam's grab mid-drag, survives).
     fn render_panes(&mut self, window: &AppWindow) {
         let (_, height) = content_size(window);
-        let focused = self.model.visible_tab();
+        let focused = self.shown();
         let rects = self.pane_rects(window);
         let fill = rects.len() == 1;
         let panes: Vec<SplitPane> = rects
@@ -434,7 +443,7 @@ impl Host {
     /// Takes each pane's new frame, if it has one, and the focused page's popup frame. Returns
     /// whether any pane got a frame.
     pub(super) fn present_panes(&mut self, window: &AppWindow) -> Result<bool, String> {
-        let focused = self.model.visible_tab();
+        let focused = self.shown();
         let mut presented = false;
         for rect in self.pane_rects(window) {
             let layout = self.layout_of(window, &rect);
@@ -609,8 +618,7 @@ impl Host {
     /// A tab row's right click at `x, y` (window, logical): its split entries, as the shell's
     /// menu on the focused page.
     pub fn tab_context(&mut self, id: i32, x: f32, y: f32) {
-        let (Some(tab), Some(focused)) = (crate::shell::tab_id(id), self.model.visible_tab())
-        else {
+        let (Some(tab), Some(focused)) = (crate::shell::tab_id(id), self.shown()) else {
             return;
         };
         let Some(window) = self.w.window.upgrade() else {
@@ -649,7 +657,7 @@ mod tests {
             tab: TabId(1),
             restore_window: false,
         };
-        assert_eq!(framed_tabs(&m, &page), m.visible_tabs());
+        assert_eq!(framed_tabs(&m, &page, m.focused()), m.visible_tabs());
         assert_eq!(m.visible_tabs().len(), 2);
     }
 }

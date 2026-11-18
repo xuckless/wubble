@@ -45,12 +45,12 @@ impl Host {
             return;
         };
         let seen = self.checks.page_smoke.is_some().then(|| event.clone());
-        let visible = self.model.visible_tab() == Some(tab);
+        let visible = self.shown() == Some(tab);
         let routed = surface::route(event);
         // A page beside the focused one that asks something takes the focus, so its question
         // shows instead of blocking it unseen.
         if !visible
-            && self.model.visible_tabs().contains(&tab)
+            && self.model.window_tabs(self.w.id).contains(&tab)
             && matches!(
                 routed,
                 Routed::Dialog(DialogEvent::Requested(_)) | Routed::Auth(AuthEvent::Requested(_))
@@ -347,7 +347,7 @@ impl Host {
     /// Writes the visible tab's surfaces into the shell (Slint ignores
     /// values that did not change; the menu is compared here, see [`Drawn`]).
     pub(super) fn render_surfaces(&mut self, window: &AppWindow) {
-        let tab = self.model.visible_tab();
+        let tab = self.shown();
         if self.w.drawn.tab != tab
             && let Some(old) = self.w.drawn.tab
         {
@@ -390,7 +390,7 @@ impl Host {
     /// The sheet's answer: the sign-in sheet's when one shows (`text` is
     /// the user name), else the JS dialog's.
     pub fn dialog_answered(&mut self, accept: bool, text: &str, secret: &str) {
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return;
         };
         let signing_in = matches!(
@@ -419,7 +419,7 @@ impl Host {
     }
 
     pub fn permission_answered(&mut self, allow: bool, remember: bool) {
-        if let Some(tab) = self.model.visible_tab() {
+        if let Some(tab) = self.shown() {
             self.apply_permission(tab, PermissionEvent::Answer { allow, remember });
             self.redraw_surfaces();
         }
@@ -428,7 +428,7 @@ impl Host {
     /// The error panel's default button: Go back on a certificate panel,
     /// else Reload.
     pub fn error_primary(&mut self) {
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return;
         };
         let event = match self.surfaces.get(&tab).map(|s| &s.error) {
@@ -443,7 +443,7 @@ impl Host {
 
     /// Proceed past a certificate error.
     pub fn error_secondary(&mut self) {
-        if let Some(tab) = self.model.visible_tab() {
+        if let Some(tab) = self.shown() {
             self.apply_error(tab, ErrorEvent::Proceed);
             self.redraw_surfaces();
         }
@@ -459,7 +459,7 @@ impl Host {
     }
 
     fn menu_event(&mut self, event: MenuEvent) -> usize {
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return 0;
         };
         let answered = self.apply_menu(tab, event);
@@ -468,7 +468,7 @@ impl Host {
     }
 
     pub fn find_event(&mut self, event: FindEvent) {
-        if let Some(tab) = self.model.visible_tab() {
+        if let Some(tab) = self.shown() {
             self.apply_find(tab, event);
             self.redraw_surfaces();
         }

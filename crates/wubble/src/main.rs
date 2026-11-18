@@ -28,6 +28,7 @@ mod shell;
 mod split_smoke;
 mod surface;
 mod tabs_smoke;
+mod windows_smoke;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -85,6 +86,9 @@ const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
 /// How often live tabs are asked whether they play sound (the speaker glyph;
 /// CEF has no audible callback, see `wubble_engine::media`).
 const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
+
+use wubble_core::model::Command as Cmd;
+use wubble_core::window::{WindowId, WindowKind};
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os()) {
@@ -158,6 +162,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: tabs FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Windows) => {
+            match with_smoke_dir(|config, dir| run(Mode::Windows, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    windows_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: windows ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: windows FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: windows FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -408,6 +435,7 @@ fn main() -> ExitCode {
 /// indicator) and hands the scene its frames from the same, single rendering notifier.
 fn install_shell_driver(
     window: &AppWindow,
+    id: WindowId,
     ui: persist::UiState,
     glass: &Rc<RefCell<Glass>>,
 ) -> Result<Rc<RefCell<GlassRegistry>>, Box<dyn std::error::Error>> {
@@ -423,7 +451,7 @@ fn install_shell_driver(
             // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
             // Inside rendering the host may be busy (a pump renders); then this frame skips
             // them and asks for the next.
-            if panes_frame(window, now) {
+            if panes_frame(id, window, now) {
                 window.window().request_redraw();
             }
         },
@@ -588,6 +616,8 @@ struct Outcome {
     blocked_seen: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
+    /// `--smoke windows` reached its end.
+    windows_passed: bool,
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     pages_passed: bool,
@@ -612,6 +642,8 @@ enum Mode {
     Tabs,
     /// `--smoke split`.
     Split,
+    /// `--smoke windows`.
+    Windows,
     /// `--smoke page`.
     Page,
     /// `--smoke block`.
@@ -661,15 +693,91 @@ fn with_host(f: impl FnOnce(&mut Host)) {
     });
 }
 
-/// The panes' frame from the rendering notifier: whether another frame is needed. A busy host
-/// (rendering inside a pump) skips this one and asks for the next; no host needs none.
-fn panes_frame(window: &AppWindow, now: Instant) -> bool {
+/// Runs `f` on the host in window `id` (one of its callbacks), if that window is still open.
+fn with_host_in(id: WindowId, f: impl FnOnce(&mut Host)) {
+    HOST.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut host) => {
+            if let Some(host) = host.as_mut()
+                && host.enter(id)
+            {
+                f(host);
+            }
+        }
+        Err(_) => eprintln!("wubble: host busy, input or pump request dropped"),
+    });
+}
+
+/// The panes' frame of window `id` from its rendering notifier: whether another frame is
+/// needed. A busy host (rendering inside a pump) skips this one and asks for the next; no host
+/// needs none.
+fn panes_frame(id: WindowId, window: &AppWindow, now: Instant) -> bool {
     HOST.with(|cell| match cell.try_borrow_mut() {
         Ok(mut host) => host
             .as_mut()
-            .is_some_and(|host| host.panes_frame(window, now)),
+            .is_some_and(|host| host.enter(id) && host.panes_frame(window, now)),
         Err(_) => true,
     })
+}
+
+/// What a new window is made from: the shared GPU device and the glass setting.
+pub(crate) struct WindowFactory {
+    pub gpu: GpuContext,
+    pub glass_scene: bool,
+}
+
+impl WindowFactory {
+    /// A platform window for model window `id`: the shell, its glass and spring driver, every
+    /// callback wired to the host in that window. Not shown yet.
+    pub(crate) fn open(
+        &self,
+        id: WindowId,
+        kind: WindowKind,
+        ui: persist::UiState,
+    ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
+        let window = AppWindow::new()?;
+        window.set_window_kind(kind.index());
+        let glass = Rc::new(RefCell::new(backdrop::choose(
+            &self.gpu,
+            &window,
+            self.glass_scene,
+        )));
+        connect_input(&window, id);
+        connect_shell(&window, id);
+        connect_surfaces(&window, id);
+        wubble_ui::window::wire(&window);
+        // The shell's close button and the window manager's close the window, not the app:
+        // the model says when the last Main window is gone (`Effect::LastWindowClosed`).
+        window.on_window_close_requested(move || {
+            with_host_in(id, |host| host.dispatch(Cmd::CloseWindow(id)))
+        });
+        window.window().on_close_requested(move || {
+            with_host_in(id, |host| host.dispatch(Cmd::CloseWindow(id)));
+            slint::CloseRequestResponse::KeepWindowShown
+        });
+        // Little and Popup windows show their page alone.
+        let ui = match kind {
+            WindowKind::Main => ui,
+            WindowKind::Little | WindowKind::Popup => persist::UiState {
+                mode: wubble_core::seam::SidebarMode::Hidden,
+                ..ui
+            },
+        };
+        let panels = install_shell_driver(&window, id, ui, &glass)?;
+        let gpu = &self.gpu;
+        Ok(host::WindowHost::new(
+            id,
+            kind,
+            window,
+            [
+                gpu.presenter(),
+                gpu.presenter(),
+                gpu.presenter(),
+                gpu.presenter(),
+            ],
+            glass,
+            panels,
+        ))
+    }
 }
 
 /// Hands a pump request to the host.
@@ -736,48 +844,54 @@ pub fn page_url(html: &str) -> String {
 }
 
 /// Hands the shell's web-content callbacks and raw window events to the host.
-fn connect_input(window: &AppWindow) {
+fn connect_input(window: &AppWindow, win: WindowId) {
     let point = |x: f32, y: f32| Point { x, y };
     window.on_web_pointer_moved(move |pane, x, y| {
-        with_host(|host| host.pointer_moved(pane, point(x, y)))
+        with_host_in(win, |host| host.pointer_moved(pane, point(x, y)))
     });
     window.on_web_pointer_left(move |pane, x, y| {
-        with_host(|host| host.pointer_left(pane, point(x, y)))
+        with_host_in(win, |host| host.pointer_left(pane, point(x, y)))
     });
     window.on_web_pointer_pressed(move |pane, button, x, y| {
-        with_host(|host| host.pointer_button(pane, button, true, point(x, y)))
+        with_host_in(win, |host| {
+            host.pointer_button(pane, button, true, point(x, y))
+        })
     });
     window.on_web_pointer_released(move |pane, button, x, y| {
-        with_host(|host| host.pointer_button(pane, button, false, point(x, y)))
+        with_host_in(win, |host| {
+            host.pointer_button(pane, button, false, point(x, y))
+        })
     });
-    window.on_web_pointer_cancelled(|pane| with_host(|host| host.pointer_cancelled(pane)));
+    window.on_web_pointer_cancelled(move |pane| {
+        with_host_in(win, |host| host.pointer_cancelled(pane))
+    });
     window.on_web_scrolled(move |pane, x, y, dx, dy| {
-        with_host(|host| host.scrolled(pane, point(x, y), dx, dy))
+        with_host_in(win, |host| host.scrolled(pane, point(x, y), dx, dy))
     });
     // The split's seams and the panes' close buttons.
-    window.on_split_grab(|j, x, y| with_host(|host| host.split_grab(j, x, y)));
-    window.on_split_drag(|x, y| with_host(|host| host.split_drag(x, y)));
-    window.on_split_release(|| with_host(Host::split_release));
-    window.on_split_even(|| with_host(Host::split_even));
-    window.on_pane_close(|id| with_host(|host| host.pane_close(id)));
+    window.on_split_grab(move |j, x, y| with_host_in(win, |host| host.split_grab(j, x, y)));
+    window.on_split_drag(move |x, y| with_host_in(win, |host| host.split_drag(x, y)));
+    window.on_split_release(move || with_host_in(win, Host::split_release));
+    window.on_split_even(move || with_host_in(win, Host::split_even));
+    window.on_pane_close(move |id| with_host_in(win, |host| host.pane_close(id)));
     let weak = window.as_weak();
     window.on_web_focus_changed(move |_| {
         if let Some(window) = weak.upgrade() {
-            with_host(|host| host.sync_focus(&window));
+            with_host_in(win, |host| host.sync_focus(&window));
         }
     });
-    window.window().on_winit_window_event(|_, event| {
+    window.window().on_winit_window_event(move |_, event| {
         let mut result = EventResult::Propagate;
-        with_host(|host| result = host.window_event(event));
+        with_host_in(win, |host| result = host.window_event(event));
         result
     });
 }
 
 /// Hands the shell's tab, Space and command-bar callbacks to the host,
 /// each one a model command or a bar update.
-fn connect_shell(window: &AppWindow) {
+fn connect_shell(window: &AppWindow, win: WindowId) {
     use wubble_core::model::Command as Cmd;
-    let command = |c: Cmd| with_host(|host| host.dispatch(c));
+    let command = move |c: Cmd| with_host_in(win, |host| host.dispatch(c));
     window.on_tab_activated(move |id| {
         if let Some(t) = shell::tab_id(id) {
             command(Cmd::ActivateTab(t));
@@ -789,9 +903,9 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     // A row dragged to slot `to` of the flat tab list.
-    window.on_tab_moved(|id, to| {
+    window.on_tab_moved(move |id, to| {
         if let (Some(tab), Ok(to)) = (shell::tab_id(id), usize::try_from(to)) {
-            with_host(|host| host.move_tab(tab, to));
+            with_host_in(win, |host| host.move_tab(tab, to));
         }
     });
     window.on_space_switched(move |id| {
@@ -802,143 +916,167 @@ fn connect_shell(window: &AppWindow) {
     let weak = window.as_weak();
     window.on_new_tab_requested(move || {
         if let Some(window) = weak.upgrade() {
-            with_host(|host| host.bar_for_new_tab(&window));
+            with_host_in(win, |host| host.bar_for_new_tab(&window));
         }
     });
     let weak = window.as_weak();
     window.on_address_focus_requested(move || {
         if let Some(window) = weak.upgrade() {
-            with_host(|host| host.bar_for_address(&window));
+            with_host_in(win, |host| host.bar_for_address(&window));
         }
     });
     let weak = window.as_weak();
     window.on_command_query_changed(move |query| {
         if let Some(window) = weak.upgrade() {
-            with_host(|host| host.bar_query(&window, &query));
+            with_host_in(win, |host| host.bar_query(&window, &query));
         }
     });
-    window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
-    window.on_tab_context(|id, x, y| with_host(|host| host.tab_context(id, x, y)));
+    window.on_command_result_chosen(move |index| with_host_in(win, |host| host.bar_chosen(index)));
+    window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
     let weak = window.as_weak();
     window.on_beside_requested(move || {
         if let Some(window) = weak.upgrade() {
-            with_host(|host| host.bar_for_beside(&window));
+            with_host_in(win, |host| host.bar_for_beside(&window));
         }
     });
-    window.on_tab_mute_toggled(|id| {
+    window.on_tab_mute_toggled(move |id| {
         if let Some(tab) = shell::tab_id(id) {
-            with_host(|host| host.toggle_mute(tab));
+            with_host_in(win, |host| host.toggle_mute(tab));
         }
     });
     // The sidebar's buttons name their action; it runs like its shortcut.
-    window.on_shell_action(|id| match wubble_core::action::Action::from_id(&id) {
-        Some(action) => with_host(|host| host.perform(action)),
+    window.on_shell_action(move |id| match wubble_core::action::Action::from_id(&id) {
+        Some(action) => with_host_in(win, |host| host.perform(action)),
         None => eprintln!("wubble: the shell asked for an unknown action {id:?}"),
     });
 }
 
 /// Hands the page's own UI (menu, dialog sheet, find bar) to the host.
-fn connect_surfaces(window: &AppWindow) {
+fn connect_surfaces(window: &AppWindow, win: WindowId) {
     use surface::FindEvent;
-    window.on_menu_chosen(|i| {
+    window.on_menu_chosen(move |i| {
         if let Ok(i) = usize::try_from(i) {
-            with_host(|host| host.menu_chosen(i));
+            with_host_in(win, |host| host.menu_chosen(i));
         }
     });
-    window.on_menu_dismissed(|| {
-        with_host(|host| {
+    window.on_menu_dismissed(move || {
+        with_host_in(win, |host| {
             host.menu_dismissed();
         })
     });
-    window.on_dialog_answered(|accept, text, secret| {
-        with_host(|host| host.dialog_answered(accept, &text, &secret))
+    window.on_dialog_answered(move |accept, text, secret| {
+        with_host_in(win, |host| host.dialog_answered(accept, &text, &secret))
     });
-    window.on_permission_answered(|allow, remember| {
-        with_host(|host| host.permission_answered(allow, remember))
+    window.on_permission_answered(move |allow, remember| {
+        with_host_in(win, |host| host.permission_answered(allow, remember))
     });
-    window.on_error_primary(|| with_host(Host::error_primary));
-    window.on_error_secondary(|| with_host(Host::error_secondary));
-    window.on_download_action(|id, action| {
-        with_host(|host| host.download_action(i64::from(id), action))
+    window.on_error_primary(move || with_host_in(win, Host::error_primary));
+    window.on_error_secondary(move || with_host_in(win, Host::error_secondary));
+    window.on_download_action(move |id, action| {
+        with_host_in(win, |host| host.download_action(i64::from(id), action))
     });
-    window.on_find_edited(|q| with_host(|host| host.find_event(FindEvent::Query(q.into()))));
-    window.on_find_step(|forward| {
+    window.on_find_edited(move |q| {
+        with_host_in(win, |host| host.find_event(FindEvent::Query(q.into())))
+    });
+    window.on_find_step(move |forward| {
         let event = if forward {
             FindEvent::Next
         } else {
             FindEvent::Prev
         };
-        with_host(|host| host.find_event(event));
+        with_host_in(win, |host| host.find_event(event));
     });
-    window.on_find_closed(|| with_host(|host| host.find_event(FindEvent::Close)));
-    connect_settings(window);
-    connect_pages(window);
-    window.on_autofill_menu(|i| with_host(|host| host.autofill_menu(i)));
-    window.on_autofill_answer(|i| with_host(|host| host.autofill_answer(i)));
+    window.on_find_closed(move || with_host_in(win, |host| host.find_event(FindEvent::Close)));
+    connect_settings(window, win);
+    connect_pages(window, win);
+    window.on_autofill_menu(move |i| with_host_in(win, |host| host.autofill_menu(i)));
+    window.on_autofill_answer(move |i| with_host_in(win, |host| host.autofill_answer(i)));
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
 /// visible tab's, on the shared GPU device) and runs the Slint loop until
 /// the window closes or the smoke ends, then saves the session.
 /// The settings page's intents: each becomes one host call.
-fn connect_settings(window: &AppWindow) {
+fn connect_settings(window: &AppWindow, win: WindowId) {
     use wubble_core::action::Action;
     use wubble_core::keys::CaptureEvent;
-    window.on_settings_requested(|| with_host(|host| host.perform(Action::OpenSettings)));
-    window.on_settings_query_changed(|q| with_host(|host| host.settings_query(&q)));
-    window.on_setting_changed(|key, value| {
-        with_host(|host| {
+    window.on_settings_requested(move || {
+        with_host_in(win, |host| host.perform(Action::OpenSettings))
+    });
+    window.on_settings_query_changed(move |q| with_host_in(win, |host| host.settings_query(&q)));
+    window.on_setting_changed(move |key, value| {
+        with_host_in(win, |host| {
             host.write_setting(&key, &value);
         })
     });
-    window.on_setting_reset(|key| with_host(|host| host.setting_reset(&key)));
-    window.on_setting_entry_removed(|key, entry| {
-        with_host(|host| host.setting_entry_removed(&key, &entry))
+    window.on_setting_reset(move |key| with_host_in(win, |host| host.setting_reset(&key)));
+    window.on_setting_entry_removed(move |key, entry| {
+        with_host_in(win, |host| host.setting_entry_removed(&key, &entry))
     });
-    window.on_setting_entry_added(|key, entry| {
-        with_host(|host| host.setting_entry_added(&key, &entry))
+    window.on_setting_entry_added(move |key, entry| {
+        with_host_in(win, |host| host.setting_entry_added(&key, &entry))
     });
-    window.on_binding_record(|id| with_host(|host| host.binding_record(&id)));
-    window.on_binding_reset(|id| with_host(|host| host.binding_reset(&id)));
-    window.on_capture_confirm(|| with_host(|host| host.capture_event(CaptureEvent::Confirm)));
-    window.on_capture_cancel(|| with_host(|host| host.capture_event(CaptureEvent::Cancel)));
-    window.on_space_renamed(|id, name| with_host(|host| host.space_renamed(id, &name)));
-    window.on_space_tinted(|id, tint| with_host(|host| host.space_tinted(id, tint)));
-    window.on_space_icon_chosen(|id, icon| with_host(|host| host.space_icon_chosen(id, &icon)));
-    window.on_site_zoom_removed(|h| with_host(|host| host.site_zoom_removed(&h)));
-    window.on_site_permission_removed(|i| with_host(|host| host.site_permission_removed(&i)));
+    window.on_binding_record(move |id| with_host_in(win, |host| host.binding_record(&id)));
+    window.on_binding_reset(move |id| with_host_in(win, |host| host.binding_reset(&id)));
+    window.on_capture_confirm(move || {
+        with_host_in(win, |host| host.capture_event(CaptureEvent::Confirm))
+    });
+    window.on_capture_cancel(move || {
+        with_host_in(win, |host| host.capture_event(CaptureEvent::Cancel))
+    });
+    window
+        .on_space_renamed(move |id, name| with_host_in(win, |host| host.space_renamed(id, &name)));
+    window.on_space_tinted(move |id, tint| with_host_in(win, |host| host.space_tinted(id, tint)));
+    window.on_space_icon_chosen(move |id, icon| {
+        with_host_in(win, |host| host.space_icon_chosen(id, &icon))
+    });
+    window.on_site_zoom_removed(move |h| with_host_in(win, |host| host.site_zoom_removed(&h)));
+    window.on_site_permission_removed(move |i| {
+        with_host_in(win, |host| host.site_permission_removed(&i))
+    });
 }
 
 /// The native pages' intents (history, bookmarks, downloads): each becomes one host call.
-fn connect_pages(window: &AppWindow) {
-    window.on_history_query_changed(|q| with_host(|host| host.history_query(&q)));
-    window.on_history_deleted(|url| with_host(|host| host.history_deleted(&url)));
-    window.on_history_more(|| with_host(Host::history_more));
-    window.on_history_cleared(|range| with_host(|host| host.history_cleared(range)));
-    window.on_page_opened(|url| with_host(|host| host.page_opened(&url)));
-    window.on_page_opened_new_tab(|url| with_host(|host| host.page_opened_new_tab(&url)));
-    window.on_bookmarks_query_changed(|q| with_host(|host| host.bookmarks_query(&q)));
-    window.on_bookmark_toggled(|id| with_host(|host| host.bookmark_toggled(id)));
-    window.on_bookmark_rename_requested(|id| with_host(|host| host.bookmark_rename_requested(id)));
-    window.on_bookmark_move_requested(|id| with_host(|host| host.bookmark_move_requested(id)));
-    window.on_bookmark_deleted(|id| with_host(|host| host.bookmark_deleted(id)));
-    window.on_bookmark_folder_requested(|| with_host(Host::bookmark_folder_requested));
-    window.on_bookmark_sheet_answered(|accept, remove, name, folder| {
-        with_host(|host| host.bookmark_sheet_answered(accept, remove, &name, folder))
+fn connect_pages(window: &AppWindow, win: WindowId) {
+    window.on_history_query_changed(move |q| with_host_in(win, |host| host.history_query(&q)));
+    window.on_history_deleted(move |url| with_host_in(win, |host| host.history_deleted(&url)));
+    window.on_history_more(move || with_host_in(win, Host::history_more));
+    window.on_history_cleared(move |range| with_host_in(win, |host| host.history_cleared(range)));
+    window.on_page_opened(move |url| with_host_in(win, |host| host.page_opened(&url)));
+    window.on_page_opened_new_tab(move |url| {
+        with_host_in(win, |host| host.page_opened_new_tab(&url))
     });
-    window.on_address_bookmark_requested(|| with_host(Host::bookmark_page));
-    window.on_address_blocker_requested(|x, y| with_host(|host| host.blocker_menu_requested(x, y)));
-    window.on_downloads_cleared(|| with_host(Host::downloads_cleared));
-    window.on_passwords_query_changed(|q| with_host(|host| host.passwords_query(&q)));
-    window.on_passwords_unlock(|| with_host(Host::passwords_unlock));
-    window.on_login_reveal(|id| with_host(|host| host.login_reveal(&id)));
-    window.on_login_hide(|| with_host(Host::login_hide));
-    window.on_login_copy(|id| with_host(|host| host.login_copy(&id)));
-    window.on_login_deleted(|id| with_host(|host| host.login_deleted(&id)));
-    window.on_login_added(|site, user, password| {
-        with_host(|host| host.login_added(&site, &user, &password))
+    window.on_bookmarks_query_changed(move |q| with_host_in(win, |host| host.bookmarks_query(&q)));
+    window.on_bookmark_toggled(move |id| with_host_in(win, |host| host.bookmark_toggled(id)));
+    window.on_bookmark_rename_requested(move |id| {
+        with_host_in(win, |host| host.bookmark_rename_requested(id))
     });
-    window.on_passwords_import_requested(|| with_host(Host::passwords_import_requested));
+    window.on_bookmark_move_requested(move |id| {
+        with_host_in(win, |host| host.bookmark_move_requested(id))
+    });
+    window.on_bookmark_deleted(move |id| with_host_in(win, |host| host.bookmark_deleted(id)));
+    window.on_bookmark_folder_requested(move || with_host_in(win, Host::bookmark_folder_requested));
+    window.on_bookmark_sheet_answered(move |accept, remove, name, folder| {
+        with_host_in(win, |host| {
+            host.bookmark_sheet_answered(accept, remove, &name, folder)
+        })
+    });
+    window.on_address_bookmark_requested(move || with_host_in(win, Host::bookmark_page));
+    window.on_address_blocker_requested(move |x, y| {
+        with_host_in(win, |host| host.blocker_menu_requested(x, y))
+    });
+    window.on_downloads_cleared(move || with_host_in(win, Host::downloads_cleared));
+    window.on_passwords_query_changed(move |q| with_host_in(win, |host| host.passwords_query(&q)));
+    window.on_passwords_unlock(move || with_host_in(win, Host::passwords_unlock));
+    window.on_login_reveal(move |id| with_host_in(win, |host| host.login_reveal(&id)));
+    window.on_login_hide(move || with_host_in(win, Host::login_hide));
+    window.on_login_copy(move |id| with_host_in(win, |host| host.login_copy(&id)));
+    window.on_login_deleted(move |id| with_host_in(win, |host| host.login_deleted(&id)));
+    window.on_login_added(move |site, user, password| {
+        with_host_in(win, |host| host.login_added(&site, &user, &password))
+    });
+    window
+        .on_passwords_import_requested(move || with_host_in(win, Host::passwords_import_requested));
 }
 
 fn run(
@@ -999,6 +1137,7 @@ fn run(
         settings_smoke: None,
         pages_smoke: None,
         autofill_smoke: None,
+        windows_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -1043,6 +1182,13 @@ fn run(
             Some(bundled()),
             Checks {
                 split_smoke: Some(SplitSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Windows => (
+            Some(bundled()),
+            Checks {
+                windows_smoke: Some(windows_smoke::WindowsSmoke::default()),
                 ..none
             },
         ),
@@ -1126,32 +1272,15 @@ fn run(
         blocking.start(profile, &loaded.settings.blocker);
     }
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
-    let window = AppWindow::new()?;
-    let glass = Rc::new(RefCell::new(backdrop::choose(
-        &gpu,
-        &window,
-        loaded.settings.glass_scene(),
-    )));
-    connect_input(&window);
-    connect_shell(&window);
-    connect_surfaces(&window);
-    wubble_ui::window::wire(&window);
-    let panels = install_shell_driver(&window, loaded.settings.ui, &glass)?;
-    let first = host::WindowHost::new(
-        wubble_core::window::WindowId(0),
-        wubble_core::window::WindowKind::Main,
-        window.clone_strong(),
-        [
-            gpu.presenter(),
-            gpu.presenter(),
-            gpu.presenter(),
-            gpu.presenter(),
-        ],
-        glass,
-        panels,
-    );
+    let factory = WindowFactory {
+        gpu: gpu.clone(),
+        glass_scene: loaded.settings.glass_scene(),
+    };
+    // The focused window first; the host opens the session's others.
+    let first = factory.open(loaded.model.focused(), WindowKind::Main, loaded.settings.ui)?;
+    let window = first.handle();
     let host = Host::new(
-        engine, first, loaded, store, url, checks, downloads, blocking,
+        engine, first, factory, loaded, store, url, checks, downloads, blocking,
     );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
@@ -1175,9 +1304,12 @@ fn run(
         });
     }
 
-    let result = window.run();
-    // Read while the window still exists.
-    let ui = host::ui_state(&window);
+    window.show()?;
+    with_host(Host::open_session_windows);
+    let result = slint::run_event_loop();
+    // Read while the windows still exist.
+    let ui = HOST.with_borrow_mut(|host| host.as_mut().map(Host::ui_state));
+    let ui = ui.unwrap_or_else(|| host::ui_state(&window));
     drop(measure_timer);
     let measured = measuring
         .then(|| measure::finish(&gpu.describe()))
@@ -1196,6 +1328,7 @@ fn run(
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
+        windows_passed: host.windows_passed,
         settings_passed: host.settings_passed,
         pages_passed: host.pages_passed,
         session_passed: host.session_passed,

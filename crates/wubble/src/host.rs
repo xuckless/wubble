@@ -221,6 +221,7 @@ pub struct Checks {
     pub settings_smoke: Option<SettingsSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
+    pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -259,6 +260,8 @@ pub struct Host {
     /// The window the host works on now (`window.rs`); the others are parked.
     w: WindowHost,
     parked: BTreeMap<WindowId, WindowHost>,
+    /// Makes the platform window of each model window that opens.
+    factory: crate::WindowFactory,
     /// The engine's single-shot pump timer.
     pub timer: slint::Timer,
     /// The one owner of tabs and Spaces.
@@ -282,6 +285,7 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    pub windows_passed: bool,
     pub settings_passed: bool,
     pub pages_passed: bool,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
@@ -352,6 +356,7 @@ impl Host {
     pub fn new(
         engine: Engine,
         w: WindowHost,
+        factory: crate::WindowFactory,
         loaded: Loaded,
         store: StoreClient,
         open: Option<String>,
@@ -387,6 +392,7 @@ impl Host {
             engine,
             w,
             parked: BTreeMap::new(),
+            factory,
             timer: slint::Timer::default(),
             model,
             views: BTreeMap::new(),
@@ -410,6 +416,7 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            windows_passed: false,
             settings_passed: false,
             pages_passed: false,
             settings_read: None,
@@ -474,6 +481,85 @@ impl Host {
         true
     }
 
+    /// Opens the platform windows of the session's other windows (the focused one exists).
+    pub fn open_session_windows(&mut self) {
+        let ids: Vec<WindowId> = self.model.windows.iter().map(|w| w.id).collect();
+        for id in ids {
+            self.open_window(id);
+        }
+        self.after_change();
+    }
+
+    /// Opens model window `id`'s platform window, unless it has one: a Main window takes the
+    /// sidebar of the window the host is in.
+    fn open_window(&mut self, id: WindowId) {
+        let Some(w) = self.model.window(id) else {
+            return;
+        };
+        if self.w.id == id || self.parked.contains_key(&id) {
+            return;
+        }
+        let (kind, geometry) = (w.kind, w.geometry);
+        let ui = ui_state(&self.w.handle);
+        let opened = match self.factory.open(id, kind, ui) {
+            Ok(opened) => opened,
+            Err(e) => {
+                eprintln!("wubble: window {}: {e}", id.0);
+                return;
+            }
+        };
+        if let Some(g) = geometry {
+            let size = slint::LogicalSize::new(g.width as f32, g.height as f32);
+            opened.handle.window().set_size(size);
+        }
+        if let Err(e) = opened.handle.show() {
+            eprintln!("wubble: window {}: {e}", id.0);
+            return;
+        }
+        self.parked.insert(id, opened);
+    }
+
+    /// Closes window `id`'s platform window. Its frames and rings go with it; the tabs it
+    /// showed are hidden (or closed) by the model.
+    fn close_window(&mut self, id: WindowId) {
+        if self.w.id == id {
+            let Some(&other) = self.parked.keys().next() else {
+                return;
+            };
+            self.enter(other);
+        }
+        if let Some(gone) = self.parked.remove(&id) {
+            let _ = gone.handle.hide();
+        }
+    }
+
+    /// Raises and focuses window `id`.
+    fn raise_window(&mut self, id: WindowId) {
+        let handle = if self.w.id == id {
+            Some(&self.w.handle)
+        } else {
+            self.parked.get(&id).map(|w| &w.handle)
+        };
+        if let Some(handle) = handle {
+            handle.window().with_winit_window(|w| w.focus_window());
+        }
+    }
+
+    /// The sidebar to keep: the focused Main window's.
+    pub fn ui_state(&mut self) -> UiState {
+        let main = self
+            .model
+            .windows
+            .iter()
+            .rev()
+            .find(|w| w.kind == wubble_core::window::WindowKind::Main)
+            .map(|w| w.id);
+        if let Some(main) = main {
+            self.enter(main);
+        }
+        ui_state(&self.w.handle)
+    }
+
     /// Enters the model's focused window, if it has one open.
     pub fn enter_focused(&mut self) {
         self.enter(self.model.focused());
@@ -531,6 +617,10 @@ impl Host {
     fn execute(&mut self, c: Call, frame_rate: u32) -> Option<Command> {
         match c {
             Call::OpenView { tab, url } => {
+                // sized for the window that shows it
+                if let Some(id) = self.model.window_of(tab) {
+                    self.enter(id);
+                }
                 let window = self.w.window.upgrade()?;
                 if self.views.contains_key(&tab) {
                     return None;
@@ -589,14 +679,33 @@ impl Host {
                     .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
             }
             Call::Quit => quit(),
-            // A second window comes with the host's window map (TODO.md, multi-window).
-            Call::OpenWindow(_) | Call::CloseWindow(_) | Call::FocusWindow(_) | Call::Nothing => {}
+            Call::OpenWindow(id) => self.open_window(id),
+            Call::CloseWindow(id) => self.close_window(id),
+            Call::FocusWindow(id) => self.raise_window(id),
+            Call::Nothing => {}
         }
         None
     }
 
     /// Re-derives the shell from the model.
     fn after_change(&mut self) {
+        for id in self.window_ids() {
+            if self.enter(id) {
+                self.render_window();
+            }
+        }
+        self.enter_focused();
+    }
+
+    /// The open windows, the one the host is in first.
+    fn window_ids(&self) -> Vec<WindowId> {
+        std::iter::once(self.w.id)
+            .chain(self.parked.keys().copied())
+            .collect()
+    }
+
+    /// Re-derives the current window's shell from the model.
+    fn render_window(&mut self) {
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
@@ -609,13 +718,16 @@ impl Host {
             window.set_web_cursor(Cursor::Default as i32);
         }
         self.settle_panes(&window);
-        self.sync_focus(&window);
+        // one keyboard focus: the focused window's page
+        if self.w.id == self.model.focused() {
+            self.sync_focus(&window);
+        }
         let tabs = &self.model.tabs;
         self.favicons.retain(|tab, _| tabs.contains_key(tab));
         let blocked = self.blocked_counts();
         crate::bind::render(
             &window,
-            &crate::shell::view_model(&self.model, &self.audio, &blocked),
+            &crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked),
             &self.favicons,
         );
         self.render_surfaces(&window);
@@ -673,17 +785,22 @@ impl Host {
         self.dispatch(Command::BusyChanged { tab, busy });
     }
 
+    /// The page of the window the host is in that gets keys: in the focused window, the
+    /// model's visible tab.
+    pub(crate) fn shown(&self) -> Option<TabId> {
+        self.model.window_tab(self.w.id)
+    }
+
     /// The visible tab's view: the focused page, the one that gets keys.
     pub(crate) fn view(&mut self) -> Option<&mut View> {
-        self.tab_view(self.model.visible_tab()?)
+        self.tab_view(self.shown()?)
     }
 
     /// The visible tab's view, else any live tab's: for work that needs a view but none in
     /// particular (a retried download started from an internal page).
     fn any_view(&mut self) -> Option<&mut View> {
         let tab = self
-            .model
-            .visible_tab()
+            .shown()
             .filter(|t| self.views.contains_key(t))
             .or_else(|| self.views.keys().next().copied())?;
         self.tab_view(tab)
@@ -717,18 +834,24 @@ impl Host {
         if !worked {
             return;
         }
+        for (view, event) in events {
+            if let Some(window) = self.enter_view(view) {
+                self.on_web_event(&window, view, event);
+            }
+        }
+        for (view, event) in self.engine.take_page_events() {
+            if let Some(window) = self.enter_view(view) {
+                self.on_page_event(&window, view, event);
+            }
+        }
+        self.enter_focused();
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        for (view, event) in events {
-            self.on_web_event(&window, view, event);
-        }
-        for (view, event) in self.engine.take_page_events() {
-            self.on_page_event(&window, view, event);
-        }
         self.close_tabs_of_gone_views();
         self.smoke_step(SmokeInput::Worked);
         self.tabs_smoke_step();
+        self.windows_smoke_step();
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
@@ -737,17 +860,14 @@ impl Host {
         }
         self.split_smoke_step(&window);
         self.autofill_smoke_worked();
-        let framed = self
-            .model
-            .visible_tab()
-            .is_some_and(|t| self.w.frames.contains_key(&t));
+        let framed = self.shown().is_some_and(|t| self.w.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
         if self.checks.block_smoke.is_some() {
             let blocked = self.visible_blocked();
             self.block_smoke_step(block_smoke::Input::Worked { blocked });
         }
         if self.checks.page_smoke.is_some() {
-            let view_width = self.model.visible_tab().map_or(0.0, |t| {
+            let view_width = self.shown().map_or(0.0, |t| {
                 self.pane_layout(&window, t).size.width as f32 / window.window().scale_factor()
             });
             self.page_smoke_step(page_smoke::Input::Worked {
@@ -782,6 +902,34 @@ impl Host {
         }
     }
 
+    /// Presents the new frames of every window's panes; whether any window got one. Ends in
+    /// the focused window.
+    fn present_windows(&mut self) -> Result<bool, String> {
+        let mut presented = false;
+        for id in self.window_ids() {
+            if self.enter(id)
+                && let Some(window) = self.w.window.upgrade()
+            {
+                presented |= self.present_panes(&window)?;
+            }
+        }
+        self.enter_focused();
+        Ok(presented)
+    }
+
+    /// Enters the window showing `view`'s tab (the focused one for a tab no window shows) and
+    /// returns it.
+    fn enter_view(&mut self, view: ViewId) -> Option<AppWindow> {
+        let window = self
+            .tab_of(view)
+            .and_then(|tab| self.model.window_of(tab))
+            .unwrap_or_else(|| self.model.focused());
+        if !self.enter(window) {
+            self.enter_focused();
+        }
+        self.w.window.upgrade()
+    }
+
     fn show_frame(&mut self, window: &AppWindow) -> Result<(), String> {
         if self.frame_rate.is_none() {
             // Before winit has created the window there is no monitor to
@@ -804,7 +952,7 @@ impl Host {
         if new_cpu > 0 {
             eprintln!("wubble: {new_cpu} CPU fallback frame(s) (OnPaint), not shown");
         }
-        if !self.present_panes(window)? {
+        if !self.present_windows()? {
             return Ok(());
         }
         let now = Instant::now();
@@ -817,7 +965,7 @@ impl Host {
             .quit_after
             .is_some_and(|n| self.stats.accelerated >= n)
         {
-            if let Some(tab) = self.model.visible_tab()
+            if let Some(tab) = self.shown()
                 && let Some(frame) = self.w.frames.get(&tab)
             {
                 let layout = self.pane_layout(window, tab);
@@ -942,7 +1090,7 @@ impl Host {
                 self.dispatch(Command::RendererGone(tab));
             }
             WebEvent::KeyUnhandled(key) => {
-                if Some(tab) == self.model.visible_tab()
+                if Some(tab) == self.shown()
                     && let Some(action) = self.page_first.unhandled(key)
                 {
                     self.perform(action);
@@ -967,7 +1115,11 @@ impl Host {
 
     /// Ctrl+L or the address pill: the bar opens on the visible tab's URL.
     pub fn bar_for_address(&mut self, window: &AppWindow) {
-        let visible = self.model.visible_tab();
+        // a Little or Popup window's address is read-only
+        if self.w.kind != wubble_core::window::WindowKind::Main {
+            return;
+        }
+        let visible = self.shown();
         match visible.and_then(|t| self.model.tabs.get(&t)) {
             Some(tab) => {
                 let url = tab.url.clone();
@@ -1042,7 +1194,7 @@ impl Host {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
                 if bar::is_typed(target) {
-                    self.typed_nav.started(self.model.visible_tab());
+                    self.typed_nav.started(self.shown());
                 }
             }
             Some(Choice::Perform(action)) => self.perform(action),
@@ -1066,10 +1218,10 @@ impl Host {
         match perform::plan(action, &self.model) {
             Plan::Model(command) => self.dispatch(command),
             Plan::View(op) => {
-                if let Some(tab) = self.model.visible_tab() {
+                if let Some(tab) = self.shown() {
                     self.typed_nav.ended(tab);
                 }
-                let Some(tab) = self.model.visible_tab() else {
+                let Some(tab) = self.shown() else {
                     return;
                 };
                 let zoom_default = self.zoom_default;
@@ -1097,7 +1249,7 @@ impl Host {
                 }
             }
             Plan::Print => {
-                if let Some(tab) = self.model.visible_tab() {
+                if let Some(tab) = self.shown() {
                     self.print(tab);
                 }
             }
@@ -1233,7 +1385,7 @@ impl Host {
         self.checks.nav_smoke = Some(state);
         match action {
             Some(SmokeAction::LoadSecondPage) => {
-                if let Some(tab) = self.model.visible_tab() {
+                if let Some(tab) = self.shown() {
                     self.dispatch(Command::Navigate {
                         tab,
                         url: page_url(NAV_PAGE),
@@ -1252,8 +1404,7 @@ impl Host {
     fn seen(&self) -> Seen {
         let order = self.model.order(self.model.active_space());
         let shown = self
-            .model
-            .visible_tab()
+            .shown()
             .and_then(|t| self.views.get(&t))
             .is_some_and(|&id| self.engine.is_visible(id));
         Seen {
@@ -1270,6 +1421,99 @@ impl Host {
                 let kept = self.framed_tabs();
                 self.w.frames.keys().any(|t| !kept.contains(t))
             },
+        }
+    }
+
+    /// What `--smoke windows` waits on, across every window.
+    fn windows_seen(&mut self) -> crate::windows_smoke::Seen {
+        let visible = self.model.visible_tabs();
+        let views_agree = self.model.tabs.keys().all(|t| {
+            let shown = self
+                .views
+                .get(t)
+                .is_some_and(|&id| self.engine.is_visible(id));
+            shown == visible.contains(t)
+        }) && self.engine.visible_views() == visible.len();
+        let mut framed = true;
+        for id in self.window_ids() {
+            if self.enter(id) {
+                let tabs = self.model.window_tabs(id);
+                framed &= tabs.iter().all(|t| self.w.frames.contains_key(t));
+            }
+        }
+        self.enter_focused();
+        crate::windows_smoke::Seen {
+            titled: self
+                .model
+                .tabs
+                .values()
+                .filter(|t| !t.title.is_empty())
+                .count(),
+            model_windows: self.model.windows.len(),
+            open_windows: 1 + self.parked.len(),
+            views_agree,
+            framed,
+            shown: visible.len(),
+        }
+    }
+
+    fn windows_smoke_step(&mut self) {
+        use crate::windows_smoke::{self, Action};
+        let Some(state) = self.checks.windows_smoke.take() else {
+            return;
+        };
+        let seen = self.windows_seen();
+        let (state, action) = windows_smoke::next(state, &seen);
+        self.checks.windows_smoke = Some(state);
+        // the window the smoke opened: the newest
+        let second = self.model.windows.iter().map(|w| w.id).max();
+        match action {
+            Some(Action::OpenPage) => self.dispatch(new_tab(page_url(SMOKE_PAGE), None)),
+            Some(Action::NewWindow) => self.dispatch(Command::NewWindow { space: None }),
+            Some(Action::MoveTab) => {
+                let visible = self.model.visible_tabs();
+                let hidden = self
+                    .model
+                    .tabs
+                    .keys()
+                    .copied()
+                    .find(|t| !visible.contains(t));
+                if let (Some(tab), Some(to)) = (hidden, second) {
+                    self.dispatch(Command::MoveTabToWindow {
+                        tab,
+                        to: wubble_core::window::WindowTarget::Existing(to),
+                    });
+                }
+            }
+            Some(Action::CheckAndClose) => {
+                for id in self.window_ids() {
+                    if !self.enter(id) {
+                        continue;
+                    }
+                    let Some(window) = self.w.window.upgrade() else {
+                        continue;
+                    };
+                    let checked =
+                        snapshot(&window).and_then(|shot| self.check_pixels(&window, &shot));
+                    match checked {
+                        Ok(sample) => println!(
+                            "smoke: windows pixels ok window={} distinct={}",
+                            id.0, sample.distinct
+                        ),
+                        Err(e) => return self.fail(format!("window {}: {e}", id.0)),
+                    }
+                }
+                self.enter_focused();
+                if let Some(second) = second {
+                    self.dispatch(Command::CloseWindow(second));
+                }
+            }
+            Some(Action::Pass) => {
+                self.windows_passed = true;
+                quit();
+            }
+            Some(Action::Fail(reason)) => self.fail(reason),
+            None => {}
         }
     }
 
@@ -1386,7 +1630,7 @@ impl Host {
                 println!("smoke: split resized panes {left}+{right}");
             }
             Some(split_smoke::Action::Unsplit) => {
-                if let Some(tab) = self.model.visible_tab() {
+                if let Some(tab) = self.shown() {
                     self.dispatch(Command::Unsplit(tab));
                 }
             }
@@ -1410,8 +1654,7 @@ impl Host {
         let seen = settings_smoke::Seen {
             ready: self.frame_rate.is_some(),
             on_settings: self
-                .model
-                .visible_tab()
+                .shown()
                 .and_then(|t| self.model.tabs.get(&t))
                 .is_some_and(|t| t.url == InternalPage::Settings.url()),
             page_open: window.get_settings_open(),
@@ -1502,7 +1745,7 @@ impl Host {
     }
 
     fn visible_blocked(&mut self) -> u32 {
-        let tab = self.model.visible_tab();
+        let tab = self.shown();
         tab.and_then(|t| self.blocked_of(t)).unwrap_or(0)
     }
 
@@ -1572,8 +1815,7 @@ impl Host {
                 },
                 page_smoke::Action::MenuGone => {
                     let open = self
-                        .model
-                        .visible_tab()
+                        .shown()
                         .and_then(|t| self.surfaces.get(&t))
                         .is_some_and(|s| s.menu != crate::menu::Menu::Closed);
                     if open || self.menu_dismissed() != 0 {
@@ -1644,9 +1886,7 @@ impl Host {
                 .iter()
                 .map(|t| t.lifecycle.liveness == Liveness::Discarded)
                 .collect(),
-            visible: order
-                .iter()
-                .position(|&t| Some(t) == self.model.visible_tab()),
+            visible: order.iter().position(|&t| Some(t) == self.shown()),
             icon: self.session_icon,
         };
         let (state, action) = session_smoke::next(state, &seen, &want);
@@ -1671,11 +1911,7 @@ impl Host {
     /// window has focus and the web content is the shell's focused item.
     /// A view that stops being visible loses focus first.
     pub fn sync_focus(&mut self, window: &AppWindow) {
-        let target = self
-            .model
-            .visible_tab()
-            .and_then(|t| self.views.get(&t))
-            .copied();
+        let target = self.shown().and_then(|t| self.views.get(&t)).copied();
         if target != self.focus_view {
             if let Some(view) = self.focus_view.and_then(|id| self.engine.view(id)) {
                 view.focus(false);
@@ -1686,7 +1922,7 @@ impl Host {
         }
         // The page's own context menu takes the shell's focus but not the page's.
         let page_menu = target
-            .and(self.model.visible_tab())
+            .and(self.shown())
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| s.menu.keeps_page_focus());
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
@@ -1741,6 +1977,9 @@ impl Host {
             }
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
+                if *focused && self.model.focused() != self.w.id {
+                    self.dispatch(Command::FocusWindow(self.w.id));
+                }
                 self.sync_focus(&window);
             }
             WindowEvent::Ime(ime) => {
@@ -1920,8 +2159,8 @@ impl Host {
         };
         if pressed
             && let Some(tab) = crate::shell::tab_id(pane)
-            && self.model.visible_tab() != Some(tab)
-            && self.model.visible_tabs().contains(&tab)
+            && self.shown() != Some(tab)
+            && self.model.window_tabs(self.w.id).contains(&tab)
         {
             self.dispatch(Command::ActivateTab(tab));
         }

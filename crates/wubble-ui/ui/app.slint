@@ -40,6 +40,8 @@ export component AppWindow inherits Window {
     // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
     // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
     in property <bool> native-frame: false;
+    // What the window is (wubble_core::window::WindowKind::index): 0 Main, 1 Little, 2 Popup.
+    in property <int> window-kind: 0;
     no-frame: !root.native-frame;
     background: transparent;
     default-font-family: Fonts.ui;
