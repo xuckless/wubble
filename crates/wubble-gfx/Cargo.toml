@@ -17,3 +17,6 @@ wgpu-profiler = "0.28"
 [dev-dependencies]
 # WGSL validation of the scene shaders in tests; same version wgpu 30 uses.
 naga = { version = "30", features = ["wgsl-in"] }
+# The HDR surface spike (examples/hdr_surface.rs). Versions already in the lock file.
+winit = "0.30"
+pollster = "0.4"

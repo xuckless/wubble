@@ -7936,10 +7936,12 @@ name = "wubble-gfx"
 version = "0.0.0"
 dependencies = [
  "naga",
+ "pollster 0.4.0",
  "slint",
  "welding",
  "wgpu",
  "wgpu-profiler",
+ "winit",
 ]
 
 [[package]]
