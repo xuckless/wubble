@@ -11,6 +11,6 @@ mod types;
 
 pub use blocker::{Blocker, BlockerError, Cosmetic};
 pub use decision::Decision;
-pub use refresh::{DEFAULT_LISTS, ListSpec, Policy, due};
+pub use refresh::{DEFAULT_LISTS, ListSpec, due};
 pub use site::{Shields, SiteOverrides};
 pub use types::{NetRequest, ResourceType};

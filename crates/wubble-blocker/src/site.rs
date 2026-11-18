@@ -12,9 +12,17 @@ pub enum Shields {
 /// Hosts where blocking is turned off. Pure data owned by the caller; a host entry
 /// also covers its subdomains.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SiteOverrides(pub BTreeSet<String>);
+pub struct SiteOverrides(BTreeSet<String>);
 
 impl SiteOverrides {
+    /// Add a host (case and one trailing dot ignored). Returns false if it was present
+    /// or empty.
+    pub fn insert(&mut self, host: &str) -> bool {
+        let host = host.trim().to_ascii_lowercase();
+        let host = host.strip_suffix('.').unwrap_or(&host);
+        !host.is_empty() && self.0.insert(host.to_owned())
+    }
+
     /// Shields for a page. An unparsable URL or one without a host gets `On`.
     pub fn shields_for(&self, page_url: &str) -> Shields {
         let Some(host) = Url::parse(page_url)
@@ -23,7 +31,7 @@ impl SiteOverrides {
         else {
             return Shields::On;
         };
-        let mut rest = host.as_str();
+        let mut rest = host.strip_suffix('.').unwrap_or(&host);
         loop {
             if self.0.contains(rest) {
                 return Shields::Off;
@@ -41,7 +49,9 @@ mod tests {
     use super::*;
 
     fn overrides() -> SiteOverrides {
-        SiteOverrides(["example.com".to_owned()].into())
+        let mut o = SiteOverrides::default();
+        o.insert("example.com");
+        o
     }
 
     #[test]
@@ -57,6 +67,27 @@ mod tests {
         let o = overrides();
         assert_eq!(o.shields_for("https://notexample.com/"), Shields::On);
         assert_eq!(o.shields_for("https://example.com.evil.org/"), Shields::On);
+    }
+
+    #[test]
+    fn trailing_dot_host_matches() {
+        assert_eq!(
+            overrides().shields_for("https://example.com./"),
+            Shields::Off
+        );
+        assert_eq!(
+            overrides().shields_for("https://a.example.com./"),
+            Shields::Off
+        );
+    }
+
+    #[test]
+    fn insert_normalises_entries() {
+        let mut o = SiteOverrides::default();
+        assert!(o.insert(" Example.COM. "));
+        assert!(!o.insert("example.com"));
+        assert!(!o.insert(" "));
+        assert_eq!(o.shields_for("https://example.com/"), Shields::Off);
     }
 
     #[test]

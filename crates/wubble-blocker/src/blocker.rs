@@ -25,17 +25,25 @@ pub enum BlockerError {
 pub struct Cosmetic {
     /// Selectors to hide, sorted.
     pub hide_selectors: Vec<String>,
-    /// One `sel{display:none!important}` rule per selector, so one bad selector
-    /// cannot void the rest.
-    pub css: String,
     /// Procedural cosmetic filters, sorted. Executing them is the engine lane's job.
     pub procedural_actions: Vec<String>,
     /// Scriptlet source (empty unless resources are loaded).
     pub injected_script: String,
     /// Generic hiding is disabled on this page.
     pub generichide: bool,
-    /// Exceptions to pass to `generic_selectors`.
-    pub exceptions: HashSet<String>,
+    /// Exceptions for `generic_selectors`, which takes the whole `Cosmetic`.
+    pub(crate) exceptions: HashSet<String>,
+}
+
+impl Cosmetic {
+    /// One `sel{display:none!important}` rule per selector, so one bad selector
+    /// cannot void the rest.
+    pub fn css(&self) -> String {
+        self.hide_selectors
+            .iter()
+            .map(|s| format!("{s}{{display:none!important}}\n"))
+            .collect()
+    }
 }
 
 /// Compiled filter engine. `Send + Sync`; holds no per-site state.
@@ -115,14 +123,8 @@ impl Blocker {
             v.sort();
             v
         };
-        let hide_selectors = sorted(r.hide_selectors);
-        let css = hide_selectors
-            .iter()
-            .map(|s| format!("{s}{{display:none!important}}\n"))
-            .collect();
         Cosmetic {
-            hide_selectors,
-            css,
+            hide_selectors: sorted(r.hide_selectors),
             procedural_actions: sorted(r.procedural_actions),
             injected_script: r.injected_script,
             generichide: r.generichide,
@@ -298,7 +300,7 @@ mod tests {
         let c = b.cosmetic("https://example.com/", Shields::On);
         assert_eq!(c.hide_selectors, [".aaa", ".sponsor"]);
         assert_eq!(
-            c.css,
+            c.css(),
             ".aaa{display:none!important}\n.sponsor{display:none!important}\n"
         );
         assert!(

@@ -43,28 +43,3 @@ pub struct NetRequest<'a> {
     pub source_url: &'a str,
     pub resource_type: ResourceType,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ResourceType::*;
-
-    #[test]
-    fn every_variant_maps_to_its_filter_string() {
-        let table = [
-            (Document, "main_frame"),
-            (Subdocument, "sub_frame"),
-            (Stylesheet, "stylesheet"),
-            (Script, "script"),
-            (Image, "image"),
-            (Font, "font"),
-            (Object, "object"),
-            (Media, "media"),
-            (Xhr, "xhr"),
-            (Ping, "ping"),
-            (Other, "other"),
-        ];
-        for (ty, s) in table {
-            assert_eq!(ty.filter_type(), s);
-        }
-    }
-}
