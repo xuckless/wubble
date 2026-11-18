@@ -210,6 +210,18 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `on_accelerated_paint`; `vulkan_dmabuf.rs` `copy_dmabuf_to_owned` takes it
    and measures the whole copy and the `device.poll(Wait)` part. For
    wubble's hand-run `--measure`; costs three `Instant::now()` per frame.
+23. **A dismissed context menu is retired, not dropped.** `held.rs`: new
+   `Held::retire` (CEF answered every waiting request itself: ids go stale,
+   nothing is answered, the handles are kept) and `Held::take_retired`;
+   `handlers.rs` `hold` and `drain` release the retired handles outside the
+   lock, and `OnContextMenuDismissed` retires instead of draining. CEF
+   cancels its own menu (`CefMenuManager::CancelContextMenu`, from
+   `SetFocus(false)`, `Hide`, a non-right mouse press, a wheel, browser
+   destruction) by calling `Continue` through a raw pointer it holds no
+   reference for, and `OnContextMenuDismissed` runs inside that `Continue`:
+   dropping the held handle there freed the callback under it (SIGSEGV in
+   `BindStateHolder::Reset`). Tests: retire answers nothing and keeps the
+   handles; every request answered exactly once whoever closes it.
 
 ## Not changed, on purpose
 

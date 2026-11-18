@@ -50,16 +50,19 @@ impl Default for GlassRegistry {
 }
 
 impl GlassRegistry {
-    /// A panel's current item: kept when present, removed when not.
-    pub fn report(&mut self, item: GlassItem) {
-        if item.present {
-            if self.items.get(&item.key) != Some(&item) {
+    /// A panel's current item: kept when present, removed when not. Returns whether the list
+    /// changed.
+    pub fn report(&mut self, item: GlassItem) -> bool {
+        let changed = if item.present {
+            self.items.get(&item.key) != Some(&item) && {
                 self.items.insert(item.key, item);
-                self.dirty = true;
+                true
             }
-        } else if self.items.remove(&item.key).is_some() {
-            self.dirty = true;
-        }
+        } else {
+            self.items.remove(&item.key).is_some()
+        };
+        self.dirty |= changed;
+        changed
     }
 
     /// The models changed: sweep at the next frame.

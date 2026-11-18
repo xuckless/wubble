@@ -1235,8 +1235,46 @@ impl Host {
                 page_smoke::Action::RightClick(at) => click(self, PointerEventButton::Right, at),
                 page_smoke::Action::AcceptDialog => self.dialog_answered(true, "", ""),
                 page_smoke::Action::DismissMenu => {
-                    if !self.menu_dismissed() {
+                    if self.menu_dismissed() != 1 {
                         self.fail("the context menu was not answered exactly once".into());
+                    }
+                }
+                page_smoke::Action::CancelMenu(cancel) => {
+                    let Some(view) = self.view() else { continue };
+                    match cancel {
+                        // The engine's own paths, as a window blur or a tab switch takes them.
+                        page_smoke::Cancel::Blur => view.focus(false),
+                        page_smoke::Cancel::Hide => view.set_visible(false),
+                        page_smoke::Cancel::Press => {
+                            click(self, PointerEventButton::Left, page_smoke::BLANK_AT)
+                        }
+                    }
+                }
+                page_smoke::Action::Restore(cancel) => match cancel {
+                    page_smoke::Cancel::Blur => {
+                        // Back to what the shell's focus says.
+                        self.input.forget_view_focus();
+                        if let Some(window) = self.window.upgrade() {
+                            self.sync_focus(&window);
+                        }
+                    }
+                    page_smoke::Cancel::Hide => {
+                        if let Some(view) = self.view() {
+                            view.set_visible(true);
+                        }
+                    }
+                    page_smoke::Cancel::Press => {}
+                },
+                page_smoke::Action::MenuGone => {
+                    let open = self
+                        .model
+                        .visible_tab()
+                        .and_then(|t| self.surfaces.get(&t))
+                        .is_some_and(|s| s.menu != crate::menu::Menu::Closed);
+                    if open || self.menu_dismissed() != 0 {
+                        self.fail(
+                            "CEF closed the context menu but the shell still answered it".into(),
+                        );
                     }
                 }
                 page_smoke::Action::Find(query) => {
@@ -1310,7 +1348,12 @@ impl Host {
             self.page_first.clear();
             self.focus_view = target;
         }
-        let focused = self.input.window_focused && window.get_web_focused();
+        // The page's own context menu takes the shell's focus but not the page's.
+        let page_menu = target
+            .and(self.model.visible_tab())
+            .and_then(|t| self.surfaces.get(&t))
+            .is_some_and(|s| s.menu.keeps_page_focus());
+        let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
         let view_open = self.view().is_some();
         if let Some(focused) = self.input.focus_change(focused, view_open)
             && let Some(view) = self.view()
