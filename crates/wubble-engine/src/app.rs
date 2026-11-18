@@ -137,7 +137,17 @@ const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[
     // the ChromeOS style). Measured on CEF 156 windowless, Linux: a tall
     // page's `innerWidth - documentElement.clientWidth` is 15 without it and
     // 0 with it. `FluentOverlayScrollbar` alone changes nothing there.
-    ("enable-features", Some("OverlayScrollbar")),
+    //
+    // Middle-click autoscroll (press the wheel, then move to scroll), which
+    // Chromium turns on by default only on Windows
+    // (`features::kMiddleClickAutoscroll`). Same switch as above because a
+    // switch given twice keeps one value.
+    (
+        "enable-features",
+        Some("OverlayScrollbar,MiddleClickAutoscroll"),
+    ),
+    // The Blink side of the same feature; older builds read only this one.
+    ("enable-blink-features", Some("MiddleClickAutoscroll")),
 ];
 
 #[cfg(target_os = "linux")]
@@ -557,10 +567,16 @@ mod tests {
         let cef = cef_config(&config("/opt/wubble", "/c"));
         assert_eq!(
             cef.command_line_switches,
-            vec![(
-                "enable-features".to_string(),
-                Some("OverlayScrollbar".to_string())
-            )]
+            vec![
+                (
+                    "enable-features".to_string(),
+                    Some("OverlayScrollbar,MiddleClickAutoscroll".to_string())
+                ),
+                (
+                    "enable-blink-features".to_string(),
+                    Some("MiddleClickAutoscroll".to_string())
+                ),
+            ]
         );
     }
 
