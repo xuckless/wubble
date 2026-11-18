@@ -12,6 +12,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 |---|---|
 | Light theme | Only Ink, Sky and a few ground/Mist values come from the pack; the other light colours (Deep, Haze, Lilac, Blush, Mint, Coral, fills) are our own picks in `tokens.slint`, to be checked by eye. Theme is `Colors.light`, a bool inside each colour token, not a second token set |
 | Slint ids | Slint has only `int` (i32), so `TabItem.id` / `SpaceItem.id` are `int`; the wiring item converts from core `u64`/`u32` with `try_from`, never truncating silently |
+| Key routing | Each default binding has a `Route` column: `Shell` (shell always takes it: NewTab, CloseTab, ReopenClosedTab, NewWindow, Next/PrevTab, Quit, Fullscreen, spaces, sidebar; the Chromium `kReservedCommandIds` / Firefox `reserved` set plus wubble-only actions) or `PageFirst` (page gets the key, the shell acts only if unhandled, via CEF `OnKeyEvent`; everything else, incl. Zen's Mod+S compact mode). Overrides take the action's default route. In page fullscreen only Fullscreen stays `Shell` |
 | Licence | GPL-3.0-only (matches Slint's GPL option; Chromium/CEF are BSD and compatible) |
 | Platforms | Daily-drive targets: Linux (lead, Wayland) and macOS, both built locally. Windows is built and tested on CI runners only and may trail by a milestone |
 | Engine, phase 1 | Prebuilt CEF 154 via the `cef` crate (stock Chromium, **not** ungoogled) |
@@ -133,6 +134,7 @@ Daily-drive set
 - [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; glass, results wiring and actions remain)
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
 - [x] Command bar brain (`wubble_core::omnibox`): `classify` (Chromium Parse rules), one search-engine table, `rank` over tabs/history/bookmarks/actions; wiring to Slint results remains
+- [x] Keybindings and actions as data (`wubble_core::action`, `keys`): one `Action` enum shared with the command bar, `DEFAULTS` chord table (Zen first, then Firefox/Chromium) with per-platform rows, chord parser/formatter, user overrides + conflict detection; the key-event router and editor UI remain
 - [ ] Suggestion fetch effect (run `Source::Remote` requests, debounce, cancel stale) and the settings toggle for the flag
 - [ ] Compact mode: sidebar/toolbar hide and reveal; the stretchy seam ("Room to play") for sidebar width
 - [ ] URL pill (Thin glass): host in Ink, rest in Haze

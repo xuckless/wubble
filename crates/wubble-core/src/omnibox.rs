@@ -11,6 +11,7 @@
 
 use ::url::{Host, Url};
 
+use crate::action::{Action, PALETTE};
 use crate::tab::TabId;
 use crate::url::percent_encode_into;
 
@@ -237,55 +238,6 @@ pub struct Bookmark {
     pub title: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActionId {
-    NewSpace,
-    CloseTab,
-    ReopenClosedTab,
-    Reload,
-    ToggleSidebar,
-    ToggleCompactMode,
-}
-
-pub struct Action {
-    pub id: ActionId,
-    pub title: &'static str,
-    pub keywords: &'static str,
-}
-
-pub const ACTIONS: [Action; 6] = [
-    Action {
-        id: ActionId::NewSpace,
-        title: "New Space",
-        keywords: "create workspace",
-    },
-    Action {
-        id: ActionId::CloseTab,
-        title: "Close Tab",
-        keywords: "remove",
-    },
-    Action {
-        id: ActionId::ReopenClosedTab,
-        title: "Reopen Closed Tab",
-        keywords: "undo restore",
-    },
-    Action {
-        id: ActionId::Reload,
-        title: "Reload",
-        keywords: "refresh",
-    },
-    Action {
-        id: ActionId::ToggleSidebar,
-        title: "Toggle Sidebar",
-        keywords: "hide show tabs",
-    },
-    Action {
-        id: ActionId::ToggleCompactMode,
-        title: "Toggle Compact Mode",
-        keywords: "hide show",
-    },
-];
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Candidates<'a> {
     pub tabs: &'a [OpenTab],
@@ -310,7 +262,7 @@ pub enum Target {
     OpenTab(TabId),
     Url(String),
     Search(String),
-    Action(ActionId),
+    Action(Action),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,11 +354,11 @@ pub fn rank(
             scored.push((class * CLASS_UNIT + bonus, row(kind, title, url, target)));
         }
     }
-    for a in &ACTIONS {
+    for a in &PALETTE {
         if let Some(class) = match_class(&terms, "", a.title, a.keywords) {
             scored.push((
                 class * CLASS_UNIT,
-                row(Kind::Action, a.title, "", Target::Action(a.id)),
+                row(Kind::Action, a.title, "", Target::Action(a.action)),
             ));
         }
     }
@@ -729,10 +681,10 @@ mod tests {
     #[test]
     fn actions_match_by_word_prefix() {
         let r = run("new sp", &Candidates::default());
-        assert_eq!(r[1].target, Target::Action(ActionId::NewSpace));
+        assert_eq!(r[1].target, Target::Action(Action::NewSpace));
         assert_eq!(r.len(), 2);
         let r = run("refresh", &Candidates::default());
-        assert_eq!(r[1].target, Target::Action(ActionId::Reload));
+        assert_eq!(r[1].target, Target::Action(Action::Reload));
     }
 
     #[test]
