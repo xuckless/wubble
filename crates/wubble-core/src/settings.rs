@@ -54,6 +54,8 @@ pub enum Section {
     General,
     Privacy,
     Appearance,
+    /// Tab sleep and glass quality.
+    Performance,
     /// Stored but not a row on the page (it has its own editor or is dragged).
     Hidden,
 }
@@ -168,6 +170,76 @@ pub const SITE_ZOOM: SettingDef = SettingDef {
     restart: false,
 };
 
+/// The zoom a site without its own level shows at, percent.
+pub const ZOOM_DEFAULT: SettingDef = SettingDef {
+    key: "zoom.default",
+    kind: SettingKind::Count { min: 25, max: 500 },
+    default: "100",
+    label: "Default page zoom (%)",
+    section: Section::General,
+    restart: false,
+};
+/// A hidden tab is frozen after this long (`sleep::SleepPolicy::freeze_after`).
+pub const SLEEP_FREEZE_AFTER: SettingDef = SettingDef {
+    key: "sleep.freeze_after_s",
+    kind: SettingKind::Count {
+        min: 10,
+        max: 86_400,
+    },
+    default: "60",
+    label: "Freeze background tabs after (seconds)",
+    section: Section::Performance,
+    restart: false,
+};
+/// A hidden tab is discarded after this long (`sleep::SleepPolicy::discard_after`).
+pub const SLEEP_DISCARD_AFTER: SettingDef = SettingDef {
+    key: "sleep.discard_after_s",
+    kind: SettingKind::Count {
+        min: 60,
+        max: 604_800,
+    },
+    default: "900",
+    label: "Unload background tabs after (seconds)",
+    section: Section::Performance,
+    restart: false,
+};
+/// Pinned tabs are frozen but never unloaded on a timer.
+pub const SLEEP_KEEP_PINNED: SettingDef = SettingDef {
+    key: "sleep.keep_pinned",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Keep pinned tabs loaded",
+    section: Section::Performance,
+    restart: false,
+};
+/// Which glass levels the scene's governor may use (`apply::GlassSetting`).
+pub const GLASS_QUALITY: SettingDef = SettingDef {
+    key: "glass.quality",
+    kind: SettingKind::Choice(&["auto", "full", "reduced", "off"]),
+    default: "auto",
+    label: "Glass quality",
+    section: Section::Performance,
+    restart: false,
+};
+/// Chromium's `OverlayScrollbar` feature, a CEF start switch.
+pub const OVERLAY_SCROLLBARS: SettingDef = SettingDef {
+    key: "scroll.overlay_scrollbars",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Thin scrollbars over the page",
+    section: Section::General,
+    restart: true,
+};
+/// Chromium's `MiddleClickAutoscroll` feature, a CEF start switch.
+pub const MIDDLE_CLICK_AUTOSCROLL: SettingDef = SettingDef {
+    key: "scroll.middle_click_autoscroll",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Scroll by middle-click and drag",
+    section: Section::General,
+    restart: true,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -180,7 +252,19 @@ pub const ALL: &[&SettingDef] = &[
     &BLOCKER_LISTS_AUTO_UPDATE,
     &HISTORY_RETENTION_DAYS,
     &SITE_ZOOM,
+    &ZOOM_DEFAULT,
+    &OVERLAY_SCROLLBARS,
+    &MIDDLE_CLICK_AUTOSCROLL,
+    &SLEEP_FREEZE_AFTER,
+    &SLEEP_DISCARD_AFTER,
+    &SLEEP_KEEP_PINNED,
+    &GLASS_QUALITY,
 ];
+
+/// The definition of `key`, if it is a setting.
+pub fn find(key: &str) -> Option<&'static SettingDef> {
+    ALL.iter().copied().find(|d| d.key == key)
+}
 
 #[cfg(test)]
 mod tests {
@@ -204,6 +288,29 @@ mod tests {
                 d.default
             );
         }
+    }
+
+    #[test]
+    fn new_rows_have_their_ranges_and_sections() {
+        assert_eq!(ZOOM_DEFAULT.kind, SettingKind::Count { min: 25, max: 500 });
+        assert!(!ZOOM_DEFAULT.kind.accepts("20") && ZOOM_DEFAULT.kind.accepts("500"));
+        // The sleep defaults are `SleepPolicy::default()`'s.
+        let policy = crate::sleep::SleepPolicy::default();
+        assert_eq!(
+            SLEEP_FREEZE_AFTER.default.parse::<u64>().unwrap(),
+            policy.freeze_after.as_secs()
+        );
+        assert_eq!(
+            SLEEP_DISCARD_AFTER.default.parse::<u64>().unwrap(),
+            policy.discard_after.as_secs()
+        );
+        assert_eq!(SLEEP_KEEP_PINNED.default == "1", policy.keep_pinned_alive);
+        for d in [&SLEEP_FREEZE_AFTER, &SLEEP_DISCARD_AFTER, &GLASS_QUALITY] {
+            assert_eq!(d.section, Section::Performance, "{}", d.key);
+        }
+        const { assert!(OVERLAY_SCROLLBARS.restart && MIDDLE_CLICK_AUTOSCROLL.restart) };
+        assert_eq!(find("glass.quality"), Some(&GLASS_QUALITY));
+        assert_eq!(find("nope"), None);
     }
 
     #[test]

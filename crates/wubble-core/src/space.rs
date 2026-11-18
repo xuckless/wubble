@@ -27,6 +27,37 @@ pub struct Container {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
+/// A Space's drawn icon: the design's three (`slint/space-icons.json`, the shell's
+/// `SpaceIconPaths`), by the id the shell draws it with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpaceIcon {
+    Personal,
+    Work,
+    Study,
+}
+
+impl SpaceIcon {
+    pub const ALL: [SpaceIcon; 3] = [SpaceIcon::Personal, SpaceIcon::Work, SpaceIcon::Study];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            SpaceIcon::Personal => "personal",
+            SpaceIcon::Work => "work",
+            SpaceIcon::Study => "study",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<SpaceIcon> {
+        Self::ALL.into_iter().find(|i| i.id() == id)
+    }
+
+    /// The icon a new Space at `index` gets: the three in turn, as the sidebar drew them
+    /// before Spaces had their own.
+    pub fn nth(index: usize) -> SpaceIcon {
+        Self::ALL[index % Self::ALL.len()]
+    }
+}
+
 /// One level of grouping. Holds unpinned tabs only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Folder {
@@ -46,6 +77,7 @@ pub struct Space {
     pub id: SpaceId,
     pub name: String,
     pub tint: Rgb,
+    pub icon: SpaceIcon,
     /// Default container of tabs without an override. Spaces may share one.
     pub container: ContainerId,
     pub pinned: Vec<TabId>,
@@ -165,6 +197,16 @@ fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn space_icons_round_trip_and_rotate() {
+        for i in SpaceIcon::ALL {
+            assert_eq!(SpaceIcon::from_id(i.id()), Some(i));
+        }
+        assert_eq!(SpaceIcon::from_id("rocket"), None);
+        assert_eq!(SpaceIcon::nth(0), SpaceIcon::Personal);
+        assert_eq!(SpaceIcon::nth(4), SpaceIcon::Work);
+    }
 
     #[test]
     fn dye_keeps_the_tint_hue_in_the_design_band() {

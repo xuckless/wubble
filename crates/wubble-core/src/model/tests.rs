@@ -1715,3 +1715,85 @@ fn from_parts_rejects_bad_splits() {
         assert!(parts(spaces.clone()).is_err(), "{g:?}");
     }
 }
+
+#[test]
+fn set_sleep_policy_changes_when_a_hidden_tab_sleeps() {
+    let (m, ids) = with_tabs(2);
+    // ids[0] is hidden; the default freezes it after 60 s.
+    let (m, _) = tick(m, Duration::from_secs(20));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    let (m, _) = run_all(
+        m,
+        Command::SetSleepPolicy(SleepPolicy::from_settings(10, 60, true)),
+    );
+    let (m, _) = tick(m, Duration::from_secs(1));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Frozen);
+    assert_eq!(m.policy().freeze_after, Duration::from_secs(10));
+}
+
+#[test]
+fn open_internal_focuses_the_tab_already_on_it() {
+    let (m, ids) = with_tabs(1);
+    let (m, fx) = run(m, Command::OpenInternal(InternalPage::Settings));
+    let Effect::CreateTab {
+        tab: settings, url, ..
+    } = fx[0].clone()
+    else {
+        panic!("no CreateTab: {fx:?}")
+    };
+    assert_eq!(url, InternalPage::Settings.url());
+    assert!(m.is_internal(settings) && !m.is_internal(ids[0]));
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, fx) = run(m, Command::OpenInternal(InternalPage::Settings));
+    assert_eq!(fx, [Effect::ActivateTab(settings)]);
+    assert_eq!(m.tabs.len(), 2);
+}
+
+#[test]
+fn an_internal_tab_never_joins_a_split() {
+    let (m, ids) = with_tabs(1);
+    let (m, _) = run(m, Command::OpenInternal(InternalPage::Settings));
+    let settings = m.visible_tab().unwrap();
+    let (m2, fx) = run(m.clone(), Command::SplitWith(ids[0]));
+    assert!(fx.is_empty() && m2.shown_split().is_none());
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, fx) = run(m, Command::SplitWith(settings));
+    assert!(fx.is_empty() && m.shown_split().is_none());
+}
+
+#[test]
+fn space_tint_and_icon_change_in_place() {
+    let m = Model::new(t0());
+    let (m, _) = run(
+        m,
+        Command::SetSpaceTint {
+            space: s0(),
+            tint: Rgb(9, 8, 7),
+        },
+    );
+    let (m, _) = run(
+        m,
+        Command::SetSpaceIcon {
+            space: s0(),
+            icon: SpaceIcon::Study,
+        },
+    );
+    assert_eq!(m.spaces[0].tint, Rgb(9, 8, 7));
+    assert_eq!(m.spaces[0].icon, SpaceIcon::Study);
+    assert_eq!(m.spaces[0].id, s0());
+    // Unknown Spaces are ignored.
+    let (m2, fx) = run(
+        m.clone(),
+        Command::SetSpaceIcon {
+            space: SpaceId(99),
+            icon: SpaceIcon::Work,
+        },
+    );
+    assert!(fx.is_empty() && m2 == m);
+    // New Spaces take the icons in turn.
+    let (m, s1) = add_space(m, D);
+    assert_eq!(
+        m.spaces.iter().find(|s| s.id == s1).unwrap().icon,
+        SpaceIcon::Work
+    );
+}

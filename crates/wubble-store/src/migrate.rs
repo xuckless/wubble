@@ -13,6 +13,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (7, include_str!("../sql/007_splits.sql")),
     (8, include_str!("../sql/008_favicons.sql")),
     (9, include_str!("../sql/009_logins_vault_shape.sql")),
+    (10, include_str!("../sql/010_space_icons.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {

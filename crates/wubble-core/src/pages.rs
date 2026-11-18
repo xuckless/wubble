@@ -314,13 +314,90 @@ pub fn passwords_list(rows: &[LoginEntry], query: &str) -> Vec<LoginEntry> {
     out
 }
 
+// ---------------------------------------------------------- internal pages
+
+/// A page the shell draws itself (native Slint, never a web page), shown in a tab whose URL is
+/// [`InternalPage::url`]. The tab's URL is the one owner: the session restores it as any tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InternalPage {
+    Settings,
+}
+
+impl InternalPage {
+    pub const ALL: [InternalPage; 1] = [InternalPage::Settings];
+
+    pub fn url(self) -> &'static str {
+        match self {
+            InternalPage::Settings => "wubble://settings",
+        }
+    }
+
+    /// The tab row's title.
+    pub fn title(self) -> &'static str {
+        match self {
+            InternalPage::Settings => "Settings",
+        }
+    }
+
+    /// The page a URL names; a trailing slash and the scheme's case do not matter.
+    pub fn from_url(url: &str) -> Option<InternalPage> {
+        let url = url.trim().trim_end_matches('/');
+        Self::ALL
+            .into_iter()
+            .find(|p| p.url().eq_ignore_ascii_case(url))
+    }
+}
+
 // --------------------------------------------------------------- settings
+
+/// The control a settings row shows, picked by the setting's kind ([`control_for`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Control {
+    /// On / off.
+    Toggle,
+    /// One of these stored words (a search engine's id, a choice's word).
+    Segmented(&'static [&'static str]),
+    /// A whole number, stepped within the range.
+    Stepper { min: u32, max: u32 },
+    /// A number dragged within the range.
+    Slider { min: f32, max: f32 },
+    /// A list of strings: rows with remove, and a field to add.
+    ListEditor,
+    /// A map of key to number: rows with remove.
+    MapEditor,
+}
+
+/// The search engines' stored ids, the words of the engine's segmented control.
+const ENGINE_IDS: [&str; crate::omnibox::ENGINES.len()] = {
+    let mut ids = [""; crate::omnibox::ENGINES.len()];
+    let mut i = 0;
+    while i < ids.len() {
+        ids[i] = crate::omnibox::ENGINES[i].id;
+        i += 1;
+    }
+    ids
+};
+
+/// The control for a kind. Exhaustive, with no catch-all: a new kind does not compile until it
+/// has a control, and a new row of an existing kind needs no UI code at all.
+pub fn control_for(kind: SettingKind) -> Control {
+    match kind {
+        SettingKind::Bool => Control::Toggle,
+        SettingKind::Count { min, max } => Control::Stepper { min, max },
+        SettingKind::Float { min, max } => Control::Slider { min, max },
+        SettingKind::SearchEngine => Control::Segmented(&ENGINE_IDS),
+        SettingKind::Choice(words) => Control::Segmented(words),
+        SettingKind::List => Control::ListEditor,
+        SettingKind::Map => Control::MapEditor,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingRow {
     pub key: &'static str,
     pub label: &'static str,
     pub kind: SettingKind,
+    pub control: Control,
     /// Storage text: the stored value if valid, else the default.
     pub value: String,
     /// The value differs from the default.
@@ -334,15 +411,30 @@ pub struct SectionView {
     pub rows: Vec<SettingRow>,
 }
 
+/// The order the page lists its sections in; `Hidden` is never listed.
+pub const SECTION_ORDER: [Section; 4] = [
+    Section::General,
+    Section::Privacy,
+    Section::Appearance,
+    Section::Performance,
+];
+
 /// The settings page from the stored `key -> text` rows. A missing or invalid value shows the
 /// default, as the store reads it. `Hidden` settings are left out; sections keep the table order
 /// and an empty section is not listed.
 pub fn settings_page(stored: &HashMap<String, String>) -> Vec<SectionView> {
-    const ORDER: [Section; 3] = [Section::General, Section::Privacy, Section::Appearance];
-    ORDER
+    settings_page_from(settings::ALL, stored)
+}
+
+/// [`settings_page`] over any table: the page is generated from the definitions alone.
+pub fn settings_page_from(
+    defs: &[&settings::SettingDef],
+    stored: &HashMap<String, String>,
+) -> Vec<SectionView> {
+    SECTION_ORDER
         .iter()
         .filter_map(|&section| {
-            let rows: Vec<SettingRow> = settings::ALL
+            let rows: Vec<SettingRow> = defs
                 .iter()
                 .filter(|d| d.section == section)
                 .map(|d| {
@@ -354,6 +446,7 @@ pub fn settings_page(stored: &HashMap<String, String>) -> Vec<SectionView> {
                         key: d.key,
                         label: d.label,
                         kind: d.kind,
+                        control: control_for(d.kind),
                         value: value.to_owned(),
                         changed: value != d.default,
                         restart: d.restart,
@@ -363,6 +456,54 @@ pub fn settings_page(stored: &HashMap<String, String>) -> Vec<SectionView> {
             (!rows.is_empty()).then_some(SectionView { section, rows })
         })
         .collect()
+}
+
+/// The rows whose label or key contains `query` (case-insensitive; blank keeps all). A section
+/// left with no row is dropped.
+pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
+    let needle = query.trim().to_lowercase();
+    sections
+        .iter()
+        .filter_map(|s| {
+            let rows: Vec<SettingRow> = s
+                .rows
+                .iter()
+                .filter(|r| {
+                    needle.is_empty() || contains_ci(r.label, &needle) || r.key.contains(&needle)
+                })
+                .cloned()
+                .collect();
+            (!rows.is_empty()).then_some(SectionView {
+                section: s.section,
+                rows,
+            })
+        })
+        .collect()
+}
+
+// ------------------------------------------------------------------ sites
+
+/// Per-site data the user can delete: saved zoom levels and permission decisions.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SitesView {
+    /// (host, percent), by host.
+    pub zoom: Vec<(String, u32)>,
+    /// (origin, permission, decision), by origin then permission.
+    pub permissions: Vec<(String, crate::site::Permission, crate::site::Decision)>,
+}
+
+/// The Sites section from the zoom table and the remembered decisions.
+pub fn sites_view(
+    zoom: &crate::zoom::ZoomTable,
+    permissions: &crate::site::SitePermissions,
+) -> SitesView {
+    SitesView {
+        zoom: zoom.iter().map(|(h, p)| (h.clone(), *p)).collect(),
+        permissions: permissions
+            .iter()
+            .map(|(o, k, d)| (o.to_owned(), k, d))
+            .collect(),
+    }
 }
 
 #[cfg(test)]
@@ -642,10 +783,7 @@ mod tests {
     fn settings_page_groups_sections_and_skips_hidden() {
         let page = settings_page(&HashMap::new());
         let sections: Vec<_> = page.iter().map(|s| s.section).collect();
-        assert_eq!(
-            sections,
-            [Section::General, Section::Privacy, Section::Appearance]
-        );
+        assert_eq!(sections, SECTION_ORDER);
         let keys: Vec<_> = page.iter().flat_map(|s| &s.rows).map(|r| r.key).collect();
         assert!(!keys.contains(&"ui.sidebar_width") && !keys.contains(&"keys.overrides"));
         // Every non-hidden setting appears exactly once.
@@ -688,5 +826,127 @@ mod tests {
         assert_eq!(row("history.retention_days").value, "0");
         assert!(row("search.engine").changed);
         assert!(!row("ui.sidebar_mode").restart);
+    }
+
+    #[test]
+    fn every_kind_has_a_control() {
+        let kinds = [
+            (SettingKind::Bool, Control::Toggle),
+            (
+                SettingKind::Count { min: 1, max: 9 },
+                Control::Stepper { min: 1, max: 9 },
+            ),
+            (
+                SettingKind::Float { min: 0.5, max: 2.0 },
+                Control::Slider { min: 0.5, max: 2.0 },
+            ),
+            (SettingKind::SearchEngine, Control::Segmented(&ENGINE_IDS)),
+            (
+                SettingKind::Choice(&["a", "b"]),
+                Control::Segmented(&["a", "b"]),
+            ),
+            (SettingKind::List, Control::ListEditor),
+            (SettingKind::Map, Control::MapEditor),
+        ];
+        for (kind, want) in kinds {
+            assert_eq!(control_for(kind), want, "{kind:?}");
+        }
+        let ids: Vec<&str> = crate::omnibox::ENGINES.iter().map(|e| e.id).collect();
+        assert_eq!(ENGINE_IDS.as_slice(), ids.as_slice());
+    }
+
+    /// A table the app does not ship: every kind becomes a row with its control, with no UI
+    /// code for any of them.
+    #[test]
+    fn a_page_is_generated_from_any_table() {
+        use settings::SettingDef;
+        const fn def(key: &'static str, kind: SettingKind, default: &'static str) -> SettingDef {
+            SettingDef {
+                key,
+                kind,
+                default,
+                label: key,
+                section: Section::General,
+                restart: false,
+            }
+        }
+        const DEFS: [SettingDef; 8] = [
+            def("t.bool", SettingKind::Bool, "1"),
+            def("t.count", SettingKind::Count { min: 0, max: 9 }, "3"),
+            def("t.float", SettingKind::Float { min: 0.0, max: 1.0 }, "0.5"),
+            def("t.engine", SettingKind::SearchEngine, ""),
+            def("t.choice", SettingKind::Choice(&["x", "y"]), "x"),
+            def("t.list", SettingKind::List, "[]"),
+            def("t.map", SettingKind::Map, "{}"),
+            SettingDef {
+                section: Section::Hidden,
+                ..def("t.hidden", SettingKind::Bool, "0")
+            },
+        ];
+        let defs: Vec<&SettingDef> = DEFS.iter().collect();
+        let page = settings_page_from(&defs, &stored(&[("t.count", "7")]));
+        assert_eq!(page.len(), 1);
+        let rows = &page[0].rows;
+        assert_eq!(rows.len(), 7);
+        for (row, d) in rows.iter().zip(&DEFS) {
+            assert_eq!(row.control, control_for(d.kind), "{}", d.key);
+        }
+        assert_eq!((rows[1].value.as_str(), rows[1].changed), ("7", true));
+    }
+
+    #[test]
+    fn filter_matches_label_or_key_and_drops_empty_sections() {
+        let page = settings_page(&HashMap::new());
+        let keys = |q: &str| -> Vec<&str> {
+            filter(&page, q)
+                .iter()
+                .flat_map(|s| s.rows.iter().map(|r| r.key))
+                .collect()
+        };
+        assert_eq!(keys("BLOCK ADS"), ["blocker.enabled"]);
+        assert_eq!(keys("glass.quality"), ["glass.quality"]);
+        assert_eq!(filter(&page, "zoom").len(), 1);
+        assert!(filter(&page, "no such setting").is_empty());
+        assert_eq!(filter(&page, "  "), page);
+    }
+
+    #[test]
+    fn internal_pages_round_trip_their_url() {
+        for p in InternalPage::ALL {
+            assert_eq!(InternalPage::from_url(p.url()), Some(p));
+            assert_eq!(InternalPage::from_url(&format!("{}/", p.url())), Some(p));
+            assert!(!p.title().is_empty());
+        }
+        assert_eq!(
+            InternalPage::from_url("WUBBLE://settings"),
+            Some(InternalPage::Settings)
+        );
+        assert_eq!(InternalPage::from_url("https://settings"), None);
+        assert_eq!(InternalPage::from_url("wubble://nope"), None);
+    }
+
+    #[test]
+    fn sites_view_lists_zoom_and_decisions_in_order() {
+        use crate::site::{Decision, Permission, SitePermissions};
+        let zoom = crate::zoom::ZoomTable::from([("b.test".into(), 125), ("a.test".into(), 90)]);
+        let mut perms = SitePermissions::default();
+        perms.set("https://b.test", Permission::Camera, Decision::Allow);
+        perms.set("https://a.test", Permission::Microphone, Decision::Block);
+        perms.set("https://a.test", Permission::Camera, Decision::Allow);
+        let v = sites_view(&zoom, &perms);
+        assert_eq!(v.zoom, [("a.test".into(), 90), ("b.test".into(), 125)]);
+        let origins: Vec<(&str, Permission)> = v
+            .permissions
+            .iter()
+            .map(|(o, k, _)| (o.as_str(), *k))
+            .collect();
+        assert_eq!(
+            origins,
+            [
+                ("https://a.test", Permission::Camera),
+                ("https://a.test", Permission::Microphone),
+                ("https://b.test", Permission::Camera)
+            ]
+        );
     }
 }

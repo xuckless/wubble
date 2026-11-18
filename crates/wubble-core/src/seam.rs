@@ -33,6 +33,25 @@ pub enum SidebarMode {
 // wubble change: the sidebar toggle, as `cycleSidebar` in browser/chrome.tsx: hidden opens the
 // extended sidebar, anything else (the rail too) hides it. The rail is reached by the seam.
 impl SidebarMode {
+    /// The stored word (`settings::SIDEBAR_MODE`'s choices).
+    pub fn id(self) -> &'static str {
+        match self {
+            SidebarMode::Extended => "extended",
+            SidebarMode::Rail => "rail",
+            SidebarMode::Hidden => "hidden",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        [
+            SidebarMode::Extended,
+            SidebarMode::Rail,
+            SidebarMode::Hidden,
+        ]
+        .into_iter()
+        .find(|m| m.id() == id)
+    }
+
     pub fn toggled(self) -> Self {
         if self == SidebarMode::Hidden {
             SidebarMode::Extended
