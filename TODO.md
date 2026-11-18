@@ -37,6 +37,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Deleting a Space | Closes its tabs (as Zen does); the UI confirms first. The last Space cannot be deleted |
 | Ctrl+T in the model | `Command::OpenCommandBar` returns only `Effect::ShowCommandBar`; the tab exists once `NewTab` is sent after a choice |
 | Content blocker | Brave's `adblock-rust` (network + cosmetic, uBlock/EasyList lists), on by default, per-site toggle |
+| Blocker build | `adblock` with `default-features = false` (+ `embedded-domain-resolver`, `full-regex-handling`): the default `single-thread` feature makes `Engine` not `Send`/`Sync`, and CEF calls us from several threads |
 | No-blur desktops | Opaque Abyss ground with Space tint (GNOME etc.); in-window glass unaffected |
 | Search | First-run choice between Google and DuckDuckGo. Suggestions are local (tabs/history/bookmarks); live engine suggestions exist behind a flag, off by default, and never send typed addresses |
 | Network on its own | No telemetry. Crash reports are opt-in and open a GitHub issue; designed at ship time (M7) |
@@ -163,7 +164,9 @@ After daily-drive
 
 - [ ] DevTools docked as a wubble view, or detached; inspect element
 - [ ] Remote debugging endpoint (off by default)
-- [ ] Content blocker on `adblock-rust`: list fetch/refresh, network hook, cosmetic injection, per-site toggle
+- [~] Content blocker on `adblock-rust`: list fetch/refresh, network hook, cosmetic injection, per-site toggle
+  - [x] `wubble-blocker` crate: decisions, cosmetic data, compiled cache, per-site shields, pure refresh policy
+  - [ ] List fetch behind an off-by-default flag, CEF network hook, cosmetic injection, per-site toggle UI
 - [ ] Built-in password manager: encrypted store keyed from the OS keyring, form detection and fill, save prompt, generator, import from Zen/Arc
 - [ ] Reader mode, screenshots, PDF viewer
 
