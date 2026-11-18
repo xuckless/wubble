@@ -130,8 +130,8 @@ pub use held::RequestId;
 #[cfg(target_os = "linux")]
 pub use native_frame::build_dmabuf_capable_device;
 pub use native_frame::{
-    HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame, NativeFrameKind,
-    NativeFramePixelFormat, WgpuTextureImporter,
+    CopiedFrame, HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame,
+    NativeFrameKind, NativeFramePixelFormat, WgpuTextureImporter,
 };
 pub use permissions::{PermissionId, PermissionKind};
 #[cfg(all(feature = "cef-runtime", target_os = "windows"))]

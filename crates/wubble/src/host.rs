@@ -38,6 +38,7 @@ use wubble_ui::{AppWindow, CommandBarState, SidebarMode};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
+use crate::measure;
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
 use crate::perform::{self, Plan, ViewOp};
 use crate::persist::{self, Loaded, SaveState, StoreClient, TypedNav, UiState};
@@ -379,7 +380,7 @@ impl Host {
     }
 
     /// The visible tab's view, the only one that gets frames and input.
-    fn view(&mut self) -> Option<&mut View> {
+    pub(crate) fn view(&mut self) -> Option<&mut View> {
         self.tab_view(self.model.visible_tab()?)
     }
 
@@ -481,8 +482,12 @@ impl Host {
         };
         let frame_size = frame.size();
         let clip = frame_size.cropped_to(layout.size);
+        let measured = measure::Frame::of(&frame, layout.frame_size());
         let image = self.presenter.present(frame).map_err(|e| e.to_string())?;
         window.set_web_frame(image);
+        measure::taken(measured, || {
+            self.presenter.probe(measure::PROBE.0, measure::PROBE.1)
+        });
         self.presented = self.model.visible_tab();
         window.set_web_frame_clip_width(slint_int(clip.width));
         window.set_web_frame_clip_height(slint_int(clip.height));

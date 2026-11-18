@@ -430,18 +430,27 @@ pub fn connect(window: &AppWindow) -> Shared {
 }
 
 /// Wire the shell driver and register the window's one rendering notifier.
-pub fn install(window: &AppWindow) -> Result<(), SetRenderingNotifierError> {
+/// `after_rendering` runs after each render (the host's frame measurement).
+pub fn install(
+    window: &AppWindow,
+    mut after_rendering: impl FnMut() + 'static,
+) -> Result<(), SetRenderingNotifierError> {
     let driver = connect(window);
     driver.borrow_mut().origin = Some(Instant::now());
     let weak = window.as_weak();
-    window.window().set_rendering_notifier(move |state, _api| {
-        if let slint::RenderingState::BeforeRendering = state
-            && let Some(window) = weak.upgrade()
-            && driver.borrow_mut().frame(&window, Instant::now())
-        {
-            window.window().request_redraw();
-        }
-    })
+    window
+        .window()
+        .set_rendering_notifier(move |state, _api| match state {
+            slint::RenderingState::BeforeRendering => {
+                if let Some(window) = weak.upgrade()
+                    && driver.borrow_mut().frame(&window, Instant::now())
+                {
+                    window.window().request_redraw();
+                }
+            }
+            slint::RenderingState::AfterRendering => after_rendering(),
+            _ => {}
+        })
 }
 
 #[cfg(test)]

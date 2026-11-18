@@ -5,12 +5,17 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
+pub use crate::measure::Scenario;
+
+/// `--measure`'s run time unless `--seconds` says otherwise.
+const DEFAULT_SECONDS: NonZeroU32 = NonZeroU32::new(10).unwrap();
+
 #[derive(Parser, Debug)]
 #[command(name = "wubble", about = "The wubble browser.")]
 struct Cli {
     /// Page to open (`example.com` means `https://example.com`); the bundled
     /// page if none.
-    #[arg(value_name = "URL", conflicts_with = "smoke")]
+    #[arg(value_name = "URL", conflicts_with_all = ["smoke", "measure"])]
     page: Option<String>,
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
     /// stops, no window), `frames=N` (show N zero-copy frames, then exit; on
@@ -18,10 +23,22 @@ struct Cli {
     /// switch, sleep, restore and close tabs on bundled pages, then exit) or
     /// `session` (open two tabs, quit, start again and check they come back).
     /// `session-phase=1|2` is one half of `session`, run by it.
-    #[arg(long, value_name = "CHECK", value_parser = parse_smoke)]
+    #[arg(long, value_name = "CHECK", value_parser = parse_smoke, conflicts_with = "measure")]
     smoke: Option<SmokeArg>,
+    /// Measure the frame path on a bundled page and print the numbers (hand
+    /// run only): `scroll` (scripted scroll), `video` (CSS and canvas
+    /// animation), `resize` (the window resizes itself) or `typing` (keys and
+    /// clicks, timed to the first frame that shows them). Exits by itself.
+    #[arg(long, value_name = "SCENARIO", value_enum, conflicts_with = "profile")]
+    measure: Option<Scenario>,
+    /// How long `--measure` runs.
+    #[arg(long, value_name = "N", requires = "measure", default_value_t = DEFAULT_SECONDS)]
+    seconds: NonZeroU32,
+    /// Also write `--measure`'s samples as CSV to this file.
+    #[arg(long, value_name = "PATH", requires = "measure")]
+    out: Option<PathBuf>,
     /// Page for `--smoke frames=N` instead of the bundled test page.
-    #[arg(long, requires = "smoke")]
+    #[arg(long, requires = "smoke", conflicts_with = "measure")]
     url: Option<String>,
     /// Profile directory (database and CEF cache) instead of the per-user one.
     #[arg(long, value_name = "DIR")]
@@ -95,6 +112,15 @@ pub enum Command {
         profile: Option<PathBuf>,
     },
     Smoke(Smoke),
+    /// `--measure`: a hand-run frame-path measurement.
+    Measure(Measure),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Measure {
+    pub scenario: Scenario,
+    pub seconds: NonZeroU32,
+    pub out: Option<PathBuf>,
 }
 
 impl TryFrom<Cli> for Command {
@@ -102,6 +128,14 @@ impl TryFrom<Cli> for Command {
 
     fn try_from(cli: Cli) -> Result<Self, Self::Error> {
         let conflict = |msg| Err(Cli::command().error(ErrorKind::ArgumentConflict, msg));
+        if let Some(scenario) = cli.measure {
+            // clap rejects a URL, `--smoke` and `--profile` next to it.
+            return Ok(Command::Measure(Measure {
+                scenario,
+                seconds: cli.seconds,
+                out: cli.out,
+            }));
+        }
         let smoke = match (cli.smoke, cli.url, cli.profile) {
             (None, _, profile) => {
                 return Ok(Command::Run {
@@ -289,6 +323,62 @@ mod tests {
             );
         }
         assert!(parse(["wubble", "--smoke", "session", "--url", "about:blank"]).is_err());
+    }
+
+    fn measure(scenario: Scenario, seconds: u32, out: Option<&str>) -> Option<Command> {
+        Some(Command::Measure(Measure {
+            scenario,
+            seconds: NonZeroU32::new(seconds).expect("test uses seconds > 0"),
+            out: out.map(PathBuf::from),
+        }))
+    }
+
+    #[test]
+    fn measure_scenarios() {
+        for (arg, scenario) in [
+            ("scroll", Scenario::Scroll),
+            ("video", Scenario::Video),
+            ("resize", Scenario::Resize),
+            ("typing", Scenario::Typing),
+        ] {
+            assert_eq!(
+                parse(["wubble", "--measure", arg]).ok(),
+                measure(scenario, 10, None),
+                "{arg}"
+            );
+        }
+        assert_eq!(
+            parse([
+                "wubble",
+                "--measure",
+                "typing",
+                "--seconds",
+                "3",
+                "--out",
+                "/tmp/m.csv"
+            ])
+            .ok(),
+            measure(Scenario::Typing, 3, Some("/tmp/m.csv"))
+        );
+    }
+
+    #[test]
+    fn bad_measure_arguments_are_errors() {
+        for bad in [
+            &["--measure", "nope"][..],
+            &["--measure"],
+            &["--measure", "scroll", "--seconds", "0"],
+            &["--measure", "scroll", "--seconds", "x"],
+            &["--measure", "scroll", "example.com"],
+            &["--measure", "scroll", "--smoke", "boot"],
+            &["--measure", "scroll", "--profile", "/tmp/p"],
+            &["--measure", "scroll", "--url", "about:blank"],
+            &["--seconds", "3"],
+            &["--out", "/tmp/m.csv"],
+        ] {
+            let args = std::iter::once("wubble").chain(bad.iter().copied());
+            assert!(parse(args).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

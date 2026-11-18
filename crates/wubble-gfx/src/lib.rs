@@ -14,7 +14,7 @@ pub mod import;
 pub mod pacing;
 pub mod scene;
 
-pub use import::{FramePresenter, GfxError, GpuContext, NativeFrame};
+pub use import::{FramePresenter, FrameTiming, GfxError, GpuContext, NativeFrame};
 
 /// A size in physical pixels: frames, views and the content rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

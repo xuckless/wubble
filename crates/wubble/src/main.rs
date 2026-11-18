@@ -3,6 +3,7 @@ mod bind;
 mod cli;
 mod host;
 mod input;
+mod measure;
 mod nav_smoke;
 mod perform;
 mod persist;
@@ -162,6 +163,42 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Measure(m) => {
+            measure::begin(m.scenario, m.seconds.get());
+            match with_smoke_dir(|config, dir| run(Mode::Measure(m.scenario), config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    measured: Some((report, csv)),
+                    ..
+                }) => {
+                    println!("{report}");
+                    match m.out {
+                        Some(path) => match measure::write_csv(&path, &csv) {
+                            Ok(()) => {
+                                println!("measure: samples written to {}", path.display());
+                                ExitCode::SUCCESS
+                            }
+                            Err(e) => {
+                                eprintln!("measure: cannot write {}: {e}", path.display());
+                                ExitCode::FAILURE
+                            }
+                        },
+                        None => ExitCode::SUCCESS,
+                    }
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("measure: FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("measure: FAILED: nothing was recorded");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Frames { frames, url }) => {
             let mode = Mode::Frames {
                 frames: frames.get().into(),
@@ -193,7 +230,7 @@ fn main() -> ExitCode {
 
 /// Starts the spring-driven shell: sidebar seam, compact mode, Space indicator.
 fn install_shell_driver(window: &AppWindow) -> Result<(), Box<dyn std::error::Error>> {
-    wubble_ui::driver::install(window)?;
+    wubble_ui::driver::install(window, measure::rendered)?;
     Ok(())
 }
 
@@ -289,6 +326,8 @@ struct Outcome {
     tabs_passed: bool,
     /// The `--smoke session` phase reached its end.
     session_passed: bool,
+    /// `--measure`'s report and CSV.
+    measured: Option<(String, String)>,
 }
 
 /// What the window is for.
@@ -303,6 +342,8 @@ enum Mode {
     Tabs,
     /// One phase of `--smoke session`.
     Session(Phase),
+    /// `--measure`: the scenario's bundled page, measured until it ends.
+    Measure(measure::Scenario),
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
@@ -500,6 +541,7 @@ fn run(
         session_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    let measuring = matches!(mode, Mode::Measure(_));
     // `url` is opened in a new tab; without one a fresh profile gets the
     // bundled page and a restored session opens nothing new.
     let (url, checks) = match mode {
@@ -537,6 +579,7 @@ fn run(
                 ..none
             },
         ),
+        Mode::Measure(scenario) => (Some(page_url(scenario.page())), none),
     };
     // The first pump runs once the loop does; from there CEF schedules every
     // pump itself.
@@ -572,10 +615,23 @@ fn run(
             with_host(|host| host.tick(Instant::now()))
         });
     }
+    let measure_timer = slint::Timer::default();
+    if measuring {
+        let weak = window.as_weak();
+        measure_timer.start(slint::TimerMode::Repeated, measure::TICK, move || {
+            if let Some(window) = weak.upgrade() {
+                with_host(|host| measure::tick(host, &window));
+            }
+        });
+    }
 
     let result = window.run();
     // Read while the window still exists.
     let ui = host::ui_state(&window);
+    drop(measure_timer);
+    let measured = measuring
+        .then(|| measure::finish(&gpu.describe()))
+        .flatten();
     drop(lifecycle);
     drop(window);
     let mut host = HOST.take().ok_or("the host went missing")?;
@@ -589,5 +645,6 @@ fn run(
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         session_passed: host.session_passed,
+        measured,
     })
 }

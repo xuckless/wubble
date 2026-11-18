@@ -88,6 +88,8 @@ cef::wrap_render_handler! {
             // its own element rather than compositing it into the view, so it
             // lands here with PET_POPUP and goes to a separate slot.
             let is_popup = type_ == cef::PaintElementType::POPUP;
+            // wubble change: stamped for `CopiedFrame::arrived`.
+            let arrived = std::time::Instant::now();
             let Some(info) = info else { return };
 
             let plane_count = info.plane_count as usize;
@@ -155,7 +157,7 @@ cef::wrap_render_handler! {
             let copied = image
                 .map_err(|error| format!("failed to wrap CEF DMABUF image: {error}"))
                 .and_then(|image| {
-                    crate::native_frame::copy_dmabuf_to_owned(image, &self.handler.gpu)
+                    crate::native_frame::copy_dmabuf_to_owned(image, &self.handler.gpu, arrived)
                         .map_err(|error| format!("failed to copy CEF DMABUF image: {error}"))
                 });
             match copied {

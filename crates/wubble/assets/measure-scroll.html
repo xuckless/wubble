@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- `wubble --measure scroll`: a tall page scrolled by script every animation
+     frame, with a CSS animation on top. Bundled; loads nothing. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble measure scroll</title>
+<style>
+  html, body { margin: 0; font: 500 20px system-ui, sans-serif; color: #111114; }
+  .row { height: 120px; display: flex; align-items: center; padding-left: 96px; }
+  .row:nth-child(odd) { background: #e8ecff; }
+  .row:nth-child(even) { background: #fff3e0; }
+  #spin { position: fixed; right: 32px; top: 32px; width: 64px; height: 64px;
+          background: #7aa2ff; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="spin"></div>
+<div id="rows"></div>
+<script>
+  const rows = document.getElementById("rows");
+  for (let i = 0; i < 400; i++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.textContent = "row " + i;
+    rows.appendChild(row);
+  }
+  let dir = 1;
+  function step() {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    if (scrollY >= max) dir = -1;
+    if (scrollY <= 0) dir = 1;
+    scrollBy(0, 6 * dir);
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+</script>
+</body>
+</html>
