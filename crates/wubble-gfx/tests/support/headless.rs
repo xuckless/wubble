@@ -82,6 +82,7 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
                     pressed: false,
                     hover,
                     focus: false,
+                    tint: [0.0; 3],
                 };
                 let bar = Rect::new(16.0, 110.0, 100.0, 30.0);
                 r.scene.set_glass(&[

@@ -107,6 +107,7 @@ export component GlassPanel inherits Rectangle {
         hover: root.hover,
         focus: root.focused,
         bow: root.follows-seam,
+        tint: root.tint,
         present: root.over-wgpu && root.present && root.visible && min(root.absolute-position.x + root.width * root.scale, root.clip-end) > max(root.absolute-position.x, root.clip-start) && root.height > 0,
     };
     property <int> generation: GlassLayer.generation;
@@ -291,7 +292,8 @@ export component TabRow inherits Rectangle {
     height: Chrome.row;
     border-radius: Radius.sm;
     // the selected row's background is the indicator (drawn by Sidebar), so rows only hover
-    background: touch.has-hover && !root.selected ? Palette.shell : transparent;
+    // wubble change: .wb-tab:hover white 4.5 % (the port's opaque shell read as a slab)
+    background: touch.has-hover && !root.selected ? Shell.row-hover : transparent;
     animate background { duration: 150ms; easing: Motion.easeOut; }
 
     transform-origin: { x: self.width / 2, y: self.height / 2 };
@@ -329,8 +331,9 @@ export component TabRow inherits Rectangle {
             if root.tab.favicon.width == 0: Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                path: IconPaths.globe;
-                tint: root.selected ? Palette.ink : Palette.mist;
+                // wubble change: a wubble:// page shows its own glyph (icons.tsx PAGE_ICON)
+                path: IconPaths.page(root.tab.url);
+                tint: root.selected ? Palette.ink : Shell.tab-ink;
             }
         }
         if !root.compact: Text {
@@ -338,9 +341,10 @@ export component TabRow inherits Rectangle {
             horizontal-stretch: 1;
             vertical-alignment: center;
             overflow: elide;
-            color: root.selected ? Palette.ink : Palette.mist;
+            // wubble change: .wb-tab #C3C8D4 at 13.5
+            color: root.selected ? Palette.ink : Shell.tab-ink;
             font-family: Fonts.ui;
-            font-size: Type.body.size;
+            font-size: Shell.tab-font;
             font-weight: Type.body.weight;
             animate color { duration: 150ms; easing: Motion.easeOut; }
         }
@@ -385,7 +389,8 @@ export component TabRow inherits Rectangle {
     Rectangle {
         x: root.width - Shell.side-pad - self.width;
         width: 22px;
-        visible: !root.compact && (touch.has-hover || close-touch.has-hover || root.selected);
+        // wubble change: hover only, the selected row too (.wb-tab:hover .wb-tab-x)
+        visible: !root.compact && (touch.has-hover || close-touch.has-hover);
         close-touch := TouchArea { clicked => { root.close(); } }
         Path {
             width: 10px;

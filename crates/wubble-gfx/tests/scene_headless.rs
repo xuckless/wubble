@@ -199,6 +199,7 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
         hover: false,
         focus: false,
         bow: false,
+        tint: [0.0; 3],
     };
     // the same liquid each run; `grow` widens the panel for the last frame
     let run = |glass: Option<(f32, f32)>| {

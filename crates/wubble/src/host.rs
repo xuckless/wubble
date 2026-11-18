@@ -861,9 +861,11 @@ impl Host {
             .get(key)
             .cloned()
             .ok_or("the sidebar's glass never reached the scene")?;
-        // The band below the tab list and above the Space switcher: glass, no text.
+        // The window's glass under the sidebar, left of the page card: the band below the tab
+        // list and above the Space switcher, glass and no text.
         let scale = window.window().scale_factor();
-        let (x, w) = (side.x + side.radius, side.width - 2.0 * side.radius);
+        let x = side.x + side.radius;
+        let w = window.get_content_x() - side.radius - x;
         let (y, h) = (side.y + side.height * 0.45, side.height * 0.25);
         let region = pixels::Region {
             x: physical(x, scale),

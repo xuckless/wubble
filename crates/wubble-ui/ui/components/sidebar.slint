@@ -25,6 +25,7 @@ import { WindowLights } from "window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
 import { MoveArea } from "window-frame.slint";
 import { Wobble } from "wobble.slint";
+import { Raised } from "raised.slint";
 import { SideEdges } from "model.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
@@ -351,13 +352,19 @@ export component Sidebar inherits Rectangle {
                         // the indicator: under the rows, stretched along y about `origin`, squashed along x
                         property <length> h: Chrome.row * root.indicator-stretch;
                         property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
-                        Rectangle {
+                        // .wb-tab-ind: raised, with its top highlight, rim and drop shadow
+                        indicator := Raised {
                             x: (parent.width - parent.w) / 2;
                             y: root.indicator-y + (Chrome.row - parent.h) * root.indicator-origin;
                             width: parent.w;
                             height: parent.h;
-                            border-radius: Radius.sm;
-                            background: Palette.rim;
+                            radius: Radius.sm;
+                            fill: Shell.selected-fill;
+                            highlight: Shell.selected-highlight;
+                            rim: Shell.selected-rim;
+                            shadow-y: Shell.selected-shadow-y;
+                            shadow-blur: Shell.selected-shadow-blur;
+                            shadow: Shell.selected-shadow;
                             visible: root.selected >= 0 && root.selected < root.tabs.length;
                         }
 
@@ -419,28 +426,48 @@ export component Sidebar inherits Rectangle {
         switcher := Rectangle {
             property <length> pitch: Shell.space-tile + Shell.space-gap;
             property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            height: root.compact ? self.span + Shell.side-bottom-gap-rail + settings.height + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
+            // the buttons at the end of the row, in order (chrome.tsx @ 21838b8: Source, then
+            // Settings, side by side; .wb-side-bottom-rail stacks them 10 apart under the Spaces)
+            // dev tools gives way when the row has no room for all three (downloads shown on a
+            // narrow sidebar); F12 still opens them
+            property <bool> tools: root.compact || !root.has-downloads || self.width >= self.span + 3 * Shell.side-bottom-button;
+            property <int> buttons: (root.has-downloads ? 1 : 0) + (self.tools ? 1 : 0) + 1;
+            property <length> rail-pitch: Shell.side-bottom-button + Shell.side-bottom-gap-rail;
+            height: root.compact ? self.span + self.buttons * self.rail-pitch : Shell.space-tile;
 
-            // icons.tsx `download`, left of the settings button (above it on the rail)
+            // wubble: the downloads list (the design has no downloads), first of the buttons
             downloads := IconButton {
                 visible: root.has-downloads;
                 width: Shell.side-bottom-button;
                 height: Shell.side-bottom-button;
                 border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width - settings.width - Shell.space-gap;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - parent.buttons * self.width;
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.download;
                 clicked => {
                     root.downloads-requested();
                 }
             }
-            // wubble: the settings entry, always at the far end
+            // the design's Source button (`code`): wubble's is the page's dev tools
+            dev-tools := IconButton {
+                visible: parent.tools;
+                width: Shell.side-bottom-button;
+                height: Shell.side-bottom-button;
+                border-radius: Shell.control-radius;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - 2 * self.width;
+                y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
+                icon-path: IconPaths.code;
+                clicked => {
+                    root.action("dev-tools");
+                }
+            }
+            // the settings entry, always at the far end
             settings := IconButton {
                 width: Shell.side-bottom-button;
                 height: Shell.side-bottom-button;
                 border-radius: Shell.control-radius;
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
-                y: root.compact ? parent.span + Shell.side-bottom-gap-rail + (downloads.visible ? downloads.height + Shell.side-bottom-gap-rail : 0px) : 0px;
+                y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.settings;
                 clicked => {
                     root.settings-requested();
@@ -500,7 +527,8 @@ export component Sidebar inherits Rectangle {
                             // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
                             stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
                             kind: space.icon;
-                            tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                            // .wb button: ink (the capsule under the active one carries its colour)
+                            tint: Palette.ink;
                         }
                     }
                 }

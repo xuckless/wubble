@@ -114,6 +114,9 @@ pub struct GlassRect {
     pub focus: bool,
     /// wubble: its right edge follows the bowed seam ([`Scene::set_bow`]); the sidebar's glass.
     pub bow: bool,
+    /// wubble: RGB 0..1 mixed into the glass at 10% (`GlassSurface::tint`); black = none. The
+    /// window's glass carries the Space colour (design desktop.tsx `glass.tint = accent`).
+    pub tint: [f32; 3],
 }
 
 /// Where the border beam runs: a rounded rect, logical px (the address bar).
@@ -196,6 +199,7 @@ pub fn surface_of(g: &GlassRect) -> GlassSurface {
         film: if touched { 1.0 } else { 0.0 },
         shadow: 0.6,
         bow: g.bow,
+        tint: g.tint,
         ..Default::default()
     }
 }
@@ -719,6 +723,7 @@ mod tests {
             pressed: false,
             hover: false,
             focus: false,
+            tint: [0.0; 3],
         }
     }
 

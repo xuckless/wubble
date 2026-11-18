@@ -386,10 +386,10 @@ fn margin_in_rounded(
 /// browser.css `.wb-light`: 12 px dots; the gap is 8, 6 on the rail (`.wb-side-rail .wb-lights`).
 const LIGHT: f32 = 12.0;
 
-/// The header holds the lights and the four nav buttons, and they never meet; the downloads button
-/// is the footer's secondary action (`.wb-side-bottom > .wb-ib`, 36 square), next to the settings
-/// button at its end (2 apart, the tiles' gap), clear of the Space tiles. At the default width
-/// and at the minimum.
+/// The header holds the lights and the four nav buttons, and they never meet; the footer's buttons
+/// (`.wb-side-bottom > .wb-ib`, 36 square) sit side by side at its end, downloads, dev tools
+/// (the design's Source) and settings last, clear of the Space tiles. At the default width and
+/// at the minimum.
 fn header_and_footer(app: &AppWindow, driver: &Shared) {
     use wubble_ui::DownloadItem;
     app.set_downloads(ModelRc::from([DownloadItem::default()].as_slice()));
@@ -410,7 +410,14 @@ fn header_and_footer(app: &AppWindow, driver: &Shared) {
         );
         assert_eq!(e.settings_end, e.end - SIDE_PAD, "at {raw}");
         assert_eq!(e.settings_end - e.settings, 36.0, "at {raw}");
-        assert_eq!(e.downloads_end, e.settings - 2.0, "at {raw}");
+        // the dev tools button (the design's Source) between them, all three side by side;
+        // at the minimum there is no room for it beside downloads, and it gives way
+        let tools = if raw == SIDEBAR_DEFAULT as f32 {
+            36.0
+        } else {
+            0.0
+        };
+        assert_eq!(e.downloads_end, e.settings - tools, "at {raw}");
         assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
         assert!(
             e.spaces_end < e.downloads,

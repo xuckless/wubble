@@ -85,6 +85,8 @@ export struct GlassItem {
     focus: bool,
     // wubble: the right edge follows the bowed seam (the sidebar's glass; scene `set_bow`)
     bow: bool,
+    // wubble: mixed into the glass at 10%, transparent for none (the window's Space colour)
+    tint: color,
     present: bool,
 }
 
@@ -285,6 +287,8 @@ export struct EntryItem {
 // for the rest of it), `first` / `last` round the section's card.
 export struct SettingItem {
     section: string,
+    // the section's place among the page's sections (the nav's row)
+    section-index: int,
     first: bool,
     last: bool,
     key: string,
