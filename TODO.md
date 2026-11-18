@@ -194,7 +194,9 @@ After daily-drive
 - [~] Content blocker on `adblock-rust`: list fetch/refresh, network hook, cosmetic injection, per-site toggle
   - [x] `wubble-blocker` crate: decisions, cosmetic data, compiled cache, per-site shields, pure refresh policy
   - [ ] List fetch behind an off-by-default flag, CEF network hook, cosmetic injection, per-site toggle UI
-- [ ] Built-in password manager: encrypted store keyed from the OS keyring, form detection and fill, save prompt, generator, import from Zen/Arc
+- [~] Built-in password manager: encrypted store keyed from the OS keyring, form detection and fill, save prompt, generator, import from Zen/Arc
+  - [x] `wubble-vault` crate: keyring-keyed AES-GCM store, origin matching, generator, Firefox/Chromium CSV parser
+  - [ ] Form detection and fill, save prompt, store table in wubble-store, Zen/Arc import
 - [ ] Reader mode, screenshots, PDF viewer
 
 ## M5 — Arc-style features
