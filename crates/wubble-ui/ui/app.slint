@@ -332,7 +332,8 @@ export component AppWindow inherits Window {
     }
     // The pointer is in the strip a hidden sidebar peeks from.
     property <bool> at-edge: !root.page-fullscreen && (edge.has-hover || edges.west-hovered);
-    property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && root.sidebar-width <= Shell.sidebar-open;
+    // Hidden and closed, or peeking (chrome.tsx: the peek panel shows at once, even mid-close).
+    property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && (root.peek || root.sidebar-width <= Shell.sidebar-open);
     property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
     property <float> peek-alpha: root.peeking ? 1 : Shell.peek-from;
     animate peek-offset, peek-alpha {
@@ -578,7 +579,8 @@ export component AppWindow inherits Window {
             sidebar := Sidebar {
                 x: Chrome.inset;
                 y: Chrome.inset;
-                width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-contents;
+                width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-width;
+                content-width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-contents;
                 height: parent.height - 2 * Chrome.inset;
                 opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
                 compact: root.hidden-at-rest ? false : root.sidebar-rail;
