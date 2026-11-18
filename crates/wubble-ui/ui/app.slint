@@ -305,7 +305,7 @@ export component AppWindow inherits Window {
     callback passwords-query-changed(string);
     callback passwords-unlock();
     callback login-reveal(string);
-    callback login-hide(string);
+    callback login-hide();
     callback login-copy(string);
     callback login-deleted(string);
     callback login-added(string, string, string);
@@ -686,8 +686,8 @@ export component AppWindow inherits Window {
                 reveal(id) => {
                     root.login-reveal(id);
                 }
-                hide(id) => {
-                    root.login-hide(id);
+                hide() => {
+                    root.login-hide();
                 }
                 copy(id) => {
                     root.login-copy(id);

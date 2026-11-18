@@ -6,7 +6,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
@@ -346,7 +345,7 @@ impl Host {
             }
             self.pages.shown = page;
             match page {
-                Some(InternalPage::History) => self.history_fetch(false),
+                Some(InternalPage::History) => self.history_fetch(false, HISTORY_PAGE),
                 Some(InternalPage::Bookmarks) => self.bookmarks_request(None),
                 _ => {}
             }
@@ -421,14 +420,10 @@ impl Host {
         self.render_pages();
     }
 
-    /// Mod+D, or the star: the bookmark sheet for the visible page.
-    pub(crate) fn bookmark_star_clicked(&mut self) {
-        self.bookmark_page();
-    }
-
     // ----- history
 
-    fn history_fetch(&mut self, more: bool) {
+    /// Fetch `limit` rows: the next page after the loaded ones (`more`) or a fresh list.
+    fn history_fetch(&mut self, more: bool, limit: usize) {
         let h = &mut self.pages.history;
         h.generation += 1;
         let generation = h.generation;
@@ -437,20 +432,19 @@ impl Host {
             .last()
             .filter(|_| more)
             .map(|r| (r.visit_ms, r.visit_id));
-        self.store
-            .visits(&h.query, before, HISTORY_PAGE, move |page| {
-                let _ = slint::invoke_from_event_loop(move || {
-                    with_host(|host| host.visits_arrived(generation, more, page));
-                });
+        self.store.visits(&h.query, before, limit, move |page| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| host.visits_arrived(generation, more, limit, page));
             });
+        });
     }
 
-    fn visits_arrived(&mut self, generation: u64, more: bool, page: VisitsPage) {
+    fn visits_arrived(&mut self, generation: u64, more: bool, limit: usize, page: VisitsPage) {
         let h = &mut self.pages.history;
         if generation != h.generation {
             return;
         }
-        h.exhausted = page.rows.len() < HISTORY_PAGE;
+        h.exhausted = page.rows.len() < limit;
         if more {
             h.rows.extend(page.rows);
             h.icons.extend(page.icons);
@@ -466,7 +460,7 @@ impl Host {
             return;
         };
         let h = &self.pages.history;
-        let groups = pages::history_page(&h.rows, "", utc_offset_min(), now_ms());
+        let groups = pages::history_page(&h.rows, utc_offset_min(), now_ms());
         let lines = pages::history_lines(&groups);
         let items = wubble_ui::pages::history_items(&lines, |url| {
             h.icons
@@ -483,17 +477,19 @@ impl Host {
 
     pub(crate) fn history_query(&mut self, query: &str) {
         query.clone_into(&mut self.pages.history.query);
-        self.history_fetch(false);
+        self.history_fetch(false, HISTORY_PAGE);
     }
 
     pub(crate) fn history_more(&mut self) {
-        self.history_fetch(true);
+        self.history_fetch(true, HISTORY_PAGE);
     }
 
     fn history_clear(&mut self, what: HistoryClear) {
-        self.store.clear_history(what, |_| {
-            let _ = slint::invoke_from_event_loop(|| {
-                with_host(|host| host.history_fetch(false));
+        // Reload as many rows as are shown, so "Show more" pages survive a delete.
+        let shown = self.pages.history.rows.len().max(HISTORY_PAGE);
+        self.store.clear_history(what, move |_| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| host.history_fetch(false, shown));
             });
         });
     }
@@ -641,7 +637,7 @@ impl Host {
 
     /// Mod+D: the sheet for the visible web page. Not while an engine dialog waits for its
     /// answer (one sheet at a time).
-    pub(super) fn bookmark_page(&mut self) {
+    pub(crate) fn bookmark_page(&mut self) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
@@ -764,7 +760,7 @@ impl Host {
         );
     }
 
-    pub(crate) fn login_hide(&mut self, _id: &str) {
+    pub(crate) fn login_hide(&mut self) {
         self.pages.passwords.revealed = None;
         if let Some(window) = self.window.upgrade() {
             self.render_passwords(&window);
@@ -807,16 +803,12 @@ impl Host {
                 .await
                 .and_then(|p| p.into_iter().next())
             {
-                with_host(|host| host.import_passwords(path));
+                with_host(|host| host.vault_request(VaultCommand::ImportCsv(path), Then::Apply));
             }
         });
         if let Err(e) = task {
             eprintln!("wubble: cannot show the file dialog: {e}");
         }
-    }
-
-    fn import_passwords(&mut self, path: PathBuf) {
-        self.vault_request(VaultCommand::ImportCsv(path), Then::Apply);
     }
 }
 

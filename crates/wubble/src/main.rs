@@ -876,13 +876,13 @@ fn connect_pages(window: &AppWindow) {
     window.on_bookmark_sheet_answered(|accept, remove, name, folder| {
         with_host(|host| host.bookmark_sheet_answered(accept, remove, &name, folder))
     });
-    window.on_address_bookmark_requested(|| with_host(Host::bookmark_star_clicked));
+    window.on_address_bookmark_requested(|| with_host(Host::bookmark_page));
     window.on_address_blocker_requested(|x, y| with_host(|host| host.blocker_menu_requested(x, y)));
     window.on_downloads_cleared(|| with_host(Host::downloads_cleared));
     window.on_passwords_query_changed(|q| with_host(|host| host.passwords_query(&q)));
     window.on_passwords_unlock(|| with_host(Host::passwords_unlock));
     window.on_login_reveal(|id| with_host(|host| host.login_reveal(&id)));
-    window.on_login_hide(|id| with_host(|host| host.login_hide(&id)));
+    window.on_login_hide(|| with_host(Host::login_hide));
     window.on_login_copy(|id| with_host(|host| host.login_copy(&id)));
     window.on_login_deleted(|id| with_host(|host| host.login_deleted(&id)));
     window.on_login_added(|site, user, password| {

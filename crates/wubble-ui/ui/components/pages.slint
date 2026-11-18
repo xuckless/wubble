@@ -331,7 +331,7 @@ export component PasswordsPage inherits Rectangle {
     callback query-changed(string);
     callback unlock();
     callback reveal(string);
-    callback hide(string);
+    callback hide();
     callback copy(string);
     callback deleted(string);
     callback added(string, string, string);
@@ -427,7 +427,7 @@ export component PasswordsPage inherits Rectangle {
                     text: login.has-revealed ? "Hide" : "Show";
                     clicked => {
                         if login.has-revealed {
-                            root.hide(login.id);
+                            root.hide();
                         } else {
                             root.reveal(login.id);
                         }

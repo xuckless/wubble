@@ -311,3 +311,5 @@ Needs ~150 GB free and several hours per full build per platform.
 ## Open decisions
 
 - Fallback if Turso (pre-1.0) proves unstable: the schema stays SQLite-compatible so `rusqlite` can replace it
+
+- [ ] Hardening: a vault Unlock waiting on the OS keyring blocks the single store thread (move keyring I/O off it); clear the clipboard after a password copy (only if it still holds that value).

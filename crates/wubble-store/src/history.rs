@@ -106,7 +106,7 @@ impl Store {
     /// One page of the history page's rows: visits strictly before the `(visit_ms, visit_id)`
     /// cursor of the last row already shown (`None`: from the newest), newest first, at most
     /// `limit`. The id breaks ties between visits with the same millisecond. `query` keeps the
-    /// visits whose title or url contains it (case-insensitive; empty keeps all), so a search
+    /// visits whose title or url contains it (SQLite `lower()`, so case-insensitive for ASCII only; empty keeps all), so a search
     /// reaches rows older than any loaded page. Day grouping is
     /// `wubble_core::pages::history_page`.
     pub async fn list_visits(

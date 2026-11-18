@@ -7,6 +7,8 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
+use chrono::NaiveDate;
+
 use crate::settings::{self, Section, SettingKind};
 
 const MIN_MS: i64 = 60_000;
@@ -28,7 +30,7 @@ pub struct HistoryRow {
 pub enum DayLabel {
     Today,
     Yesterday,
-    Date { year: i32, month: u8, day: u8 },
+    Date(NaiveDate),
 }
 
 /// The visits of one local day, newest first.
@@ -46,31 +48,17 @@ fn local_day(ms: i64, tz_offset_min: i32) -> i64 {
     (ms + i64::from(tz_offset_min) * MIN_MS).div_euclid(DAY_MS)
 }
 
-/// (year, month 1..=12, day 1..=31) of a day count since 1970-01-01.
-///
-/// Source: Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" `civil_from_days`
-/// (http://howardhinnant.github.io/date_algorithms.html), public domain.
-fn civil_from_days(days: i64) -> (i32, u8, u8) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year as i32, month as u8, day as u8)
-}
-
 fn day_label(day: i64, today: i64) -> DayLabel {
     if day == today {
         DayLabel::Today
     } else if day == today - 1 {
         DayLabel::Yesterday
     } else {
-        let (year, month, day) = civil_from_days(day);
-        DayLabel::Date { year, month, day }
+        // Days from 0001-01-01 (CE day 1) are the epoch day count plus 719_163.
+        i32::try_from(day + 719_163)
+            .ok()
+            .and_then(NaiveDate::from_num_days_from_ce_opt)
+            .map_or(DayLabel::Today, DayLabel::Date)
     }
 }
 
@@ -78,22 +66,11 @@ fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
     haystack.to_lowercase().contains(needle_lower)
 }
 
-/// The history page: visits matching `query` (case-insensitive substring of title or url; empty
-/// keeps all), newest first, grouped by local day.
-pub fn history_page(
-    rows: &[HistoryRow],
-    query: &str,
-    tz_offset_min: i32,
-    now_ms: i64,
-) -> Vec<DayGroup> {
-    let needle = query.trim().to_lowercase();
+/// The history page: visits newest first, grouped by local day. Searching is the store's job
+/// (`list_visits`), so a search reaches rows older than any loaded page.
+pub fn history_page(rows: &[HistoryRow], tz_offset_min: i32, now_ms: i64) -> Vec<DayGroup> {
     let today = local_day(now_ms, tz_offset_min);
-    let mut hits: Vec<&HistoryRow> = rows
-        .iter()
-        .filter(|r| {
-            needle.is_empty() || contains_ci(&r.title, &needle) || contains_ci(&r.url, &needle)
-        })
-        .collect();
+    let mut hits: Vec<&HistoryRow> = rows.iter().collect();
     hits.sort_by_key(|r| Reverse(r.visit_ms));
     let mut groups: Vec<DayGroup> = Vec::new();
     for r in hits {
@@ -110,36 +87,13 @@ pub fn history_page(
     groups
 }
 
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-
-/// Day count since 1970-01-01 of a civil date: the inverse of [`civil_from_days`].
-///
-/// Source: Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" `days_from_civil`,
-/// public domain.
-fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
-    let y = i64::from(year) - i64::from(month <= 2);
-    let era = y.div_euclid(400);
-    let yoe = y.rem_euclid(400);
-    let mp = (i64::from(month) + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
 impl DayLabel {
     /// A group header: "Today", "Yesterday", "Mon, 3 Nov 2026".
     pub fn text(self) -> String {
         match self {
             DayLabel::Today => "Today".to_owned(),
             DayLabel::Yesterday => "Yesterday".to_owned(),
-            DayLabel::Date { year, month, day } => {
-                let weekday = WEEKDAYS[days_from_civil(year, month, day).rem_euclid(7) as usize];
-                let month = MONTHS[usize::from(month.clamp(1, 12)) - 1];
-                format!("{weekday}, {day} {month} {year}")
-            }
+            DayLabel::Date(date) => date.format("%a, %-d %b %Y").to_string(),
         }
     }
 }
@@ -795,19 +749,6 @@ mod tests {
     }
 
     #[test]
-    fn civil_from_days_known_values() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(-1), (1969, 12, 31));
-        assert_eq!(civil_from_days(19_782), (2024, 2, 29)); // leap day
-        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
-        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-        assert_eq!(civil_from_days(-719_468), (0, 3, 1));
-        assert_eq!(civil_from_days(47_482), (2100, 1, 1));
-        assert_eq!(civil_from_days(47_541), (2100, 3, 1)); // 2100 is not a leap year
-        assert_eq!(civil_from_days(local_day(NOW, 0)), (2024, 3, 1));
-    }
-
-    #[test]
     fn history_groups_by_day_newest_first() {
         let rows = [
             visit("https://a.test/", "A", NOW - HOUR),
@@ -815,18 +756,14 @@ mod tests {
             visit("https://c.test/", "C", NOW - 2 * HOUR),
             visit("https://d.test/", "D", NOW - 24 * 3 * HOUR),
         ];
-        let g = history_page(&rows, "", 0, NOW);
+        let g = history_page(&rows, 0, NOW);
         let labels: Vec<_> = g.iter().map(|g| g.label).collect();
         assert_eq!(
             labels,
             [
                 DayLabel::Today,
                 DayLabel::Yesterday,
-                DayLabel::Date {
-                    year: 2024,
-                    month: 2,
-                    day: 27
-                }
+                DayLabel::Date(NaiveDate::from_ymd_opt(2024, 2, 27).unwrap())
             ]
         );
         let urls: Vec<_> = g[0].rows.iter().map(|r| r.url.as_str()).collect();
@@ -840,55 +777,24 @@ mod tests {
         let late = NOW - 12 * HOUR - HOUR / 2;
         let rows = [visit("https://a.test/", "A", late)];
         let now = NOW; // Mar 1 12:00 UTC
-        assert_eq!(history_page(&rows, "", 60, now)[0].label, DayLabel::Today);
-        assert_eq!(
-            history_page(&rows, "", 0, now)[0].label,
-            DayLabel::Yesterday
-        );
-        assert_eq!(
-            history_page(&rows, "", -60, now)[0].label,
-            DayLabel::Yesterday
-        );
+        assert_eq!(history_page(&rows, 60, now)[0].label, DayLabel::Today);
+        assert_eq!(history_page(&rows, 0, now)[0].label, DayLabel::Yesterday);
+        assert_eq!(history_page(&rows, -60, now)[0].label, DayLabel::Yesterday);
         // Exactly local midnight belongs to the new day; one ms before to the old one.
         let midnight = 19_783 * DAY_MS;
         let rows = [
             visit("https://a.test/", "A", midnight),
             visit("https://b.test/", "B", midnight - 1),
         ];
-        let g = history_page(&rows, "", 0, NOW);
+        let g = history_page(&rows, 0, NOW);
         assert_eq!(g.len(), 2);
         assert_eq!(g[0].rows[0].url, "https://a.test/");
         // Month and leap boundaries print as dates.
         let far = [visit("https://a.test/", "A", 951_782_400_000)]; // 2000-02-29
         assert_eq!(
-            history_page(&far, "", 0, NOW)[0].label,
-            DayLabel::Date {
-                year: 2000,
-                month: 2,
-                day: 29
-            }
+            history_page(&far, 0, NOW)[0].label,
+            DayLabel::Date(NaiveDate::from_ymd_opt(2000, 2, 29).unwrap())
         );
-    }
-
-    #[test]
-    fn history_search_is_case_insensitive_over_title_and_url() {
-        let rows = [
-            visit("https://rust-lang.org/", "Rust Language", NOW),
-            visit("https://example.com/Docs", "Example", NOW - HOUR),
-            visit("https://other.test/", "Other", NOW - 2 * HOUR),
-        ];
-        let titles = |q: &str| -> Vec<String> {
-            history_page(&rows, q, 0, NOW)
-                .into_iter()
-                .flat_map(|g| g.rows)
-                .map(|r| r.title)
-                .collect()
-        };
-        assert_eq!(titles("RUST"), ["Rust Language"]);
-        assert_eq!(titles("docs"), ["Example"]);
-        assert_eq!(titles("  "), ["Rust Language", "Example", "Other"]);
-        assert!(titles("nothing").is_empty());
-        assert!(history_page(&[], "", 0, NOW).is_empty());
     }
 
     fn bm(id: i64, parent: Option<i64>, folder: bool, pos: u32, title: &str) -> BookmarkRow {
@@ -1169,15 +1075,11 @@ mod tests {
     fn day_labels_read_as_dates() {
         assert_eq!(DayLabel::Today.text(), "Today");
         assert_eq!(DayLabel::Yesterday.text(), "Yesterday");
-        let d = |year, month, day| DayLabel::Date { year, month, day }.text();
+        let d = |y, m, day| DayLabel::Date(NaiveDate::from_ymd_opt(y, m, day).unwrap()).text();
         assert_eq!(d(1970, 1, 1), "Thu, 1 Jan 1970");
         assert_eq!(d(2026, 11, 3), "Tue, 3 Nov 2026");
         assert_eq!(d(2024, 2, 29), "Thu, 29 Feb 2024");
         assert_eq!(d(1969, 12, 31), "Wed, 31 Dec 1969");
-        for days in [-800, 0, 19_000, 20_400] {
-            let (y, m, dd) = civil_from_days(days);
-            assert_eq!(days_from_civil(y, m, dd), days);
-        }
     }
 
     #[test]
@@ -1189,7 +1091,7 @@ mod tests {
             visit_id: ms,
         };
         let now = 3 * DAY_MS + 5;
-        let groups = history_page(&[row(now), row(now - 1), row(DAY_MS)], "", 0, now);
+        let groups = history_page(&[row(now), row(now - 1), row(DAY_MS)], 0, now);
         let lines = history_lines(&groups);
         assert_eq!(lines.len(), 5);
         assert_eq!(
