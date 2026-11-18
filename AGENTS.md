@@ -51,13 +51,27 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
 
-macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there):
+macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there; rsync the
+worktree without `target/` and `.git`; clippy needs `rustup component add clippy` once):
 
     cargo build --workspace && cargo run -p wubble-bundle   # writes target/debug/bundle/wubble.app
     target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke boot   # any wubble args; `open` fails over ssh
     cargo build --workspace --examples && cargo run -p wubble-bundle -- --exe target/debug/examples/frame_smoke
     target/debug/bundle/wubble.app/Contents/MacOS/wubble   # windowless zero-copy and colour check; re-bundle without --exe after
     cargo run -p wubble-engine --example frame_smoke   # the same check on Linux
+
+Window smokes need a GUI session: over ssh they hang creating the window, so always
+wrap them in `timeout`. Console smoke loop: log in at the Mac console as `pixlbot`
+(fast user switching; the toolchain and `~/wubble-b6` are that user's), open Terminal,
+`cd ~/wubble-b6 && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
+(above), then:
+
+    for s in boot nav tabs session frames=120 split page block; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s > /tmp/wubble-$s.log 2>&1; echo "exit $?"; grep -E '^smoke|panicked|^wubble:' /tmp/wubble-$s.log; done; pgrep -fl MacOS/wubble
+
+Each section ends `exit 0` with its `smoke:` lines (`frames=120`: `smoke: pixels ok` and
+`smoke: glass ok`); `exit 124` is a hang killed by `timeout`; any other exit is a crash
+(full output in `/tmp/wubble-<smoke>.log`). A `panicked` line about handling an event
+while another is handled is the cue for a dispatch2 main-queue pump. `pgrep` prints nothing.
 
 ## Code principles
 
