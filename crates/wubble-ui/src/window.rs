@@ -164,7 +164,7 @@ fn run(window: &slint::Window, intent: Intent) {
 }
 
 /// Connect the shell's window intents. Call once, after `AppWindow::new`. The platform flags are
-/// applied once the event loop runs, when the native window exists.
+/// applied later, by [`native_window_ready`].
 pub fn wire(app: &AppWindow) {
     let weak = app.as_weak();
     let on = move |intent: Intent| {
@@ -186,21 +186,22 @@ pub fn wire(app: &AppWindow) {
             run(app.window(), Intent::BeginResize(edge));
         }
     });
+}
 
-    let weak = app.as_weak();
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(app) = weak.upgrade() else { return };
-        let kind = app.window().with_winit_window(|w| {
-            w.window_handle()
-                .map(|h| Kind::of(h.as_raw()))
-                .unwrap_or(Kind::Other)
-        });
-        if kind.is_none() {
-            eprintln!("wubble: rounded corners: no native window yet, staying square");
-        }
-        let square = std::env::var_os("WUBBLE_SQUARE_CORNERS").is_some();
-        app.set_rounded_corners(!square && kind.is_some_and(Kind::transparent_corners));
+/// Round the corners if the platform shows a transparent window background. Call once the native
+/// window exists: [`crate::driver::install`] does, on the renderer's `RenderingSetup`. (Queued
+/// from `wire` with `invoke_from_event_loop` it ran before winit had created the window, so the
+/// window always stayed square.)
+pub fn native_window_ready(app: &AppWindow) {
+    let kind = app.window().with_winit_window(|w| {
+        w.window_handle()
+            .map(|h| Kind::of(h.as_raw()))
+            .unwrap_or(Kind::Other)
     });
+    let square = std::env::var_os("WUBBLE_SQUARE_CORNERS").is_some();
+    let rounded = !square && kind.is_some_and(Kind::transparent_corners);
+    eprintln!("wubble: window {kind:?}, rounded corners {rounded}");
+    app.set_rounded_corners(rounded);
 }
 
 #[cfg(test)]

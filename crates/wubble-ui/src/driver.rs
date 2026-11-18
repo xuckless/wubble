@@ -415,17 +415,25 @@ pub fn connect(window: &AppWindow) -> Shared {
     driver
 }
 
-/// Wire the shell driver and register the window's one rendering notifier.
+/// Wire the shell driver and register the window's one rendering notifier, which also tells
+/// [`crate::window`] when the native window exists.
 pub fn install(window: &AppWindow) -> Result<(), SetRenderingNotifierError> {
     let driver = connect(window);
     driver.borrow_mut().origin = Some(Instant::now());
     let weak = window.as_weak();
     window.window().set_rendering_notifier(move |state, _api| {
-        if let slint::RenderingState::BeforeRendering = state
-            && let Some(window) = weak.upgrade()
-            && driver.borrow_mut().frame(&window, Instant::now())
-        {
-            window.window().request_redraw();
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        match state {
+            // The first frame: the native window exists now.
+            slint::RenderingState::RenderingSetup => crate::window::native_window_ready(&window),
+            slint::RenderingState::BeforeRendering
+                if driver.borrow_mut().frame(&window, Instant::now()) =>
+            {
+                window.window().request_redraw();
+            }
+            _ => {}
         }
     })
 }
