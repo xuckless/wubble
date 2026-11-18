@@ -1,0 +1,58 @@
+// The sidebar header's navigation: sidebar, back, forward, reload. From the design repo's
+// src/wubble/browser/chrome.tsx (`.wb-nav` in `wb-side-top`) and browser.css `.wb-nav`, `.wb-ib`
+// (owner's own code, xuckless/the-wallpaper-project @ 6c840da), built on the port's
+// PressableButton (the 0.97 press). Intents only: each button names a wubble `Action` by its id,
+// which the host runs through `perform`.
+
+import { Palette, Motion } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { PressableButton } from "../components.slint";
+import { Icon, IconPaths } from "icon.slint";
+
+// .wb-ib: an icon-only PressableButton
+export component IconButton inherits PressableButton {
+    in property <string> icon-path;
+    width: Shell.icon-button;
+    height: Shell.icon-button;
+    padding-x: 0px;
+    border-radius: Shell.icon-button-radius;
+    background: self.hovered && self.enabled ? Shell.icon-button-hover : transparent;
+    opacity: self.enabled ? 1 : Shell.icon-button-disabled;
+    // A plain cell that fills the button, so the fixed-size icon sits at its exact centre:
+    // placed straight into PressableButton's layout the icon went to the cell's top edge and
+    // the hover fill looked off-centre around it.
+    Rectangle {
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            path: root.icon-path;
+            tint: root.hovered && root.enabled ? Palette.ink : Palette.mist;
+            animate tint {
+                duration: Shell.icon-button-ms;
+                easing: Motion.easeOut;
+            }
+        }
+    }
+}
+
+export component NavButtons inherits HorizontalLayout {
+    in property <bool> can-go-back: false;
+    in property <bool> can-go-forward: false;
+    // An `Action` id (wubble-core action.rs): toggle-sidebar, back, forward, reload.
+    callback action(string);
+    spacing: Shell.nav-gap;
+    // [icon, action id, enabled]: one table, one button each
+    property <[{icon: string, id: string, enabled: bool}]> buttons: [
+        { icon: IconPaths.sidebar, id: "toggle-sidebar", enabled: true },
+        { icon: IconPaths.back, id: "back", enabled: root.can-go-back },
+        { icon: IconPaths.forward, id: "forward", enabled: root.can-go-forward },
+        { icon: IconPaths.reload, id: "reload", enabled: true },
+    ];
+    for b in root.buttons: IconButton {
+        icon-path: b.icon;
+        enabled: b.enabled;
+        clicked => {
+            root.action(b.id);
+        }
+    }
+}

@@ -1,0 +1,33 @@
+// The icon wobble on a hit, from the design repo's core/wubble.css `@source wobble` (owner's own
+// code, xuckless/the-wallpaper-project @ 6c840da): `wb-wob-a` / `wb-wob-b`, 0.55 s ease-out,
+// 25 % rotate(-14deg) scale(.9, 1.12), 50 % rotate(9deg) scale(1.06, .95), 75 % rotate(-4deg).
+// The port has none (its README: Slint has no keyframes). Here one tween runs a phase from 0 to
+// 1 and the keyframes are interpolated from it, each stretch eased out as CSS eases each one
+// (the ease-out curve approximated by 1 - (1 - u)²). The design's two names, so a repeat
+// restarts, are `hit` flipping: each flip plays it once more.
+
+import { Shell } from "../app-tokens.slint";
+
+export component Wobble inherits Rectangle {
+    // Flip to play the wobble.
+    in property <bool> hit: false;
+    property <float> phase: root.hit ? 1 : 0;
+    animate phase {
+        duration: Shell.wobble-ms;
+        easing: linear;
+    }
+    // How far along the keyframes: 1 (at rest) until the first flip.
+    property <float> t: root.hit ? root.phase : 1 - root.phase;
+    property <int> seg: min(3, Math.floor(root.t * 4));
+    property <float> u: root.t * 4 - root.seg;
+    property <float> e: 1 - (1 - root.u) * (1 - root.u);
+    property <[float]> turn: [0, -14, 9, -4, 0];
+    property <[float]> sx: [1, 0.9, 1.06, 1, 1];
+    property <[float]> sy: [1, 1.12, 0.95, 1, 1];
+
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-rotation: (root.turn[root.seg] + (root.turn[root.seg + 1] - root.turn[root.seg]) * root.e) * 1deg;
+    transform-scale-x: root.sx[root.seg] + (root.sx[root.seg + 1] - root.sx[root.seg]) * root.e;
+    transform-scale-y: root.sy[root.seg] + (root.sy[root.seg + 1] - root.sy[root.seg]) * root.e;
+    @children
+}

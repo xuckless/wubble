@@ -291,6 +291,11 @@ impl Host {
                 width: physical(r.width as f32, scale),
                 height: physical(height as f32, scale),
             };
+            // The first (or only) pane shows the bundled page: its swatches' exact colours.
+            if last.is_none() {
+                pixels::check_swatches(shot, region)
+                    .map_err(|e| format!("pane of tab {}: {e}", r.tab.0))?;
+            }
             let sample =
                 pixels::check(shot, region).map_err(|e| format!("pane of tab {}: {e}", r.tab.0))?;
             last = Some(sample);

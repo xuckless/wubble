@@ -99,6 +99,45 @@ pub fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region) -> Result
     Ok(sample)
 }
 
+/// The bundled smoke page's fixed swatches: centre in content pixels and the
+/// exact colour the page asks for (see `assets/smoke.html`, `.swatches`).
+const SWATCHES: [(&str, u32, u32, [u8; 3]); 4] = [
+    ("red", 56, 56, [255, 0, 0]),
+    ("green", 128, 56, [0, 255, 0]),
+    ("blue", 200, 56, [0, 0, 255]),
+    ("grey", 272, 56, [128, 128, 128]),
+];
+
+/// Largest per-channel error allowed for a swatch.
+const SWATCH_TOLERANCE: u8 = 2;
+
+/// Fails unless each swatch of the smoke page shows its own colour: catches a
+/// wrong channel order or a gamma error (mid grey is the sensitive one).
+pub fn check_swatches(
+    snapshot: &SharedPixelBuffer<Rgba8Pixel>,
+    region: Region,
+) -> Result<(), String> {
+    let width = snapshot.width() as usize;
+    let pixels = snapshot.as_slice();
+    for (name, x, y, want) in SWATCHES {
+        let index = (region.y + y) as usize * width + (region.x + x) as usize;
+        let p = pixels
+            .get(index)
+            .ok_or_else(|| format!("the {name} swatch is outside the snapshot"))?;
+        let got = [p.r, p.g, p.b];
+        if got
+            .iter()
+            .zip(want)
+            .any(|(g, w)| g.abs_diff(w) > SWATCH_TOLERANCE)
+        {
+            return Err(format!(
+                "the {name} swatch shows {got:?}, the page asked for {want:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

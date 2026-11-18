@@ -22,6 +22,10 @@ import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
 import { NewTabRow } from "new-tab-row.slint";
 import { WindowLights } from "window-lights.slint";
+import { NavButtons, IconButton } from "nav-buttons.slint";
+import { MoveArea } from "window-frame.slint";
+import { Wobble } from "wobble.slint";
+import { SideEdges } from "model.slint";
 
 export component Sidebar inherits Rectangle {
     in property <string> address-host;
@@ -42,6 +46,8 @@ export component Sidebar inherits Rectangle {
     // The wgpu scene draws the glass of the pill and the favourites (and the sidebar's own,
     // in app.slint).
     in property <bool> glass-over-wgpu: false;
+    // The floating peek panel: .wb-side-peek pads 10 8 10 10 where the sidebar pads 6.
+    in property <bool> floating: false;
     // The window can be moved by dragging the sidebar's glass (off in full screen).
     in property <bool> window-movable: true;
     // The address pill is loading a page (see AddressPill).
@@ -50,6 +56,15 @@ export component Sidebar inherits Rectangle {
     // Where the command bar grows from when opened from the pill / the new-tab row, in window
     // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
     out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
+    // Where the column's edges fall, in window coordinates (the alignment the tests pin).
+    out property <SideEdges> edges: {
+        lights: lights.absolute-position.x,
+        nav-end: nav.absolute-position.x + nav.width,
+        pill: pill.absolute-position.x,
+        pill-end: pill.absolute-position.x + pill.width,
+        rows: rows.absolute-position.x,
+        new-tab: new-tab.absolute-position.x,
+    };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
     out property <Origin> address-below: { x: pill.absolute-position.x, y: pill.absolute-position.y + pill.height };
@@ -83,9 +98,14 @@ export component Sidebar inherits Rectangle {
     callback window-close-requested();
     callback window-minimise-requested();
     callback window-toggle-fullscreen-requested();
+    callback window-move-requested();
+    callback window-maximise-requested();
+    // The visible page's history, for the header's back and forward.
+    in property <bool> can-go-back: false;
+    in property <bool> can-go-forward: false;
+    // A header button: the id of the wubble `Action` it runs.
+    callback action(string);
     callback address-activated();
-    // the sidebar button (chrome.tsx `cycleSidebar`)
-    callback sidebar-toggle-requested();
     callback space-switched(int);    // space id
     callback scroll-wheel(length);
     callback scroll-touch-down(length);
@@ -102,19 +122,28 @@ export component Sidebar inherits Rectangle {
     clip: true;
 
     // Under everything: the glass the controls do not claim moves the window (the design's
-    // `wb-side-top` drag, wider). Slint's WindowMoveArea starts the compositor's move.
-    WindowMoveArea {
+    // `wb-side-top` drag, wider), and a double-click on it maximises.
+    MoveArea {
         enabled: root.window-movable;
+        begin-move => {
+            root.window-move-requested();
+        }
+        toggle-maximise => {
+            root.window-maximise-requested();
+        }
     }
 
     VerticalLayout {
-        padding: Shell.side-pad;
+        padding-left: root.floating ? Shell.peek-pad-start : Shell.side-pad;
+        padding-right: root.floating ? Shell.peek-pad-end : Shell.side-pad;
+        padding-top: root.floating ? Shell.peek-pad-y : Shell.side-pad;
+        padding-bottom: root.floating ? Shell.peek-pad-y : Shell.side-pad;
         spacing: Spacing.s3;
 
         // .wb-side-top: 30 high, lights 10 in (centred on the rail)
         Rectangle {
             height: Shell.side-top;
-            WindowLights {
+            lights := WindowLights {
                 x: root.compact ? (parent.width - self.width) / 2 : Shell.side-grid;
                 y: (parent.height - self.height) / 2;
                 compact: root.compact;
@@ -128,41 +157,28 @@ export component Sidebar inherits Rectangle {
                     root.window-toggle-fullscreen-requested();
                 }
             }
-            // .wb-nav's sidebar button (chrome.tsx, icons.tsx `sidebar`), right of the lights.
-            // The design's back, forward and reload buttons beside it are not built yet.
-            nav := PressableButton {
+            // .wb-nav: right-aligned, pulled 4 px past the padding (.wb-side-top margin-right -4)
+            nav := NavButtons {
                 visible: !root.compact;
-                x: parent.width - self.width + Shell.nav-outset;
-                y: (parent.height - self.height) / 2;
-                width: Chrome.controls;
-                height: Chrome.controls;
-                border-radius: Shell.nav-radius;
-                padding-x: (Chrome.controls - Shell.icon) / 2;
-                background: self.hovered ? Shell.nav-hover : transparent;
-                clicked => {
-                    root.sidebar-toggle-requested();
-                }
-                Icon {
-                    path: IconPaths.sidebar;
-                    tint: nav.hovered ? Palette.ink : Palette.mist;
+                // its own width: a bare layout would fill the header and spread the buttons
+                width: self.preferred-width;
+                x: parent.width - self.width + Shell.nav-pull;
+                y: 0px;
+                height: parent.height;
+                can-go-back: root.can-go-back;
+                can-go-forward: root.can-go-forward;
+                action(id) => {
+                    root.action(id);
                 }
             }
-            // wubble: the downloads button (icons.tsx `download`), left of the sidebar button.
-            downloads := PressableButton {
+            // wubble: the downloads button (icons.tsx `download`), left of the nav buttons.
+            downloads := IconButton {
                 visible: !root.compact && root.has-downloads;
-                x: nav.x - self.width;
-                y: nav.y;
-                width: Chrome.controls;
-                height: Chrome.controls;
-                border-radius: Shell.nav-radius;
-                padding-x: (Chrome.controls - Shell.icon) / 2;
-                background: self.hovered ? Shell.nav-hover : transparent;
+                x: nav.x - self.width - Shell.nav-gap;
+                y: (parent.height - self.height) / 2;
+                icon-path: IconPaths.download;
                 clicked => {
                     root.downloads-requested();
-                }
-                Icon {
-                    path: IconPaths.download;
-                    tint: downloads.hovered ? Palette.ink : Palette.mist;
                 }
             }
         }
@@ -341,7 +357,9 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                for space[i] in root.spaces: Rectangle {
+                for space[i] in root.spaces: tile := Rectangle {
+                    // tabs.tsx SpaceSwitcher: each click wobbles the icon once more
+                    property <bool> hit: false;
                     x: root.compact ? 0px : i * switcher.pitch;
                     y: root.compact ? i * switcher.pitch : 0px;
                     width: Shell.space-tile;
@@ -355,19 +373,25 @@ export component Sidebar inherits Rectangle {
                     }
                     ta := TouchArea {
                         clicked => {
+                            tile.hit = !tile.hit;
                             root.space-switched(space.id);
                         }
                     }
                     // the model has no icon per Space yet: the three drawn icons in turn
-                    SpaceIcon {
+                    Wobble {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         width: Shell.space-glyph;
                         height: Shell.space-glyph;
-                        // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
-                        stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                        kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
-                        tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                        hit: tile.hit;
+                        SpaceIcon {
+                            width: parent.width;
+                            height: parent.height;
+                            // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
+                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
+                            kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
+                            tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                        }
                     }
                 }
             }

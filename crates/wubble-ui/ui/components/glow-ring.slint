@@ -1,0 +1,36 @@
+// The glowing border: the film ring (GlassPanel's touch rim, the sky-lilac-blush-mint gradient)
+// and, optionally, the sheen that sweeps across it. Extracted from AddressPill (chrome.tsx
+// `Address` border beam, whose shader is the gfx lane's) so the address pill and the peeking
+// sidebar draw one thing. Put it over a glass panel; `strength` 0 draws nothing and costs
+// nothing (the sweep's clock runs only while something is visible).
+
+import { Palette } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+
+export component GlowRing inherits Rectangle {
+    in property <length> radius;
+    // 0..1: the ring's opacity and the sheen's, squared for the sheen (a lingering tail)
+    in property <float> strength: 0;
+    // false: a steady ring (the peek); true: the sheen laps it every `beam-ms` (the pill)
+    in property <bool> sweep: true;
+    // the sweep runs on the animation clock, only while drawn, so an idle shell requests no frames
+    property <float> phase: Math.mod(animation-tick() / Shell.beam-ms, 1);
+    property <float> sheen: root.strength * root.strength;
+
+    if root.strength > 0: Rectangle {
+        border-radius: root.radius;
+        border-width: Shell.glow-width;
+        border-color: @linear-gradient(120deg, Palette.sky 0%, Palette.lilac 33%, Palette.blush 66%, Palette.mint 100%);
+        opacity: root.strength;
+    }
+    if root.sweep && root.sheen > 0: Rectangle {
+        border-radius: root.radius;
+        clip: true;
+        opacity: root.sheen;
+        Rectangle {
+            width: parent.width * 0.35;
+            x: -self.width + (parent.width + self.width) * root.phase;
+            background: @linear-gradient(100deg, transparent 0%, Shell.beam-sheen 50%, transparent 100%);
+        }
+    }
+}

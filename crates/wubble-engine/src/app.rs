@@ -129,9 +129,32 @@ trait Platform {
     /// Per-user data directory, given an environment lookup.
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
 
-    /// Chromium switches every wubble process gets.
+    /// Chromium switches every wubble process gets on this OS, after
+    /// [`CHROMIUM_SWITCHES`].
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)];
 }
+
+/// Chromium switches every wubble process gets on every OS. One entry per
+/// switch, each with the reason. A switch given twice keeps one value, so a
+/// platform table must not add its own `enable-features`: merge it here.
+const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[
+    // Scrollbars drawn over the page, thin and fading, instead of a classic
+    // gutter that takes layout width (Chromium `features::kOverlayScrollbar`,
+    // the ChromeOS style). Measured on CEF 156 windowless, Linux: a tall
+    // page's `innerWidth - documentElement.clientWidth` is 15 without it and
+    // 0 with it. `FluentOverlayScrollbar` alone changes nothing there.
+    //
+    // Middle-click autoscroll (press the wheel, then move to scroll), which
+    // Chromium turns on by default only on Windows
+    // (`features::kMiddleClickAutoscroll`). Same switch as above because a
+    // switch given twice keeps one value.
+    (
+        "enable-features",
+        Some("OverlayScrollbar,MiddleClickAutoscroll"),
+    ),
+    // The Blink side of the same feature; older builds read only this one.
+    ("enable-blink-features", Some("MiddleClickAutoscroll")),
+];
 
 #[cfg(target_os = "linux")]
 struct Linux;
@@ -202,8 +225,9 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     let mut cef = CefRuntimeConfig::new(config.exe_dir.clone(), SANDBOX);
     cef.browser_subprocess_path = Some(helper_path(&config.exe_dir));
     cef.cache_path = Some(config.cache_dir.clone());
-    cef.command_line_switches = Current::CHROMIUM_SWITCHES
+    cef.command_line_switches = CHROMIUM_SWITCHES
         .iter()
+        .chain(Current::CHROMIUM_SWITCHES)
         .map(|(name, value)| ((*name).into(), value.map(Into::into)))
         .collect();
     cef.pump_scheduler = config.pump_scheduler.clone();
@@ -548,9 +572,21 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_adds_no_chromium_switches() {
+    fn linux_gets_only_the_shared_switches() {
         let cef = cef_config(&config("/opt/wubble", "/c"));
-        assert!(cef.command_line_switches.is_empty());
+        assert_eq!(
+            cef.command_line_switches,
+            vec![
+                (
+                    "enable-features".to_string(),
+                    Some("OverlayScrollbar,MiddleClickAutoscroll".to_string())
+                ),
+                (
+                    "enable-blink-features".to_string(),
+                    Some("MiddleClickAutoscroll".to_string())
+                ),
+            ]
+        );
     }
 
     fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {

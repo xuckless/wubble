@@ -221,3 +221,14 @@ export struct PopupView {
     origin-x: length,
     origin-y: length,
 }
+
+// The x of the sidebar's column edges, in window coordinates: the window lights, the right end of
+// the header's buttons, the address pill's two sides, the tab rows, the new-tab row.
+export struct SideEdges {
+    lights: length,
+    nav-end: length,
+    pill: length,
+    pill-end: length,
+    rows: length,
+    new-tab: length,
+}

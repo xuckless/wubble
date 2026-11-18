@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
 use slint::{
-    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc,
+    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, VecModel,
     platform::{PointerEventButton, WindowEvent},
 };
 use wubble_core::tabs::TABS;
@@ -144,6 +144,56 @@ fn tab_drag_emits_tab_moved(app: &AppWindow, driver: &Shared, log: &Log) {
     assert_eq!(rows(app), [0.0, 40.0, 80.0]);
 }
 
+/// Drag row 0 two slots down; halfway, the host re-renders the rows (a title changed) with
+/// `rerender`. Returns how far the dragged row has followed the pointer just before the release.
+fn drag_across_rerender(app: &AppWindow, driver: &Shared, rerender: impl Fn(Vec<TabItem>)) -> f32 {
+    let y = row_centre(0);
+    press(app, ROW_X, y, PointerEventButton::Left);
+    for k in 1..=17 {
+        if k == 8 {
+            let mut items: Vec<TabItem> = app.get_tabs().iter().collect();
+            items[1].title = format!("retitled {k}").into();
+            rerender(items);
+            app.invoke_shell_model_changed();
+            pump();
+        }
+        moved(app, ROW_X, y + k as f32 * 5.0);
+        driver.borrow_mut().advance(app, DT);
+    }
+    for _ in 0..60 {
+        driver.borrow_mut().advance(app, DT);
+    }
+    let followed = rows(app)[0];
+    release(app, ROW_X, y + 85.0, PointerEventButton::Left);
+    settle(app, driver);
+    followed
+}
+
+/// A re-render that replaces the model rebuilds every row, and the dragged row's TouchArea
+/// with its grab: the row stops following the pointer. One synced in place (`wubble_ui::sync`)
+/// keeps the row and the drag.
+fn drag_survives_an_in_place_rerender(app: &AppWindow, driver: &Shared) {
+    let model = Rc::new(VecModel::from(
+        tabs([10, 11, 12]).iter().collect::<Vec<_>>(),
+    ));
+    app.set_tabs(ModelRc::from(model.clone()));
+    pump();
+    settle(app, driver);
+    let m = model.clone();
+    let kept = drag_across_rerender(app, driver, move |items| wubble_ui::sync(&m, items));
+    let replaced = drag_across_rerender(app, driver, |items| {
+        app.set_tabs(ModelRc::from(items.as_slice()))
+    });
+    assert!(
+        kept > 70.0,
+        "the row follows the pointer to the end: {kept}"
+    );
+    assert!(replaced < 50.0, "the rebuilt row lost the drag: {replaced}");
+    app.set_tabs(tabs([10, 11, 12]));
+    pump();
+    settle(app, driver);
+}
+
 fn tab_scroll_reaches_scroller(app: &AppWindow, driver: &Shared) {
     app.set_tabs(tabs(0..30));
     pump();
@@ -192,5 +242,6 @@ fn tab_list_scenarios() {
     tab_click_activates(&app, &driver, &log);
     tab_close_middle_click(&app, &driver, &log);
     tab_drag_emits_tab_moved(&app, &driver, &log);
+    drag_survives_an_in_place_rerender(&app, &driver);
     tab_scroll_reaches_scroller(&app, &driver);
 }

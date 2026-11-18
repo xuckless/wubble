@@ -1,7 +1,9 @@
-// The resize zones of the frameless window: edge strips 7 px and corner squares 16 px, as in the
-// design repo's desktop.tsx (`WIN.edge`, `WIN.corner`; owner's own code, xuckless/the-wallpaper-project
-// @ 6c840da). A press reports the edge and the host hands the grab to the compositor
-// (xdg_toplevel.resize on Wayland). The corners come last, so they win over the strips.
+// The frameless window's own frame: resize zones and the bare chrome that moves the window.
+// The zones are the design repo's browser.css `.wb-edge` (owner's own code,
+// xuckless/the-wallpaper-project @ 6c840da): 10 px strips and 20 px corners centred on the
+// window's border, so 5 px and 10 px of them are inside it; a native window has nothing outside,
+// so only the inside half is kept. A press reports the edge and the host hands the grab to the
+// compositor (xdg_toplevel.resize on Wayland). The corners come last, so they win over the strips.
 
 import { Shell } from "../app-tokens.slint";
 import { WindowEdge } from "model.slint";
@@ -17,10 +19,38 @@ component Zone inherits TouchArea {
     }
 }
 
+// Bare chrome (the design's `wb-frame-drag` and `wb-side-top`, desktop.tsx `dragStart` and
+// `toggleMax`): a drag moves the window, a double-click maximises it. The compositor does the move
+// (winit `drag_window`, xdg_toplevel.move on Wayland), so only its start is reported, once the
+// pointer has left the press by `Shell.move-threshold` (a click stays a click).
+export component MoveArea inherits TouchArea {
+    callback begin-move();
+    callback toggle-maximise();
+    property <bool> armed;
+    pointer-event(event) => {
+        if event.kind == PointerEventKind.down {
+            self.armed = event.button == PointerEventButton.left;
+        } else if event.kind != PointerEventKind.move {
+            self.armed = false;
+        }
+    }
+    moved => {
+        if self.armed && (abs(self.mouse-x - self.pressed-x) > Shell.move-threshold || abs(self.mouse-y - self.pressed-y) > Shell.move-threshold) {
+            self.armed = false;
+            root.begin-move();
+        }
+    }
+    double-clicked => {
+        root.toggle-maximise();
+    }
+}
+
 export component WindowEdges inherits Rectangle {
     // Invisible means no zones: nothing to press in a full-screen or maximised window.
     in property <bool> resizable: true;
     callback begin(WindowEdge);
+    // The pointer rests on the west strip (a hidden sidebar peeks from there too).
+    out property <bool> west-hovered: false;
 
     property <length> e: Shell.edge-width;
     property <length> c: Shell.edge-corner;
@@ -46,6 +76,11 @@ export component WindowEdges inherits Rectangle {
         height: z.h;
         begin(which) => {
             root.begin(which);
+        }
+        changed has-hover => {
+            if z.edge == WindowEdge.w {
+                root.west-hovered = self.has-hover;
+            }
         }
     }
 }

@@ -10,6 +10,7 @@ import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
 import { GlassTier, GlassKeys, TabItem } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Wobble } from "wobble.slint";
 
 export component FavGrid inherits Rectangle {
     in property <[TabItem]> tabs;
@@ -27,7 +28,9 @@ export component FavGrid inherits Rectangle {
 
     height: max(0px, root.rows * (root.tile-h + root.gap) - root.gap);
 
-    for tab[i] in root.tabs: GlassPanel {
+    for tab[i] in root.tabs: tile := GlassPanel {
+        // chrome.tsx `Fav`: each click wobbles the icon once more
+        property <bool> hit: false;
         x: root.compact ? (root.width - root.tile-w) / 2 : mod(i, root.cols) * (root.tile-w + root.gap);
         y: floor(i / root.cols) * (root.tile-h + root.gap);
         width: root.tile-w;
@@ -51,6 +54,7 @@ export component FavGrid inherits Rectangle {
 
         ta := TouchArea {
             clicked => {
+                tile.hit = !tile.hit;
                 root.activated(tab.id);
             }
         }
@@ -66,15 +70,18 @@ export component FavGrid inherits Rectangle {
                 duration: Shell.fav-hover-ms;
                 easing: Motion.easeSpring;
             }
-            if tab.favicon.width > 0: Image {
-                source: tab.favicon;
-                width: parent.width;
-                height: parent.height;
-            }
-            if tab.favicon.width == 0: Icon {
-                path: IconPaths.globe;
-                size: Shell.fav-icon;
-                tint: tab.id == root.active-tab-id ? Palette.ink : Palette.mist;
+            Wobble {
+                hit: tile.hit;
+                if tab.favicon.width > 0: Image {
+                    source: tab.favicon;
+                    width: parent.width;
+                    height: parent.height;
+                }
+                if tab.favicon.width == 0: Icon {
+                    path: IconPaths.globe;
+                    size: Shell.fav-icon;
+                    tint: tab.id == root.active-tab-id ? Palette.ink : Palette.mist;
+                }
             }
         }
     }

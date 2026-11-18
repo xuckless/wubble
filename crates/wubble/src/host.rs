@@ -531,6 +531,8 @@ impl Host {
             &self.favicons,
         );
         self.render_surfaces(&window);
+        let page = self.view().map(|view| view.nav().page.clone());
+        crate::bind::render_history(&window, page.as_ref());
     }
 
     /// Shows `icon` on `tab`'s row if it is still its page's icon (a late image of the previous
@@ -1341,11 +1343,18 @@ impl Host {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
             }
-            // A press anywhere sends a wave through the scene (the page gets it too).
+            // A press anywhere sends a wave through the scene (the page gets it too). Raw, so
+            // the side buttons navigate over the shell too.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
+                button,
                 ..
-            } => self.glass.borrow_mut().tap(),
+            } => {
+                self.glass.borrow_mut().tap();
+                if let Some(action) = input::button_action(*button) {
+                    self.perform(action);
+                }
+            }
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
                 self.sync_focus(&window);

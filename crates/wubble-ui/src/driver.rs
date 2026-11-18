@@ -31,7 +31,7 @@ use wubble_core::seam::{self, INSET, SEAM, Seam};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::GlassRegistry;
-use crate::{AppWindow, GlassItem, GlassLayer, Radius, SidebarMode};
+use crate::{AppWindow, GlassItem, GlassLayer, Radius, SidebarMode, sync};
 
 impl From<seam::SidebarMode> for SidebarMode {
     fn from(m: seam::SidebarMode) -> Self {
@@ -103,20 +103,6 @@ fn index(i: i32) -> usize {
 
 fn slint_index(i: Option<usize>) -> i32 {
     i.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1)
-}
-
-/// Write a frame's values into a model, resizing it only when the row count changed
-/// (the port's `sync`).
-fn sync(m: &VecModel<f32>, v: Vec<f32>) {
-    if m.row_count() != v.len() {
-        m.set_vec(v);
-        return;
-    }
-    for (i, x) in v.into_iter().enumerate() {
-        if m.row_data(i) != Some(x) {
-            m.set_row_data(i, x);
-        }
-    }
 }
 
 impl Driver {
@@ -452,7 +438,8 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
 /// rendering notifier. On every frame, after the driver's step, `hook` gets the window, the
 /// frame time and the glass list when it changed (back to front); `after_rendering` runs after
 /// each render (the host's frame measurement and begin-frame pacing). Returns the registry,
-/// the list's one owner, for readers outside the frame (the pixel smoke).
+/// the list's one owner, for readers outside the frame (the pixel smoke). The notifier also tells
+/// [`crate::window`] when the native window exists.
 pub fn install(
     window: &AppWindow,
     seam: Seam,
@@ -466,6 +453,12 @@ pub fn install(
     window
         .window()
         .set_rendering_notifier(move |state, _api| match state {
+            // The first frame: the native window exists now.
+            slint::RenderingState::RenderingSetup => {
+                if let Some(window) = weak.upgrade() {
+                    crate::window::native_window_ready(&window);
+                }
+            }
             slint::RenderingState::BeforeRendering => {
                 let Some(window) = weak.upgrade() else {
                     return;

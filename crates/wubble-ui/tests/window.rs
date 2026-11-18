@@ -50,13 +50,14 @@ fn edges(app: &AppWindow) {
         (w - 3.0, h / 2.0, WindowEdge::E),
         (w / 2.0, 3.0, WindowEdge::N),
         (w / 2.0, h - 3.0, WindowEdge::S),
-        // A press in the 16 px corner square gives the corner, not the strip under it.
+        // A press in the 10 px corner square gives the corner, not the strip under it.
         (3.0, 3.0, WindowEdge::Nw),
-        (12.0, 3.0, WindowEdge::Nw),
+        (8.0, 3.0, WindowEdge::Nw),
         (w - 3.0, 3.0, WindowEdge::Ne),
         (3.0, h - 3.0, WindowEdge::Sw),
         (w - 3.0, h - 3.0, WindowEdge::Se),
-        (20.0, 3.0, WindowEdge::N),
+        (12.0, 3.0, WindowEdge::N),
+        (w / 2.0, 2.0, WindowEdge::N),
     ];
     for (x, y, _) in table {
         click(app, x, y);
@@ -94,6 +95,59 @@ fn edges(app: &AppWindow) {
     assert!(app.get_window_resizable());
 }
 
+fn drag(app: &AppWindow, x: f32, y: f32, dx: f32) {
+    let w = app.window();
+    let button = PointerEventButton::Left;
+    let at = |x: f32| LogicalPosition::new(x, y);
+    w.dispatch_event(WindowEvent::PointerMoved { position: at(x) });
+    w.dispatch_event(WindowEvent::PointerPressed {
+        position: at(x),
+        button,
+    });
+    mock_elapsed_time(Duration::from_millis(1));
+    w.dispatch_event(WindowEvent::PointerMoved {
+        position: at(x + dx),
+    });
+    mock_elapsed_time(Duration::from_millis(1));
+    w.dispatch_event(WindowEvent::PointerReleased {
+        position: at(x + dx),
+        button,
+    });
+    // Far from the last press, so the next one is no double-click.
+    mock_elapsed_time(Duration::from_millis(1000));
+}
+
+/// Bare chrome moves the window once a press travels; the thin top strip still resizes.
+fn moving(app: &AppWindow) {
+    let size = app.window().size().to_logical(app.window().scale_factor());
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let l = log.clone();
+    app.on_window_begin_move(move || l.borrow_mut().push("move"));
+    let l = log.clone();
+    app.on_window_begin_resize(move |_| l.borrow_mut().push("resize"));
+    let l = log.clone();
+    app.on_window_toggle_maximise_requested(move || l.borrow_mut().push("maximise"));
+    // The top gutter over the page, below the 5 px resize strip.
+    drag(app, size.width / 2.0, 6.0, 20.0);
+    assert_eq!(*log.borrow(), ["move"]);
+    // The sidebar's glass beside the lights, inside its padding.
+    log.borrow_mut().clear();
+    drag(app, 120.0, 10.0, 20.0);
+    assert_eq!(*log.borrow(), ["move"]);
+    // A press that does not travel is a click, not a move.
+    log.borrow_mut().clear();
+    drag(app, 120.0, 10.0, 2.0);
+    assert!(log.borrow().is_empty());
+    // At the very top it resizes.
+    drag(app, size.width / 2.0, 2.0, 20.0);
+    assert_eq!(*log.borrow(), ["resize"]);
+    // A double-click on bare chrome maximises.
+    log.borrow_mut().clear();
+    click(app, size.width / 2.0, 6.0);
+    click(app, size.width / 2.0, 6.0);
+    assert_eq!(*log.borrow(), ["maximise"]);
+}
+
 fn loading(app: &AppWindow) {
     assert_eq!(app.get_address_sheen(), 0.0);
     app.set_address_loading(true);
@@ -115,5 +169,6 @@ fn window_frame() {
     mock_elapsed_time(Duration::from_millis(1));
     lights(&app);
     edges(&app);
+    moving(&app);
     loading(&app);
 }

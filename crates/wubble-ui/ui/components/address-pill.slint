@@ -9,6 +9,7 @@ import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton } from "../components.slint";
 import { GlassTier, GlassKeys } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { GlowRing } from "glow-ring.slint";
 
 export component AddressPill inherits Rectangle {
     in property <string> host;
@@ -18,20 +19,19 @@ export component AddressPill inherits Rectangle {
     in property <bool> over-wgpu: false;
     // A page is loading. The design's border beam (chrome.tsx `Address`) is the scene's
     // (`set_beam` on this pill's glass rect, `lap_beam` when loading starts); this is its Slint
-    // fallback, used wherever the scene does not draw this pill (no scene, or the hidden
-    // sidebar's peek): a sheen that sweeps the pill every 1.5 s and fades over 1.5 s once
-    // loading ends.
+    // fallback (GlowRing), used wherever the scene does not draw this pill (no scene, or the
+    // hidden sidebar's peek): the ring, and a sheen that sweeps the pill every 1.5 s, fading
+    // over 1.5 s once loading ends.
     in property <bool> loading: false;
-    // Beam strength: up in 120 ms, down over 1500 ms; the sheen shows its square (lingering tail).
+    // Beam strength: up in 120 ms, down over 1500 ms; the ring shows it, the sheen its square.
     property <float> strength: root.loading ? 1 : 0;
     animate strength {
         duration: root.loading ? Shell.beam-in : Shell.beam-ms;
         easing: Motion.easeOut;
     }
-    // The sweep runs on the animation clock and only while the sheen is drawn (the element below
-    // exists only then), so an idle shell requests no frames; it keeps going through the fade.
-    property <float> phase: Math.mod(animation-tick() / Shell.beam-ms, 1);
-    out property <float> sheen: root.over-wgpu ? 0 : root.strength * root.strength;
+    // The Slint fallback's strength: nothing where the scene draws the beam.
+    property <float> glow: root.over-wgpu ? 0 : root.strength;
+    out property <float> sheen: root.glow * root.glow;
     callback activated();
 
     height: Chrome.address;
@@ -62,15 +62,9 @@ export component AddressPill inherits Rectangle {
             }
         }
 
-        if root.sheen > 0: Rectangle {
-            border-radius: Shell.control-radius;
-            clip: true;
-            opacity: root.sheen;
-            Rectangle {
-                width: parent.width * 0.35;
-                x: -self.width + (parent.width + self.width) * root.phase;
-                background: @linear-gradient(100deg, transparent 0%, Shell.beam-sheen 50%, transparent 100%);
-            }
+        GlowRing {
+            radius: Shell.control-radius;
+            strength: root.glow;
         }
 
         HorizontalLayout {

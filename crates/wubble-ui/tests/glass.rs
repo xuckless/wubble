@@ -133,7 +133,12 @@ fn glass_panels_report_their_items() {
     assert!(!item(&seen, sidebar).present);
     app.set_peek(true);
     pump(1000);
-    assert!(near(item(&seen, address).x, pill.x), "back with the peek");
+    // The floating peek panel pads 10 on the left where the sidebar pads 6 (browser.css
+    // .wb-side-peek, .wb-side).
+    assert!(
+        near(item(&seen, address).x, pill.x + 4.0),
+        "back with the peek"
+    );
     // The scene draws no beam over the peek, so the pill's loading shows as the Slint sheen.
     app.set_address_loading(true);
     pump(200);

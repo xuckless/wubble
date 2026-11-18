@@ -7,16 +7,23 @@ export global Shell {
     // One logical pixel: divide a length by it to get a plain number.
     out property <length> px: 1px;
     // demo.slint preferred size
-    // desktop.tsx WIN: resize edge strips 7, corner squares 16
-    out property <length> edge-width: 7px;
-    out property <length> edge-corner: 16px;
+    // browser.css .wb-edge: strips 10 and corners 20, centred on the border (the inside half)
+    out property <length> edge-width: 5px;
+    out property <length> edge-corner: 10px;
+    // .wb-nav: gap 2, pulled 4 right; .wb-ib: 30 square, radius 9, white 7 % on hover, 35 % disabled
+    out property <length> nav-gap: 2px;
+    out property <length> nav-pull: 4px;
+    out property <length> icon-button: 30px;
+    out property <length> icon-button-radius: 9px;
+    out property <color> icon-button-hover: rgba(255, 255, 255, 0.07);
+    out property <float> icon-button-disabled: 0.35;
+    out property <duration> icon-button-ms: 150ms;   // .wb-ib transition: color .15s
+    // wubble.css wb-wob: the icon wobble on a hit
+    out property <duration> wobble-ms: 550ms;
+    // how far a press on bare chrome travels before it moves the window
+    out property <length> move-threshold: 4px;
     // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
     out property <length> side-top: 30px;
-    // .wb-ib (the sidebar button in .wb-nav): 30 square (Chrome.controls), radius 9, white 7%
-    // on hover; .wb-side-top margin-right -4
-    out property <length> nav-radius: 9px;
-    out property <color> nav-hover: rgba(255, 255, 255, 0.07);
-    out property <length> nav-outset: 4px;
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
     out property <duration> light-fill-ms: 200ms;
     out property <duration> light-glyph-ms: 150ms;
@@ -32,6 +39,15 @@ export global Shell {
     // chrome.tsx Address border beam: 1500 ms, brightens in 120 ms
     out property <duration> beam-ms: 1500ms;
     out property <duration> beam-in: 120ms;
+    // the ring's width: GlassPanel's film rim (1.5)
+    out property <length> glow-width: 1.5px;
+    // browser.css .wb-side-peek: padding 10 8 10 10 (the extended sidebar's is side-pad, 6)
+    out property <length> peek-pad-start: 10px;
+    out property <length> peek-pad-end: 8px;
+    out property <length> peek-pad-y: 10px;
+    // Stand-in for the backdrop blur (.wb-thick: blur 44) while the wgpu pass is not under the
+    // panel: thick glass over the page at .94, so the page cannot be read through the text.
+    out property <color> thick-unblurred-fill: rgba(28, 31, 40, 0.94);
     out property <length> window-width: 1280px;
     out property <length> window-height: 800px;
 

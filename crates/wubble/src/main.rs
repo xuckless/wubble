@@ -664,6 +664,11 @@ fn connect_shell(window: &AppWindow) {
             with_host(|host| host.toggle_mute(tab));
         }
     });
+    // The sidebar's buttons name their action; it runs like its shortcut.
+    window.on_shell_action(|id| match wubble_core::action::Action::from_id(&id) {
+        Some(action) => with_host(|host| host.perform(action)),
+        None => eprintln!("wubble: the shell asked for an unknown action {id:?}"),
+    });
 }
 
 /// Hands the page's own UI (menu, dialog sheet, find bar) to the host.
