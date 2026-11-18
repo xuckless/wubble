@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+wubble-core = { path = "crates/wubble-core" }
+wubble-engine = { path = "crates/wubble-engine" }
+wubble-gfx = { path = "crates/wubble-gfx" }
+wubble-ui = { path = "crates/wubble-ui" }
+
+# All three must agree on the wgpu major (currently 30).
+slint = { version = "1.19", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "accessibility",
+    "backend-winit",
+    "renderer-femtovg-wgpu",
+    "unstable-wgpu-30",
+] }
+slint-build = "1.19"
+wgpu = "30"
+welding = { version = "0.15", features = ["cef-runtime"] }
+# Pinned by welding 0.15 (cef ^154.5); only one cef-dll-sys may be linked. Bump together.
+cef = "154.5"
+serde_json = "1"
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

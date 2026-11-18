@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wubble tokens</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#7CC8FF}a:hover{color:#B8E2FF}
+.wg{position:relative;isolation:isolate}
+.wg::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,0) 42%)}
+.wg-film::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;pointer-events:none;background:conic-gradient(from 210deg,#7CC8FF,#B8A6FF,#FF9ED8,#8AF2D0,#7CC8FF);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.7}
+.mono{font-family:'Geist Mono',monospace}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1360px; box-sizing: border-box; padding: 64px 72px; background: #08090D; color: #F2F4FA; font-family: Geist, system-ui, sans-serif; display: flex; flex-direction: column; gap: 40px; overflow: hidden">
+
+<header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px">
+<h1 style="margin: 0; font-family: Fredoka, sans-serif; font-weight: 600; font-size: 56px; line-height: 1">Glass, shape, motion</h1>
+<p style="margin: 0; font-size: 14px; color: #A3A9B8; max-width: 34em; text-align: right">One recipe on macOS, Windows, Linux and mobile. Wubble draws its own glass instead of asking the OS for it, so it looks the same everywhere.</p>
+</header>
+
+<section style="display: flex; gap: 28px; height: 430px">
+<div style="position: relative; flex: 1 1 0; min-width: 0; border-radius: 28px; overflow: hidden; background: #0C0E14">
+<div aria-hidden="true" style="position: absolute; left: 40px; top: 60px; width: 260px; height: 260px; border-radius: 50%; background: #3B6FD8; filter: blur(6px); opacity: .85"></div>
+<div aria-hidden="true" style="position: absolute; left: 300px; top: 180px; width: 220px; height: 220px; border-radius: 50%; background: #C25596; filter: blur(4px); opacity: .8"></div>
+<div aria-hidden="true" style="position: absolute; left: 560px; top: 30px; width: 200px; height: 200px; border-radius: 50%; background: #2E9C80; filter: blur(5px); opacity: .8"></div>
+<div aria-hidden="true" style="position: absolute; left: 200px; top: 8px; width: 90px; height: 90px; border-radius: 50%; background: #8E7BE6"></div>
+<div aria-hidden="true" style="position: absolute; left: 640px; top: 300px; width: 110px; height: 110px; border-radius: 50%; background: #E9B45A; opacity: .75"></div>
+<div style="position: absolute; inset: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; padding: 44px 32px; align-items: center">
+<div class="wg" style="height: 250px; border-radius: 22px; padding: 22px; box-sizing: border-box; background: rgba(255,255,255,.08); backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%); box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.07), 0 10px 24px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 8px">
+<b style="font-size: 17px; font-weight: 600">Thin</b>
+<span style="font-size: 13px; color: #E2E5EE">Tooltips, chips, URL pill</span>
+<span class="mono" style="margin-top: auto; font-size: 12px; line-height: 1.6; color: #E2E5EE">blur 16 · sat 160%<br>fill white 8%<br>shadow 10 / 24</span>
+</div>
+<div class="wg" style="height: 250px; border-radius: 22px; padding: 22px; box-sizing: border-box; background: rgba(22,25,33,.42); backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%); box-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 0 0 1px rgba(255,255,255,.07), 0 18px 40px rgba(0,0,0,.45); display: flex; flex-direction: column; gap: 8px">
+<b style="font-size: 17px; font-weight: 600">Regular</b>
+<span style="font-size: 13px; color: #E2E5EE">Sidebar, toolbar, dock</span>
+<span class="mono" style="margin-top: auto; font-size: 12px; line-height: 1.6; color: #E2E5EE">blur 30 · sat 180%<br>fill #161921 42% + Space tint<br>shadow 18 / 40</span>
+</div>
+<div class="wg wg-film" style="height: 250px; border-radius: 22px; padding: 22px; box-sizing: border-box; background: rgba(28,31,40,.64); backdrop-filter: blur(44px) saturate(200%); -webkit-backdrop-filter: blur(44px) saturate(200%); box-shadow: inset 0 1px 0 rgba(255,255,255,.24), inset 0 0 0 1px rgba(255,255,255,.08), 0 24px 60px rgba(0,0,0,.55); display: flex; flex-direction: column; gap: 8px">
+<b style="font-size: 17px; font-weight: 600">Thick</b>
+<span style="font-size: 13px; color: #E2E5EE">Menus, popovers, command bar</span>
+<span class="mono" style="margin-top: auto; font-size: 12px; line-height: 1.6; color: #E2E5EE">blur 44 · sat 200%<br>fill #1C1F28 64%<br>shadow 24 / 60 · film rim on</span>
+</div>
+</div>
+</div>
+<div style="width: 360px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: #7E8496">Glass, layer by layer</h2>
+<ol style="margin: 0; padding: 0 0 0 20px; display: flex; flex-direction: column; gap: 11px; font-size: 14px; color: #DADDE6; line-height: 1.45">
+<li><b style="font-weight: 600; color: #F2F4FA">Backdrop</b>: blur, then saturate whatever sits behind.</li>
+<li><b style="font-weight: 600; color: #F2F4FA">Tint</b>: the tier's fill, plus the Space colour at 10% on sidebar glass.</li>
+<li><b style="font-weight: 600; color: #F2F4FA">Specular</b>: white 10% to 0 across the top 42%.</li>
+<li><b style="font-weight: 600; color: #F2F4FA">Rim</b>: 1 px inner highlight (white 22% top, 7% all round).</li>
+<li><b style="font-weight: 600; color: #F2F4FA">Film rim</b>: 1.5 px soap-film ring. Only on hover, press, drag and focus, so the sheen reads as touch.</li>
+<li><b style="font-weight: 600; color: #F2F4FA">Shadow</b>: soft drop, grows with tier.</li>
+</ol>
+<p style="margin: 0; font-size: 13px; color: #A3A9B8; line-height: 1.5">Light theme keeps the layers and flips the fills: white 55 / 68 / 80%, ink #11131A, Sky deepens to #1E6BD6 for 4.7:1 text.</p>
+</div>
+</section>
+
+<section style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px">
+<div style="display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: #7E8496">Radius</h2>
+<div style="display: flex; align-items: flex-end; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 56px; height: 56px; border-radius: 6px; background: #1A1D26; box-shadow: inset 0 0 0 1px #2A2F3B"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">6 xs</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 56px; height: 56px; border-radius: 10px; background: #1A1D26; box-shadow: inset 0 0 0 1px #2A2F3B"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">10 sm</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 56px; height: 56px; border-radius: 14px; background: #1A1D26; box-shadow: inset 0 0 0 1px #2A2F3B"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">14 md</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 56px; height: 56px; border-radius: 20px; background: #1A1D26; box-shadow: inset 0 0 0 1px #2A2F3B"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">20 lg</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 56px; height: 56px; border-radius: 28px; background: #1A1D26; box-shadow: inset 0 0 0 1px #2A2F3B"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">28 xl</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 96px; height: 56px; border-radius: 999px; background: #1A1D26; box-shadow: inset 0 0 0 1px #2A2F3B"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">pill</span></div>
+</div>
+<span style="font-size: 13px; color: #A3A9B8">Tabs and buttons 10, cards and the web view 14, sidebar and popovers 20, window 22. Nested corners subtract the padding.</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: #7E8496">Spacing, 4 pt</h2>
+<div style="display: flex; align-items: flex-end; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 4px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">4</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 8px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">8</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 12px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">12</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 16px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">16</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 24px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">24</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 32px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">32</span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; align-items: center"><div style="width: 48px; height: 56px; border-radius: 2px; background: #7CC8FF"></div><span class="mono" style="font-size: 11px; color: #A3A9B8">48</span></div>
+</div>
+<span style="font-size: 13px; color: #A3A9B8">Sidebar padding 12, tab row 36 high (44 on touch), gap between glass and web view 8.</span>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 13px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: #7E8496">Motion, carried over from Ultra Reactivate</h2>
+<div style="display: flex; gap: 28px">
+<div style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; border-radius: 22px; background: #11131A; padding: 8px 22px">
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Follow spring</b><span class="mono" style="color: #7CC8FF">k 300 · c 15</span><span style="color: #A3A9B8">Values settling: slider, tab indicator, toggle travel</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Stretch spring</b><span class="mono" style="color: #7CC8FF">k 700 · c 24</span><span style="color: #A3A9B8">Up to +55% along travel at 1500 px/s; cross axis 1/√s keeps volume</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Seam string</b><span class="mono" style="color: #7CC8FF">150/20 held · 260/24 · 520/9</span><span style="color: #A3A9B8">Room to play seam: width lags the pointer, the string bends (band 70) and wobbles straight; contents follow at 210/21</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Rubber band</b><span class="mono" style="color: #7CC8FF">k·(1 − 1/(|d|/k + 1))</span><span style="color: #A3A9B8">k 26 px on controls, 34 px on seam widths and scroll ends</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Press</b><span class="mono" style="color: #7CC8FF">0.97 · 200 ms</span><span style="color: #A3A9B8">Every button, skipped where physics owns the transform</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Squash</b><span class="mono" style="color: #7CC8FF">500 ms · 1.30×0.78 → 0.93×1.07</span><span style="color: #A3A9B8">Toggle knob landing, then 1.03×0.98 and rest</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #1F232D"><b style="font-weight: 600">Wobble</b><span class="mono" style="color: #7CC8FF">550 ms · −14° → 9° → −4°</span><span style="color: #A3A9B8">Icon hit in the toolbar and dock</span></div>
+<div style="display: grid; grid-template-columns: 128px 250px minmax(0, 1fr); gap: 16px; padding: 12px 0; font-size: 13px"><b style="font-weight: 600">Overlap</b><span class="mono" style="color: #7CC8FF">in 240 · out 190 ms</span><span style="color: #A3A9B8">Blur 4 px, shift 7 px. Rows stagger 30 ms, modal contents 60 / 120 ms, ticks 70 ms</span></div>
+</div>
+<div style="width: 470px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+<figure style="margin: 0; border-radius: 22px; background: #11131A; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+<svg width="100%" height="96" viewBox="0 -24 120 130" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Ease curve"><path d="M10 100H110M10 100V30" stroke="#2A2F3B" stroke-width="1" fill="none"></path><path d="M10 100C32 30 46 30 110 30" stroke="#7CC8FF" stroke-width="3" fill="none" stroke-linecap="round"></path></svg>
+<figcaption style="font-size: 12px; color: #A3A9B8">ease <span class="mono">.22, 1, .36, 1</span></figcaption>
+</figure>
+<figure style="margin: 0; border-radius: 22px; background: #11131A; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+<svg width="100%" height="96" viewBox="0 -24 120 130" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Spring curve"><path d="M10 100H110M10 100V30M10 30H110" stroke="#2A2F3B" stroke-width="1" fill="none" stroke-dasharray="0"></path><path d="M10 100C40 -8 60 30 110 30" stroke="#FF9ED8" stroke-width="3" fill="none" stroke-linecap="round"></path></svg>
+<figcaption style="font-size: 12px; color: #A3A9B8">spring <span class="mono">.3, 1.55, .5, 1</span></figcaption>
+</figure>
+<figure style="margin: 0; border-radius: 22px; background: #11131A; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+<svg width="100%" height="96" viewBox="0 -24 120 130" preserveAspectRatio="xMidYMid meet" role="img" aria-label="In-out curve"><path d="M10 100H110M10 100V30" stroke="#2A2F3B" stroke-width="1" fill="none"></path><path d="M10 100C75 100 45 30 110 30" stroke="#B8A6FF" stroke-width="3" fill="none" stroke-linecap="round"></path></svg>
+<figcaption style="font-size: 12px; color: #A3A9B8">in-out <span class="mono">.65, 0, .35, 1</span></figcaption>
+</figure>
+<figure style="margin: 0; border-radius: 22px; background: #11131A; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px">
+<svg width="100%" height="96" viewBox="0 -4 150 64" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Rubber band curve"><path d="M10 50L60 0" stroke="#2A2F3B" stroke-width="1.5" fill="none" stroke-dasharray="3 3"></path><path d="M10 50L36 24L62 15.4L88 11L114 8.4L140 6.6" stroke="#8AF2D0" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+<figcaption style="font-size: 12px; color: #A3A9B8">rubber band, k 26</figcaption>
+</figure>
+<div style="grid-column: 1 / -1; border-radius: 22px; background: #11131A; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px">
+<b style="font-size: 13px; font-weight: 600">120 Hz budget</b>
+<span style="font-size: 12px; color: #A3A9B8; line-height: 1.5">8.33 ms a frame. Springs step semi-implicit Euler each tick, dt capped at 32 ms, rest at |v| and |x − target| under 0.02. Interruptions retarget from the current value, never restart.</span>
+</div>
+</div>
+</div>
+</section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1360}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

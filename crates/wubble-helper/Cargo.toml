@@ -1,0 +1,11 @@
+[package]
+name = "wubble-helper"
+description = "CEF subprocess entry point (renderer / GPU / utility). Must stay tiny: no Slint, no wgpu."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+cef.workspace = true

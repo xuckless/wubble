@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wubble component sheet</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#7CC8FF}a:hover{color:#B8E2FF}
+.wc button{font:inherit;color:inherit;-webkit-tap-highlight-color:transparent}
+.wc :focus-visible{outline:2px solid #7CC8FF;outline-offset:3px}
+.stage{position:relative;height:270px;border-radius:22px;overflow:hidden;background:#0C0E14;display:grid;place-items:center}
+.stage>.bb{position:absolute;border-radius:50%;pointer-events:none}
+.stage>.ct{position:relative;display:grid;place-items:center;width:100%;height:100%}
+.cap h3{margin:14px 4px 0;font-size:15px;font-weight:600}
+.cap p{margin:3px 4px 0;font-size:13px;color:#A3A9B8}
+.glass{position:relative;background:rgba(22,25,33,.42);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 0 0 1px rgba(255,255,255,.07),0 18px 40px rgba(0,0,0,.45)}
+.thin{position:relative;background:rgba(255,255,255,.08);backdrop-filter:blur(16px) saturate(160%);-webkit-backdrop-filter:blur(16px) saturate(160%);box-shadow:inset 0 1px 0 rgba(255,255,255,.2),inset 0 0 0 1px rgba(255,255,255,.06),0 10px 24px rgba(0,0,0,.35)}
+.thick{position:relative;background:rgba(28,31,40,.66);backdrop-filter:blur(44px) saturate(200%);-webkit-backdrop-filter:blur(44px) saturate(200%);box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 0 0 1px rgba(255,255,255,.08),0 24px 60px rgba(0,0,0,.55)}
+.film::before{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.5px;pointer-events:none;background:conic-gradient(from 210deg,#7CC8FF,#B8A6FF,#FF9ED8,#8AF2D0,#7CC8FF);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .2s ease-out}
+.film:hover::before,.film:focus-visible::before,.film.on::before{opacity:.75}
+
+/* slider */
+.sl-wrap{width:300px}
+.sl-label{display:flex;align-items:center;justify-content:space-between;font-size:14px;margin-bottom:6px;color:#A3A9B8}
+.sl-label output{font-variant-numeric:tabular-nums;color:#F2F4FA;font-weight:500;transition:opacity .2s ease-out,filter .2s ease-out}
+.sl-wrap.held .sl-label output{opacity:0;filter:blur(3px)}
+.sl{position:relative;height:44px;touch-action:none;cursor:grab;outline:none}
+.sl-wrap.held .sl{cursor:grabbing}
+.sl-rail,.sl-fill{position:absolute;top:50%;left:0;height:8px;margin-top:-4px;border-radius:4px}
+.sl-rail{background:rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.12)}
+.sl-fill{background:#7CC8FF}
+.sl-thumb{position:absolute;top:50%;left:0;width:26px;height:26px;border-radius:13px;background:#F2F4FA;box-shadow:0 0 0 5px rgba(124,200,255,.22),0 6px 14px rgba(0,0,0,.5)}
+.sl:focus-visible .sl-thumb{box-shadow:0 0 0 5px rgba(124,200,255,.5),0 6px 14px rgba(0,0,0,.5)}
+.sl-bub{position:absolute;left:0;bottom:calc(100% + 2px);pointer-events:none;opacity:0;transition:opacity .15s ease-in}
+.sl-wrap.held .sl-bub{opacity:1;transition:opacity .2s ease-out}
+.sl-bub b{display:block;min-width:38px;padding:3px 8px;border-radius:9px;background:#F2F4FA;color:#0B0C12;font-size:12.5px;font-weight:600;text-align:center;font-variant-numeric:tabular-nums}
+
+/* toggle */
+.tg{width:92px;height:52px;padding:5px;border:0;border-radius:26px;cursor:pointer;transition:background .3s cubic-bezier(.65,0,.35,1),transform .2s cubic-bezier(.22,1,.36,1)}
+.tg.on{background:#7CC8FF}
+.tg:active{transform:scale(.97)}
+.tg .kn{display:block;width:42px;height:42px;transform:translateX(0)}
+.tg.on .kn{transform:translateX(40px)}
+.tg.moved .kn{transition:transform .55s cubic-bezier(.3,1.55,.5,1)}
+.tg .kn i{display:block;width:100%;height:100%;border-radius:50%;background:#A3A9B8;box-shadow:0 3px 8px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.4);transition:background .3s,scale .18s cubic-bezier(.22,1,.36,1)}
+.tg.on .kn i{background:#0B0C12;box-shadow:0 3px 8px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.12)}
+.tg.sqA .kn i{animation:sqA .5s ease-out}.tg.sqB .kn i{animation:sqB .5s ease-out}
+.tg:active .kn i{scale:1.16 .88}
+@keyframes sqA{0%{transform:none}28%{transform:scale(1.3,.78)}58%{transform:scale(.93,1.07)}80%{transform:scale(1.03,.98)}100%{transform:none}}
+@keyframes sqB{0%{transform:none}28%{transform:scale(1.3,.78)}58%{transform:scale(.93,1.07)}80%{transform:scale(1.03,.98)}100%{transform:none}}
+
+/* overlap swap */
+.swA{animation:ovA .24s cubic-bezier(.22,1,.36,1) backwards}.swB{animation:ovB .24s cubic-bezier(.22,1,.36,1) backwards}
+.upA{animation:upA .3s cubic-bezier(.22,1,.36,1) backwards}.dnA{animation:dnA .3s cubic-bezier(.22,1,.36,1) backwards}
+@keyframes ovA{from{opacity:0;filter:blur(4px);transform:translateY(7px) scale(.98)}to{opacity:1;filter:none;transform:none}}
+@keyframes ovB{from{opacity:0;filter:blur(4px);transform:translateY(7px) scale(.98)}to{opacity:1;filter:none;transform:none}}
+@keyframes upA{from{opacity:0;filter:blur(3px);transform:translateY(80%)}to{opacity:1;filter:none;transform:none}}
+@keyframes dnA{from{opacity:0;filter:blur(3px);transform:translateY(-80%)}to{opacity:1;filter:none;transform:none}}
+
+/* pin (bookmark) */
+.pin{position:relative;width:104px;height:104px;border:0;border-radius:28px;display:grid;place-items:center;cursor:pointer;color:#F2F4FA;overflow:hidden;transition:transform .2s cubic-bezier(.22,1,.36,1)}
+.pin:active{transform:scale(.97)}
+.pin.tlA{animation:tiltA .6s ease-out}.pin.tlB{animation:tiltB .6s ease-out}
+.pin>svg{position:relative}
+.pin>svg path{fill:transparent;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round;transition:fill .25s ease-out,stroke .25s ease-out}
+.pin.on>svg path{fill:#FF9ED8;stroke:#FF9ED8}
+.pin.tlA>svg path{animation:bendA .62s ease-out}.pin.tlB>svg path{animation:bendB .62s ease-out}
+.rp{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.rp svg{grid-area:1/1;opacity:0;transform-origin:50% 55%}
+.rp svg path{fill:none;stroke:#A3A9B8;stroke-width:1.4;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.rp.on svg path{stroke:#FF9ED8}
+.rp.rpA svg{animation:rpA .8s linear both}.rp.rpB svg{animation:rpB .8s linear both}
+.rp svg+svg{animation-delay:90ms!important}
+@keyframes rpA{0%{opacity:.95;scale:1 1;rotate:0deg}30%{opacity:.95;scale:1.06 1.04;rotate:0deg}55%{opacity:.8;scale:1.36 1.2;rotate:-3deg}78%{opacity:.45;scale:1.78 2.02;rotate:4deg}100%{opacity:0;scale:2.7 2.2;rotate:-6deg}}
+@keyframes rpB{0%{opacity:.95;scale:1 1;rotate:0deg}30%{opacity:.95;scale:1.06 1.04;rotate:0deg}55%{opacity:.8;scale:1.36 1.2;rotate:-3deg}78%{opacity:.45;scale:1.78 2.02;rotate:4deg}100%{opacity:0;scale:2.7 2.2;rotate:-6deg}}
+@keyframes bendA{0%{d:path("M6 3 L18 3 L18 21 L12 17 L6 21 Z")}28%{d:path("M4.4 4.6 L19.6 4.6 L20 19.6 L12 13.2 L4 19.6 Z")}55%{d:path("M6.9 1.8 L17.1 1.8 L17.1 22.2 L12 18.8 L6.9 22.2 Z")}78%{d:path("M5.6 3.4 L18.4 3.4 L18.4 20.6 L12 16.2 L5.6 20.6 Z")}100%{d:path("M6 3 L18 3 L18 21 L12 17 L6 21 Z")}}
+@keyframes bendB{0%{d:path("M6 3 L18 3 L18 21 L12 17 L6 21 Z")}28%{d:path("M4.4 4.6 L19.6 4.6 L20 19.6 L12 13.2 L4 19.6 Z")}55%{d:path("M6.9 1.8 L17.1 1.8 L17.1 22.2 L12 18.8 L6.9 22.2 Z")}78%{d:path("M5.6 3.4 L18.4 3.4 L18.4 20.6 L12 16.2 L5.6 20.6 Z")}100%{d:path("M6 3 L18 3 L18 21 L12 17 L6 21 Z")}}
+@keyframes tiltA{0%{transform:none}30%{transform:perspective(500px) rotateX(16deg) scale(.96)}62%{transform:perspective(500px) rotateX(-6deg) scale(1.02)}100%{transform:none}}
+@keyframes tiltB{0%{transform:none}30%{transform:perspective(500px) rotateX(16deg) scale(.96)}62%{transform:perspective(500px) rotateX(-6deg) scale(1.02)}100%{transform:none}}
+
+/* download (publish) */
+.dl{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:10px;height:52px;padding:0 22px;border:0;border-radius:16px;background:#7CC8FF;color:#08131F;font-size:15px;font-weight:600;white-space:nowrap;cursor:pointer;overflow:visible;transition:width .45s cubic-bezier(.22,1,.36,1),background .3s,transform .2s cubic-bezier(.22,1,.36,1)}
+.dl:active{transform:scale(.97)}
+.dl.s1{background:#5FAEE8;cursor:progress}
+.dl.s2{background:#8AF2D0;color:#06140F}
+.dl .spin{animation:spin .8s linear infinite}
+.dl .tick path{stroke-dasharray:20;stroke-dashoffset:20;animation:draw .32s .07s cubic-bezier(.22,1,.36,1) forwards}
+.dl .pulse{position:absolute;inset:0;border-radius:inherit;pointer-events:none;animation:pulse .8s .3s ease-out both}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(138,242,208,.5)}100%{box-shadow:0 0 0 14px rgba(138,242,208,0)}}
+
+/* dock */
+.dock{position:relative;display:flex;gap:6px;padding:8px;border-radius:20px}
+.dock button{position:relative;width:44px;height:44px;display:grid;place-items:center;border:0;border-radius:12px;background:transparent;color:#A3A9B8;cursor:pointer;transition:color .15s}
+.dock button::before{content:"";position:absolute;inset:0;border-radius:inherit;background:rgba(255,255,255,.12);opacity:0;scale:.7;transition:opacity .12s ease-in,scale .2s ease-in}
+.dock button.hov::before{opacity:1;scale:1;transition:opacity .15s ease-out,scale .38s cubic-bezier(.3,1.55,.5,1)}
+.dock button>span{position:relative;display:grid;place-items:center;line-height:0;transition:scale .36s cubic-bezier(.3,1.55,.5,1)}
+.dock button.hov{color:#F2F4FA}
+.dock button.hov>span{scale:1.24}
+.dock button.near>span{scale:1.08}
+.dock button.danger.hov{color:#FF8F7F}
+.dock button:active>span{scale:.94;transition-duration:.12s}
+.dock button.wbA>span>svg{animation:wobA .55s ease-out}.dock button.wbB>span>svg{animation:wobB .55s ease-out}
+.tip{position:absolute;left:0;bottom:calc(100% + 10px);height:30px;padding:0 11px;box-sizing:border-box;display:grid;place-items:center;border-radius:10px;background:#F2F4FA;color:#0B0C12;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;pointer-events:none;opacity:0;transform-origin:50% 100%;transition:transform .26s cubic-bezier(.65,0,.35,1),width .26s cubic-bezier(.65,0,.35,1),opacity .14s ease-in}
+.tip.show{opacity:1;transition:transform .26s cubic-bezier(.65,0,.35,1),width .26s cubic-bezier(.65,0,.35,1),opacity .2s ease-out}
+@keyframes wobA{0%{transform:none}25%{transform:rotate(-14deg) scale(.9,1.12)}50%{transform:rotate(9deg) scale(1.06,.95)}75%{transform:rotate(-4deg)}100%{transform:none}}
+@keyframes wobB{0%{transform:none}25%{transform:rotate(-14deg) scale(.9,1.12)}50%{transform:rotate(9deg) scale(1.06,.95)}75%{transform:rotate(-4deg)}100%{transform:none}}
+
+/* segmented */
+.seg{position:relative;display:flex;padding:4px;border-radius:14px}
+.seg button{position:relative;z-index:1;width:96px;height:38px;border:0;border-radius:10px;background:transparent;color:#A3A9B8;font-size:14px;font-weight:500;cursor:pointer;transition:color .2s}
+.seg button.on{color:#0B0C12}
+.seg button:active{transform:scale(.97)}
+.seg-ind{position:absolute;top:4px;left:4px;width:96px;height:38px;border-radius:10px;background:#F2F4FA;box-shadow:0 4px 12px rgba(0,0,0,.35);pointer-events:none}
+
+/* buttons */
+.btn{position:relative;height:44px;padding:0 18px;border:0;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;transition:transform .2s cubic-bezier(.22,1,.36,1),background .15s}
+.btn:active{transform:scale(.97)}
+.btn.pri{background:#7CC8FF;color:#08131F}.btn.pri:hover{background:#95D3FF}
+.btn.gho{background:transparent;color:#DADDE6}.btn.gho:hover{background:rgba(255,255,255,.07)}
+.btn.bqA{animation:bqA .5s ease-out}.btn.bqB{animation:bqB .5s ease-out}
+@keyframes bqA{0%{transform:none}28%{transform:scale(1.08,.88)}58%{transform:scale(.97,1.04)}80%{transform:scale(1.01,.99)}100%{transform:none}}
+@keyframes bqB{0%{transform:none}28%{transform:scale(1.08,.88)}58%{transform:scale(.97,1.04)}80%{transform:scale(1.01,.99)}100%{transform:none}}
+
+/* menu */
+.menu{position:absolute;left:0;top:calc(100% + 8px);width:230px;padding:6px;box-sizing:border-box;border-radius:16px;transform-origin:12% 0;z-index:2}
+.menu.in{animation:mIn .42s cubic-bezier(.3,1.35,.5,1) both}
+.menu.out{animation:mOut .19s cubic-bezier(.65,0,.35,1) both;pointer-events:none}
+.menu.in .mr{animation:ovA .24s cubic-bezier(.22,1,.36,1) backwards}
+.mr{display:flex;align-items:center;gap:10px;width:100%;height:36px;padding:0 10px;border:0;border-radius:10px;background:transparent;color:#DADDE6;font-size:13.5px;text-align:left;cursor:pointer;transition:background .12s}
+.mr:hover,.mr:focus-visible{background:rgba(255,255,255,.09)}
+.mr.danger{color:#FF8F7F}
+.mr kbd{margin-left:auto;font-family:'Geist Mono',monospace;font-size:11.5px;color:#7E8496}
+@keyframes mIn{from{opacity:0;filter:blur(5px);transform:scale(.3,.2)}55%{opacity:1;filter:none}to{opacity:1;filter:none;transform:none}}
+@keyframes mOut{from{opacity:1;transform:none}to{opacity:0;filter:blur(4px);transform:scale(.6,.4)}}
+
+/* checks */
+.ck{display:flex;align-items:center;gap:12px;border:0;background:transparent;padding:6px 4px;color:#DADDE6;font-size:14px;cursor:pointer;text-align:left}
+.ck .bx{position:relative;width:24px;height:24px;border-radius:8px;display:grid;place-items:center;background:rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.2),inset 0 0 0 1px rgba(255,255,255,.1);transition:background .2s}
+.ck.on .bx{background:#7CC8FF;box-shadow:inset 0 1px 0 rgba(255,255,255,.4)}
+.ck .bx svg path{stroke-dasharray:20;stroke-dashoffset:20;transition:stroke-dashoffset .1s}
+.ck.on .bx svg path{stroke-dashoffset:0;transition:stroke-dashoffset .3s .07s cubic-bezier(.22,1,.36,1)}
+.ck.cqA .bx{animation:sqA .5s ease-out}.ck.cqB .bx{animation:sqB .5s ease-out}
+.ck:active .bx{scale:1.12 .9}
+@media (prefers-reduced-motion:reduce){.wc *{animation:none!important;transition:none!important}}
+</style>
+</helmet>
+<div class="wc" style="width: 1440px; height: 1280px; box-sizing: border-box; padding: 64px 72px; background: #08090D; color: #F2F4FA; font-family: Geist, system-ui, sans-serif; display: flex; flex-direction: column; gap: 40px">
+
+<header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px">
+<h1 style="margin: 0; font-family: Fredoka, sans-serif; font-weight: 600; font-size: 56px; line-height: 1">Touch everything</h1>
+<p style="margin: 0; font-size: 14px; color: #A3A9B8; max-width: 36em; text-align: right">Behaviours copied from Ultra Reactivate, re-dressed in Wubble glass. Same springs, same rubber band, same Overlap timings.</p>
+</header>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 36px 28px">
+
+<article>
+<div class="stage">
+<i class="bb" style="left: -40px; top: 40px; width: 220px; height: 220px; background: #2F5FC4; filter: blur(24px); opacity: .7"></i>
+<i class="bb" style="right: -30px; top: -50px; width: 170px; height: 170px; background: #8E3C74; filter: blur(24px); opacity: .6"></i>
+<div class="ct">
+<div class="sl-wrap {{slHeld}}">
+<div class="sl-label"><span style="display: flex; align-items: center; gap: 8px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10h4l5-4v12l-5-4H3zM16 8q5 4 0 8"></path></svg>Tab volume</span><output>{{vol}}</output></div>
+<div class="sl" role="slider" tabIndex="0" aria-label="Tab volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{vol}}" onPointerDown="{{slDown}}" onPointerMove="{{slMove}}" onPointerUp="{{slUp}}" onPointerCancel="{{slUp}}" onKeyDown="{{slKey}}">
+<span class="sl-rail" style="left: {{railL}}px; width: {{railW}}px"></span>
+<span class="sl-fill" style="width: {{fillW}}px"></span>
+<span class="sl-thumb" style="transform: {{thumbT}}; transform-origin: {{thumbO}}"></span>
+<span class="sl-bub" aria-hidden="true" style="transform: {{bubT}}"><b>{{vol}}</b></span>
+</div>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Elastic slider</h3><p>The knob stretches with speed and rubber-bands past both ends.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: 60px; bottom: -70px; width: 220px; height: 220px; background: #237E69; filter: blur(24px); opacity: .65"></i>
+<i class="bb" style="right: 30px; top: 20px; width: 120px; height: 120px; background: #7563D8; filter: blur(10px); opacity: .7"></i>
+<div class="ct">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 20px">
+<button class="tg thin {{tgCls}}" role="switch" aria-checked="{{tgAria}}" aria-label="Block trackers" onClick="{{tgClick}}"><span class="kn"><i></i></span></button>
+<span class="{{tgSw}}" style="display: inline-block; font-size: 14px; color: #A3A9B8">{{tgLabel}}</span>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Toggle</h3><p>The knob squashes on press and overshoots on its way across.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: 20px; top: -40px; width: 180px; height: 180px; background: #A84886; filter: blur(24px); opacity: .6"></i>
+<i class="bb" style="right: -40px; bottom: -40px; width: 200px; height: 200px; background: #2F5FC4; filter: blur(24px); opacity: .6"></i>
+<div class="ct">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 16px">
+<button class="pin glass {{pinCls}}" aria-label="Pin tab" aria-pressed="{{pinAria}}" onClick="{{pinClick}}">
+<span class="rp {{rpCls}}" aria-hidden="true"><svg width="46" height="46" viewBox="0 0 24 24"><path d="M6 3 L18 3 L18 21 L12 17 L6 21 Z"></path></svg><svg width="46" height="46" viewBox="0 0 24 24"><path d="M6 3 L18 3 L18 21 L12 17 L6 21 Z"></path></svg></span>
+<svg width="46" height="46" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3 L18 3 L18 21 L12 17 L6 21 Z"></path></svg>
+</button>
+<span style="display: flex; gap: 6px; font-size: 14px; color: #A3A9B8; font-variant-numeric: tabular-nums; overflow: hidden"><span class="{{pinSw}}" style="display: inline-block">{{pinLabel}}</span><span class="{{pinRoll}}" style="display: inline-block">{{pinCount}}</span></span>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Pin</h3><p>The ribbon bends, a ripple leaves it, then the count rolls.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: -30px; bottom: -60px; width: 200px; height: 200px; background: #7563D8; filter: blur(24px); opacity: .6"></i>
+<i class="bb" style="right: 10px; top: -60px; width: 200px; height: 200px; background: #237E69; filter: blur(24px); opacity: .55"></i>
+<div class="ct">
+<button class="dl {{dlCls}}" aria-busy="{{dlBusy}}" style="width: {{dlW}}px" onClick="{{dlClick}}">
+<span class="{{dlSw}}">{{dlLabel}}</span>
+<sc-if value="{{dl0}}" hint-placeholder-val="{{true}}"><svg class="{{dlSw}}" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"></path></svg></sc-if>
+<sc-if value="{{dl1}}" hint-placeholder-val="{{false}}"><svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 3a9 9 0 1 1-9 9"></path></svg></sc-if>
+<sc-if value="{{dl2}}" hint-placeholder-val="{{false}}"><svg class="tick" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg><span class="pulse" aria-hidden="true"></span></sc-if>
+</button>
+</div>
+</div>
+<div class="cap"><h3>Download button</h3><p>Width springs to each label; spinner, then a tick 70 ms after the fill.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: 40px; top: 30px; width: 180px; height: 180px; background: #2F5FC4; filter: blur(24px); opacity: .65"></i>
+<i class="bb" style="right: 40px; bottom: -40px; width: 180px; height: 180px; background: #A84886; filter: blur(24px); opacity: .55"></i>
+<div class="ct" style="padding-top: 30px; box-sizing: border-box">
+<div class="dock glass" onPointerLeave="{{dockLeave}}">
+<span class="tip {{tipShow}}" aria-hidden="true" style="transform: translateX({{tipX}}px) translateX(-50%) scale({{tipS}}); width: {{tipW}}px"><span class="{{tipSw}}">{{tipLabel}}</span></span>
+<sc-for list="{{dock}}" as="d" hint-placeholder-count="6">
+<button class="{{d.cls}}" aria-label="{{d.label}}" onPointerEnter="{{d.enter}}" onFocus="{{d.enter}}" onBlur="{{dockLeave}}" onClick="{{d.hit}}"><span><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{d.path}}"></path></svg></span></button>
+</sc-for>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Toolbar dock</h3><p>One tooltip glides and resizes between icons; neighbours swell a little.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: -50px; top: -30px; width: 200px; height: 200px; background: #237E69; filter: blur(24px); opacity: .6"></i>
+<i class="bb" style="right: -20px; bottom: -50px; width: 220px; height: 220px; background: #7563D8; filter: blur(24px); opacity: .6"></i>
+<div class="ct">
+<div class="seg thin" role="tablist" aria-label="Space">
+<span class="seg-ind" aria-hidden="true" style="transform: translateX({{sgX}}px) scale({{sgSx}}, {{sgSy}}); transform-origin: {{sgO}}"></span>
+<sc-for list="{{segs}}" as="g" hint-placeholder-count="3">
+<button role="tab" class="{{g.cls}}" aria-selected="{{g.sel}}" onClick="{{g.pick}}">{{g.label}}</button>
+</sc-for>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Space switcher</h3><p>The indicator follows on the follow spring and stretches along its travel.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: 30px; bottom: -50px; width: 200px; height: 200px; background: #A84886; filter: blur(24px); opacity: .55"></i>
+<i class="bb" style="right: -30px; top: -30px; width: 180px; height: 180px; background: #2F5FC4; filter: blur(24px); opacity: .65"></i>
+<div class="ct">
+<div style="display: flex; gap: 12px; align-items: center">
+<button class="btn pri {{bq0}}" onClick="{{b0}}">Open in Space</button>
+<button class="btn thin film {{bq1}}" onClick="{{b1}}" style="color: #F2F4FA">Split view</button>
+<button class="btn gho {{bq2}}" onClick="{{b2}}">Cancel</button>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Buttons</h3><p>Press to 0.97, release with a squash. Glass buttons light the film rim on hover.</p></div>
+</article>
+
+<article>
+<div class="stage" style="overflow: visible">
+<div style="position: absolute; inset: 0; border-radius: 22px; overflow: hidden; pointer-events: none">
+<i class="bb" style="left: 80px; top: 60px; width: 220px; height: 220px; background: #7563D8; filter: blur(24px); opacity: .6"></i>
+<i class="bb" style="right: -40px; top: -40px; width: 160px; height: 160px; background: #237E69; filter: blur(24px); opacity: .6"></i>
+</div>
+<div class="ct" style="align-items: start; justify-items: start; padding: 34px 40px; box-sizing: border-box">
+<div style="position: relative">
+<button class="btn thin film {{menuBtn}}" aria-expanded="{{menuAria}}" aria-haspopup="menu" onClick="{{menuToggle}}" style="color: #F2F4FA; display: flex; align-items: center; gap: 8px">Tab actions<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+<sc-if value="{{menuShown}}" hint-placeholder-val="{{false}}">
+<div class="menu thick film on {{menuState}}" role="menu" onKeyDown="{{menuKey}}">
+<button class="mr" role="menuitem" style="animation-delay: 60ms" onClick="{{menuClose}}">Duplicate<kbd>Ctrl D</kbd></button>
+<button class="mr" role="menuitem" style="animation-delay: 90ms" onClick="{{menuClose}}">Move to Space</button>
+<button class="mr" role="menuitem" style="animation-delay: 120ms" onClick="{{menuClose}}">Copy link<kbd>Ctrl Shift C</kbd></button>
+<button class="mr danger" role="menuitem" style="animation-delay: 150ms" onClick="{{menuClose}}">Close tab<kbd>Ctrl W</kbd></button>
+</div>
+</sc-if>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Menu</h3><p>Thick glass. The body springs from the trigger, rows follow 30 ms apart.</p></div>
+</article>
+
+<article>
+<div class="stage">
+<i class="bb" style="left: -40px; top: 60px; width: 200px; height: 200px; background: #2F5FC4; filter: blur(24px); opacity: .6"></i>
+<i class="bb" style="right: 20px; bottom: -60px; width: 200px; height: 200px; background: #237E69; filter: blur(24px); opacity: .55"></i>
+<div class="ct">
+<div class="glass" style="display: flex; flex-direction: column; gap: 2px; padding: 14px 18px; border-radius: 20px; width: 280px; box-sizing: border-box">
+<sc-for list="{{checks}}" as="c" hint-placeholder-count="3">
+<button class="{{c.cls}}" role="checkbox" aria-checked="{{c.aria}}" onClick="{{c.pick}}"><span class="bx"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#08131F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg></span>{{c.label}}</button>
+</sc-for>
+</div>
+</div>
+</div>
+<div class="cap"><h3>Checkboxes</h3><p>The box squashes as it fills; the tick draws in 70 ms behind it.</p></div>
+</article>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1280}}'>
+var DOCK = [
+  ['Back', 'M15 5l-7 7 7 7'],
+  ['Forward', 'M9 5l7 7-7 7'],
+  ['Reload', 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4.5H15'],
+  ['Share', 'M12 15V4m-5 5 5-5 5 5M5 13v7h14v-7'],
+  ['Split view', 'M4 5h16v14H4zM12 5v14'],
+  ['Close tab', 'M6 6l12 12M18 6 6 18']
+];
+var SEGS = ['Personal', 'Work', 'Study'];
+var CHECKS = ['Block trackers', 'Open links in a peek', 'Sync Spaces'];
+var DLW = [150, 178, 152];
+var DLL = ['Download', 'Downloading', 'Saved'];
+function band(d, k) { return Math.sign(d) * k * (1 - 1 / (Math.abs(d) / k + 1)); }
+function bandClamp(v, a, b, k) { return v < a ? a + band(v - a, k) : v > b ? b + band(v - b, k) : v; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function springStep(s, target, k, c, dt) {
+  var a = -k * (s.x - target) - c * s.v;
+  s.v += a * dt; s.x += s.v * dt;
+  if (Math.abs(s.v) < 0.02 && Math.abs(s.x - target) < 0.02) { s.x = target; s.v = 0; return false; }
+  return true;
+}
+function alt(v) { return v === 'A' ? 'B' : 'A'; }
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    var W = 300;
+    this.state = {
+      vol: 64, slHeld: false, sx: 192, ssx: 1, sdir: 1,
+      seg: 0, gx: 0, gsx: 1, gdir: 1,
+      tg: true, tgPar: '', pin: false, pinPar: '', dl: 0, dlPar: '',
+      dock: -1, tipPar: 'A', dockHit: [-1, ''], bq: ['', '', ''],
+      menu: 'closed', checks: [true, false, true], ckPar: ['', '', '']
+    };
+    this.p = { W: W, x: { x: 192, v: 0 }, st: { x: 1, v: 0 }, target: 64, held: false, raw: 0, vel: 0, dir: 1, shown: 64,
+      g: { x: 0, v: 0 }, gst: { x: 1, v: 0 }, gt: 0, gvel: 0, gdir: 1, raf: 0, last: 0 };
+    var self = this;
+    this.tick = function (now) {
+      var p = self.p, dt = Math.min(0.032, (now - p.last) / 1000); p.last = now;
+      var moving = false, before = p.x.x;
+      if (p.held) { p.x.x = bandClamp(p.raw, 0, p.W, 26); p.x.v = 0; moving = true; }
+      else moving = springStep(p.x, (p.target / 100) * p.W, 300, 15, dt);
+      var inst = (p.x.x - before) / Math.max(dt, 1e-3);
+      p.vel = p.vel * 0.6 + inst * 0.4;
+      if (Math.abs(p.vel) > 30) p.dir = Math.sign(p.vel);
+      moving = springStep(p.st, 1 + Math.min(0.55, Math.abs(p.vel) / 1500), 700, 24, dt) || moving;
+      var gb = p.g.x;
+      moving = springStep(p.g, p.gt, 300, 15, dt) || moving;
+      var gi = (p.g.x - gb) / Math.max(dt, 1e-3);
+      p.gvel = p.gvel * 0.6 + gi * 0.4;
+      if (Math.abs(p.gvel) > 30) p.gdir = Math.sign(p.gvel);
+      moving = springStep(p.gst, 1 + Math.min(0.55, Math.abs(p.gvel) / 1500), 700, 24, dt) || moving;
+      var upd = { sx: p.x.x, ssx: p.st.x, sdir: p.dir, gx: p.g.x, gsx: p.gst.x, gdir: p.gdir };
+      if (p.held) { var v = Math.round(clamp(p.x.x, 0, p.W) / p.W * 100); if (v !== p.shown) { p.shown = v; upd.vol = v; } }
+      self.setState(upd);
+      p.raf = moving ? requestAnimationFrame(self.tick) : 0;
+    };
+    this.kick = function () { if (self.p.raf) return; self.p.last = performance.now(); self.p.raf = requestAnimationFrame(self.tick); };
+    this.go = function (v) { v = clamp(Math.round(v), 0, 100); self.p.target = v; self.p.shown = v; self.setState({ vol: v }); self.kick(); };
+    this.slDown = function (e) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      self.p.raw = e.clientX - e.currentTarget.getBoundingClientRect().left;
+      self.p.held = true; self.setState({ slHeld: true }); self.kick();
+    };
+    this.slMove = function (e) { if (self.p.held) self.p.raw = e.clientX - e.currentTarget.getBoundingClientRect().left; };
+    this.slUp = function () { if (!self.p.held) return; self.p.held = false; self.p.target = self.p.shown; self.setState({ slHeld: false }); self.kick(); };
+    this.slKey = function (e) {
+      var v = self.state.vol, s = e.shiftKey ? 10 : 1;
+      var m = { ArrowLeft: v - s, ArrowDown: v - s, ArrowRight: v + s, ArrowUp: v + s, PageDown: v - 10, PageUp: v + 10, Home: 0, End: 100 };
+      if (e.key in m) { e.preventDefault(); self.go(m[e.key]); }
+    };
+    this.pickSeg = function (i) { self.p.gt = i * 96; self.setState({ seg: i }); self.kick(); };
+    this.tgClick = function () { self.setState({ tg: !self.state.tg, tgPar: alt(self.state.tgPar) }); };
+    this.pinClick = function () { self.setState({ pin: !self.state.pin, pinPar: alt(self.state.pinPar) }); };
+    this.dlClick = function () {
+      var d = self.state.dl;
+      if (d === 1) return;
+      if (d === 2) { self.setState({ dl: 0, dlPar: alt(self.state.dlPar) }); return; }
+      self.setState({ dl: 1, dlPar: alt(self.state.dlPar) });
+      clearTimeout(self.dlT);
+      self.dlT = setTimeout(function () { self.setState({ dl: 2, dlPar: alt(self.state.dlPar) }); }, 1600);
+    };
+    this.dockLeave = function () { self.setState({ dock: -1 }); };
+    this.bump = function (i) { var b = self.state.bq.slice(); b[i] = alt(b[i]); self.setState({ bq: b }); };
+    this.menuToggle = function () {
+      var m = self.state.menu;
+      if (m === 'in') self.menuClose(); else { clearTimeout(self.mT); self.setState({ menu: 'in' }); }
+    };
+    this.menuClose = function () {
+      self.setState({ menu: 'out' });
+      clearTimeout(self.mT);
+      self.mT = setTimeout(function () { self.setState({ menu: 'closed' }); }, 190);
+    };
+    this.menuKey = function (e) { if (e.key === 'Escape') { e.stopPropagation(); self.menuClose(); } };
+    this.pickCheck = function (i) {
+      var c = self.state.checks.slice(), q = self.state.ckPar.slice();
+      c[i] = !c[i]; q[i] = alt(q[i]);
+      self.setState({ checks: c, ckPar: q });
+    };
+  }
+  componentWillUnmount() { if (this.p.raf) cancelAnimationFrame(this.p.raf); clearTimeout(this.dlT); clearTimeout(this.mT); }
+  renderVals() {
+    var st = this.state, self = this, W = this.p.W;
+    var x = st.sx, sx = st.ssx;
+    var railL = Math.min(0, x), railR = Math.max(W, x);
+    var dockItems = DOCK.map(function (d, i) {
+      var c = (st.dock === i ? ' hov' : '') + (st.dock >= 0 && Math.abs(st.dock - i) === 1 ? ' near' : '') + (i === 5 ? ' danger' : '') + (st.dockHit[0] === i && st.dockHit[1] ? ' wb' + st.dockHit[1] : '');
+      return { label: d[0], path: d[1], cls: c.trim(),
+        enter: function () { self.lastDock = i; if (self.state.dock !== i) self.setState({ dock: i, tipPar: alt(self.state.tipPar) }); },
+        hit: function () { var h = self.state.dockHit; self.setState({ dockHit: [i, h[0] === i ? alt(h[1]) : 'A'] }); } };
+    });
+    var tipLabel = st.dock >= 0 ? DOCK[st.dock][0] : '';
+    var lastDock = st.dock >= 0 ? st.dock : (this.lastDock || 0);
+    var segs = SEGS.map(function (l, i) { return { label: l, sel: i === st.seg ? 'true' : 'false', cls: i === st.seg ? 'on' : '', pick: function () { self.pickSeg(i); } }; });
+    var checks = CHECKS.map(function (l, i) {
+      return { label: l, aria: st.checks[i] ? 'true' : 'false', cls: 'ck' + (st.checks[i] ? ' on' : '') + (st.ckPar[i] ? ' cq' + st.ckPar[i] : ''), pick: function () { self.pickCheck(i); } };
+    });
+    return {
+      vol: st.vol, slHeld: st.slHeld ? 'held' : '',
+      railL: railL.toFixed(2), railW: (railR - railL).toFixed(2), fillW: Math.max(0, x).toFixed(2),
+      thumbT: 'translate(' + x.toFixed(2) + 'px,-50%) translateX(-50%) scale(' + sx.toFixed(4) + ',' + (1 / Math.sqrt(sx)).toFixed(4) + ')',
+      thumbO: st.sdir > 0 ? '70% 50%' : '30% 50%',
+      bubT: 'translateX(' + clamp(x, 0, W).toFixed(2) + 'px) translateX(-50%)',
+      slDown: this.slDown, slMove: this.slMove, slUp: this.slUp, slKey: this.slKey,
+      tgCls: (st.tg ? 'on' : '') + (st.tgPar ? ' moved sq' + st.tgPar : ''), tgAria: st.tg ? 'true' : 'false', tgClick: this.tgClick,
+      tgLabel: st.tg ? 'Trackers blocked' : 'Trackers allowed', tgSw: st.tgPar ? 'sw' + st.tgPar : '',
+      pinCls: (st.pin ? 'on' : '') + (st.pinPar ? ' tl' + st.pinPar : ''), pinAria: st.pin ? 'true' : 'false', pinClick: this.pinClick,
+      rpCls: (st.pin ? 'on' : '') + (st.pinPar ? ' rp' + st.pinPar : ''),
+      pinLabel: st.pin ? 'Pinned' : 'Pin', pinCount: st.pin ? 13 : 12,
+      pinSw: st.pinPar ? 'sw' + st.pinPar : '', pinRoll: st.pinPar ? (st.pin ? 'upA' : 'dnA') : '',
+      dlCls: 's' + st.dl, dlW: DLW[st.dl], dlLabel: DLL[st.dl], dlSw: st.dlPar ? 'sw' + st.dlPar : '', dlBusy: st.dl === 1 ? 'true' : 'false',
+      dl0: st.dl === 0, dl1: st.dl === 1, dl2: st.dl === 2, dlClick: this.dlClick,
+      dock: dockItems, dockLeave: this.dockLeave,
+      tipShow: st.dock >= 0 ? 'show' : '', tipLabel: tipLabel, tipSw: 'sw' + st.tipPar,
+      tipX: 8 + lastDock * 50 + 22, tipS: st.dock >= 0 ? 1 : 0.95, tipW: Math.round((tipLabel.length || 4) * 7.1 + 22),
+      segs: segs, sgX: st.gx.toFixed(2), sgSx: st.gsx.toFixed(4), sgSy: (1 / Math.sqrt(st.gsx)).toFixed(4), sgO: st.gdir > 0 ? '70% 50%' : '30% 50%',
+      bq0: st.bq[0] ? 'bq' + st.bq[0] : '', bq1: st.bq[1] ? 'bq' + st.bq[1] : '', bq2: st.bq[2] ? 'bq' + st.bq[2] : '',
+      b0: function () { self.bump(0); }, b1: function () { self.bump(1); }, b2: function () { self.bump(2); },
+      menuShown: st.menu !== 'closed', menuState: st.menu, menuAria: st.menu === 'in' ? 'true' : 'false', menuBtn: st.menu === 'in' ? 'on' : '',
+      menuToggle: this.menuToggle, menuClose: this.menuClose, menuKey: this.menuKey,
+      checks: checks
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+[package]
+name = "wubble-core"
+description = "Engine- and UI-agnostic browser model: tabs, spaces, sleep policy, session."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true

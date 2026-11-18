@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Room to play inspector</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#7CC8FF}a:hover{color:#B8E2FF}
+.rpw button{font:inherit;color:inherit;-webkit-tap-highlight-color:transparent}
+.rpw :focus-visible{outline:2px solid #7CC8FF;outline-offset:3px}
+.rp-win{position:relative;width:1040px;height:520px;border-radius:22px;overflow:hidden;user-select:none;-webkit-user-select:none;background:rgba(16,18,25,.42);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.2),inset 0 0 0 1px rgba(255,255,255,.07),0 30px 70px rgba(0,0,0,.55)}
+.rp-art{position:absolute;left:0;top:0;bottom:0;display:grid;place-items:center;overflow:hidden}
+.rp-toggle{position:absolute;top:14px;right:14px;z-index:2;width:36px;height:36px;display:grid;place-items:center;border:0;border-radius:11px;cursor:pointer;color:#A3A9B8;background:rgba(255,255,255,.08);backdrop-filter:blur(16px) saturate(160%);-webkit-backdrop-filter:blur(16px) saturate(160%);box-shadow:inset 0 1px 0 rgba(255,255,255,.2),inset 0 0 0 1px rgba(255,255,255,.06);transition:color .15s,transform .2s cubic-bezier(.22,1,.36,1)}
+.rp-toggle:hover{color:#F2F4FA}.rp-toggle:active{transform:scale(.97)}
+.rp-doc{position:relative;width:220px;padding:18px;box-sizing:border-box;display:flex;flex-direction:column;background:rgba(255,255,255,.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 0 0 1px rgba(255,255,255,.07),0 18px 40px rgba(0,0,0,.45);transition:transform .45s cubic-bezier(.3,1.55,.5,1),border-radius .2s,opacity .2s,gap .3s cubic-bezier(.22,1,.36,1)}
+.rp-doc i{display:block;height:124px;background:linear-gradient(135deg,rgba(124,200,255,.55),rgba(184,166,255,.5) 40%,rgba(255,158,216,.45) 70%,rgba(138,242,208,.45));transition:border-radius .2s}
+.rp-doc b{display:block;height:9px;border-radius:5px;background:rgba(255,255,255,.18)}
+.rp-doc b:nth-of-type(2){width:78%}.rp-doc b:nth-of-type(3){width:52%}
+.rp-panel{position:absolute;inset:0;background:rgba(30,33,43,.58);backdrop-filter:blur(36px) saturate(190%);-webkit-backdrop-filter:blur(36px) saturate(190%)}
+.rp-content{position:absolute;top:0;left:0;padding:22px 26px;box-sizing:border-box}
+.rp-content strong{display:block;height:20px;margin-bottom:10px;font-size:13px;font-weight:500;color:#A3A9B8}
+.scrub{display:flex;align-items:center;justify-content:space-between;gap:12px;height:38px;margin:0 -10px;padding:0 10px;border-radius:9px;font-size:14px;white-space:nowrap;cursor:ew-resize;touch-action:none;outline:none;transition:transform .5s cubic-bezier(.3,1.55,.5,1),background .15s}
+.scrub:hover{background:rgba(255,255,255,.06)}
+.scrub.on{background:rgba(255,255,255,.1);transition:background .15s}
+.scrub:focus-visible{box-shadow:inset 0 0 0 2px #7CC8FF}
+.scrub output{color:#A3A9B8;font-variant-numeric:tabular-nums;transition:color .15s}
+.scrub.on output{color:#7CC8FF}
+.rp-seam{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.rp-seam path{fill:none;stroke:rgba(255,255,255,.22);stroke-width:1.25;transition:stroke .2s}
+.rp-win.held .rp-seam path{stroke:url(#seamFilm);stroke-width:1.6}
+.rp-win.closed .rp-seam path{stroke:transparent}
+.rp-pill{position:absolute;left:0;top:0;width:7px;height:38px;pointer-events:none}
+.rp-pill i{display:block;width:100%;height:100%;border-radius:4px;background:#A3A9B8;opacity:0;scale:.5;transition:opacity .16s ease-in,scale .16s ease-in,background .15s}
+.rp-win:has(.rp-grab:hover) .rp-pill i{opacity:.8;scale:.75;transition:opacity .2s ease-out,scale .25s cubic-bezier(.3,1.55,.5,1)}
+.rp-win.held .rp-pill i,.rp-win:has(.rp-grab:focus-visible) .rp-pill i{opacity:1;scale:1;background:#7CC8FF;transition:opacity .15s ease-out,scale .3s cubic-bezier(.3,1.55,.5,1)}
+.rp-grab{position:absolute;top:0;bottom:0;left:-10px;width:20px;cursor:col-resize;touch-action:none;outline:none;border:0;padding:0;background:transparent}
+@media (prefers-reduced-motion:reduce){.rpw *{transition:none!important}}
+</style>
+</helmet>
+<div class="rpw" style="width: 1440px; height: 800px; box-sizing: border-box; padding: 64px 72px; background: #08090D; color: #F2F4FA; font-family: Geist, system-ui, sans-serif; display: flex; flex-direction: column; gap: 32px">
+
+<header style="display: flex; justify-content: space-between; align-items: flex-end; gap: 24px">
+<h1 style="margin: 0; font-family: Fredoka, sans-serif; font-weight: 600; font-size: 56px; line-height: 1">Room to play</h1>
+<p style="margin: 0; font-size: 14px; color: #A3A9B8; max-width: 38em; text-align: right">The inspector from Ultra Reactivate in Wubble glass. Grab the seam anywhere and pull: it bends like a rubber string, rubber-bands past its limits and wobbles straight on release. Drag a row sideways to scrub it.</p>
+</header>
+
+<div style="position: relative; flex: 1 1 0; border-radius: 28px; overflow: hidden; background: #0C0E14; display: grid; place-items: center">
+<i aria-hidden="true" style="position: absolute; left: 60px; top: 40px; width: 380px; height: 380px; border-radius: 50%; background: #2F5FC4; filter: blur(30px); opacity: .65"></i>
+<i aria-hidden="true" style="position: absolute; left: 520px; top: 300px; width: 300px; height: 300px; border-radius: 50%; background: #A84886; filter: blur(30px); opacity: .55"></i>
+<i aria-hidden="true" style="position: absolute; right: 80px; top: -60px; width: 340px; height: 340px; border-radius: 50%; background: #237E69; filter: blur(30px); opacity: .55"></i>
+<i aria-hidden="true" style="position: absolute; right: 260px; bottom: 30px; width: 110px; height: 110px; border-radius: 50%; background: #7563D8; opacity: .8"></i>
+
+<div class="rp-win {{winCls}}">
+<div class="rp-art" style="width: {{ax}}px">
+<button class="rp-toggle" aria-label="{{toggleLabel}}" aria-expanded="{{openAria}}" onClick="{{toggle}}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18v16H3zM15 4v16"></path></svg></button>
+<div class="rp-doc" style="transform: scale({{docScale}}); border-radius: {{docR}}px; opacity: {{docO}}; gap: {{docGap}}px; backdrop-filter: blur({{docBlur}}px) saturate(160%); -webkit-backdrop-filter: blur({{docBlur}}px) saturate(160%)">
+<i style="border-radius: {{docIR}}px"></i><b></b><b></b><b></b>
+</div>
+</div>
+
+<div class="rp-panel" style="clip-path: path('{{clip}}'); -webkit-clip-path: path('{{clip}}')">
+<div class="rp-content" style="transform: translateX({{cx}}px); width: {{cw}}px; opacity: {{co}}; pointer-events: {{cpe}}" aria-hidden="{{hiddenAria}}">
+<strong>Inspector</strong>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+<div class="{{r.cls}}" role="slider" tabIndex="{{r.tab}}" aria-label="{{r.label}}" aria-valuemin="{{r.min}}" aria-valuemax="{{r.max}}" aria-valuenow="{{r.value}}" aria-valuetext="{{r.text}}" style="transform: translateX({{r.over}}px)" onPointerDown="{{r.down}}" onPointerMove="{{r.move}}" onPointerUp="{{r.up}}" onPointerCancel="{{r.up}}" onKeyDown="{{r.key}}">
+<span style="translate: {{r.offL}}px 0">{{r.label}}</span><output style="translate: {{r.offO}}px 0">{{r.text}}</output>
+</div>
+</sc-for>
+</div>
+</div>
+
+<svg class="rp-seam" viewBox="0 0 1040 520" preserveAspectRatio="none" aria-hidden="true">
+<defs><linearGradient id="seamFilm" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="520"><stop offset="0" stop-color="#7CC8FF"></stop><stop offset=".36" stop-color="#B8A6FF"></stop><stop offset=".68" stop-color="#FF9ED8"></stop><stop offset="1" stop-color="#8AF2D0"></stop></linearGradient></defs>
+<path d="{{curve}}"></path>
+</svg>
+<span class="rp-pill" aria-hidden="true" style="transform: translate({{bx}}px, {{gy}}px) translate(-50%, -50%)"><i></i></span>
+<sc-if value="{{open}}" hint-placeholder-val="{{true}}">
+<button class="rp-grab" role="separator" aria-orientation="vertical" aria-label="Resize inspector" aria-valuemin="{{min}}" aria-valuemax="{{max}}" aria-valuenow="{{now}}" style="transform: translateX({{bx}}px)" onPointerDown="{{gDown}}" onPointerMove="{{gMove}}" onPointerUp="{{gUp}}" onPointerCancel="{{gUp}}" onKeyDown="{{gKey}}"></button>
+</sc-if>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":800}}'>
+var W = 1040, H = 520, MIN = 200, MAX = 360, ROW0 = 50, ROWH = 38;
+var ROWS = [
+  { key: 'width', label: 'Width', min: 640, max: 1920, step: 16, unit: '' },
+  { key: 'radius', label: 'Radius', min: 0, max: 32, step: 1, unit: '' },
+  { key: 'gap', label: 'Gap', min: 0, max: 48, step: 2, unit: '' },
+  { key: 'blur', label: 'Blur', min: 0, max: 60, step: 2, unit: '' },
+  { key: 'opacity', label: 'Opacity', min: 10, max: 100, step: 5, unit: '%' }
+];
+function band(d, k) { return Math.sign(d) * k * (1 - 1 / (Math.abs(d) / k + 1)); }
+function bandClamp(v, a, b, k) { return v < a ? a + band(v - a, k) : v > b ? b + band(v - b, k) : v; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function springStep(s, target, k, c, dt) {
+  var a = -k * (s.x - target) - c * s.v;
+  s.v += a * dt; s.x += s.v * dt;
+  if (Math.abs(s.v) < 0.02 && Math.abs(s.x - target) < 0.02) { s.x = target; s.v = 0; return false; }
+  return true;
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    var saved = 320;
+    this.p = { cx: { x: W - saved, v: 0 }, w: { x: saved, v: 0 }, target: saved, saved: saved, d: { x: 0, v: 0 }, gy: H / 2, held: false, px: 0, py: 0, open: true, raf: 0, last: 0 };
+    this.sc = {};
+    this.state = { vals: { width: 1280, radius: 14, gap: 24, blur: 30, opacity: 100 }, open: true, held: false, now: saved, scrub: {}, frame: 0 };
+    var self = this, p = this.p;
+    this.tick = function (now) {
+      var dt = Math.min(0.032, (now - p.last) / 1000); p.last = now;
+      var moving;
+      if (p.held) {
+        var want = bandClamp(W - p.px, MIN, MAX, 34);
+        springStep(p.w, want, 150, 20, dt);
+        p.d.x = band(p.px - (W - p.w.x), 70); p.d.v = 0;
+        p.gy += (clamp(p.py, 18, H - 18) - p.gy) * Math.min(1, dt * 30);
+        moving = true;
+      } else {
+        var a = springStep(p.w, p.target, 260, 24, dt);
+        var b = springStep(p.d, 0, 520, 9, dt);
+        moving = a || b;
+      }
+      var ax = W - p.w.x;
+      var c = springStep(p.cx, ax, 210, 21, dt);
+      p.cx.x = clamp(p.cx.x, ax - 8, ax + 40);
+      moving = c || moving;
+      self.setState({ frame: self.state.frame + 1 });
+      p.raf = moving ? requestAnimationFrame(self.tick) : 0;
+    };
+    this.kick = function () { if (p.raf) return; p.last = performance.now(); p.raf = requestAnimationFrame(self.tick); };
+    this.local = function (e) {
+      var win = e.currentTarget.closest('.rp-win'), b = win.getBoundingClientRect();
+      var k = W / (b.width || W);
+      p.px = (e.clientX - b.left) * k; p.py = (e.clientY - b.top) * (H / (b.height || H));
+    };
+    this.toggle = function () {
+      var o = !self.state.open; p.open = o;
+      p.target = o ? p.saved : 0; p.d.v += o ? -260 : 260;
+      self.setState({ open: o }); self.kick();
+    };
+    this.gDown = function (e) {
+      e.currentTarget.setPointerCapture(e.pointerId); self.local(e);
+      p.gy = clamp(p.py, 18, H - 18); p.held = true; self.setState({ held: true }); self.kick();
+    };
+    this.gMove = function (e) { if (p.held) self.local(e); };
+    this.gUp = function () {
+      if (!p.held) return;
+      p.held = false; p.saved = p.target = clamp(p.w.x, MIN, MAX);
+      self.setState({ held: false, now: Math.round(p.saved) }); self.kick();
+    };
+    this.gKey = function (e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      var dir = e.key === 'ArrowLeft' ? 1 : -1;
+      p.saved = p.target = clamp(p.saved + dir * 16, MIN, MAX);
+      p.gy = H / 2; p.d.v -= dir * 220; self.setState({ now: p.saved }); self.kick();
+    };
+    this.setVal = function (key, v) { var o = Object.assign({}, self.state.vals); o[key] = v; self.setState({ vals: o }); };
+    this.setScrub = function (key, on, over) { var s = Object.assign({}, self.state.scrub); s[key] = { on: on, over: over }; self.setState({ scrub: s }); };
+    this.rowHandlers = ROWS.map(function (r) {
+      return {
+        down: function (e) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          self.sc[r.key] = { x0: e.clientX, v0: self.state.vals[r.key], on: true };
+          self.setScrub(r.key, true, 0);
+        },
+        move: function (e) {
+          var s = self.sc[r.key]; if (!s || !s.on) return;
+          var raw = s.v0 + Math.round((e.clientX - s.x0) / 3) * r.step;
+          var v = clamp(raw, r.min, r.max);
+          if (v !== self.state.vals[r.key]) self.setVal(r.key, v);
+          self.setScrub(r.key, true, band(((raw - v) / r.step) * 3, 12));
+        },
+        up: function () {
+          var s = self.sc[r.key]; if (!s || !s.on) return;
+          s.on = false; self.setScrub(r.key, false, 0);
+        },
+        key: function (e) {
+          var k = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 0;
+          if (!k) return; e.preventDefault();
+          self.setVal(r.key, clamp(self.state.vals[r.key] + k * r.step * (e.shiftKey ? 5 : 1), r.min, r.max));
+        }
+      };
+    });
+  }
+  componentWillUnmount() { if (this.p.raf) cancelAnimationFrame(this.p.raf); }
+  renderVals() {
+    var p = this.p, st = this.state, v = st.vals, self = this;
+    var ax = W - p.w.x, bx = ax + p.d.x, gy = p.gy;
+    var f = function (n) { return n.toFixed(2); };
+    var curve = 'M' + f(ax) + ' -1 C' + f(ax) + ' ' + f(gy * 0.5) + ' ' + f(bx) + ' ' + f(gy * 0.45) + ' ' + f(bx) + ' ' + f(gy) +
+      ' C' + f(bx) + ' ' + f(gy + (H - gy) * 0.55) + ' ' + f(ax) + ' ' + f(gy + (H - gy) * 0.5) + ' ' + f(ax) + ' ' + (H + 1);
+    var clip = curve + ' L' + (W + 2) + ' ' + (H + 1) + ' L' + (W + 2) + ' -1 Z';
+    var d = p.d.x;
+    var rows = ROWS.map(function (r, i) {
+      var y = ROW0 + i * ROWH + ROWH / 2;
+      var u = clamp(y < gy ? y / gy : (H - y) / (H - gy), 0, 1);
+      var off = d * u * u * (3 - 2 * u);
+      var sc = st.scrub[r.key] || { on: false, over: 0 }, h = self.rowHandlers[i];
+      return { label: r.label, min: r.min, max: r.max, value: v[r.key], text: v[r.key] + r.unit,
+        cls: 'scrub' + (sc.on ? ' on' : ''), over: f(sc.over), tab: st.open ? '0' : '-1',
+        offL: f(off), offO: f(Math.min(off * 0.2, off)),
+        down: h.down, move: h.move, up: h.up, key: h.key };
+    });
+    return {
+      winCls: (st.held ? 'held' : '') + (st.open ? '' : ' closed'),
+      ax: f(ax), bx: f(bx), gy: f(gy), curve: curve, clip: clip,
+      cx: f(p.cx.x), cw: f(Math.max(p.w.x, MIN)), co: Math.pow(clamp(p.w.x / MIN, 0, 1), 2).toFixed(3),
+      cpe: st.open ? 'auto' : 'none', hiddenAria: st.open ? 'false' : 'true',
+      rows: rows, open: st.open, openAria: st.open ? 'true' : 'false', toggleLabel: st.open ? 'Hide inspector' : 'Show inspector', toggle: this.toggle,
+      min: MIN, max: MAX, now: st.now, gDown: this.gDown, gMove: this.gMove, gUp: this.gUp, gKey: this.gKey,
+      docScale: (0.62 + ((v.width - 640) / 1280) * 0.5).toFixed(3), docR: v.radius, docIR: Math.max(2, v.radius * 0.6).toFixed(1),
+      docO: (v.opacity / 100).toFixed(2), docGap: (6 + v.gap / 3).toFixed(1), docBlur: v.blur
+    };
+  }
+}
+</script>
+</body>
+</html>
