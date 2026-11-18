@@ -34,22 +34,10 @@ pub fn url_key(url: &str) -> String {
     rest.strip_prefix("www.").unwrap_or(rest).to_string()
 }
 
-/// Exclusive upper bound of the keys starting with `key`: the last char incremented.
-/// Turns a prefix match into a range scan on the index, with no LIKE escaping.
+/// Exclusive upper bound of the keys starting with `key` (`char::MAX` sorts after any char a
+/// URL key realistically holds). Turns a prefix match into an index range scan, no LIKE escaping.
 fn prefix_upper(key: &str) -> String {
-    let mut upper = key.to_string();
-    if let Some(last) = upper.pop() {
-        // Skip the surrogate gap; `char::MAX` has no successor, so fall back to appending it.
-        let next = (last as u32 + 1..=char::MAX as u32).find_map(char::from_u32);
-        match next {
-            Some(n) => upper.push(n),
-            None => {
-                upper.push(last);
-                upper.push(char::MAX);
-            }
-        }
-    }
-    upper
+    format!("{key}{}", char::MAX)
 }
 
 const DAY_MS: i64 = 86_400_000;
@@ -90,7 +78,7 @@ impl Store {
              ON CONFLICT(url) DO UPDATE SET \
                visit_count = visit_count + 1, \
                typed_count = typed_count + excluded.typed_count, \
-               last_visit_time = excluded.last_visit_time, \
+               last_visit_time = MAX(last_visit_time, excluded.last_visit_time), \
                title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE title END",
             (url, url_key(url), title, typed, at_ms),
         )
@@ -172,12 +160,10 @@ mod tests {
     }
 
     #[test]
-    fn prefix_upper_increments_last_char() {
-        assert_eq!(prefix_upper("abc"), "abd");
-        assert_eq!(prefix_upper("a%"), "a&");
+    fn prefix_upper_bounds_the_prefix_range() {
         assert!("abc" < prefix_upper("abc").as_str());
-        let max = format!("a{}", char::MAX);
-        assert!(max.as_str() < prefix_upper(&max).as_str());
+        assert!("abc~zzz" < prefix_upper("abc").as_str());
+        assert!("abd" > prefix_upper("abc").as_str());
     }
 
     #[test]
@@ -187,6 +173,22 @@ mod tests {
         assert!(!is_recordable("https://"));
         assert!(!is_recordable("file:///etc/passwd"));
         assert!(!is_recordable("about:blank"));
+    }
+
+    #[test]
+    fn older_visit_does_not_rewind_last_visit() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            s.record_visit("https://a.com/", "A", 50, Transition::Link)
+                .await
+                .unwrap();
+            s.record_visit("https://a.com/", "A", 20, Transition::Link)
+                .await
+                .unwrap();
+            let hits = s.query_history("a.com", 60, 10).await.unwrap();
+            assert_eq!(hits[0].last_visit_ms, 50);
+            assert_eq!(hits[0].visit_count, 2);
+        });
     }
 
     #[test]

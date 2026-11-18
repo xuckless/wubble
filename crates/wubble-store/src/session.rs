@@ -97,6 +97,17 @@ impl Store {
     /// Replace the stored session with `s`. Parents before children is not required; ids must be
     /// unique and every referenced container/space must be present or the save fails and rolls back.
     pub async fn save_session(&mut self, s: &StoredSession) -> Result<()> {
+        // Validate before touching the database: ids are stored as i64, scroll must be finite.
+        let id = |v: u64, what| {
+            i64::try_from(v).map_err(|_| Error::Corrupt(format!("{what} too large: {v}")))
+        };
+        let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+        let tab_ids = s
+            .tabs
+            .iter()
+            .map(|t| id(t.id.0, "tab id"))
+            .collect::<Result<Vec<_>>>()?;
+        let active_tab = s.active_tab.map(|t| id(t.0, "tab id")).transpose()?;
         let tx = self.conn.transaction().await?;
         // Children first; foreign keys are enforced per statement.
         for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
@@ -143,7 +154,7 @@ impl Store {
             .await?;
         for (i, t) in s.tabs.iter().enumerate() {
             st.execute((
-                t.id.0 as i64,
+                tab_ids[i],
                 t.space.0,
                 t.container.0,
                 t.folder.map(|f| f.0),
@@ -153,15 +164,15 @@ impl Store {
                 t.title.as_str(),
                 liveness_code(t.liveness),
                 t.busy as i64,
-                t.scroll.0,
-                t.scroll.1,
+                finite(t.scroll.0),
+                finite(t.scroll.1),
                 t.last_visible_ms,
             ))
             .await?;
         }
         tx.execute(
             "INSERT INTO session(id, active_space_id, active_tab_id, saved_at) VALUES (1, ?1, ?2, ?3)",
-            (s.active_space.map(|v| v.0), s.active_tab.map(|v| v.0 as i64), s.saved_at_ms),
+            (s.active_space.map(|v| v.0), active_tab, s.saved_at_ms),
         )
         .await?;
         tx.commit().await?;
@@ -281,6 +292,36 @@ mod tests {
             let mut bad = sample();
             bad.tabs[0].space = SpaceId(999); // no such space
             assert!(store.save_session(&bad).await.is_err());
+            assert_eq!(store.load_session().await.unwrap(), good);
+        });
+    }
+
+    #[test]
+    fn non_finite_scroll_is_saved_as_zero() {
+        pollster::block_on(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let mut s = sample();
+            s.tabs[0].scroll = (f64::NAN, f64::INFINITY);
+            store.save_session(&s).await.unwrap();
+            assert_eq!(
+                store.load_session().await.unwrap().tabs[0].scroll,
+                (0.0, 0.0)
+            );
+        });
+    }
+
+    #[test]
+    fn oversized_tab_id_is_rejected_at_save() {
+        pollster::block_on(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let good = sample();
+            store.save_session(&good).await.unwrap();
+            let mut bad = sample();
+            bad.tabs[0].id = TabId(u64::MAX);
+            assert!(matches!(
+                store.save_session(&bad).await,
+                Err(Error::Corrupt(_))
+            ));
             assert_eq!(store.load_session().await.unwrap(), good);
         });
     }

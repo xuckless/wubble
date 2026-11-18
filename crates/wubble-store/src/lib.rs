@@ -40,19 +40,12 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open (creating if needed) the database at `path`, then migrate it. Before applying a
-    /// pending migration to an existing non-empty file, the file (and its `-wal`) is copied to
-    /// `<path>.bak-v<old version>`.
+    /// Open (creating if needed) the database at `path`, then migrate it.
     pub async fn open(path: &Path) -> Result<Store> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let mut store = Self::connect(&path.to_string_lossy()).await?;
-        let found = migrate::schema_version(&store.conn).await?;
-        let pending = found < migrate::latest(MIGRATIONS);
-        if pending && found > 0 {
-            backup(path, found)?;
-        }
         migrate::migrate(&mut store.conn, MIGRATIONS).await?;
         Ok(store)
     }
@@ -70,23 +63,6 @@ impl Store {
         conn.execute_batch("PRAGMA foreign_keys = ON").await?;
         Ok(Store { _db: db, conn })
     }
-}
-
-fn backup(path: &Path, version: i64) -> Result<()> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_default();
-    for suffix in ["", "-wal"] {
-        let src = path.with_file_name(format!("{name}{suffix}"));
-        if src.exists() {
-            std::fs::copy(
-                &src,
-                path.with_file_name(format!("{name}.bak-v{version}{suffix}")),
-            )?;
-        }
-    }
-    Ok(())
 }
 
 /// Read a column as `i64` and convert to a narrower id type.

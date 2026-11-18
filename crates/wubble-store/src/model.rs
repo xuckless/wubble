@@ -59,26 +59,24 @@ pub struct StoredSession {
     pub saved_at_ms: i64,
 }
 
-/// Database codes for [`Liveness`]; one table, both directions derive from it.
-const LIVENESS_CODES: [(Liveness, i64); 4] = [
-    (Liveness::Active, 0),
-    (Liveness::Background, 1),
-    (Liveness::Frozen, 2),
-    (Liveness::Discarded, 3),
-];
-
+/// Database code for [`Liveness`]; exhaustive, so a new variant fails to compile here.
 pub fn liveness_code(l: Liveness) -> i64 {
-    LIVENESS_CODES
-        .iter()
-        .find(|(v, _)| *v == l)
-        .map_or(0, |(_, c)| *c)
+    match l {
+        Liveness::Active => 0,
+        Liveness::Background => 1,
+        Liveness::Frozen => 2,
+        Liveness::Discarded => 3,
+    }
 }
 
 pub fn liveness_from_code(code: i64) -> Option<Liveness> {
-    LIVENESS_CODES
-        .iter()
-        .find(|(_, c)| *c == code)
-        .map(|(v, _)| *v)
+    Some(match code {
+        0 => Liveness::Active,
+        1 => Liveness::Background,
+        2 => Liveness::Frozen,
+        3 => Liveness::Discarded,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -87,7 +85,12 @@ mod tests {
 
     #[test]
     fn liveness_codes_round_trip() {
-        for (l, _) in LIVENESS_CODES {
+        for l in [
+            Liveness::Active,
+            Liveness::Background,
+            Liveness::Frozen,
+            Liveness::Discarded,
+        ] {
             assert_eq!(liveness_from_code(liveness_code(l)), Some(l));
         }
         assert_eq!(liveness_from_code(99), None);
