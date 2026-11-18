@@ -143,6 +143,14 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    /// `CHECKS` is an independent oracle written with literals; pin what they assume.
+    #[test]
+    fn check_sql_literals_match_the_discriminants() {
+        assert_eq!(crate::Transition::Typed as i64, 1);
+        assert_eq!(crate::BookmarkKind::Link as i64, 0);
+        assert_eq!(crate::BookmarkKind::Folder as i64, 1);
+    }
+
     use wubble_core::model::{Command, Model, apply};
 
     use super::*;

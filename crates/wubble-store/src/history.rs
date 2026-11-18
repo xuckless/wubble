@@ -151,7 +151,7 @@ pub(crate) async fn recompute_url_counters(c: &Connection, url_ids: &[i64]) -> R
         .prepare(
             "UPDATE urls SET \
                visit_count = (SELECT COUNT(*) FROM visits WHERE url_id = ?1), \
-               typed_count = (SELECT COUNT(*) FROM visits WHERE url_id = ?1 AND transition = 1), \
+               typed_count = (SELECT COUNT(*) FROM visits WHERE url_id = ?1 AND transition = ?2), \
                last_visit_time = COALESCE((SELECT MAX(visit_time) FROM visits WHERE url_id = ?1), last_visit_time) \
              WHERE id = ?1",
         )
@@ -161,7 +161,7 @@ pub(crate) async fn recompute_url_counters(c: &Connection, url_ids: &[i64]) -> R
         .await?;
     let mut dropped = 0;
     for &id in url_ids {
-        update.execute([id]).await?;
+        update.execute((id, Transition::Typed as i64)).await?;
         dropped += drop_empty.execute([id]).await?;
     }
     Ok(dropped)

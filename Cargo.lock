@@ -7529,7 +7529,6 @@ dependencies = [
  "thiserror 2.0.21",
  "turso",
  "wubble-core",
- "wubble-import",
 ]
 
 [[package]]

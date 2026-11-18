@@ -1,4 +1,4 @@
-//! Applying a `wubble_import::Imported` profile to the model and the database.
+//! Applying a `wubble_core::import::Imported` profile to the model and the database.
 //!
 //! The Model owns Space, folder, tab and container ids, and `save_session` rewrites every
 //! session table from it, so Spaces and tabs cannot be inserted as rows: [`merge_spaces`]
@@ -16,11 +16,11 @@ use std::future::Future;
 use std::pin::Pin;
 
 use turso::Connection;
+use wubble_core::import::{BookmarkNode as Imp, Imported, Placement, Source};
 use wubble_core::lifecycle::{Activity, Lifecycle, Pin as TabPin};
 use wubble_core::model::Model;
 use wubble_core::space::{Container, ContainerId, Folder, FolderId, Item, Space, SpaceId};
 use wubble_core::tab::{Liveness, Tab, TabId};
-use wubble_import::{BookmarkNode as Imp, Imported, Placement, Source};
 
 use crate::bookmarks::{BookmarkKind, find_folder, find_link, insert_node, valid_link_url};
 use crate::history::{recompute_url_counters, url_key};
@@ -44,8 +44,6 @@ pub enum SkipReason {
     InvalidUrl,
     /// An index into the imported spaces or folders that points nowhere.
     BadReference,
-    /// A nested folder: core folders do not nest, its tabs went into the outermost folder.
-    FlattenedIntoParent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +60,8 @@ pub struct ImportSummary {
     pub spaces_added: u32,
     pub folders_added: u32,
     pub tabs_added: u32,
-    /// Of `tabs_added`, how many were Essentials (now ordinary pinned tabs).
-    pub essentials_pinned: u32,
+    /// Nested folders: core folders do not nest, their tabs went into the outermost folder.
+    pub folders_flattened: u32,
     pub bookmark_folders_added: u32,
     pub bookmarks_added: u32,
     pub bookmarks_already_present: u32,
@@ -163,9 +161,13 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             format!("{base}\u{1f}{n}")
         };
         *n += 1;
-        let imported_before = marks
-            .get(&key)
-            .is_some_and(|&id| model.spaces.iter().any(|s| i64::from(s.id.0) == id));
+        let imported_before = marks.get(&key).is_some_and(|&id| {
+            // Space ids are reused after a delete: the name must match as well.
+            model
+                .spaces
+                .iter()
+                .any(|s| i64::from(s.id.0) == id && s.name == sp.name)
+        });
         if imported_before {
             sum.skip(ItemKind::Space, &sp.name, SkipReason::AlreadyImported);
             new_spaces.push(None);
@@ -229,7 +231,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             sum.skip(ItemKind::Folder, &f.name, SkipReason::BadReference);
         } else if let Some(slot) = slots[top] {
             slots[i] = Some(slot);
-            sum.skip(ItemKind::Folder, &f.name, SkipReason::FlattenedIntoParent);
+            sum.folders_flattened += 1;
         } // else: the top folder's Space was imported before, or already reported
     }
 
@@ -241,7 +243,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             continue;
         };
         let Some((_, space)) = slot else { continue };
-        if t.url.trim().is_empty() {
+        if !valid_link_url(&t.url) {
             sum.skip(ItemKind::Tab, &t.url, SkipReason::InvalidUrl);
             continue;
         }
@@ -285,7 +287,6 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
                 .push(id),
         }
         sum.tabs_added += 1;
-        sum.essentials_pinned += u32::from(t.placement == Placement::Essential);
     }
 
     let mut spaces = model.spaces.clone();
@@ -301,13 +302,6 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
         new_marks.push((key, space.id));
         spaces.push(space);
         sum.spaces_added += 1;
-    }
-    if sum.spaces_added == 0 && sum.containers_added == 0 {
-        return Ok(Merged {
-            model: model.clone(),
-            marks: new_marks,
-            summary: sum,
-        });
     }
     let merged =
         Model::from_parts(spaces, containers, tabs, model.active_space).map_err(Error::Corrupt)?;
@@ -464,6 +458,12 @@ impl Store {
         let tx = self.conn.transaction().await?;
         if summary.spaces_added > 0 || summary.containers_added > 0 {
             write_model(&tx, &merged).await?;
+            // Marks of Spaces that no longer exist must not suppress a later import.
+            tx.execute(
+                "DELETE FROM import_marks WHERE space_id NOT IN (SELECT id FROM spaces)",
+                (),
+            )
+            .await?;
             for (key, id) in &new_marks {
                 tx.execute(
                     "INSERT INTO import_marks(key, space_id) VALUES (?1, ?2) \
@@ -501,9 +501,9 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    use wubble_core::import::{ImportedFolder, ImportedSpace, ImportedTab, ImportedVisit};
     use wubble_core::model::{Command, apply};
     use wubble_core::space::Rgb;
-    use wubble_import::{ImportedFolder, ImportedSpace, ImportedTab, ImportedVisit};
 
     use super::*;
 
@@ -742,7 +742,7 @@ mod tests {
                 sum.spaces_added,
                 sum.folders_added,
                 sum.tabs_added,
-                sum.essentials_pinned
+                sum.folders_flattened
             ),
             (1, 2, 2, 7, 1)
         );
@@ -753,10 +753,7 @@ mod tests {
                 .map(|s| (s.what.as_str(), s.reason))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            reasons(ItemKind::Folder),
-            [("Rust", SkipReason::FlattenedIntoParent)]
-        );
+        assert!(reasons(ItemKind::Folder).is_empty());
         assert_eq!(
             reasons(ItemKind::Tab),
             [
@@ -972,6 +969,56 @@ mod tests {
             m2.check().unwrap();
             consistent(&s).await;
         });
+    }
+
+    #[test]
+    fn a_reused_space_id_does_not_suppress_the_import() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let (m1, _) = s.apply_import(&base_model(), &fixture(), 1).await.unwrap();
+            // "Reading" had the highest id; the user deletes it and a new Space takes that id.
+            let reading = m1.spaces.iter().find(|sp| sp.name == "Reading").unwrap();
+            let id = reading.id;
+            let mut spaces = m1.spaces.clone();
+            spaces.retain(|sp| sp.id != id);
+            let mut fresh = reading.clone();
+            fresh.name = "Fresh".into();
+            fresh.pinned = vec![];
+            fresh.items = vec![];
+            fresh.active = None;
+            spaces.push(fresh);
+            let tabs = m1
+                .tabs
+                .values()
+                .filter(|t| t.url != "https://news.test" && t.url != "https://n2.test")
+                .cloned()
+                .collect();
+            let m =
+                Model::from_parts(spaces, m1.containers.clone(), tabs, m1.active_space).unwrap();
+            s.save_session(&m).await.unwrap();
+            let (m2, sum) = s.apply_import(&m, &fixture(), 2).await.unwrap();
+            assert_eq!(sum.spaces_added, 1);
+            assert!(m2.spaces.iter().any(|sp| sp.name == "Reading"));
+            assert!(m2.spaces.iter().any(|sp| sp.name == "Fresh"));
+            consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn tabs_with_script_urls_are_skipped() {
+        let mut imp = fixture();
+        imp.tabs
+            .push(tab(0, None, Placement::Normal, 0, "javascript:alert(1)"));
+        let m = merge_spaces(&base_model(), &imp, &HashMap::new()).unwrap();
+        assert!(m.summary.skipped.iter().any(|k| k.kind == ItemKind::Tab
+            && k.what == "javascript:alert(1)"
+            && k.reason == SkipReason::InvalidUrl));
+        assert!(
+            m.model
+                .tabs
+                .values()
+                .all(|t| !t.url.starts_with("javascript:"))
+        );
     }
 
     #[test]

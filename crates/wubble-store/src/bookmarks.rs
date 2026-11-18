@@ -347,8 +347,9 @@ impl Store {
             .conn
             .query(
                 "SELECT title, url, date_added, id FROM bookmarks WHERE kind = 0 \
-                 AND (instr(lower(title), ?1) > 0 OR instr(lower(url), ?1) > 0)",
-                [needle.as_str()],
+                 AND (instr(lower(title), ?1) > 0 OR instr(lower(url), ?1) > 0 \
+                      OR (?2 <> '' AND instr(lower(url), ?2) > 0))",
+                (needle.as_str(), key.as_str()),
             )
             .await?;
         let mut hits: Vec<(u8, i64, i64, Bookmark)> = Vec::new();
@@ -609,6 +610,15 @@ mod tests {
             assert_eq!(
                 urls(s.search_bookmarks("https://www.rust", 10).await.unwrap()),
                 ["https://www.rust-lang.org/"]
+            );
+            // Scheme and www. are ignored on both sides.
+            assert_eq!(
+                urls(s.search_bookmarks("www.rust-l", 10).await.unwrap()),
+                ["https://www.rust-lang.org/"]
+            );
+            assert_eq!(
+                urls(s.search_bookmarks("http://docs.te", 10).await.unwrap()),
+                ["https://docs.test/rust"]
             );
             assert_eq!(
                 urls(s.search_bookmarks("RUST-LANG", 10).await.unwrap()).len(),

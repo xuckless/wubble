@@ -6,7 +6,7 @@
 //! (a second writer would get `Busy`). Times are unix milliseconds supplied by the caller.
 //! Encryption is out of scope: the `logins` table holds opaque blobs the vault crate produces.
 //!
-//! The store depends on `wubble-import` to apply an `Imported` profile (`import.rs`), and a
+//! The store applies a `wubble_core::import::Imported` profile (`import.rs`), and a
 //! password vault adapts its storage trait to the plain byte-row functions in `logins.rs`;
 //! both drive the futures with whatever executor they have (`pollster::block_on` is enough).
 
