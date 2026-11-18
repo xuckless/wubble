@@ -21,10 +21,9 @@
 
 use wubble_core::action::Action;
 use wubble_core::model::Model;
-use wubble_core::space::MAX_PANES;
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
-use wubble_core::window::{WindowId, WindowKind, WindowTarget};
+use wubble_core::window::{Shown, WindowId, WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -308,7 +307,7 @@ pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     };
     let own = model.window_of(tab);
     let others = model.windows.iter().filter(|w| {
-        w.kind == WindowKind::Main
+        w.kind() == WindowKind::Main
             && Some(w.id) != own
             && w.space() != model.location(tab).map(|l| l.0)
     });
@@ -336,8 +335,8 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
         enabled: true,
     };
     let active = model.active_space();
-    match (w.kind, w.tab()) {
-        (WindowKind::Little, Some(_)) => std::iter::once(entry(
+    match w.shown {
+        Shown::Little(_) => std::iter::once(entry(
             "Open as Tab".into(),
             Command::PromoteLittle(window, active),
         ))
@@ -348,23 +347,11 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
             )
         }))
         .collect(),
-        (WindowKind::Popup, Some(tab)) => {
-            let main = model
-                .windows
-                .iter()
-                .rev()
-                .find(|w| w.kind == WindowKind::Main)
-                .map(|w| w.id);
-            main.map(|m| {
-                entry(
-                    "Open as Tab".into(),
-                    Command::MoveToWindow(tab, WindowTarget::Existing(m)),
-                )
-            })
-            .into_iter()
-            .collect()
-        }
-        _ => vec![],
+        Shown::Popup(tab) => vec![entry(
+            "Open as Tab".into(),
+            Command::MoveToWindow(tab, WindowTarget::Existing(model.main_window())),
+        )],
+        Shown::Space(_) => vec![],
     }
 }
 
@@ -396,7 +383,7 @@ fn split_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     if model.split_of(tab).is_some() {
         return vec![entry("Take Out of Split View", Command::Unsplit(tab))];
     }
-    let room = model.visible_tabs().len() < MAX_PANES;
+    let room = model.pane_room();
     let in_space = model.order(model.active_space()).contains(&tab);
     if !room || !in_space {
         return vec![];

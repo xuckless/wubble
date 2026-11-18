@@ -756,9 +756,13 @@ impl WindowFactory {
         id: WindowId,
         kind: WindowKind,
         ui: persist::UiState,
+        geometry: Option<wubble_core::window::Geometry>,
     ) -> Result<host::WindowHost, Box<dyn std::error::Error>> {
         let window = AppWindow::new()?;
         window.set_window_kind(kind.index());
+        if let Some(g) = geometry {
+            host::place_window(&window, g);
+        }
         let glass = Rc::new(RefCell::new(backdrop::choose(
             &self.gpu,
             &window,
@@ -1310,7 +1314,9 @@ fn run(
         glass_scene: loaded.settings.glass_scene(),
     };
     // The focused window first; the host opens the session's others.
-    let first = factory.open(loaded.model.focused(), WindowKind::Main, loaded.settings.ui)?;
+    let focused = loaded.model.focused();
+    let geometry = loaded.model.window(focused).and_then(|w| w.geometry);
+    let first = factory.open(focused, WindowKind::Main, loaded.settings.ui, geometry)?;
     let window = first.handle();
     let host = Host::new(
         engine, first, factory, loaded, store, url, checks, downloads, blocking,
@@ -1348,7 +1354,12 @@ fn run(
     with_host(Host::open_session_windows);
     let result = slint::run_event_loop();
     // Read while the windows still exist.
-    let ui = HOST.with_borrow_mut(|host| host.as_mut().map(Host::ui_state));
+    let ui = HOST.with_borrow_mut(|host| {
+        host.as_mut().map(|host| {
+            host.record_geometry();
+            host.ui_state()
+        })
+    });
     let ui = ui.unwrap_or_else(|| host::ui_state(&window));
     drop(measure_timer);
     let measured = measuring

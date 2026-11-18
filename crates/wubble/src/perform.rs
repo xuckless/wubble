@@ -5,7 +5,7 @@
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::{MAX_PANES, SpaceId};
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 
 use wubble_core::window::WindowTarget;
@@ -122,7 +122,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         // the design's `split_next`: the next tab down, else a page chosen in the bar
         Action::SplitNext => match model.split_candidate() {
             Some(t) => Plan::Model(Command::SplitWith(t)),
-            None if visible.is_some() && model.visible_tabs().len() < MAX_PANES => Plan::OpenBeside,
+            None if visible.is_some() && model.pane_room() => Plan::OpenBeside,
             None => Plan::Nothing,
         },
         Action::Unsplit => match visible {

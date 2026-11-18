@@ -1,5 +1,6 @@
-//! `--smoke windows`: two tabs on the bundled page in one window, a second window, one tab
-//! moved into it, both windows' pixels checked, the second window closed; then a link from
+//! `--smoke windows`: two tabs on the bundled page in one window, a second window (its command
+//! bar open there, not in the first), one tab dragged into it (no ghost left behind), both
+//! windows' pixels checked, the second window closed; then a link from
 //! another app in a Little window, made a tab of the Space. After each step the
 //! model, the engine and the windows must agree. Every wait is "until the host sees X", bounded
 //! by a count of CEF work runs, never by time.
@@ -21,6 +22,14 @@ pub struct Seen {
     pub framed: bool,
     /// Tabs on screen in any window.
     pub shown: usize,
+    /// Windows whose command bar is open (or still closing).
+    pub bars: usize,
+    /// The newest window's command bar is open.
+    pub bar_in_newest: bool,
+    /// Windows still drawing a drag ghost.
+    pub ghosts: usize,
+    /// Every model window has its size recorded.
+    pub geometry: bool,
 }
 
 impl Seen {
@@ -30,6 +39,9 @@ impl Seen {
             && self.views_agree
             && self.framed
             && self.shown == shown
+            && self.ghosts == 0
+            && self.bars == 0
+            && self.geometry
     }
 }
 
@@ -40,7 +52,7 @@ pub enum Stage {
     Titles,
     /// A second window asked for, waiting for it.
     Opened,
-    /// A tab moved into it, waiting for both windows to show their page.
+    /// A tab dragged into it, waiting for both windows to show their page.
     Moved,
     /// The second window closed, waiting for its tab to be hidden.
     Closed,
@@ -71,7 +83,7 @@ pub enum Action {
     /// A second tab on the bundled page.
     OpenPage,
     NewWindow,
-    /// The first window's hidden tab into the second window.
+    /// The first window's hidden tab dragged onto the second window.
     MoveTab,
     /// Check both windows' pixels, then close the second window.
     CheckAndClose,
@@ -90,7 +102,12 @@ pub fn next(s: WindowsSmoke, seen: &Seen) -> (WindowsSmoke, Option<Action>) {
         Stage::Titles if seen.titled == 2 && seen.settled(1, 1) => {
             Some((Stage::Opened, Action::NewWindow))
         }
-        Stage::Opened if seen.model_windows == 2 && seen.open_windows == 2 => {
+        Stage::Opened
+            if seen.model_windows == 2
+                && seen.open_windows == 2
+                && seen.bars == 1
+                && seen.bar_in_newest =>
+        {
             Some((Stage::Moved, Action::MoveTab))
         }
         Stage::Moved if seen.settled(2, 2) => Some((Stage::Closed, Action::CheckAndClose)),
@@ -131,6 +148,10 @@ mod tests {
             views_agree: true,
             framed: true,
             shown,
+            bars: 0,
+            bar_in_newest: false,
+            ghosts: 0,
+            geometry: true,
         }
     }
 
@@ -141,10 +162,35 @@ mod tests {
         assert_eq!(a, Some(Action::OpenPage));
         let (s, a) = next(s, &seen(1, 1));
         assert_eq!(a, Some(Action::NewWindow));
-        let (s, a) = next(s, &seen(2, 1));
+        let elsewhere = Seen {
+            bars: 1,
+            ..seen(2, 1)
+        };
+        let (s, a) = next(s, &elsewhere);
+        assert_eq!(a, None, "the bar opened in the old window");
+        let in_newest = Seen {
+            bars: 1,
+            bar_in_newest: true,
+            ..seen(2, 1)
+        };
+        let (s, a) = next(s, &in_newest);
         assert_eq!(a, Some(Action::MoveTab));
+        let (s, a) = next(
+            s,
+            &Seen {
+                bars: 1,
+                ..seen(2, 2)
+            },
+        );
+        assert_eq!(a, None, "the bar still closing over the page");
         let (s, a) = next(s, &seen(2, 1));
         assert_eq!(a, None, "the moved tab is not shown yet");
+        let ghost = Seen {
+            ghosts: 1,
+            ..seen(2, 2)
+        };
+        let (s, a) = next(s, &ghost);
+        assert_eq!(a, None, "a ghost left in the source window");
         let (s, a) = next(s, &seen(2, 2));
         assert_eq!(a, Some(Action::CheckAndClose));
         let (s, a) = next(s, &seen(1, 1));

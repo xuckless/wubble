@@ -16,11 +16,13 @@ use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, Listener, ListenerOptions, Stream};
 
 /// The socket's file in the profile.
+#[cfg(not(windows))]
 pub const SOCKET_FILE: &str = "instance.sock";
 /// The longest message read; anything longer is dropped.
 pub const MAX_MESSAGE: usize = 8 * 1024;
 /// The longest socket path used as is. `sockaddr_un.sun_path` holds 108 bytes on Linux and 104
 /// on macOS, with the trailing NUL; longer profile paths use a hashed name instead.
+#[cfg(not(windows))]
 const MAX_SOCKET_PATH: usize = 100;
 
 /// What a second start asks of the first.
@@ -63,7 +65,23 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
 }
 
 /// Where the socket of `profile` lives: in it when the path is short enough, else a name
-/// hashed from it in `runtime` (`$XDG_RUNTIME_DIR`, else the temp directory).
+/// hashed from it in `runtime` (`$XDG_RUNTIME_DIR`, else the temp directory). On Windows a
+/// named pipe ([`pipe_path`]): interprocess takes only `\\.\pipe\` paths there.
+#[cfg(windows)]
+pub fn socket_path(profile: &Path, _runtime: &Path) -> PathBuf {
+    pipe_path(profile)
+}
+
+/// The named pipe of `profile`, named by a hash of its path.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn pipe_path(profile: &Path) -> PathBuf {
+    PathBuf::from(format!(
+        r"\\.\pipe\wubble-{:016x}",
+        fnv1a(profile.as_os_str().as_encoded_bytes())
+    ))
+}
+
+#[cfg(not(windows))]
 pub fn socket_path(profile: &Path, runtime: &Path) -> PathBuf {
     let inside = profile.join(SOCKET_FILE);
     if inside.as_os_str().len() <= MAX_SOCKET_PATH {
@@ -203,6 +221,21 @@ mod tests {
         assert_eq!(parse_message(long.as_bytes()), None, "oversize");
     }
 
+    #[test]
+    fn a_windows_profile_names_a_pipe() {
+        let a = pipe_path(Path::new(r"C:\Users\u\AppData\Local\wubble"));
+        let s = a.to_str().unwrap();
+        assert!(s.starts_with(r"\\.\pipe\wubble-"), "{s}");
+        assert_eq!(s.len(), r"\\.\pipe\wubble-".len() + 16);
+        assert_ne!(a, pipe_path(Path::new(r"C:\other")));
+        #[cfg(windows)]
+        assert_eq!(
+            socket_path(Path::new(r"C:\p"), &runtime_dir()),
+            pipe_path(Path::new(r"C:\p"))
+        );
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn a_long_profile_path_hashes_its_socket_into_the_runtime_dir() {
         let runtime = Path::new("/run/user/1000");

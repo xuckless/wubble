@@ -61,6 +61,12 @@ pub enum Command {
         container: Option<ContainerId>,
         opener: Option<TabId>,
     },
+    /// A link opened in the background (middle click, Ctrl+click): placed right after its
+    /// `opener`, never shown, the opener relation kept.
+    BackgroundTab {
+        url: String,
+        opener: TabId,
+    },
     CloseTab(TabId),
     ActivateTab(TabId),
     MoveTab {
@@ -448,6 +454,13 @@ impl Model {
         }
     }
 
+    /// Whether the active Space's window has room for another pane. The limit is per window:
+    /// what other windows show does not count.
+    pub fn pane_room(&self) -> bool {
+        self.space_idx(self.active_space())
+            .is_some_and(|si| self.space_tabs(si).len() < MAX_PANES)
+    }
+
     /// The split `tab` is a pane of, shown or not.
     pub fn split_of(&self, tab: TabId) -> Option<&SplitGroup> {
         self.spaces
@@ -460,7 +473,7 @@ impl Model {
     /// active Space's order, wrapping, that is not already in its split (the design's
     /// `split_next`). `None` when there is none, or the shown split is full.
     pub fn split_candidate(&self) -> Option<TabId> {
-        if self.visible_tabs().len() >= MAX_PANES {
+        if !self.pane_room() {
             return None;
         }
         let si = self.space_idx(self.active_space())?;
@@ -1013,9 +1026,12 @@ impl Model {
             s.active = Some(new);
         }
         for w in &mut self.windows {
-            if w.shown == crate::window::Shown::Tab(tab) {
-                w.shown = crate::window::Shown::Tab(new);
-            }
+            use crate::window::Shown;
+            w.shown = match w.shown {
+                Shown::Little(t) if t == tab => Shown::Little(new),
+                Shown::Popup(t) if t == tab => Shown::Popup(new),
+                shown => shown,
+            };
         }
         self.forget(&[tab]);
         let mut fx = vec![
@@ -1277,6 +1293,11 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             container,
             opener,
         } => m.new_tab(url, container, opener),
+        Command::BackgroundTab { url, opener } => m
+            .place_new_tab(url, None, Some(opener), None)
+            .map(|(_, _, create)| create)
+            .into_iter()
+            .collect(),
         Command::CloseTab(t) => m.close_tab(t),
         Command::ActivateTab(t) => m.activate_tab(t),
         Command::MoveTab { tab, to } => m.move_tab(tab, to),

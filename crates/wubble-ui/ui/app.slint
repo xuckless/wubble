@@ -264,6 +264,11 @@ export component AppWindow inherits Window {
         root.beside-requested();
     }
 
+    // Closes the bar as Esc does (`--smoke windows`, before it reads the page's pixels).
+    public function dismiss-command-bar() {
+        bar.dispatch(CommandBarEvent.close);
+    }
+
     // ── The page's own UI (wubble surface.rs, menu.rs, screen.rs): the visible tab's surfaces,
     // written by the host; the components report intents through these callbacks.
     // The page is full screen: the content fills the window, the sidebar and frame hide.

@@ -145,8 +145,6 @@ pub enum Input {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
-    /// The drag began: the row lifts, a ghost follows the pointer outside the list.
-    Lift(TabId),
     /// The hovered Space opens (the tab is still held).
     SwitchSpace(SpaceId),
     MoveToSpace {
@@ -163,8 +161,6 @@ pub enum Effect {
     },
     /// The drag ended away from the list: the row physics must not also act on the release.
     CancelRows,
-    /// The ghost goes; the drag is over.
-    Land,
 }
 
 impl Drag {
@@ -174,6 +170,12 @@ impl Drag {
             Drag::Dragging { tab, over, .. } if over != DropTarget::List => Some(tab),
             _ => None,
         }
+    }
+
+    /// Whether the pointer rests on a Space's icon the hover has not opened yet: a later
+    /// [`Input::Tick`] may open it, so the host keeps a timer running.
+    pub fn awaits_dwell(&self) -> bool {
+        matches!(*self, Drag::Dragging { over: DropTarget::Space(s), opened, .. } if opened != Some(s))
     }
 
     /// The target the pointer is over, while dragging.
@@ -199,7 +201,7 @@ pub fn transition(d: Drag, input: Input) -> (Drag, Vec<Effect>) {
                 since: now,
                 opened: None,
             };
-            (next, vec![Effect::Lift(tab)])
+            (next, vec![])
         }
         (
             Drag::Dragging {
@@ -227,7 +229,7 @@ pub fn transition(d: Drag, input: Input) -> (Drag, Vec<Effect>) {
                 // into the list of the Space the hover opened
                 (DropTarget::List, Some(space)) => Some(Effect::MoveToSpace { tab, space }),
                 // the row physics reorders
-                (DropTarget::List, None) => return (Drag::Idle, vec![Effect::Land]),
+                (DropTarget::List, None) => return (Drag::Idle, vec![]),
                 (DropTarget::Space(space), _) => Some(Effect::MoveToSpace { tab, space }),
                 (DropTarget::SplitEdge(side), _) => Some(Effect::SplitInto { tab, side }),
                 (DropTarget::Window(w), _) => Some(Effect::MoveToWindow {
@@ -240,15 +242,12 @@ pub fn transition(d: Drag, input: Input) -> (Drag, Vec<Effect>) {
                 }),
                 (DropTarget::None, _) => None,
             };
-            let fx = std::iter::once(Effect::CancelRows)
-                .chain(drop)
-                .chain(std::iter::once(Effect::Land))
-                .collect();
-            (Drag::Idle, fx)
+            (
+                Drag::Idle,
+                std::iter::once(Effect::CancelRows).chain(drop).collect(),
+            )
         }
-        (Drag::Dragging { .. }, Input::Cancel) => {
-            (Drag::Idle, vec![Effect::CancelRows, Effect::Land])
-        }
+        (Drag::Dragging { .. }, Input::Cancel) => (Drag::Idle, vec![Effect::CancelRows]),
         (Drag::Pressed { .. }, Input::Release { .. } | Input::Cancel) => (Drag::Idle, vec![]),
         (d, _) => (d, vec![]),
     }
@@ -312,7 +311,8 @@ mod tests {
             },
         );
         let (d, fx) = mv(d, 50.0, hit, 0);
-        assert_eq!(fx, vec![Effect::Lift(T)]);
+        assert!(fx.is_empty());
+        assert!(matches!(d, Drag::Dragging { .. }));
         d
     }
 
@@ -343,7 +343,7 @@ mod tests {
     fn in_the_list_the_rows_reorder() {
         let d = dragging(DropTarget::List);
         assert_eq!(d.ghost(), None, "the row itself moves");
-        assert_eq!(release(d, DropTarget::List), vec![Effect::Land]);
+        assert_eq!(release(d, DropTarget::List), vec![]);
     }
 
     #[test]
@@ -367,12 +367,36 @@ mod tests {
         // dropped into the opened Space's list
         assert_eq!(
             release(d, DropTarget::List),
-            vec![
-                Effect::CancelRows,
-                Effect::MoveToSpace { tab: T, space: S },
-                Effect::Land
-            ]
+            vec![Effect::CancelRows, Effect::MoveToSpace { tab: T, space: S }]
         );
+    }
+
+    #[test]
+    fn a_second_space_still_waits_for_its_hover() {
+        let d = dragging(DropTarget::Space(S));
+        assert!(d.awaits_dwell());
+        let (d, fx) = transition(
+            d,
+            Input::Tick {
+                now: t0() + SPACE_HOVER,
+            },
+        );
+        assert_eq!(fx, vec![Effect::SwitchSpace(S)]);
+        assert!(!d.awaits_dwell(), "opened: nothing to wait for");
+        // on to another Space's icon: the timer must run again
+        let other = SpaceId(3);
+        let (d, _) = mv(d, 80.0, DropTarget::Space(other), 600);
+        assert!(d.awaits_dwell(), "{d:?}");
+        let (d, fx) = transition(
+            d,
+            Input::Tick {
+                now: t0() + Duration::from_millis(600) + SPACE_HOVER,
+            },
+        );
+        assert_eq!(fx, vec![Effect::SwitchSpace(other)]);
+        assert!(!d.awaits_dwell());
+        let (d, _) = mv(d, 90.0, DropTarget::List, 1200);
+        assert!(!d.awaits_dwell());
     }
 
     #[test]
@@ -395,11 +419,7 @@ mod tests {
         let drop = |hit| release(dragging(hit), hit);
         assert_eq!(
             drop(DropTarget::Space(S)),
-            vec![
-                Effect::CancelRows,
-                Effect::MoveToSpace { tab: T, space: S },
-                Effect::Land
-            ]
+            vec![Effect::CancelRows, Effect::MoveToSpace { tab: T, space: S }]
         );
         assert_eq!(
             drop(DropTarget::SplitEdge(Side::Right))[1],
@@ -422,19 +442,13 @@ mod tests {
                 to: WindowTarget::Existing(WindowId(3))
             }
         );
-        assert_eq!(
-            drop(DropTarget::None),
-            vec![Effect::CancelRows, Effect::Land]
-        );
+        assert_eq!(drop(DropTarget::None), vec![Effect::CancelRows]);
     }
 
     #[test]
     fn cancel_drops_nothing() {
         let (d, fx) = transition(dragging(DropTarget::Outside), Input::Cancel);
-        assert_eq!(
-            (d, fx),
-            (Drag::Idle, vec![Effect::CancelRows, Effect::Land])
-        );
+        assert_eq!((d, fx), (Drag::Idle, vec![Effect::CancelRows]));
         let (d, _) = transition(
             Drag::Idle,
             Input::Press {

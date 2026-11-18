@@ -17,14 +17,38 @@ use wubble_ui::AppWindow;
 
 use super::Host;
 
-/// TabRow `track` kinds.
+/// TabRow `track` kinds: the row reports the press and a cancel; the pointer after the press
+/// comes from the window (`drag_pointer`), since the pressed row may be gone mid-drag (a Space
+/// the hover opened re-lists the rows).
 const DOWN: i32 = 0;
-const MOVE: i32 = 1;
-const UP: i32 = 2;
 
 impl Host {
-    /// The left button on a tab row: down, move, up or cancel, in window px.
+    /// The left button on a tab row: down or cancel, in window px.
     pub fn tab_track(&mut self, id: i32, kind: i32, x: f32, y: f32) {
+        let input = match kind {
+            DOWN => match crate::shell::tab_id(id) {
+                Some(tab) => {
+                    let at = Point {
+                        x: f64::from(x),
+                        y: f64::from(y),
+                    };
+                    self.drag_at = at;
+                    self.drag_window = self.w.id;
+                    Input::Press { tab, at }
+                }
+                None => return,
+            },
+            _ => Input::Cancel,
+        };
+        self.run_drag(input);
+    }
+
+    /// The window's pointer while a press on a row is held: moved, or the left button let go,
+    /// in this window's logical px.
+    pub(super) fn drag_pointer(&mut self, x: f32, y: f32, released: bool) {
+        if self.tab_drag == tabdrag::Drag::Idle || self.w.id != self.drag_window {
+            return;
+        }
         let Some(window) = self.w.window.upgrade() else {
             return;
         };
@@ -33,21 +57,44 @@ impl Host {
             y: f64::from(y),
         };
         self.drag_at = at;
-        let hit = || tabdrag::hit(at, &self.drop_rects(&window));
-        let input = match kind {
-            DOWN => match crate::shell::tab_id(id) {
-                Some(tab) => Input::Press { tab, at },
-                None => return,
-            },
-            MOVE => Input::Move {
+        let hit = tabdrag::hit(at, &self.drop_rects(&window));
+        self.run_drag(if released {
+            Input::Release { hit }
+        } else {
+            Input::Move {
                 at,
-                hit: hit(),
+                hit,
                 now: Instant::now(),
-            },
-            UP => Input::Release { hit: hit() },
-            _ => Input::Cancel,
+            }
+        });
+    }
+
+    /// `--smoke windows`: drags `tab` from the window showing its Space onto window `to`, as
+    /// a pointer would where the platform tells window positions.
+    pub(super) fn smoke_drag(&mut self, tab: wubble_core::tab::TabId, to: WindowId) {
+        let Some(from) = self
+            .model
+            .location(tab)
+            .and_then(|(space, _)| self.model.windows.iter().find(|w| w.space() == Some(space)))
+            .map(|w| w.id)
+        else {
+            return;
         };
-        self.run_drag(input);
+        if !self.enter(from) {
+            return;
+        }
+        self.drag_window = from;
+        let at = Point { x: 10.0, y: 10.0 };
+        self.run_drag(Input::Press { tab, at });
+        let hit = DropTarget::Window(to);
+        let at = Point { x: 200.0, y: 10.0 };
+        self.drag_at = at;
+        self.run_drag(Input::Move {
+            at,
+            hit,
+            now: Instant::now(),
+        });
+        self.run_drag(Input::Release { hit });
     }
 
     /// Esc during a drag: nothing moves.
@@ -66,38 +113,41 @@ impl Host {
         });
     }
 
+    /// Runs the machine, then draws the ghost in the window the drag started in. Effects may
+    /// move focus to another window (a tear-out, a drop on another window, a hovered Space
+    /// another window shows); the ghost is never drawn there, and the source's goes once idle.
     fn run_drag(&mut self, input: Input) {
         let (next, effects) = tabdrag::transition(self.tab_drag, input);
         self.tab_drag = next;
-        // a rest on a Space's icon still opens it: the machine is asked again once the delay is up
-        match next {
-            tabdrag::Drag::Dragging {
-                over: DropTarget::Space(_),
-                opened,
-                ..
-            } if opened.is_none() => {
-                let id = self.w.id;
-                self.drag_timer.start(
-                    slint::TimerMode::SingleShot,
-                    tabdrag::SPACE_HOVER,
-                    move || crate::with_host_in(id, Host::drag_tick),
-                );
-            }
-            _ => self.drag_timer.stop(),
+        let source = self.drag_window;
+        // a rest on a Space's icon opens it: the machine is asked again once the delay is up
+        if next.awaits_dwell() {
+            self.drag_timer.start(
+                slint::TimerMode::SingleShot,
+                tabdrag::SPACE_HOVER,
+                move || crate::with_host_in(source, Host::drag_tick),
+            );
+        } else {
+            self.drag_timer.stop();
         }
         for effect in effects {
             self.drag_effect(effect);
         }
-        if let Some(window) = self.w.window.upgrade() {
+        let here = self.w.id;
+        if self.enter(source)
+            && let Some(window) = self.w.window.upgrade()
+        {
             self.render_drag(&window);
         }
+        self.enter(here);
     }
 
     fn drag_effect(&mut self, effect: Effect) {
         match effect {
-            Effect::Lift(_) | Effect::Land => {}
             Effect::CancelRows => {
-                if let Some(window) = self.w.window.upgrade() {
+                if self.enter(self.drag_window)
+                    && let Some(window) = self.w.window.upgrade()
+                {
                     window.invoke_tab_rows_cancel();
                 }
             }

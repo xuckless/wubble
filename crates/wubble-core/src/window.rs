@@ -37,13 +37,16 @@ impl WindowKind {
     }
 }
 
-/// What a window shows. One enum, so a window shows a Space or one tab, never both.
+/// What a window shows, and so what kind of window it is. One enum, so a window shows a Space
+/// or one tab, never both, and its kind cannot disagree with what it shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shown {
     /// A Main window: the Space's active tab or its shown split.
     Space(SpaceId),
-    /// A Little or Popup window: this one tab.
-    Tab(TabId),
+    /// A Little window: this one tab.
+    Little(TabId),
+    /// A Popup window: this one tab.
+    Popup(TabId),
 }
 
 /// A window's inner size in logical pixels and, where the platform tells (not Wayland), its
@@ -58,7 +61,6 @@ pub struct Geometry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Window {
     pub id: WindowId,
-    pub kind: WindowKind,
     pub shown: Shown,
     /// `None` until the window reports it (a new window takes the platform's default).
     pub geometry: Option<Geometry>,
@@ -69,9 +71,16 @@ impl Window {
     pub fn main(id: WindowId, space: SpaceId) -> Window {
         Window {
             id,
-            kind: WindowKind::Main,
             shown: Shown::Space(space),
             geometry: None,
+        }
+    }
+
+    pub fn kind(&self) -> WindowKind {
+        match self.shown {
+            Shown::Space(_) => WindowKind::Main,
+            Shown::Little(_) => WindowKind::Little,
+            Shown::Popup(_) => WindowKind::Popup,
         }
     }
 
@@ -79,14 +88,14 @@ impl Window {
     pub fn space(&self) -> Option<SpaceId> {
         match self.shown {
             Shown::Space(s) => Some(s),
-            Shown::Tab(_) => None,
+            Shown::Little(_) | Shown::Popup(_) => None,
         }
     }
 
     /// The tab a Little or Popup window shows.
     pub fn tab(&self) -> Option<TabId> {
         match self.shown {
-            Shown::Tab(t) => Some(t),
+            Shown::Little(t) | Shown::Popup(t) => Some(t),
             Shown::Space(_) => None,
         }
     }

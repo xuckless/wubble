@@ -2043,7 +2043,7 @@ fn popup_and_little_windows_own_their_tab() {
     );
     let p = opened(&fx);
     let pt = m.window(p).unwrap().tab().unwrap();
-    assert_eq!(m.window(p).unwrap().kind, WindowKind::Popup);
+    assert_eq!(m.window(p).unwrap().kind(), WindowKind::Popup);
     assert_eq!(
         m.window(p).unwrap().geometry,
         Some(Geometry {
@@ -2095,7 +2095,7 @@ fn a_little_window_promotes_into_a_space() {
     );
     let l = opened(&fx);
     let lt = m.window(l).unwrap().tab().unwrap();
-    assert_eq!(m.window(l).unwrap().kind, WindowKind::Little);
+    assert_eq!(m.window(l).unwrap().kind(), WindowKind::Little);
     let (m, fx) = run(
         m,
         Command::PromoteLittle {
@@ -2180,8 +2180,7 @@ fn from_parts_checks_the_windows() {
     );
     let popup_only = Window {
         id: WindowId(0),
-        kind: WindowKind::Popup,
-        shown: Shown::Tab(TabId(1)),
+        shown: Shown::Popup(TabId(1)),
         geometry: None,
     };
     assert!(parts(vec![popup_only]).is_err(), "no Main window");
@@ -2197,4 +2196,93 @@ fn from_parts_checks_the_windows() {
         WindowId(5),
         "ids continue past the restored ones"
     );
+}
+
+#[test]
+fn the_pane_limit_counts_only_the_focused_window() {
+    // three Main windows, each showing a tab; the focused one has a second tab to split with
+    let (m, _) = with_tabs(1);
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let _ = opened(&fx);
+    let (m, _) = open(m, None);
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let _ = opened(&fx);
+    let (m, a) = open(m, None);
+    let (m, b) = open(m, None);
+    assert_eq!(m.visible_tabs().len(), 3, "one tab in each window");
+    assert!(m.pane_room());
+    assert_eq!(m.split_candidate(), Some(a));
+    // a 2-pane split may take a third pane while other windows show their tabs
+    let (m, _) = run(m, Command::SplitWith(a));
+    let (m, c) = open(m, None);
+    let (m, _) = run(m, Command::ActivateTab(b));
+    assert_eq!(m.window_tabs(m.focused()), vec![b, a]);
+    assert_eq!(m.split_candidate(), Some(c));
+    let (m, _) = run(m, Command::SplitWith(c));
+    assert_eq!(m.window_tabs(m.focused()).len(), MAX_PANES);
+    assert!(!m.pane_room() && m.split_candidate().is_none(), "full");
+}
+
+#[test]
+fn the_main_window_is_the_one_showing_the_active_space() {
+    let (m, _) = with_tabs(1);
+    assert_eq!(m.main_window(), WindowId(0));
+    let (m, fx) = run(m, Command::NewWindow { space: None });
+    let w = opened(&fx);
+    assert!(
+        fx.contains(&Effect::ShowCommandBar),
+        "an empty Space opens the bar"
+    );
+    assert_eq!(m.main_window(), w, "the bar goes to the new window");
+    // a Little window's focus leaves the Main window as it was
+    let (m, _) = run(
+        m,
+        Command::OpenLittle {
+            url: "https://l.test".into(),
+            space: None,
+        },
+    );
+    assert_ne!(m.focused(), w);
+    assert_eq!(m.main_window(), w);
+    assert_eq!(
+        m.window(m.main_window()).unwrap().space(),
+        Some(m.active_space())
+    );
+}
+
+#[test]
+fn a_background_tab_follows_its_opener_unshown() {
+    let (m, ids) = with_tabs(2);
+    let (m, child) = open(m, Some(ids[1]));
+    let (m, fx) = run(m, Command::ActivateTab(ids[0]));
+    assert!(!fx.is_empty());
+    let before = m.clone();
+    let (m, fx) = run_all(
+        m,
+        Command::BackgroundTab {
+            url: "https://bg.test".into(),
+            opener: ids[0],
+        },
+    );
+    let Effect::CreateTab { tab: bg, .. } = fx[0] else {
+        panic!("{fx:?}")
+    };
+    assert!(
+        !fx.iter().any(|e| matches!(
+            e,
+            Effect::ActivateTab(_)
+                | Effect::Lifecycle {
+                    effect: crate::lifecycle::Effect::Show,
+                    ..
+                }
+        )),
+        "never shown: {fx:?}"
+    );
+    assert_eq!(m.visible_tab(), Some(ids[0]));
+    assert_eq!(m.tabs[&bg].opener, Some(ids[0]));
+    assert_eq!(
+        m.tabs[&child].opener, before.tabs[&child].opener,
+        "other openers stay"
+    );
+    assert_eq!(m.order(s0())[1], bg, "right after its opener");
 }

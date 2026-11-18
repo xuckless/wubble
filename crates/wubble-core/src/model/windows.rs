@@ -27,7 +27,7 @@ impl Model {
     pub fn windowed(&self, tab: TabId) -> Option<WindowId> {
         self.windows
             .iter()
-            .find(|w| w.shown == Shown::Tab(tab))
+            .find(|w| w.tab() == Some(tab))
             .map(|w| w.id)
     }
 
@@ -45,7 +45,7 @@ impl Model {
             Some(Shown::Space(s)) => self
                 .space_idx(s)
                 .map_or_else(Vec::new, |si| self.space_tabs(si)),
-            Some(Shown::Tab(t)) => vec![t],
+            Some(Shown::Little(t) | Shown::Popup(t)) => vec![t],
             None => vec![],
         }
     }
@@ -63,16 +63,22 @@ impl Model {
     /// The page of `w` that gets keys: its own tab, or its Space's active tab.
     pub(super) fn focused_tab(&self, w: &Window) -> Option<TabId> {
         match w.shown {
-            Shown::Tab(t) => Some(t),
+            Shown::Little(t) | Shown::Popup(t) => Some(t),
             Shown::Space(s) => self.space_idx(s).and_then(|si| self.spaces[si].active),
         }
+    }
+
+    /// The focused Main window (the last focused one while a Little or Popup window has
+    /// focus): the one showing [`Model::active_space`], where its command bar and sidebar are.
+    pub fn main_window(&self) -> WindowId {
+        self.windows[self.main_idx()].id
     }
 
     /// The index of the focused Main window.
     fn main_idx(&self) -> usize {
         self.windows
             .iter()
-            .rposition(|w| w.kind == WindowKind::Main)
+            .rposition(|w| w.kind() == WindowKind::Main)
             .expect("a Main window")
     }
 
@@ -151,18 +157,12 @@ impl Model {
     }
 
     /// Adds an unfocused window. Returns its id.
-    fn push_window(
-        &mut self,
-        kind: WindowKind,
-        shown: Shown,
-        geometry: Option<Geometry>,
-    ) -> WindowId {
+    fn push_window(&mut self, shown: Shown, geometry: Option<Geometry>) -> WindowId {
         let id = WindowId(self.next_window);
         self.next_window += 1;
         // before the focused one: `focus` then moves it last
         self.windows.push(Window {
             id,
-            kind,
             shown,
             geometry,
         });
@@ -178,7 +178,7 @@ impl Model {
             },
             None => self.space_for_window(),
         };
-        let id = self.push_window(WindowKind::Main, Shown::Space(space), None);
+        let id = self.push_window(Shown::Space(space), None);
         let si = self.space_idx(space).expect("space");
         vec![
             Effect::WindowOpened(id),
@@ -193,12 +193,12 @@ impl Model {
         };
         match w.shown {
             // its tab closes; `prune_windows` then closes the window
-            Shown::Tab(t) => self.close_tab(t),
+            Shown::Little(t) | Shown::Popup(t) => self.close_tab(t),
             Shown::Space(_) => {
                 if self
                     .windows
                     .iter()
-                    .filter(|w| w.kind == WindowKind::Main)
+                    .filter(|w| w.kind() == WindowKind::Main)
                     .count()
                     == 1
                 {
@@ -234,12 +234,12 @@ impl Model {
         let mut fx = vec![];
         let target = match to {
             WindowTarget::Existing(w) => match self.window(w) {
-                Some(win) if win.kind == WindowKind::Main => w,
+                Some(win) if win.kind() == WindowKind::Main => w,
                 _ => return vec![],
             },
             WindowTarget::New => {
                 let space = self.space_for_window();
-                let id = self.push_window(WindowKind::Main, Shown::Space(space), None);
+                let id = self.push_window(Shown::Space(space), None);
                 fx.push(Effect::WindowOpened(id));
                 id
             }
@@ -286,7 +286,7 @@ impl Model {
             height,
             pos: None,
         });
-        let id = self.push_window(WindowKind::Popup, Shown::Tab(tab), geometry);
+        let id = self.push_window(Shown::Popup(tab), geometry);
         self.focus(id);
         vec![create, Effect::WindowOpened(id)]
     }
@@ -295,16 +295,14 @@ impl Model {
         let Some((tab, _, create)) = self.place_new_tab(url, None, None, space) else {
             return vec![];
         };
-        let id = self.push_window(WindowKind::Little, Shown::Tab(tab), None);
+        let id = self.push_window(Shown::Little(tab), None);
         self.focus(id);
         vec![create, Effect::WindowOpened(id)]
     }
 
     pub(super) fn promote_little(&mut self, window: WindowId, space: SpaceId) -> Vec<Effect> {
-        let tab = match self.window(window) {
-            Some(w) if w.kind == WindowKind::Little && self.space_idx(space).is_some() => {
-                w.tab().expect("a Little window shows a tab")
-            }
+        let tab = match self.window(window).map(|w| w.shown) {
+            Some(Shown::Little(t)) if self.space_idx(space).is_some() => t,
             _ => return vec![],
         };
         self.windows.retain(|w| w.id != window);
@@ -325,7 +323,7 @@ impl Model {
 
     /// The window invariants (part of [`Model::check`]).
     pub(super) fn check_windows(&self) -> Result<(), String> {
-        if !self.windows.iter().any(|w| w.kind == WindowKind::Main) {
+        if !self.windows.iter().any(|w| w.kind() == WindowKind::Main) {
             return Err("no Main window".into());
         }
         let mut seen: Vec<TabId> = vec![];
@@ -336,8 +334,8 @@ impl Model {
             if w.id.0 >= self.next_window {
                 return Err(format!("window {:?} past the counter", w.id));
             }
-            match (w.kind, w.shown) {
-                (WindowKind::Main, Shown::Space(s)) => {
+            match w.shown {
+                Shown::Space(s) => {
                     if self.space_idx(s).is_none() {
                         return Err(format!("window {:?} shows unknown space", w.id));
                     }
@@ -345,12 +343,11 @@ impl Model {
                         return Err(format!("space {s:?} shown in two windows"));
                     }
                 }
-                (WindowKind::Little | WindowKind::Popup, Shown::Tab(t)) => {
+                Shown::Little(t) | Shown::Popup(t) => {
                     if !self.tabs.contains_key(&t) {
                         return Err(format!("window {:?} shows unknown tab", w.id));
                     }
                 }
-                _ => return Err(format!("window {:?} shows the wrong kind of thing", w.id)),
             }
             for t in self.window_tabs(w.id) {
                 if seen.contains(&t) {

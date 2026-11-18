@@ -32,7 +32,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
-use slint::winit_030::winit::event::{ElementState, WindowEvent};
+use slint::winit_030::winit::event::{ElementState, MouseButton, WindowEvent};
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
@@ -320,6 +320,8 @@ pub struct Host {
     tab_drag: wubble_core::tabdrag::Drag,
     /// Where the pointer was at the drag's last event, window px.
     drag_at: wubble_core::tabdrag::Point,
+    /// The window the drag started in: its pointer drives the drag, its ghost shows it.
+    drag_window: WindowId,
     /// Asks the drag again once the pointer has rested on a Space's icon for the hover delay.
     drag_timer: slint::Timer,
     /// Window and page fullscreen.
@@ -448,6 +450,7 @@ impl Host {
             held_popups: BTreeMap::new(),
             tab_drag: wubble_core::tabdrag::Drag::Idle,
             drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
+            drag_window: WindowId(0),
             drag_timer: slint::Timer::default(),
             screen: Screen::default(),
             ime: Ime::default(),
@@ -508,7 +511,7 @@ impl Host {
     }
 
     /// Opens model window `id`'s platform window, unless it has one: a Main window takes the
-    /// sidebar of the window the host is in.
+    /// sidebar of the focused Main window.
     fn open_window(&mut self, id: WindowId) {
         let Some(w) = self.model.window(id) else {
             return;
@@ -516,19 +519,15 @@ impl Host {
         if self.w.id == id || self.parked.contains_key(&id) {
             return;
         }
-        let (kind, geometry) = (w.kind, w.geometry);
-        let ui = ui_state(&self.w.handle);
-        let opened = match self.factory.open(id, kind, ui) {
+        let (kind, geometry) = (w.kind(), w.geometry);
+        let ui = self.ui_state();
+        let opened = match self.factory.open(id, kind, ui, geometry) {
             Ok(opened) => opened,
             Err(e) => {
                 eprintln!("wubble: window {}: {e}", id.0);
                 return;
             }
         };
-        if let Some(g) = geometry {
-            let size = slint::LogicalSize::new(g.width as f32, g.height as f32);
-            opened.handle.window().set_size(size);
-        }
         if let Err(e) = opened.handle.show() {
             eprintln!("wubble: window {}: {e}", id.0);
             return;
@@ -562,19 +561,44 @@ impl Host {
         }
     }
 
-    /// The sidebar to keep: the focused Main window's.
+    /// The sidebar to keep: the focused Main window's (a Little or Popup window has none).
     pub fn ui_state(&mut self) -> UiState {
-        let main = self
-            .model
-            .windows
-            .iter()
-            .rev()
-            .find(|w| w.kind == wubble_core::window::WindowKind::Main)
-            .map(|w| w.id);
-        if let Some(main) = main {
-            self.enter(main);
+        let here = self.w.id;
+        self.enter(self.model.main_window());
+        let ui = ui_state(&self.w.handle);
+        self.enter(here);
+        ui
+    }
+
+    /// Records every open window's size and (where the platform tells) position in the model,
+    /// for the session. Read on save rather than on each resize event.
+    pub fn record_geometry(&mut self) {
+        let here = self.w.id;
+        let mut changed = vec![];
+        for id in self.window_ids() {
+            if !self.enter(id) {
+                continue;
+            }
+            let geometry = window_geometry(&self.w.handle);
+            if self
+                .model
+                .window(id)
+                .is_some_and(|w| w.geometry != Some(geometry))
+            {
+                changed.push(Command::ResizeWindow {
+                    window: id,
+                    geometry,
+                });
+            }
         }
-        ui_state(&self.w.handle)
+        self.enter(here);
+        // not `dispatch`: nothing on screen changes, and a save is what asked
+        for command in changed {
+            let current = std::mem::replace(&mut self.model, Model::new(Instant::now()));
+            let (model, effects) = model::apply(current, command);
+            self.model = model;
+            self.pending.extend(effects);
+        }
     }
 
     /// Enters the model's focused window, if it has one open.
@@ -689,8 +713,10 @@ impl Host {
                 }
                 self.pace(PaceEvent::Wake);
             }
-            // Later, outside the host: opening the bar calls back into it.
+            // In the window showing the active Space, where what is chosen opens. Later,
+            // outside the host: opening the bar calls back into it.
             Call::ShowCommandBar => {
+                self.enter(self.model.main_window());
                 let _ = self
                     .w
                     .window
@@ -1141,12 +1167,11 @@ impl Host {
             .as_deref()
             .and_then(|o| self.site_permissions.get(o, Permission::Popups));
         match popup::decide(request.opened, request.gesture, remembered) {
-            Outcome::Tab { foreground } => {
-                self.dispatch(new_tab(request.url, Some(tab)));
-                if !foreground {
-                    self.dispatch(Command::ActivateTab(tab));
-                }
-            }
+            Outcome::Tab { foreground: true } => self.dispatch(new_tab(request.url, Some(tab))),
+            Outcome::Tab { foreground: false } => self.dispatch(Command::BackgroundTab {
+                url: request.url,
+                opener: tab,
+            }),
             Outcome::PopupWindow => self.dispatch(Command::OpenPopupWindow {
                 url: request.url,
                 opener: tab,
@@ -1448,10 +1473,10 @@ impl Host {
     }
 
     fn save_now(&mut self) {
-        if let Some(window) = self.w.window.upgrade() {
-            self.store.save(&self.model, ui_state(&window));
-            self.save = SaveState::default();
-        }
+        self.record_geometry();
+        let ui = self.ui_state();
+        self.store.save(&self.model, ui);
+        self.save = SaveState::default();
     }
 
     /// Orderly shutdown: the final save, then the store thread finishes and
@@ -1537,11 +1562,19 @@ impl Host {
                 .is_some_and(|&id| self.engine.is_visible(id));
             shown == visible.contains(t)
         }) && self.engine.visible_views() == visible.len();
-        let mut framed = true;
+        self.record_geometry();
+        let newest = self.model.windows.iter().map(|w| w.id).max();
+        let (mut framed, mut bars, mut bar_in_newest, mut ghosts) = (true, 0, false, 0);
         for id in self.window_ids() {
             if self.enter(id) {
                 let tabs = self.model.window_tabs(id);
                 framed &= tabs.iter().all(|t| self.w.frames.contains_key(t));
+                if let Some(window) = self.w.window.upgrade() {
+                    let open = window.get_command_bar_state() != CommandBarState::Closed;
+                    bars += usize::from(open);
+                    bar_in_newest |= open && Some(id) == newest;
+                    ghosts += usize::from(!window.get_drag_ghost().is_empty());
+                }
             }
         }
         self.enter_focused();
@@ -1557,6 +1590,10 @@ impl Host {
             views_agree,
             framed,
             shown: visible.len(),
+            bars,
+            bar_in_newest,
+            ghosts,
+            geometry: self.model.windows.iter().all(|w| w.geometry.is_some()),
         }
     }
 
@@ -1582,10 +1619,13 @@ impl Host {
                     .copied()
                     .find(|t| !visible.contains(t));
                 if let (Some(tab), Some(to)) = (hidden, second) {
-                    self.dispatch(Command::MoveTabToWindow {
-                        tab,
-                        to: wubble_core::window::WindowTarget::Existing(to),
-                    });
+                    // Esc on the bar the new window opened for its empty Space, as a user would
+                    if self.enter(to)
+                        && let Some(window) = self.w.window.upgrade()
+                    {
+                        window.invoke_dismiss_command_bar();
+                    }
+                    self.smoke_drag(tab, to);
                 }
             }
             Some(Action::CheckAndClose) => {
@@ -1619,7 +1659,7 @@ impl Host {
                     .model
                     .windows
                     .iter()
-                    .find(|w| w.kind == wubble_core::window::WindowKind::Little)
+                    .find(|w| w.kind() == wubble_core::window::WindowKind::Little)
                     .map(|w| w.id);
                 if let Some(window) = little {
                     let space = self.model.active_space();
@@ -2074,6 +2114,7 @@ impl Host {
                     .glass
                     .borrow_mut()
                     .pointer_move(position.x, position.y);
+                self.drag_pointer(position.x, position.y, false);
             }
             WindowEvent::CursorLeft { .. } => {
                 self.input.pointer = None;
@@ -2093,12 +2134,31 @@ impl Host {
                     self.perform(action);
                 }
             }
+            // A tab drag's release, wherever the pointer is (the pressed row may be gone).
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                let at = self
+                    .input
+                    .pointer
+                    .map_or((self.drag_at.x as f32, self.drag_at.y as f32), |p| {
+                        (p.x, p.y)
+                    });
+                self.drag_pointer(at.0, at.1, true);
+            }
             WindowEvent::Focused(focused) => {
-                self.input.window_focused = *focused;
-                if *focused && self.model.focused() != self.w.id {
-                    self.dispatch(Command::FocusWindow(self.w.id));
+                let current = self.model.focused() == self.w.id;
+                if let Some(focused) = input::window_focus(current, *focused) {
+                    self.input.window_focused = focused;
+                    if focused && !current {
+                        self.dispatch(Command::FocusWindow(self.w.id));
+                    }
+                    if self.model.focused() == self.w.id {
+                        self.sync_focus(&window);
+                    }
                 }
-                self.sync_focus(&window);
             }
             WindowEvent::Ime(ime) => {
                 if self.ime_event(&window, ime) {
@@ -2333,6 +2393,31 @@ impl Host {
 /// What of the shell's state is saved with the session: the sidebar's mode
 /// (peeking is a separate property, so a peek saves as hidden) and the seam's
 /// saved width (the live width is 0 while the sidebar is hidden).
+/// A window's inner size in logical px and its outer position in physical px, where the
+/// platform tells it (not Wayland).
+pub fn window_geometry(window: &AppWindow) -> wubble_core::window::Geometry {
+    let win = window.window();
+    let size = win.size().to_logical(win.scale_factor());
+    let pos = win
+        .with_winit_window(|w| w.outer_position().ok())
+        .flatten()
+        .map(|p| (p.x, p.y));
+    wubble_core::window::Geometry {
+        width: size.width.round() as u32,
+        height: size.height.round() as u32,
+        pos,
+    }
+}
+
+/// Puts a window at its saved size and position, before it shows.
+pub fn place_window(window: &AppWindow, g: wubble_core::window::Geometry) {
+    let win = window.window();
+    win.set_size(slint::LogicalSize::new(g.width as f32, g.height as f32));
+    if let Some((x, y)) = g.pos {
+        win.set_position(slint::PhysicalPosition::new(x, y));
+    }
+}
+
 pub fn ui_state(window: &AppWindow) -> UiState {
     UiState {
         sidebar_width: window.get_sidebar_saved(),
