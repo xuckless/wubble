@@ -48,6 +48,14 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
 
+macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there):
+
+    cargo build --workspace && cargo run -p wubble-bundle   # writes target/debug/bundle/wubble.app
+    target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke boot   # any wubble args; `open` fails over ssh
+    cargo build --workspace --examples && cargo run -p wubble-bundle -- --exe target/debug/examples/frame_smoke
+    target/debug/bundle/wubble.app/Contents/MacOS/wubble   # windowless zero-copy and colour check; re-bundle without --exe after
+    cargo run -p wubble-engine --example frame_smoke   # the same check on Linux
+
 ## Code principles
 
 1. **Declarative first.** UI is a function of state: Slint bindings over models, no imperative widget poking. Config, keybindings, policies and feature tables are data.

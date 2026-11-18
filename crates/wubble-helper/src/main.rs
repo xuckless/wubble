@@ -7,8 +7,25 @@
 use welding::{CefRuntime, CefSandboxMode};
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    let _framework = load_framework();
     // Must match `SANDBOX` in wubble-engine/src/app.rs. Duplicated on purpose:
     // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
     let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
     std::process::exit(CefRuntime::run_subprocess(&cef::args::Args::new(), sandbox));
+}
+
+/// macOS helpers live in `wubble.app/Contents/Frameworks/wubble Helper*.app`
+/// and must load the CEF framework before any CEF call; the loader keeps it
+/// loaded while it lives. Linux links libcef directly and needs nothing.
+///
+/// From cef-rs `cef/src/library_loader.rs` and its use in the cefsimple helper
+/// (tauri-apps/cef-rs, MIT OR Apache-2.0), as wgpu-weld's
+/// `demo-weld-mac/src/helper.rs` does (MPL-2.0).
+#[cfg(target_os = "macos")]
+fn load_framework() -> cef::library_loader::LibraryLoader {
+    let exe = std::env::current_exe().expect("the helper knows its own path");
+    let loader = cef::library_loader::LibraryLoader::new(&exe, true);
+    assert!(loader.load(), "cannot load the CEF framework");
+    loader
 }

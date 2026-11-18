@@ -7904,6 +7904,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wubble-bundle"
+version = "0.0.0"
+dependencies = [
+ "cef",
+ "semver",
+]
+
+[[package]]
 name = "wubble-core"
 version = "0.0.0"
 dependencies = [

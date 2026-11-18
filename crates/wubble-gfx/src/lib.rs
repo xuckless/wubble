@@ -13,6 +13,7 @@
 pub mod import;
 pub mod pacing;
 pub mod scene;
+pub mod swatch;
 
 pub use import::{FramePresenter, FrameTiming, GfxError, GpuContext, NativeFrame};
 

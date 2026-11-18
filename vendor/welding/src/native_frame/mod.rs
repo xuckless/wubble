@@ -594,6 +594,84 @@ mod vulkan_dmabuf;
 pub use vulkan_dmabuf::build_dmabuf_capable_device;
 #[cfg(target_os = "linux")]
 pub(crate) use vulkan_dmabuf::copy_dmabuf_to_owned;
+#[cfg(target_vendor = "apple")]
+pub(crate) use metal::copy_metal_to_owned;
+
+/// wubble change: copies an imported, callback-scoped CEF frame into a
+/// weld-owned texture and waits for the copy, so CEF may reuse its pooled
+/// buffer once `OnAcceleratedPaint` returns. Shared by the Linux DMABUF and
+/// macOS IOSurface paths.
+///
+/// The copy is created as `source.format.add_srgb_suffix()`: CEF's bytes are
+/// display-encoded, and the host samples the copy through an sRGB view. On
+/// Linux the import is already sRGB (no-op); macOS imports `Bgra8Unorm`, and
+/// `copy_texture_to_texture` allows formats that differ only in the suffix.
+///
+/// Ported from cef-rs `cef/src/osr_texture_import/common.rs`
+/// (`texture::copy_to_owned`, `texture::wait_for_copy`; cef-rs #498),
+/// MIT OR Apache-2.0. Returns a [`CopiedFrame`] timed from `arrived` (the
+/// callback's entry) and `started` (before the import), with the wait
+/// measured on its own.
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn copy_to_owned(
+    source: ImportedTexture,
+    ctx: &HostWgpuContext,
+    arrived: std::time::Instant,
+    started: std::time::Instant,
+) -> Result<CopiedFrame, ImportError> {
+    let format = source.format.add_srgb_suffix();
+    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("weld-cef-frame-copy"),
+        size: source.size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("weld-cef-frame-copy"),
+        });
+    encoder.copy_texture_to_texture(
+        source.texture.as_image_copy(),
+        texture.as_image_copy(),
+        source.size,
+    );
+    let submission = ctx.queue.submit([encoder.finish()]);
+    let waiting = std::time::Instant::now();
+    loop {
+        match ctx.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission.clone()),
+            timeout: None,
+        }) {
+            Ok(_) => break,
+            // CEF must not reuse the source while the copy is in flight.
+            Err(wgpu::PollError::Timeout) => continue,
+            Err(error) => {
+                return Err(ImportError::Hal(format!(
+                    "waiting for the CEF frame copy: {error}"
+                )));
+            }
+        }
+    }
+    let done = std::time::Instant::now();
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    Ok(CopiedFrame {
+        texture: ImportedTexture {
+            texture,
+            view,
+            size: source.size,
+            format,
+            generation: source.generation,
+        },
+        arrived,
+        copy: done - started,
+        copy_wait: done - waiting,
+    })
+}
 
 #[cfg(windows)]
 pub use dx12::D3d11CallbackFrameCopier;

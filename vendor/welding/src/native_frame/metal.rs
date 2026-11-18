@@ -105,3 +105,19 @@ fn wgpu_format_to_mtl(format: wgpu::TextureFormat) -> Option<objc2_metal::MTLPix
         _ => None,
     }
 }
+
+/// wubble change: imports a callback-scoped CEF IOSurface and copies it into a
+/// weld-owned texture before returning (see [`super::copy_to_owned`]). CEF
+/// renders into pooled IOSurfaces: the `CFRetain` keeps the object alive but
+/// not its contents, so a deferred import could read a newer frame. cef-rs
+/// does the same (`cef/src/osr_texture_import/iosurface.rs`, `import_to_wgpu`
+/// then `texture::copy_to_owned`), MIT OR Apache-2.0.
+pub(crate) fn copy_metal_to_owned(
+    frame: MetalTextureRef,
+    ctx: &HostWgpuContext,
+    arrived: std::time::Instant,
+) -> Result<CopiedFrame, ImportError> {
+    let started = std::time::Instant::now();
+    let source = import_metal(frame, ctx)?;
+    super::copy_to_owned(source, ctx, arrived, started)
+}

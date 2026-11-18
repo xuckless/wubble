@@ -203,8 +203,9 @@ pub struct ViewConfig {
     /// CEF paints only on [`View::send_begin_frame`] (external begin
     /// frames) instead of on its own timer at `frame_rate`.
     pub begin_frames: bool,
-    /// The device frames are shown on. On Linux welding copies each frame
-    /// onto it inside CEF's paint callback, before CEF reuses the buffer.
+    /// The device frames are shown on. On Linux and macOS welding copies
+    /// each frame onto it inside CEF's paint callback, before CEF reuses the
+    /// buffer.
     pub gpu: HostWgpuContext,
 }
 
@@ -1508,15 +1509,8 @@ fn new_producer(
             ..welding::CefSurfaceConfig::default()
         },
     };
-    #[cfg(target_os = "linux")]
-    let producer = PlatformCefProducer::new(runtime, config, gpu);
-    // welding's macOS producer takes no device: it imports at present time.
-    #[cfg(not(target_os = "linux"))]
-    let producer = {
-        let _ = gpu;
-        PlatformCefProducer::new(runtime, config)
-    };
-    producer.map_err(|e| EngineError::View(e.to_string()))
+    // Linux and macOS copy each frame inside the paint callback on `gpu`.
+    PlatformCefProducer::new(runtime, config, gpu).map_err(|e| EngineError::View(e.to_string()))
 }
 
 /// welding's Windows producer also needs the host's `HostWgpuContext`, and
