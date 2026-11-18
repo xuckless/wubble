@@ -7879,6 +7879,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "dispatch2",
  "log",
  "opener",
  "png",
@@ -7988,6 +7989,7 @@ name = "wubble-ui"
 version = "0.0.0"
 dependencies = [
  "i-slint-backend-testing",
+ "objc2-foundation 0.3.2",
  "slint",
  "slint-build",
  "wubble-core",

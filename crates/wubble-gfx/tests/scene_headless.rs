@@ -51,7 +51,6 @@ fn scene_renders_glass_over_the_backdrop() {
         glass,
         quality: Quality::Full,
         frames: FRAMES,
-        bow: 0.0,
     };
     let (w, h, with_glass) = render(&device, &queue, full(true));
     assert_eq!((w, h), (640, 400), "logical 320×200 at dpr 2");
@@ -118,7 +117,6 @@ fn every_quality_draws_glass_and_flat_freezes_and_flattens() {
                 glass,
                 quality,
                 frames,
-                bow: 0.0,
             },
         );
         assert_eq!((w, h), (640, 400));
@@ -198,7 +196,6 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
         pressed: false,
         hover: false,
         focus: false,
-        bow: false,
         tint: [0.0; 3],
     };
     // the same liquid each run; `grow` widens the panel for the last frame
@@ -231,32 +228,6 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
             "no glass at x {x} of a panel 280 wide"
         );
     }
-}
-
-/// The sidebar's glass follows the bowed seam: with its right edge bowed 30 px at mid height the
-/// panel reaches into the strip right of its straight edge there, and nothing changes at the rows
-/// above it, where the string is straight.
-#[test]
-fn a_bowed_glass_edge_differs_from_a_straight_one_only_where_it_bows() {
-    let Some((device, queue, _)) = device() else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    let run = |bow| Run {
-        glass: true,
-        quality: Quality::Full,
-        frames: 3,
-        bow,
-    };
-    let (w, _, straight) = render(&device, &queue, run(0.0));
-    let (_, _, bowed) = render(&device, &queue, run(30.0));
-    let mid = THICK.y + THICK.h / 2.0;
-    // just right of the straight edge, at the peak: glass now
-    let strip = (THICK.x + THICK.w + 4.0, mid - 2.0, 16.0, 4.0);
-    assert_ne!(region(&bowed, w, strip), region(&straight, w, strip));
-    // the rows above the panel's top, where the bow is zero: the same
-    let above = (THICK.x, 0.0, THICK.w + 40.0, THICK.y - 1.0);
-    assert_eq!(region(&bowed, w, above), region(&straight, w, above));
 }
 
 /// A solid texture of `rgba`, `w`×`h`, sampled by the mask.

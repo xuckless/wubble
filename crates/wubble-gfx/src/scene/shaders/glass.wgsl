@@ -5,7 +5,7 @@
 // `uMaterial` 0 draws the effects only (beam, glow) for surfaces over live content;
 // 2 (wubble's, not the design's) is the flat fill of `Quality::Flat`.
 // This pass is what Slint itself cannot do (no backdrop blur): Slint draws the content on top.
-// Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl, edge.wgsl. Blend: premultiplied.
+// Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl. Blend: premultiplied.
 
 // @source slint-glass-wgsl
 struct GlassU {
@@ -24,8 +24,7 @@ struct GlassU {
   uWaveN: i32,
   uVoiceAmt: f32,
   uMaterial: f32,    // 1 full glass, 0 effects only, 2 flat fill (wubble)
-  uBow: f32,         // wubble: 1 = the right edge follows B (the bowed seam)
-  _p1: f32, _p2: f32,
+  _p0: f32, _p1: f32, _p2: f32,
   uBeam: vec4<f32>,  // head, length (fractions of the perimeter), strength, hue
   uVoice: vec4<f32>, // low, mid, high, phase
   uWave: array<vec4<f32>, 4>,
@@ -36,9 +35,6 @@ struct GlassU {
 // uBg is declared in the GLSL but never read there either; only the pyramid levels are used.
 @group(0) @binding(3) var uB1: texture_2d<f32>;
 @group(0) @binding(4) var uB2: texture_2d<f32>;
-
-// wubble: a glass flagged uBow follows the seam's bowed string, edge 0 of EDGES (edge.wgsl,
-// prepended), so the sidebar bulges and pinches with the string.
 
 @vertex
 fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQuad, U.uView); }
@@ -56,9 +52,7 @@ fn sat(c: vec3<f32>, s: f32) -> vec3<f32> { let l = dot(c, vec3<f32>(0.2126, 0.7
 @fragment
 fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   let vPx = fin.vPx;
-  // wubble: a bowed right edge moves by the string's offset at this height (the left stays)
-  let bw = select(0.0, edgeAt(0u, vPx.y), U.uBow > 0.5);
-  let half_ = vec2<f32>(max(0.5, (U.uRect.z + bw) * 0.5), U.uRect.w * 0.5); let c = U.uRect.xy + half_; let p = vPx - c;
+  let half_ = vec2<f32>(max(0.5, U.uRect.z * 0.5), U.uRect.w * 0.5); let c = U.uRect.xy + half_; let p = vPx - c;
   let r = min(U.uR, min(half_.x, half_.y));
   let d = sdRound(p, half_, r);
   let aa = 0.75 / U.uDpr;

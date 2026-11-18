@@ -949,12 +949,6 @@ fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
     assert!(app.get_seam_bowed());
     let table: Vec<f32> = app.get_seam_edge().iter().collect();
     assert!(table.len() > 1);
-    let step = app.get_seam_edge_step();
-    let edge = wubble_core::bow::EdgeTable {
-        y0: 0.0,
-        step: step.into(),
-        offset: table.clone(),
-    };
     pump(1);
     let held = app.get_side_edges();
     let pill = held.pill - rest.pill;
@@ -964,27 +958,10 @@ fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
         lights < pill,
         "the header rides less, nearer the end: {lights} {pill}"
     );
-    // the Slint-only outline reaches the sidebar's width plus the bend at the grab height
-    let outline = app.get_sidebar_outline();
-    assert!(!outline.is_empty());
-    // every command of the path takes x y pairs: the x values are the even ones
-    let numbers: Vec<f32> = outline
-        .split(|c: char| c.is_ascii_alphabetic() || c == ' ')
-        .filter_map(|n| n.parse().ok())
-        .collect();
-    let xs: Vec<f32> = numbers.iter().step_by(2).copied().collect();
-    let reach = xs.iter().copied().fold(f32::MIN, f32::max);
-    let bend = edge.max_abs() as f32;
-    assert!(
-        (reach - (app.get_sidebar_width() + bend)).abs() < 0.05,
-        "outline reaches {reach}, width {} + bend {bend}",
-        app.get_sidebar_width()
-    );
     button(app, x + 60.0, y, false);
     settle(app, driver);
     pump(1);
     assert_eq!(app.get_seam_edge().row_count(), 0);
-    assert!(app.get_sidebar_outline().is_empty());
     assert_eq!(app.get_side_edges().pill, rest.pill);
     pointer(app, 900.0, 300.0);
 

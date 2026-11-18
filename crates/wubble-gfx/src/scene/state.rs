@@ -112,8 +112,6 @@ pub struct GlassRect {
     pub pressed: bool,
     pub hover: bool,
     pub focus: bool,
-    /// wubble: its right edge follows the bowed seam ([`Scene::set_bow`]); the sidebar's glass.
-    pub bow: bool,
     /// wubble: RGB 0..1 mixed into the glass at 10% (`GlassSurface::tint`); black = none. The
     /// window's glass carries the Space colour (design desktop.tsx `glass.tint = accent`).
     pub tint: [f32; 3],
@@ -149,8 +147,6 @@ pub struct GlassSurface {
     pub beam: Option<Beam>,
     /// 1 = full glass; 0 = effects only (beam, glow) for surfaces drawn over live content
     pub material: f64,
-    /// wubble: the right edge follows the scene's bow ([`Scene::set_bow`])
-    pub bow: bool,
 }
 
 impl Default for GlassSurface {
@@ -170,7 +166,6 @@ impl Default for GlassSurface {
             waves: vec![],
             beam: None,
             material: 1.0,
-            bow: false,
         }
     }
 }
@@ -198,30 +193,8 @@ pub fn surface_of(g: &GlassRect) -> GlassSurface {
         tier: g.tier.shader_value(),
         film: if touched { 1.0 } else { 0.0 },
         shadow: 0.6,
-        bow: g.bow,
         tint: g.tint,
         ..Default::default()
-    }
-}
-
-/// Length of one beam lap, seconds (chrome.tsx `D = 1500`).
-pub const BEAM_LAP: f32 = 1.5;
-
-// @source address-loading (browser/chrome.tsx)
-/// The address bar's loading beam at `k` (0..1 of one lap): it laps the bar
-/// on an ease-out and fades as it slows. It brightens in 120 ms, then from
-/// 35% of the way its strength eases to zero (smootherstep, squared so the
-/// last of it lingers) while its tail grows longer.
-pub fn lap_beam_at(k: f64, hue: f64) -> Beam {
-    let k = k.clamp(0.0, 1.0);
-    let e = 1.0 - (1.0 - k).powi(3);
-    let f = ((k - 0.35) / 0.65).clamp(0.0, 1.0);
-    let fade = 1.0 - f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    Beam {
-        head: 0.08 + e * 1.35,
-        length: 0.35 + 0.3 * f,
-        strength: (k * 12.5).min(1.0) * fade * fade,
-        hue,
     }
 }
 
@@ -352,15 +325,6 @@ pub const MAX_GLASS: usize = 64;
 /// Flat quality); the oldest go first.
 const MAX_OPS: usize = 64;
 
-/// The border beam: where it runs, and how far through its lap it is.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct BeamSlot {
-    at: BeamRect,
-    /// `Some(k)`, k in 0..1, while a lap runs.
-    lap: Option<f32>,
-    hue: f64,
-}
-
 // @source slint-render-scene (render.rs)
 /// The CPU half of `Scene`: everything except the GPU calls. Methods match scene.ts.
 pub struct Scene {
@@ -370,7 +334,10 @@ pub struct Scene {
     fluid_aspect: f32,
     pub(super) time: f32,
     pub(super) glass: Vec<GlassSurface>,
-    beam: Option<BeamSlot>,
+    /// The border beam: where it runs, and what it looks like this frame (the shell owns its
+    /// lifecycle: `wubble_core::beam`).
+    beam: Option<BeamRect>,
+    beam_shape: Option<Beam>,
     pub(super) ripples: Vec<Ripple>,
     pub(super) light: [f32; 2],
     light_target: [f32; 2],
@@ -382,10 +349,6 @@ pub struct Scene {
     pub(super) opts: SceneOptions,
     ops: Vec<FluidOp>,
     rng: Rng,
-    /// wubble: the bowed seam the flagged glass's right edge follows, packed for the shader
-    /// (`crate::EdgeU`), and its largest displacement.
-    pub(super) bow: crate::EdgeU,
-    pub(super) bow_reach: f32,
 }
 
 impl Scene {
@@ -412,6 +375,7 @@ impl Scene {
             time: 0.0,
             glass: vec![],
             beam: None,
+            beam_shape: None,
             ripples: vec![],
             light: [0.0; 2],
             light_target: [0.0; 2],
@@ -423,17 +387,7 @@ impl Scene {
             opts: o,
             ops: vec![],
             rng: Rng::new(seed),
-            bow: crate::EdgeU::pack(None),
-            bow_reach: 0.0,
         }
-    }
-
-    /// wubble: the seam's bowed string (window heights, logical px), which the right edge of
-    /// every glass rect flagged `bow` follows; `None` when it is straight. The sidebar's glass
-    /// bulges and pinches with the string instead of staying a rigid box under it.
-    pub fn set_bow(&mut self, edge: Option<crate::Edge>) {
-        self.bow_reach = edge.map_or(0.0, |e| e.offset.iter().fold(0.0f32, |m, o| m.max(o.abs())));
-        self.bow = crate::EdgeU::pack(edge);
     }
 
     /// The Space's dye colours; the liquid crossfades to them in about 600 ms.
@@ -459,43 +413,33 @@ impl Scene {
             .collect();
     }
 
-    /// Where the border beam runs (the address bar), or `None` to remove it.
-    /// The beam shows only during a lap ([`Scene::lap_beam`]); it is drawn
-    /// as effects only (stroke, glow, bloom) over whatever is there.
+    /// Where the border beam runs (the address bar), or `None` to remove it. It is drawn
+    /// only while it has a shape ([`Scene::set_beam_shape`]), as effects only (stroke, glow,
+    /// bloom) over whatever is there.
     pub fn set_beam(&mut self, at: Option<BeamRect>) {
-        self.beam = at.map(|at| match self.beam {
-            Some(b) => BeamSlot { at, ..b },
-            None => BeamSlot {
-                at,
-                lap: None,
-                hue: 0.0,
-            },
-        });
+        self.beam = at;
     }
 
-    /// Start one lap of the beam (a page starts loading): 1.5 s, with a new
-    /// hue. Restarts a running lap. Does nothing without [`Scene::set_beam`].
-    pub fn lap_beam(&mut self) {
-        let hue = self.rng.random();
-        if let Some(b) = &mut self.beam {
-            b.lap = Some(0.0);
-            b.hue = hue;
-        }
+    /// The beam this frame (`None`: nothing drawn). wubble: the design times its lap in
+    /// chrome.tsx `Address`; here the shell's `wubble_core::beam` does, and hands the shape over
+    /// every frame. Kept without a rect, for when one arrives.
+    pub fn set_beam_shape(&mut self, shape: Option<Beam>) {
+        self.beam_shape = shape;
     }
 
     /// The beam's surface this frame, if a lap is running.
     pub(super) fn beam_surface(&self) -> Option<GlassSurface> {
-        let b = self.beam?;
-        let k = b.lap?;
+        let at = self.beam?;
+        let shape = self.beam_shape.filter(|s| s.strength > 0.001)?;
         Some(GlassSurface {
-            x: b.at.rect.x.into(),
-            y: b.at.rect.y.into(),
-            w: b.at.rect.w.into(),
-            h: b.at.rect.h.into(),
-            r: b.at.radius.into(),
+            x: at.rect.x.into(),
+            y: at.rect.y.into(),
+            w: at.rect.w.into(),
+            h: at.rect.h.into(),
+            r: at.radius.into(),
             shadow: 0.0,
             material: 0.0,
-            beam: Some(lap_beam_at(k.into(), b.hue)),
+            beam: Some(shape),
             ..Default::default()
         })
     }
@@ -595,18 +539,20 @@ impl Scene {
         self.pointer.4 = false;
     }
 
-    /// A tap or press at (x, y), logical px: a ring wave through the backdrop
-    /// and an outward push in the liquid, and a press wave through the
-    /// front-most glass under the point (chrome.tsx `Fav`: reach 90, life 0.7).
+    /// A tap or press at (x, y), logical px. On glass, a press wave through the front-most
+    /// glass under the point (chrome.tsx `Fav`: reach 90, life 0.7); on the bare backdrop, a
+    /// ring wave through it and an outward push in the liquid (desktop.tsx `deskDown`:
+    /// `ripple(x, y, 240, 0.6)`). README › Shaders: "presses send one through glass; taps send
+    /// one through the liquid".
     pub fn tap(&mut self, x: f32, y: f32) {
-        self.ripple(x, y, 260.0, 1.0);
-        if let Some(g) = self
+        match self
             .glass
             .iter_mut()
             .rev()
             .find(|g| Rect::new(g.x as f32, g.y as f32, g.w as f32, g.h as f32).contains(x, y))
         {
-            push_wave(&mut g.waves, x.into(), y.into(), 90.0, 0.7);
+            Some(g) => push_wave(&mut g.waves, x.into(), y.into(), 90.0, 0.7),
+            None => self.ripple(x, y, 240.0, 0.6),
         }
     }
 
@@ -635,7 +581,7 @@ impl Scene {
     // @source slint-render-emitters (render.rs `advance`, split in two)
     /// The per-frame CPU part of `Scene.frame` that runs whether or not the
     /// backdrop is rendered: time, glass waves, palette crossfade, light lag,
-    /// ripple ageing and the beam lap.
+    /// and ripple ageing.
     pub(super) fn advance(&mut self, dt: f32) {
         self.time += dt;
         for g in &mut self.glass {
@@ -658,9 +604,6 @@ impl Scene {
             r.age += dt;
             r.age < r.life
         });
-        if let Some(b) = &mut self.beam {
-            b.lap = b.lap.map(|k| k + dt / BEAM_LAP).filter(|k| *k < 1.0);
-        }
     }
 
     /// The fluid ops of a frame whose backdrop is rendered, in order: the
@@ -716,7 +659,6 @@ mod tests {
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> GlassRect {
         GlassRect {
-            bow: false,
             rect: Rect::new(x, y, w, h),
             radius: 12.0,
             tier: Tier::Regular,
@@ -869,9 +811,14 @@ mod tests {
         s.set_glass(&[rect(0.0, 0.0, 100.0, 100.0), hovered]);
         assert_eq!(s.glass[1].waves.len(), 1);
         assert_eq!(s.glass[1].film, 1.0);
+        assert!(
+            s.ripples.is_empty(),
+            "a press on glass waves the glass only"
+        );
         // outside every panel: backdrop only
         s.tap(500.0, 500.0);
         assert_eq!(s.glass[1].waves.len(), 1);
+        assert_eq!((s.ripples.len(), s.ripples[0].reach), (1, 240.0));
         s.set_glass(&[]);
         assert!(s.glass.is_empty());
         let many = vec![rect(0.0, 0.0, 10.0, 10.0); MAX_GLASS + 5];
@@ -880,40 +827,34 @@ mod tests {
     }
 
     #[test]
-    fn beam_shows_only_during_a_lap() {
+    fn beam_shows_only_with_a_rect_and_a_shape() {
         let mut s = sized();
-        s.lap_beam();
+        let shape = Beam {
+            head: 0.4,
+            length: 0.35,
+            strength: 0.8,
+            hue: 0.1,
+        };
+        s.set_beam_shape(Some(shape));
         assert!(s.beam_surface().is_none(), "no rect yet");
         let at = BeamRect {
             rect: Rect::new(100.0, 10.0, 300.0, 32.0),
             radius: 12.0,
         };
         s.set_beam(Some(at));
-        assert!(s.beam_surface().is_none());
-        s.lap_beam();
-        s.advance(0.5);
-        let b = s.beam_surface().expect("lapping");
+        let b = s.beam_surface().expect("a rect and a shape");
         assert_eq!((b.material, b.shadow, b.w), (0.0, 0.0, 300.0));
-        assert!(b.beam.unwrap().strength > 0.0);
-        s.advance(1.0);
+        assert_eq!(b.beam, Some(shape));
+        s.set_beam_shape(None);
         assert!(s.beam_surface().is_none(), "the lap ended");
-        s.lap_beam();
+        s.set_beam_shape(Some(Beam {
+            strength: 0.0,
+            ..shape
+        }));
+        assert!(s.beam_surface().is_none(), "a faded beam draws nothing");
+        s.set_beam_shape(Some(shape));
         s.set_beam(None);
         assert!(s.beam_surface().is_none());
-    }
-
-    #[test]
-    fn lap_beam_curve_matches_the_design() {
-        let start = lap_beam_at(0.0, 0.3);
-        assert_eq!(
-            (start.head, start.length, start.strength),
-            (0.08, 0.35, 0.0)
-        );
-        assert_eq!(lap_beam_at(0.08, 0.0).strength, 1.0);
-        let end = lap_beam_at(1.0, 0.0);
-        assert!((end.head - 1.43).abs() < 1e-12);
-        assert!((end.length - 0.65).abs() < 1e-12);
-        assert_eq!(end.strength, 0.0);
     }
 
     #[test]

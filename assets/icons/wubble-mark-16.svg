@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- wubble mark, 16 px variant: sheen flattened to one periwinkle so it stays crisp in a tab strip. Brand kit Icons board. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <title>wubble</title>
+  <path d="M61 9C89 8 112 30 111 59C110 90 90 112 60 111C29 110 9 92 9 61C9 31 32 10 61 9Z" fill="#1A1E2A"/>
+  <path d="M28 44Q36 88 46 88Q53 88 60 64Q67 88 74 88Q84 88 92 44" fill="none" stroke="#B8C8FF" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,5 +1,7 @@
 // Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
-// `src/wubble/slint/scroller.rs`, copied verbatim (tests added below the port's).
+// `src/wubble/slint/scroller.rs`, copied verbatim (tests added below the port's), except the
+// marked `wubble change`: the glide of `browser/scroller.tsx` @ 21838b8 (`to(y)`), which the
+// port does not have yet.
 
 //! Scroll physics, ported 1:1 from `browser/scroller.tsx` (the Preact component's loop and event
 //! handlers, without the DOM). Wheel and keys move a target that the content follows on a
@@ -21,6 +23,9 @@ pub mod SCROLL {
     pub const follow: [f64; 2] = [520.0, 46.0];
     /// back from overscroll: ζ ≈ 0.93, home in ~350 ms
     pub const release: [f64; 2] = [420.0, 38.0];
+    /// wubble change (scroller.tsx @ 21838b8): `to()`, a programmatic jump (a settings section),
+    /// ζ = 1, so long trips read as a move, not a cut
+    pub const glide: [f64; 2] = [170.0, 26.0];
     /// rubber band past the ends
     pub const bandK: f64 = 34.0;
     /// wheel quiet for this long → clamp the target
@@ -82,6 +87,8 @@ pub struct Scroller {
     vel: Velocity,
     touch_y: f64,
     pub held: bool,
+    /// wubble change: gliding to a `to()` target, until it arrives or input takes over
+    pub glide: bool,
 }
 
 impl Default for Scroller {
@@ -107,6 +114,7 @@ impl Scroller {
             vel: Velocity::new(),
             touch_y: 0.0,
             held: false,
+            glide: false,
         }
     }
 
@@ -123,6 +131,15 @@ impl Scroller {
         self.pos.v = 0.0;
         self.target = 0.0;
         self.fling = 0.0;
+        self.glide = false;
+    }
+
+    /// wubble change (scroller.tsx @ 21838b8 `to`): glide to `y`, kept inside the page.
+    pub fn to(&mut self, y: f64, now: f64) {
+        self.target = clamp(y, 0.0, self.max);
+        self.glide = true;
+        self.fling = 0.0;
+        self.shown_at = now;
     }
 
     // @source slint-scroll-input
@@ -161,6 +178,7 @@ impl Scroller {
             self.last_wheel = now - SCROLL::idleMs - 1.0;
             return;
         }
+        self.glide = false;
         self.target += d
             * (if outward {
                 1.0 / (1.0 + out / 40.0)
@@ -190,6 +208,7 @@ impl Scroller {
             ScrollKey::Home => -1e9,
             ScrollKey::End => 1e9,
         };
+        self.glide = false;
         self.target = clamp(self.target + m, 0.0, self.max);
         self.shown_at = now;
         self.last_wheel = now;
@@ -198,6 +217,7 @@ impl Scroller {
     /// Touch and pen drag the page directly (mouse keeps text selection in the web version).
     pub fn touch_down(&mut self, y: f64, now: f64) {
         self.held = true;
+        self.glide = false;
         self.touch_y = y;
         self.vel.reset();
         self.vel.push(0.0, y, now);
@@ -270,10 +290,15 @@ impl Scroller {
             let out = self.pos.x < 0.0 || self.pos.x > self.max;
             let [k, c] = if out && now - self.last_wheel > SCROLL::idleMs {
                 SCROLL::release
+            } else if self.glide {
+                SCROLL::glide
             } else {
                 SCROLL::follow
             };
             step(&mut self.pos, self.target, k, c, dt);
+            if self.glide && self.pos.x == self.target {
+                self.glide = false;
+            }
             if self.fling != 0.0 && (self.target < -60.0 || self.target > self.max + 60.0) {
                 self.fling = 0.0;
             }
@@ -405,5 +430,30 @@ mod tests {
         assert!(s.target < 0.0);
         s.step(0.016, 91.0);
         assert_eq!(s.target, 0.0);
+    }
+
+    /// `to()` glides on its own spring (no overshoot, ζ = 1), inside the page, and stops gliding
+    /// when it arrives; a wheel takes over at once.
+    #[test]
+    fn to_glides_inside_the_page() {
+        let mut s = Scroller::new();
+        s.measure(600.0, 2000.0);
+        s.to(5000.0, 0.0);
+        assert_eq!(s.target, s.max);
+        assert!(s.glide);
+        let mut now = 0.0;
+        let mut top = 0f64;
+        for _ in 0..600 {
+            now += 16.0;
+            s.step(0.016, now);
+            top = top.max(s.pos.x);
+        }
+        assert!(top <= s.max + 1e-9, "no overshoot: {top}");
+        assert_eq!(s.pos.x, s.max);
+        assert!(!s.glide, "arrived");
+        s.to(300.0, now);
+        s.wheel(10.0, DeltaMode::Pixel, now);
+        assert!(!s.glide);
+        assert_eq!(s.target, 310.0);
     }
 }

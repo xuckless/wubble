@@ -44,7 +44,7 @@ export component Toast inherits Rectangle {
             easing: root.shown ? Motion.easeSpring : Motion.easeIn;
         }
         animate opacity {
-            duration: root.shown ? Shell.menu-in : Shell.toast-out;
+            duration: root.shown ? Motion.dropdownIn : Shell.toast-out;
             easing: root.shown ? Motion.easeOut : Motion.easeIn;
         }
         label := Text {

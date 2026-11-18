@@ -20,9 +20,12 @@ export component DownloadsPopover inherits Rectangle {
     callback action(int, DownloadAction);
     callback dismissed();
 
-    visible: root.open;
+    // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
+    // the panel has faded; only the open popover takes the pointer.
+    visible: root.open || panel.opacity > 0;
 
     TouchArea {
+        enabled: root.open;
         pointer-event(e) => {
             if e.kind == PointerEventKind.down {
                 root.dismissed();
@@ -63,8 +66,8 @@ export component DownloadsPopover inherits Rectangle {
         transform-scale: root.open ? 1 : Motion.dropdownFrom;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Shell.menu-in : Shell.menu-out;
-            easing: root.open ? Motion.easeOut : Motion.easeIn;
+            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
         TouchArea { }
 

@@ -20,7 +20,6 @@ fn main() {
         glass: true,
         quality: Quality::Full,
         frames: 90,
-        bow: 0.0,
     };
     let (w, h, data) = headless::render(&device, &queue, run);
     let mut ppm = format!("P6 {w} {h} 255\n").into_bytes();

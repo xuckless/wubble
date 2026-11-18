@@ -79,13 +79,6 @@ export component GlassPanel inherits Rectangle {
     // `present` is the panel's own say whether it shows.
     in property <int> key: -1;
     in property <bool> present: true;
-    // wubble: the right edge follows the bowed seam string. Over wgpu the scene bows it
-    // (`GlassItem.bow`); Slint-only, `outline` is the bowed rounded rect (an SVG path in this
-    // panel's coordinates, wubble_core::split::string_rect_of) and the panel draws it instead of
-    // its rectangle. Empty: the plain rectangle.
-    in property <bool> follows-seam: false;
-    in property <string> outline;
-    property <bool> outlined: !root.over-wgpu && root.outline != "";
     // The press scale, about the centre. A property of its own (callers animate it): Slint
     // reads an unbound transform-scale as 0. `absolute-position` maps the origin through the
     // transform (scaled origin), but `width` and `height` stay unscaled.
@@ -106,7 +99,6 @@ export component GlassPanel inherits Rectangle {
         pressed: root.pressed,
         hover: root.hover,
         focus: root.focused,
-        bow: root.follows-seam,
         tint: root.tint,
         present: root.over-wgpu && root.present && root.visible && min(root.absolute-position.x + root.width * root.scale, root.clip-end) > max(root.absolute-position.x, root.clip-start) && root.height > 0,
     };
@@ -125,31 +117,16 @@ export component GlassPanel inherits Rectangle {
     property <float> shadow-alpha: root.tier == GlassTier.thin ? 0.35 : root.tier == GlassTier.regular ? 0.45 : 0.55;
 
     border-radius: root.radius;
-    background: root.over-wgpu || root.outlined ? transparent : root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;   // wubble change: Shell, not Glass.thickOverContent (.72): without the blur, text needs more body
-    drop-shadow-offset-y: root.over-wgpu || root.outlined ? 0px : root.t.shadowY;
-    drop-shadow-blur: root.over-wgpu || root.outlined ? 0px : root.t.shadowBlur;
-    drop-shadow-color: root.over-wgpu || root.outlined ? transparent : rgba(0, 0, 0, root.shadow-alpha);
-
-    // wubble: the bowed outline, Slint-only: the tier fill and the 7% rim along the string
-    outline-path := Path {
-        width: root.width;
-        height: root.height;
-        viewbox-x: 0;
-        viewbox-y: 0;
-        viewbox-width: root.width / 1px;
-        viewbox-height: root.height / 1px;
-        commands: root.outline;
-        visible: root.outlined;
-        fill: root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;
-        stroke: Glass.rimAll;
-        stroke-width: 1px;
-    }
+    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;   // wubble change: Shell, not Glass.thickOverContent (.72): without the blur, text needs more body
+    drop-shadow-offset-y: root.over-wgpu ? 0px : root.t.shadowY;
+    drop-shadow-blur: root.over-wgpu ? 0px : root.t.shadowBlur;
+    drop-shadow-color: root.over-wgpu ? transparent : rgba(0, 0, 0, root.shadow-alpha);
 
     // tint at 10%
     Rectangle {
         border-radius: root.radius;
         background: root.tint.transparentize(0.9);
-        visible: !root.over-wgpu && !root.outlined && root.tint.alpha > 0;
+        visible: !root.over-wgpu && root.tint.alpha > 0;
     }
 
     // specular band
@@ -159,7 +136,7 @@ export component GlassPanel inherits Rectangle {
         border-top-left-radius: root.radius;
         border-top-right-radius: root.radius;
         background: @linear-gradient(180deg, Glass.specular 0%, transparent 100%);
-        visible: !root.over-wgpu && !root.outlined;
+        visible: !root.over-wgpu;
     }
 
     // 1px inner rim, 7% all round
@@ -167,7 +144,7 @@ export component GlassPanel inherits Rectangle {
         border-radius: root.radius;
         border-width: 1px;
         border-color: Glass.rimAll;
-        visible: !root.over-wgpu && !root.outlined;
+        visible: !root.over-wgpu;
     }
     // ... and 22% along the top edge (inset 0 1px 0)
     Rectangle {
@@ -176,7 +153,7 @@ export component GlassPanel inherits Rectangle {
         width: max(0px, parent.width - root.radius * 2);
         height: 1px;
         background: Glass.rimTop;
-        visible: !root.over-wgpu && !root.outlined;
+        visible: !root.over-wgpu;
     }
 
     // film rim, only on touch. wubble change: the scene draws its own (uFilm) over wgpu.
@@ -386,12 +363,27 @@ export component TabRow inherits Rectangle {
     // wubble change: shown while the row or the button itself is hovered. In the port the button
     // appeared only while the row's TouchArea had hover, which it loses to the button's own
     // TouchArea, so the button flickered away under the pointer.
+    // wubble change: it fades and grows in as .wb-tab-x does (browser.css: opacity 0 → 1 over
+    // .15 s, scale .8 → 1 over .2 s ease-out; a 22 px tile, radius 7, white 10% on its own hover).
+    // wubble change: hover only, the selected row too (.wb-tab:hover .wb-tab-x)
+    property <bool> close-shown: !root.compact && (touch.has-hover || close-touch.has-hover);
     Rectangle {
         x: root.width - Shell.side-pad - self.width;
+        y: (root.height - self.height) / 2;
         width: 22px;
-        // wubble change: hover only, the selected row too (.wb-tab:hover .wb-tab-x)
-        visible: !root.compact && (touch.has-hover || close-touch.has-hover);
-        close-touch := TouchArea { clicked => { root.close(); } }
+        height: 22px;
+        border-radius: Shell.tab-close-radius;
+        background: close-touch.has-hover ? Shell.tab-close-hover : transparent;
+        animate background { duration: 150ms; easing: Motion.easeOut; }
+        visible: !root.compact;
+        opacity: root.close-shown ? 1 : 0;
+        animate opacity { duration: 150ms; easing: Motion.easeOut; }
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: root.close-shown ? 1 : 0.8;
+        animate transform-scale { duration: 200ms; easing: Motion.easeOut; }
+        close-touch := TouchArea {
+            clicked => { root.close(); }
+        }
         Path {
             width: 10px;
             height: 10px;

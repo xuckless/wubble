@@ -18,6 +18,7 @@ import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.
 import { Shell } from "../app-tokens.slint";
 import { PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView } from "model.slint";
+import { PageScroll } from "page-scroll.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
 import { Raised } from "raised.slint";
@@ -199,6 +200,8 @@ export component Field inherits Rectangle {
         width: parent.width - self.x - root.end - root.trail;
         height: parent.height;
         color: Palette.ink;
+        selection-background-color: Shell.selection-fill;
+        selection-foreground-color: Shell.selection-ink;
         font-family: Fonts.ui;
         font-size: root.font;
         vertical-alignment: center;
@@ -341,6 +344,13 @@ export component Slider inherits VerticalLayout {
             height: Shell.slider-knob;
             border-radius: self.width / 2;
             background: Palette.ink;
+            // the held knob swells to 1.1 (touch.tsx SLIDER.holdScale)
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            transform-scale: ta.pressed ? 1.1 : 1;
+            animate transform-scale {
+                duration: Motion.overlapIn;
+                easing: Motion.easeSpring;
+            }
             drop-shadow-blur: Shell.slider-shadow-blur;
             drop-shadow-offset-y: Shell.slider-shadow-y;
             drop-shadow-color: Shell.slider-shadow;
@@ -839,23 +849,73 @@ component Section inherits VerticalLayout {
     }
 }
 
-// The scroller every native page shares: the page's colour, one scroll position.
-component PageScroll inherits Rectangle {
-    in-out property <length> scroll: 0px;
+// The scroller every native page shares: the page's colour on the design's scroll physics
+// (the PageScroll global, stepped by the driver). The open page reports its sizes there and
+// takes its input from here; `wheeled` is any scroll by hand (wheel, touch, thumb).
+component PageScroller inherits Rectangle {
+    in property <bool> open;
+    // where the content is (rubber-banded past the ends), and how far it can go
+    out property <length> scroll: root.open ? PageScroll.y : 0px;
     out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
     callback wheeled();
     background: Palette.web;
     public function wheel(d: length) {
-        root.scroll = max(0px, min(root.room, root.scroll + d));
+        PageScroll.wheel(d);
         root.wheeled();
     }
+    // glide to `y` (scroller.tsx `to`)
+    public function to(y: length) {
+        PageScroll.to(y);
+    }
+    // back to the top at once
+    public function reset() {
+        PageScroll.reset();
+    }
+    changed open => {
+        if root.open {
+            PageScroll.reset();
+            root.report();
+        }
+    }
+    function report() {
+        if root.open {
+            PageScroll.viewport = scroller.viewport-height;
+            PageScroll.content = scroller.content-height;
+        }
+    }
     scroller := WubbleScroller {
-        content-y: min(root.scroll, root.room);
-        thumb-visible: root.room > 0px;
-        thumb-height: root.room > 0px ? max(Spacing.s6, self.viewport-height * self.viewport-height / self.content-height) : 0px;
-        thumb-top: root.room > 0px ? min(root.scroll, root.room) / root.room * (self.viewport-height - self.thumb-height) : 0px;
+        content-y: root.scroll;
+        thumb-visible: root.open && PageScroll.thumb-visible;
+        thumb-height: PageScroll.thumb-height;
+        thumb-top: PageScroll.thumb-top;
+        changed viewport-height => {
+            root.report();
+        }
+        changed content-height => {
+            root.report();
+        }
         wheel(d) => {
             root.wheel(d);
+        }
+        touch-down(y) => {
+            PageScroll.touch-down(y);
+            root.wheeled();
+        }
+        touch-move(y) => {
+            PageScroll.touch-move(y);
+        }
+        touch-up => {
+            PageScroll.touch-up();
+        }
+        thumb-down(y) => {
+            PageScroll.thumb-down(y);
+            root.wheeled();
+        }
+        thumb-move(y) => {
+            PageScroll.thumb-move(y);
+        }
+        thumb-up => {
+            PageScroll.thumb-up();
         }
         @children
     }
@@ -886,12 +946,13 @@ export component PageFrame inherits Rectangle {
     }
     // Back to the top: a new query or a page switch starts there.
     public function scroll-to-top() {
-        page.scroll = 0px;
+        page.reset();
     }
 
     visible: root.open;
 
-    page := PageScroll {
+    page := PageScroller {
+        open: root.open;
         HorizontalLayout {
             alignment: center;
             padding-top: Shell.settings-top;
@@ -914,7 +975,7 @@ export component PageFrame inherits Rectangle {
                         icon-path: IconPaths.search;
                         placeholder: root.placeholder;
                         edited(q) => {
-                            page.scroll = 0px;
+                            page.reset();
                             root.query-changed(q);
                         }
                     }
@@ -971,7 +1032,7 @@ export component SettingsPage inherits Rectangle {
         search.take-focus();
     }
     public function scroll-to-top() {
-        page.scroll = 0px;
+        page.reset();
         root.tracked = 0;
     }
 
@@ -1018,10 +1079,11 @@ export component SettingsPage inherits Rectangle {
         root.tracked = past ? max(root.tracked, index) : max(0, min(root.tracked, index - 1));
     }
     function jump(top: length) {
-        page.scroll = max(0px, min(page.room, top - Shell.settings-pin));
+        page.to(top - Shell.settings-pin);
     }
 
-    page := PageScroll {
+    page := PageScroller {
+        open: root.open;
         wheeled => {
             root.picked = -1;
         }
@@ -1349,7 +1411,7 @@ export component SettingsPage inherits Rectangle {
                 icon-path: IconPaths.search;
                 placeholder: "Search settings";
                 edited(q) => {
-                    page.scroll = 0px;
+                    page.reset();
                     root.tracked = 0;
                     root.picked = -1;
                     root.query-changed(q);

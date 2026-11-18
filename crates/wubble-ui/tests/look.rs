@@ -2,7 +2,8 @@
 //! (design repo @ 21838b8, browser.css and settings.css): the page card sits one inset from the
 //! window's top, right and bottom and from the sidebar in every sidebar mode; the footer ends
 //! where the page card does, less the sidebar's padding; the selected row's raised tile is the
-//! row; and the settings page's section list is generated from the table, beside its rows.
+//! row; and the settings page's section list is generated from the table, beside its rows, and
+//! picking a section glides the page there on the shared page scroller.
 //! Mock time only; one test, because the platform can be installed once per process.
 
 use std::collections::HashMap;
@@ -18,7 +19,7 @@ use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
 use wubble_core::settings::{Section, SettingDef, SettingKind};
 use wubble_ui::driver;
 use wubble_ui::settings::setting_items;
-use wubble_ui::{AppWindow, DownloadItem, InternalPageKind, SidebarMode, TabItem};
+use wubble_ui::{AppWindow, DownloadItem, InternalPageKind, PageScroll, SidebarMode, TabItem};
 
 const W: f32 = 1360.0;
 const H: f32 = 880.0;
@@ -176,4 +177,32 @@ fn look_scenarios() {
     // picking a section in the list is harmless when the page cannot scroll
     privacy[0].invoke_accessible_default_action();
     pump(500);
+
+    // A page that scrolls: picking the last section glides there (scroller.tsx `to`) on the
+    // driver's page scroller, not in one jump.
+    let mut long: Vec<SettingDef> = (0..40)
+        .map(|i| {
+            def(
+                Box::leak(format!("a.{i}").into_boxed_str()),
+                Section::General,
+            )
+        })
+        .collect();
+    long.push(def("b.one", Section::Privacy));
+    app.set_settings_rows(table(&long));
+    pump(500);
+    settle(&app, &driver);
+    let page = app.global::<PageScroll>();
+    assert_eq!(page.get_y(), 0.0);
+    nav_rows(&app, "About")[0].invoke_accessible_default_action();
+    pump(16);
+    driver.borrow_mut().advance(&app, 0.016);
+    let first = page.get_y();
+    settle(&app, &driver);
+    let there = page.get_y();
+    assert!(there > 0.0, "the page moved");
+    assert!(
+        first > 0.0 && first < there / 2.0,
+        "a glide: {first} of {there} after a frame"
+    );
 }
