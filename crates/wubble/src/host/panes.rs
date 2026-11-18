@@ -280,7 +280,12 @@ impl Host {
         let fill = [web.red(), web.green(), web.blue()].map(|c| f32::from(c) / 255.0);
         let mut any = false;
         for (i, rect) in self.pane_rects(window).into_iter().enumerate() {
-            let (split_left, right) = self.panes.edges(rect.tab, height);
+            // a fullscreen page is square and alone: nothing bends it
+            let (split_left, right) = if fullscreen {
+                (None, None)
+            } else {
+                self.panes.edges(rect.tab, height)
+            };
             let left = if i == 0 { seam.clone() } else { split_left };
             let slot = self.slots.iter().position(|s| *s == Some(rect.tab));
             let Some(frame) = self.frames.get_mut(&rect.tab) else {
