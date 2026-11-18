@@ -1,0 +1,205 @@
+import { Colors, Motion, Radius, Sizes, Spacing, Type } from "../tokens.slint";
+import { CommandBarEvent, CommandBarState, CommandResult } from "model.slint";
+import { Glass } from "glass.slint";
+import { CommandRow } from "command-row.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// Command bar overlay; fills its parent (the content area).
+// `state` has one writer, `dispatch`; everything else reads it.
+export component CommandBar inherits Rectangle {
+    in property <[CommandResult]> results;
+    in-out property <string> query <=> input.text;
+    in-out property <CommandBarState> state: CommandBarState.closed;
+
+    callback query-changed(string);
+    callback result-chosen(int);
+    callback dismissed();
+
+    // Keyboard selection; `current` is what the UI uses, clamped to the model.
+    in-out property <int> selected: 0;
+    property <int> count: root.results.length;
+    property <int> current: max(0, min(root.selected, root.count - 1));
+    property <length> row-pitch: Sizes.row-height + Spacing.s1;
+    property <int> visible-rows: min(root.count, Sizes.command-max-rows);
+
+    pure function next(s: CommandBarState, e: CommandBarEvent) -> CommandBarState {
+        if (e == CommandBarEvent.open) {
+            return CommandBarState.open;
+        }
+        if (e == CommandBarEvent.close && s == CommandBarState.open) {
+            return CommandBarState.closing;
+        }
+        if (e == CommandBarEvent.settle && s == CommandBarState.closing) {
+            return CommandBarState.closed;
+        }
+        return s;
+    }
+
+    public function dispatch(e: CommandBarEvent) {
+        root.state = root.next(root.state, e);
+    }
+
+    function choose(i: int) {
+        if (i >= 0 && i < root.count) {
+            root.result-chosen(i);
+            root.dispatch(CommandBarEvent.close);
+        }
+    }
+
+    function dismiss() {
+        root.dismissed();
+        root.dispatch(CommandBarEvent.close);
+    }
+
+    // Port of listview.slint bring-into-view (see THIRD_PARTY_NOTICES.md).
+    function bring-into-view(i: int) {
+        if (i * root.row-pitch < -list.content-y) {
+            list.content-y = -i * root.row-pitch;
+        } else if ((i + 1) * root.row-pitch > -list.content-y + list.visible-height) {
+            list.content-y = -((i + 1) * root.row-pitch - list.visible-height);
+        }
+    }
+
+    function move(delta: int) {
+        if (root.count > 0) {
+            root.selected = mod(root.current + delta + root.count, root.count);
+            root.bring-into-view(root.selected);
+        }
+    }
+
+    visible: root.state != CommandBarState.closed;
+
+    states [
+        shown when root.state == CommandBarState.open: {
+            opacity: 1;
+            panel.y: Sizes.command-bar-top;
+            in {
+                animate opacity, panel.y {
+                    duration: Motion.overlap-in;
+                    easing: ease-out;
+                }
+            }
+            out {
+                animate opacity, panel.y {
+                    duration: Motion.overlap-out;
+                    easing: ease-in;
+                }
+            }
+        }
+        hidden when root.state != CommandBarState.open: {
+            opacity: 0;
+            panel.y: Sizes.command-bar-top - Sizes.overlap-shift;
+        }
+    ]
+
+    changed state => {
+        if (self.state == CommandBarState.open) {
+            input.focus();
+            input.select-all();
+        }
+    }
+
+    Timer {
+        interval: Motion.overlap-out;
+        running: root.state == CommandBarState.closing;
+        triggered => {
+            root.dispatch(CommandBarEvent.settle);
+        }
+    }
+
+    // Scrim; a click outside the panel dismisses.
+    TouchArea {
+        clicked => {
+            root.dismiss();
+        }
+    }
+    Rectangle {
+        background: Colors.scrim;
+    }
+
+    panel := FocusScope {
+        width: min(Sizes.command-bar-width, root.width);
+        x: (root.width - self.width) / 2;
+        height: Sizes.command-input-height + root.visible-rows * root.row-pitch + (root.count > 0 ? Spacing.s2 : 0px);
+
+        KeyBinding {
+            keys: @keys(Escape);
+            activated => {
+                root.dismiss();
+            }
+        }
+
+        Glass {
+            radius: Radius.xl;
+            // Swallow clicks so they do not reach the scrim.
+            TouchArea { }
+
+            VerticalLayout {
+                padding-bottom: root.count > 0 ? Spacing.s2 : 0px;
+                spacing: 0px;
+
+                Rectangle {
+                    height: Sizes.command-input-height;
+                    input := TextInput {
+                        x: Spacing.s6;
+                        width: parent.width - 2 * Spacing.s6;
+                        font-family: Type.ui;
+                        font-size: Type.body-lg;
+                        color: Colors.ink;
+                        single-line: true;
+                        edited => {
+                            root.selected = 0;
+                            root.query-changed(self.text);
+                        }
+                        accepted => {
+                            root.choose(root.current);
+                        }
+                        // Adapted from combobox-base.slint popup-key-handler.
+                        key-pressed(event) => {
+                            if (event.text == Key.UpArrow) {
+                                root.move(-1);
+                                return accept;
+                            }
+                            if (event.text == Key.DownArrow) {
+                                root.move(1);
+                                return accept;
+                            }
+                            if (event.text == Key.Escape) {
+                                root.dismiss();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                    Text {
+                        x: Spacing.s6;
+                        text: "Search or enter address";
+                        color: Colors.haze;
+                        font-size: Type.body-lg;
+                        vertical-alignment: center;
+                        visible: input.text == "";
+                    }
+                }
+
+                list := ScrollView {
+                    height: root.visible-rows * root.row-pitch;
+                    VerticalLayout {
+                        padding-left: Spacing.s2;
+                        padding-right: Spacing.s2;
+                        spacing: Spacing.s1;
+                        alignment: start;
+                        for r[i] in root.results: CommandRow {
+                            item: r;
+                            index: i;
+                            shown: root.state == CommandBarState.open;
+                            active: i == root.current;
+                            activated => {
+                                root.choose(i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

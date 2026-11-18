@@ -1,6 +1,7 @@
 import { Colors, Radius, Sizes, Spacing, Type } from "../tokens.slint";
 import { TabItem } from "model.slint";
 import { RowBase } from "row-base.slint";
+import { GlyphTile } from "glyph-tile.slint";
 
 export component TabRow inherits RowBase {
     in property <TabItem> item;
@@ -12,17 +13,9 @@ export component TabRow inherits RowBase {
         spacing: Spacing.s3;
         alignment: stretch;
 
-        Rectangle {
-            width: Sizes.glyph;
-            height: Sizes.glyph;
-            border-radius: Radius.xs;
-            background: root.item.tint;
-            Text {
-                text: root.item.glyph;
-                color: Colors.on-film;
-                font-size: Type.caption;
-                font-weight: Type.semibold;
-            }
+        GlyphTile {
+            glyph: root.item.glyph;
+            tint: root.item.tint;
         }
 
         Text {

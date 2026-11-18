@@ -1,8 +1,9 @@
 import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
-import { TabItem, SpaceItem } from "components/model.slint";
+import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent } from "components/model.slint";
+import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
 
-export { TabItem, SpaceItem, Colors }
+export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -25,26 +26,63 @@ export component AppWindow inherits Window {
 
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;
-    callback new-tab-requested <=> sidebar.new-tab-requested;
+    in-out property <CommandBarState> command-bar-state <=> bar.state;
+    in property <[CommandResult]> command-results <=> bar.results;
+    in-out property <string> command-query <=> bar.query;
+    callback command-query-changed <=> bar.query-changed;
+    callback command-result-chosen <=> bar.result-chosen;
+    callback command-dismissed <=> bar.dismissed;
+    // Intents: the bar opens itself; Rust may prefill the query.
+    callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
-    callback address-activated <=> sidebar.address-activated;
+    callback address-focus-requested();
 
-    HorizontalLayout {
-        padding: Spacing.s2;
-        spacing: Spacing.s2;
-
-        sidebar := Sidebar {
-            width: Sizes.sidebar-width;
-        }
-
-        Rectangle {
-            border-radius: Radius.md;
-            clip: true;
-            Image {
-                width: 100%;
-                height: 100%;
-                source: root.web-frame;
+    root-keys := FocusScope {
+        KeyBinding {
+            keys: @keys(Control + T);
+            activated => {
+                bar.dispatch(CommandBarEvent.open);
+                root.new-tab-requested();
             }
         }
+        KeyBinding {
+            keys: @keys(Control + L);
+            activated => {
+                bar.dispatch(CommandBarEvent.open);
+                root.address-focus-requested();
+            }
+        }
+
+        HorizontalLayout {
+            padding: Spacing.s2;
+            spacing: Spacing.s2;
+
+            sidebar := Sidebar {
+                width: Sizes.sidebar-width;
+                new-tab-requested => {
+                    bar.dispatch(CommandBarEvent.open);
+                    root.new-tab-requested();
+                }
+                address-activated => {
+                    bar.dispatch(CommandBarEvent.open);
+                    root.address-focus-requested();
+                }
+            }
+
+            Rectangle {
+                border-radius: Radius.md;
+                clip: true;
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.web-frame;
+                }
+                bar := CommandBar { }
+            }
+        }
+    }
+
+    init => {
+        root-keys.focus();
     }
 }

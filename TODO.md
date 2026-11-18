@@ -29,6 +29,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption |
 | Layout | No top toolbar. Address pill at the top of the sidebar, then pinned, tabs, new-tab row, Space switcher |
 | New tab | Ctrl+T opens the command bar over the current page; a tab is created only when something is chosen. No start page |
+| Command bar state | One `CommandBarState` enum written only by a pure `next()` via `dispatch` in Slint; closing to closed is a Slint Timer equal to the out duration (no animation-finished callback) |
 | Passwords | Built-in manager (encrypted store, OS keyring) before extensions; extension password managers work once the extension pass (M6) lands |
 | Glass under load | Glass degrades automatically (lower-res blur → cached backdrop → flat tint); animation never drops frames for it |
 | Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate) with a declared schema and migrations: Spaces, tabs, session, history, bookmarks, passwords. Chromium keeps only cookies/cache per container |
@@ -115,7 +116,7 @@ Foundations
 Daily-drive set
 - [ ] Vertical sidebar on Regular glass: tab rows 36 px, pinned section, "Today" group, new-tab row
 - [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container
-- [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts
+- [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; glass, results wiring and actions remain)
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
 - [ ] Suggestion fetch effect (run `Source::Remote` requests, debounce, cancel stale) and the settings toggle for the flag
 - [ ] Compact mode: sidebar/toolbar hide and reveal; the stretchy seam ("Room to play") for sidebar width

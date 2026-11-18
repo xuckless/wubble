@@ -1,0 +1,20 @@
+import { Colors, Radius, Sizes, Type } from "../tokens.slint";
+
+// Tinted tile with a one-letter glyph; the defaults are the list-row size.
+export component GlyphTile inherits Rectangle {
+    in property <string> glyph;
+    in property <color> tint;
+    in property <length> radius: Radius.xs;
+    in property <length> glyph-size: Type.caption;
+
+    width: Sizes.glyph;
+    height: Sizes.glyph;
+    border-radius: root.radius;
+    background: root.tint;
+    Text {
+        text: root.glyph;
+        color: Colors.on-film;
+        font-size: root.glyph-size;
+        font-weight: Type.semibold;
+    }
+}

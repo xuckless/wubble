@@ -30,6 +30,7 @@ export global Colors {
     out property <color> glass-regular: light ? #FFFFFFAD : #1619216B;
     out property <color> hover-fill: light ? #11131A0D : #FFFFFF0D;
     out property <color> press-fill: light ? #11131A1A : #FFFFFF1A;
+    out property <color> scrim: light ? #11131A52 : #08090D66;
 }
 
 export global Radius {
@@ -64,6 +65,12 @@ export global Sizes {
     out property <length> pinned-glyph: 36px;
     out property <length> space-dot-inset: 2px;
     out property <int> pinned-max: 4;
+    out property <length> command-bar-width: 640px;
+    out property <length> command-bar-top: 64px;
+    out property <length> command-input-height: 52px;
+    out property <int> command-max-rows: 8;
+    out property <length> overlap-shift: 7px;
+    out property <length> shortcut-hint-width: 72px;
     out property <length> window-width: 1280px;
     out property <length> window-height: 800px;
 }
@@ -87,4 +94,8 @@ export global Type {
 
 export global Motion {
     out property <duration> fast: 150ms;
+    // The pack's "Overlap" timings.
+    out property <duration> overlap-in: 240ms;
+    out property <duration> overlap-out: 190ms;
+    out property <duration> stagger: 30ms;
 }

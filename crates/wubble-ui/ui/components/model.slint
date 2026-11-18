@@ -11,3 +11,31 @@ export struct SpaceItem {
     name: string,
     tint: color,
 }
+
+export enum CommandKind {
+    open-tab,
+    history,
+    bookmark,
+    search,
+    action,
+}
+
+export struct CommandResult {
+    kind: CommandKind,
+    title: string,
+    subtitle: string,
+    shortcut: string,
+}
+
+// Lifecycle of the command bar overlay. Written only by CommandBar.dispatch.
+export enum CommandBarState {
+    closed,
+    open,
+    closing,
+}
+
+export enum CommandBarEvent {
+    open,
+    close,
+    settle,
+}

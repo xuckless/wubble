@@ -1,6 +1,7 @@
-import { Colors, Radius, Sizes, Type } from "../tokens.slint";
+import { Radius, Sizes, Type } from "../tokens.slint";
 import { TabItem } from "model.slint";
 import { RowBase } from "row-base.slint";
+import { GlyphTile } from "glyph-tile.slint";
 
 export component PinnedTile inherits RowBase {
     in property <TabItem> item;
@@ -9,16 +10,12 @@ export component PinnedTile inherits RowBase {
     height: Sizes.pinned-tile;
     border-radius: Radius.md;
 
-    Rectangle {
+    GlyphTile {
         width: Sizes.pinned-glyph;
         height: Sizes.pinned-glyph;
-        border-radius: Radius.sm;
-        background: root.item.tint;
-        Text {
-            text: root.item.glyph;
-            color: Colors.on-film;
-            font-size: Type.body-lg;
-            font-weight: Type.semibold;
-        }
+        radius: Radius.sm;
+        glyph-size: Type.body-lg;
+        glyph: root.item.glyph;
+        tint: root.item.tint;
     }
 }
