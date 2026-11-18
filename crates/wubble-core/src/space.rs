@@ -62,3 +62,18 @@ impl Space {
         })
     }
 }
+
+/// Isolated cookie/cache jar. A Space has a default container; Spaces may share one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContainerId(pub u32);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn container_ids_compare_by_value() {
+        assert_eq!(ContainerId(3), ContainerId(3));
+        assert_ne!(ContainerId(3), ContainerId(4));
+    }
+}

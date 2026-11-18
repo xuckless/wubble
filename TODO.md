@@ -32,7 +32,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Command bar state | One `CommandBarState` enum written only by a pure `next()` via `dispatch` in Slint; closing to closed is a Slint Timer equal to the out duration (no animation-finished callback) |
 | Passwords | Built-in manager (encrypted store, OS keyring) before extensions; extension password managers work once the extension pass (M6) lands |
 | Glass under load | Glass degrades automatically (lower-res blur → cached backdrop → flat tint); animation never drops frames for it |
-| Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate) with a declared schema and migrations: Spaces, tabs, session, history, bookmarks, passwords. Chromium keeps only cookies/cache per container |
+| Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate, pinned `=0.9.0-pre.5`, default features off because `mimalloc` would install a global allocator; no async runtime needed) with a declared schema and `PRAGMA user_version` migrations: Spaces, tabs, session, history, bookmarks, settings; passwords get their own encrypted store later. Chromium keeps only cookies/cache per container |
 | Containers | Each Space has a default container; a tab can be reopened in another, and Spaces may share one |
 | Deleting a Space | Closes its tabs (as Zen does); the UI confirms first. The last Space cannot be deleted |
 | Ctrl+T in the model | `Command::OpenCommandBar` returns only `Effect::ShowCommandBar`; the tab exists once `NewTab` is sent after a choice |
@@ -135,7 +135,8 @@ Daily-drive set
 - [ ] Compact mode: sidebar/toolbar hide and reveal; the stretchy seam ("Room to play") for sidebar width
 - [ ] URL pill (Thin glass): host in Ink, rest in Haze
 - [ ] Web view inset: radius 14, 8 px gap from glass
-- [ ] Turso schema + migrations; session restore, history
+- [x] Turso schema + migrations (`wubble-store`): session, history, bookmarks table, settings
+- [ ] Session restore and history recording wired into the app
 - [ ] First-run: search engine choice (Google / DuckDuckGo)
 
 After daily-drive

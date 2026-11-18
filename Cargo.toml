@@ -13,6 +13,7 @@ license = "GPL-3.0-only"
 wubble-core = { path = "crates/wubble-core" }
 wubble-engine = { path = "crates/wubble-engine" }
 wubble-gfx = { path = "crates/wubble-gfx" }
+wubble-store = { path = "crates/wubble-store" }
 wubble-ui = { path = "crates/wubble-ui" }
 
 # All three must agree on the wgpu major (currently 30).

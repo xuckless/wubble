@@ -1,0 +1,19 @@
+[package]
+name = "wubble-store"
+description = "wubble's own database (Turso): session, history, bookmarks, settings."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+wubble-core.workspace = true
+# default-features = false: the default `mimalloc` feature installs a global allocator,
+# which a browser embedding CEF must not get. Exact pin: pre-release semver is not range-safe.
+turso = { version = "=0.9.0-pre.5", default-features = false }
+thiserror = "2"
+
+[dev-dependencies]
+pollster = "0.4"
+tempfile = "3"
