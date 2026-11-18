@@ -1237,13 +1237,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
         Command::DeleteContainer(c) => m.delete_container(c),
         Command::ReopenInContainer { tab, container } => m.reopen_in_container(tab, container),
-        Command::Navigate { tab, url } => {
-            if m.set_url(tab, &url) {
-                vec![Effect::Navigate { tab, url }]
-            } else {
-                vec![]
-            }
-        }
+        // A web tab keeps its view and history: an internal page typed into it opens in its own tab.
+        Command::Navigate { tab, url } => match InternalPage::from_url(&url) {
+            Some(page) if m.tabs.contains_key(&tab) && !m.is_internal(tab) => m.open_internal(page),
+            _ if m.set_url(tab, &url) => vec![Effect::Navigate { tab, url }],
+            _ => vec![],
+        },
         Command::UrlChanged { tab, url } => {
             m.set_url(tab, &url);
             vec![]

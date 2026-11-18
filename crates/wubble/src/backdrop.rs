@@ -102,21 +102,26 @@ pub struct SceneHost {
     image_error_logged: bool,
 }
 
-/// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value.
+/// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value, `scene` the
+/// `settings::GLASS_SCENE` row.
 pub fn choose_with<R>(
     forced: Option<&str>,
+    scene: bool,
     build: impl FnOnce() -> Result<R, GfxError>,
 ) -> Result<R, String> {
     if forced == Some("slint") {
         return Err(format!("{GLASS_ENV}=slint"));
     }
+    if !scene {
+        return Err("the glass scene is off in settings".into());
+    }
     build().map_err(|e| e.to_string())
 }
 
 /// The glass for this run, logged; with the scene, tells the shell so (before it shows).
-pub fn choose(gpu: &GpuContext, window: &AppWindow) -> Glass {
+pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
     let forced = std::env::var(GLASS_ENV).ok();
-    match choose_with(forced.as_deref(), || {
+    match choose_with(forced.as_deref(), scene, || {
         Renderer::try_new(gpu, SceneOptions::default())
     }) {
         Ok(renderer) => {
@@ -366,14 +371,16 @@ mod tests {
     #[test]
     fn the_scene_is_off_when_forced_or_when_it_fails_to_build() {
         let built = || Ok::<_, GfxError>(7);
-        assert_eq!(choose_with(None, built), Ok(7));
-        assert_eq!(choose_with(Some("scene"), built), Ok(7));
+        assert_eq!(choose_with(None, true, built), Ok(7));
+        assert_eq!(choose_with(Some("scene"), true, built), Ok(7));
         assert_eq!(
-            choose_with(Some("slint"), built),
+            choose_with(Some("slint"), true, built),
             Err("WUBBLE_GLASS=slint".into())
         );
+        // The settings row turns the scene off for the Slint-only glass.
+        assert!(choose_with(None, false, built).is_err());
         let failed = || Err::<u8, _>(GfxError::Device("scene pipelines: bad".into()));
-        let reason = choose_with(None, failed).unwrap_err();
+        let reason = choose_with(None, true, failed).unwrap_err();
         assert!(reason.contains("scene pipelines: bad"), "{reason}");
     }
 

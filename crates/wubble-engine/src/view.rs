@@ -904,10 +904,6 @@ impl View {
         self.zoom_step(welding::ZoomCommand::Out);
     }
 
-    pub fn zoom_reset(&mut self) {
-        self.zoom_step(welding::ZoomCommand::Reset);
-    }
-
     /// Clamped to 25..=500 %.
     pub fn set_zoom_percent(&mut self, percent: u32) {
         if self.is_open() {

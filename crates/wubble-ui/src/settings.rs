@@ -4,10 +4,10 @@
 use slint::{ModelRc, SharedString, VecModel};
 use wubble_core::keys::BindingRow;
 use wubble_core::omnibox::ENGINES;
-use wubble_core::pages::{Control, SectionView, SettingRow};
+use wubble_core::pages::{Control, Entry, SectionView, SettingRow};
 use wubble_core::settings::{Section, SettingKind};
 
-use crate::{BindingItem, SettingControl, SettingItem};
+use crate::{BindingItem, EntryItem, SettingControl, SettingItem};
 
 fn strings<I: IntoIterator<Item = S>, S: Into<SharedString>>(items: I) -> ModelRc<SharedString> {
     ModelRc::from(std::rc::Rc::new(VecModel::from(
@@ -48,6 +48,17 @@ fn word_label(kind: SettingKind, word: &str) -> String {
         .unwrap_or_default()
 }
 
+/// A list's entries for an `EntryList`.
+pub fn entry_items(entries: &[Entry]) -> Vec<EntryItem> {
+    entries
+        .iter()
+        .map(|e| EntryItem {
+            label: e.label.as_str().into(),
+            key: e.key.as_str().into(),
+        })
+        .collect()
+}
+
 /// One row's item: the fields its control reads, the rest at their defaults.
 pub fn setting_item(row: &SettingRow) -> SettingItem {
     let mut item = SettingItem {
@@ -57,6 +68,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         changed: row.changed,
         restart: row.restart,
         selected: -1,
+        entries: ModelRc::from(std::rc::Rc::new(VecModel::from(entry_items(&row.entries)))),
         ..Default::default()
     };
     match row.control {
@@ -84,19 +96,8 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
             item.number = row.value.parse().unwrap_or(min);
             (item.min, item.max) = (min, max);
         }
-        Control::ListEditor => {
-            item.control = SettingControl::List;
-            let list: Vec<String> = serde_json::from_str(&row.value).unwrap_or_default();
-            item.entries = strings(list.iter().map(String::as_str));
-            item.entry_keys = strings(list.iter().map(String::as_str));
-        }
-        Control::MapEditor => {
-            item.control = SettingControl::Map;
-            let map: std::collections::BTreeMap<String, u32> =
-                serde_json::from_str(&row.value).unwrap_or_default();
-            item.entries = strings(map.iter().map(|(k, v)| format!("{k}: {v}")));
-            item.entry_keys = strings(map.keys().map(String::as_str));
-        }
+        Control::ListEditor => item.control = SettingControl::List,
+        Control::MapEditor => item.control = SettingControl::Map,
     }
     item
 }

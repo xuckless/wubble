@@ -270,6 +270,12 @@ export enum SettingControl {
     map,
 }
 
+// One removable entry of a list: its line, and the key removing it names.
+export struct EntryItem {
+    label: string,
+    key: string,
+}
+
 // One row of the flat list the page shows; `section` names the section the row opens (empty
 // for the rest of it), `first` / `last` round the section's card.
 export struct SettingItem {
@@ -292,9 +298,8 @@ export struct SettingItem {
     words: [string],
     labels: [string],
     selected: int,
-    // list and map: each entry's key (what removing it names) and its line
-    entry-keys: [string],
-    entries: [string],
+    // list and map
+    entries: [EntryItem],
     changed: bool,
     restart: bool,
 }

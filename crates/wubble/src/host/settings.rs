@@ -170,18 +170,13 @@ impl Host {
         }
     }
 
-    /// Forgets the remembered decision at `index` of the Sites list.
-    pub(crate) fn site_permission_removed(&mut self, index: &str) {
-        let view = pages::sites_view(&self.site_zoom, &self.site_permissions);
-        let Some((origin, kind, _)) = index
-            .parse()
-            .ok()
-            .and_then(|i: usize| view.permissions.get(i))
-        else {
+    /// Forgets the remembered decision the Sites list names `key` (`pages::permission_key`).
+    pub(crate) fn site_permission_removed(&mut self, key: &str) {
+        let Some((origin, kind)) = pages::parse_permission_key(key) else {
             return;
         };
-        self.site_permissions.forget(origin, *kind);
-        self.store.forget_site_permission(origin, *kind);
+        self.site_permissions.forget(origin, kind);
+        self.store.forget_site_permission(origin, kind);
         self.render_settings();
     }
 
@@ -359,39 +354,14 @@ fn render_page(window: &AppWindow, host: &Host) {
     });
 
     let sites = pages::sites_view(&host.site_zoom, &host.site_permissions);
-    let strings =
-        |v: Vec<String>| -> Vec<slint::SharedString> { v.into_iter().map(Into::into).collect() };
-    let zoom_lines = sites
-        .zoom
-        .iter()
-        .map(|(h, p)| format!("{h}: {p}%"))
-        .collect();
-    let zoom_keys = sites.zoom.iter().map(|(h, _)| h.clone()).collect();
-    let perm_lines = sites
-        .permissions
-        .iter()
-        .map(|(o, k, d)| format!("{o}: {} ({d:?})", k.ask_text()))
-        .collect();
-    let perm_keys = (0..sites.permissions.len())
-        .map(|i| i.to_string())
-        .collect();
-    crate::bind::sync(window.get_settings_site_zoom(), strings(zoom_lines), |m| {
+    let entries = wubble_ui::settings::entry_items;
+    crate::bind::sync(window.get_settings_site_zoom(), entries(&sites.zoom), |m| {
         window.set_settings_site_zoom(m)
     });
     crate::bind::sync(
-        window.get_settings_site_zoom_keys(),
-        strings(zoom_keys),
-        |m| window.set_settings_site_zoom_keys(m),
-    );
-    crate::bind::sync(
         window.get_settings_site_permissions(),
-        strings(perm_lines),
+        entries(&sites.permissions),
         |m| window.set_settings_site_permissions(m),
-    );
-    crate::bind::sync(
-        window.get_settings_site_permission_keys(),
-        strings(perm_keys),
-        |m| window.set_settings_site_permission_keys(m),
     );
     if window.get_settings_about().version.is_empty() {
         window.set_settings_about(about());

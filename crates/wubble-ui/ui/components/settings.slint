@@ -14,7 +14,7 @@
 import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
-import { SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, GlassTier } from "model.slint";
+import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, GlassTier } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
 
@@ -278,8 +278,7 @@ component TextButton inherits PressableButton {
 
 // Entries of a list or map setting, each removable; `can-add` adds a field for a new one.
 export component EntryList inherits VerticalLayout {
-    in property <[string]> entries;
-    in property <[string]> entry-keys;
+    in property <[EntryItem]> entries;
     in property <bool> can-add;
     in property <string> placeholder;
     in property <string> empty: "None";
@@ -293,11 +292,11 @@ export component EntryList inherits VerticalLayout {
         font-family: Fonts.ui;
         font-size: Type.label.size;
     }
-    for entry[i] in root.entries: HorizontalLayout {
+    for entry in root.entries: HorizontalLayout {
         spacing: Spacing.s2;
         Text {
             horizontal-stretch: 1;
-            text: entry;
+            text: entry.label;
             color: Palette.mist;
             font-family: Fonts.ui;
             font-size: Type.body.size;
@@ -307,7 +306,7 @@ export component EntryList inherits VerticalLayout {
         IconButton {
             icon-path: IconPaths.close;
             clicked => {
-                root.removed(i < root.entry-keys.length ? root.entry-keys[i] : entry);
+                root.removed(entry.key);
             }
         }
     }
@@ -444,7 +443,6 @@ export component SettingRow inherits VerticalLayout {
     }
     if root.setting.control == SettingControl.list || root.setting.control == SettingControl.map: entries := EntryList {
         entries: root.setting.entries;
-        entry-keys: root.setting.entry-keys;
         can-add: root.setting.control == SettingControl.list;
         placeholder: "Add";
         removed(k) => {
@@ -525,10 +523,8 @@ export component SettingsPage inherits Rectangle {
     in property <CaptureView> capture;
     in property <[SpaceSetting]> spaces;
     // the Sites lists: each line and what removing it names (a host, a decision's index)
-    in property <[string]> site-zoom;
-    in property <[string]> site-zoom-keys;
-    in property <[string]> site-permissions;
-    in property <[string]> site-permission-keys;
+    in property <[EntryItem]> site-zoom;
+    in property <[EntryItem]> site-permissions;
     in property <AboutView> about;
     // the search box is blank: the sections that are not settings rows show too
     in property <bool> searching;
@@ -742,7 +738,6 @@ export component SettingsPage inherits Rectangle {
                             }
                             EntryList {
                                 entries: root.site-zoom;
-                                entry-keys: root.site-zoom-keys;
                                 empty: "No site has its own zoom";
                                 removed(k) => {
                                     root.site-zoom-removed(k);
@@ -753,7 +748,6 @@ export component SettingsPage inherits Rectangle {
                             }
                             EntryList {
                                 entries: root.site-permissions;
-                                entry-keys: root.site-permission-keys;
                                 empty: "No site has a remembered permission";
                                 removed(k) => {
                                     root.site-permission-removed(k);

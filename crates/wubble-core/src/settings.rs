@@ -215,11 +215,21 @@ pub const SLEEP_KEEP_PINNED: SettingDef = SettingDef {
 /// Which glass levels the scene's governor may use (`apply::GlassSetting`).
 pub const GLASS_QUALITY: SettingDef = SettingDef {
     key: "glass.quality",
-    kind: SettingKind::Choice(&["auto", "full", "reduced", "off"]),
+    kind: SettingKind::Choice(&crate::apply::GLASS_WORDS),
     default: "auto",
     label: "Glass quality",
     section: Section::Performance,
     restart: false,
+};
+/// The wgpu glass scene; off, the panels draw their own Slint glass on the plain ground. The
+/// renderer is chosen before the window exists, so it changes at the next start.
+pub const GLASS_SCENE: SettingDef = SettingDef {
+    key: "glass.scene",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "GPU glass scene (off: plain panels)",
+    section: Section::Performance,
+    restart: true,
 };
 /// Chromium's `OverlayScrollbar` feature, a CEF start switch.
 pub const OVERLAY_SCROLLBARS: SettingDef = SettingDef {
@@ -259,6 +269,7 @@ pub const ALL: &[&SettingDef] = &[
     &SLEEP_DISCARD_AFTER,
     &SLEEP_KEEP_PINNED,
     &GLASS_QUALITY,
+    &GLASS_SCENE,
 ];
 
 /// The definition of `key`, if it is a setting.

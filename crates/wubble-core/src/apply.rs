@@ -12,8 +12,9 @@ use crate::sleep::SleepPolicy;
 use crate::zoom::ZoomTable;
 
 /// Which glass levels the scene may use (`settings::GLASS_QUALITY`). The renderer maps it onto
-/// its quality levels; `Off` is its flat glass, not the Slint-only fallback (that one is a
-/// different renderer, chosen before the window exists by `WUBBLE_GLASS=slint`).
+/// its quality levels; `Off` is its flat glass, live. The Slint-only fallback is a different
+/// renderer, chosen before the window exists: `settings::GLASS_SCENE` off (restart) or
+/// `WUBBLE_GLASS=slint`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GlassSetting {
     /// The governor picks, from the best level down, by the frame budget.
@@ -26,17 +27,15 @@ pub enum GlassSetting {
     Off,
 }
 
+/// The stored words of [`GlassSetting`], in its order: the row's choices.
+pub const GLASS_WORDS: [&str; 4] = ["auto", "full", "reduced", "off"];
+
 impl GlassSetting {
     pub const ALL: [GlassSetting; 4] = [Self::Auto, Self::Full, Self::Reduced, Self::Off];
 
     /// The stored word, one of the row's choices.
     pub fn id(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Full => "full",
-            Self::Reduced => "reduced",
-            Self::Off => "off",
-        }
+        GLASS_WORDS[self as usize]
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -83,11 +82,11 @@ fn count(def: &SettingDef, stored: &HashMap<String, String>) -> u32 {
     parsed.unwrap_or_else(|_| def.default.parse().expect("a count default is a number"))
 }
 
-fn list(def: &SettingDef, stored: &HashMap<String, String>) -> Vec<String> {
+pub(crate) fn list(def: &SettingDef, stored: &HashMap<String, String>) -> Vec<String> {
     serde_json::from_str(value_of(def, stored)).unwrap_or_default()
 }
 
-fn map(def: &SettingDef, stored: &HashMap<String, String>) -> ZoomTable {
+pub(crate) fn map(def: &SettingDef, stored: &HashMap<String, String>) -> ZoomTable {
     serde_json::from_str(value_of(def, stored)).unwrap_or_default()
 }
 
@@ -168,15 +167,6 @@ pub fn with_entry(key: &str, stored: &HashMap<String, String>, entry: &str) -> O
         items.push(entry.to_owned());
     }
     serde_json::to_string(&items).ok()
-}
-
-/// The Choice words a kind offers, for a test that the enum and the table agree.
-#[cfg(test)]
-fn words(kind: settings::SettingKind) -> &'static [&'static str] {
-    match kind {
-        settings::SettingKind::Choice(w) => w,
-        _ => &[],
-    }
 }
 
 #[cfg(test)]
@@ -267,9 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn glass_words_are_the_rows_choices() {
-        let ids: Vec<&str> = GlassSetting::ALL.iter().map(|g| g.id()).collect();
-        assert_eq!(ids, words(settings::GLASS_QUALITY.kind));
+    fn every_glass_word_applies() {
         for g in GlassSetting::ALL {
             assert_eq!(
                 effect_of("glass.quality", &stored(&[("glass.quality", g.id())])),

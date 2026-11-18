@@ -166,6 +166,8 @@ settings! {
     SleepDiscardAfter: u32 = defs::SLEEP_DISCARD_AFTER;
     SleepKeepPinned: bool = defs::SLEEP_KEEP_PINNED;
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
+    /// Read before the window exists: off, the shell runs Slint-only glass.
+    GlassScene: bool = defs::GLASS_SCENE;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

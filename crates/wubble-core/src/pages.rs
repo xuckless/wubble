@@ -403,6 +403,36 @@ pub struct SettingRow {
     /// The value differs from the default.
     pub changed: bool,
     pub restart: bool,
+    /// A list or map row's entries, decoded once here; empty for other kinds.
+    pub entries: Vec<Entry>,
+}
+
+/// One removable entry of a list: what it shows, and what removing it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub label: String,
+    pub key: String,
+}
+
+/// A list or map row's entries: a list item is its own key, a map entry is named by its key.
+fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> Vec<Entry> {
+    match def.kind {
+        SettingKind::List => crate::apply::list(def, stored)
+            .into_iter()
+            .map(|item| Entry {
+                label: item.clone(),
+                key: item,
+            })
+            .collect(),
+        SettingKind::Map => crate::apply::map(def, stored)
+            .into_iter()
+            .map(|(key, v)| Entry {
+                label: format!("{key}: {v}"),
+                key,
+            })
+            .collect(),
+        _ => vec![],
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -438,10 +468,7 @@ pub fn settings_page_from(
                 .iter()
                 .filter(|d| d.section == section)
                 .map(|d| {
-                    let value = stored
-                        .get(d.key)
-                        .filter(|v| d.kind.accepts(v))
-                        .map_or(d.default, String::as_str);
+                    let value = crate::apply::value_of(d, stored);
                     SettingRow {
                         key: d.key,
                         label: d.label,
@@ -450,6 +477,7 @@ pub fn settings_page_from(
                         value: value.to_owned(),
                         changed: value != d.default,
                         restart: d.restart,
+                        entries: entries_of(d, stored),
                     }
                 })
                 .collect();
@@ -486,10 +514,21 @@ pub fn filter(sections: &[SectionView], query: &str) -> Vec<SectionView> {
 /// Per-site data the user can delete: saved zoom levels and permission decisions.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SitesView {
-    /// (host, percent), by host.
-    pub zoom: Vec<(String, u32)>,
-    /// (origin, permission, decision), by origin then permission.
-    pub permissions: Vec<(String, crate::site::Permission, crate::site::Decision)>,
+    /// By host; each named by its host.
+    pub zoom: Vec<Entry>,
+    /// By origin then permission; each named by [`permission_key`].
+    pub permissions: Vec<Entry>,
+}
+
+/// What names a remembered decision on the page: stable while the list changes under it.
+pub fn permission_key(origin: &str, kind: crate::site::Permission) -> String {
+    format!("{origin}|{}", kind.as_str())
+}
+
+/// The origin and permission a [`permission_key`] names.
+pub fn parse_permission_key(key: &str) -> Option<(&str, crate::site::Permission)> {
+    let (origin, kind) = key.rsplit_once('|')?;
+    Some((origin, crate::site::Permission::parse(kind)?))
 }
 
 /// The Sites section from the zoom table and the remembered decisions.
@@ -498,10 +537,19 @@ pub fn sites_view(
     permissions: &crate::site::SitePermissions,
 ) -> SitesView {
     SitesView {
-        zoom: zoom.iter().map(|(h, p)| (h.clone(), *p)).collect(),
+        zoom: zoom
+            .iter()
+            .map(|(h, p)| Entry {
+                label: format!("{h}: {p}%"),
+                key: h.clone(),
+            })
+            .collect(),
         permissions: permissions
             .iter()
-            .map(|(o, k, d)| (o.to_owned(), k, d))
+            .map(|(o, k, d)| Entry {
+                label: format!("{o}: {} ({d:?})", k.ask_text()),
+                key: permission_key(o, k),
+            })
             .collect(),
     }
 }
@@ -851,8 +899,6 @@ mod tests {
         for (kind, want) in kinds {
             assert_eq!(control_for(kind), want, "{kind:?}");
         }
-        let ids: Vec<&str> = crate::omnibox::ENGINES.iter().map(|e| e.id).collect();
-        assert_eq!(ENGINE_IDS.as_slice(), ids.as_slice());
     }
 
     /// A table the app does not ship: every kind becomes a row with its control, with no UI
@@ -884,7 +930,14 @@ mod tests {
             },
         ];
         let defs: Vec<&SettingDef> = DEFS.iter().collect();
-        let page = settings_page_from(&defs, &stored(&[("t.count", "7")]));
+        let page = settings_page_from(
+            &defs,
+            &stored(&[
+                ("t.count", "7"),
+                ("t.list", r#"["a.test"]"#),
+                ("t.map", r#"{"b.test":90}"#),
+            ]),
+        );
         assert_eq!(page.len(), 1);
         let rows = &page[0].rows;
         assert_eq!(rows.len(), 7);
@@ -892,6 +945,14 @@ mod tests {
             assert_eq!(row.control, control_for(d.kind), "{}", d.key);
         }
         assert_eq!((rows[1].value.as_str(), rows[1].changed), ("7", true));
+        // List and map rows come decoded: what each entry shows and what removing it names.
+        let entry = |label: &str, key: &str| Entry {
+            label: label.into(),
+            key: key.into(),
+        };
+        assert_eq!(rows[5].entries, [entry("a.test", "a.test")]);
+        assert_eq!(rows[6].entries, [entry("b.test: 90", "b.test")]);
+        assert!(rows[0].entries.is_empty());
     }
 
     #[test]
@@ -934,12 +995,27 @@ mod tests {
         perms.set("https://a.test", Permission::Microphone, Decision::Block);
         perms.set("https://a.test", Permission::Camera, Decision::Allow);
         let v = sites_view(&zoom, &perms);
-        assert_eq!(v.zoom, [("a.test".into(), 90), ("b.test".into(), 125)]);
+        let zoom: Vec<(&str, &str)> = v
+            .zoom
+            .iter()
+            .map(|e| (e.key.as_str(), e.label.as_str()))
+            .collect();
+        assert_eq!(
+            zoom,
+            [("a.test", "a.test: 90%"), ("b.test", "b.test: 125%")]
+        );
+        // Each decision is named by its origin and kind, not its place in the list.
         let origins: Vec<(&str, Permission)> = v
             .permissions
             .iter()
-            .map(|(o, k, _)| (o.as_str(), *k))
+            .map(|e| parse_permission_key(&e.key).unwrap())
             .collect();
+        assert_eq!(
+            v.permissions[0].label,
+            "https://a.test: Use your camera (Allow)"
+        );
+        assert_eq!(parse_permission_key("https://a.test|nope"), None);
+        assert_eq!(parse_permission_key("https://a.test"), None);
         assert_eq!(
             origins,
             [

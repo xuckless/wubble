@@ -33,10 +33,10 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality, HistoryRetentionDays,
-    KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll, OverlayScrollbars,
-    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter,
-    SleepFreezeAfter, SleepKeepPinned, ZoomDefault, text_of,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality, GlassScene,
+    HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll,
+    OverlayScrollbars, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
+    SleepDiscardAfter, SleepFreezeAfter, SleepKeepPinned, ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

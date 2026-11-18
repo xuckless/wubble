@@ -107,7 +107,8 @@ pub enum Call {
 /// has no freeze API; hiding already throttles) and snapshots have no UI
 /// yet, so those are recorded no-ops (TODO.md "Tabs in the host").
 /// An internal page (`InternalPage`, wubble://) has no view: the shell draws it, so creating
-/// or restoring its tab opens none, and navigating a tab to one closes the tab's view.
+/// or restoring its tab opens none. Only a tab already on an internal page navigates to one
+/// (the model opens it in its own tab otherwise), so there is no view to load into.
 pub fn call(effect: &Effect, model: &Model) -> Call {
     let internal = |url: &str| InternalPage::from_url(url).is_some();
     match effect {
@@ -117,7 +118,7 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
             url: url.clone(),
         },
         Effect::CloseTab(tab) => Call::CloseView(*tab),
-        Effect::Navigate { tab, url } if internal(url) => Call::CloseView(*tab),
+        Effect::Navigate { url, .. } if internal(url) => Call::Nothing,
         Effect::Navigate { tab, url } => Call::Load {
             tab: *tab,
             url: url.clone(),
@@ -1032,6 +1033,7 @@ impl Host {
                 let Some(tab) = self.model.visible_tab() else {
                     return;
                 };
+                let zoom_default = self.zoom_default;
                 let Some(view) = self.tab_view(tab) else {
                     return;
                 };
@@ -1043,7 +1045,8 @@ impl Host {
                     ViewOp::Forward => view.forward(),
                     ViewOp::ZoomIn => view.zoom_in(),
                     ViewOp::ZoomOut => view.zoom_out(),
-                    ViewOp::ZoomReset => view.zoom_reset(),
+                    // To the user's default, which CEF's own reset (always 100 %) ignores.
+                    ViewOp::ZoomReset => view.set_zoom_percent(zoom_default),
                     ViewOp::ToggleMute => {
                         let muted = view.is_muted();
                         view.set_muted(!muted);

@@ -1750,6 +1750,34 @@ fn open_internal_focuses_the_tab_already_on_it() {
 }
 
 #[test]
+fn an_internal_page_typed_into_a_web_tab_opens_its_own_tab() {
+    let (m, ids) = with_tabs(1);
+    let web_url = m.tabs[&ids[0]].url.clone();
+    let go = |tab| Command::Navigate {
+        tab,
+        url: InternalPage::Settings.url().into(),
+    };
+    // The web tab keeps its URL (and so its view and history); the page opens beside it.
+    let (m, fx) = run(m, go(ids[0]));
+    assert!(
+        matches!(&fx[0], Effect::CreateTab { url, .. } if url == InternalPage::Settings.url()),
+        "{fx:?}"
+    );
+    assert_eq!(m.tabs[&ids[0]].url, web_url);
+    let settings = m.visible_tab().unwrap();
+    assert!(m.is_internal(settings));
+    // Again from the web tab: the open page is focused, no second one.
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, fx) = run(m, go(ids[0]));
+    assert_eq!(fx, [Effect::ActivateTab(settings)]);
+    // An internal tab navigates in place; an unknown tab does nothing.
+    let (m, fx) = run(m, go(settings));
+    assert!(matches!(&fx[..], [Effect::Navigate { tab, .. }] if *tab == settings));
+    let (_, fx) = run(m, go(TabId(999)));
+    assert!(fx.is_empty());
+}
+
+#[test]
 fn an_internal_tab_never_joins_a_split() {
     let (m, ids) = with_tabs(1);
     let (m, _) = run(m, Command::OpenInternal(InternalPage::Settings));

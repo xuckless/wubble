@@ -83,6 +83,17 @@ mod tests {
         assert!(next_table(t, "b.test", 125, 125).is_empty());
     }
 
+    /// Reset zoom shows the user's default, not CEF's 100 %: the site's row goes and the
+    /// page shows at the default again.
+    #[test]
+    fn a_reset_to_another_default_forgets_the_site() {
+        let d = 125;
+        let t = next_table(ZoomTable::new(), "a.test", 150, d);
+        let t = next_table(t, "a.test", d, d);
+        assert!(t.is_empty());
+        assert_eq!(wanted(&t, "https://a.test/", d), d);
+    }
+
     #[test]
     fn wanted_reads_the_table_or_the_default() {
         let d = DEFAULT_PERCENT;

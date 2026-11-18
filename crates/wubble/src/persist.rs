@@ -163,6 +163,11 @@ impl Settings {
             middle_click_autoscroll: on(&defs::MIDDLE_CLICK_AUTOSCROLL),
         }
     }
+
+    /// Whether the wgpu glass scene runs (`settings::GLASS_SCENE`, read before the window).
+    pub fn glass_scene(&self) -> bool {
+        apply::value_of(&wubble_core::settings::GLASS_SCENE, &self.stored) == "1"
+    }
 }
 
 /// Download entries read at start (newest first).

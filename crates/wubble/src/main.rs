@@ -982,7 +982,11 @@ fn run(
     }
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
-    let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));
+    let glass = Rc::new(RefCell::new(backdrop::choose(
+        &gpu,
+        &window,
+        loaded.settings.glass_scene(),
+    )));
     connect_input(&window);
     connect_shell(&window);
     connect_surfaces(&window);
