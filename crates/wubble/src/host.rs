@@ -28,7 +28,7 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::sleep::Pressure;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, ViewId};
-use wubble_engine::input::Point;
+use wubble_engine::input::{KeyId, Point};
 use wubble_engine::nav::{Cursor, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
@@ -37,10 +37,10 @@ use wubble_store::{ClosedTab, HistoryHit, Transition};
 use wubble_ui::{AppWindow, CommandBarState, CompactMode};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
-use crate::input::{self, InputState, KeyFocus, KeyRoute};
+use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
 use crate::perform::{self, Plan, ViewOp};
-use crate::persist::{self, Loaded, SaveState, StoreClient, UiState};
+use crate::persist::{self, Loaded, SaveState, StoreClient, TypedNav, UiState};
 use crate::pixels;
 use crate::session_smoke::{self, SessionSmoke};
 use crate::tabs_smoke::{self, Seen, TabsSmoke};
@@ -117,6 +117,26 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
     }
 }
 
+/// The loaded session and its first effect. The store brings the visible
+/// tab back Active, but it has no view yet: it is restored, unless `opening`
+/// (a URL from the command line) is about to take its place as the visible
+/// tab. Then it is marked Discarded, what it really is, and gets its view
+/// when it is activated again instead of loading in the background.
+pub fn startup(mut model: Model, opening: bool) -> (Model, Option<Effect>) {
+    let visible = model.visible_tab();
+    if opening {
+        if let Some(t) = visible.and_then(|t| model.tabs.get_mut(&t)) {
+            t.lifecycle.liveness = Liveness::Discarded;
+        }
+        return (model, None);
+    }
+    let restore = visible.map(|tab| Effect::Lifecycle {
+        tab,
+        effect: Life::Restore,
+    });
+    (model, restore)
+}
+
 /// What the command bar was opened for and what it lists.
 struct Bar {
     mode: BarMode,
@@ -170,14 +190,16 @@ pub struct Host {
     pub session_passed: bool,
     input: InputState,
     keymap: Keymap,
+    /// Page-first actions waiting to hear the page left their key alone.
+    page_first: PendingKeys,
     store: StoreClient,
     /// Session changes not yet saved.
     save: SaveState,
     /// `None` until the first-run choice.
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
-    /// The tab whose next committed URL was typed or picked in the bar.
-    typed_nav: Option<TabId>,
+    /// Which commit is a typed visit.
+    typed_nav: TypedNav,
     /// Each tab's last committed URL: a commit that only changes the
     /// fragment, or repeats it (a restored tab), is no new visit.
     committed: BTreeMap<TabId, String>,
@@ -189,7 +211,7 @@ impl Host {
     /// A host on the loaded session. Only the visible tab gets a view (once
     /// the window exists); the other restored tabs stay Discarded until
     /// activated, through the `Life::Restore` mapping. `open` is loaded in a
-    /// new tab.
+    /// new tab, which is then the only one with a view (see [`startup`]).
     pub fn new(
         engine: Engine,
         window: &AppWindow,
@@ -201,10 +223,7 @@ impl Host {
     ) -> Self {
         let Loaded { model, settings } = loaded;
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
-        let restore = model.visible_tab().map(|tab| Effect::Lifecycle {
-            tab,
-            effect: Life::Restore,
-        });
+        let (model, restore) = startup(model, open.is_some());
         let mut host = Self {
             engine,
             window: window.as_weak(),
@@ -232,11 +251,12 @@ impl Host {
             session_passed: false,
             input: InputState::default(),
             keymap: input::keymap(Platform::current(), &settings.keybinding_overrides),
+            page_first: PendingKeys::default(),
             store,
             save: SaveState::default(),
             search_engine: settings.engine,
             live_suggestions: settings.live_suggestions,
-            typed_nav: None,
+            typed_nav: TypedNav::default(),
             committed,
             failure: None,
         };
@@ -534,9 +554,19 @@ impl Host {
             }
             WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
             WebEvent::LoadingChanged { loading, .. } => {
+                if !loading {
+                    self.typed_nav.ended(tab);
+                }
                 self.dispatch(Command::LoadingChanged { tab, loading });
             }
             WebEvent::RendererGone => self.dispatch(Command::RendererGone(tab)),
+            WebEvent::KeyUnhandled(key) => {
+                if Some(tab) == self.model.visible_tab()
+                    && let Some(action) = self.page_first.unhandled(key)
+                {
+                    self.perform(action);
+                }
+            }
             // No favicons in the shell yet.
             WebEvent::FaviconChanged(_) => {}
         }
@@ -625,7 +655,7 @@ impl Host {
             Some(Choice::Model(command)) => {
                 self.dispatch(command);
                 if bar::is_typed(target) {
-                    self.typed_nav = self.model.visible_tab();
+                    self.typed_nav.started(self.model.visible_tab());
                 }
             }
             Some(Choice::Perform(action)) => self.perform(action),
@@ -650,9 +680,13 @@ impl Host {
         match perform::plan(action, &self.model) {
             Plan::Model(command) => self.dispatch(command),
             Plan::View(op) => {
+                if let Some(tab) = self.model.visible_tab() {
+                    self.typed_nav.ended(tab);
+                }
                 if let Some(view) = self.view() {
                     match op {
                         ViewOp::Reload => view.reload(),
+                        ViewOp::HardReload => view.hard_reload(),
                         ViewOp::Stop => view.stop(),
                         ViewOp::Back => view.back(),
                         ViewOp::Forward => view.forward(),
@@ -708,9 +742,7 @@ impl Host {
     /// Called before a tab closes: it goes on the recently-closed list.
     fn remember_closed(&mut self, tab: TabId) {
         self.committed.remove(&tab);
-        if self.typed_nav == Some(tab) {
-            self.typed_nav = None;
-        }
+        self.typed_nav.ended(tab);
         let Some(t) = self.model.tabs.get(&tab) else {
             return;
         };
@@ -731,10 +763,7 @@ impl Host {
     /// with `TitleChanged`.
     fn record_visit(&mut self, tab: TabId, url: &str) {
         let previous = self.committed.insert(tab, url.to_string());
-        let typed = self.typed_nav == Some(tab);
-        if typed {
-            self.typed_nav = None;
-        }
+        let typed = self.typed_nav.committed(tab);
         if persist::visit_to_record(previous.as_deref(), url) {
             let transition = if typed {
                 Transition::Typed
@@ -912,6 +941,7 @@ impl Host {
                 view.focus(false);
             }
             self.input.forget_view_focus();
+            self.page_first.clear();
             self.focus_view = target;
         }
         let focused = self.input.window_focused && window.get_web_focused();
@@ -958,20 +988,29 @@ impl Host {
                 // Actions run on the press; releases follow the focus.
                 let binding = key
                     .pressed
-                    .then(|| input::chord_of(&key.unmodified, key.modifiers.keys))
+                    .then(|| {
+                        input::chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref())
+                    })
                     .flatten()
                     .and_then(|chord| self.keymap.action_for(chord));
                 let route = input::key_route(focus, binding, input::is_modifier(&key.unmodified));
                 if matches!(
                     route,
-                    KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageAndPerform(_)
+                    KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
                 ) && let Some(view) = self.view()
                 {
                     view.key(&key);
                 }
                 match route {
-                    KeyRoute::Perform(action) | KeyRoute::PageAndPerform(action) => {
+                    KeyRoute::Perform(action) => {
                         self.perform(action);
+                        return EventResult::PreventDefault;
+                    }
+                    // Runs on the view's `KeyUnhandled`, if the page sends it.
+                    KeyRoute::PageFirst(action) => {
+                        if let Some(id) = KeyId::of(&key) {
+                            self.page_first.push(id, action);
+                        }
                         return EventResult::PreventDefault;
                     }
                     KeyRoute::Page => return EventResult::PreventDefault,
@@ -1217,6 +1256,63 @@ mod tests {
                 "{label}: visible views"
             );
         }
+    }
+
+    /// Two tabs as the store loads them: `b` visible and Active, `a`
+    /// Discarded, neither with a view.
+    fn loaded_session() -> (Model, TabId, TabId) {
+        let m = [
+            new_tab("https://a.test/".into(), None),
+            new_tab("https://b.test/".into(), None),
+        ]
+        .into_iter()
+        .fold(Model::new(), |m, c| model::apply(m, c).0);
+        let order = m.order(m.active_space);
+        let (a, b) = (order[0], order[1]);
+        let mut m = m;
+        for t in m.tabs.values_mut() {
+            t.lifecycle.liveness = if t.id == b {
+                Liveness::Active
+            } else {
+                Liveness::Discarded
+            };
+            t.lifecycle.hidden_since = None;
+        }
+        (m, a, b)
+    }
+
+    #[test]
+    fn a_session_restores_only_its_visible_tab() {
+        let (m, _, b) = loaded_session();
+        let (m, restore) = startup(m, false);
+        let mut views = BTreeMap::new();
+        simulate(&m, &restore.into_iter().collect::<Vec<_>>(), &mut views);
+        assert_eq!(views, BTreeMap::from([(b, true)]));
+        assert_eq!(m.live_tabs(), 1);
+    }
+
+    #[test]
+    fn a_url_to_open_leaves_the_restored_tabs_without_views() {
+        let (m, _, b) = loaded_session();
+        let (mut m, restore) = startup(m, true);
+        assert_eq!(restore, None);
+        let mut views = BTreeMap::new();
+        let script = [
+            new_tab("https://c.test/".into(), None),
+            Command::ActivateTab(b),
+        ];
+        for (i, command) in script.into_iter().enumerate() {
+            let (next, effects) = model::apply(m, command);
+            m = next;
+            simulate(&m, &effects, &mut views);
+            assert_eq!(views.len(), m.live_tabs(), "step {i}: view count");
+            if i == 0 {
+                assert!(!views.contains_key(&b), "b loaded in the background");
+                assert_eq!(views.len(), 1);
+            }
+        }
+        // Activated again, b gets its view and is the visible one.
+        assert_eq!(views.get(&b), Some(&true));
     }
 
     #[test]

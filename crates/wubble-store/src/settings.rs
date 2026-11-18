@@ -6,13 +6,9 @@
 //!
 //! A missing or undecodable row yields the default: a bad settings row must not block startup.
 
-use crate::{Result, Store};
+use wubble_core::omnibox::SearchEngine;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchEngine {
-    Google,
-    DuckDuckGo,
-}
+use crate::{Result, Store};
 
 /// Text form of a setting value.
 trait Codec: Sized {

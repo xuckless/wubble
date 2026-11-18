@@ -19,6 +19,7 @@ use std::thread::JoinHandle;
 
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox;
+use wubble_core::tab::TabId;
 use wubble_store::{
     ClosedTab, CompactMode, HistoryHit, KeybindingOverrides, LiveSuggestions, SearchEngineChoice,
     Setting, SidebarWidth, Store, Transition,
@@ -26,14 +27,13 @@ use wubble_store::{
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
-/// Lifecycle ticks without a change after which pending changes are saved.
-pub const SAVE_AFTER_IDLE_TICKS: u32 = 1;
 
-/// Unsaved session changes and the ticks since the last of them.
+/// Unsaved session changes, and whether a lifecycle tick has gone by
+/// without a change since the last of them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SaveState {
     pub changes: u32,
-    pub idle_ticks: u32,
+    pub quiet: bool,
 }
 
 impl SaveState {
@@ -41,14 +41,14 @@ impl SaveState {
     pub fn changed(self) -> Self {
         Self {
             changes: self.changes.saturating_add(1),
-            idle_ticks: 0,
+            quiet: false,
         }
     }
 
     /// A lifecycle tick went by.
     pub fn ticked(self) -> Self {
         Self {
-            idle_ticks: self.idle_ticks.saturating_add(1),
+            quiet: true,
             ..self
         }
     }
@@ -57,7 +57,7 @@ impl SaveState {
 /// Save when something changed and either enough did or it has gone quiet.
 /// After a save the host starts again from `SaveState::default()`.
 pub fn should_save(s: SaveState) -> bool {
-    s.changes > 0 && (s.changes >= SAVE_AFTER_CHANGES || s.idle_ticks >= SAVE_AFTER_IDLE_TICKS)
+    s.changes > 0 && (s.changes >= SAVE_AFTER_CHANGES || s.quiet)
 }
 
 /// Whether `command` can change what `save_session` stores. Ticks and
@@ -76,6 +76,35 @@ pub fn changes_session(command: &Command) -> bool {
 pub fn visit_to_record(previous: Option<&str>, new: &str) -> bool {
     let page = |url: &str| url.split_once('#').map_or(url, |(page, _)| page).to_owned();
     wubble_store::is_recordable(new) && previous.map(page) != Some(page(new))
+}
+
+/// The tab whose navigation the command bar started, until that navigation
+/// commits a URL (a typed visit) or ends without one: it loaded the same URL
+/// again, was cancelled, became a download, or another navigation replaced
+/// it. Only then is the tab's next visit a link again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TypedNav(Option<TabId>);
+
+impl TypedNav {
+    /// The bar started a navigation in `tab`.
+    pub fn started(&mut self, tab: Option<TabId>) {
+        self.0 = tab;
+    }
+
+    /// `tab` committed a URL: whether that visit was typed.
+    pub fn committed(&mut self, tab: TabId) -> bool {
+        let typed = self.0 == Some(tab);
+        self.ended(tab);
+        typed
+    }
+
+    /// `tab` stopped loading, closed, or started a navigation of its own
+    /// (back, forward, reload).
+    pub fn ended(&mut self, tab: TabId) {
+        if self.0 == Some(tab) {
+            self.0 = None;
+        }
+    }
 }
 
 /// UI state saved with the session: the typed settings `SidebarWidth` and
@@ -100,7 +129,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            engine: SearchEngineChoice::default().map(to_core),
+            engine: SearchEngineChoice::default(),
             live_suggestions: LiveSuggestions::default(),
             ui: UiState {
                 sidebar_width: SidebarWidth::default(),
@@ -124,22 +153,6 @@ impl Default for Loaded {
             model: Model::new(),
             settings: Settings::default(),
         }
-    }
-}
-
-// The store and the core each have a `SearchEngine` (the core cannot depend
-// on the store); these two map between them.
-fn to_core(e: wubble_store::SearchEngine) -> omnibox::SearchEngine {
-    match e {
-        wubble_store::SearchEngine::Google => omnibox::SearchEngine::Google,
-        wubble_store::SearchEngine::DuckDuckGo => omnibox::SearchEngine::DuckDuckGo,
-    }
-}
-
-fn to_store(e: omnibox::SearchEngine) -> wubble_store::SearchEngine {
-    match e {
-        omnibox::SearchEngine::Google => wubble_store::SearchEngine::Google,
-        omnibox::SearchEngine::DuckDuckGo => wubble_store::SearchEngine::DuckDuckGo,
     }
 }
 
@@ -315,7 +328,7 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
     let store = Store::open(path).await?;
     let model = store.load_session().await?;
     let settings = Settings {
-        engine: store.setting::<SearchEngineChoice>().await?.map(to_core),
+        engine: store.setting::<SearchEngineChoice>().await?,
         live_suggestions: store.setting::<LiveSuggestions>().await?,
         ui: UiState {
             sidebar_width: store.setting::<SidebarWidth>().await?,
@@ -370,7 +383,7 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         }
         Request::SetEngine(engine) => {
             store
-                .set_setting::<SearchEngineChoice>(Some(to_store(engine)))
+                .set_setting::<SearchEngineChoice>(Some(engine))
                 .await?;
         }
     }
@@ -388,25 +401,21 @@ mod tests {
 
     use super::*;
 
-    fn state(changes: u32, idle_ticks: u32) -> SaveState {
-        SaveState {
-            changes,
-            idle_ticks,
-        }
+    fn state(changes: u32, quiet: bool) -> SaveState {
+        SaveState { changes, quiet }
     }
 
     #[test]
     fn save_policy() {
         let n = SAVE_AFTER_CHANGES;
-        let idle = SAVE_AFTER_IDLE_TICKS;
         let cases = [
-            (state(0, 0), false),
-            (state(0, idle + 5), false),
-            (state(1, 0), false),
-            (state(n - 1, 0), false),
-            (state(n, 0), true),
-            (state(1, idle), true),
-            (state(n - 1, idle), true),
+            (state(0, false), false),
+            (state(0, true), false),
+            (state(1, false), false),
+            (state(n - 1, false), false),
+            (state(n, false), true),
+            (state(1, true), true),
+            (state(n - 1, true), true),
         ];
         for (s, want) in cases {
             assert_eq!(should_save(s), want, "{s:?}");
@@ -414,13 +423,37 @@ mod tests {
     }
 
     #[test]
-    fn a_change_resets_the_quiet_count() {
+    fn a_change_ends_the_quiet() {
         let s = SaveState::default().changed().ticked();
         assert!(should_save(s));
         let s = s.changed();
-        assert_eq!(s, state(2, 0));
+        assert_eq!(s, state(2, false));
         assert!(!should_save(s));
-        assert_eq!(SaveState::default().ticked(), state(0, 1));
+        assert_eq!(SaveState::default().ticked(), state(0, true));
+    }
+
+    #[test]
+    fn a_typed_navigation_marks_only_its_own_commit() {
+        let (a, b) = (TabId(1), TabId(2));
+        let mut typed = TypedNav::default();
+        typed.started(Some(a));
+        assert!(!typed.committed(b), "another tab's commit is a link");
+        assert!(typed.committed(a));
+        assert!(!typed.committed(a), "the next commit is a link again");
+    }
+
+    #[test]
+    fn a_typed_navigation_without_a_commit_does_not_mark_the_next_one() {
+        // Enter on the URL already shown: the load finishes, no URL commits.
+        let t = TabId(1);
+        let mut typed = TypedNav::default();
+        typed.started(Some(t));
+        typed.ended(t);
+        assert!(!typed.committed(t), "a later link click is not typed");
+        // Another tab finishing does not end it.
+        typed.started(Some(t));
+        typed.ended(TabId(2));
+        assert!(typed.committed(t));
     }
 
     #[test]

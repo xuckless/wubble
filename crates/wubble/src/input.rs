@@ -18,7 +18,7 @@ use slint::winit_030::winit::platform::modifier_supplement::KeyEventExtModifierS
 use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
 use wubble_core::action::Action;
 use wubble_core::keys::{self, Chord, Key as ChordKey, Keymap, Override, Platform, Route};
-use wubble_engine::input::{Buttons, KeyInput, Modifiers, MouseButton};
+use wubble_engine::input::{Buttons, KeyId, KeyInput, Modifiers, MouseButton};
 
 /// Where keyboard focus is, as far as routing a key cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,8 +43,9 @@ pub enum KeyRoute {
     Shell,
     /// Run the action; nobody else sees the key.
     Perform(Action),
-    /// To the page, and run the action (see `key_route`).
-    PageAndPerform(Action),
+    /// To the page; the action runs only if the page leaves the key alone
+    /// (see [`PendingKeys`]).
+    PageFirst(Action),
 }
 
 /// Whether `key` is a modifier on its own.
@@ -67,21 +68,17 @@ pub fn is_modifier(key: &Key) -> bool {
 ///
 /// - `Route::Shell` bindings always run and never reach the page or Slint.
 /// - `Route::PageFirst` means "the page first, the action if the page does
-///   not handle it". The engine does not report whether the page handled a
-///   key yet (CEF `OnKeyEvent`), so with the page focused the key goes to the
-///   page *and* the action runs, which is what happens for every page that
-///   does not claim the key. In a shell text field the field keeps it
-///   (Escape closes the bar, it does not stop the page); with nothing
-///   focused the action runs.
+///   not handle it". With the page focused the key goes to the page only; the
+///   action waits for the engine's `WebEvent::KeyUnhandled` ([`PendingKeys`]).
+///   In a shell text field the field keeps it (Escape closes the bar, it does
+///   not stop the page); with nothing focused the action runs.
 /// - Unbound keys go where the focus is; modifier keys also reach Slint.
 pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bool) -> KeyRoute {
     match (focus, binding, modifier) {
         (KeyFocus::Page, _, true) => KeyRoute::PageAndShell,
         (_, _, true) => KeyRoute::Shell,
         (_, Some((action, Route::Shell)), false) => KeyRoute::Perform(action),
-        (KeyFocus::Page, Some((action, Route::PageFirst)), false) => {
-            KeyRoute::PageAndPerform(action)
-        }
+        (KeyFocus::Page, Some((action, Route::PageFirst)), false) => KeyRoute::PageFirst(action),
         (KeyFocus::Field, Some((_, Route::PageFirst)), false) => KeyRoute::Shell,
         (KeyFocus::Shell, Some((action, Route::PageFirst)), false) => KeyRoute::Perform(action),
         (KeyFocus::Page, None, false) => KeyRoute::Page,
@@ -89,10 +86,16 @@ pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bo
     }
 }
 
-/// The keymap's chord for a key (without modifiers applied) and the held
-/// modifiers. Super is `cmd`: on macOS that is Cmd, elsewhere the keymap
-/// binds nothing to it. Keys the keymap cannot name are `None`.
-pub fn chord_of(unmodified: &Key, mods: ModifiersState) -> Option<Chord> {
+/// The keymap's chord for a key (without modifiers applied), the held
+/// modifiers and the text it typed. Super is `cmd`: on macOS that is Cmd,
+/// elsewhere the keymap binds nothing to it. Keys the keymap cannot name are
+/// `None`, and so is Ctrl+Alt with printable text: that is AltGr (Windows
+/// reports it as Ctrl+Alt), which types a character, as Chromium treats it.
+pub fn chord_of(unmodified: &Key, mods: ModifiersState, text: Option<&str>) -> Option<Chord> {
+    let printable = text.is_some_and(|t| !t.is_empty() && !t.chars().any(char::is_control));
+    if mods.control_key() && mods.alt_key() && printable {
+        return None;
+    }
     let key = match unmodified {
         Key::Character(text) => {
             let mut chars = text.chars();
@@ -163,6 +166,38 @@ fn function_key(key: NamedKey) -> Option<u8> {
     ];
     let i = KEYS.iter().position(|&k| k == key)?;
     u8::try_from(i + 1).ok()
+}
+
+/// Page-first actions whose keys went to the page, oldest first, each with
+/// the key-down it waits on. The page handles keys in the order they were
+/// sent and reports only those it leaves alone, so a report settles its own
+/// entry and every older one (those keys were handled).
+#[derive(Debug, Default)]
+pub struct PendingKeys(Vec<(KeyId, Action)>);
+
+impl PendingKeys {
+    /// Keys a page may hold back at once; older entries are dropped.
+    const MAX: usize = 16;
+
+    pub fn push(&mut self, key: KeyId, action: Action) {
+        if self.0.len() == Self::MAX {
+            self.0.remove(0);
+        }
+        self.0.push((key, action));
+    }
+
+    /// The page left `key` alone: the action to run now, if one waits on it.
+    pub fn unhandled(&mut self, key: KeyId) -> Option<Action> {
+        let i = self.0.iter().position(|(k, _)| *k == key)?;
+        let (_, action) = self.0[i];
+        self.0.drain(..=i);
+        Some(action)
+    }
+
+    /// Another view is visible: nothing it reports was sent for these.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 /// The platform's default keymap with the stored overrides applied. Each
@@ -332,14 +367,14 @@ mod tests {
             (ch("ab"), ctrl(), None),
         ];
         for (key, mods, want) in cases {
-            assert_eq!(chord_of(&key, mods), want, "{key:?} {mods:?}");
+            assert_eq!(chord_of(&key, mods, None), want, "{key:?} {mods:?}");
         }
     }
 
     #[test]
     fn default_chords_reach_their_actions() {
         let map = keymap(Platform::Linux, &[]);
-        let action = |key: Key, mods| chord_of(&key, mods).and_then(|c| map.action_for(c));
+        let action = |key: Key, mods| chord_of(&key, mods, None).and_then(|c| map.action_for(c));
         assert_eq!(
             action(ch("t"), ctrl()),
             Some((Action::NewTab, Route::Shell))
@@ -375,9 +410,9 @@ mod tests {
             (Page, shell, KeyRoute::Perform(Action::NewTab)),
             (Field, shell, KeyRoute::Perform(Action::NewTab)),
             (Shell, shell, KeyRoute::Perform(Action::NewTab)),
-            // Page-first chords: the page and the action, the field alone,
-            // or the action alone.
-            (Page, page_first, KeyRoute::PageAndPerform(Action::Reload)),
+            // Page-first chords: the page (the action only if it leaves the
+            // key alone), the field alone, or the action alone.
+            (Page, page_first, KeyRoute::PageFirst(Action::Reload)),
             (Field, page_first, KeyRoute::Shell),
             (Shell, page_first, KeyRoute::Perform(Action::Reload)),
             // Unbound keys go where the focus is.
@@ -392,6 +427,81 @@ mod tests {
                 "{focus:?} {binding:?}"
             );
         }
+    }
+
+    #[test]
+    fn altgr_text_is_no_ctrl_alt_chord() {
+        let ctrl_alt = ModifiersState::CONTROL | ModifiersState::ALT;
+        // Polish AltGr+Z types 'ż'; Windows reports Ctrl+Alt.
+        assert_eq!(chord_of(&ch("z"), ctrl_alt, Some("ż")), None);
+        // A real Ctrl+Alt chord types nothing (or a control character).
+        assert_eq!(chord_of(&ch("z"), ctrl_alt, None), chord("Ctrl+Alt+Z"));
+        assert_eq!(
+            chord_of(&ch("z"), ctrl_alt, Some("\u{1a}")),
+            chord("Ctrl+Alt+Z")
+        );
+        // Ctrl alone with text, or Alt alone, still make chords.
+        assert_eq!(chord_of(&ch("t"), ctrl(), Some("t")), chord("Ctrl+T"));
+        assert_eq!(
+            chord_of(&ch("1"), ModifiersState::ALT, Some("¡")),
+            chord("Alt+1")
+        );
+    }
+
+    fn key_down(c: &str, mods: ModifiersState) -> KeyId {
+        use slint::winit_030::winit::keyboard::{KeyCode, KeyLocation, PhysicalKey};
+        let key = KeyInput {
+            pressed: true,
+            repeat: false,
+            physical: PhysicalKey::Code(KeyCode::KeyR),
+            scancode: None,
+            unmodified: ch(c),
+            text: None,
+            location: KeyLocation::Standard,
+            modifiers: Modifiers {
+                keys: mods,
+                buttons: Buttons::default(),
+            },
+        };
+        KeyId::of(&key).unwrap()
+    }
+
+    #[test]
+    fn a_page_first_action_runs_only_when_the_page_leaves_its_key() {
+        let ctrl_r = key_down("r", ctrl());
+        let ctrl_l = key_down("l", ctrl());
+        let mut pending = PendingKeys::default();
+        // The page handled Ctrl+R (a web terminal): nothing reports it.
+        pending.push(ctrl_r, Action::Reload);
+        // The page leaves Ctrl+L alone: the bar opens, and the Ctrl+R that
+        // was handled before it is settled too.
+        pending.push(ctrl_l, Action::FocusAddress);
+        assert_eq!(pending.unhandled(ctrl_l), Some(Action::FocusAddress));
+        assert_eq!(pending.unhandled(ctrl_r), None);
+        // A plain R the page leaves alone runs nothing.
+        pending.push(ctrl_r, Action::Reload);
+        assert_eq!(
+            pending.unhandled(key_down("r", ModifiersState::empty())),
+            None
+        );
+        assert_eq!(pending.unhandled(ctrl_r), Some(Action::Reload));
+        // A new visible view reports nothing for the old one's keys.
+        pending.push(ctrl_r, Action::Reload);
+        pending.clear();
+        assert_eq!(pending.unhandled(ctrl_r), None);
+    }
+
+    #[test]
+    fn pending_keys_stay_bounded() {
+        let ctrl_r = key_down("r", ctrl());
+        let ctrl_l = key_down("l", ctrl());
+        let mut pending = PendingKeys::default();
+        pending.push(ctrl_l, Action::FocusAddress);
+        for _ in 0..PendingKeys::MAX {
+            pending.push(ctrl_r, Action::Reload);
+        }
+        assert_eq!(pending.0.len(), PendingKeys::MAX);
+        assert_eq!(pending.unhandled(ctrl_l), None, "the oldest was dropped");
     }
 
     #[test]

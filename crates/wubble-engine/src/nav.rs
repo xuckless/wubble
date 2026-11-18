@@ -6,6 +6,8 @@
 
 use welding::CursorShape;
 
+use crate::input::KeyId;
+
 /// The pointer shape a page asks for. Exactly the shapes Slint can show
 /// (i-slint-common 1.19 `BuiltInMouseCursor`). `cursor as i32` indexes the
 /// `cursors` table in `wubble-ui/ui/app.slint`, which lists them in this order.
@@ -79,6 +81,9 @@ pub enum WebEvent {
     },
     /// The renderer process died. The view reloads the page once by itself.
     RendererGone,
+    /// The page left this key-down alone (CEF `OnKeyEvent`): a page-first
+    /// shortcut may run now.
+    KeyUnhandled(KeyId),
 }
 
 /// What the view shows, as far as the host cares.
@@ -135,6 +140,8 @@ pub enum NavInput {
     Back,
     Forward,
     Reload,
+    /// Reload, bypassing the cache.
+    HardReload,
     Stop,
 }
 
@@ -145,6 +152,7 @@ pub enum NavEffect {
     Back,
     Forward,
     Reload,
+    HardReload,
     Stop,
     /// Nudge CEF to paint: a replacement renderer paints nothing until asked
     /// (welding `request_repaint`).
@@ -238,6 +246,7 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
         NavInput::Popup(url) => (page, vec![Emit(WebEvent::PopupRequested { url })]),
         NavInput::Load(url) => (page, command(NavEffect::Load(url))),
         NavInput::Reload => (page, command(NavEffect::Reload)),
+        NavInput::HardReload => (page, command(NavEffect::HardReload)),
         NavInput::Back if page.can_go_back => (page, command(NavEffect::Back)),
         NavInput::Forward if page.can_go_forward => (page, command(NavEffect::Forward)),
         NavInput::Stop if loading => (page, vec![NavEffect::Stop]),
@@ -355,7 +364,14 @@ mod tests {
             vec![E::Emit(WebEvent::RendererGone), E::Reload, E::Repaint]
         );
         // Commands while crashed repaint too.
-        assert_eq!(transition(state, I::Reload).1, vec![E::Reload, E::Repaint]);
+        assert_eq!(
+            transition(state.clone(), I::Reload).1,
+            vec![E::Reload, E::Repaint]
+        );
+        assert_eq!(
+            transition(state, I::HardReload).1,
+            vec![E::HardReload, E::Repaint]
+        );
     }
 
     #[test]

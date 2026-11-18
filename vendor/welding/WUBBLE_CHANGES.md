@@ -51,9 +51,17 @@ Every change is marked `wubble change` in the source.
    `WeldDisplayHandler::on_favicon_urlchange` on Linux, macOS and Windows
    (`*/cef_backed.rs`). welding had no source for either: `can_go_back` /
    `can_go_forward` were only queryable, favicons not reported at all.
-6. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
+6. **Unhandled-key event.** New `src/keyboard.rs` (registered in `lib.rs`):
+   `WeldKeyboardHandler`, whose `OnKeyEvent` pushes
+   `CefSurfaceEvent::KeyUnhandled { windows_key_code, modifiers }`
+   (`surface.rs`) for each RAWKEYDOWN / KEYDOWN the page did not handle and
+   returns 0, so CEF's default handling still runs. The `WeldClient` of
+   Linux, macOS and Windows (`*/cef_backed.rs`) returns it from
+   `keyboard_handler`. welding had no keyboard handler; the host needs it to
+   run a page-first shortcut only when the page leaves the key alone.
+7. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`frame_timing_defaults_match_upstream`; `BrowserClosed`,
-   `LoadingStateChanged` and `FaviconUrlsChanged` added to
+   `LoadingStateChanged`, `FaviconUrlsChanged` and `KeyUnhandled` added to
    `mixed_callbacks_keep_observation_order`).
 
 ## Not changed, on purpose
@@ -61,7 +69,7 @@ Every change is marked `wubble change` in the source.
 - **No `Browser` accessor.** wubble already reaches the browser host through
   `cef::browser_host_get_browser_by_identifier(producer.browser_id())`, and
   `CefSurfaceProducer` already has input, navigation and `set_visible`.
-- **Input untouched.** wubble-engine sends mouse, wheel and key events to the
+- **Input untouched** (apart from the unhandled-key report). wubble-engine sends mouse, wheel and key events to the
   `BrowserHost` itself: welding's input path has no click count, mouse
   leave, wheel precision flag, `is_system_key` or key table, and fixing it
   would mean three platform copies of the change.

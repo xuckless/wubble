@@ -10,10 +10,6 @@ use wubble_core::tab::TabId;
 /// Actions with no implementation yet, each with the reason.
 pub const NOT_YET: &[(Action, &str)] = &[
     (Action::NewWindow, "one window only (TODO.md, multi-window)"),
-    (
-        Action::HardReload,
-        "the engine has no reload-ignoring-cache yet",
-    ),
     (Action::NewSpace, "needs a name and tint prompt"),
     (
         Action::ToggleCompactMode,
@@ -35,6 +31,7 @@ pub const NOT_YET: &[(Action, &str)] = &[
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewOp {
     Reload,
+    HardReload,
     Stop,
     Back,
     Forward,
@@ -73,6 +70,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ReopenClosedTab => Plan::ReopenClosed,
         Action::FocusAddress => Plan::FocusAddress,
         Action::Reload => view(ViewOp::Reload),
+        Action::HardReload => view(ViewOp::HardReload),
         Action::Stop => view(ViewOp::Stop),
         Action::Back => view(ViewOp::Back),
         Action::Forward => view(ViewOp::Forward),
@@ -97,7 +95,6 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         },
         Action::Quit => Plan::Quit,
         Action::NewWindow
-        | Action::HardReload
         | Action::NewSpace
         | Action::ToggleCompactMode
         | Action::Find
@@ -186,6 +183,7 @@ mod tests {
             Plan::Model(Command::UnpinTab(TabId(3)))
         );
         assert_eq!(plan(Action::Reload, &m), Plan::View(ViewOp::Reload));
+        assert_eq!(plan(Action::HardReload, &m), Plan::View(ViewOp::HardReload));
     }
 
     #[test]
