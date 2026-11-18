@@ -1415,7 +1415,15 @@ impl Host {
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
-            Some(settings_smoke::Action::Open) => self.perform(Action::OpenSettings),
+            Some(settings_smoke::Action::Open) => {
+                if crate::shot::requested() {
+                    let host = std::cell::RefCell::new(&mut *self);
+                    crate::shot::seed(&mut |c| host.borrow_mut().dispatch(c), || {
+                        host.borrow().model.clone()
+                    });
+                }
+                self.perform(Action::OpenSettings)
+            }
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
                 // which it calls back into. The read is queued after the write it causes.
