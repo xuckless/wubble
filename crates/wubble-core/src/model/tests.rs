@@ -1291,7 +1291,7 @@ fn tab_order_helpers_follow_the_sidebar_order() {
 
 #[test]
 fn tab_order_helpers_on_an_empty_space() {
-    let m = Model::new();
+    let m = Model::new(t0());
     assert_eq!(m.tab_step(1), None);
     assert_eq!(m.nth_tab(0), None);
     assert_eq!(m.last_tab(), None);
@@ -1299,7 +1299,7 @@ fn tab_order_helpers_on_an_empty_space() {
 
 #[test]
 fn space_helpers_wrap() {
-    let (m, s1) = add_space(Model::new(), D);
+    let (m, s1) = add_space(Model::new(t0()), D);
     assert_eq!(m.space_step(1), Some(s1));
     assert_eq!(m.space_step(-1), Some(s1));
     let (m, _) = run(m, Command::SwitchSpace(s1));

@@ -34,7 +34,7 @@ use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
 use wubble_store::{ClosedTab, HistoryHit, Transition};
-use wubble_ui::{AppWindow, CommandBarState, CompactMode};
+use wubble_ui::{AppWindow, CommandBarState, SidebarMode};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
@@ -712,7 +712,7 @@ impl Host {
             }),
             Plan::ToggleSidebar => {
                 if let Some(window) = self.window.upgrade() {
-                    window.invoke_toggle_compact();
+                    window.invoke_toggle_sidebar();
                 }
             }
             Plan::Quit => quit(),
@@ -1081,11 +1081,12 @@ impl Host {
 }
 
 /// What of the shell's state is saved with the session. Peeking is the
-/// hidden sidebar shown for a moment, so it saves as compact.
+/// hidden sidebar shown for a moment, so it saves as compact. The width is the
+/// seam's saved one: the live width is 0 while the sidebar is hidden.
 pub fn ui_state(window: &AppWindow) -> UiState {
     UiState {
-        sidebar_width: window.get_sidebar_width(),
-        compact: window.get_compact_mode() != CompactMode::Expanded,
+        sidebar_width: window.get_sidebar_saved(),
+        compact: window.get_sidebar_mode() == SidebarMode::Hidden,
     }
 }
 

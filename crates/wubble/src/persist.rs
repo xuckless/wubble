@@ -326,7 +326,7 @@ fn latest_save_only(batch: Vec<Request>) -> impl Iterator<Item = Request> {
 
 async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
     let store = Store::open(path).await?;
-    let model = store.load_session().await?;
+    let model = store.load_session(std::time::Instant::now()).await?;
     let settings = Settings {
         engine: store.setting::<SearchEngineChoice>().await?,
         live_suggestions: store.setting::<LiveSuggestions>().await?,

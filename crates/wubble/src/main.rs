@@ -556,14 +556,12 @@ fn run(
     });
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
-    // The driver reads the width once, at install.
-    window.set_sidebar_width(loaded.settings.ui.sidebar_width);
     connect_input(&window);
     connect_shell(&window);
     wubble_ui::window::wire(&window);
     install_shell_driver(&window)?;
     if loaded.settings.ui.compact {
-        window.invoke_toggle_compact();
+        window.invoke_toggle_sidebar();
     }
     let host = Host::new(engine, &window, gpu.presenter(), loaded, store, url, checks);
     HOST.set(Some(host));
