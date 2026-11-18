@@ -231,6 +231,7 @@ fn space_capsule(app: &AppWindow, driver: &Shared) {
             id,
             name: "".into(),
             tint: Default::default(),
+            icon: "personal".into(),
         })
         .collect();
     app.set_spaces(ModelRc::from(spaces.as_slice()));
@@ -385,8 +386,9 @@ fn margin_in_rounded(
 const LIGHT: f32 = 12.0;
 
 /// The header holds the lights and the four nav buttons, and they never meet; the downloads button
-/// is the footer's secondary action (`.wb-side-bottom > .wb-ib`, 36 square), at its end, clear of
-/// the Space tiles. At the default width and at the minimum.
+/// is the footer's secondary action (`.wb-side-bottom > .wb-ib`, 36 square), next to the settings
+/// button at its end (2 apart, the tiles' gap), clear of the Space tiles. At the default width
+/// and at the minimum.
 fn header_and_footer(app: &AppWindow, driver: &Shared) {
     use wubble_ui::DownloadItem;
     app.set_downloads(ModelRc::from([DownloadItem::default()].as_slice()));
@@ -405,7 +407,9 @@ fn header_and_footer(app: &AppWindow, driver: &Shared) {
             e.downloads_y > e.pill_y,
             "at {raw}: downloads in the header"
         );
-        assert_eq!(e.downloads_end, e.end - SIDE_PAD, "at {raw}");
+        assert_eq!(e.settings_end, e.end - SIDE_PAD, "at {raw}");
+        assert_eq!(e.settings_end - e.settings, 36.0, "at {raw}");
+        assert_eq!(e.downloads_end, e.settings - 2.0, "at {raw}");
         assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
         assert!(
             e.spaces_end < e.downloads,
@@ -444,6 +448,7 @@ fn rail_centre_line(app: &AppWindow, driver: &Shared) {
         ("new tab", e.new_tab, e.new_tab_end),
         ("spaces", e.spaces, e.spaces_end),
         ("downloads", e.downloads, e.downloads_end),
+        ("settings", e.settings, e.settings_end),
     ] {
         assert_eq!((a + b) / 2.0, mid, "{what} {a}..{b} off the rail's centre");
     }
@@ -496,6 +501,7 @@ fn peek_panel_holds_its_contents(app: &AppWindow, driver: &Shared) {
             ("new tab", (e.new_tab, e.new_tab_end)),
             ("spaces", (e.spaces, e.spaces_end)),
             ("downloads", (e.downloads, e.downloads_end)),
+            ("settings", (e.settings, e.settings_end)),
         ] {
             inside(&format!("{from}: {what}"), part, panel);
         }

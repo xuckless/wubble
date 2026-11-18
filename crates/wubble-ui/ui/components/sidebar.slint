@@ -105,6 +105,8 @@ export component Sidebar inherits Rectangle {
         downloads: downloads.absolute-position.x,
         downloads-end: downloads.absolute-position.x + downloads.width,
         downloads-y: downloads.absolute-position.y,
+        settings: settings.absolute-position.x,
+        settings-end: settings.absolute-position.x + settings.width,
     };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
@@ -112,6 +114,8 @@ export component Sidebar inherits Rectangle {
     // There are downloads to list: the download button shows in the footer.
     in property <bool> has-downloads: false;
     callback downloads-requested();
+    // The footer's settings button: opens wubble://settings.
+    callback settings-requested();
     // Right of the download button, level with its top, in window coordinates: the popover opens
     // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
     out property <Origin> downloads-anchor: { x: downloads.absolute-position.x + downloads.width + Shell.prompt-gap, y: downloads.absolute-position.y };
@@ -393,19 +397,31 @@ export component Sidebar inherits Rectangle {
         switcher := Rectangle {
             property <length> pitch: Shell.space-tile + Shell.space-gap;
             property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            height: root.compact ? self.span + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
+            height: root.compact ? self.span + Shell.side-bottom-gap-rail + settings.height + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
 
-            // icons.tsx `download`
+            // icons.tsx `download`, left of the settings button (above it on the rail)
             downloads := IconButton {
                 visible: root.has-downloads;
                 width: Shell.side-bottom-button;
                 height: Shell.side-bottom-button;
                 border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width - settings.width - Shell.space-gap;
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.download;
                 clicked => {
                     root.downloads-requested();
+                }
+            }
+            // wubble: the settings entry, always at the far end
+            settings := IconButton {
+                width: Shell.side-bottom-button;
+                height: Shell.side-bottom-button;
+                border-radius: Shell.control-radius;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
+                y: root.compact ? parent.span + Shell.side-bottom-gap-rail + (downloads.visible ? downloads.height + Shell.side-bottom-gap-rail : 0px) : 0px;
+                icon-path: IconPaths.settings;
+                clicked => {
+                    root.settings-requested();
                 }
             }
 
@@ -450,7 +466,6 @@ export component Sidebar inherits Rectangle {
                             root.space-switched(space.id);
                         }
                     }
-                    // the model has no icon per Space yet: the three drawn icons in turn
                     Wobble {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
@@ -462,7 +477,7 @@ export component Sidebar inherits Rectangle {
                             height: parent.height;
                             // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
                             stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                            kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
+                            kind: space.icon;
                             tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
                         }
                     }

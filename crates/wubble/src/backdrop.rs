@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
+use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::{
     BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Tier,
@@ -59,6 +60,23 @@ pub fn frame_load(
     scene.max(late)
 }
 
+/// The levels a glass setting lets the governor use, best and cheapest (`Quality`'s order:
+/// greater is cheaper). `Off` is the flat glass; the Slint-only fallback is not a level.
+pub fn levels(setting: GlassSetting) -> (Quality, Quality) {
+    match setting {
+        GlassSetting::Auto => (Quality::Full, Quality::Flat),
+        GlassSetting::Full => (Quality::Full, Quality::Full),
+        GlassSetting::Reduced => (Quality::HalfRes, Quality::Cached),
+        GlassSetting::Off => (Quality::Flat, Quality::Flat),
+    }
+}
+
+/// `quality` held inside the setting's levels.
+pub fn clamp(quality: Quality, setting: GlassSetting) -> Quality {
+    let (best, worst) = levels(setting);
+    quality.clamp(best, worst)
+}
+
 /// Which glass the window has, for the whole run.
 pub enum Glass {
     /// The wgpu scene draws the backdrop and the glass; Slint draws the content on top.
@@ -71,6 +89,8 @@ pub enum Glass {
 pub struct SceneHost {
     renderer: Renderer,
     governor: Governor,
+    /// The levels the user allows (`settings::GLASS_QUALITY`); the governor stays inside them.
+    setting: GlassSetting,
     /// The frame budget ([`frame_budget`]), once the window knows its monitor.
     budget: Option<Duration>,
     /// The tint the palette was last dyed from.
@@ -108,6 +128,7 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow) -> Glass {
             Glass::Scene(Box::new(SceneHost {
                 renderer,
                 governor: Governor::new(Quality::Full),
+                setting: GlassSetting::Auto,
                 budget: None,
                 tint: None,
                 loading: false,
@@ -162,6 +183,21 @@ fn active_tint(window: &AppWindow) -> Option<Rgb> {
 impl Glass {
     pub fn is_scene(&self) -> bool {
         matches!(self, Glass::Scene(_))
+    }
+
+    /// The user's glass setting, applied at once: the governor starts over at the best level
+    /// it allows (no measurements of other levels carry over).
+    pub fn set_setting(&mut self, setting: GlassSetting) {
+        let Glass::Scene(s) = self else {
+            return;
+        };
+        if s.setting == setting {
+            return;
+        }
+        s.setting = setting;
+        let (best, _) = levels(setting);
+        s.governor = Governor::new(best);
+        s.renderer.set_quality(best);
     }
 
     /// The scene's output size, physical px, once it has rendered (`--measure`).
@@ -272,8 +308,14 @@ impl SceneHost {
             return;
         };
         let before = self.governor.quality();
-        self.governor = self.governor.next(cost, budget);
-        let after = self.governor.quality();
+        let next = self.governor.next(cost, budget);
+        let after = clamp(next.quality(), self.setting);
+        // A step outside the allowed levels is undone: the governor restarts at the bound.
+        self.governor = if after == next.quality() {
+            next
+        } else {
+            Governor::new(after)
+        };
         if after != before {
             // The load that moved it: the smoothed load of the level it left.
             let load = self.governor.load_at(before).unwrap_or_default();
@@ -417,6 +459,20 @@ mod tests {
             g = g.next(frame_load(None, Some(budget * 2), budget).unwrap(), budget);
         }
         assert_eq!(g.quality(), Quality::HalfRes);
+    }
+
+    #[test]
+    fn the_glass_setting_bounds_the_level() {
+        use Quality::*;
+        let all = [Full, HalfRes, Cached, Flat];
+        for q in all {
+            assert_eq!(clamp(q, GlassSetting::Auto), q);
+            assert_eq!(clamp(q, GlassSetting::Full), Full);
+            assert_eq!(clamp(q, GlassSetting::Off), Flat);
+        }
+        assert_eq!(clamp(Full, GlassSetting::Reduced), HalfRes);
+        assert_eq!(clamp(Cached, GlassSetting::Reduced), Cached);
+        assert_eq!(clamp(Flat, GlassSetting::Reduced), Cached);
     }
 
     #[test]

@@ -16,6 +16,7 @@
 
 mod downloads;
 mod panes;
+mod settings;
 mod surfaces;
 
 use std::cell::RefCell;
@@ -36,6 +37,7 @@ use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
 use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
+use wubble_core::pages::InternalPage;
 use wubble_core::site::SitePermissions;
 use wubble_core::sleep::Pressure;
 use wubble_core::space::MAX_PANES;
@@ -66,6 +68,7 @@ use crate::persist::{self, Loaded, SaveState, StoreClient, TypedNav, UiState};
 use crate::pixels;
 use crate::screen::{Screen, ScreenEvent};
 use crate::session_smoke::{self, SessionSmoke};
+use crate::settings_smoke::{self, SettingsSmoke};
 use crate::shell::AudioMap;
 use crate::split_smoke::{self, SplitSmoke};
 use crate::surface::{FindEvent, Surfaces};
@@ -103,13 +106,18 @@ pub enum Call {
 /// The engine work an effect stands for. Freeze has no CEF call (CEF 156
 /// has no freeze API; hiding already throttles) and snapshots have no UI
 /// yet, so those are recorded no-ops (TODO.md "Tabs in the host").
+/// An internal page (`InternalPage`, wubble://) has no view: the shell draws it, so creating
+/// or restoring its tab opens none, and navigating a tab to one closes the tab's view.
 pub fn call(effect: &Effect, model: &Model) -> Call {
+    let internal = |url: &str| InternalPage::from_url(url).is_some();
     match effect {
+        Effect::CreateTab { url, .. } if internal(url) => Call::Nothing,
         Effect::CreateTab { tab, url, .. } => Call::OpenView {
             tab: *tab,
             url: url.clone(),
         },
         Effect::CloseTab(tab) => Call::CloseView(*tab),
+        Effect::Navigate { tab, url } if internal(url) => Call::CloseView(*tab),
         Effect::Navigate { tab, url } => Call::Load {
             tab: *tab,
             url: url.clone(),
@@ -130,13 +138,16 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
             Life::Discard | Life::ReleaseTexture => Call::CloseView(*tab),
             // A live view's crash shows the error panel, whose Reload
             // recovers (`page_error`); this opens a view only where none is.
-            Life::Restore => model
-                .tabs
-                .get(tab)
-                .map_or(Call::Nothing, |t| Call::OpenView {
-                    tab: *tab,
-                    url: t.url.clone(),
-                }),
+            Life::Restore => {
+                model
+                    .tabs
+                    .get(tab)
+                    .filter(|t| !internal(&t.url))
+                    .map_or(Call::Nothing, |t| Call::OpenView {
+                        tab: *tab,
+                        url: t.url.clone(),
+                    })
+            }
             Life::Freeze | Life::Unfreeze | Life::CaptureSnapshot | Life::ReleaseSnapshot => {
                 Call::Nothing
             }
@@ -196,6 +207,7 @@ pub struct Checks {
     pub page_smoke: Option<PageSmoke>,
     pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
+    pub settings_smoke: Option<SettingsSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -274,6 +286,9 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    pub settings_passed: bool,
+    /// `--smoke settings`: the stored value of the setting it flipped, read back.
+    settings_read: Option<String>,
     pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
@@ -306,6 +321,10 @@ pub struct Host {
     favicons: BTreeMap<TabId, slint::Image>,
     /// Per-site zoom; stored through the store, applied on each commit.
     site_zoom: ZoomTable,
+    /// The zoom of sites without their own (`settings::ZOOM_DEFAULT`).
+    zoom_default: u32,
+    /// The settings page and the stored setting rows.
+    settings: settings::SettingsPage,
     /// Bumped per notice and per find-bar focus request.
     toast_serial: i32,
     find_focus: i32,
@@ -366,7 +385,6 @@ impl Host {
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
-        let site_zoom = settings.site_zoom.clone();
         let begin_frames = checks.begin_frames;
         let mut host = Self {
             engine,
@@ -403,13 +421,16 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            settings_passed: false,
+            settings_read: None,
             input: InputState::default(),
-            keymap: input::keymap(Platform::current(), &settings.keybinding_overrides),
+            // `replay_settings` below applies the stored overrides, engine, zoom, ...
+            keymap: Keymap::defaults(Platform::current()),
             page_first: PendingKeys::default(),
             store,
             save: SaveState::default(),
-            search_engine: settings.engine,
-            live_suggestions: settings.live_suggestions,
+            search_engine: None,
+            live_suggestions: false,
             typed_nav: TypedNav::default(),
             committed,
             failure: None,
@@ -419,7 +440,9 @@ impl Host {
             ime: Ime::default(),
             audio: AudioMap::new(),
             favicons,
-            site_zoom,
+            site_zoom: ZoomTable::new(),
+            zoom_default: wubble_core::zoom::DEFAULT_PERCENT,
+            settings: settings::SettingsPage::new(settings.stored),
             toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
@@ -433,6 +456,7 @@ impl Host {
                 timer: slint::Timer::default(),
             }),
         };
+        host.replay_settings();
         host.render_downloads(window);
         host.session_icon_setup();
         match open {
@@ -525,9 +549,17 @@ impl Host {
                     self.view_gone(tab);
                 }
             }
+            // A live tab without a view (it showed an internal page) gets one for the page.
             Call::Load { tab, url } => {
-                if let Some(view) = self.tab_view(tab) {
-                    view.load(&url);
+                let live = self
+                    .model
+                    .tabs
+                    .get(&tab)
+                    .is_some_and(|t| t.lifecycle.liveness == Liveness::Active);
+                match self.tab_view(tab) {
+                    Some(view) => view.load(&url),
+                    None if live => return self.execute(Call::OpenView { tab, url }, frame_rate),
+                    None => {}
                 }
             }
             Call::SetVisible { tab, visible } => {
@@ -573,6 +605,7 @@ impl Host {
         self.render_surfaces(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
+        self.render_settings();
     }
 
     /// The blocker's count for `tab`, if it has a view.
@@ -670,6 +703,7 @@ impl Host {
         self.smoke_step(SmokeInput::Worked);
         self.tabs_smoke_step();
         self.session_smoke_step();
+        self.settings_smoke_step();
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
@@ -973,8 +1007,7 @@ impl Host {
             }
             Some(Choice::Perform(action)) => self.perform(action),
             Some(Choice::SetEngine(engine)) => {
-                self.search_engine = Some(engine);
-                self.store.set_engine(engine);
+                self.write_setting(wubble_core::settings::SEARCH_ENGINE.key, engine.id());
                 // The text that offered the choice is searched with it.
                 if let omnibox::Intent::Search(q) = omnibox::classify(&self.bar.query)
                     && !q.is_empty()
@@ -1301,6 +1334,58 @@ impl Host {
         }
     }
 
+    fn settings_smoke_step(&mut self) {
+        let Some(state) = self.checks.settings_smoke.take() else {
+            return;
+        };
+        let Some(window) = self.window.upgrade() else {
+            self.checks.settings_smoke = Some(state);
+            return;
+        };
+        let seen = settings_smoke::Seen {
+            ready: self.frame_rate.is_some(),
+            on_settings: self
+                .model
+                .visible_tab()
+                .and_then(|t| self.model.tabs.get(&t))
+                .is_some_and(|t| t.url == InternalPage::Settings.url()),
+            page_open: window.get_settings_open(),
+            rows: slint::Model::row_count(&window.get_settings_rows()),
+            views: self.engine.view_count(),
+            stored: self.settings_read.clone(),
+            blocking: self.blocking.is_enabled(),
+        };
+        let (state, action) = settings_smoke::next(state, &seen);
+        self.checks.settings_smoke = Some(state);
+        match action {
+            Some(settings_smoke::Action::Open) => self.perform(Action::OpenSettings),
+            Some(settings_smoke::Action::Flip { key, value }) => {
+                // The toggle's own callback, as a click sends it: later, outside the host,
+                // which it calls back into. The read is queued after the write it causes.
+                let _ = self.window.upgrade_in_event_loop(move |window| {
+                    window.invoke_setting_changed(key.into(), value.into());
+                    with_host(|host| {
+                        host.store.read_settings(move |rows| {
+                            let value = rows.get(key).cloned().unwrap_or_default();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                with_host(|host| {
+                                    host.settings_read = Some(value);
+                                    host.settings_smoke_step();
+                                });
+                            });
+                        })
+                    });
+                });
+            }
+            Some(settings_smoke::Action::Pass) => {
+                self.settings_passed = true;
+                quit();
+            }
+            Some(settings_smoke::Action::Fail(reason)) => self.fail(reason),
+            None => {}
+        }
+    }
+
     fn visible_blocked(&mut self) -> u32 {
         let tab = self.model.visible_tab();
         tab.and_then(|t| self.blocked_of(t)).unwrap_or(0)
@@ -1565,6 +1650,16 @@ impl Host {
                 ..
             } => {
                 let key = self.input.key_input(event);
+                // The keybinding editor's recorder takes keys before any shortcut does.
+                if key.pressed
+                    && self.capture_key(input::chord_of(
+                        &key.unmodified,
+                        key.modifiers.keys,
+                        key.text.as_deref(),
+                    ))
+                {
+                    return EventResult::PreventDefault;
+                }
                 let focus = if window.get_web_focused() {
                     KeyFocus::Page
                 } else if window.get_command_bar_state() != CommandBarState::Closed {

@@ -4,6 +4,7 @@ slint::include_modules!();
 
 pub mod driver;
 pub mod glass;
+pub mod settings;
 pub mod window;
 
 use slint::{Model, VecModel};

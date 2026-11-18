@@ -423,6 +423,16 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
         })
     });
     let (d, w) = hook();
+    window.on_sidebar_mode_requested(move |mode| {
+        run(&d, &w, |s, w| {
+            if s.seam.held {
+                s.seam.release();
+            }
+            s.set_mode(w, mode.into());
+            None
+        })
+    });
+    let (d, w) = hook();
     window.on_sidebar_toggle_requested(move || {
         run(&d, &w, |s, w| {
             if s.seam.held {

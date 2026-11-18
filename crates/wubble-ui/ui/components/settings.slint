@@ -1,0 +1,802 @@
+// The settings page (wubble://settings): native Slint in the content area, generated from the
+// one settings table (wubble_core::settings, through pages::settings_page). Each row picks its
+// control by `row.control`, so a new setting is a table row and no UI code.
+//
+// Controls: the design repo has the toggle, slider and segmented control only as its web touch
+// kit (`src/wubble/pages/touch.css` .tp-tg, .tp-sl, .tp-seg, and `touch-kit.tsx` Segmented,
+// xuckless/the-wallpaper-project @ 6c840da, owner's code); they are drawn here to those
+// metrics and colours. Their springs (the liquid indicator, the rubber-banded knob) are not
+// ported: Slint `animate` moves them, as the check box does. Written from scratch, because the
+// bucket has nothing for them: the stepper, the text field, the list editor, the section
+// header, the chord recorder row, the swatch row and the page itself. Reused: the port's
+// GlassPanel, PressableButton, SpaceIcon and WubbleScroller, wubble's IconButton and Icon.
+
+import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
+import { SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, GlassTier } from "model.slint";
+import { Icon, IconPaths } from "icon.slint";
+import { IconButton } from "nav-buttons.slint";
+
+// .tp-tg at half size: the accent fill when on, the track when off; the knob slides.
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    in property <color> accent: Palette.sky;
+    callback toggled();
+
+    width: Shell.toggle-width;
+    height: Shell.toggle-height;
+    border-radius: self.height / 2;
+    background: root.on ? root.accent : Shell.track;
+    animate background {
+        duration: Shell.control-ms;
+        easing: Motion.easeOut;
+    }
+    accessible-role: switch;
+    accessible-checked: root.on;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    Rectangle {
+        x: root.on ? root.width - self.width - Shell.toggle-inset : Shell.toggle-inset;
+        y: Shell.toggle-inset;
+        width: Shell.toggle-knob;
+        height: Shell.toggle-knob;
+        border-radius: self.width / 2;
+        background: root.on ? Palette.ink : Palette.mist;
+        drop-shadow-blur: Shell.toggle-shadow-blur;
+        drop-shadow-offset-y: Shell.toggle-shadow-y;
+        drop-shadow-color: Shell.toggle-shadow;
+        animate x {
+            duration: Shell.control-ms;
+            easing: Motion.easeSpring;
+        }
+        animate background {
+            duration: Shell.control-ms;
+            easing: Motion.easeOut;
+        }
+    }
+    TouchArea {
+        clicked => {
+            root.toggled();
+        }
+    }
+}
+
+// .tp-seg: a track with one segment per word; the ink indicator sits under the chosen one.
+export component Segmented inherits Rectangle {
+    in property <[string]> labels;
+    in property <int> selected: -1;
+    callback chosen(int);
+
+    width: root.labels.length * Shell.seg-width + 2 * Shell.seg-pad;
+    height: Shell.seg-height + 2 * Shell.seg-pad;
+    border-radius: Shell.seg-radius;
+    background: Shell.track;
+
+    Rectangle {
+        x: Shell.seg-pad + max(0, root.selected) * Shell.seg-width;
+        y: Shell.seg-pad;
+        width: Shell.seg-width;
+        height: Shell.seg-height;
+        border-radius: Shell.seg-inner-radius;
+        background: Palette.ink;
+        drop-shadow-blur: Shell.seg-shadow-blur;
+        drop-shadow-offset-y: Shell.seg-shadow-y;
+        drop-shadow-color: Shell.seg-shadow;
+        opacity: root.selected >= 0 ? 1 : 0;
+        animate x {
+            duration: Shell.control-ms;
+            easing: Motion.easeSpring;
+        }
+    }
+    for label[i] in root.labels: Rectangle {
+        x: Shell.seg-pad + i * Shell.seg-width;
+        y: Shell.seg-pad;
+        width: Shell.seg-width;
+        height: Shell.seg-height;
+        accessible-role: button;
+        accessible-label: label;
+        accessible-action-default => {
+            root.chosen(i);
+        }
+        ta := TouchArea {
+            clicked => {
+                root.chosen(i);
+            }
+        }
+        Text {
+            text: label;
+            color: i == root.selected ? Palette.abyss : ta.has-hover ? Palette.ink : Palette.mist;
+            font-family: Fonts.ui;
+            font-size: Shell.seg-label;
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            animate color {
+                duration: Shell.seg-label-ms;
+                easing: Motion.easeOut;
+            }
+        }
+    }
+}
+
+// A one-line text field on the track colour; with `icon-path`, the icon leads (the search box).
+export component Field inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    in property <string> icon-path: "";
+    in property <bool> numeric: false;
+    callback edited(string);
+    callback accepted(string);
+    public function take-focus() {
+        input.focus();
+    }
+
+    height: Shell.field-height;
+    border-radius: Radius.sm;
+    background: input.has-focus ? Palette.shell : Shell.track;
+
+    property <length> lead: root.icon-path == "" ? Spacing.s3 : Spacing.s3 + Spacing.s4 + Spacing.s2;
+    if root.icon-path != "": Icon {
+        x: Spacing.s3;
+        y: (parent.height - self.height) / 2;
+        size: Spacing.s4;
+        path: root.icon-path;
+        tint: Palette.haze;
+    }
+    Text {
+        x: root.lead;
+        width: parent.width - self.x - Spacing.s3;
+        height: parent.height;
+        visible: input.text == "";
+        text: root.placeholder;
+        color: Palette.haze;
+        font-family: Fonts.ui;
+        font-size: Type.body.size;
+        vertical-alignment: center;
+        horizontal-alignment: root.numeric ? right : left;
+        overflow: elide;
+    }
+    input := TextInput {
+        x: root.lead;
+        width: parent.width - self.x - Spacing.s3;
+        height: parent.height;
+        color: Palette.ink;
+        font-family: Fonts.ui;
+        font-size: Type.body.size;
+        vertical-alignment: center;
+        horizontal-alignment: root.numeric ? right : left;
+        single-line: true;
+        input-type: root.numeric ? InputType.decimal : InputType.text;
+        edited => {
+            root.edited(self.text);
+        }
+        accepted => {
+            root.accepted(self.text);
+        }
+    }
+}
+
+// A whole number in a range: minus, the number (typed, Enter applies), plus. Written from
+// scratch: the touch kit has no stepper.
+export component Stepper inherits HorizontalLayout {
+    in property <float> value;
+    in property <float> min;
+    in property <float> max;
+    in property <float> step: 1;
+    callback set(float);
+
+    spacing: Spacing.s1;
+    alignment: end;
+    IconButton {
+        icon-path: IconPaths.minus;
+        enabled: root.value > root.min;
+        y: (parent.height - self.height) / 2;
+        clicked => {
+            root.set(Math.max(root.min, root.value - root.step));
+        }
+    }
+    number := Field {
+        width: Shell.stepper-field;
+        numeric: true;
+        text: root.value;
+        accepted(t) => {
+            root.set(t.to-float());
+            self.text = root.value;
+        }
+    }
+    IconButton {
+        icon-path: IconPaths.plus;
+        enabled: root.value < root.max;
+        clicked => {
+            root.set(Math.min(root.max, root.value + root.step));
+        }
+    }
+    changed value => {
+        number.text = root.value;
+    }
+}
+
+// .tp-sl: the rail, the accent fill and the knob; the value is set on release.
+export component Slider inherits Rectangle {
+    in property <float> value;
+    in property <float> min;
+    in property <float> max: 1;
+    in property <color> accent: Palette.sky;
+    callback set(float);
+
+    width: Shell.slider-width;
+    height: Shell.slider-height;
+    property <float> span: Math.max(0.0001, root.max - root.min);
+    property <float> held: (root.min + Math.clamp(ta.mouse-x / root.width, 0, 1) * root.span);
+    property <float> shown: ta.pressed ? root.held : root.value;
+    property <float> t: Math.clamp((root.shown - root.min) / root.span, 0, 1);
+
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: Shell.slider-rail;
+        border-radius: self.height / 2;
+        background: Shell.track;
+    }
+    Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: root.t * root.width;
+        height: Shell.slider-rail;
+        border-radius: self.height / 2;
+        background: root.accent;
+    }
+    Rectangle {
+        x: root.t * (root.width - self.width);
+        y: (parent.height - self.height) / 2;
+        width: Shell.slider-knob;
+        height: Shell.slider-knob;
+        border-radius: self.width / 2;
+        background: Palette.ink;
+        drop-shadow-blur: Shell.slider-shadow-blur;
+        drop-shadow-offset-y: Shell.slider-shadow-y;
+        drop-shadow-color: Shell.slider-shadow;
+    }
+    ta := TouchArea {
+        mouse-cursor: self.pressed ? grabbing : grab;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.up {
+                root.set(root.held);
+            }
+        }
+    }
+}
+
+// A small text button: a row's Reset, a list's Remove.
+component TextButton inherits PressableButton {
+    height: Shell.icon-button;
+    border-radius: Shell.icon-button-radius;
+    background: self.hovered ? Shell.icon-button-hover : transparent;
+}
+
+// Entries of a list or map setting, each removable; `can-add` adds a field for a new one.
+export component EntryList inherits VerticalLayout {
+    in property <[string]> entries;
+    in property <[string]> entry-keys;
+    in property <bool> can-add;
+    in property <string> placeholder;
+    in property <string> empty: "None";
+    callback removed(string);
+    callback added(string);
+
+    spacing: Spacing.s1;
+    if root.entries.length == 0 && !root.can-add: Text {
+        text: root.empty;
+        color: Palette.haze;
+        font-family: Fonts.ui;
+        font-size: Type.label.size;
+    }
+    for entry[i] in root.entries: HorizontalLayout {
+        spacing: Spacing.s2;
+        Text {
+            horizontal-stretch: 1;
+            text: entry;
+            color: Palette.mist;
+            font-family: Fonts.ui;
+            font-size: Type.body.size;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        IconButton {
+            icon-path: IconPaths.close;
+            clicked => {
+                root.removed(i < root.entry-keys.length ? root.entry-keys[i] : entry);
+            }
+        }
+    }
+    if root.can-add: Field {
+        placeholder: root.placeholder;
+        accepted(t) => {
+            if t != "" {
+                root.added(t);
+            }
+            self.text = "";
+        }
+    }
+}
+
+// A section's title over its card.
+export component SectionHeader inherits Text {
+    color: Palette.mist;
+    font-family: Fonts.ui;
+    font-size: Type.heading.size;
+    font-weight: Type.heading.weight;
+}
+
+// A section's rows on a faint card.
+component Card inherits Rectangle {
+    border-radius: Radius.md;
+    background: Shell.settings-card;
+    VerticalLayout {
+        padding-left: Spacing.s4;
+        padding-right: Spacing.s4;
+        padding-top: Spacing.s2;
+        padding-bottom: Spacing.s2;
+        spacing: 0px;
+        @children
+    }
+}
+
+// A label on the left, a note under it, the control on the right.
+component Line inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> note;
+    in property <color> note-color: Palette.haze;
+
+    min-height: Shell.settings-row;
+    spacing: Spacing.s3;
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: Palette.ink;
+            font-family: Fonts.ui;
+            font-size: Type.body.size;
+            wrap: word-wrap;
+        }
+        if root.note != "": Text {
+            text: root.note;
+            color: root.note-color;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+            wrap: word-wrap;
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: Spacing.s2;
+        @children
+    }
+}
+
+// One generated row: the control follows `row.control`.
+export component SettingRow inherits VerticalLayout {
+    in property <SettingItem> setting;
+    callback changed(string, string);
+    callback reset(string);
+    callback entry-removed(string, string);
+    callback entry-added(string, string);
+
+    padding-bottom: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map ? Spacing.s2 : 0px;
+    Line {
+        label: root.setting.label;
+        note: root.setting.restart ? "Applies after a restart" : "";
+        note-color: Palette.amber;
+        if root.setting.changed: VerticalLayout {
+            alignment: center;
+            TextButton {
+                text: "Reset";
+                clicked => {
+                    root.reset(root.setting.key);
+                }
+            }
+        }
+        if root.setting.control == SettingControl.toggle: VerticalLayout {
+            alignment: center;
+            toggle := Toggle {
+                on: root.setting.on;
+                toggled => {
+                    root.changed(root.setting.key, root.setting.on ? "0" : "1");
+                }
+            }
+        }
+        if root.setting.control == SettingControl.segmented: VerticalLayout {
+            alignment: center;
+            segmented := Segmented {
+                labels: root.setting.labels;
+                selected: root.setting.selected;
+                chosen(i) => {
+                    root.changed(root.setting.key, root.setting.words[i]);
+                }
+            }
+        }
+        if root.setting.control == SettingControl.stepper: VerticalLayout {
+            alignment: center;
+            stepper := Stepper {
+                value: root.setting.number;
+                min: root.setting.min;
+                max: root.setting.max;
+                step: root.setting.step;
+                set(v) => {
+                    root.changed(root.setting.key, Math.round(v));
+                }
+            }
+        }
+        if root.setting.control == SettingControl.slider: VerticalLayout {
+            alignment: center;
+            slider := Slider {
+                value: root.setting.number;
+                min: root.setting.min;
+                max: root.setting.max;
+                set(v) => {
+                    root.changed(root.setting.key, v);
+                }
+            }
+        }
+    }
+    if root.setting.control == SettingControl.list || root.setting.control == SettingControl.map: entries := EntryList {
+        entries: root.setting.entries;
+        entry-keys: root.setting.entry-keys;
+        can-add: root.setting.control == SettingControl.list;
+        placeholder: "Add";
+        removed(k) => {
+            root.entry-removed(root.setting.key, k);
+        }
+        added(t) => {
+            root.entry-added(root.setting.key, t);
+        }
+    }
+}
+
+// One action's shortcut: click the chord to record a new one; Reset when it was changed.
+component BindingRow inherits Line {
+    in property <BindingItem> item;
+    in property <CaptureView> capture;
+    callback record(string);
+    callback reset(string);
+    callback confirm();
+    callback cancel();
+
+    property <bool> armed: root.capture.armed && root.capture.action == root.item.action;
+    property <bool> asking: root.capture.conflict && root.capture.action == root.item.action;
+    label: root.item.label;
+    note: root.asking ? root.capture.chord + " runs " + root.capture.other + " now" : "";
+    note-color: Palette.coral;
+    if root.asking: VerticalLayout {
+        alignment: center;
+        TextButton {
+            text: "Replace";
+            clicked => {
+                root.confirm();
+            }
+        }
+    }
+    if root.asking || root.armed: VerticalLayout {
+        alignment: center;
+        TextButton {
+            text: "Cancel";
+            clicked => {
+                root.cancel();
+            }
+        }
+    }
+    if root.item.changed && !root.armed && !root.asking: VerticalLayout {
+        alignment: center;
+        TextButton {
+            text: "Reset";
+            clicked => {
+                root.reset(root.item.action);
+            }
+        }
+    }
+    VerticalLayout {
+        alignment: center;
+        chord := PressableButton {
+            height: Shell.icon-button;
+            border-radius: Shell.icon-button-radius;
+            background: root.armed ? Palette.rim : self.hovered ? Palette.shell : Shell.track;
+            text: root.armed ? "Press a shortcut" : root.item.chord == "" ? "None" : root.item.chord;
+            accessible-role: button;
+            accessible-label: root.item.label;
+            accessible-action-default => {
+                root.record(root.item.action);
+            }
+            clicked => {
+                root.record(root.item.action);
+            }
+        }
+    }
+}
+
+// The full-content settings page, over the page area like the error panel.
+export component SettingsPage inherits Rectangle {
+    in property <bool> open;
+    // the generated rows, flat: each section's first row names it
+    in property <[SettingItem]> rows;
+    in property <[BindingItem]> bindings;
+    in property <CaptureView> capture;
+    in property <[SpaceSetting]> spaces;
+    // the Sites lists: each line and what removing it names (a host, a decision's index)
+    in property <[string]> site-zoom;
+    in property <[string]> site-zoom-keys;
+    in property <[string]> site-permissions;
+    in property <[string]> site-permission-keys;
+    in property <AboutView> about;
+    // the search box is blank: the sections that are not settings rows show too
+    in property <bool> searching;
+    callback query-changed(string);
+    callback setting-changed(string, string);
+    callback setting-reset(string);
+    callback entry-removed(string, string);
+    callback entry-added(string, string);
+    callback binding-record(string);
+    callback binding-reset(string);
+    callback capture-confirm();
+    callback capture-cancel();
+    callback space-renamed(int, string);
+    callback space-tinted(int, color);
+    callback space-icon-chosen(int, string);
+    callback site-zoom-removed(string);
+    callback site-permission-removed(string);
+
+    // The Space colours: the design's film colours (tokens.slint Palette).
+    property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.coral, Palette.amber];
+    property <[string]> icons: ["personal", "work", "study"];
+    property <bool> notices-open: false;
+    property <length> scroll: 0px;
+
+    public function take-focus() {
+        search.take-focus();
+    }
+
+    visible: root.open;
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: 0px;
+        over-content: true;
+
+        scroller := WubbleScroller {
+            property <length> room: max(0px, self.content-height - self.viewport-height);
+            content-y: min(root.scroll, self.room);
+            thumb-visible: self.room > 0px;
+            thumb-height: self.room > 0px ? max(Spacing.s6, self.viewport-height * self.viewport-height / self.content-height) : 0px;
+            thumb-top: self.room > 0px ? min(root.scroll, self.room) / self.room * (self.viewport-height - self.thumb-height) : 0px;
+            wheel(d) => {
+                root.scroll = max(0px, min(self.room, root.scroll + d));
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                padding-top: Spacing.s8;
+                padding-bottom: Spacing.s12;
+                VerticalLayout {
+                    width: min(Shell.settings-width, root.width - 2 * Spacing.s6);
+                    spacing: 0px;
+
+                    HorizontalLayout {
+                        spacing: Spacing.s4;
+                        Text {
+                            text: "Settings";
+                            color: Palette.ink;
+                            font-family: Fonts.ui;
+                            font-size: Type.title.size;
+                            font-weight: Type.title.weight;
+                            vertical-alignment: center;
+                        }
+                        search := Field {
+                            horizontal-stretch: 1;
+                            icon-path: IconPaths.search;
+                            placeholder: "Search settings";
+                            edited(q) => {
+                                root.scroll = 0px;
+                                root.query-changed(q);
+                            }
+                        }
+                    }
+
+                    // A flat list (rows keep their instance across a re-render); each section's
+                    // first row carries its header, the rows draw the section's card.
+                    for row in root.rows: setting-row := VerticalLayout {
+                        spacing: Spacing.s2;
+                        padding-top: row.first ? Spacing.s6 : 0px;
+                        if row.section != "": SectionHeader {
+                            text: row.section;
+                        }
+                        Rectangle {
+                            background: Shell.settings-card;
+                            border-top-left-radius: row.first ? Radius.md : 0px;
+                            border-top-right-radius: row.first ? Radius.md : 0px;
+                            border-bottom-left-radius: row.last ? Radius.md : 0px;
+                            border-bottom-right-radius: row.last ? Radius.md : 0px;
+                            VerticalLayout {
+                                padding-left: Spacing.s4;
+                                padding-right: Spacing.s4;
+                                padding-top: row.first ? Spacing.s2 : 0px;
+                                padding-bottom: row.last ? Spacing.s2 : 0px;
+                                SettingRow {
+                                    setting: row;
+                                    changed(k, v) => {
+                                        root.setting-changed(k, v);
+                                    }
+                                    reset(k) => {
+                                        root.setting-reset(k);
+                                    }
+                                    entry-removed(k, e) => {
+                                        root.entry-removed(k, e);
+                                    }
+                                    entry-added(k, e) => {
+                                        root.entry-added(k, e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.bindings.length > 0: VerticalLayout {
+                        spacing: Spacing.s2;
+                        padding-top: Spacing.s6;
+                        SectionHeader {
+                            text: "Keyboard shortcuts";
+                        }
+                        Card {
+                            for b in root.bindings: BindingRow {
+                                item: b;
+                                capture: root.capture;
+                                record(a) => {
+                                    root.binding-record(a);
+                                }
+                                reset(a) => {
+                                    root.binding-reset(a);
+                                }
+                                confirm => {
+                                    root.capture-confirm();
+                                }
+                                cancel => {
+                                    root.capture-cancel();
+                                }
+                            }
+                        }
+                    }
+
+                    if !root.searching: VerticalLayout {
+                        spacing: Spacing.s2;
+                        padding-top: Spacing.s6;
+                        SectionHeader {
+                            text: "Spaces";
+                        }
+                        Card {
+                            for space in root.spaces: VerticalLayout {
+                                padding-top: Spacing.s2;
+                                padding-bottom: Spacing.s2;
+                                spacing: Spacing.s2;
+                                HorizontalLayout {
+                                    spacing: Spacing.s2;
+                                    Field {
+                                        horizontal-stretch: 1;
+                                        text: space.name;
+                                        placeholder: "Name";
+                                        accepted(t) => {
+                                            root.space-renamed(space.id, t);
+                                        }
+                                    }
+                                    for icon in root.icons: Rectangle {
+                                        width: Shell.icon-button;
+                                        height: Shell.icon-button;
+                                        border-radius: Shell.icon-button-radius;
+                                        background: icon == space.icon ? Shell.track : icon-ta.has-hover ? Shell.icon-button-hover : transparent;
+                                        icon-ta := TouchArea {
+                                            clicked => {
+                                                root.space-icon-chosen(space.id, icon);
+                                            }
+                                        }
+                                        SpaceIcon {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            width: Shell.space-glyph;
+                                            height: Shell.space-glyph;
+                                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
+                                            kind: icon;
+                                            tint: icon == space.icon ? space.tint : Palette.haze;
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: Spacing.s2;
+                                    alignment: start;
+                                    for swatch in root.swatches: Rectangle {
+                                        width: Shell.swatch;
+                                        height: Shell.swatch;
+                                        border-radius: self.width / 2;
+                                        background: swatch;
+                                        border-width: swatch == space.tint ? Shell.swatch-ring : 0px;
+                                        border-color: Palette.ink;
+                                        TouchArea {
+                                            clicked => {
+                                                root.space-tinted(space.id, swatch);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if !root.searching: VerticalLayout {
+                        spacing: Spacing.s2;
+                        padding-top: Spacing.s6;
+                        SectionHeader {
+                            text: "Sites";
+                        }
+                        Card {
+                            Line {
+                                label: "Zoom levels";
+                            }
+                            EntryList {
+                                entries: root.site-zoom;
+                                entry-keys: root.site-zoom-keys;
+                                empty: "No site has its own zoom";
+                                removed(k) => {
+                                    root.site-zoom-removed(k);
+                                }
+                            }
+                            Line {
+                                label: "Permissions";
+                            }
+                            EntryList {
+                                entries: root.site-permissions;
+                                entry-keys: root.site-permission-keys;
+                                empty: "No site has a remembered permission";
+                                removed(k) => {
+                                    root.site-permission-removed(k);
+                                }
+                            }
+                        }
+                    }
+
+                    if !root.searching: VerticalLayout {
+                        spacing: Spacing.s2;
+                        padding-top: Spacing.s6;
+                        SectionHeader {
+                            text: "About";
+                        }
+                        Card {
+                            Line {
+                                label: "wubble " + root.about.version;
+                                note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+                            }
+                            Line {
+                                label: "Licence";
+                                note: root.about.licence;
+                                VerticalLayout {
+                                    alignment: center;
+                                    TextButton {
+                                        text: root.notices-open ? "Hide notices" : "Third-party notices";
+                                        clicked => {
+                                            root.notices-open = !root.notices-open;
+                                        }
+                                    }
+                                }
+                            }
+                            if root.notices-open: Text {
+                                text: root.about.notices;
+                                color: Palette.mist;
+                                font-family: Fonts.mono;
+                                font-size: Type.label.size;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

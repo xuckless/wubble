@@ -21,7 +21,7 @@ fn color(Rgb(r, g, b): Rgb) -> Color {
 
 /// `rows` into the model `current` already is, when it is one of ours;
 /// otherwise (the first render) a new one through `set`.
-fn sync<T: Clone + PartialEq + 'static>(
+pub(crate) fn sync<T: Clone + PartialEq + 'static>(
     current: ModelRc<T>,
     rows: Vec<T>,
     set: impl FnOnce(ModelRc<T>),
@@ -74,6 +74,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             id: s.id,
             name: s.name.as_str().into(),
             tint: color(s.tint),
+            icon: s.icon.id().into(),
         })
         .collect();
     sync(window.get_spaces(), spaces, |m| window.set_spaces(m));

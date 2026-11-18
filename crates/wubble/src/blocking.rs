@@ -120,11 +120,7 @@ impl Blocking {
     /// Returns whether the lists are loaded.
     fn load_cached(&self, settings: &BlockerSettings, dir: &Path, cache: &Path) -> bool {
         self.set_enabled(settings.enabled);
-        let mut overrides = SiteOverrides::default();
-        for host in &settings.exceptions {
-            overrides.insert(host);
-        }
-        self.set_overrides(overrides);
+        self.set_exceptions(&settings.exceptions);
         match Blocker::from_cache(dir, cache) {
             Some(blocker) => {
                 self.replace_blocker(blocker);
@@ -146,6 +142,19 @@ impl Blocking {
 
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    /// The hosts the blocker skips (`settings::BLOCKER_EXCEPTIONS`).
+    pub fn set_exceptions(&self, hosts: &[String]) {
+        let mut overrides = SiteOverrides::default();
+        for host in hosts {
+            overrides.insert(host);
+        }
+        self.set_overrides(overrides);
     }
 
     pub fn set_overrides(&self, overrides: SiteOverrides) {

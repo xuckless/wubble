@@ -4,6 +4,7 @@
 
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
+use wubble_core::pages::InternalPage;
 use wubble_core::space::{MAX_PANES, SpaceId};
 use wubble_core::tab::TabId;
 
@@ -125,6 +126,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             Some(t) if model.split_of(t).is_some() => Plan::Model(Command::Unsplit(t)),
             _ => Plan::Nothing,
         },
+        Action::OpenSettings => Plan::Model(Command::OpenInternal(InternalPage::Settings)),
         Action::Quit => Plan::Quit,
         Action::NewWindow
         | Action::NewSpace

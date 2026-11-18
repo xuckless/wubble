@@ -64,6 +64,7 @@ enum SmokeArg {
     Split,
     Page,
     Block,
+    Settings,
     Session,
     SessionPhase(Phase),
 }
@@ -76,6 +77,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "split" => Ok(SmokeArg::Split),
         None if value == "page" => Ok(SmokeArg::Page),
         None if value == "block" => Ok(SmokeArg::Block),
+        None if value == "settings" => Ok(SmokeArg::Settings),
         None if value == "session" => Ok(SmokeArg::Session),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
@@ -84,8 +86,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `session` or \
-             `session-phase=1|2`"
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
+             `session` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -111,6 +113,8 @@ pub enum Smoke {
     Page,
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
+    /// Open wubble://settings, flip a setting through its toggle, read the store back.
+    Settings,
     /// Runs both session phases on a temporary profile.
     Session,
     /// One half of `Session`, on the profile in `profile`.
@@ -194,6 +198,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
+            (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
         };
         Ok(Command::Smoke(smoke))
@@ -292,9 +297,19 @@ mod tests {
     }
 
     #[test]
+    fn smoke_settings() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "settings"]).ok(),
+            Some(Command::Smoke(Smoke::Settings))
+        );
+        assert!(parse(["wubble", "--smoke", "settings", "--url", "about:blank"]).is_err());
+        assert!(parse(["wubble", "--smoke", "settings", "--profile", "/tmp/p"]).is_err());
+    }
+
+    #[test]
     fn a_url_does_not_combine_with_a_smoke() {
         for smoke in [
-            "boot", "nav", "tabs", "split", "page", "block", "frames=3", "session",
+            "boot", "nav", "tabs", "split", "page", "block", "settings", "frames=3", "session",
         ] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),

@@ -18,6 +18,8 @@ export struct SpaceItem {
     id: int,
     name: string,
     tint: color,
+    // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
+    icon: string,
 }
 
 export enum CommandKind {
@@ -252,4 +254,82 @@ export struct SideEdges {
     downloads: length,
     downloads-end: length,
     downloads-y: length,
+    // wubble: the footer's settings button
+    settings: length,
+    settings-end: length,
+}
+
+// ── The settings page (wubble_core::pages::settings_page), generated from the settings table:
+// one row per setting, its control picked by the setting's kind (`pages::control_for`).
+export enum SettingControl {
+    toggle,
+    segmented,
+    stepper,
+    slider,
+    list,
+    map,
+}
+
+// One row of the flat list the page shows; `section` names the section the row opens (empty
+// for the rest of it), `first` / `last` round the section's card.
+export struct SettingItem {
+    section: string,
+    first: bool,
+    last: bool,
+    key: string,
+    label: string,
+    control: SettingControl,
+    // the storage text
+    value: string,
+    // toggle
+    on: bool,
+    // stepper and slider
+    number: float,
+    min: float,
+    max: float,
+    step: float,
+    // segmented: the stored words, their labels, the chosen one (-1: none yet)
+    words: [string],
+    labels: [string],
+    selected: int,
+    // list and map: each entry's key (what removing it names) and its line
+    entry-keys: [string],
+    entries: [string],
+    changed: bool,
+    restart: bool,
+}
+
+// One action of the keybinding editor (`keys::binding_rows`).
+export struct BindingItem {
+    // the `Action`'s id
+    action: string,
+    label: string,
+    chord: string,
+    changed: bool,
+}
+
+// The editor's chord capture (`keys::Capture`): idle, armed for `action`, or asking whether to
+// take `chord` from `other`.
+export struct CaptureView {
+    action: string,
+    armed: bool,
+    conflict: bool,
+    chord: string,
+    other: string,
+}
+
+export struct SpaceSetting {
+    id: int,
+    name: string,
+    tint: color,
+    // "personal" | "work" | "study" (SpaceIcon)
+    icon: string,
+}
+
+export struct AboutView {
+    version: string,
+    cef: string,
+    chromium: string,
+    licence: string,
+    notices: string,
 }

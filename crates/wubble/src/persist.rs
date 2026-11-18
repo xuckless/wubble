@@ -18,18 +18,18 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
+use wubble_core::apply;
 use wubble_core::download::{self, DownloadEntry};
 use wubble_core::model::{Command, Model};
-use wubble_core::omnibox::{self, HistoryEntry};
+use wubble_core::omnibox::HistoryEntry;
+use wubble_core::pages::InternalPage;
 use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
-use wubble_core::zoom::ZoomTable;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon,
-    KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting,
-    SidebarWidth, SiteZoom, Store, Transition,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, Setting,
+    SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 
 use crate::blocking::BlockerSettings;
@@ -75,7 +75,10 @@ pub fn should_save(s: SaveState) -> bool {
 pub fn changes_session(command: &Command) -> bool {
     !matches!(
         command,
-        Command::Tick { .. } | Command::BusyChanged { .. } | Command::OpenCommandBar
+        Command::Tick { .. }
+            | Command::BusyChanged { .. }
+            | Command::OpenCommandBar
+            | Command::SetSleepPolicy(_)
     )
 }
 
@@ -84,7 +87,9 @@ pub fn changes_session(command: &Command) -> bool {
 /// another fragment of it (a restored tab reloading, an in-page link).
 pub fn visit_to_record(previous: Option<&str>, new: &str) -> bool {
     let page = |url: &str| url.split_once('#').map_or(url, |(page, _)| page).to_owned();
-    wubble_store::is_recordable(new) && previous.map(page) != Some(page(new))
+    wubble_store::is_recordable(new)
+        && InternalPage::from_url(new).is_none()
+        && previous.map(page) != Some(page(new))
 }
 
 /// The tab whose navigation the command bar started, until that navigation
@@ -124,32 +129,38 @@ pub struct UiState {
     pub mode: SidebarMode,
 }
 
-/// The typed settings the host reads at start.
+/// The settings read at start. Everything but what is needed before the host exists (the
+/// shell's sidebar, the blocker) reaches the host as text rows, which it replays through
+/// `apply::effect_of`, the same path a change on the settings page takes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// `None`: not chosen yet (first run).
-    pub engine: Option<omnibox::SearchEngine>,
-    pub live_suggestions: bool,
     pub ui: UiState,
-    /// Opaque entries, decoded by `input::keymap`.
-    pub keybinding_overrides: Vec<String>,
-    /// Per-site zoom (`wubble_core::zoom`).
-    pub site_zoom: ZoomTable,
     pub blocker: BlockerSettings,
+    /// Every stored setting row, `key -> text` (`Store::all_settings`).
+    pub stored: HashMap<String, String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            engine: SearchEngineChoice::default(),
-            live_suggestions: LiveSuggestions::default(),
             ui: UiState {
                 sidebar_width: SidebarWidth::default(),
                 mode: SidebarModeSetting::default(),
             },
-            keybinding_overrides: KeybindingOverrides::default(),
-            site_zoom: SiteZoom::default(),
             blocker: BlockerSettings::default(),
+            stored: HashMap::new(),
+        }
+    }
+}
+
+impl Settings {
+    /// The page features CEF takes as start switches (`restart` rows).
+    pub fn page_features(&self) -> wubble_engine::app::PageFeatures {
+        use wubble_core::settings as defs;
+        let on = |def| apply::value_of(def, &self.stored) == "1";
+        wubble_engine::app::PageFeatures {
+            overlay_scrollbars: on(&defs::OVERLAY_SCROLLBARS),
+            middle_click_autoscroll: on(&defs::MIDDLE_CLICK_AUTOSCROLL),
         }
     }
 }
@@ -224,8 +235,21 @@ enum Request {
     },
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
-    SetEngine(omnibox::SearchEngine),
-    SetSiteZoom(ZoomTable),
+    /// One settings row, validated by the client (`apply::accepts`) and again by the store.
+    SetSetting {
+        key: &'static str,
+        value: String,
+    },
+    /// Every stored setting row, after the writes queued before it.
+    ReadSettings(Reply<HashMap<String, String>>),
+    /// Expire visits by the stored retention.
+    ExpireHistory {
+        now_ms: i64,
+    },
+    ForgetSitePermission {
+        origin: String,
+        kind: Permission,
+    },
     SetSitePermission {
         origin: String,
         kind: Permission,
@@ -339,13 +363,33 @@ impl StoreClient {
         self.send(Request::PopClosed(Box::new(reply)));
     }
 
-    pub fn set_engine(&self, engine: omnibox::SearchEngine) {
-        self.send(Request::SetEngine(engine));
+    /// Writes one settings row; the one write path of every setting the host changes. A key
+    /// that is no setting or a value its kind refuses is not sent: `false`.
+    pub fn set_setting(&self, key: &str, value: &str) -> bool {
+        let Some(def) = wubble_core::settings::find(key).filter(|d| d.kind.accepts(value)) else {
+            return false;
+        };
+        self.send(Request::SetSetting {
+            key: def.key,
+            value: value.into(),
+        });
+        true
     }
 
-    /// The whole per-site zoom table (one settings row).
-    pub fn set_site_zoom(&self, table: ZoomTable) {
-        self.send(Request::SetSiteZoom(table));
+    /// `reply` runs on the store thread, after every request sent before this one.
+    pub fn read_settings(&self, reply: impl FnOnce(HashMap<String, String>) + Send + 'static) {
+        self.send(Request::ReadSettings(Box::new(reply)));
+    }
+
+    pub fn expire_history(&self, now_ms: i64) {
+        self.send(Request::ExpireHistory { now_ms });
+    }
+
+    pub fn forget_site_permission(&self, origin: &str, kind: Permission) {
+        self.send(Request::ForgetSitePermission {
+            origin: origin.into(),
+            kind,
+        });
     }
 
     pub fn set_site_permission(
@@ -427,19 +471,16 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
     let mut store = Store::open(path).await?;
     let model = store.load_session(std::time::Instant::now()).await?;
     let settings = Settings {
-        engine: store.setting::<SearchEngineChoice>().await?,
-        live_suggestions: store.setting::<LiveSuggestions>().await?,
         ui: UiState {
             sidebar_width: store.setting::<SidebarWidth>().await?,
             mode: store.setting::<SidebarModeSetting>().await?,
         },
-        keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
-        site_zoom: store.setting::<SiteZoom>().await?,
         blocker: BlockerSettings {
             enabled: store.setting::<BlockerEnabled>().await?,
             exceptions: store.setting::<BlockerExceptions>().await?,
             lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
         },
+        stored: store.all_settings().await?,
     };
     let site_permissions = store.site_permissions().await?.into_iter().collect();
     // No download of the last run is alive any more.
@@ -522,12 +563,20 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 }
             }
         }
-        Request::SetEngine(engine) => {
-            store
-                .set_setting::<SearchEngineChoice>(Some(engine))
-                .await?;
+        Request::SetSetting { key, value } => store.set_text(key, &value).await?,
+        Request::ReadSettings(reply) => match store.all_settings().await {
+            Ok(rows) => reply(rows),
+            Err(e) => {
+                reply(HashMap::new());
+                return Err(e);
+            }
+        },
+        Request::ExpireHistory { now_ms } => {
+            store.expire_history(now_ms).await?;
         }
-        Request::SetSiteZoom(table) => store.set_setting::<SiteZoom>(table).await?,
+        Request::ForgetSitePermission { origin, kind } => {
+            store.forget_site_permission(&origin, kind).await?;
+        }
         Request::SetSitePermission {
             origin,
             kind,
@@ -664,6 +713,7 @@ mod tests {
             (Some("https://a.test/#one"), "https://a.test/#two", false),
             (Some("https://a.test/#one"), "https://a.test/", false),
             (None, "about:blank", false),
+            (None, "wubble://settings", false),
             (None, "data:text/html,x", false),
             (Some("data:text/html,x"), "file:///tmp/x", false),
         ];
@@ -745,9 +795,13 @@ mod tests {
             mode: SidebarMode::Rail,
         };
         client.save(&model, ui);
-        client.set_engine(omnibox::SearchEngine::Google);
-        let zoom = ZoomTable::from([("a.test".to_string(), 125)]);
-        client.set_site_zoom(zoom.clone());
+        assert!(client.set_setting("search.engine", "google"));
+        assert!(client.set_setting("zoom.sites", r#"{"a.test":125}"#));
+        assert!(
+            !client.set_setting("zoom.default", "9000"),
+            "refused before sending"
+        );
+        assert!(!client.set_setting("no.such", "1"));
         client.record_visit("https://a.test/", "", 5, Transition::Typed);
         client.update_title("https://a.test/", "A");
         client.push_closed(closed("https://gone.test/"));
@@ -790,9 +844,11 @@ mod tests {
             };
             assert_eq!(tab.lifecycle.liveness, want);
         }
-        assert_eq!(loaded.settings.engine, Some(omnibox::SearchEngine::Google));
+        let stored = &loaded.settings.stored;
+        assert_eq!(stored["search.engine"], "google");
+        assert_eq!(stored["zoom.sites"], r#"{"a.test":125}"#);
+        assert!(!stored.contains_key("zoom.default"));
         assert_eq!(loaded.settings.ui, ui);
-        assert_eq!(loaded.settings.site_zoom, zoom);
         assert_eq!(
             loaded
                 .site_permissions
@@ -914,5 +970,30 @@ mod tests {
         assert!(loaded.favicons.is_empty());
         client.shutdown();
         const _: () = assert!(FAVICON_CAP_BYTES >= 64 * 64 * 4);
+    }
+
+    #[test]
+    fn a_setting_written_is_read_back_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, loaded) = start(&dir.path().join("wubble.db"));
+        assert!(loaded.settings.stored.is_empty());
+        assert!(client.set_setting("blocker.enabled", "0"));
+        let (tx, rx) = mpsc::channel();
+        client.read_settings(move |rows| tx.send(rows).unwrap());
+        assert_eq!(rx.recv().unwrap()["blocker.enabled"], "0");
+        client.set_site_permission("https://a.test", Permission::Camera, Decision::Allow, 5);
+        client.forget_site_permission("https://a.test", Permission::Camera);
+        client.shutdown();
+        let (client, loaded) = start(&dir.path().join("wubble.db"));
+        assert!(!loaded.settings.blocker.enabled);
+        assert_eq!(
+            loaded
+                .site_permissions
+                .get("https://a.test", Permission::Camera),
+            None
+        );
+        let features = loaded.settings.page_features();
+        assert!(features.overlay_scrollbars && features.middle_click_autoscroll);
+        client.shutdown();
     }
 }
