@@ -154,7 +154,7 @@ mod tests {
     fn entries_survive_their_space_being_deleted() {
         pollster::block_on(async {
             let mut s = Store::open_in_memory().await.unwrap();
-            let mut m = wubble_core::model::Model::new();
+            let mut m = wubble_core::model::Model::new(std::time::Instant::now());
             m.spaces[0].id = SpaceId(0);
             s.save_session(&m).await.unwrap();
             s.push_closed(&closed(0)).await.unwrap(); // space 0

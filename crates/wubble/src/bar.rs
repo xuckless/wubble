@@ -201,14 +201,22 @@ mod tests {
 
     #[test]
     fn a_blank_query_has_no_rows() {
-        let (m, _) = tab(Model::new(), "https://a.test/", "A");
+        let (m, _) = tab(
+            Model::new(std::time::Instant::now()),
+            "https://a.test/",
+            "A",
+        );
         assert_eq!(bar_rows(&m, "", BarMode::NewTab), vec![]);
         assert_eq!(bar_rows(&m, "   ", BarMode::NewTab), vec![]);
     }
 
     #[test]
     fn the_first_row_opens_or_navigates() {
-        let (m, t) = tab(Model::new(), "https://a.test/", "A");
+        let (m, t) = tab(
+            Model::new(std::time::Instant::now()),
+            "https://a.test/",
+            "A",
+        );
         let rows = bar_rows(&m, "example.com", BarMode::NewTab);
         assert_eq!(rows[0].kind, CommandKind::Action);
         assert_eq!(
@@ -229,7 +237,11 @@ mod tests {
 
     #[test]
     fn open_tabs_match_title_or_url_active_space_first() {
-        let (m, a) = tab(Model::new(), "https://mail.test/", "Inbox");
+        let (m, a) = tab(
+            Model::new(std::time::Instant::now()),
+            "https://mail.test/",
+            "Inbox",
+        );
         let (m, b) = tab(m, "https://docs.test/", "Docs about MAIL");
         let (m, _) = tab(m, "https://other.test/", "Other");
         let (m, _) = apply(

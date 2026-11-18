@@ -2,6 +2,12 @@ use super::*;
 
 const D: ContainerId = ContainerId::DEFAULT;
 
+/// One fixed start time for every model in these tests, so two new models compare equal.
+fn t0() -> Instant {
+    static T0: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *T0.get_or_init(Instant::now)
+}
+
 /// `apply` with the invariants checked, returning every effect.
 fn run_all(m: Model, c: Command) -> (Model, Vec<Effect>) {
     let (m, fx) = apply(m, c);
@@ -38,7 +44,7 @@ fn open(m: Model, opener: Option<TabId>) -> (Model, TabId) {
 
 /// A model with `n` plain tabs in the first Space; the last one is active.
 fn with_tabs(n: usize) -> (Model, Vec<TabId>) {
-    let mut m = Model::new();
+    let mut m = Model::new(t0());
     let mut ids = vec![];
     for _ in 0..n {
         let (m2, t) = open(m, None);
@@ -72,7 +78,7 @@ fn add_space(m: Model, container: ContainerId) -> (Model, SpaceId) {
 
 #[test]
 fn open_command_bar_creates_nothing() {
-    let m = Model::new();
+    let m = Model::new(t0());
     let (m2, fx) = run(m.clone(), Command::OpenCommandBar);
     assert_eq!(m2, m);
     assert_eq!(fx, vec![Effect::ShowCommandBar]);
@@ -81,7 +87,7 @@ fn open_command_bar_creates_nothing() {
 #[test]
 fn new_tab_into_empty_space_is_active() {
     let (m, fx) = run(
-        Model::new(),
+        Model::new(t0()),
         Command::NewTab {
             url: "u".into(),
             container: None,
@@ -119,7 +125,7 @@ fn new_tab_goes_after_opener_else_last() {
 #[test]
 fn new_tab_container_override_and_unknown() {
     let (m, _) = run(
-        Model::new(),
+        Model::new(t0()),
         Command::NewContainer {
             name: "Work".into(),
         },
@@ -298,7 +304,7 @@ fn folders_hold_tabs_and_unpin_pinned_ones() {
 #[test]
 fn move_across_spaces_keeps_effective_container_and_reselects_source() {
     let (m, _) = run(
-        Model::new(),
+        Model::new(t0()),
         Command::NewContainer {
             name: "Work".into(),
         },
@@ -339,7 +345,7 @@ fn move_across_spaces_keeps_effective_container_and_reselects_source() {
 
 #[test]
 fn delete_space_closes_tabs_and_falls_back() {
-    let (m, _) = run(Model::new(), Command::NewContainer { name: "W".into() });
+    let (m, _) = run(Model::new(t0()), Command::NewContainer { name: "W".into() });
     let work = m.containers[1].id;
     let (m, s2) = add_space(m, work);
     let (m, ids) = with_tabs_in(m, 2);
@@ -396,7 +402,7 @@ fn switch_space_restores_remembered_active() {
 
 #[test]
 fn delete_container_resets_spaces_and_overrides() {
-    let (m, _) = run(Model::new(), Command::NewContainer { name: "W".into() });
+    let (m, _) = run(Model::new(t0()), Command::NewContainer { name: "W".into() });
     let work = m.containers[1].id;
     let (m, s2) = add_space(m, work);
     let (m, a) = open(m, None);
@@ -499,7 +505,7 @@ fn reopen_replaces_in_place() {
 #[test]
 fn rename_space() {
     let (m, _) = run(
-        Model::new(),
+        Model::new(t0()),
         Command::RenameSpace {
             space: SpaceId(0),
             name: "Home".into(),
@@ -665,7 +671,7 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
 fn random_sequences_keep_invariants() {
     for seed in 1..=200u64 {
         let mut r = Xorshift(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-        let mut m = Model::new();
+        let mut m = Model::new(t0());
         for step in 0..300 {
             let (cmd, must_reject) = random_command(&mut r, &m);
             let before = m.clone();
@@ -830,7 +836,7 @@ fn tab_commands_for_unknown_tabs_do_nothing() {
 
 #[test]
 fn visible_tab_and_live_tabs() {
-    let m = Model::new();
+    let m = Model::new(t0());
     assert_eq!((m.visible_tab(), m.live_tabs()), (None, 0));
     let (m, ids) = with_tabs(3);
     assert_eq!((m.visible_tab(), m.live_tabs()), (Some(ids[2]), 3));
@@ -862,7 +868,7 @@ fn a_new_tab_hides_the_previous_one() {
     assert_eq!(liveness(&m, new), Liveness::Active);
     // The first tab shows nothing: it was never hidden.
     let (_, fx) = run_all(
-        Model::new(),
+        Model::new(t0()),
         Command::NewTab {
             url: "u".into(),
             container: None,
@@ -1045,20 +1051,27 @@ fn a_popup_from_a_hidden_tab_goes_next_to_it_and_stays_hidden() {
     assert_eq!(m.spaces[0].active, Some(ids[1]));
 }
 
-#[test]
-fn a_loading_tab_is_not_put_to_sleep_until_the_load_ends() {
+/// Tab `ids[0]` of two starts loading while hidden.
+fn hidden_loading_tab() -> (Model, Vec<TabId>) {
     let (m, ids) = with_tabs(2);
-    let loading = |loading| Command::LoadingChanged {
-        tab: ids[0],
-        loading,
-    };
-    let (m, fx) = run_all(m, loading(true));
+    let (m, fx) = run_all(m, loading(ids[0], true));
     assert_eq!(fx, vec![]);
+    (m, ids)
+}
+
+fn loading(tab: TabId, loading: bool) -> Command {
+    Command::LoadingChanged { tab, loading }
+}
+
+/// Regression for the tabs smoke flake: the one tick came while the hidden tab was
+/// still loading, and nothing judged it again once the load ended.
+#[test]
+fn a_hidden_tab_that_stops_loading_is_judged_by_the_last_tick() {
+    let (m, ids) = hidden_loading_tab();
     let (m, fx) = tick(m, Duration::from_secs(16 * 60));
     assert_eq!(fx, vec![]);
     assert_eq!(liveness(&m, ids[0]), Liveness::Background);
-    let (m, _) = run_all(m, loading(false));
-    let (m, fx) = tick(m, Duration::from_secs(16 * 60));
+    let (m, fx) = run_all(m, loading(ids[0], false));
     assert_eq!(
         fx,
         vec![
@@ -1067,6 +1080,59 @@ fn a_loading_tab_is_not_put_to_sleep_until_the_load_ends() {
         ]
     );
     assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+}
+
+#[test]
+fn a_hidden_tab_that_stops_loading_before_any_tick_stays_in_background() {
+    let (m, ids) = hidden_loading_tab();
+    let (m, fx) = run_all(m, loading(ids[0], false));
+    assert_eq!(fx, vec![]);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+}
+
+#[test]
+fn critical_pressure_of_the_last_tick_discards_a_tab_that_stops_loading() {
+    let (m, ids) = hidden_loading_tab();
+    let now = m.clock;
+    let (m, _) = run_all(
+        m,
+        Command::Tick {
+            now,
+            pressure: Pressure::Critical,
+        },
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    let (m, _) = run_all(m, loading(ids[0], false));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+}
+
+#[test]
+fn unpinning_a_long_hidden_tab_discards_it() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::PinTab(ids[0]));
+    let (m, _) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Frozen);
+    let (m, _) = run(m, Command::UnpinTab(ids[0]));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+}
+
+#[test]
+fn new_and_from_parts_stamp_hides_with_the_given_time() {
+    let start = t0() + Duration::from_secs(5);
+    let (m, a) = open(Model::new(start), None);
+    let (m, b) = open(m, None);
+    assert_eq!(m.tabs[&a].lifecycle.hidden_since, Some(start));
+    let restart = start + Duration::from_secs(1);
+    let m = Model::from_parts(
+        m.spaces.clone(),
+        m.containers.clone(),
+        m.tabs.values().cloned().collect(),
+        m.active_space,
+        restart,
+    )
+    .unwrap();
+    let (m, _) = open(m, None);
+    assert_eq!(m.tabs[&b].lifecycle.hidden_since, Some(restart));
 }
 
 #[test]
@@ -1088,21 +1154,20 @@ fn reopening_a_pinned_tab_keeps_its_lifecycle_pinned() {
     assert_eq!(m.tabs[&new].lifecycle.pin, crate::lifecycle::Pin::Unpinned);
 }
 
-/// The clock is not stored, so a rebuilt model takes the original's.
+/// The clock is not stored, so a rebuilt model is given the original's.
 fn rebuild(m: &Model) -> Result<Model, String> {
-    let mut rebuilt = Model::from_parts(
+    Model::from_parts(
         m.spaces.clone(),
         m.containers.clone(),
         m.tabs.values().cloned().collect(),
         m.active_space,
-    )?;
-    rebuilt.clock = m.clock;
-    Ok(rebuilt)
+        m.clock,
+    )
 }
 
 #[test]
 fn from_parts_of_new_is_new() {
-    let m = Model::new();
+    let m = Model::new(t0());
     assert_eq!(rebuild(&m), Ok(m));
 }
 
@@ -1151,8 +1216,20 @@ fn from_parts_rejects_invalid_parts() {
     let (m, _) = with_tabs(1);
     let mut tabs: Vec<Tab> = m.tabs.values().cloned().collect();
     tabs.clear();
-    let r = Model::from_parts(m.spaces.clone(), m.containers.clone(), tabs, m.active_space);
+    let r = Model::from_parts(
+        m.spaces.clone(),
+        m.containers.clone(),
+        tabs,
+        m.active_space,
+        t0(),
+    );
     assert!(r.is_err(), "placed tab missing from tabs");
-    let r = Model::from_parts(m.spaces.clone(), m.containers.clone(), vec![], SpaceId(99));
+    let r = Model::from_parts(
+        m.spaces.clone(),
+        m.containers.clone(),
+        vec![],
+        SpaceId(99),
+        t0(),
+    );
     assert!(r.is_err(), "unknown active space");
 }
