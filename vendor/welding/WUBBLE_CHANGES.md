@@ -341,6 +341,31 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    renderer's own report, so a compromised renderer could lie about it; it
    is used for accounting only. Tests: the queue test carries a pid through;
    `sender_pid` (with `cef-runtime`).
+35. **Served responses.** `surface.rs`: `RequestAction::Serve(data_url)`.
+   `handlers.rs`: `WeldResourceRequestHandler` gains a `served` slot;
+   `on_before_resource_load` decodes the base64 `data:` URL into `Served`
+   (MIME type, body; `RV_CANCEL` when it does not parse) and returns
+   `RV_CONTINUE`, and its new `resource_handler` hands the slot to a new
+   `WeldServedResource` (`open` handles at once, `response_headers` gives
+   200, the MIME type, the length and `Access-Control-Allow-Origin: *`,
+   `read` copies from memory). Contract from CEF `cef_resource_handler.h`
+   and libcef_dll `CefStreamResourceHandler` (BSD-3-Clause), no code copied.
+   Lets the content blocker serve uBO's `$redirect=` stubs, which Chromium
+   would refuse as a `data:` redirect target. Test: the data URL parsing.
+36. **Response observer.** `surface.rs`: new `ResponseInfo` (URL, browser
+   id, raw resource type, status, MIME type without parameters,
+   `Content-Length`, raw `Content-Range` and `Content-Disposition`,
+   `Accept-Ranges: bytes`) and `ResponseObserver` (a shared closure, a
+   panic caught where unwinding is on); `CefSurfaceConfig::response_observer`
+   (default `None`). `handlers.rs`: `SharedHandlers::build` takes it next to
+   the request filter; `resource_request_handler` returns the handler when
+   either is set (the filter becomes optional inside it), and the handler's
+   new `on_resource_response` reports the headers and returns false (the
+   request is never changed). The three platform producers pass it on. Shape
+   from cefclient `ClientHandler::OnResourceResponse` (BSD-3-Clause), no code
+   copied. wubble's media downloader detects video, audio, HLS and DASH by
+   the response's MIME type, which the request hook cannot see. Test: the
+   header reading and a panicking observer.
 
 ## Not changed, on purpose
 

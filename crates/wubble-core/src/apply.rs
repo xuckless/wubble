@@ -68,6 +68,41 @@ impl Default for PasswordSettings {
     }
 }
 
+/// `media.*`: the media downloader's settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaSettings {
+    pub enabled: bool,
+    /// Ask YouTube's player API (a request of wubble's own).
+    pub youtube: bool,
+    pub quality: crate::media::select::Quality,
+    /// Empty: the downloads folder.
+    pub save_dir: String,
+    pub ask_each_time: bool,
+    pub concurrency: usize,
+    pub min_bytes: u64,
+}
+
+impl MediaSettings {
+    pub fn from_stored(stored: &HashMap<String, String>) -> Self {
+        use settings as s;
+        Self {
+            enabled: flag(&s::MEDIA_ENABLED, stored),
+            youtube: flag(&s::MEDIA_YOUTUBE, stored),
+            quality: crate::media::select::Quality::from_word(value_of(&s::MEDIA_QUALITY, stored)),
+            save_dir: value_of(&s::MEDIA_SAVE_DIR, stored).trim().to_owned(),
+            ask_each_time: flag(&s::MEDIA_ASK_EACH_TIME, stored),
+            concurrency: count(&s::MEDIA_CONCURRENCY, stored) as usize,
+            min_bytes: u64::from(count(&s::MEDIA_MIN_BYTES, stored)),
+        }
+    }
+}
+
+impl Default for MediaSettings {
+    fn default() -> Self {
+        Self::from_stored(&HashMap::new())
+    }
+}
+
 /// A setting's live effect, for the host to execute.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Applied {
@@ -90,6 +125,7 @@ pub enum Applied {
     RoutingRules(Vec<String>),
     Glass(GlassSetting),
     Passwords(PasswordSettings),
+    Media(MediaSettings),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -160,6 +196,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if [s::PASSWORDS_OFFER_TO_SAVE.key, s::PASSWORDS_AUTOFILL.key].contains(&k) => {
             Applied::Passwords(PasswordSettings::from_stored(stored))
         }
+        k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })
 }
@@ -218,6 +255,29 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn media_settings_read_their_rows() {
+        let m = MediaSettings::default();
+        assert!(m.enabled && !m.youtube && m.ask_each_time);
+        assert_eq!(
+            (m.quality, m.concurrency, m.min_bytes),
+            (crate::media::select::Quality::UpTo(720), 4, 65_536)
+        );
+        let changed = stored(&[
+            ("media.youtube", "1"),
+            ("media.quality", "best"),
+            ("media.save_dir", " /v "),
+        ]);
+        let Some(Applied::Media(m)) = effect_of("media.save_dir", &changed) else {
+            panic!()
+        };
+        assert!(m.youtube);
+        assert_eq!(
+            (m.quality, m.save_dir.as_str()),
+            (crate::media::select::Quality::Best, "/v")
+        );
     }
 
     #[test]

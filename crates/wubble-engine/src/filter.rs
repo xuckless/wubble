@@ -52,6 +52,10 @@ pub enum RequestAction {
     Block,
     /// Load this URL instead.
     Redirect(String),
+    /// Answer with the content of this base64 `data:` URL instead of
+    /// sending the request (a blocker's stub resource); the request is
+    /// cancelled if it does not parse.
+    Serve(String),
 }
 
 /// The host's content filter.
@@ -111,6 +115,51 @@ pub fn kind_of(cef_type: u32) -> RequestKind {
         .map_or(RequestKind::Other, |(_, kind)| *kind)
 }
 
+/// One response's headers, as the response hook saw them (CEF `OnResourceResponse`, through
+/// welding's `ResponseObserver`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResponseInfo<'a> {
+    pub url: &'a str,
+    /// As [`RequestInfo::browser_id`].
+    pub browser_id: i32,
+    pub kind: RequestKind,
+    pub status: i32,
+    /// Lower case, without parameters.
+    pub mime: &'a str,
+    pub content_length: Option<u64>,
+    /// The raw `Content-Range` header (empty when absent).
+    pub content_range: &'a str,
+    pub accepts_ranges: bool,
+}
+
+/// Sees every response a view gets (the media downloader's detection). Called on CEF's IO
+/// thread: it must be cheap, never wait on the UI thread, and not panic.
+pub trait ResponseObserver: Send + Sync {
+    fn seen(&self, response: &ResponseInfo<'_>);
+}
+
+impl fmt::Debug for dyn ResponseObserver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ResponseObserver")
+    }
+}
+
+/// welding's response observer for `observer`.
+pub(crate) fn response_observer(observer: Arc<dyn ResponseObserver>) -> welding::ResponseObserver {
+    welding::ResponseObserver::new(move |r| {
+        observer.seen(&ResponseInfo {
+            url: &r.url,
+            browser_id: r.browser_id,
+            kind: kind_of(r.resource_type),
+            status: r.status,
+            mime: &r.mime,
+            content_length: r.content_length,
+            content_range: &r.content_range,
+            accepts_ranges: r.accepts_ranges,
+        })
+    })
+}
+
 /// welding's request filter for `filter`.
 pub(crate) fn request_filter(filter: Arc<dyn ContentFilter>) -> welding::RequestFilter {
     welding::RequestFilter::new(move |request| {
@@ -124,6 +173,7 @@ pub(crate) fn request_filter(filter: Arc<dyn ContentFilter>) -> welding::Request
             RequestAction::Allow => welding::RequestAction::Allow,
             RequestAction::Block => welding::RequestAction::Cancel,
             RequestAction::Redirect(url) => welding::RequestAction::Redirect(url),
+            RequestAction::Serve(data_url) => welding::RequestAction::Serve(data_url),
         }
     })
 }

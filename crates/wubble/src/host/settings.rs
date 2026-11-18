@@ -117,6 +117,7 @@ impl Host {
             Applied::RoutingRules(rules) => self.routing_rules = rules,
             Applied::Glass(setting) => self.w.glass.borrow_mut().set_setting(setting),
             Applied::Passwords(settings) => self.autofill.set_settings(settings),
+            Applied::Media(settings) => self.apply_media_settings(settings),
             Applied::RestartOnly => {}
         }
     }

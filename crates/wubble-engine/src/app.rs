@@ -23,7 +23,7 @@ pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
-use crate::filter::ContentFilter;
+use crate::filter::{ContentFilter, ResponseObserver};
 use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
 use crate::view::{View, ViewConfig};
@@ -50,6 +50,9 @@ pub struct EngineConfig {
     /// Checks every request each view sends and injects cosmetic filters
     /// ([`crate::filter`]). `None`: nothing is filtered.
     pub content_filter: Option<Arc<dyn ContentFilter>>,
+    /// Sees the headers of every response each view gets ([`crate::filter::ResponseObserver`]).
+    /// `None`: nothing is observed.
+    pub response_observer: Option<Arc<dyn ResponseObserver>>,
     /// Chromium features chosen by the user's settings; CEF takes them only at start.
     pub features: PageFeatures,
     /// Runs the page clipboard through the host ([`CLIPBOARD_SWITCH`]): on for
@@ -263,6 +266,7 @@ impl EngineConfig {
             pump_scheduler: None,
             clipboard_bridge: false,
             content_filter: None,
+            response_observer: None,
             features: PageFeatures::default(),
             profile: ProfileKind::User,
         })
@@ -557,6 +561,7 @@ pub struct Engine {
     /// What the views reported beyond navigation, until the host takes it.
     page_events: PageQueue<ViewId>,
     content_filter: Option<Arc<dyn ContentFilter>>,
+    response_observer: Option<Arc<dyn ResponseObserver>>,
 }
 
 impl Engine {
@@ -588,6 +593,7 @@ impl Engine {
             requests: RequestMode::default(),
             page_events: PageQueue::default(),
             content_filter: config.content_filter,
+            response_observer: config.response_observer,
         };
         engine.apply(Event::Initialised);
         Ok(engine)
@@ -626,7 +632,12 @@ impl Engine {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
-        let view = View::open(runtime, config, self.content_filter.clone())?;
+        let view = View::open(
+            runtime,
+            config,
+            self.content_filter.clone(),
+            self.response_observer.clone(),
+        )?;
         let id = ViewId(self.next_view);
         self.next_view += 1;
         self.views.push((id, view));
@@ -803,6 +814,7 @@ mod tests {
             cache_dir: PathBuf::from(cache_dir),
             pump_scheduler: None,
             content_filter: None,
+            response_observer: None,
             features: PageFeatures::default(),
             clipboard_bridge: false,
             profile: ProfileKind::User,
@@ -1065,6 +1077,7 @@ mod tests {
             cache_dir: dir,
             pump_scheduler: None,
             content_filter: None,
+            response_observer: None,
             features: PageFeatures::default(),
             clipboard_bridge: false,
             profile: ProfileKind::Throwaway,

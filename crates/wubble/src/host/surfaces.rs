@@ -351,7 +351,12 @@ impl Host {
                     );
                     self.open_held_popups(tab);
                 }
-                MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
+                MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
+                    self.save_media(tab, item, choice)
+                }
+                MenuEffect::Run(
+                    MenuCommand::Engine(_) | MenuCommand::Separator | MenuCommand::Info,
+                ) => {}
             }
         }
         answered
@@ -426,7 +431,7 @@ impl Host {
     }
 
     /// The tab's view closed: its surfaces close without answering (welding
-    /// answered every held request), its fullscreen and sound end.
+    /// answered every held request), its fullscreen, sound and blocked count end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
         if self.devtools.dock.tab() == Some(tab) {
             self.dock_event(DockEvent::TabGone(tab));
@@ -436,6 +441,7 @@ impl Host {
         }
         self.downloads_lost(tab);
         self.autofill_gone(tab);
+        self.forget_gone_blocks();
         self.audio.remove(&tab);
         self.busy_view_gone(tab);
         if let Some(window) = self.w.window.upgrade() {

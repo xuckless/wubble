@@ -551,6 +551,8 @@ pub enum Control {
     ListEditor,
     /// A map of key to number: rows with remove.
     MapEditor,
+    /// One line of text, applied on Enter.
+    TextField,
 }
 
 /// The search engines' stored ids, the words of the engine's segmented control.
@@ -575,6 +577,7 @@ pub fn control_for(kind: SettingKind) -> Control {
         SettingKind::Choice(words) => Control::Segmented(words),
         SettingKind::List => Control::ListEditor,
         SettingKind::Map => Control::MapEditor,
+        SettingKind::Text => Control::TextField,
     }
 }
 
@@ -1004,6 +1007,7 @@ mod tests {
             ),
             (SettingKind::List, Control::ListEditor),
             (SettingKind::Map, Control::MapEditor),
+            (SettingKind::Text, Control::TextField),
         ];
         for (kind, want) in kinds {
             assert_eq!(control_for(kind), want, "{kind:?}");

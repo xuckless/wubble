@@ -105,6 +105,16 @@ impl Codec for ArchiveAfter {
     }
 }
 
+/// Text as it is (a choice's word, a folder path); the setting's kind validates it.
+impl Codec for String {
+    fn encode(&self) -> String {
+        self.clone()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        Some(s.to_owned())
+    }
+}
+
 /// A JSON array of strings; entries are opaque to the store.
 impl Codec for defs::BackForwardCache {
     fn encode(&self) -> String {
@@ -171,6 +181,12 @@ settings! {
     /// Hosts the blocker skips.
     BlockerExceptions: Vec<String> = defs::BLOCKER_EXCEPTIONS;
     BlockerListsAutoUpdate: bool = defs::BLOCKER_LISTS_AUTO_UPDATE;
+    BlockerCookieBanners: bool = defs::BLOCKER_COOKIE_BANNERS;
+    BlockerStripParams: bool = defs::BLOCKER_STRIP_PARAMS;
+    /// URLs of the user's own lists.
+    BlockerCustomLists: Vec<String> = defs::BLOCKER_CUSTOM_LISTS;
+    /// Catalog id to 0/1, for lists switched from their default.
+    BlockerLists: std::collections::BTreeMap<String, u32> = defs::BLOCKER_LISTS;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
     HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
     /// Per-site zoom (`wubble_core::zoom`): hosts at the default zoom are absent.
@@ -202,6 +218,16 @@ settings! {
     DevtoolsRemotePort: u32 = defs::DEVTOOLS_REMOTE_PORT;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
+    MediaEnabled: bool = defs::MEDIA_ENABLED;
+    /// A request wubble makes itself (YouTube's player API): off by default.
+    MediaYoutube: bool = defs::MEDIA_YOUTUBE;
+    /// One of `wubble_core::media::select::QUALITY_WORDS`.
+    MediaQuality: String = defs::MEDIA_QUALITY;
+    /// Empty: the downloads folder.
+    MediaSaveDir: String = defs::MEDIA_SAVE_DIR;
+    MediaAskEachTime: bool = defs::MEDIA_ASK_EACH_TIME;
+    MediaConcurrency: u32 = defs::MEDIA_CONCURRENCY;
+    MediaMinBytes: u32 = defs::MEDIA_MIN_BYTES;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

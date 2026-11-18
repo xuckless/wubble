@@ -20,6 +20,7 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+mod media;
 mod pages;
 mod panes;
 mod parity;
@@ -31,6 +32,7 @@ mod swipe;
 mod tab_drag;
 mod tasks;
 mod window;
+pub use media::MediaObserver;
 pub use swipe::Swipe;
 
 pub(crate) use window::WindowHost;
@@ -257,6 +259,7 @@ pub struct Checks {
     pub pages_smoke: Option<PagesSmoke>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
+    pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -390,6 +393,8 @@ pub struct Host {
     pub blocked_seen: Option<u32>,
     /// `--smoke autofill` reached its end.
     pub autofill_passed: bool,
+    /// `--smoke media` reached its end.
+    pub media_passed: bool,
     /// Password autofill per tab (`host/autofill.rs`).
     autofill: autofill::Autofill,
     /// The content blocker, whose per-view counts the tab rows show.
@@ -399,6 +404,8 @@ pub struct Host {
     /// Certificate errors the user proceeded past, for this run only.
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
+    /// The media downloader: each tab's streams and the download jobs (`host/media.rs`).
+    media: media::Media,
     pace: Option<Pace>,
     /// The system clipboard, for the pages' copies and pastes and the shell's copies.
     clipboard: crate::clipboard::Clipboard,
@@ -442,6 +449,7 @@ impl Host {
         checks: Checks,
         downloads_dir: Option<PathBuf>,
         blocking: Arc<Blocking>,
+        media_observer: Arc<media::MediaObserver>,
     ) -> Self {
         let Loaded {
             model,
@@ -541,11 +549,13 @@ impl Host {
             page_zoom: None,
             blocked_seen: None,
             autofill_passed: false,
+            media_passed: false,
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
+            media: media::Media::new(media_observer),
             pace: begin_frames.then(|| Pace {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
@@ -928,6 +938,26 @@ impl Host {
         Some(self.blocking.blocked(browser))
     }
 
+    /// The blocker's count for `tab` and its breakdown by host, if it has a view.
+    fn blocked_breakdown(&mut self, tab: TabId) -> Option<(u32, Vec<(String, u32)>)> {
+        let id = *self.views.get(&tab)?;
+        let browser = self.engine.view(id)?.browser_id();
+        Some((
+            self.blocking.blocked(browser),
+            self.blocking.blocked_hosts(browser),
+        ))
+    }
+
+    /// Drops the blocker's counts of views that are gone.
+    pub(super) fn forget_gone_blocks(&mut self) {
+        let ids: Vec<_> = self.views.values().copied().collect();
+        let live: Vec<i32> = ids
+            .into_iter()
+            .filter_map(|id| Some(self.engine.view(id)?.browser_id()))
+            .collect();
+        self.blocking.keep_views(&live);
+    }
+
     /// The blocker's count for each tab with a view.
     fn blocked_counts(&mut self) -> crate::shell::BlockedMap {
         let tabs: Vec<_> = self.views.keys().copied().collect();
@@ -1044,6 +1074,7 @@ impl Host {
                 self.on_page_event(&window, view, event);
             }
         }
+        self.media_pump();
         self.enter_focused();
         let Some(window) = self.w.window.upgrade() else {
             return;
@@ -1293,6 +1324,7 @@ impl Host {
             }
             WebEvent::UrlChanged(url) => {
                 self.held_popups.remove(&tab);
+                self.media_navigated(tab, &url);
                 self.autofill_navigated(tab, &url);
                 self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
@@ -1786,6 +1818,7 @@ impl Host {
 
     /// Called before a tab closes: it goes on the recently-closed list.
     fn remember_closed(&mut self, tab: TabId) {
+        self.media_tab_closed(tab);
         self.committed.remove(&tab);
         self.typed_nav.ended(tab);
         if self.archiving.contains_key(&tab) {
@@ -1832,6 +1865,7 @@ impl Host {
     /// Orderly shutdown: the final save, then the store thread finishes and
     /// closes the database. `ui` was read before the window went away.
     pub fn shutdown(&mut self, ui: UiState) {
+        self.media_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();

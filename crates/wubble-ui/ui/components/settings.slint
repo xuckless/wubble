@@ -474,6 +474,18 @@ export component SettingRow inherits Rectangle {
                     }
                 }
             }
+            // wubble: a one-line text row (a folder path), applied on Enter; the settings field.
+            if root.setting.control == SettingControl.text: VerticalLayout {
+                alignment: center;
+                Field {
+                    width: Shell.slider-width;
+                    text: root.setting.value;
+                    placeholder: "Default";
+                    accepted(t) => {
+                        root.changed(root.setting.key, t);
+                    }
+                }
+            }
             if root.setting.control == SettingControl.slider: VerticalLayout {
                 alignment: center;
                 slider := Slider {

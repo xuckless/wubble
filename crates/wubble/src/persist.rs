@@ -39,8 +39,9 @@ use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    ArchivedTab, BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon,
-    HistoryDeleted, Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
+    ArchivedTab, BlockerCookieBanners, BlockerCustomLists, BlockerEnabled, BlockerExceptions,
+    BlockerLists, BlockerListsAutoUpdate, BlockerStripParams, ClosedTab, Favicon, HistoryDeleted,
+    Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 use wubble_vault::keyring::KeyRingError;
 use wubble_vault::{
@@ -50,6 +51,7 @@ use zeroize::Zeroizing;
 
 use crate::blocking::BlockerSettings;
 use crate::host::now_ms;
+use wubble_blocker::catalog::Selection;
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
@@ -838,6 +840,12 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             enabled: store.setting::<BlockerEnabled>().await?,
             exceptions: store.setting::<BlockerExceptions>().await?,
             lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
+            selection: Selection {
+                lists: store.setting::<BlockerLists>().await?,
+                cookie_banners: store.setting::<BlockerCookieBanners>().await?,
+                strip_params: store.setting::<BlockerStripParams>().await?,
+                custom: store.setting::<BlockerCustomLists>().await?,
+            },
         },
         stored: store.all_settings().await?,
     };

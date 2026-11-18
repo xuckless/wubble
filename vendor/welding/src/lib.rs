@@ -138,7 +138,8 @@ pub use permissions::{PermissionId, PermissionKind};
 #[cfg(all(feature = "cef-runtime", target_os = "windows"))]
 pub use runtime::CefWindowsSandboxContext;
 pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode, PumpScheduler};
-// wubble change: `RequestAction`, `RequestFilter`, `ResourceRequest` (change 21).
+// wubble change: `RequestAction`, `RequestFilter`, `ResourceRequest` (change 21);
+// `ResponseInfo`, `ResponseObserver` (change 36).
 pub use surface::{
     AcceptFilter, BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
     CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuMedia, ContextMenuTarget, Cookie,
@@ -146,6 +147,6 @@ pub use surface::{
     FileChooserMode, FocusDirection, ImeComposition, JsDialogKind, KeyEvent, KeyEventKind,
     MAX_MENU_DEPTH, MenuItem, MenuItemKind, MouseAction, MouseButton, MouseEvent,
     NavigationEvent, NewWindowKind, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,
-    RequestFilter, ResourceRequest, SameSite,
+    RequestFilter, ResourceRequest, ResponseInfo, ResponseObserver, SameSite,
     SnapshotPngCompletion, SnapshotRequestId, TouchInput, TouchPhase, WebRequestId, ZoomCommand,
 };

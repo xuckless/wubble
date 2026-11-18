@@ -141,6 +141,8 @@ export component AppWindow inherits Window {
     callback address-blocker-requested <=> sidebar.address-blocker-requested;
     in property <int> address-popups-blocked <=> sidebar.address-popups-blocked;
     callback address-popups-requested <=> sidebar.address-popups-requested;
+    in property <bool> address-media-visible <=> sidebar.address-media-visible;
+    callback address-media-requested <=> sidebar.address-media-requested;
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
     in property <[TabItem]> tabs <=> sidebar.tabs;
     in property <[SpaceItem]> spaces <=> sidebar.spaces;

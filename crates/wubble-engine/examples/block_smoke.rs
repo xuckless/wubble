@@ -107,6 +107,7 @@ fn run(dir: &Path) -> Result<(), String> {
         pump_scheduler: None,
         content_filter: Some(filter.clone()),
         clipboard_bridge: false,
+        response_observer: None,
         features: Default::default(),
         profile: wubble_engine::app::ProfileKind::Throwaway,
     })

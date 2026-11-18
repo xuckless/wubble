@@ -40,6 +40,7 @@ use crate::held::{Answer, Held, RequestId};
 use crate::permissions::{Pending, PermissionKind};
 use crate::surface::{
     CefSurfaceConfig, CefSurfaceEvent, MenuSource, NavigationEvent, RequestAction, RequestFilter,
+    ResponseInfo, ResponseObserver,
     ResourceRequest, WebEventQueue,
 };
 
@@ -540,6 +541,8 @@ impl SharedHandlers {
         metrics: Arc<Mutex<crate::view::ViewMetrics>>,
         // wubble change: checks each request before it is sent.
         request_filter: Option<RequestFilter>,
+        // wubble change 36: sees each response's headers.
+        response_observer: Option<ResponseObserver>,
     ) -> Self {
         Self {
             request: WeldRequestHandler::new(
@@ -547,6 +550,7 @@ impl SharedHandlers {
                 requests.clone(),
                 scripts,
                 request_filter,
+                response_observer,
             ),
             download: WeldDownloadHandler::new(events.clone(), requests.clone()),
             permission: WeldPermissionHandler::new(events.clone(), requests.clone()),
@@ -565,11 +569,13 @@ cef::wrap_request_handler! {
         requests: Arc<Requests>,
         scripts: Arc<crate::app::PendingScripts>,
         request_filter: Option<RequestFilter>,
+        response_observer: Option<ResponseObserver>,
     }
 
     impl RequestHandler {
         // wubble change: a resource-request handler only when the host set
-        // a filter, so without one CEF's default handling is untouched.
+        // a filter or a response observer (change 36), so without either
+        // CEF's default handling is untouched.
         // Shape from cefclient `ClientHandler::GetResourceRequestHandler`
         // (chromiumembedded/cef, BSD-3-Clause); no code copied.
         fn resource_request_handler(
@@ -582,11 +588,15 @@ cef::wrap_request_handler! {
             request_initiator: Option<&cef::CefString>,
             _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
         ) -> Option<cef::ResourceRequestHandler> {
-            let filter = self.request_filter.clone()?;
+            if self.request_filter.is_none() && self.response_observer.is_none() {
+                return None;
+            }
             Some(WeldResourceRequestHandler::new(
-                filter,
+                self.request_filter.clone(),
+                self.response_observer.clone(),
                 opt_string(request_initiator),
                 is_navigation != 0,
+                Arc::new(Mutex::new(None)),
             ))
         }
 
@@ -741,9 +751,14 @@ fn in_site(host: &str, site: &str) -> bool {
 
 cef::wrap_resource_request_handler! {
     struct WeldResourceRequestHandler {
-        filter: RequestFilter,
+        filter: Option<RequestFilter>,
+        // wubble change 36.
+        observer: Option<ResponseObserver>,
         initiator: String,
         is_navigation: bool,
+        // wubble change 35: what `RequestAction::Serve` decided, taken by
+        // `resource_handler` (CEF calls it after `on_before_resource_load`).
+        served: Arc<Mutex<Option<Served>>>,
     }
 
     impl ResourceRequestHandler {
@@ -757,6 +772,7 @@ cef::wrap_resource_request_handler! {
             _callback: Option<&mut cef::Callback>,
         ) -> cef::ReturnValue {
             let Some(request) = request else { return cef::ReturnValue::CONTINUE };
+            let Some(filter) = &self.filter else { return cef::ReturnValue::CONTINUE };
             let url = cef_string(request.url());
             let resource_type = request.resource_type();
             let main_frame = resource_type == cef::ResourceType::MAIN_FRAME;
@@ -778,14 +794,155 @@ cef::wrap_resource_request_handler! {
                 is_navigation: self.is_navigation,
                 browser_id: browser.map_or(0, |b| b.identifier()),
             };
-            match self.filter.check(&checked) {
+            let action = filter.check(&checked);
+            let mut served = self.served.lock().unwrap_or_else(|e| e.into_inner());
+            *served = None;
+            match action {
                 RequestAction::Allow => cef::ReturnValue::CONTINUE,
                 RequestAction::Cancel => cef::ReturnValue::CANCEL,
                 RequestAction::Redirect(to) => {
                     request.set_url(Some(&cef::CefString::from(to.as_str())));
                     cef::ReturnValue::CONTINUE
                 }
+                RequestAction::Serve(data_url) => match Served::from_data_url(&data_url) {
+                    Some(body) => {
+                        *served = Some(body);
+                        cef::ReturnValue::CONTINUE
+                    }
+                    None => cef::ReturnValue::CANCEL,
+                },
             }
+        }
+
+        // wubble change 36: reports the response's headers; never changes
+        // the request (returns false). Called on the IO thread. Shape from
+        // cefclient `ClientHandler::OnResourceResponse` (BSD-3-Clause); no
+        // code copied.
+        fn on_resource_response(
+            &self,
+            browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            response: Option<&mut cef::Response>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(observer), Some(request), Some(response)) = (&self.observer, request, response)
+            else {
+                return 0;
+            };
+            let header = |name: &str| cef_string(response.header_by_name(Some(&cef::CefString::from(name))));
+            let info = ResponseInfo::from_headers(
+                cef_string(request.url()),
+                browser.map_or(0, |b| b.identifier()),
+                request.resource_type().get_raw(),
+                response.status(),
+                &cef_string(response.mime_type()),
+                header,
+            );
+            observer.seen(&info);
+            0
+        }
+
+        // wubble change 35: serves what `on_before_resource_load` decided;
+        // `None` (the default) lets the request go to the network.
+        fn resource_handler(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut cef::Request>,
+        ) -> Option<cef::ResourceHandler> {
+            let served = self.served.lock().unwrap_or_else(|e| e.into_inner()).take()?;
+            Some(WeldServedResource::new(Arc::new(served), Arc::new(Mutex::new(0))))
+        }
+    }
+}
+
+/// wubble change 35: a response given as a `data:` URL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Served {
+    mime: String,
+    body: Vec<u8>,
+}
+
+impl Served {
+    /// `data:<mime>[;param...];base64,<payload>`; anything else is `None`.
+    fn from_data_url(url: &str) -> Option<Self> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let (head, payload) = url.strip_prefix("data:")?.split_once(',')?;
+        let head = head.strip_suffix(";base64")?;
+        let mime = head.split(';').next().unwrap_or_default().trim();
+        let mime = if mime.is_empty() { "text/plain" } else { mime };
+        let body = STANDARD.decode(payload).ok()?;
+        Some(Self { mime: mime.to_owned(), body })
+    }
+}
+
+// wubble change 35: one `Served` response, read from memory on the IO
+// thread. The `open` / `read` contract from CEF `cef_resource_handler.h`
+// and libcef_dll `CefStreamResourceHandler` (BSD-3-Clause); no code copied.
+cef::wrap_resource_handler! {
+    struct WeldServedResource {
+        served: Arc<Served>,
+        offset: Arc<Mutex<usize>>,
+    }
+
+    impl ResourceHandler {
+        fn open(
+            &self,
+            _request: Option<&mut cef::Request>,
+            handle_request: Option<&mut ::std::os::raw::c_int>,
+            _callback: Option<&mut cef::Callback>,
+        ) -> ::std::os::raw::c_int {
+            if let Some(handle) = handle_request {
+                *handle = 1;
+            }
+            1
+        }
+
+        fn response_headers(
+            &self,
+            response: Option<&mut cef::Response>,
+            response_length: Option<&mut i64>,
+            _redirect_url: Option<&mut cef::CefString>,
+        ) {
+            if let Some(response) = response {
+                response.set_status(200);
+                response.set_status_text(Some(&cef::CefString::from("OK")));
+                response.set_mime_type(Some(&cef::CefString::from(self.served.mime.as_str())));
+                // A stub answers a cross-origin `fetch` / XHR too.
+                response.set_header_by_name(
+                    Some(&cef::CefString::from("Access-Control-Allow-Origin")),
+                    Some(&cef::CefString::from("*")),
+                    1,
+                );
+            }
+            if let Some(length) = response_length {
+                *length = self.served.body.len() as i64;
+            }
+        }
+
+        fn read(
+            &self,
+            data_out: *mut u8,
+            bytes_to_read: ::std::os::raw::c_int,
+            bytes_read: Option<&mut ::std::os::raw::c_int>,
+            _callback: Option<&mut cef::ResourceReadCallback>,
+        ) -> ::std::os::raw::c_int {
+            let mut offset = self.offset.lock().unwrap_or_else(|e| e.into_inner());
+            let rest = self.served.body.get(*offset..).unwrap_or_default();
+            let n = rest.len().min(usize::try_from(bytes_to_read).unwrap_or(0));
+            if n > 0 && !data_out.is_null() {
+                // SAFETY: CEF hands a buffer of `bytes_to_read` bytes, and `n`
+                // is at most that and at most what is left of the body.
+                unsafe { std::ptr::copy_nonoverlapping(rest.as_ptr(), data_out, n) };
+                *offset += n;
+            } else if n > 0 {
+                return 0;
+            }
+            if let Some(read) = bytes_read {
+                *read = n as ::std::os::raw::c_int;
+            }
+            // 0 with 0 bytes read: the response is complete.
+            (n > 0) as ::std::os::raw::c_int
         }
     }
 }
@@ -1213,7 +1370,22 @@ cef::wrap_dialog_handler! {
 // wubble change: the request filter's top-page rule.
 #[cfg(test)]
 mod request_filter_tests {
-    use super::top_url;
+    use super::{Served, top_url};
+
+    // wubble change 35.
+    #[test]
+    fn served_data_urls_decode_base64_only() {
+        let gif = Served::from_data_url("data:image/gif;base64,R0lGODlhAQABAAAAACw=").unwrap();
+        assert_eq!(gif.mime, "image/gif");
+        assert_eq!(&gif.body[..6], b"GIF89a");
+        let js = Served::from_data_url("data:application/javascript;charset=utf-8;base64,KGZ1bmN0aW9uKCl7fSkoKTs=").unwrap();
+        assert_eq!((js.mime.as_str(), js.body.as_slice()), ("application/javascript", &b"(function(){})();"[..]));
+        let empty = Served::from_data_url("data:;base64,").unwrap();
+        assert_eq!((empty.mime.as_str(), empty.body.len()), ("text/plain", 0));
+        assert_eq!(Served::from_data_url("data:text/plain,plain"), None);
+        assert_eq!(Served::from_data_url("data:text/plain;base64,@@@"), None);
+        assert_eq!(Served::from_data_url("https://x.test/;base64,AA=="), None);
+    }
 
     #[test]
     fn top_url_prefers_the_request_then_main_frame_then_initiator() {

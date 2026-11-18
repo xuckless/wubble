@@ -74,6 +74,7 @@ enum SmokeArg {
     Session,
     Autofill,
     Windows,
+    Media,
     SessionPhase(Phase),
 }
 
@@ -91,6 +92,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
         None if value == "windows" => Ok(SmokeArg::Windows),
+        None if value == "media" => Ok(SmokeArg::Media),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -137,6 +139,9 @@ pub enum Smoke {
     Session,
     /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
     Autofill,
+    /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
+    /// check sizes and hashes.
+    Media,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -224,6 +229,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
+            (Some(SmokeArg::Media), None, None) => Smoke::Media,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -481,6 +487,7 @@ mod tests {
             ("video", Scenario::Video),
             ("resize", Scenario::Resize),
             ("typing", Scenario::Typing),
+            ("blocker", Scenario::Blocker),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),

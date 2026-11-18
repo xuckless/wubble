@@ -12,6 +12,7 @@ mod ime;
 mod input;
 mod instance;
 mod measure;
+mod media_smoke;
 mod menu;
 mod nav_smoke;
 mod page_drag;
@@ -366,6 +367,29 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Smoke(Smoke::Media) => {
+            match with_smoke_dir(|config, dir| run(Mode::Media, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    media_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: media ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: media FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: media FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Session) => match smoke_session() {
             Ok(()) => {
                 println!("smoke: session ok");
@@ -399,6 +423,10 @@ fn main() -> ExitCode {
                     ExitCode::FAILURE
                 }
             }
+        }
+        Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
+            println!("{}", blocking::measure());
+            ExitCode::SUCCESS
         }
         Command::Measure(m) => {
             measure::begin(m.scenario, m.seconds.get());
@@ -681,6 +709,8 @@ struct Outcome {
     pages_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
+    /// `--smoke media` reached its end.
+    media_passed: bool,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
     /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
     measured: Option<Result<(), String>>,
@@ -717,6 +747,8 @@ enum Mode {
     Pages,
     /// `--smoke autofill`.
     Autofill,
+    /// `--smoke media`.
+    Media,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -1168,6 +1200,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_address_popups_requested(move |x, y| {
         with_host_in(win, |host| host.popups_menu_requested(x, y))
     });
+    window.on_address_media_requested(move |x, y| {
+        with_host_in(win, |host| host.media_menu_requested(x, y))
+    });
     window.on_downloads_cleared(move || with_host_in(win, Host::downloads_cleared));
     window.on_passwords_query_changed(move |q| with_host_in(win, |host| host.passwords_query(&q)));
     window.on_passwords_unlock(move || with_host_in(win, Host::passwords_unlock));
@@ -1194,6 +1229,10 @@ fn run(
     // `--smoke autofill`'s pages, on a loopback port.
     let autofill_port = matches!(mode, Mode::Autofill)
         .then(autofill_smoke::serve)
+        .transpose()?;
+    // `--smoke media`'s fixtures, on a loopback port.
+    let media_port = matches!(mode, Mode::Media)
+        .then(media_smoke::serve)
         .transpose()?;
     let db = Profile {
         dir: profile.into(),
@@ -1247,6 +1286,7 @@ fn run(
         pages_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
+        media_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -1348,6 +1388,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Media => (
+            media_port.map(|port| format!("http://127.0.0.1:{port}/")),
+            Checks {
+                media_smoke: Some(media_smoke::MediaSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Session(phase) => (
             None,
             Checks {
@@ -1390,9 +1437,11 @@ fn run(
         );
     }
     let blocking = blocking::Blocking::new();
+    let media_observer = host::MediaObserver::new();
     let engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
         content_filter: Some(blocking.clone()),
+        response_observer: Some(media_observer.clone()),
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         ..config?
@@ -1415,7 +1464,16 @@ fn run(
     let window = first.handle();
     shot::attach(&window);
     let host = Host::new(
-        engine, first, factory, loaded, store, url, checks, downloads, blocking,
+        engine,
+        first,
+        factory,
+        loaded,
+        store,
+        url,
+        checks,
+        downloads,
+        blocking,
+        media_observer,
     );
     HOST.set(Some(host));
     if let Some(listener) = listener {
@@ -1492,6 +1550,7 @@ fn run(
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,
         autofill_passed: host.autofill_passed,
+        media_passed: host.media_passed,
         measured,
     })
 }

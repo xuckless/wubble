@@ -99,6 +99,7 @@ fn run(dir: &Path) -> Result<(), String> {
         cache_dir: dir.join("cache"),
         pump_scheduler: None,
         content_filter: None,
+        response_observer: None,
         features: Default::default(),
         clipboard_bridge: false,
         profile: wubble_engine::app::ProfileKind::Throwaway,

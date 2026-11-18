@@ -7,19 +7,23 @@
 //! update swaps in one pointer move, the site overrides, the on/off flag.
 //! Nothing here waits on the UI thread.
 //!
-//! Lists come from `<profile>/blocklists/*.txt` (plus `resources.json`), the
-//! compiled engine is cached in `<profile>/blocker-engine.bin`. Nothing is
-//! downloaded unless `blocker.lists_auto_update` is on (TODO.md, Decided).
+//! Lists are uBlock Origin's default set (`wubble_blocker::catalog`): the
+//! snapshot bundled in the binary, or the copy downloaded into
+//! `<profile>/blocklists` (plus the user's own `*.txt` there). The compiled
+//! engine is cached in `<profile>/blocker-engine.bin`. Nothing is downloaded
+//! unless `blocker.lists_auto_update` is on (TODO.md, Decided).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use wubble_blocker::catalog::Selection;
 use wubble_blocker::{
-    Blocker, DEFAULT_LISTS, Decision, NetRequest, ResourceType, Shields, SiteOverrides,
+    Blocker, Decision, Due, NetRequest, ResourceType, Shields, SiteOverrides, Source,
 };
 use wubble_engine::filter::{ContentFilter, RequestAction, RequestInfo, RequestKind};
 use wubble_store::{BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, Setting};
@@ -39,6 +43,9 @@ pub struct BlockerSettings {
     /// Hosts the blocker skips (with their subdomains).
     pub exceptions: Vec<String>,
     pub lists_auto_update: bool,
+    /// Which lists are on (`blocker.lists`, `blocker.cookie_banners`,
+    /// `blocker.strip_params`, `blocker.custom_lists`).
+    pub selection: Selection,
 }
 
 impl Default for BlockerSettings {
@@ -47,6 +54,7 @@ impl Default for BlockerSettings {
             enabled: BlockerEnabled::default(),
             exceptions: BlockerExceptions::default(),
             lists_auto_update: BlockerListsAutoUpdate::default(),
+            selection: Selection::default(),
         }
     }
 }
@@ -54,15 +62,57 @@ impl Default for BlockerSettings {
 /// Fetches one URL; the network is reached only through this.
 type Fetch = fn(&str) -> Result<String, String>;
 
-/// The blocker shared with CEF's IO thread, and the per-view counts of
-/// blocked requests for the shell to show.
+/// Distinct blocked URLs a page keeps track of; past this the count stops
+/// growing, so a long-lived page's beacons with cache-busting query strings
+/// cannot grow it without bound.
+const MAX_PAGE_BLOCKS: usize = 4096;
+
+/// What was blocked on a view's page since its last main-frame request.
+/// Counted by distinct URL: Blink may ask for a blocked resource twice (its
+/// preload scanner, then the parser once the first load failed), which is
+/// one thing blocked, not two.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PageBlocks {
+    /// A hash of each blocked URL, at most [`MAX_PAGE_BLOCKS`].
+    urls: HashSet<u64>,
+    /// Distinct blocked URLs per host.
+    by_host: BTreeMap<String, u32>,
+}
+
+impl PageBlocks {
+    /// Records a blocked request.
+    fn record(&mut self, url: &str) {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        url.hash(&mut h);
+        if self.urls.len() < MAX_PAGE_BLOCKS && self.urls.insert(h.finish()) {
+            let host = wubble_core::zoom::host_of(url).unwrap_or_default();
+            *self.by_host.entry(host).or_insert(0) += 1;
+        }
+    }
+
+    /// Distinct URLs blocked.
+    pub fn count(&self) -> u32 {
+        u32::try_from(self.urls.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Blocked URLs per host, most first (then by name).
+    pub fn hosts(&self) -> Vec<(String, u32)> {
+        let mut hosts: Vec<(String, u32)> =
+            self.by_host.iter().map(|(h, n)| (h.clone(), *n)).collect();
+        hosts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        hosts
+    }
+}
+
+/// The blocker shared with CEF's IO thread, and what each view's page had
+/// blocked, for the shell to show.
 pub struct Blocking {
     blocker: RwLock<Arc<Blocker>>,
     overrides: RwLock<SiteOverrides>,
     enabled: AtomicBool,
-    /// Requests blocked per view ([`wubble_engine::view::View::browser_id`])
-    /// since its last main-frame request.
-    blocked: Mutex<HashMap<i32, u32>>,
+    /// Per view ([`wubble_engine::view::View::browser_id`]), since its last
+    /// main-frame request; dropped when the view goes ([`Self::keep_views`]).
+    blocked: Mutex<HashMap<i32, PageBlocks>>,
 }
 
 impl Blocking {
@@ -76,10 +126,10 @@ impl Blocking {
         })
     }
 
-    /// Applies the stored settings and loads the lists of `profile`: from
-    /// the cache at once when it matches them, else compiled on a
-    /// background thread. With `lists_auto_update` on, that thread also
-    /// fetches due lists now and every [`UPDATE_CHECK`].
+    /// Applies the stored settings and loads the selected lists: from the
+    /// cache at once when it matches them, else compiled on a background
+    /// thread (requests pass meanwhile). With `lists_auto_update` on, that
+    /// thread also fetches due lists now and every [`UPDATE_CHECK`].
     pub fn start(self: &Arc<Self>, profile: &Path, settings: &BlockerSettings) {
         self.start_with(profile, settings, wubble_blocker::fetch_http);
     }
@@ -92,7 +142,9 @@ impl Blocking {
         fetch: Fetch,
     ) -> Option<JoinHandle<()>> {
         let (dir, cache) = paths(profile);
-        let compiled = self.load_cached(settings, &dir, &cache);
+        let selection = settings.selection.clone();
+        let sources = wubble_blocker::sources(&dir, &selection);
+        let compiled = self.load_cached(settings, &sources, &cache);
         let update = settings.lists_auto_update;
         if compiled && !update {
             return None;
@@ -102,11 +154,11 @@ impl Blocking {
             .name("wubble-blocker".into())
             .spawn(move || {
                 if !compiled {
-                    this.replace_blocker(Blocker::compile_dir(&dir, &cache));
+                    this.replace_blocker(Blocker::compile(&sources, Some(&cache)));
                 }
                 if update {
                     loop {
-                        this.update_once(&dir, &cache, fetch);
+                        this.update_once(&dir, &cache, &selection, fetch);
                         std::thread::sleep(UPDATE_CHECK);
                     }
                 }
@@ -116,12 +168,12 @@ impl Blocking {
             .ok()
     }
 
-    /// The settings, then the cached blocker if it matches the lists.
+    /// The settings, then the cached blocker if it matches the sources.
     /// Returns whether the lists are loaded.
-    fn load_cached(&self, settings: &BlockerSettings, dir: &Path, cache: &Path) -> bool {
+    fn load_cached(&self, settings: &BlockerSettings, sources: &[Source], cache: &Path) -> bool {
         self.set_enabled(settings.enabled);
         self.set_exceptions(&settings.exceptions);
-        match Blocker::from_cache(dir, cache) {
+        match Blocker::from_cache(sources, cache) {
             Some(blocker) => {
                 self.replace_blocker(blocker);
                 true
@@ -131,12 +183,14 @@ impl Blocking {
     }
 
     /// Fetches the due lists into `dir`; recompiles and swaps if any changed.
-    fn update_once(&self, dir: &Path, cache: &Path, fetch: Fetch) {
+    fn update_once(&self, dir: &Path, cache: &Path, selection: &Selection, fetch: Fetch) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        if !wubble_blocker::refresh(dir, DEFAULT_LISTS, now, &fetch).is_empty() {
-            self.replace_blocker(Blocker::compile_dir(dir, cache));
+        let specs = wubble_blocker::specs(selection);
+        if !wubble_blocker::refresh(dir, &specs, Due::At(now), &fetch).is_empty() {
+            let sources = wubble_blocker::sources(dir, selection);
+            self.replace_blocker(Blocker::compile(&sources, Some(cache)));
         }
     }
 
@@ -164,11 +218,12 @@ impl Blocking {
             .unwrap_or_else(PoisonError::into_inner) = overrides;
     }
 
-    /// `--smoke block`: only `list` blocks, shields on, nothing read from disk or fetched.
+    /// `--smoke block`: only `list` (with uBO's resources) blocks, shields
+    /// on, nothing read from disk or fetched.
     pub fn use_list(&self, list: &str) {
         self.set_enabled(true);
         self.set_overrides(SiteOverrides::default());
-        self.replace_blocker(Blocker::from_lists(&[list]));
+        self.replace_blocker(Blocker::from_sources(&[Source::text(list)]));
     }
 
     /// Swaps in a new blocker; requests already being checked finish on the
@@ -183,12 +238,26 @@ impl Blocking {
         drop(old);
     }
 
-    /// Requests blocked in a view since its last main-frame request.
+    /// Distinct URLs blocked in a view since its last main-frame request.
     pub fn blocked(&self, browser_id: i32) -> u32 {
-        self.counts().get(&browser_id).copied().unwrap_or(0)
+        self.counts().get(&browser_id).map_or(0, PageBlocks::count)
     }
 
-    fn counts(&self) -> std::sync::MutexGuard<'_, HashMap<i32, u32>> {
+    /// What a view's page had blocked, per host.
+    pub fn blocked_hosts(&self, browser_id: i32) -> Vec<(String, u32)> {
+        self.counts()
+            .get(&browser_id)
+            .map(PageBlocks::hosts)
+            .unwrap_or_default()
+    }
+
+    /// Forgets what views other than `live` had blocked: called when a
+    /// view goes, so a closed or slept tab's page does not stay counted.
+    pub fn keep_views(&self, live: &[i32]) {
+        self.counts().retain(|id, _| live.contains(id));
+    }
+
+    fn counts(&self) -> std::sync::MutexGuard<'_, HashMap<i32, PageBlocks>> {
         self.blocked.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -220,13 +289,85 @@ fn is_web(url: &str) -> bool {
         })
 }
 
+/// `--measure blocker`: the bundled default lists' cold compile, cache
+/// size, load from the cache and mean cost of one request decision over a
+/// fixed set of URLs. Printed for a person to read; nothing asserts on it.
+pub fn measure() -> String {
+    use std::time::Instant;
+    let sources = wubble_blocker::bundled_sources(&Selection::default());
+    let start = Instant::now();
+    let blocker = Blocker::from_sources(&sources);
+    let compile = start.elapsed();
+    let bytes = blocker.to_bytes();
+    let start = Instant::now();
+    let loaded = Blocker::from_bytes(&bytes).map(Blocker::with_bundled_resources);
+    let load = start.elapsed();
+    let Ok(loaded) = loaded else {
+        return "measure: blocker cache did not load".into();
+    };
+    const HOSTS: [&str; 8] = [
+        "news.example",
+        "cdn.news.example",
+        "pagead2.googlesyndication.com",
+        "www.google-analytics.com",
+        "static.doubleclick.net",
+        "connect.facebook.net",
+        "fonts.gstatic.com",
+        "images.shop.example",
+    ];
+    const KINDS: [ResourceType; 4] = [
+        ResourceType::Script,
+        ResourceType::Image,
+        ResourceType::Xhr,
+        ResourceType::Stylesheet,
+    ];
+    let urls: Vec<(String, ResourceType)> = (0..10_000usize)
+        .map(|i| {
+            let host = HOSTS[i % HOSTS.len()];
+            let kind = KINDS[(i / HOSTS.len()) % KINDS.len()];
+            (
+                format!("https://{host}/assets/{i}/file.js?v={i}&utm_source=x"),
+                kind,
+            )
+        })
+        .collect();
+    let mut blocked = 0usize;
+    let start = Instant::now();
+    for (url, kind) in &urls {
+        let req = NetRequest {
+            url,
+            source_url: "https://news.example/article",
+            resource_type: *kind,
+        };
+        if loaded.decide(req, Shields::On) != Decision::Allow {
+            blocked += 1;
+        }
+    }
+    let decide = start.elapsed();
+    format!(
+        "measure blocker ({} build): {} bundled lists\n  cold compile {:.0} ms\n  cache {:.1} MB, load {:.1} ms with resources\n  decide {:.2} us per request (mean of {}, {blocked} not allowed)",
+        if cfg!(debug_assertions) {
+            "dev, opt-level 1"
+        } else {
+            "release"
+        },
+        sources.len(),
+        compile.as_secs_f64() * 1e3,
+        bytes.len() as f64 / 1e6,
+        load.as_secs_f64() * 1e3,
+        decide.as_secs_f64() * 1e6 / urls.len() as f64,
+        urls.len(),
+    )
+}
+
 impl ContentFilter for Blocking {
     // Runs on CEF's IO thread and must not panic: the release profile aborts
     // on panic, so welding's catch-and-allow does not hold there. Hence the
     // poison-tolerant locks and no `expect`, `unwrap` or indexing on this path.
     fn check(&self, request: &RequestInfo<'_>) -> RequestAction {
         if request.kind == RequestKind::Document {
-            self.counts().insert(request.browser_id, 0);
+            self.counts()
+                .insert(request.browser_id, PageBlocks::default());
         }
         if !is_web(request.url) {
             return RequestAction::Allow;
@@ -243,17 +384,24 @@ impl ContentFilter for Blocking {
             source_url: top,
             resource_type: resource_type(request.kind),
         };
-        match self.current().decide(net, self.shields_for(top)) {
-            Decision::Allow => RequestAction::Allow,
-            Decision::Rewrite { url } => RequestAction::Redirect(url),
-            // A `$redirect` resource is a `data:` URL, which Chromium may
-            // refuse as a redirect target for a web request (not verified);
-            // blocked until it is served through a resource handler (TODO.md, M4).
-            Decision::Block | Decision::Redirect { .. } => {
-                *self.counts().entry(request.browser_id).or_insert(0) += 1;
-                RequestAction::Block
+        let action = match self.current().decide(net, self.shields_for(top)) {
+            Decision::Allow => return RequestAction::Allow,
+            Decision::Rewrite { url } => return RequestAction::Redirect(url),
+            // A `$redirect` stub (uBO's `noop.js`, `googletagmanager_gtm.js`,
+            // ...) stands in for the blocked resource so the page does not
+            // break; a page itself is never replaced by one.
+            Decision::Redirect { data_url } if request.kind != RequestKind::Document => {
+                RequestAction::Serve(data_url)
             }
-        }
+            Decision::Block | Decision::Redirect { .. } => RequestAction::Block,
+        };
+        // Counted as blocked either way, as uBO and Brave count redirects:
+        // the real resource was not loaded.
+        self.counts()
+            .entry(request.browser_id)
+            .or_default()
+            .record(request.url);
+        action
     }
 
     fn page_script(&self, top_url: &str) -> Option<String> {
@@ -292,7 +440,7 @@ fn paths(profile: &Path) -> (PathBuf, PathBuf) {
 mod tests {
     use super::*;
 
-    /// The built-in test list. Tests only: no list ships with wubble.
+    /// A small list for the request-path tests.
     const TEST_LIST: &str = "\
 ||ads.example^
 @@||ads.example/ok^
@@ -302,15 +450,9 @@ mod tests {
 example.com##.sponsor
 ";
 
-    const RES: &str = r#"[{"name":"1x1.gif","aliases":[],"kind":{"mime":"image/gif"},"content":"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"}]"#;
-
     fn blocking(list: &str) -> Arc<Blocking> {
         let b = Blocking::new();
-        b.replace_blocker(
-            Blocker::from_lists(&[list])
-                .with_resources_json(RES)
-                .unwrap(),
-        );
+        b.replace_blocker(Blocker::from_lists(&[list]).with_bundled_resources());
         b
     }
 
@@ -329,7 +471,7 @@ example.com##.sponsor
         b.check(&req(url, top, kind))
     }
 
-    use RequestAction::{Allow, Block, Redirect};
+    use RequestAction::{Allow, Block, Redirect, Serve};
     use RequestKind::*;
 
     #[test]
@@ -350,8 +492,53 @@ example.com##.sponsor
             ),
             Redirect("https://q.test/?a=2".into())
         );
-        // A `$redirect` data URL is blocked, not redirected.
-        assert_eq!(check(&b, "https://img.test/a.png", SITE, Image), Block);
+    }
+
+    /// uBO's `$redirect` stubs are served in place of the resource (and
+    /// counted as blocked); a page is never replaced by one.
+    #[test]
+    fn redirect_resources_are_served_except_for_pages() {
+        let b = blocking(TEST_LIST);
+        let img = "https://img.test/a.png";
+        assert!(
+            matches!(check(&b, img, SITE, Image), Serve(u) if u.starts_with("data:image/gif;base64,"))
+        );
+        assert_eq!(b.blocked(1), 1);
+        let gtm = "https://www.googletagmanager.com/gtm.js?id=GTM-X";
+        let b = blocking("||googletagmanager.com/gtm.js$script,redirect=googletagmanager_gtm.js\n");
+        assert!(
+            matches!(check(&b, gtm, SITE, Script), Serve(u) if u.starts_with("data:application/javascript;base64,"))
+        );
+        let b = blocking("||img.test^$document,redirect=noop.html\n");
+        assert_eq!(
+            check(&b, "https://img.test/", "https://img.test/", Document),
+            Block
+        );
+    }
+
+    #[test]
+    fn a_long_lived_page_s_blocks_stay_bounded_and_go_with_the_view() {
+        let b = blocking(TEST_LIST);
+        for i in 0..MAX_PAGE_BLOCKS + 10 {
+            check(
+                &b,
+                &format!("https://ads.example/beacon?t={i}"),
+                SITE,
+                Image,
+            );
+        }
+        assert_eq!(b.blocked(1), MAX_PAGE_BLOCKS as u32);
+        assert_eq!(
+            b.blocked_hosts(1),
+            [("ads.example".to_owned(), MAX_PAGE_BLOCKS as u32)]
+        );
+        b.check(&RequestInfo {
+            browser_id: 2,
+            ..req("https://ads.example/x.js", SITE, Script)
+        });
+        b.keep_views(&[2]);
+        assert_eq!((b.blocked(1), b.blocked(2)), (0, 1));
+        assert_eq!(b.counts().len(), 1);
     }
 
     #[test]
@@ -428,24 +615,50 @@ example.com##.sponsor
     #[test]
     fn blocked_requests_are_counted_per_view_and_reset_by_a_new_page() {
         let b = blocking(TEST_LIST);
-        let ads = "https://ads.example/x.js";
-        let on = |id| RequestInfo {
+        let on = |id, url| RequestInfo {
             browser_id: id,
-            ..req(ads, SITE, Script)
+            ..req(url, SITE, Script)
         };
-        b.check(&on(1));
-        b.check(&on(1));
-        b.check(&on(2));
-        b.check(&RequestInfo {
-            browser_id: 1,
-            ..req("https://fine.test/", SITE, Script)
-        });
+        b.check(&on(1, "https://ads.example/x.js"));
+        b.check(&on(1, "https://ads.example/y.js"));
+        b.check(&on(2, "https://ads.example/x.js"));
+        b.check(&on(1, "https://fine.test/"));
         assert_eq!((b.blocked(1), b.blocked(2), b.blocked(3)), (2, 1, 0));
         b.check(&RequestInfo {
             browser_id: 1,
             ..req("https://next.test/", "https://next.test/", Document)
         });
         assert_eq!((b.blocked(1), b.blocked(2)), (0, 1));
+    }
+
+    /// Blink's preload scanner and its parser may both ask for a blocked
+    /// script: one thing blocked.
+    #[test]
+    fn the_same_url_twice_counts_once() {
+        let b = blocking(TEST_LIST);
+        for _ in 0..3 {
+            assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Block);
+        }
+        assert_eq!(b.blocked(1), 1);
+    }
+
+    #[test]
+    fn blocked_urls_are_broken_down_by_host() {
+        let b = blocking("||ads.example^\n||tracker.net^\n");
+        for url in [
+            "https://ads.example/a.js",
+            "https://ads.example/b.js",
+            "https://ads.example/b.js",
+            "https://tracker.net/p.gif",
+            "https://fine.test/",
+        ] {
+            check(&b, url, SITE, Image);
+        }
+        assert_eq!(
+            b.blocked_hosts(1),
+            [("ads.example".to_owned(), 2), ("tracker.net".to_owned(), 1)]
+        );
+        assert!(b.blocked_hosts(9).is_empty());
     }
 
     #[test]
@@ -501,6 +714,43 @@ example.com##.sponsor
         }
     }
 
+    /// Every catalog list off: only the profile's own files.
+    fn only_own_lists() -> BlockerSettings {
+        BlockerSettings {
+            selection: Selection::none(),
+            ..BlockerSettings::default()
+        }
+    }
+
+    #[test]
+    fn the_defaults_block_and_never_fetch() {
+        let d = BlockerSettings::default();
+        assert!(d.enabled && !d.lists_auto_update);
+    }
+
+    #[test]
+    fn the_bundled_lists_block_out_of_the_box() {
+        let p = Profile::new("bundled");
+        let b = Blocking::new();
+        let compile = b
+            .start_with(&p.0, &BlockerSettings::default(), no_network)
+            .expect("compiles");
+        compile.join().expect("no fetch");
+        let ad = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
+        // uBO's filters replace it with their `adsbygoogle` stub.
+        assert!(matches!(
+            check(&b, ad, "https://news.example/", Script),
+            Serve(u) if u.starts_with("data:application/javascript;base64,")
+        ));
+        assert_eq!(b.blocked(1), 1);
+        // Tracking parameters are stripped from a page load.
+        let page = "https://news.example/a?utm_source=x&id=1";
+        assert_eq!(
+            check(&b, page, page, Document),
+            Redirect("https://news.example/a?id=1".into())
+        );
+    }
+
     fn no_network(url: &str) -> Result<String, String> {
         panic!("fetched {url} with auto-update off")
     }
@@ -513,7 +763,7 @@ example.com##.sponsor
         std::fs::write(dir.join("mine.txt"), "||ads.example^\n").unwrap();
         let settings = BlockerSettings {
             exceptions: vec!["site.org".into()],
-            ..BlockerSettings::default()
+            ..only_own_lists()
         };
         assert!(!settings.lists_auto_update);
         let ads = "https://ads.example/x.js";
@@ -534,17 +784,14 @@ example.com##.sponsor
         let p = Profile::new("update");
         let (dir, cache) = paths(&p.0);
         let b = Blocking::new();
-        fn fake(url: &str) -> Result<String, String> {
-            Ok(if url.ends_with(".json") {
-                "[]".into()
-            } else {
-                "||ads.example^\n".into()
-            })
+        fn fake(_: &str) -> Result<String, String> {
+            Ok("||ads.example^\n".into())
         }
-        b.update_once(&dir, &cache, fake);
+        let selection = Selection::default();
+        b.update_once(&dir, &cache, &selection, fake);
         assert!(dir.join("easylist.txt").exists());
         assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Block);
         // Everything is fresh now: a second update fetches nothing.
-        b.update_once(&dir, &cache, no_network);
+        b.update_once(&dir, &cache, &selection, no_network);
     }
 }
