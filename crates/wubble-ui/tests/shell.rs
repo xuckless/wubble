@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
 use slint::{
-    ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString,
-    platform::{Key, PointerEventButton, WindowEvent},
+    ComponentHandle, LogicalPosition, LogicalSize, ModelRc,
+    platform::{PointerEventButton, WindowEvent},
 };
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
 use wubble_core::tabs::SpaceSwitcher;
@@ -57,20 +57,6 @@ fn button(app: &AppWindow, x: f32, y: f32, down: bool) {
     } else {
         WindowEvent::PointerReleased { position, button }
     });
-    pump(1);
-}
-
-/// Modifiers held down around one key, as a keyboard sends them.
-fn chord(app: &AppWindow, held: &[SharedString], key: &str) {
-    let w = app.window();
-    for m in held {
-        w.dispatch_event(WindowEvent::KeyPressed { text: m.clone() });
-    }
-    w.dispatch_event(WindowEvent::KeyPressed { text: key.into() });
-    w.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
-    for m in held.iter().rev() {
-        w.dispatch_event(WindowEvent::KeyReleased { text: m.clone() });
-    }
     pump(1);
 }
 
@@ -192,8 +178,9 @@ fn seam_drag(app: &AppWindow, driver: &Shared) {
     settle(app, driver);
     assert_eq!(app.get_sidebar_width(), 0.0);
 
-    // The seam strip is gone; the sidebar shortcut brings it back at the saved width.
-    chord(app, &[Key::Control.into(), Key::Alt.into()], "z");
+    // The seam strip is gone; the sidebar toggle (the host routes its shortcut here) brings it
+    // back at the saved width.
+    app.invoke_toggle_sidebar();
     assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
     settle(app, driver);
     assert_eq!(app.get_sidebar_width(), max);
