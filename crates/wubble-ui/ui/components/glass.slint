@@ -1,11 +1,98 @@
-import { Colors, Radius, Sizes } from "../tokens.slint";
+import { Colors, GlassStyle, Radius, Sizes } from "../tokens.slint";
+import { GlassTier, GlassQuality } from "model.slint";
 
-// Flat fill for now; real glass replaces the inside later without touching callers.
+// Backdrop textures from wubble-gfx (`glass::GlassBackdrop::render`), one
+// per tier in use, set by the host every web frame. Until the host sets a
+// quality other than flat, glass is the flat tier fill.
+export global GlassBackdrops {
+    in property <image> thin;
+    in property <image> regular;
+    in property <image> thick;
+    // Backdrop pixels per logical pixel: `Backdrops::px_per_frame_px` times
+    // the window scale factor (a global cannot read the scale factor).
+    in property <float> scale;
+    in property <GlassQuality> quality: GlassQuality.flat;
+    // Where the web frame's top-left sits in the window.
+    in property <length> frame-x;
+    in property <length> frame-y;
+
+    public pure function image(tier: GlassTier) -> image {
+        tier == GlassTier.thin ? root.thin : tier == GlassTier.thick ? root.thick : root.regular
+    }
+
+    // A window length measured from the frame origin, in backdrop pixels.
+    public pure function to-backdrop(offset: length) -> int {
+        round(offset / Sizes.logical-px * root.scale)
+    }
+
+    // Whether a panel at window position (x, y) of size (w, h) shows its
+    // backdrop: not flat, and wholly over the web frame (else flat entirely).
+    public pure function shows(tier: GlassTier, x: length, y: length, w: length, h: length) -> bool {
+        root.quality != GlassQuality.flat && x >= root.frame-x && y >= root.frame-y && root.to-backdrop(x - root.frame-x) + root.to-backdrop(w) <= root.image(tier).width && root.to-backdrop(y - root.frame-y) + root.to-backdrop(h) <= root.image(tier).height
+    }
+}
+
+// Glass, layer by layer (pack Tokens.dc.html): blurred and saturated backdrop,
+// tier tint (+ Space colour on Regular), specular, rim, optional film rim,
+// drop shadow. Children draw on top.
 export component Glass inherits Rectangle {
     in property <length> radius: Radius.lg;
+    in property <GlassTier> tier: GlassTier.regular;
+    // The Space colour; mixed in on Regular glass only.
+    in property <color> space-tint: transparent;
+    // Conic soap-film ring, for hover / press / focus; the caller decides.
+    in property <bool> film: false;
+
     border-radius: root.radius;
-    background: Colors.glass-regular;
-    border-width: Sizes.hairline;
-    border-color: Colors.rim;
+    // The flat fill; under a shown backdrop the same fill is repeated above it.
+    background: GlassStyle.fill(root.tier);
+    drop-shadow-offset-y: GlassStyle.shadow-y(root.tier);
+    drop-shadow-blur: GlassStyle.shadow-blur(root.tier);
+    drop-shadow-color: GlassStyle.shadow-color(root.tier);
+
+    if GlassBackdrops.shows(root.tier, root.absolute-position.x, root.absolute-position.y, root.width, root.height): Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: root.radius;
+        clip: true;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: GlassBackdrops.image(root.tier);
+            source-clip-x: GlassBackdrops.to-backdrop(root.absolute-position.x - GlassBackdrops.frame-x);
+            source-clip-y: GlassBackdrops.to-backdrop(root.absolute-position.y - GlassBackdrops.frame-y);
+            source-clip-width: GlassBackdrops.to-backdrop(root.width);
+            source-clip-height: GlassBackdrops.to-backdrop(root.height);
+            image-fit: fill;
+        }
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: GlassStyle.fill(root.tier);
+        }
+    }
+    if root.tier == GlassTier.regular: Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: root.radius;
+        background: root.space-tint.with-alpha(root.space-tint.alpha / 255 * GlassStyle.space-tint-alpha);
+    }
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: root.radius;
+        background: @linear-gradient(180deg, Colors.glass-specular 0%, Colors.glass-specular-end GlassStyle.specular-end);
+        // Rim: the hairline ring, brightest at the top (the pack's inset highlight).
+        border-width: Sizes.hairline;
+        border-color: @linear-gradient(180deg, GlassStyle.highlight(root.tier) 0%, GlassStyle.rim(root.tier) GlassStyle.specular-end);
+    }
+    if root.film: Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: root.radius;
+        border-width: GlassStyle.film-width;
+        border-color: @conic-gradient(from GlassStyle.film-from, Colors.sky 0deg, Colors.lilac 90deg, Colors.blush 180deg, Colors.mint 270deg, Colors.sky 360deg);
+        opacity: GlassStyle.film-opacity;
+    }
     @children
 }

@@ -1,9 +1,10 @@
 import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
-import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent, CompactMode } from "components/model.slint";
+import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent, CompactMode, GlassTier, GlassQuality } from "components/model.slint";
+import { GlassBackdrops } from "components/glass.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
 
-export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState, CompactMode, Sizes }
+export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState, CompactMode, Sizes, GlassTier, GlassQuality, GlassBackdrops }
 
 export component AppWindow inherits Window {
     title: "wubble";

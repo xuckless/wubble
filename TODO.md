@@ -32,6 +32,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Command bar state | One `CommandBarState` enum written only by a pure `next()` via `dispatch` in Slint; closing to closed is a Slint Timer equal to the out duration (no animation-finished callback) |
 | Passwords | Built-in manager (encrypted store, OS keyring) before extensions; extension password managers work once the extension pass (M6) lands |
 | Glass under load | Glass degrades automatically (lower-res blur → cached backdrop → flat tint); animation never drops frames for it |
+| Glass backdrop | Slint 1.19 has a native `backdrop-blur` on `Rectangle`, femtovg-wgpu included (i-slint-compiler `typeregister.rs` `RESERVED_BACKDROP_BLUR_PROPERTIES`, i-slint-renderer-femtovg `itemrenderer.rs` `blur_backdrop`), but no saturate, no per-tier sharing, no intermediate quality, and each panel ends the render pass and copies the screen. So `wubble_gfx::glass` renders it: one shared dual-Kawase down chain (ported from KWin) from the web frame, one up chain per tier in use with saturate folded into its last pass, half-res `slint::Image` outputs; Slint layers tint, specular, rim, film rim (`@conic-gradient` border, no image) and shadow. Quality is one enum `Full/HalfRes/Cached/Flat` moved by a pure `next_quality` over host-supplied costs. Only web content is blurred: glass not wholly over the web frame shows the flat fill. Native `backdrop-blur` stays a hand-measured alternative |
 | Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate, pinned `=0.9.0-pre.5`, default features off because `mimalloc` would install a global allocator; no async runtime needed) with a declared schema and `PRAGMA user_version` migrations: Spaces, tabs, session, history, bookmarks, settings; passwords get their own encrypted store later. Chromium keeps only cookies/cache per container |
 | Containers | Each Space has a default container; a tab can be reopened in another, and Spaces may share one |
 | Deleting a Space | Closes its tabs (as Zen does); the UI confirms first. The last Space cannot be deleted |
@@ -121,8 +122,8 @@ The pack sets colour, glass, type and motion feel. Layouts on its Browser board 
 Foundations
 - [x] Tokens as Slint globals: ground (Abyss/Deep/Shell/Rim), ink (Ink/Mist/Haze), film (Sky/Lilac/Blush/Mint), Coral; radius 6/10/14/20/28/pill; 4 pt spacing; light theme fills
 - [x] Fonts embedded: Fredoka (display, 32 px+), Geist (interface), Geist Mono (addresses)
-- [ ] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim)
-- [ ] Glass quality governor: measures frame time and steps blur quality down/up; exposed as explicit levels, not ad-hoc flags
+- [x] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim) (`wubble-ui` `Glass` + `GlassBackdrops`, backdrop pass in `wubble_gfx::glass`; host wiring into the present loop and the on-screen look are the next batch)
+- [x] Glass quality governor: measures frame time and steps blur quality down/up; exposed as explicit levels, not ad-hoc flags (`glass::Quality` + pure `next_quality`; the host supplies the measured costs, next batch)
 - [ ] Film rim (conic soap-film ring) on hover, press, drag and focus only
 - [x] Motion library in Rust (springs, rubber band, stretch, easing constants in wubble-core::motion; press/squash/wobble/Overlap compose these): follow spring, stretch spring (volume-preserving), rubber band, press 0.97, squash, wobble, Overlap in/out with stagger
 - [ ] App icons exported per platform from the Icons board

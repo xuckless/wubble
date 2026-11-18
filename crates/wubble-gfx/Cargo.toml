@@ -11,3 +11,7 @@ license.workspace = true
 slint.workspace = true
 wgpu.workspace = true
 welding.workspace = true
+
+[dev-dependencies]
+# Only for the Rust/Slint glass enum mirror test.
+wubble-ui.workspace = true
