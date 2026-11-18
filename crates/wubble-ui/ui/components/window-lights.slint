@@ -15,7 +15,13 @@ component Light inherits Rectangle {
     in property <string> icon-path;
     in property <bool> group-hover;
     in property <float> icon-weight: 2.4;
+    in property <string> label;
     callback clicked();
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
 
     width: Shell.light;
     height: Shell.light;
@@ -69,6 +75,7 @@ export component WindowLights inherits Rectangle {
             Light {
                 tint: Palette.coral;
                 icon-path: IconPaths.close;
+                label: "Close window";
                 group-hover: group.has-hover;
                 clicked => {
                     root.close-requested();
@@ -77,6 +84,7 @@ export component WindowLights inherits Rectangle {
             Light {
                 tint: Palette.amber;
                 icon-path: IconPaths.minus;
+                label: "Minimise";
                 group-hover: group.has-hover;
                 clicked => {
                     root.minimise-requested();
@@ -85,6 +93,7 @@ export component WindowLights inherits Rectangle {
             Light {
                 tint: Palette.mint;
                 icon-path: IconPaths.expand;
+                label: "Full screen";
                 icon-weight: 2.2;
                 group-hover: group.has-hover;
                 clicked => {

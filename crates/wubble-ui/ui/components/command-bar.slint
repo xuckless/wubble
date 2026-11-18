@@ -163,6 +163,7 @@ export component CommandBar inherits Rectangle {
             Rectangle {
                 height: Shell.command-input-height;
                 input := TextInput {
+                    accessible-label: "Address or search";
                     x: Spacing.s3;
                     height: parent.height;
                     vertical-alignment: center;

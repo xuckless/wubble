@@ -6,12 +6,21 @@
 import { Palette, Chrome, Radius, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { FocusRing, FocusKeys } from "focus-ring.slint";
 
 export component NewTabRow inherits Rectangle {
     in property <bool> compact: false;
     callback activated();
+    public function take-focus() {
+        keys.focus();
+    }
 
     height: Chrome.row;
+    accessible-role: AccessibleRole.button;
+    accessible-label: "New tab";
+    accessible-action-default => {
+        root.activated();
+    }
 
     body := Rectangle {
         x: root.compact ? (root.width - self.width) / 2 : 0px;
@@ -29,6 +38,11 @@ export component NewTabRow inherits Rectangle {
             easing: Motion.easeOut;
         }
 
+        keys := FocusKeys {
+            activate => {
+                root.activated();
+            }
+        }
         ta := TouchArea {
             clicked => {
                 root.activated();
@@ -58,6 +72,10 @@ export component NewTabRow inherits Rectangle {
                 font-size: Type.body.size;
                 font-weight: Type.body.weight;
             }
+        }
+        FocusRing {
+            shown: keys.has-focus;
+            radius: body.border-radius;
         }
     }
 }

@@ -20,6 +20,14 @@ export component CommandRow inherits Rectangle {
     callback activated();
 
     height: Shell.command-row-height;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.item.title;
+    accessible-description: root.item.subtitle;
+    accessible-item-index: root.index;
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.activated();
+    }
 
     pure function icon(kind: CommandKind) -> string {
         if (kind == CommandKind.open-tab) {

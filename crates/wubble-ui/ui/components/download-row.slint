@@ -109,6 +109,7 @@ export component DownloadRow inherits Rectangle {
         }
         if !active: PressableButton {
             width: Chrome.controls;
+            label: "Remove from list";
             padding-x: (Chrome.controls - Shell.icon) / 2;
             clicked => {
                 root.action(root.item.id, DownloadAction.remove);

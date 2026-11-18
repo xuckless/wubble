@@ -94,6 +94,7 @@ export component Toast inherits Rectangle {
             if root.action != "" && root.sticky: IconButton {
                 y: (parent.height - self.height) / 2;
                 icon-path: IconPaths.close;
+                label: "Close";
                 enabled: root.shown;
                 clicked => {
                     root.shown = false;

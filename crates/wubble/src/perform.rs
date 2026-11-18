@@ -45,6 +45,8 @@ pub enum Plan {
     Print,
     /// Open the command bar on the visible tab's address.
     FocusAddress,
+    /// F6 / Shift+F6 (`true`: back): keyboard focus to the next region (`wubble_core::region`).
+    CycleRegion(bool),
     /// Take the newest entry off the store's recently-closed list and open it.
     ReopenClosed,
     ToggleSidebar,
@@ -91,6 +93,8 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::CloseTab => on_visible(Command::CloseTab),
         Action::ReopenClosedTab => Plan::ReopenClosed,
         Action::FocusAddress => Plan::FocusAddress,
+        Action::NextRegion => Plan::CycleRegion(false),
+        Action::PrevRegion => Plan::CycleRegion(true),
         Action::Reload => view(ViewOp::Reload),
         Action::HardReload => view(ViewOp::HardReload),
         Action::Stop => view(ViewOp::Stop),
@@ -370,6 +374,8 @@ mod tests {
         );
         assert_eq!(plan(Action::ReopenClosedTab, &m), Plan::ReopenClosed);
         assert_eq!(plan(Action::FocusAddress, &m), Plan::FocusAddress);
+        assert_eq!(plan(Action::NextRegion, &m), Plan::CycleRegion(false));
+        assert_eq!(plan(Action::PrevRegion, &m), Plan::CycleRegion(true));
         assert_eq!(plan(Action::Quit, &m), Plan::Quit);
         assert_eq!(plan(Action::ToggleSidebar, &m), Plan::ToggleSidebar);
     }

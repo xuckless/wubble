@@ -36,7 +36,7 @@ export component Toggle inherits Rectangle {
     width: Shell.toggle-width;
     height: Shell.toggle-height;
     border-radius: self.height / 2;
-    accessible-role: switch;
+    accessible-role: AccessibleRole.switch;
     accessible-checked: root.on;
     accessible-action-default => {
         root.toggled();

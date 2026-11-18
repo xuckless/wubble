@@ -61,6 +61,7 @@ use wubble_core::model::{self, Command, Effect, Model};
 use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
+use wubble_core::region::{Region, next_region};
 use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
@@ -72,7 +73,7 @@ use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
 use wubble_store::{ArchivedTab, ClosedTab, Transition};
-use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
+use wubble_ui::{AppWindow, CommandBarState, FocusRegion, GlassKeys, SidebarMode};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::block_smoke::{self, BlockSmoke};
@@ -1690,6 +1691,21 @@ impl Host {
                     .w
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_address_focus());
+            }
+            Plan::CycleRegion(back) => {
+                if let Some(window) = self.w.window.upgrade() {
+                    let at = Region::of(
+                        window.get_web_focused(),
+                        window.get_command_bar_state() != CommandBarState::Closed,
+                    );
+                    let shown = window.get_sidebar_mode() != SidebarMode::Hidden
+                        && !window.get_page_fullscreen();
+                    window.invoke_focus_region(match next_region(at, back, shown) {
+                        Region::Address => FocusRegion::Address,
+                        Region::Sidebar => FocusRegion::Sidebar,
+                        Region::Page => FocusRegion::Page,
+                    });
+                }
             }
             Plan::ReopenClosed => self.store.pop_closed(|closed| {
                 if let Some(closed) = closed {

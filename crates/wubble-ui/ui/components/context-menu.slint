@@ -132,6 +132,9 @@ export component ContextMenu inherits Rectangle {
         // Swallow clicks between rows so they do not reach the scrim.
         TouchArea { }
 
+        // Slint 1.19 has no menu roles: a list of items, the keyboard highlight selected.
+        accessible-role: AccessibleRole.list;
+        accessible-label: "Menu";
         list := VerticalLayout {
             padding: Shell.menu-pad;
             // The rows enter on the Overlap stagger (OverlapLayer, the design repo's port).
@@ -150,6 +153,17 @@ export component ContextMenu inherits Rectangle {
                     // (the design's `.tp-mrow.danger`, `.tp-menu-hl.danger`: coral at .12).
                     property <bool> lit: entry.enabled && (row-touch.has-hover || i == root.current);
                     property <length> lead: entry.icon != "" ? Shell.menu-row-pad + Shell.icon + Spacing.s2 : Shell.menu-row-pad;
+                    accessible-role: AccessibleRole.list-item;
+                    accessible-label: entry.label;
+                    accessible-enabled: entry.enabled;
+                    accessible-item-index: i;
+                    accessible-item-count: root.count;
+                    accessible-item-selected: i == root.current;
+                    accessible-action-default => {
+                        if entry.enabled && root.open {
+                            root.chosen(i);
+                        }
+                    }
                     border-radius: Shell.menu-row-radius;
                     background: !self.lit ? transparent : entry.danger ? Palette.coral.with-alpha(0.12) : Shell.command-selected;
                     animate background {

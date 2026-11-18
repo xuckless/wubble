@@ -23,6 +23,7 @@ import { Palette, Spaces, Radius, Spacing, Chrome, Glass, GlassTierStyle, Fonts,
 import { GlassTier, GlassItem, GlassLayer, TabItem } from "components/model.slint";
 import { Icon, IconPaths } from "components/icon.slint";
 import { Shell } from "app-tokens.slint";
+import { FocusRing, FocusKeys } from "components/focus-ring.slint";
 
 // @source slint-space-icons
 // The three Space icons: 24×24 stroke icons, 1.7 stroke, round caps and joins. The same path
@@ -182,6 +183,18 @@ export component PressableButton inherits Rectangle {
     callback secondary-clicked();
     out property <bool> pressed: touch.pressed;
     out property <bool> hovered: touch.has-hover;
+    // wubble change: what a screen reader calls the button when it has no text (an icon).
+    in property <string> label;
+    // wubble change: Tab reaches the button (Space or Enter clicks it), with the design's ring.
+    out property <bool> keyboard-focused: keys.has-focus;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label != "" ? root.label : root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
 
     min-height: Chrome.controls;
     border-radius: Radius.sm;
@@ -195,6 +208,10 @@ export component PressableButton inherits Rectangle {
         easing: Motion.easeOut;
     }
 
+    keys := FocusKeys {
+        enabled: root.enabled;
+        activate => { root.clicked(); }
+    }
     touch := TouchArea {
         enabled: root.enabled;
         clicked => { root.clicked(); }
@@ -219,6 +236,11 @@ export component PressableButton inherits Rectangle {
             font-size: Type.label.size;
             font-weight: Type.label.weight;
         }
+    }
+    // wubble change: the keyboard focus ring
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.border-radius;
     }
 }
 
@@ -278,6 +300,23 @@ export component TabRow inherits Rectangle {
     // wubble change: the pointer enters or leaves the row; the row's top in window px (the
     // tab hover preview).
     callback hovered(bool, length);
+    // wubble change: keyboard and screen reader: Space, Enter or the default action pick the
+    // tab, Delete closes it; `focus-token` changing gives the selected row keyboard focus (F6
+    // to the sidebar).
+    callback activate();
+    in property <int> focus-token;
+    changed focus-token => {
+        if root.selected {
+            keys.focus();
+        }
+    }
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.tab.title;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => {
+        root.activate();
+    }
 
     height: Chrome.row;
     border-radius: Radius.sm;
@@ -290,6 +329,14 @@ export component TabRow inherits Rectangle {
     transform-scale: touch.pressed ? Motion.pressScale : 1;
     animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
 
+    keys := FocusScope {
+        focus-on-click: false;
+        key-pressed(e) => {
+            if e.text == " " || e.text == Key.Return { root.activate(); return accept; }
+            if e.text == Key.Delete { root.close(); return accept; }
+            return reject;
+        }
+    }
     touch := TouchArea {
         changed has-hover => { root.hovered(self.has-hover, root.absolute-position.y); }
         pointer-event(e) => {
@@ -411,6 +458,11 @@ export component TabRow inherits Rectangle {
             stroke-width: 1.5px;
             stroke-line-cap: round;
         }
+    }
+    // wubble change: the keyboard focus ring
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.border-radius;
     }
 }
 
@@ -670,6 +722,8 @@ export component SplitView inherits Rectangle {
             // wubble change: its own height; unset, it would take the pane's whole height
             height: 28px;
             text: "×";
+            // wubble change: spoken as words, not the sign
+            label: "Close pane";
             clicked => { root.pane-close(p.id); }
         }
     }

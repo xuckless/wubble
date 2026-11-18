@@ -27,6 +27,7 @@ component CodeField inherits Rectangle {
         font-size: Type.label.size;
     }
     input := TextInput {
+        accessible-label: "Boost CSS";
         x: Spacing.s2;
         y: Spacing.s2;
         width: parent.width - 2 * Spacing.s2;
@@ -109,6 +110,7 @@ export component BoostPanel inherits Rectangle {
                 }
                 IconButton {
                     icon-path: IconPaths.close;
+                    label: "Close";
                     clicked => {
                         root.act("close");
                     }

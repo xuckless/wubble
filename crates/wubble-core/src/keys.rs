@@ -267,7 +267,8 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+Shift+W", ALL, Action::CloseWindow, Shell;
     "Mod+L", ALL, Action::FocusAddress, PageFirst;
     "Alt+D", LW, Action::FocusAddress, PageFirst;
-    "F6", LW, Action::FocusAddress, PageFirst;
+    "F6", ALL, Action::NextRegion, Shell;
+    "Shift+F6", ALL, Action::PrevRegion, Shell;
     "Mod+K", ALL, Action::FocusAddress, PageFirst;
     "Mod+R", ALL, Action::Reload, PageFirst;
     "F5", LW, Action::Reload, PageFirst;
