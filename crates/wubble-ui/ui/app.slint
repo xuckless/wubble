@@ -251,9 +251,11 @@ export component AppWindow inherits Window {
         // chrome (the gutters), so the move area under it would never see one.
         focus-on-click: false;
         content := Rectangle {
-            x: Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px);
+            // On whole physical pixels, so the page's frame is shown 1:1: the seam's spring and
+            // a dragged width are fractional, and a fractional rectangle resamples the page.
+            x: round((Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px)) / 1phx) * 1phx;
             y: Chrome.inset;
-            width: parent.width - self.x - Chrome.inset;
+            width: round((parent.width - self.x - Chrome.inset) / 1phx) * 1phx;
             height: parent.height - 2 * Chrome.inset;
             border-radius: Radius.md;
             clip: true;

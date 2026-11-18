@@ -227,6 +227,18 @@ fn space_capsule(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
 }
 
+/// A fractional sidebar width (mid-spring, or a dragged width) leaves the page's rectangle on
+/// whole pixels (scale 1 here), still filling the window to the inset.
+fn content_on_whole_pixels(app: &AppWindow) {
+    app.set_sidebar_width(252.4);
+    pump(1);
+    let (x, w) = (app.get_content_x(), app.get_content_width());
+    assert_eq!(x, x.round(), "x {x}");
+    assert_eq!(w, w.round(), "width {w}");
+    assert_eq!(x + w + INSET as f32, 1280.0);
+    assert_eq!(x, 268.0);
+}
+
 #[test]
 fn shell_scenarios() {
     init_integration_test_with_mock_time();
@@ -238,4 +250,5 @@ fn shell_scenarios() {
     peek(&app, &driver);
     seam_drag(&app, &driver);
     space_capsule(&app, &driver);
+    content_on_whole_pixels(&app);
 }
