@@ -75,8 +75,10 @@
     for (const p of peers) {
       if (p.connectionState === "closed" || p.connectionState === "failed") peers.delete(p);
     }
+    // A page can empty a field in code (a chat box after sending) without an input event:
+    // look again at what each one holds.
     for (const el of dirty) {
-      if (!el.isConnected) dirty.delete(el);
+      if (!el.isConnected || !typed(el)) dirty.delete(el);
     }
     const on = [];
     if (tracks.size) on.push("capture");
@@ -183,6 +185,13 @@
       if (e.isTrusted) report();
     });
   }
+  // Hidden: the sleep policy starts to care, so look again (a field emptied in code).
+  apply(listen, D, [
+    "visibilitychange",
+    () => {
+      if (D.visibilityState === "hidden") report();
+    },
+  ]);
   // Leaving: the frame holds nothing any more; back from the back/forward cache, say again.
   on("pagehide", () => {
     last = "";

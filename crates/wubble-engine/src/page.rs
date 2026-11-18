@@ -416,6 +416,9 @@ pub enum PageEvent {
         frozen: bool,
         ok: bool,
     },
+    /// The main frame committed a new document (not a same-document navigation): what the old
+    /// documents' frames reported through frame messages is stale.
+    Committed,
     Console {
         level: LogLevel,
         message: String,

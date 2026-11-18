@@ -313,6 +313,8 @@ pub enum Routed {
     Fullscreen(bool),
     Muted(bool),
     Audible(bool),
+    /// The main frame committed a new document.
+    Committed,
     /// The page answered a freeze or thaw (`View::set_frozen`).
     Frozen {
         frozen: bool,
@@ -391,6 +393,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
         PageEvent::Frozen { frozen, ok } => Routed::Frozen { frozen, ok },
+        PageEvent::Committed => Routed::Committed,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
         PageEvent::PermissionRequested {
             id,

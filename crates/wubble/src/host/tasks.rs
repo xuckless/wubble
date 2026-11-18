@@ -1,5 +1,5 @@
 //! The Task manager page (wubble://tasks): `wubble_core::tasks::rows` over the model, each
-//! tab's renderer pid (`host/busy.rs`) and the process meter (`wubble-sysmem`), drawn as
+//! tab's renderer pid (from its main frame's messages) and the process meter (`wubble-sysmem`), drawn as
 //! `TaskItem`s. The meter samples once a second, and only while the page is on screen.
 
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ use wubble_core::download::format_bytes;
 use wubble_core::model::Command;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::tasks::{self, Kind, TaskRow};
+use wubble_engine::page::FrameInfo;
 use wubble_sysmem::Meter;
 use wubble_ui::{TaskAction, TaskItem};
 
@@ -27,6 +28,23 @@ pub(super) struct TasksPage {
     meter: Option<Meter>,
     timer: slint::Timer,
     rows: Rc<VecModel<TaskItem>>,
+    /// Each live tab's renderer pid, as its main frame's messages carry it (welding change 28;
+    /// every frame sends the probes' hello at document start).
+    pids: BTreeMap<TabId, u32>,
+}
+
+impl TasksPage {
+    /// A message from one of `tab`'s frames.
+    pub(super) fn frame_seen(&mut self, tab: TabId, frame: &FrameInfo) {
+        if frame.is_main && frame.pid != 0 {
+            self.pids.insert(tab, frame.pid);
+        }
+    }
+
+    /// `tab`'s renderer is gone: its pid is stale.
+    pub(super) fn forget(&mut self, tab: TabId) {
+        self.pids.remove(&tab);
+    }
 }
 
 /// One row as the page draws it. A renderer several tabs share shows its memory on each,
@@ -92,7 +110,7 @@ impl Host {
             procs.iter().map(|p| (p.pid, p.sample)).collect();
         let processes: Vec<(u32, String)> =
             procs.iter().map(|p| (p.pid, p.label.clone())).collect();
-        let t = tasks::rows(&self.model, self.busy.pids(), &processes, &samples);
+        let t = tasks::rows(&self.model, &self.tasks.pids, &processes, &samples);
         let own = std::process::id();
         wubble_ui::sync(
             &self.tasks.rows,

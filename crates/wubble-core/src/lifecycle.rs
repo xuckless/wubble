@@ -164,8 +164,10 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
         (Discarded, Event::RendererGone) => (s, vec![]),
         (_, Event::RendererGone) => (discarded, vec![ReleaseTexture]),
 
-        (Active, Event::Closed) => (discarded, vec![ReleaseTexture]),
-        (Background | Frozen, Event::Closed) => (discarded, vec![ReleaseTexture, ReleaseSnapshot]),
+        // An active tab may still show its snapshot (closed while restoring).
+        (Active | Background | Frozen, Event::Closed) => {
+            (discarded, vec![ReleaseTexture, ReleaseSnapshot])
+        }
         (Discarded, Event::Closed) => (s, vec![ReleaseSnapshot]),
     }
 }
@@ -362,7 +364,7 @@ mod tests {
                 idle(Active),
                 Event::Closed,
                 Discarded,
-                vec![ReleaseTexture],
+                vec![ReleaseTexture, ReleaseSnapshot],
             ),
             (
                 "bg closed",
@@ -480,7 +482,15 @@ mod tests {
     fn closing_releases_the_snapshot_of_a_discarded_tab() {
         let (s, _) = run(idle(Background), tick(900, Pressure::None));
         assert_eq!(run(s, Event::Closed).1, vec![ReleaseSnapshot]);
-        assert_eq!(run(idle(Active), Event::Closed).1, vec![ReleaseTexture]);
+    }
+
+    #[test]
+    fn closing_a_restoring_tab_releases_the_snapshot_it_still_shows() {
+        // Discarded, restored, closed before its first frame replaced the snapshot.
+        let (s, _) = run(idle(Background), tick(900, Pressure::None));
+        let (s, _) = run(s, Event::Shown);
+        assert_eq!(s.liveness, Liveness::Active);
+        assert!(run(s, Event::Closed).1.contains(&ReleaseSnapshot));
     }
 
     #[test]

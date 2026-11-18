@@ -21,17 +21,29 @@ use super::Host;
 /// The prefix of a probe report among the context script's frame messages.
 pub(super) const PROBE_PREFIX: &str = "wubble.probe ";
 
-/// What each live tab's frames last reported, and the renderer each tab's main frame runs in.
+/// What each live tab's frames last reported.
 #[derive(Default)]
-pub(super) struct BusyFrames {
-    frames: BTreeMap<TabId, Frames>,
-    pids: BTreeMap<TabId, u32>,
-}
+pub(super) struct BusyFrames(BTreeMap<TabId, Frames>);
 
 impl BusyFrames {
-    /// Each live tab's renderer pid, as its main frame reported it.
-    pub(super) fn pids(&self) -> &BTreeMap<TabId, u32> {
-        &self.pids
+    /// Frame `frame` of `tab` reported `keys`.
+    fn report(&mut self, tab: TabId, frame: &str, keys: &str) {
+        self.0
+            .entry(tab)
+            .or_default()
+            .report(frame, Busy::from_probe(keys));
+    }
+
+    /// `tab`'s main frame started a new document, or its renderer is gone: whatever the old
+    /// documents' frames reported goes with them. Their own `pagehide` reports may never arrive
+    /// (a frame host swapped on a cross-site navigation drops its last messages), and the new
+    /// document's frames report afresh.
+    fn forget(&mut self, tab: TabId) {
+        self.0.remove(&tab);
+    }
+
+    fn probed(&self, tab: TabId) -> Busy {
+        self.0.get(&tab).map_or(Busy::NONE, Frames::fold)
     }
 }
 
@@ -65,24 +77,23 @@ impl Host {
 
     /// A `wubble.probe` report from one of the tab's frames (`keys` after the prefix).
     pub(super) fn probe_report(&mut self, tab: TabId, frame: &FrameInfo, keys: &str) {
-        if frame.is_main && frame.pid != 0 {
-            self.busy.pids.insert(tab, frame.pid);
-        }
-        self.busy
-            .frames
-            .entry(tab)
-            .or_default()
-            .report(&frame.id, Busy::from_probe(keys));
+        self.busy.report(tab, &frame.id, keys);
+        self.sync_probed(tab);
+    }
+
+    /// The tab's main frame committed a new document. Its frames' first reports (the empty
+    /// hello at document start) may arrive before or after this; any reason needs the user or
+    /// a permission prompt first, well after the commit.
+    pub(super) fn busy_page_started(&mut self, tab: TabId) {
+        self.busy.forget(tab);
         self.sync_probed(tab);
     }
 
     /// The tab's renderer is gone (crash, discard, close): its frames hold nothing, its pid is
     /// stale, its sound and DevTools are gone with it.
     pub(super) fn busy_view_gone(&mut self, tab: TabId) {
-        self.busy.frames.remove(&tab);
-        self.busy.pids.remove(&tab);
-        self.frozen.remove(&tab);
-        self.sync_probed(tab);
+        self.busy_page_started(tab);
+        self.tasks.forget(tab);
         for reason in [Reason::Audible, Reason::DevTools, Reason::Loading] {
             self.set_busy(tab, reason, false);
         }
@@ -90,7 +101,7 @@ impl Host {
 
     /// Brings the model's probed reasons in line with the tab's frames.
     fn sync_probed(&mut self, tab: TabId) {
-        let now = self.busy.frames.get(&tab).map_or(Busy::NONE, Frames::fold);
+        let now = self.busy.probed(tab);
         for reason in PROBED {
             self.set_busy(tab, reason, now.contains(reason));
         }
@@ -117,5 +128,29 @@ impl Host {
             self.snapshots.release_except(&shown);
         }
         level
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_document_forgets_what_the_old_ones_reported() {
+        let tab = TabId(1);
+        let mut busy = BusyFrames::default();
+        busy.report(tab, "old", "input");
+        busy.report(tab, "old-child", "unload");
+        assert_eq!(
+            busy.probed(tab),
+            Busy::of(&[Reason::UnsavedInput, Reason::BeforeUnload])
+        );
+        // A cross-site navigation: the old frames' `pagehide` reports never arrive.
+        busy.forget(tab);
+        assert_eq!(busy.probed(tab), Busy::NONE);
+        // The new document's hello and its own reports count from scratch.
+        busy.report(tab, "new", "");
+        busy.report(tab, "new", "capture");
+        assert_eq!(busy.probed(tab), Busy::of(&[Reason::Capture]));
     }
 }

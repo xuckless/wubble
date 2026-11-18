@@ -705,7 +705,10 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
-            Route::PageCommitted(url) => self.inject_page_script(&url),
+            Route::PageCommitted(url) => {
+                self.inject_page_script(&url);
+                self.page.push(PageEvent::Committed);
+            }
         }
     }
 

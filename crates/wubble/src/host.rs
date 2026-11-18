@@ -367,7 +367,7 @@ pub struct Host {
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
     pace: Option<Pace>,
-    /// Probed busy reasons per frame and each tab's renderer pid (`host/busy.rs`).
+    /// Probed busy reasons per frame (`host/busy.rs`).
     busy: busy::BusyFrames,
     /// The memory pressure source and its gauge, read on the lifecycle tick.
     pressure: busy::PressureGauge,
@@ -375,8 +375,6 @@ pub struct Host {
     snapshots: snapshots::Snapshots,
     /// The Task manager page's meter (`host/tasks.rs`).
     tasks: tasks::TasksPage,
-    /// Each tab's last freeze answer (frozen, ok); `--smoke tabs` reads it.
-    frozen: BTreeMap<TabId, (bool, bool)>,
 }
 
 impl Host {
@@ -500,7 +498,6 @@ impl Host {
             pressure: busy::PressureGauge::system(),
             snapshots: snapshots::Snapshots::default(),
             tasks: tasks::TasksPage::default(),
-            frozen: BTreeMap::new(),
         };
         host.replay_settings();
         host.render_downloads(window);
@@ -1285,7 +1282,7 @@ impl Host {
         }
     }
 
-    fn seen(&self) -> Seen {
+    fn seen(&self, heard: &tabs_smoke::Heard) -> Seen {
         let order = self.model.order(self.model.active_space);
         let visible = self.model.visible_tab();
         let shown = visible
@@ -1308,8 +1305,8 @@ impl Host {
                 self.frames.keys().any(|t| !kept.contains(t))
             },
             painted,
-            restored_from_snapshot: visible.is_some_and(|t| self.snapshots.replaced.contains(&t)),
-            frozen: order.iter().map(|t| self.frozen.get(t).copied()).collect(),
+            restored_from_snapshot: visible.is_some_and(|t| heard.replaced.contains(&t)),
+            frozen: order.iter().map(|t| heard.frozen.get(t).copied()).collect(),
         }
     }
 
@@ -1318,16 +1315,22 @@ impl Host {
         if !ok {
             eprintln!("wubble: tab {}: freeze {frozen} refused", tab.0);
         }
-        self.frozen.insert(tab, (frozen, ok));
+        if let Some(smoke) = self.checks.tabs_smoke.as_mut() {
+            smoke.heard.frozen.insert(tab, (frozen, ok));
+        }
     }
 
     fn tabs_smoke_step(&mut self) {
+        let Some(heard) = self.checks.tabs_smoke.as_ref().map(|s| &s.heard) else {
+            return;
+        };
+        let seen = self.seen(heard);
         let Some(state) = self.checks.tabs_smoke.take() else {
             return;
         };
         let want =
             crate::TABS_SMOKE_PAGES.map(|page| nav_smoke::title_of(page).unwrap_or_default());
-        let (state, action) = tabs_smoke::next(state, &self.seen(), &want);
+        let (state, action) = tabs_smoke::next(state, &seen, &want);
         self.checks.tabs_smoke = Some(state);
         let nth = |host: &Self, i: usize| host.model.order(host.model.active_space).get(i).copied();
         match action {

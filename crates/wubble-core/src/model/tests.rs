@@ -942,6 +942,7 @@ fn closing_the_active_tab_releases_it_then_shows_the_successor() {
             Effect::CloseTab(ids[1]),
             Effect::ActivateTab(ids[0]),
             life(ids[1], Life::ReleaseTexture),
+            life(ids[1], Life::ReleaseSnapshot),
             life(ids[0], Life::Show),
         ]
     );

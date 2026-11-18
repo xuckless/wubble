@@ -24,8 +24,6 @@ pub(super) struct Snapshots {
     book: Book<slint::Image>,
     /// Tabs whose pane shows their snapshot until their first frame.
     standing_in: BTreeSet<TabId>,
-    /// `--smoke tabs`: tabs whose stand-in a real frame replaced.
-    pub(super) replaced: BTreeSet<TabId>,
 }
 
 impl Default for Snapshots {
@@ -33,7 +31,6 @@ impl Default for Snapshots {
         Self {
             book: Book::new(BUDGET),
             standing_in: BTreeSet::new(),
-            replaced: BTreeSet::new(),
         }
     }
 }
@@ -105,8 +102,10 @@ impl Host {
 
     /// `tab` presented a real frame: its snapshot is not needed any more.
     pub(super) fn frame_arrived(&mut self, tab: TabId) {
-        if self.snapshots.standing_in.remove(&tab) {
-            self.snapshots.replaced.insert(tab);
+        if self.snapshots.standing_in.remove(&tab)
+            && let Some(smoke) = self.checks.tabs_smoke.as_mut()
+        {
+            smoke.heard.replaced.insert(tab);
         }
         self.snapshots.book.release(tab);
     }

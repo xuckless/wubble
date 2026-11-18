@@ -95,6 +95,7 @@ impl Host {
             }
             Routed::Audible(audible) => self.set_busy(tab, Reason::Audible, audible),
             Routed::Frozen { frozen, ok } => self.frozen_answered(tab, frozen, ok),
+            Routed::Committed => self.busy_page_started(tab),
             Routed::ImeBounds(rect) if visible => {
                 place_candidates(window, self.focus_origin(window), rect)
             }
@@ -112,6 +113,7 @@ impl Host {
             Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
             Routed::Frame { frame, text } => {
+                self.tasks.frame_seen(tab, &frame);
                 match text.expose().strip_prefix(super::busy::PROBE_PREFIX) {
                     Some(keys) => self.probe_report(tab, &frame, keys),
                     None => self.autofill_message(tab, frame, &text),

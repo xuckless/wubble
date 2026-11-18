@@ -5,6 +5,10 @@
 //! step the model and the engine must agree. Every wait is "until the host
 //! sees X", bounded by a count of CEF work runs, never by time.
 
+use std::collections::{BTreeMap, BTreeSet};
+
+use wubble_core::tab::TabId;
+
 use crate::nav_smoke::MAX_WORK_RUNS;
 
 /// The timers page's titles start with this, then count `setInterval` ticks.
@@ -85,6 +89,12 @@ pub enum Stage {
     Timers,
     /// Asked to freeze the first, waiting for Chromium's answer.
     Freezing,
+    /// Chromium answered, but posted the freeze to the renderer only as it did: a tick already
+    /// under way may still land. Waiting for the control tab to change once (`control` was its
+    /// title at the answer) before the frozen tab's title counts.
+    Settling {
+        control: String,
+    },
     /// The first is frozen at title `frozen`; the control has changed `ticks` times, last to
     /// `control`.
     Frozen {
@@ -103,6 +113,17 @@ pub enum Stage {
 pub struct TabsSmoke {
     pub stage: Stage,
     runs: u32,
+    /// What the host told the smoke as it happened; the host keeps none of it itself.
+    pub heard: Heard,
+}
+
+/// Host events the smoke needs and the host has no other use for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Heard {
+    /// Each tab's last freeze answer (frozen, ok).
+    pub frozen: BTreeMap<TabId, (bool, bool)>,
+    /// Tabs whose snapshot stand-in a real frame replaced.
+    pub replaced: BTreeSet<TabId>,
 }
 
 impl Default for TabsSmoke {
@@ -110,6 +131,7 @@ impl Default for TabsSmoke {
         Self {
             stage: Stage::Start,
             runs: 0,
+            heard: Heard::default(),
         }
     }
 }
@@ -156,16 +178,22 @@ pub fn next(s: TabsSmoke, seen: &Seen, want: &[&str]) -> (TabsSmoke, Option<Acti
         }
         Freezing => match seen.frozen(FROZEN) {
             Some((true, true)) => Some((
-                Frozen {
-                    frozen: seen.title(FROZEN).to_owned(),
+                Settling {
                     control: seen.title(CONTROL).to_owned(),
-                    ticks: 0,
                 },
                 None,
             )),
             Some((true, false)) => fail("Page.setWebLifecycleState frozen was refused".into()),
             _ => None,
         },
+        Settling { control } if seen.title(CONTROL) != control => Some((
+            Frozen {
+                frozen: seen.title(FROZEN).to_owned(),
+                control: seen.title(CONTROL).to_owned(),
+                ticks: 0,
+            },
+            None,
+        )),
         Frozen { frozen, .. } if seen.title(FROZEN) != frozen => fail(format!(
             "the frozen tab ran its timers: {frozen:?} became {:?}",
             seen.title(FROZEN)
@@ -201,16 +229,27 @@ pub fn next(s: TabsSmoke, seen: &Seen, want: &[&str]) -> (TabsSmoke, Option<Acti
         },
         _ => None,
     };
-    let to = |stage| TabsSmoke { stage, runs: 0 };
     match step {
-        Some((stage, action)) => (to(stage), action),
+        Some((stage, action)) => (
+            TabsSmoke {
+                stage,
+                runs: 0,
+                ..s
+            },
+            action,
+        ),
         None if s.stage == Done => (s, None),
         None if s.runs >= MAX_WORK_RUNS => {
             let why = format!(
                 "stuck at {:?} after {MAX_WORK_RUNS} runs of CEF work: {seen:?}",
                 s.stage
             );
-            (to(Done), Some(Action::Fail(why)))
+            let s = TabsSmoke {
+                stage: Done,
+                runs: 0,
+                ..s
+            };
+            (s, Some(Action::Fail(why)))
         }
         None => (
             TabsSmoke {
@@ -263,7 +302,10 @@ mod tests {
     }
 
     fn at(stage: Stage) -> TabsSmoke {
-        TabsSmoke { stage, runs: 0 }
+        TabsSmoke {
+            stage,
+            ..TabsSmoke::default()
+        }
     }
 
     #[test]
@@ -290,12 +332,15 @@ mod tests {
             timers("timer 0", "timer 0", None),
             timers("timer 1", "timer 2", None),
             timers("timer 2", "timer 3", Some((true, true))),
-            timers("timer 2", "timer 4", Some((true, true))),
-            timers("timer 2", "timer 4", Some((true, true))),
-            timers("timer 2", "timer 5", Some((true, true))),
-            timers("timer 2", "timer 6", Some((true, true))),
-            timers("timer 2", "timer 7", Some((false, true))),
+            // A tick under way as the freeze was answered lands: not a failure.
+            timers("timer 3", "timer 3", Some((true, true))),
+            timers("timer 3", "timer 4", Some((true, true))),
+            timers("timer 3", "timer 4", Some((true, true))),
+            timers("timer 3", "timer 5", Some((true, true))),
+            timers("timer 3", "timer 6", Some((true, true))),
+            timers("timer 3", "timer 7", Some((true, true))),
             timers("timer 3", "timer 8", Some((false, true))),
+            timers("timer 4", "timer 9", Some((false, true))),
         ]);
         assert_eq!(s.stage, Stage::Done);
         assert_eq!(
@@ -321,13 +366,35 @@ mod tests {
             at(Stage::Freezing),
             &[
                 timers("timer 2", "timer 3", Some((true, true))),
+                // The baseline is taken once the control ticks after the answer.
                 timers("timer 3", "timer 4", Some((true, true))),
+                timers("timer 4", "timer 4", Some((true, true))),
             ],
         );
         assert_eq!(s.stage, Stage::Done);
         assert!(
             matches!(actions.as_slice(), [Action::Fail(e)] if e.contains("ran its timers")),
             "{actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_tick_landing_right_after_the_freeze_answer_does_not_fail() {
+        let (s, actions) = run_from(
+            at(Stage::Freezing),
+            &[
+                timers("timer 2", "timer 3", Some((true, true))),
+                timers("timer 3", "timer 3", Some((true, true))),
+            ],
+        );
+        assert_eq!(
+            (s.stage, actions),
+            (
+                Stage::Settling {
+                    control: "timer 3".into()
+                },
+                vec![]
+            )
         );
     }
 
