@@ -45,6 +45,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Ctrl+T in the model | `Command::OpenCommandBar` returns only `Effect::ShowCommandBar`; the tab exists once `NewTab` is sent after a choice |
 | Content blocker | Brave's `adblock-rust` (network + cosmetic, uBlock/EasyList lists), on by default, per-site toggle |
 | Blocker build | `adblock` with `default-features = false` (+ `embedded-domain-resolver`, `full-regex-handling`): the default `single-thread` feature makes `Engine` not `Send`/`Sync`, and CEF calls us from several threads |
+| Blocker lists | Nothing is downloaded unless the typed setting `blocker.lists_auto_update` (default off) is on; then `wubble-blocker::refresh` fetches EasyList, EasyPrivacy, uBlock filters/unbreak and Brave's `resources.json` (`DEFAULT_LISTS`, ureq, HTTPS only) into the list directory when each is due by its file's age, checked at start and every 6 h. Off: lists are read from `<profile>/blocklists/*.txt` (+ `resources.json`) if present, else the blocker allows everything. No list ships; the built-in list is test-only. Compiled engine cached in `<profile>/blocker-engine.bin`, keyed (`.key` beside it) by each list's name, length and mtime; a mismatch or unreadable cache rebuilds on a background thread while requests pass |
+| Blocker request path | CEF `GetResourceRequestHandler` → `OnBeforeResourceLoad` (IO thread, every navigation and sub-resource), through the welding fork's `CefSurfaceConfig::request_filter` (its change 21, raw CEF resource type) and wubble-engine's CEF-free `filter::ContentFilter` (`check` → Allow/Block/Redirect, `kind_of` the one CEF type table); the binary's `blocking.rs` implements it on `wubble-blocker`: blocker in an `RwLock<Arc<_>>` swapped on list update, site allowlist (`blocker.exceptions`) and `blocker.enabled` consulted per request, per-view blocked counters (reset by the next main-frame request). `$removeparam` rewrites are redirects; `$redirect` resources (data: URLs) are blocked until served through a resource handler. Cosmetic: on main-frame `LoadStart` the view runs `ContentFilter::page_script` (host hide selectors as a `<style>`, then scriptlets) with `execute_java_script`, so it lands after commit, not at document start |
 | No-blur desktops | Opaque Abyss ground with Space tint (GNOME etc.); in-window glass unaffected |
 | Search | First-run choice between Google and DuckDuckGo. Suggestions are local (tabs/history/bookmarks); live engine suggestions exist behind a flag, off by default, and never send typed addresses |
 | Network on its own | No telemetry. Crash reports are opt-in and open a GitHub issue; designed at ship time (M7) |
@@ -193,7 +195,12 @@ After daily-drive
 - [ ] Remote debugging endpoint (off by default)
 - [~] Content blocker on `adblock-rust`: list fetch/refresh, network hook, cosmetic injection, per-site toggle
   - [x] `wubble-blocker` crate: decisions, cosmetic data, compiled cache, per-site shields, pure refresh policy
-  - [ ] List fetch behind an off-by-default flag, CEF network hook, cosmetic injection, per-site toggle UI
+  - [x] List fetch behind an off-by-default flag (`blocker.lists_auto_update`), lists from `<profile>/blocklists`, cached compiled engine
+  - [x] CEF network hook (welding change 21, `wubble_engine::filter`, `wubble/src/blocking.rs`), per-site allowlist consulted, per-view blocked counters as data; engine-level `block_smoke` example (run by hand)
+  - [x] Cosmetic injection of host hide selectors and scriptlets on main-frame commit
+  - [ ] Per-site toggle UI and blocked-count badge (the shell reads `Blocking::blocked`); app-level `--smoke block`
+  - [ ] Generic hide selectors (class/id collection in the page → `Blocker::generic_selectors`), procedural cosmetic filters, document-start injection
+  - [ ] `$redirect` resources served through a CEF resource handler instead of blocked
 - [~] Built-in password manager: encrypted store keyed from the OS keyring, form detection and fill, save prompt, generator, import from Zen/Arc
   - [x] `wubble-vault` crate: keyring-keyed AES-GCM store, origin matching, generator, Firefox/Chromium CSV parser
   - [ ] Form detection and fill, save prompt, store table in wubble-store, Zen/Arc import

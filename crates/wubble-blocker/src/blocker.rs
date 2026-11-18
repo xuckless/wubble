@@ -44,6 +44,34 @@ impl Cosmetic {
             .map(|s| format!("{s}{{display:none!important}}\n"))
             .collect()
     }
+
+    /// The script that applies this page's rules: a `<style>` with
+    /// [`Self::css`] (added as soon as the document has a root element),
+    /// then the scriptlets. `None` when there is nothing to apply.
+    ///
+    /// Brave applies the same data (`url_cosmetic_resources`: hide
+    /// selectors as a stylesheet, then `injected_script`) from its cosmetic
+    /// filters tab helper (brave-core `components/brave_shields`, MPL-2.0);
+    /// no code copied. Generic class/id selectors and procedural filters
+    /// are not applied yet.
+    pub fn page_script(&self) -> Option<String> {
+        let css = self.css();
+        if css.is_empty() && self.injected_script.is_empty() {
+            return None;
+        }
+        let mut script = String::new();
+        if !css.is_empty() {
+            let css = serde_json::to_string(&css).expect("a string always serialises");
+            script.push_str(&format!(
+                "(function(){{var css={css};function add(){{var s=document.createElement('style');\
+                 s.textContent=css;(document.head||document.documentElement).appendChild(s);}}\
+                 if(document.documentElement){{add();}}else{{document.addEventListener(\
+                 'readystatechange',add,{{once:true}});}}}})();\n"
+            ));
+        }
+        script.push_str(&self.injected_script);
+        Some(script)
+    }
 }
 
 /// Compiled filter engine. `Send + Sync`; holds no per-site state.
@@ -66,9 +94,15 @@ impl Blocker {
     /// Load redirect/scriptlet resources (`Vec<Resource>` JSON, Brave adblock-resources).
     /// Must be re-applied after `from_bytes`/`load`: the cache does not store them.
     pub fn with_resources_json(mut self, json: &str) -> Result<Self, BlockerError> {
+        self.use_resources_json(json)?;
+        Ok(self)
+    }
+
+    /// [`Self::with_resources_json`] in place; on error nothing changes.
+    pub fn use_resources_json(&mut self, json: &str) -> Result<(), BlockerError> {
         let resources: Vec<Resource> = serde_json::from_str(json)?;
         self.engine.use_resources(resources);
-        Ok(self)
+        Ok(())
     }
 
     /// Serialise the compiled filters (not resources). Only valid for the same adblock
@@ -326,6 +360,44 @@ mod tests {
         let c = b.cosmetic("https://nohide.org/", Shields::On);
         assert!(c.generichide);
         assert!(b.generic_selectors(&["banner"], &[], &c).is_empty());
+    }
+
+    #[test]
+    fn page_script_escapes_css_and_appends_scriptlets() {
+        assert_eq!(Cosmetic::default().page_script(), None);
+        let c = Cosmetic {
+            hide_selectors: vec![r#"a[href="x\y"]"#.into()],
+            ..Cosmetic::default()
+        };
+        let script = c.page_script().unwrap();
+        assert!(
+            script.contains(r#"var css="a[href=\"x\\y\"]{display:none!important}\n";"#),
+            "{script}"
+        );
+        let c = Cosmetic {
+            injected_script: "window.scriptlet=1;".into(),
+            ..Cosmetic::default()
+        };
+        assert_eq!(c.page_script().as_deref(), Some("window.scriptlet=1;"));
+    }
+
+    #[test]
+    fn page_script_from_host_rules() {
+        let b = Blocker::from_lists(&["example.com##.sponsor\n"]);
+        let script = b
+            .cosmetic("https://example.com/", Shields::On)
+            .page_script()
+            .unwrap();
+        assert!(script.contains(".sponsor{display:none!important}"));
+        assert_eq!(
+            b.cosmetic("https://other.org/", Shields::On).page_script(),
+            None
+        );
+        assert_eq!(
+            b.cosmetic("https://example.com/", Shields::Off)
+                .page_script(),
+            None
+        );
     }
 
     const LIST: &str = "||ads.example^\n@@||ads.example/ok^\n||img.test^$image,redirect=1x1.gif\nexample.com##.sponsor\n";

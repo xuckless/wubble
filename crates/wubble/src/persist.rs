@@ -21,9 +21,12 @@ use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{self, HistoryEntry};
 use wubble_core::tab::TabId;
 use wubble_store::{
-    ClosedTab, CompactMode, KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting,
-    SidebarWidth, Store, Transition,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, CompactMode,
+    KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting, SidebarWidth, Store,
+    Transition,
 };
+
+use crate::blocking::BlockerSettings;
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
@@ -124,6 +127,7 @@ pub struct Settings {
     pub ui: UiState,
     /// Opaque entries, decoded by `input::keymap`.
     pub keybinding_overrides: Vec<String>,
+    pub blocker: BlockerSettings,
 }
 
 impl Default for Settings {
@@ -136,6 +140,7 @@ impl Default for Settings {
                 compact: CompactMode::default(),
             },
             keybinding_overrides: KeybindingOverrides::default(),
+            blocker: BlockerSettings::default(),
         }
     }
 }
@@ -335,6 +340,11 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             compact: store.setting::<CompactMode>().await?,
         },
         keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
+        blocker: BlockerSettings {
+            enabled: store.setting::<BlockerEnabled>().await?,
+            exceptions: store.setting::<BlockerExceptions>().await?,
+            lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
+        },
     };
     Ok((store, Loaded { model, settings }))
 }

@@ -10,6 +10,7 @@ pub mod devtools;
 pub mod download;
 pub mod drag;
 pub mod extensions;
+pub mod filter;
 pub mod find;
 pub mod ime;
 pub mod input;

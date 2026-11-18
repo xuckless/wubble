@@ -112,6 +112,7 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
         exe_dir,
         cache_dir: dir.join("cache"),
         pump_scheduler: None,
+        content_filter: None,
     })
     .map_err(|e| e.to_string())?;
     engine.set_request_mode(mode);

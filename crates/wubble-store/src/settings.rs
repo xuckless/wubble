@@ -115,6 +115,9 @@ settings! {
     BlockerEnabled: bool = "blocker.enabled", true;
     /// Hosts the blocker skips.
     BlockerExceptions: Vec<String> = "blocker.exceptions", vec![];
+    /// Download EasyList, EasyPrivacy and uBlock's lists on their schedule. Off: nothing is
+    /// fetched and lists come only from `<profile>/blocklists/*.txt`.
+    BlockerListsAutoUpdate: bool = "blocker.lists_auto_update", false;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
     HistoryRetentionDays: u32 = "history.retention_days", 0;
 }
@@ -183,6 +186,7 @@ mod tests {
             assert!(s.setting::<KeybindingOverrides>().await.unwrap().is_empty());
             assert!(s.setting::<BlockerEnabled>().await.unwrap());
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
+            assert!(!s.setting::<BlockerListsAutoUpdate>().await.unwrap());
         });
     }
 
@@ -199,6 +203,7 @@ mod tests {
             round_trip::<CompactMode>(&mut s, true).await;
             round_trip::<HistoryRetentionDays>(&mut s, 90).await;
             round_trip::<BlockerEnabled>(&mut s, false).await;
+            round_trip::<BlockerListsAutoUpdate>(&mut s, true).await;
             let list = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             round_trip::<KeybindingOverrides>(&mut s, list(&["a,b", "say \"hi\"", "ctrl+ü", ""]))
                 .await;

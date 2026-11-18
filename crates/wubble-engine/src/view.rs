@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cef::{ImplBrowser, ImplBrowserHost, ImplFrame};
@@ -31,6 +32,7 @@ use wubble_gfx::{FrameSize, NativeFrame};
 use crate::app::{EngineError, RequestMode};
 use crate::download::{self, Download, DownloadEffect, DownloadInput};
 use crate::drag::{self, DragSource, DragSourceInput};
+use crate::filter::ContentFilter;
 use crate::find::{self, Find, FindEffect, FindInput};
 use crate::input::{
     self, CefKey, ClickTracker, KeyId, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
@@ -193,6 +195,8 @@ pub struct View {
     muted: bool,
     zoom: Zoom,
     drag: DragSource,
+    /// Asked for a page script on each main-frame commit.
+    filter: Option<Arc<dyn ContentFilter>>,
 }
 
 /// The second frame stream: the popup widget's newest frame and where to
@@ -213,13 +217,26 @@ pub enum DragPhase {
 }
 
 impl View {
-    pub(crate) fn open(runtime: &CefRuntime, config: ViewConfig) -> Result<Self, EngineError> {
+    pub(crate) fn open(
+        runtime: &CefRuntime,
+        config: ViewConfig,
+        filter: Option<Arc<dyn ContentFilter>>,
+    ) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let producer = new_producer(runtime, config.url, layout, config.frame_rate, &config.gpu)?;
+        let request_filter = filter.clone().map(crate::filter::request_filter);
+        let producer = new_producer(
+            runtime,
+            config.url,
+            layout,
+            config.frame_rate,
+            &config.gpu,
+            request_filter,
+        )?;
         let browser_id = producer.browser_id();
         Ok(Self {
             producer,
             browser_id,
+            filter,
             state: ViewState::Live { layout },
             visible: true,
             nav: NavState::default(),
@@ -237,6 +254,12 @@ impl View {
             zoom: Zoom::default(),
             drag: DragSource::default(),
         })
+    }
+
+    /// CEF's identifier for this view, as [`crate::filter::RequestInfo::browser_id`]
+    /// reports it.
+    pub fn browser_id(&self) -> i32 {
+        self.browser_id
     }
 
     /// Navigation as the host last heard of it.
@@ -510,6 +533,21 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
+            Route::PageCommitted(url) => self.inject_page_script(&url),
+        }
+    }
+
+    /// Runs the content filter's script for the page that just committed
+    /// (cosmetic filtering), in the main frame.
+    fn inject_page_script(&mut self, url: &str) {
+        let Some(script) = self.filter.as_ref().and_then(|f| f.page_script(url)) else {
+            return;
+        };
+        if let Err(e) = self.producer.execute_script(&script, url) {
+            eprintln!(
+                "wubble-engine: view {}: page script not run: {e}",
+                self.browser_id
+            );
         }
     }
 
@@ -1015,6 +1053,9 @@ enum Route {
     DragStarted(PageEvent),
     /// Zoom is per host and may change on navigation without a callback.
     ObserveZoom,
+    /// The main frame committed a load of this URL (welding reports
+    /// `LoadStart` for the main frame only).
+    PageCommitted(String),
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1024,6 +1065,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
     match event {
         E::AddressChanged { url } => vec![Route::Nav(NavInput::Address(url)), Route::ObserveZoom],
         E::TitleChanged { title } => one(Route::Nav(NavInput::Title(title))),
+        E::LoadStart { url } => one(Route::PageCommitted(url)),
         E::LoadingStateChanged {
             loading,
             can_go_back,
@@ -1280,6 +1322,7 @@ fn new_producer(
     layout: Layout,
     frame_rate: u32,
     gpu: &HostWgpuContext,
+    request_filter: Option<welding::RequestFilter>,
 ) -> Result<PlatformCefProducer, EngineError> {
     let config = welding::PlatformCefConfig {
         surface: welding::CefSurfaceConfig {
@@ -1292,6 +1335,7 @@ fn new_producer(
             handle_permission_requests: true,
             handle_auth_challenges: true,
             ask_download_path: true,
+            request_filter,
             ..welding::CefSurfaceConfig::default()
         },
     };
@@ -1315,6 +1359,7 @@ fn new_producer(
     _layout: Layout,
     _frame_rate: u32,
     _gpu: &HostWgpuContext,
+    _request_filter: Option<welding::RequestFilter>,
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
         "windowless views are not supported on Windows yet".into(),
@@ -1675,6 +1720,25 @@ mod tests {
         assert_eq!(menu.suggestions, vec!["the".to_string()]);
         assert_eq!(menu.items.len(), 1);
         assert_eq!(menu.items[0].command, 114);
+    }
+
+    /// The cosmetic-filter hook: a main-frame commit asks for the page
+    /// script, the end of the load does not.
+    #[test]
+    fn a_main_frame_commit_routes_to_the_page_script() {
+        assert_eq!(
+            route_one(NavigationEvent::LoadStart {
+                url: "https://site.test/".into()
+            }),
+            Route::PageCommitted("https://site.test/".into())
+        );
+        assert!(
+            route(NavigationEvent::LoadEnd {
+                url: "https://site.test/".into(),
+                http_status: 200,
+            })
+            .is_empty()
+        );
     }
 
     #[test]

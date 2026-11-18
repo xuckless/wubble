@@ -15,6 +15,7 @@ pub mod state;
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use state::{Effect, Event, State};
@@ -22,6 +23,7 @@ pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
+use crate::filter::ContentFilter;
 use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
 use crate::view::{View, ViewConfig};
@@ -45,6 +47,9 @@ pub struct EngineConfig {
     /// thread. `None` without a host event loop: the caller drives CEF with
     /// [`Engine::tick`] instead.
     pub pump_scheduler: Option<PumpScheduler>,
+    /// Checks every request each view sends and injects cosmetic filters
+    /// ([`crate::filter`]). `None`: nothing is filtered.
+    pub content_filter: Option<Arc<dyn ContentFilter>>,
 }
 
 impl EngineConfig {
@@ -61,6 +66,7 @@ impl EngineConfig {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
             pump_scheduler: None,
+            content_filter: None,
         })
     }
 }
@@ -270,6 +276,7 @@ pub struct Engine {
     requests: RequestMode,
     /// What the views reported beyond navigation, until the host takes it.
     page_events: PageQueue<ViewId>,
+    content_filter: Option<Arc<dyn ContentFilter>>,
 }
 
 impl Engine {
@@ -295,6 +302,7 @@ impl Engine {
             pump: PumpState::default(),
             requests: RequestMode::default(),
             page_events: PageQueue::default(),
+            content_filter: config.content_filter,
         };
         engine.apply(Event::Initialised);
         Ok(engine)
@@ -333,7 +341,7 @@ impl Engine {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
-        let view = View::open(runtime, config)?;
+        let view = View::open(runtime, config, self.content_filter.clone())?;
         let id = ViewId(self.next_view);
         self.next_view += 1;
         self.views.push((id, view));
@@ -509,6 +517,7 @@ mod tests {
             exe_dir: PathBuf::from(exe_dir),
             cache_dir: PathBuf::from(cache_dir),
             pump_scheduler: None,
+            content_filter: None,
         }
     }
 
@@ -634,6 +643,7 @@ mod tests {
             exe_dir: dir.clone(),
             cache_dir: dir,
             pump_scheduler: None,
+            content_filter: None,
         })
         .err();
         assert!(matches!(err, Some(EngineError::HelperMissing { .. })));
