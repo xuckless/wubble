@@ -12,6 +12,7 @@ mod input;
 mod measure;
 mod menu;
 mod nav_smoke;
+mod page_drag;
 mod page_error;
 mod page_smoke;
 mod panes;

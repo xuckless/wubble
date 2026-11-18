@@ -57,6 +57,11 @@ pub enum Command {
         container: Option<ContainerId>,
         opener: Option<TabId>,
     },
+    /// A middle or Ctrl click's tab: placed as a popup of `opener`, never shown.
+    NewBackgroundTab {
+        url: String,
+        opener: TabId,
+    },
     CloseTab(TabId),
     ActivateTab(TabId),
     MoveTab {
@@ -608,6 +613,7 @@ impl Model {
         url: String,
         container: Option<ContainerId>,
         opener: Option<TabId>,
+        foreground: bool,
     ) -> Vec<Effect> {
         if container.is_some_and(|c| !self.has_container(c)) {
             return vec![];
@@ -617,7 +623,7 @@ impl Model {
         let si = opener_space
             .unwrap_or_else(|| self.space_idx(self.active_space).expect("active space"));
         // A popup from a hidden tab must not take over the screen.
-        let show = opener.is_none() || opener == self.visible_tab();
+        let show = foreground && (opener.is_none() || opener == self.visible_tab());
         let default = self.spaces[si].container;
         let id = self.fresh_tab();
         let eff = container.unwrap_or(default);
@@ -957,7 +963,7 @@ impl Model {
     /// beside a full split, it is a plain new tab shown alone.
     fn open_beside(&mut self, url: String) -> Vec<Effect> {
         let focused = self.visible_tab();
-        let mut fx = self.new_tab(url, None, None);
+        let mut fx = self.new_tab(url, None, None, true);
         let (Some(Effect::CreateTab { tab, .. }), Some(f)) = (fx.first().cloned(), focused) else {
             return fx;
         };
@@ -1117,7 +1123,8 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             url,
             container,
             opener,
-        } => m.new_tab(url, container, opener),
+        } => m.new_tab(url, container, opener, true),
+        Command::NewBackgroundTab { url, opener } => m.new_tab(url, None, Some(opener), false),
         Command::CloseTab(t) => m.close_tab(t),
         Command::ActivateTab(t) => m.activate_tab(t),
         Command::MoveTab { tab, to } => m.move_tab(tab, to),

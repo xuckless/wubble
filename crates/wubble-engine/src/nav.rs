@@ -79,9 +79,12 @@ pub enum WebEvent {
     /// The page's first icon URL, empty when it has none.
     FaviconChanged(String),
     CursorChanged(Cursor),
-    /// `window.open` or a `target=_blank` link. CEF opened nothing itself.
+    /// `window.open`, a `target=_blank` link, or a middle or Ctrl click on a
+    /// link. CEF opened nothing itself.
     PopupRequested {
         url: String,
+        /// Open it behind the current tab (a middle or Ctrl click).
+        background: bool,
     },
     /// The renderer process died. Unless the host draws its own crash page
     /// ([`NavInput::RendererTerminated`]), the view reloads the page once by
@@ -147,7 +150,10 @@ pub enum NavInput {
     RendererTerminated {
         reload: bool,
     },
-    Popup(String),
+    Popup {
+        url: String,
+        background: bool,
+    },
     Cursor(Cursor),
     // From the host.
     Load(String),
@@ -285,7 +291,10 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             };
             return (state, effects);
         }
-        NavInput::Popup(url) => (page, vec![Emit(WebEvent::PopupRequested { url })]),
+        NavInput::Popup { url, background } => (
+            page,
+            vec![Emit(WebEvent::PopupRequested { url, background })],
+        ),
         NavInput::Load(url) => (page, command(NavEffect::Load(url))),
         NavInput::Reload => (page, command(NavEffect::Reload)),
         NavInput::HardReload => (page, command(NavEffect::HardReload)),
@@ -513,12 +522,17 @@ mod tests {
     #[test]
     fn popups_are_reported_without_a_state_change() {
         let state = at(Phase::Loaded);
-        let (next, effects) = transition(state.clone(), I::Popup("https://p/".into()));
+        let popup = I::Popup {
+            url: "https://p/".into(),
+            background: true,
+        };
+        let (next, effects) = transition(state.clone(), popup);
         assert_eq!(next, state);
         assert_eq!(
             effects,
             vec![E::Emit(WebEvent::PopupRequested {
-                url: "https://p/".into()
+                url: "https://p/".into(),
+                background: true,
             })]
         );
     }

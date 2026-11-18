@@ -305,6 +305,11 @@ impl Surfaces {
 /// Where a page event goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Routed {
+    /// The page started a drag (`page_drag`).
+    Drag {
+        data: wubble_engine::page::DragData,
+        allowed: wubble_engine::page::DragOps,
+    },
     Dialog(DialogEvent),
     /// A menu event; a request still needs the view's navigation flags.
     Menu(MenuEvent),
@@ -437,7 +442,7 @@ pub fn route(event: PageEvent) -> Routed {
             source,
             line,
         } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
-        PageEvent::DragStarted { .. } => Routed::Ignore,
+        PageEvent::DragStarted { data, allowed, .. } => Routed::Drag { data, allowed },
         PageEvent::FaviconImage(icon) => Routed::Favicon(icon),
         PageEvent::PdfPrinted { path, ok } => Routed::Pdf {
             text: pdf_notice(&path, ok),

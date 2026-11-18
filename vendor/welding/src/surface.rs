@@ -1764,6 +1764,9 @@ pub enum NavigationEvent {
     NewWindowRequested {
         url: String,
         user_gesture: bool,
+        /// wubble change: the page asked for a tab behind the current one
+        /// (a middle or Ctrl click: `CEF_WOD_NEW_BACKGROUND_TAB`).
+        background: bool,
     },
     /// A `print_to_pdf` finished. `ok` is false when Chromium could not write
     /// the file; the path is the one that was asked for either way.
@@ -2091,6 +2094,13 @@ pub enum ContextMenuMedia {
     Canvas,
     File,
     Plugin,
+}
+
+/// Whether CEF's `cef_window_open_disposition_t` asks for a background tab.
+/// wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) fn background_disposition(raw: i64) -> bool {
+    raw == 4 // CEF_WOD_NEW_BACKGROUND_TAB
 }
 
 /// Map CEF's `cef_context_menu_media_type_t`. wubble change.

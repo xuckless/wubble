@@ -341,6 +341,12 @@ impl View {
         self.apply_nav(NavInput::Reload);
     }
 
+    /// The host shows the default pointer over this view now (another tab
+    /// was shown): CEF's next shape is news again, even the one it had.
+    pub fn reset_cursor(&mut self) {
+        self.apply_nav(NavInput::Cursor(crate::nav::Cursor::Default));
+    }
+
     /// Reloads without the cache (CEF `ReloadIgnoreCache`).
     pub fn hard_reload(&mut self) {
         self.apply_nav(NavInput::HardReload);
@@ -1326,7 +1332,9 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         E::FaviconUrlsChanged { urls } => one(Route::Nav(NavInput::Favicon(
             urls.into_iter().next().unwrap_or_default(),
         ))),
-        E::NewWindowRequested { url, .. } => one(Route::Nav(NavInput::Popup(url))),
+        E::NewWindowRequested {
+            url, background, ..
+        } => one(Route::Nav(NavInput::Popup { url, background })),
         E::ContentProcessTerminated { .. } => one(Route::Crashed),
         // ERR_ABORTED (-3) is a navigation replaced by another one.
         E::LoadError {

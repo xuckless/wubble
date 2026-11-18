@@ -536,6 +536,30 @@ cef::wrap_request_handler! {
             1
         }
 
+        // wubble change: a link the page opens elsewhere (a middle or Ctrl
+        // click, Shift click) goes to the host as a new-window request, as
+        // `on_before_popup` does; without this CEF navigates in place
+        // (windowless browsers have no tab strip to put it in). Shape from
+        // cefclient `ClientHandler::OnOpenURLFromTab` (chromiumembedded/cef,
+        // BSD-3-Clause); no code copied.
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            target_url: Option<&cef::CefString>,
+            target_disposition: cef::WindowOpenDisposition,
+            user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            push(&self.events, NavigationEvent::NewWindowRequested {
+                url: opt_string(target_url),
+                user_gesture: user_gesture != 0,
+                background: crate::surface::background_disposition(
+                    *target_disposition.as_ref() as i64,
+                ),
+            });
+            1 // handled: no navigation here
+        }
+
         // New: held until the host proceeds or cancels; cancel by default.
         fn on_certificate_error(
             &self,

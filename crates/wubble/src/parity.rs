@@ -107,10 +107,11 @@ pub enum HostOp {
     CloseBar,
     /// Close the find bar as its Escape does.
     CloseFind,
-    /// Put this text on the system clipboard (`wl-copy`), so a stale value never passes.
+    /// Put this text on the system clipboard, so a stale value never passes.
     SetClipboard(&'static str),
-    /// A file from the OS dragged over the page and dropped at the point (winit's
-    /// `HoveredFile` and `DroppedFile`).
+    /// A file from the OS dragged over the page at the point (winit's `HoveredFile`).
+    HoverFile(Point),
+    /// That file dropped at the point (`DroppedFile`).
     DropFile(Point),
     /// Back to the parity page's tab, closing every other tab.
     OnlyFirstTab,
@@ -269,7 +270,8 @@ pub const ITEMS: &[Item] = &[
             Host(HostOp::SetClipboard("stale")),
             Js("parity.field('inp', 'copyme')"),
             Keys("Ctrl+A Ctrl+C"),
-            Settle(10),
+            // The window's clipboard hears of its own new selection a round trip later.
+            Settle(40),
             Js("parity.field('inp2', '')"),
             Keys("Ctrl+V")
         ],
@@ -283,7 +285,8 @@ pub const ITEMS: &[Item] = &[
         [
             Js("parity.field('inp', 'cutme')"),
             Keys("Ctrl+A Ctrl+X"),
-            Settle(10),
+            // The window's clipboard hears of its own new selection a round trip later.
+            Settle(40),
             Js("parity.field('inp2', '')"),
             Keys("Ctrl+V")
         ],
@@ -656,6 +659,8 @@ pub const ITEMS: &[Item] = &[
         "D.os-file-drop",
         [
             Host(HostOp::OnlyFirstTab),
+            Host(HostOp::HoverFile(at::FILEZONE)),
+            Settle(10),
             Host(HostOp::DropFile(at::FILEZONE))
         ],
         [J("eq(seen.files.join(), 'parity-drop.txt')")]

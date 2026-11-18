@@ -274,6 +274,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    flags_t`: paused, muted, loop, controls, ...), read in `handlers.rs`
    `run_context_menu`.
 
+28. **Links opened elsewhere reach the host.** `handlers.rs`: the request
+   handler's new `on_open_urlfrom_tab` (a middle or Ctrl click on a link)
+   reports `NavigationEvent::NewWindowRequested` and cancels CEF's in-place
+   navigation; `NewWindowRequested` gains `background` (the disposition is
+   `CEF_WOD_NEW_BACKGROUND_TAB`, `surface::background_disposition`), also set
+   by `on_before_popup` on all three platforms.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

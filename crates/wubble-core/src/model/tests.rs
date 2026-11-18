@@ -1715,3 +1715,22 @@ fn from_parts_rejects_bad_splits() {
         assert!(parts(spaces.clone()).is_err(), "{g:?}");
     }
 }
+
+#[test]
+fn a_background_tab_goes_next_to_its_visible_opener_and_stays_hidden() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    let (m, fx) = run_all(
+        m,
+        Command::NewBackgroundTab {
+            url: "https://bg.test".into(),
+            opener: ids[0],
+        },
+    );
+    let b = TabId(m.next_tab - 1);
+    assert!(matches!(core_effects(fx.clone())[..], [Effect::CreateTab { tab, .. }] if tab == b));
+    assert_eq!(m.order(s0()), vec![ids[0], b, ids[1]]);
+    assert_eq!(m.visible_tab(), Some(ids[0]));
+    assert_eq!(m.tabs[&b].opener, Some(ids[0]));
+    assert_eq!(liveness(&m, b), Liveness::Background);
+}

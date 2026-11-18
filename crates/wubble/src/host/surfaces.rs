@@ -81,6 +81,7 @@ impl Host {
                 self.apply_menu(tab, e);
             }
             Routed::Find(e) => self.apply_find(tab, e),
+            Routed::Drag { data, allowed } => self.drag_started(tab, data, allowed),
             Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
             Routed::Fullscreen(true) if visible => {
                 self.apply_screen(window, ScreenEvent::PageEntered(tab));

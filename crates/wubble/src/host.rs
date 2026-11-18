@@ -15,6 +15,7 @@
 //! keymap, and every action runs through [`Host::perform`].
 
 mod downloads;
+mod drag;
 mod panes;
 mod parity;
 mod surfaces;
@@ -274,6 +275,10 @@ pub struct Host {
     /// Session changes not yet saved.
     save: SaveState,
     /// `None` until the first-run choice.
+    /// A page's drag inside the window, and the pointer it last went to
+    /// (relative to the drag's page).
+    page_drag: crate::page_drag::PageDrag,
+    drag_point: Point,
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
     /// Which commit is a typed visit.
@@ -403,6 +408,8 @@ impl Host {
             page_first: PendingKeys::default(),
             store,
             save: SaveState::default(),
+            page_drag: Default::default(),
+            drag_point: Point { x: 0.0, y: 0.0 },
             search_engine: settings.engine,
             live_suggestions: settings.live_suggestions,
             typed_nav: TypedNav::default(),
@@ -504,6 +511,10 @@ impl Host {
                 match self.engine.open_view(config) {
                     Ok(id) => {
                         self.views.insert(tab, id);
+                        // Page drags run inside the window (`page_drag`).
+                        if let Some(view) = self.engine.view(id) {
+                            view.set_drag_source(true);
+                        }
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -555,6 +566,11 @@ impl Host {
         self.frames.retain(|tab, _| kept.contains(tab));
         if self.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
+            for tab in self.shown_tabs() {
+                if let Some(view) = self.tab_view(tab) {
+                    view.reset_cursor();
+                }
+            }
         }
         self.settle_panes(&window);
         self.sync_focus(&window);
@@ -860,7 +876,11 @@ impl Host {
                 }
                 self.dispatch(Command::TitleChanged { tab, title });
             }
-            WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
+            WebEvent::PopupRequested { url, background } => self.dispatch(if background {
+                Command::NewBackgroundTab { url, opener: tab }
+            } else {
+                new_tab(url, Some(tab))
+            }),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -1537,6 +1557,9 @@ impl Host {
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
                 self.glass.borrow_mut().pointer_move(position.x, position.y);
             }
+            WindowEvent::HoveredFile(_)
+            | WindowEvent::DroppedFile(_)
+            | WindowEvent::HoveredFileCancelled => self.file_drop(&window, event),
             WindowEvent::CursorLeft { .. } => {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
@@ -1582,6 +1605,10 @@ impl Host {
     /// One key from the keyboard (a raw winit key event, or `--smoke parity`'s): where it goes
     /// is `input::key_route`'s decision.
     pub(crate) fn key(&mut self, window: &AppWindow, key: &KeyInput) -> EventResult {
+        // Esc ends a page drag with nothing dropped, as in Chromium.
+        if key.pressed && key.unmodified == Key::Named(NamedKey::Escape) && self.drag_cancelled() {
+            return EventResult::PreventDefault;
+        }
         // Esc leaves page fullscreen before anything else sees it.
         if key.pressed
             && key.unmodified == Key::Named(NamedKey::Escape)
@@ -1697,6 +1724,9 @@ impl Host {
     }
 
     pub fn pointer_moved(&mut self, pane: i32, point: Point) {
+        if self.drag_pointer(point, false) {
+            return;
+        }
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
@@ -1724,6 +1754,9 @@ impl Host {
         let Some(button) = input::mouse_button(button) else {
             return;
         };
+        if !pressed && self.drag_pointer(point, true) {
+            return;
+        }
         if pressed
             && let Some(tab) = crate::shell::tab_id(pane)
             && self.model.visible_tab() != Some(tab)

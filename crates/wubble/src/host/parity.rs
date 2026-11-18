@@ -111,6 +111,7 @@ impl Host {
                 run.restoring = false;
                 self.parity_step(Input::Loaded)
             }
+            WebEvent::CursorChanged(cursor) => trace(&format!("cursor {cursor:?}")),
             WebEvent::TitleChanged(title) => {
                 trace(&format!("title {title}"));
                 self.parity_step(Input::Title(title))
@@ -359,16 +360,28 @@ impl Host {
                 self.clipboard
                     .store(window.window(), Buffer::Clipboard, text);
             }
-            HostOp::DropFile(p) => {
+            // As a file from another app arrives: the pointer, then the file.
+            HostOp::HoverFile(p) | HostOp::DropFile(p) => {
+                use slint::winit_030::winit::event::WindowEvent as W;
                 let path = std::env::temp_dir().join("parity-drop.txt");
                 if let Err(e) = std::fs::write(&path, "dropped") {
                     eprintln!("smoke: parity: {e}");
                 }
                 let position = self.parity_at(window, p);
-                self.input.pointer = Some(position);
-                use slint::winit_030::winit::event::WindowEvent as W;
-                self.window_event(&W::HoveredFile(path.clone()));
-                self.window_event(&W::DroppedFile(path));
+                let scale = f64::from(window.window().scale_factor());
+                self.window_event(&W::CursorMoved {
+                    device_id: slint::winit_030::winit::event::DeviceId::dummy(),
+                    position: slint::winit_030::winit::dpi::LogicalPosition::new(
+                        f64::from(position.x),
+                        f64::from(position.y),
+                    )
+                    .to_physical(scale),
+                });
+                self.window_event(&if matches!(op, HostOp::HoverFile(_)) {
+                    W::HoveredFile(path)
+                } else {
+                    W::DroppedFile(path)
+                });
             }
             HostOp::OnlyFirstTab => {
                 let order = self.model.order(self.model.active_space);
