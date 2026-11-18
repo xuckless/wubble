@@ -314,6 +314,19 @@ fn js_num(x: f64) -> String {
 mod tests {
     use super::*;
 
+    /// A point rides the bowed string: not at all at the ends, by `bend` at the grab height.
+    #[test]
+    fn ride_is_zero_at_the_ends_and_bend_at_the_grab() {
+        let mut seam = Seam::new();
+        seam.gy = 300.0;
+        seam.bend = spring(40.0);
+        assert_eq!(seam.ride(0.0, 800.0), 0.0);
+        assert_eq!(seam.ride(800.0, 800.0), 0.0);
+        assert_eq!(seam.ride(300.0, 800.0), 40.0);
+        let (above, below) = (seam.ride(150.0, 800.0), seam.ride(550.0, 800.0));
+        assert!(above > 0.0 && above < 40.0 && (above - below).abs() < 1e-9);
+    }
+
     #[test]
     fn to_fixed_matches_js() {
         assert_eq!(to_fixed2(0.125), "0.13");

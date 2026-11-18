@@ -8,6 +8,7 @@ use slint::ComponentHandle;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::space::MAX_PANES;
+use wubble_core::stretch::{Pane, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
 use wubble_engine::view::Layout;
 use wubble_gfx::pacing::PaceEvent;
@@ -26,6 +27,23 @@ fn content_size(window: &AppWindow) -> (f64, f64) {
         f64::from(window.get_content_width()),
         f64::from(window.get_content_height()),
     )
+}
+
+fn px(size: wubble_gfx::FrameSize) -> Px {
+    Px::new(size.width, size.height)
+}
+
+/// Writes `rows` into the shell's model in place when it is one this host made (rows kept, only
+/// changed ones set), else hands `set` a new one.
+fn sync_rows<T: Clone + PartialEq + 'static>(
+    model: slint::ModelRc<T>,
+    rows: Vec<T>,
+    set: impl FnOnce(slint::ModelRc<T>),
+) {
+    match slint::Model::as_any(&model).downcast_ref::<slint::VecModel<T>>() {
+        Some(model) => wubble_ui::sync(model, rows),
+        None => set(super::surfaces::model(rows)),
+    }
 }
 
 /// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's
@@ -87,9 +105,9 @@ impl Host {
         (window.get_content_x() + x, window.get_content_y())
     }
 
-    /// One frame of `dt` seconds of the split's strings, then every pane laid out and drawn.
-    /// What the strings settled is dispatched later, outside rendering. Returns whether they move.
-    fn step_panes(&mut self, window: &AppWindow, dt: f64) -> bool {
+    /// One frame of `dt` seconds of the split's strings. What they settled is dispatched later,
+    /// outside rendering. Returns whether they move.
+    fn step_strings(&mut self, window: &AppWindow, dt: f64) -> bool {
         let (width, height) = content_size(window);
         let (moving, commands) = self.panes.frame(&self.model, dt, width, height);
         if !commands.is_empty() {
@@ -99,23 +117,23 @@ impl Host {
                 let _ = slint::invoke_from_event_loop(|| with_host(Host::apply_split_commands));
             }
         }
-        self.layout_panes(window);
         moving
     }
 
-    /// The rendering notifier's frame: steps the strings while a split shows. One page alone
-    /// changes only with the model (`settle_panes`).
-    pub fn split_frame(&mut self, window: &AppWindow, now: Instant) -> bool {
-        if self.model.shown_split().is_none() {
-            self.split_last = None;
-            return false;
-        }
-        let dt = self.split_last.replace(now).map_or(0.0, |prev| {
+    /// The rendering notifier's frame, before the shell is drawn: the split's strings, every
+    /// view's size from the window as this frame lays it out, and each pane's stretch
+    /// (`wubble_core::stretch`). Returns whether another frame is needed.
+    pub fn panes_frame(&mut self, window: &AppWindow, now: Instant) -> bool {
+        let dt = self.panes_last.replace(now).map_or(0.0, |prev| {
             now.duration_since(prev).as_secs_f64().min(DT_CAP)
         });
-        let moving = self.step_panes(window, dt);
+        let strings = self.model.shown_split().is_some() && self.step_strings(window, dt);
+        self.lay_out_views(window);
+        let stretching = self.step_stretch(window, dt);
+        self.render_panes(window);
+        let moving = strings || stretching;
         if !moving {
-            self.split_last = None;
+            self.panes_last = None;
         }
         moving
     }
@@ -133,7 +151,8 @@ impl Host {
     /// After a model change: the strings adopt it at once (no time passes) and animate from
     /// the next rendered frame.
     pub(super) fn settle_panes(&mut self, window: &AppWindow) {
-        self.step_panes(window, 0.0);
+        self.step_strings(window, 0.0);
+        self.layout_panes(window);
         if self.model.shown_split().is_some() {
             window.window().request_redraw();
         }
@@ -142,26 +161,58 @@ impl Host {
     /// Each view on screen gets its pane's size (unchanged layouts cost nothing; a new one only
     /// asks CEF to resize, the stretched last frame shows meanwhile), then the shell's panes.
     pub(super) fn layout_panes(&mut self, window: &AppWindow) {
+        self.lay_out_views(window);
+        self.render_panes(window);
+        // a pane that started stretching needs the frame driver
+        if self.frames.values().any(|f| f.pane.view != PaneView::Live) {
+            window.window().request_redraw();
+        }
+    }
+
+    /// Each view on screen gets its pane's layout, and its pane the size it now wants.
+    fn lay_out_views(&mut self, window: &AppWindow) {
         let (_, height) = content_size(window);
         let scale = window.window().scale_factor();
         for rect in self.pane_rects(window) {
+            let layout = rect.layout(height, scale);
             if let Some(view) = self.tab_view(rect.tab) {
-                view.set_layout(rect.layout(height, scale));
+                view.set_layout(layout);
+            }
+            if let Some(frame) = self.frames.get_mut(&rect.tab) {
+                frame.pane = transition(frame.pane, PaneEvent::Layout(px(layout.frame_size())));
             }
         }
-        self.render_panes(window);
     }
 
-    /// Writes the panes, seams and ring, when they changed (a rewritten model would restart
-    /// the shell's rendering of them, and ask for another frame).
+    /// One frame of `dt` seconds of each pane's stretch; a settled pane goes live. Returns
+    /// whether any still moves.
+    fn step_stretch(&mut self, window: &AppWindow, dt: f64) -> bool {
+        let (_, height) = content_size(window);
+        let mut moving = false;
+        for rect in self.pane_rects(window) {
+            if let Some(frame) = self.frames.get_mut(&rect.tab) {
+                if frame.springs.step((rect.width, height), dt) {
+                    moving = true;
+                } else {
+                    frame.pane = transition(frame.pane, PaneEvent::Rest);
+                }
+            }
+        }
+        moving
+    }
+
+    /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
+    /// seam's grab mid-drag, survives).
     fn render_panes(&mut self, window: &AppWindow) {
         let (_, height) = content_size(window);
         let focused = self.model.visible_tab();
-        let panes: Vec<SplitPane> = self
-            .pane_rects(window)
+        let rects = self.pane_rects(window);
+        let fill = rects.len() == 1;
+        let panes: Vec<SplitPane> = rects
             .into_iter()
             .map(|r| {
                 let frame = self.frames.get(&r.tab);
+                let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.pane.view));
                 SplitPane {
                     id: crate::shell::pane_id(r.tab),
                     x0: r.x as f32,
@@ -169,7 +220,9 @@ impl Host {
                     frame: frame.map(|f| f.image.clone()).unwrap_or_default(),
                     clip_width: frame.map_or(0, |f| slint_int(f.clip.width)),
                     clip_height: frame.map_or(0, |f| slint_int(f.clip.height)),
-                    current: frame.is_some_and(|f| f.current),
+                    stretch_x: (sx - 1.0) as f32,
+                    stretch_y: (sy - 1.0) as f32,
+                    fill,
                     focused: Some(r.tab) == focused,
                 }
             })
@@ -192,11 +245,8 @@ impl Host {
         } else {
             self.panes.ring(focused, height)
         };
-        if (&panes, &seams) != (&self.drawn_panes.0, &self.drawn_panes.1) {
-            window.set_panes(super::surfaces::model(panes.clone()));
-            window.set_seams(super::surfaces::model(seams.clone()));
-            self.drawn_panes = (panes, seams);
-        }
+        sync_rows(window.get_panes(), panes, |m| window.set_panes(m));
+        sync_rows(window.get_seams(), seams, |m| window.set_seams(m));
         window.set_focus_ring(ring.into());
     }
 
@@ -246,8 +296,13 @@ impl Host {
             };
             self.pace(PaceEvent::FrameArrived);
             let size = frame.size();
-            let clip = size.cropped_to(layout.size);
-            let current = size == layout.frame_size();
+            // A frame painted for this layout shows its layout's part (CEF can paint a pixel
+            // more); a stale one, painted for another, is shown whole, scaled to the pane.
+            let clip = if size == layout.frame_size() {
+                size.cropped_to(layout.size)
+            } else {
+                size
+            };
             // `--measure` follows the focused page.
             let measured = (Some(rect.tab) == focused)
                 .then(|| measure::Frame::of(&frame, layout.frame_size()));
@@ -261,15 +316,21 @@ impl Host {
                     presenter.probe(measure::PROBE.0, measure::PROBE.1)
                 });
             }
-            self.frames.insert(
-                rect.tab,
-                PaneFrame {
-                    image,
-                    clip,
-                    size,
-                    current,
-                },
+            let wanted = px(layout.frame_size());
+            let entry = self.frames.entry(rect.tab).or_insert_with(|| PaneFrame {
+                image: image.clone(),
+                clip,
+                size,
+                pane: Pane::new(wanted),
+                springs: PaneSprings::default(),
+            });
+            entry.pane = transition(
+                transition(entry.pane, PaneEvent::Layout(wanted)),
+                PaneEvent::Frame(px(size)),
             );
+            entry.image = image;
+            entry.clip = clip;
+            entry.size = size;
             presented = true;
         }
         if presented {

@@ -71,6 +71,8 @@ pub struct Driver {
     scroll: Scroller,
     row_y: Rc<VecModel<f32>>,
     row_scale: Rc<VecModel<f32>>,
+    /// The seam's ride table (`seam-ride`): what each height rides of the bowed string.
+    ride: Rc<VecModel<f32>>,
     /// The scroller's millisecond clock: real time from this origin once installed; without
     /// one (tests) it is the sum of the frame deltas passed to [`Driver::advance`].
     origin: Option<Instant>,
@@ -111,8 +113,10 @@ impl Driver {
     fn new(window: &AppWindow, seam: Seam) -> Self {
         let row_y = Rc::new(VecModel::<f32>::default());
         let row_scale = Rc::new(VecModel::<f32>::default());
+        let ride = Rc::new(VecModel::<f32>::default());
         window.set_row_y(ModelRc::from(row_y.clone()));
         window.set_row_scale(ModelRc::from(row_scale.clone()));
+        window.set_seam_ride(ModelRc::from(ride.clone()));
         let (ids, row) = model_rows(window);
         let space = active_space(window);
         window.set_selected_row(slint_index(row));
@@ -126,6 +130,7 @@ impl Driver {
             scroll: Scroller::new(),
             row_y,
             row_scale,
+            ride,
             origin: None,
             clock_ms: 0.0,
             last: None,
@@ -228,6 +233,15 @@ impl Driver {
         } else {
             window.set_seam_path(Default::default());
         }
+        // the sidebar's sections ride the string (design browser/chrome.tsx `[data-ride]`)
+        sync(
+            &self.ride,
+            if bowed {
+                self.ride_table(window, h_win)
+            } else {
+                vec![]
+            },
+        );
 
         // the tab list's scroller (scroller.rs)
         self.scroll.measure(
@@ -243,6 +257,14 @@ impl Driver {
         }
         window.set_thumb_visible(r.thumb_visible);
         moving
+    }
+
+    /// `Seam::ride` sampled every `ride-step` of the window's height `h`, from the top.
+    fn ride_table(&self, window: &AppWindow, h: f64) -> Vec<f32> {
+        let step = f64::from(window.get_ride_step()).max(1.0);
+        (0..=(h / step).ceil() as usize)
+            .map(|i| self.seam.ride(i as f64 * step, h) as f32)
+            .collect()
     }
 
     /// One rendered frame at `now`. Returns true while another frame is needed; once idle it

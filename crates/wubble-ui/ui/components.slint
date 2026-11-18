@@ -504,9 +504,15 @@ export struct SplitPane {
     frame: image,
     clip-width: int,
     clip-height: int,
-    // wubble change: the frame was painted for the pane's current size. A stale one (during a
-    // resize) shows at its own size, one image pixel per physical pixel, not stretched.
-    current: bool,
+    // wubble change: the frame always fills the pane (TODO.md "Resize feel"): a stale one,
+    // painted for another size mid-resize, is scaled to the pane's rectangle, then stretched
+    // further by `stretch-x/-y` (wubble_core::stretch, the design's window stretch: 0 at rest,
+    // up to 0.035), anchored top left; the pane clips the overshoot. At rest it is 1:1.
+    stretch-x: float,
+    stretch-y: float,
+    // wubble change: one page alone fills the view, bound here rather than pushed from Rust,
+    // so it follows the window in the same layout pass (`x0`/`x1` are ignored).
+    fill: bool,
     focused: bool,
 }
 
@@ -538,19 +544,17 @@ export component SplitView inherits Rectangle {
     callback scrolled(int, length, length, length, length);
 
     for p in root.panes: Rectangle {
-        x: p.x0;
-        width: p.x1 - p.x0;
+        x: p.fill ? 0px : p.x0;
+        width: p.fill ? root.width : p.x1 - p.x0;
         border-radius: root.radius;
         clip: true;
         background: Palette.web;
-        // wubble change: anchored top left; a current frame fills the pane (stretched by at most
-        // the pixel CEF painted short), a stale one keeps its size over Palette.web
-        // (wubble-gfx `FrameSize::cropped_to`).
-        Image {
+        // wubble change: anchored top left, filling the pane times the stretch (see SplitPane).
+        pane-frame := Image {
             x: 0;
             y: 0;
-            width: p.current ? parent.width : p.clip-width * 1phx;
-            height: p.current ? parent.height : p.clip-height * 1phx;
+            width: parent.width * (1 + p.stretch-x);
+            height: parent.height * (1 + p.stretch-y);
             source: p.frame;
             source-clip-width: p.clip-width;
             source-clip-height: p.clip-height;
