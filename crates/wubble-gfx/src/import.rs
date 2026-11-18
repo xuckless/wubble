@@ -180,21 +180,6 @@ const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// and setting one on the window always changes the property.
 const RING_LEN: usize = 2;
 
-/// Whether the blit ring can take a frame of a given size.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RingAction {
-    Reuse,
-    Recreate,
-}
-
-fn ring_action(current: Option<FrameSize>, frame: FrameSize) -> RingAction {
-    if current == Some(frame) {
-        RingAction::Reuse
-    } else {
-        RingAction::Recreate
-    }
-}
-
 /// One Slint-compatible texture and its `Image`, wrapped once.
 struct Target {
     view: wgpu::TextureView,
@@ -261,7 +246,7 @@ impl FramePresenter {
         let imported = WgpuTextureImporter::import(frame.0, &self.ctx)
             .map_err(|e| GfxError::Import(e.to_string()))?;
         let ring = match self.ring.take() {
-            Some(ring) if ring_action(Some(ring.size), size) == RingAction::Reuse => ring,
+            Some(ring) if ring.size == size => ring,
             _ => Ring::new(&self.ctx.device, size)?,
         };
         let target = self.ring.insert(ring).advance();
@@ -395,25 +380,5 @@ impl Blitter {
             pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ring_is_reused_only_for_the_same_size() {
-        let size = FrameSize::new(800, 600);
-        assert_eq!(ring_action(None, size), RingAction::Recreate);
-        assert_eq!(ring_action(Some(size), size), RingAction::Reuse);
-        assert_eq!(
-            ring_action(Some(size), FrameSize::new(801, 600)),
-            RingAction::Recreate
-        );
-        assert_eq!(
-            ring_action(Some(size), FrameSize::new(800, 601)),
-            RingAction::Recreate
-        );
     }
 }

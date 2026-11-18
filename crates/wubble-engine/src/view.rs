@@ -6,9 +6,7 @@
 //! which closes them on shutdown and reports each one closed to its lifecycle.
 
 use cef::{ImplBrowser, ImplBrowserHost};
-use welding::{
-    CefRuntime, CefSurfaceConfig, CefSurfaceProducer, PlatformCefConfig, PlatformCefProducer,
-};
+use welding::{CefRuntime, CefSurfaceProducer, PlatformCefProducer};
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::EngineError;
@@ -27,6 +25,19 @@ impl Layout {
             size: self.size.at_least_one(),
             ..self
         }
+    }
+
+    /// The physical size CEF paints for this layout, which can exceed `size`
+    /// by a pixel at fractional scales or odd sizes. welding reports the view
+    /// to CEF in DIP as `round(size / scale)` (welding 0.15 `ViewMetrics::
+    /// logical`), and Chromium's OSR view paints `ScaleToCeiledSize(dip,
+    /// scale)` (CEF `RenderWidgetHostViewOSR::SizeInPixels`). Same f32 math.
+    pub fn frame_size(self) -> FrameSize {
+        let axis = |physical: u32| {
+            let dip = (physical as f32 / self.scale).round().max(1.0);
+            (dip * self.scale).ceil() as u32
+        };
+        FrameSize::new(axis(self.size.width), axis(self.size.height))
     }
 }
 
@@ -98,7 +109,7 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
         // Frames at a stale size are still shown (stretched) rather than
         // dropped, so a resize never flashes an empty view.
         (Live { .. }, Frame(_), _) => (state, vec![Present]),
-        (Resizing { wanted }, Frame(size), _) if size == wanted.size => {
+        (Resizing { wanted }, Frame(size), _) if size == wanted.frame_size() => {
             (Live { layout: wanted }, vec![Present])
         }
         (Resizing { .. }, Frame(_), _) => (state, vec![Present]),
@@ -129,18 +140,7 @@ pub struct View {
 impl View {
     pub(crate) fn open(runtime: &CefRuntime, config: ViewConfig) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let producer = PlatformCefProducer::new(
-            runtime,
-            PlatformCefConfig {
-                surface: CefSurfaceConfig {
-                    initial_url: config.url,
-                    initial_size: dpi_size(layout.size),
-                    scale_factor: layout.scale,
-                    ..CefSurfaceConfig::default()
-                },
-            },
-        )
-        .map_err(|e| EngineError::View(e.to_string()))?;
+        let producer = new_producer(runtime, config.url, layout)?;
         let browser_id = producer.browser_id();
         // welding creates the browser at a fixed 60 fps; apply ours now.
         let rate = i32::try_from(config.frame_rate).unwrap_or(i32::MAX);
@@ -164,7 +164,11 @@ impl View {
 
     /// The newest frame CEF painted since the last call, if it is to be shown.
     pub fn take_frame(&mut self) -> Option<NativeFrame> {
-        let frame = NativeFrame::from(self.producer.acquire_native_frame()?);
+        // Trait call: Windows' producer has an inherent method of the same
+        // name that returns its own frame type.
+        let frame = NativeFrame::from(CefSurfaceProducer::acquire_native_frame(
+            &mut self.producer,
+        )?);
         let effects = self.apply(ViewEvent::Frame(frame.size()));
         effects.contains(&ViewEffect::Present).then_some(frame)
     }
@@ -215,6 +219,39 @@ impl View {
         }
         true
     }
+}
+
+#[cfg(not(windows))]
+fn new_producer(
+    runtime: &CefRuntime,
+    url: String,
+    layout: Layout,
+) -> Result<PlatformCefProducer, EngineError> {
+    PlatformCefProducer::new(
+        runtime,
+        welding::PlatformCefConfig {
+            surface: welding::CefSurfaceConfig {
+                initial_url: url,
+                initial_size: dpi_size(layout.size),
+                scale_factor: layout.scale,
+                ..welding::CefSurfaceConfig::default()
+            },
+        },
+    )
+    .map_err(|e| EngineError::View(e.to_string()))
+}
+
+/// welding's Windows producer also needs the host's `HostWgpuContext`, and
+/// wubble-gfx has no Windows import path yet (D3D11, M0 Windows item).
+#[cfg(windows)]
+fn new_producer(
+    _runtime: &CefRuntime,
+    _url: String,
+    _layout: Layout,
+) -> Result<PlatformCefProducer, EngineError> {
+    Err(EngineError::View(
+        "windowless views are not supported on Windows yet".into(),
+    ))
 }
 
 fn dpi_size(size: FrameSize) -> dpi::PhysicalSize<u32> {
@@ -370,6 +407,35 @@ mod tests {
         );
         assert_eq!(effects, vec![Resize(BIG), Present, Present]);
         assert_eq!(transition(state, Frame(BIG)), (live_at(BIG), vec![Present]));
+    }
+
+    #[test]
+    fn frame_size_matches_what_cef_paints() {
+        let cases = [
+            // (physical, scale) -> CEF frame
+            ((800, 600), 1.0, (800, 600)),
+            ((800, 600), 2.0, (800, 600)),
+            ((1001, 600), 2.0, (1002, 600)),
+            ((1001, 601), 1.25, (1002, 602)),
+            ((1000, 750), 1.25, (1000, 750)),
+            ((1000, 777), 1.5, (1001, 777)),
+            ((1, 1), 2.0, (2, 2)),
+        ];
+        for ((w, h), scale, (fw, fh)) in cases {
+            let layout = layout(FrameSize::new(w, h), scale);
+            assert_eq!(layout.frame_size(), FrameSize::new(fw, fh), "{layout:?}");
+        }
+    }
+
+    #[test]
+    fn resizing_ends_on_the_frame_cef_paints_at_fractional_scale() {
+        let wanted = layout(FrameSize::new(1001, 601), 1.25);
+        let (state, _) = run(live(), &[Layout(wanted)]);
+        assert_eq!(state, Resizing { wanted });
+        assert_eq!(
+            transition(state, Frame(FrameSize::new(1002, 602))),
+            (Live { layout: wanted }, vec![Present])
+        );
     }
 
     #[test]

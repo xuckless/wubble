@@ -31,4 +31,26 @@ impl FrameSize {
     pub fn at_least_one(self) -> Self {
         Self::new(self.width.max(1), self.height.max(1))
     }
+
+    /// The part of a frame of this size that fits in `area`, anchored top
+    /// left. A frame smaller than `area` is kept whole (and stretched).
+    pub fn cropped_to(self, area: FrameSize) -> Self {
+        Self::new(self.width.min(area.width), self.height.min(area.height))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crop_keeps_only_what_fits() {
+        let area = FrameSize::new(1001, 600);
+        assert_eq!(FrameSize::new(1002, 601).cropped_to(area), area);
+        assert_eq!(
+            FrameSize::new(800, 700).cropped_to(area),
+            FrameSize::new(800, 600)
+        );
+        assert_eq!(area.cropped_to(area), area);
+    }
 }

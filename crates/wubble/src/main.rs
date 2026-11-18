@@ -1,5 +1,4 @@
 mod cli;
-mod data_url;
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -64,10 +63,11 @@ fn main() -> ExitCode {
             match with_smoke_cache(|config| run(mode, config)) {
                 Ok(Outcome { stats, failure }) => {
                     println!("{}", stats.summary_line());
+                    eprintln!("smoke: {}", pacing::CPU_FALLBACK_UNOBSERVED);
                     match failure {
                         None if stats.is_success() => ExitCode::SUCCESS,
                         None => {
-                            eprintln!("smoke: frames FAILED: no zero-copy frames, or CPU fallback");
+                            eprintln!("smoke: frames FAILED: no zero-copy frames");
                             ExitCode::FAILURE
                         }
                         Some(e) => {
@@ -214,8 +214,11 @@ impl Host {
         let Some(frame) = view.take_frame() else {
             return Ok(());
         };
+        let clip = frame.size().cropped_to(layout.size);
         let image = self.presenter.present(frame).map_err(|e| e.to_string())?;
         window.set_web_frame(image);
+        window.set_web_frame_clip_width(slint_int(clip.width));
+        window.set_web_frame_clip_height(slint_int(clip.height));
         let now = Instant::now();
         self.stats
             .record_accelerated(self.last_present.map(|last| now - last));
@@ -256,6 +259,10 @@ fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Opti
         })
 }
 
+fn slint_int(pixels: u32) -> i32 {
+    i32::try_from(pixels).unwrap_or(i32::MAX)
+}
+
 /// The content rectangle in physical pixels and the window's scale factor.
 fn content_layout(window: &AppWindow) -> Layout {
     let scale = window.window().scale_factor();
@@ -267,6 +274,13 @@ fn content_layout(window: &AppWindow) -> Layout {
         ),
         scale,
     }
+}
+
+/// The bundled test page as a `data:` URL, so nothing is fetched.
+fn smoke_page_url() -> String {
+    let mut url = String::from("data:text/html;charset=utf-8,");
+    wubble_core::url::percent_encode_into(SMOKE_PAGE, &mut url);
+    url
 }
 
 /// Opens the window with one web view on the shared GPU device and runs the
@@ -289,11 +303,8 @@ fn run(
     std::mem::forget(gpu.clone());
 
     let (url, quit_after) = match mode {
-        Mode::Browse => (data_url::html(SMOKE_PAGE), None),
-        Mode::Smoke { frames, url } => (
-            url.unwrap_or_else(|| data_url::html(SMOKE_PAGE)),
-            Some(frames),
-        ),
+        Mode::Browse => (smoke_page_url(), None),
+        Mode::Smoke { frames, url } => (url.unwrap_or_else(smoke_page_url), Some(frames)),
     };
     let engine = Engine::start(config?)?;
     let host = Rc::new(RefCell::new(Host {

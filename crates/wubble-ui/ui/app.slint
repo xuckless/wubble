@@ -8,6 +8,11 @@ export component AppWindow inherits Window {
 
     // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
     in property <image> web-frame;
+    // The part of web-frame to show, in image pixels from the top left. CEF
+    // can paint a pixel more than the rectangle at fractional scales; that
+    // pixel is cropped rather than the whole frame resampled.
+    in property <int> web-frame-clip-width;
+    in property <int> web-frame-clip-height;
     // The rectangle the web frame fills, in logical pixels. The host sizes
     // the browser from these and the window's scale factor.
     out property <length> content-width: content.width;
@@ -23,6 +28,8 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 source: root.web-frame;
+                source-clip-width: root.web-frame-clip-width;
+                source-clip-height: root.web-frame-clip-height;
                 image-fit: fill;
             }
         }

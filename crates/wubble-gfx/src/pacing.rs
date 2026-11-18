@@ -22,15 +22,18 @@ pub fn frame_rate_for(refresh_mhz: Option<u32>) -> u32 {
     }
 }
 
-/// Counts of frames handed to the window, fed by the host loop.
+/// Software `OnPaint` frames cannot be counted yet: welding's Linux producer
+/// has no `on_paint`, so CEF's software frames are dropped unseen and a broken
+/// GPU path shows up as `accelerated=0` instead. Counting them needs the
+/// welding fork (TODO.md, "CPU fallback count"). Printed with every summary.
+pub const CPU_FALLBACK_UNOBSERVED: &str =
+    "cpu_fallback not observable: welding has no OnPaint, so 0 is not a measurement";
+
+/// Counts of zero-copy frames handed to the window, fed by the host loop.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameStats {
-    /// Frames set on the window, of either kind.
-    pub presented: u64,
-    /// Zero-copy frames (GPU texture import).
+    /// Zero-copy frames (GPU texture import) set on the window.
     pub accelerated: u64,
-    /// Software `OnPaint` frames. Always a bug on the hot path.
-    pub cpu_fallback: u64,
     interval_sum: Duration,
     intervals: u64,
 }
@@ -40,17 +43,6 @@ impl FrameStats {
     /// previous presented frame (`None` for the first).
     pub fn record_accelerated(&mut self, interval: Option<Duration>) {
         self.accelerated += 1;
-        self.record_presented(interval);
-    }
-
-    /// One software fallback frame was presented.
-    pub fn record_cpu_fallback(&mut self, interval: Option<Duration>) {
-        self.cpu_fallback += 1;
-        self.record_presented(interval);
-    }
-
-    fn record_presented(&mut self, interval: Option<Duration>) {
-        self.presented += 1;
         if let Some(interval) = interval {
             self.interval_sum += interval;
             self.intervals += 1;
@@ -65,20 +57,20 @@ impl FrameStats {
         self.interval_sum.as_secs_f64() * 1000.0 / self.intervals as f64
     }
 
-    /// The `--smoke frames` result line. The interval is informational only.
+    /// The `--smoke frames` result line. Every presented frame is accelerated
+    /// and `cpu_fallback` is fixed at 0 (see [`CPU_FALLBACK_UNOBSERVED`]).
+    /// The interval is informational only.
     pub fn summary_line(&self) -> String {
         format!(
-            "smoke: frames={} accelerated={} cpu_fallback={} avg_interval_ms={:.1}",
-            self.presented,
+            "smoke: frames={0} accelerated={0} cpu_fallback=0 avg_interval_ms={1:.1}",
             self.accelerated,
-            self.cpu_fallback,
             self.avg_interval_ms()
         )
     }
 
-    /// The frame path worked: real zero-copy frames and no CPU fallback.
+    /// The frame path produced real zero-copy frames.
     pub fn is_success(&self) -> bool {
-        self.accelerated > 0 && self.cpu_fallback == 0
+        self.accelerated > 0
     }
 }
 
@@ -103,41 +95,17 @@ mod tests {
     fn stats_count_and_average_fixed_intervals() {
         let mut stats = FrameStats::default();
         assert_eq!(stats.avg_interval_ms(), 0.0);
+        assert!(!stats.is_success());
         stats.record_accelerated(None);
         assert_eq!(stats.avg_interval_ms(), 0.0);
         stats.record_accelerated(Some(Duration::from_millis(8)));
         stats.record_accelerated(Some(Duration::from_millis(10)));
-        assert_eq!(stats.presented, 3);
         assert_eq!(stats.accelerated, 3);
-        assert_eq!(stats.cpu_fallback, 0);
         assert_eq!(stats.avg_interval_ms(), 9.0);
+        assert!(stats.is_success());
         assert_eq!(
             stats.summary_line(),
             "smoke: frames=3 accelerated=3 cpu_fallback=0 avg_interval_ms=9.0"
         );
-    }
-
-    #[test]
-    fn cpu_fallback_is_counted_and_presented() {
-        let mut stats = FrameStats::default();
-        stats.record_cpu_fallback(Some(Duration::from_micros(16_667)));
-        assert_eq!((stats.presented, stats.cpu_fallback), (1, 1));
-        assert_eq!(
-            stats.summary_line(),
-            "smoke: frames=1 accelerated=0 cpu_fallback=1 avg_interval_ms=16.7"
-        );
-    }
-
-    #[test]
-    fn success_needs_accelerated_frames_and_no_fallback() {
-        let stats = |accelerated, cpu_fallback| FrameStats {
-            accelerated,
-            cpu_fallback,
-            ..FrameStats::default()
-        };
-        assert!(!stats(0, 0).is_success());
-        assert!(!stats(0, 1).is_success());
-        assert!(!stats(5, 1).is_success());
-        assert!(stats(5, 0).is_success());
     }
 }

@@ -7,3 +7,4 @@ pub mod sleep;
 pub mod space;
 pub mod suggest;
 pub mod tab;
+pub mod url;
