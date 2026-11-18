@@ -474,6 +474,14 @@ impl Host {
             }),
         };
         host.replay_settings();
+        if host.checks.check_pixels {
+            // The glass check is a correctness check of the scene's full rendering: the governor
+            // would otherwise pick the level from how fast this machine runs (and at `Flat` the
+            // glass is legitimately one flat colour).
+            host.glass
+                .borrow_mut()
+                .set_setting(wubble_core::apply::GlassSetting::Full);
+        }
         host.render_downloads(window);
         host.session_icon_setup();
         match open {
@@ -813,10 +821,12 @@ impl Host {
             .record_accelerated(self.last_present.map(|last| now - last));
         self.last_present = Some(now);
         self.idle_runs = 0;
+        // Once: a frame the loop shows before the quit takes effect (on macOS the pump runs
+        // outside winit's handler, so one more can arrive) is not checked again.
         if self
             .checks
             .quit_after
-            .is_some_and(|n| self.stats.accelerated >= n)
+            .is_some_and(|n| self.stats.accelerated == n)
         {
             if let Some(tab) = self.model.visible_tab()
                 && let Some(frame) = self.frames.get(&tab)
@@ -848,7 +858,9 @@ impl Host {
     }
 
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame.
+    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame. The
+    /// smoke pins the glass at `Full` (`Host::new`), so the verdict never depends on the
+    /// quality governor; the line says the level it checked.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
         if !self.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
@@ -879,7 +891,14 @@ impl Host {
             .readback()
             .ok_or("the scene has no frame")?;
         let diff = pixels::check_shows_scene(shot, &scene, region)?;
-        println!("smoke: glass ok distinct={} diff={diff}", sample.distinct);
+        println!(
+            "smoke: glass ok quality={} distinct={} diff={diff}",
+            self.glass
+                .borrow()
+                .quality()
+                .map_or("n/a".into(), |q| format!("{q:?}")),
+            sample.distinct
+        );
         Ok(())
     }
 

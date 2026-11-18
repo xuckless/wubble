@@ -201,6 +201,14 @@ impl Glass {
             Glass::SlintOnly => None,
         }
     }
+    /// The scene's current level, `None` without the scene.
+    pub fn quality(&self) -> Option<Quality> {
+        match self {
+            Glass::Scene(s) => Some(s.governor.quality()),
+            Glass::SlintOnly => None,
+        }
+    }
+
     pub fn is_scene(&self) -> bool {
         matches!(self, Glass::Scene(_))
     }
