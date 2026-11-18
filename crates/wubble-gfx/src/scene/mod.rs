@@ -15,7 +15,8 @@
 //! - [`Renderer`]: the GPU half; owns a `Scene` as [`Renderer::scene`].
 //! - [`Quality`] and [`Governor`]: the degrade ladder. Glass degrades before
 //!   animation drops a frame: lower levels shrink the backdrop, then refresh
-//!   it every 8th frame, then freeze it; the glass stays drawn and live.
+//!   it every 8th frame (at its real speed), then freeze it and draw the
+//!   glass as a flat fill.
 //!
 //! # Host wiring (next batch)
 //!
@@ -27,7 +28,11 @@
 //! ```ignore
 //! let scene = Rc::new(RefCell::new(scene::Renderer::new(&gpu, scene::SceneOptions::default())));
 //! // in the notifier, on RenderingState::BeforeRendering, before anything else:
-//! if let Some(image) = scene.borrow_mut().before_rendering(app.window(), Instant::now())? { app.set_scene(image) }
+//! match scene.borrow_mut().before_rendering(app.window(), Instant::now()) {
+//!     Ok(Some(image)) => app.set_scene(image),
+//!     Ok(None) => {}
+//!     Err(e) => eprintln!("wubble: scene image: {e}"),
+//! }
 //! ```
 //!
 //! and feeds the scene from the window's state:
@@ -59,17 +64,18 @@
 //! Left out: the design's start page (bubble, pops, minis, soft body, voice
 //! glow, W field: `bubble.wgsl`, `pop.wgsl`, `wfield.rs`, `softbody.rs`,
 //! `minis.rs`, `voice.rs` in the bucket) and its overlay mode. glass.wgsl is
-//! unchanged, with the voice uniforms sent as zero.
+//! the design's with the voice uniforms sent as zero, plus one branch:
+//! `uMaterial` 2, the flat fill of [`Quality::Flat`].
 
 mod quality;
 mod render;
 mod state;
 
 pub use quality::{
-    CACHED_REFRESH_CALLS, DOWN_COUNT, DOWN_FRACTION, Governor, MAX_BACKOFF, PROBE_FRAMES, Quality,
-    UP_FRACTION, WINDOW, should_render,
+    BackdropClock, CACHED_REFRESH_CALLS, DOWN_COUNT, DOWN_FRACTION, Governor, MAX_BACKDROP_DT,
+    MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality, UP_FRACTION, WINDOW, should_render,
 };
-pub use render::{MAX_DT, Renderer, readback_rgba8};
+pub use render::{Renderer, readback_rgba8};
 pub use state::{
     BEAM_LAP, Beam, BeamRect, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, Scene,
     SceneOptions, Tier, hex, lap_beam_at, surface_of,

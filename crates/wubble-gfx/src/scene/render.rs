@@ -17,8 +17,9 @@
 //!   4. blit bg to `out`, then in the same render pass the glass quads and the
 //!      beam
 //!
-//! Steps 0-3 are the backdrop: they run only when `should_render` says so
-//! (every frame at `Full`/`HalfRes`), or when the pyramid is new.
+//! Steps 0-3 are the backdrop: they run only when `BackdropClock::tick` says
+//! so (every frame at `Full`/`HalfRes`), or when the pyramid is new, and step
+//! the time of the frames they skipped.
 //!
 //! Targets (logical-px based, so they don't grow with DPR):
 //!   vel / pres ping-pong, div, curl   RGBA16Float  sim res 96 on the short side
@@ -36,7 +37,7 @@
 use std::num::NonZeroU64;
 use std::time::Instant;
 
-use super::quality::{CACHED_REFRESH_CALLS, Quality, should_render};
+use super::quality::{BackdropClock, MAX_DT, Quality};
 use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
 use crate::{GfxError, GpuContext};
 
@@ -55,9 +56,6 @@ pub(super) const GLASS_WGSL: &str = include_str!("shaders/glass.wgsl");
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-/// Longest frame step, seconds: a stall does not fling the liquid.
-pub const MAX_DT: f32 = 0.032;
 
 // @source slint-render-uniforms
 // #[repr(C)] mirrors of the WGSL uniform structs. Field order, padding and sizes match the WGSL
@@ -412,10 +410,8 @@ pub struct Renderer {
     /// Glass, beam, palette and pointer input: see [`Scene`].
     pub scene: Scene,
     quality: Quality,
-    /// Frames in a row whose backdrop was not rendered.
-    skipped: u32,
-    /// Time not yet stepped by the fluid (skipped frames), capped at `MAX_DT`.
-    backdrop_dt: f32,
+    /// When the backdrop moves, and the time of the frames it skipped.
+    clock: BackdropClock,
     last_frame: Option<Instant>,
 }
 
@@ -448,8 +444,7 @@ impl Renderer {
             sized: None,
             scene: Scene::new(opts, 0x5eed),
             quality: Quality::Full,
-            skipped: CACHED_REFRESH_CALLS - 1,
-            backdrop_dt: 0.0,
+            clock: BackdropClock::new(),
             last_frame: None,
         }
     }
@@ -605,7 +600,6 @@ impl Renderer {
         }
         self.arena.cpu.clear();
         self.scene.advance(dt);
-        self.backdrop_dt = (self.backdrop_dt + dt).min(MAX_DT);
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -613,9 +607,7 @@ impl Renderer {
             });
         let (vw, vh, t) = (self.scene.w, self.scene.h, self.scene.time);
 
-        if should_render(self.quality, self.skipped) || !sz.pyramid.drawn {
-            self.skipped = 0;
-            let dt = std::mem::take(&mut self.backdrop_dt);
+        if let Some(dt) = self.clock.tick(self.quality, dt, !sz.pyramid.drawn) {
             let f = &mut sz.fluid;
             // 0. splats (queued taps first, then emitters and the pointer: the TS order)
             for op in self.scene.fluid_ops(dt) {
@@ -648,8 +640,6 @@ impl Renderer {
             self.blur(&mut enc, &py.bg, &py.b1t, &py.b1, 3.5);
             self.blur(&mut enc, &py.b1, &py.b2t, &py.b2, 4.5);
             py.drawn = true;
-        } else {
-            self.skipped = self.skipped.saturating_add(1);
         }
 
         // 4. one pass on the output: backdrop, glass, beam
@@ -706,7 +696,8 @@ impl Renderer {
     }
 
     /// The glass uniforms of one surface. The voice glow is the deferred start
-    /// page's: its fields stay zero, so glass.wgsl is the design's unchanged.
+    /// page's: its fields stay zero. Under `Quality::Flat` full glass is sent
+    /// as `uMaterial` 2, the flat fill (the one change to glass.wgsl).
     fn glass_u(&self, s: &GlassSurface) -> GlassU {
         let pad = 70.0;
         let (u_wave, u_wave_n) = wave_uniforms(&s.waves);
@@ -730,7 +721,12 @@ impl Renderer {
             u_dpr: self.scene.dpr,
             u_wave_n,
             u_voice_amt: 0.0,
-            u_material: s.material as f32,
+            // Flat draws full glass as a flat fill (glass.wgsl `uMaterial` 2)
+            u_material: if self.quality == Quality::Flat && s.material > 0.5 {
+                2.0
+            } else {
+                s.material as f32
+            },
             _p: [0.0; 3],
             u_beam: s
                 .beam

@@ -71,11 +71,9 @@ fn scene_renders_glass_over_the_backdrop() {
         region(&without, w, inside),
         "glass changes what is under it"
     );
-    // more than the glass quads' 70 px padding away from every panel
-    let corner = (VIEW.0 - 40.0, VIEW.1 - 40.0, 40.0, 40.0);
     assert_eq!(
-        region(&with_glass, w, corner),
-        region(&without, w, corner),
+        region(&with_glass, w, CORNER),
+        region(&without, w, CORNER),
         "the backdrop away from the glass is the same"
     );
 
@@ -83,24 +81,85 @@ fn scene_renders_glass_over_the_backdrop() {
     assert!(again == with_glass, "same inputs, same image");
 }
 
+/// Largest difference of one channel between two pixels of `px`.
+fn spread(px: &[[u8; 4]]) -> u8 {
+    (0..3)
+        .map(|c| {
+            let (lo, hi) = px
+                .iter()
+                .fold((255, 0), |(lo, hi), p| (p[c].min(lo), p[c].max(hi)));
+            hi - lo
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// A column down the thick panel: from 4 px below its top (past the 1 px rim;
+/// the lens bezel and the specular band included), clear of its 20 px corners,
+/// and 50 px above the bar, where the bloom of the bar's beam has faded.
+const THICK_CORE: (f32, f32, f32, f32) = (THICK.x + 30.0, THICK.y + 4.0, THICK.w - 60.0, 40.0);
+/// More than the glass quads' 70 px padding away from every panel.
+const CORNER: (f32, f32, f32, f32) = (VIEW.0 - 40.0, VIEW.1 - 40.0, 40.0, 40.0);
+
 #[test]
-fn flat_quality_still_renders_glass_over_a_frozen_backdrop() {
+fn every_quality_draws_glass_and_flat_freezes_and_flattens() {
     let Some((device, queue, _)) = device() else {
         eprintln!("skipping: no GPU adapter");
         return;
     };
-    for quality in [Quality::Flat, Quality::Cached, Quality::HalfRes] {
+    let run = |quality, glass, frames| {
         let (w, h, img) = render(
             &device,
             &queue,
             Run {
-                glass: true,
+                glass,
                 quality,
-                frames: FRAMES,
+                frames,
             },
         );
         assert_eq!((w, h), (640, 400));
-        assert!(img.chunks(4).all(|p| p[3] == 255));
-        assert!(distinct_colours(&img, w, h) >= 8, "{quality:?} is not flat");
+        assert!(img.chunks(4).all(|p| p[3] == 255), "{quality:?} is opaque");
+        img
+    };
+    let w = 640;
+    for quality in [
+        Quality::Full,
+        Quality::HalfRes,
+        Quality::Cached,
+        Quality::Flat,
+    ] {
+        let with = run(quality, true, FRAMES);
+        let without = run(quality, false, FRAMES);
+        assert_ne!(
+            region(&with, w, THICK_CORE),
+            region(&without, w, THICK_CORE),
+            "{quality:?} draws the glass"
+        );
+        assert!(
+            distinct_colours(&with, w, 400) >= 8,
+            "{quality:?} is not a flat image"
+        );
+        let core = spread(&region(&with, w, THICK_CORE));
+        if quality == Quality::Flat {
+            assert!(core <= 2, "Flat glass is one fill colour, spread {core}");
+        } else {
+            assert!(
+                core > 4,
+                "{quality:?} glass refracts the backdrop, spread {core}"
+            );
+        }
     }
+    // Flat: the backdrop seen at frame 2 is the one seen at frame 30, while
+    // at Full the liquid has moved.
+    let corner = |quality, frames| region(&run(quality, true, frames), w, CORNER);
+    assert_eq!(
+        corner(Quality::Flat, 2),
+        corner(Quality::Flat, FRAMES),
+        "Flat freezes"
+    );
+    assert_ne!(
+        corner(Quality::Full, 2),
+        corner(Quality::Full, FRAMES),
+        "Full moves"
+    );
 }

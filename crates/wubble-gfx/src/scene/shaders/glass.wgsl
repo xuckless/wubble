@@ -2,7 +2,8 @@
 // Rounded rects that lens the blurred backdrop toward the rim, split per channel (chromatic
 // dispersion), with a specular band, a pointer glow, a 1px inner rim, the touched sheen rim,
 // distortion waves from presses, a border beam and the voice glow (with bloom outside the rect).
-// `uMaterial` 0 draws the effects only (beam, glow) for surfaces over live content.
+// `uMaterial` 0 draws the effects only (beam, glow) for surfaces over live content;
+// 2 (wubble's, not the design's) is the flat fill of `Quality::Flat`.
 // This pass is what Slint itself cannot do (no backdrop blur): Slint draws the content on top.
 // Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl. Blend: premultiplied.
 
@@ -22,7 +23,7 @@ struct GlassU {
   uDpr: f32,
   uWaveN: i32,
   uVoiceAmt: f32,
-  uMaterial: f32,    // 1 full glass, 0 effects only
+  uMaterial: f32,    // 1 full glass, 0 effects only, 2 flat fill (wubble)
   _p0: f32, _p1: f32, _p2: f32,
   uBeam: vec4<f32>,  // head, length (fractions of the perimeter), strength, hue
   uVoice: vec4<f32>, // low, mid, high, phase
@@ -110,6 +111,19 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
     // effects only, over live content
     let a0 = inside * U.uAlpha;
     return vec4<f32>(fx * a0, clamp(fxA, 0.0, 1.0) * a0);
+  }
+  // wubble: `uMaterial` 2 is the flat fill of the lowest quality level, not in the design.
+  // One colour per panel (the blurred backdrop at its centre under the tier fill), the 1px rim
+  // and the effects: no lens, dispersion, waves, specular or pointer light.
+  if (U.uMaterial > 1.5) {
+    var fillF = vec4<f32>(0.11, 0.122, 0.157, 0.64);
+    if (U.uTier < 0.5) { fillF = vec4<f32>(1.0, 1.0, 1.0, 0.08); } else if (U.uTier < 1.5) { fillF = vec4<f32>(0.086, 0.098, 0.129, 0.42); }
+    var flat_ = mix(bg(c, U.uTier), fillF.rgb, fillF.a);
+    flat_ = mix(flat_, U.uTint, 0.10 * step(0.001, dot(U.uTint, U.uTint)));
+    flat_ += (1.0 - smoothstep(0.0, 1.25, -d)) * 0.1;
+    flat_ += fx;
+    let aF = inside * U.uAlpha;
+    return vec4<f32>(flat_ * aF, aF) + vec4<f32>(0.0, 0.0, 0.0, shadow * U.uAlpha) * (1.0 - aF);
   }
 
   // normal from the SDF gradient
