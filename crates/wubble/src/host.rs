@@ -13,12 +13,14 @@
 //! on the store's recently-closed list. Keys become actions through the
 //! keymap, and every action runs through [`Host::perform`].
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
+use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
-use slint::winit_030::winit::event::WindowEvent;
+use slint::winit_030::winit::event::{ElementState, WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
 use wubble_core::keys::{Keymap, Platform};
@@ -34,8 +36,9 @@ use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
 use wubble_store::{ClosedTab, Transition};
-use wubble_ui::{AppWindow, CommandBarState, SidebarMode};
+use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 
+use crate::backdrop::Glass;
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
@@ -168,6 +171,8 @@ pub struct Host {
     /// The engine's single-shot pump timer.
     pub timer: slint::Timer,
     presenter: FramePresenter,
+    /// The window's glass, shared with the shell's rendering notifier.
+    glass: Rc<RefCell<Glass>>,
     /// The one owner of tabs and Spaces.
     model: Model,
     /// The view of every live tab.
@@ -212,10 +217,12 @@ impl Host {
     /// the window exists); the other restored tabs stay Discarded until
     /// activated, through the `Life::Restore` mapping. `open` is loaded in a
     /// new tab, which is then the only one with a view (see [`startup`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: Engine,
         window: &AppWindow,
         presenter: FramePresenter,
+        glass: Rc<RefCell<Glass>>,
         loaded: Loaded,
         store: StoreClient,
         open: Option<String>,
@@ -229,6 +236,7 @@ impl Host {
             window: window.as_weak(),
             timer: slint::Timer::default(),
             presenter,
+            glass,
             model,
             views: BTreeMap::new(),
             pending: restore.into_iter().collect(),
@@ -288,6 +296,13 @@ impl Host {
         self.after_change();
         if persist::should_save(self.save) {
             self.save_now();
+        }
+    }
+
+    /// A row dragged to slot `to` of the sidebar's flat tab list.
+    pub fn move_tab(&mut self, tab: TabId, to: usize) {
+        if let Some(to) = crate::shell::move_dest(&self.model, tab, to) {
+            self.dispatch(Command::MoveTab { tab, to });
         }
     }
 
@@ -507,14 +522,47 @@ impl Host {
                 clip.height
             );
             if self.checks.check_pixels {
-                let sample = check_pixels(window)?;
+                let shot = snapshot(window)?;
+                let sample = check_pixels(window, &shot)?;
                 println!(
                     "smoke: pixels ok distinct={} mean_luma={}",
                     sample.distinct, sample.mean_luma
                 );
+                self.check_glass(window, &shot)?;
             }
             quit();
         }
+        Ok(())
+    }
+
+    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
+    /// refracted, moving backdrop), not a flat fill.
+    fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
+        let glass = self.glass.borrow();
+        if !glass.is_scene() {
+            println!("smoke: glass fallback");
+            return Ok(());
+        }
+        let key = window.global::<GlassKeys>().get_sidebar();
+        let side = glass
+            .items()
+            .iter()
+            .find(|i| i.key == key)
+            .cloned()
+            .ok_or("the sidebar's glass never reached the scene")?;
+        drop(glass);
+        // The band below the tab list and above the Space switcher: glass, no text.
+        let scale = window.window().scale_factor();
+        let (x, w) = (side.x + side.radius, side.width - 2.0 * side.radius);
+        let (y, h) = (side.y + side.height * 0.45, side.height * 0.25);
+        let region = pixels::Region {
+            x: physical(x, scale),
+            y: physical(y, scale),
+            width: physical(w, scale),
+            height: physical(h, scale),
+        };
+        let sample = pixels::check_varied(shot, region)?;
+        println!("smoke: glass ok distinct={}", sample.distinct);
         Ok(())
     }
 
@@ -968,8 +1016,17 @@ impl Host {
             WindowEvent::CursorMoved { position, .. } => {
                 let position = position.to_logical(window.window().scale_factor().into());
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
+                self.glass.borrow_mut().pointer_move(position.x, position.y);
             }
-            WindowEvent::CursorLeft { .. } => self.input.pointer = None,
+            WindowEvent::CursorLeft { .. } => {
+                self.input.pointer = None;
+                self.glass.borrow_mut().pointer_leave();
+            }
+            // A press anywhere sends a wave through the scene (the page gets it too).
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            } => self.glass.borrow_mut().tap(),
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
                 self.sync_focus(&window);
@@ -1080,13 +1137,13 @@ impl Host {
     }
 }
 
-/// What of the shell's state is saved with the session. Peeking is the
-/// hidden sidebar shown for a moment, so it saves as compact. The width is the
-/// seam's saved one: the live width is 0 while the sidebar is hidden.
+/// What of the shell's state is saved with the session: the sidebar's mode
+/// (peeking is a separate property, so a peek saves as hidden) and the seam's
+/// saved width (the live width is 0 while the sidebar is hidden).
 pub fn ui_state(window: &AppWindow) -> UiState {
     UiState {
         sidebar_width: window.get_sidebar_saved(),
-        compact: window.get_sidebar_mode() == SidebarMode::Hidden,
+        mode: window.get_sidebar_mode().into(),
     }
 }
 
@@ -1097,12 +1154,18 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Snapshots the window and checks that the content rectangle shows the page.
-fn check_pixels(window: &AppWindow) -> Result<pixels::Sample, String> {
-    let snapshot = window
+type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
+
+/// The window as it renders now. Smoke only.
+fn snapshot(window: &AppWindow) -> Result<Snapshot, String> {
+    window
         .window()
         .take_snapshot()
-        .map_err(|e| format!("cannot snapshot the window: {e}"))?;
+        .map_err(|e| format!("cannot snapshot the window: {e}"))
+}
+
+/// Checks that the content rectangle of the snapshot shows the page.
+fn check_pixels(window: &AppWindow, shot: &Snapshot) -> Result<pixels::Sample, String> {
     let scale = window.window().scale_factor();
     let region = pixels::Region {
         x: physical(window.get_content_x(), scale),
@@ -1110,7 +1173,7 @@ fn check_pixels(window: &AppWindow) -> Result<pixels::Sample, String> {
         width: physical(window.get_content_width(), scale),
         height: physical(window.get_content_height(), scale),
     };
-    pixels::check(&snapshot, region)
+    pixels::check(shot, region)
 }
 
 fn new_tab(url: String, opener: Option<TabId>) -> Command {

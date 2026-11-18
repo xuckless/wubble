@@ -50,11 +50,45 @@ export enum SidebarMode {
     hidden,
 }
 
-// Mirrors wubble_gfx::glass::Tier.
+// Mirrors wubble_gfx::scene::Tier (checked in crates/wubble/tests/glass_mirror.rs).
 export enum GlassTier {
     thin,
     regular,
     thick,
+}
+
+// One glass panel for the wgpu scene (wubble_gfx::scene::GlassRect): where it is in the window
+// (logical px, after its press scale), its corners, tier and touch state. Every GlassPanel
+// reports its own through GlassLayer.report; `present: false` takes it out of the scene.
+export struct GlassItem {
+    key: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    radius: length,
+    tier: GlassTier,
+    pressed: bool,
+    hover: bool,
+    focus: bool,
+    present: bool,
+}
+
+// The scene's glass layer. The host sets `scene-active` once, from its explicit choice of
+// glass (wubble backdrop.rs `Glass`); the driver bumps `generation` after the models change,
+// so every live panel reports again and panels a `for` or `if` destroyed drop out.
+export global GlassLayer {
+    in-out property <bool> scene-active: false;
+    in-out property <int> generation: 0;
+    callback report(GlassItem);
+}
+
+// Each panel's place in the scene's list, back to front (one table, read by Rust too).
+export global GlassKeys {
+    out property <int> sidebar: 0;
+    out property <int> address: 1;
+    // plus the tab id
+    out property <int> favourites: 100;
 }
 
 // The eight resize zones of the window frame (design desktop.tsx `edgeDown`); Rust maps each to

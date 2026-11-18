@@ -5,8 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier } from "components/model.slint";
-import { GlassBackdrops } from "components/backdrops.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, GlassItem, GlassLayer, GlassKeys } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { WindowEdges } from "components/window-frame.slint";
@@ -15,7 +14,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, WindowEdge, GlassBackdrops, Chrome, Radius }
+export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -30,6 +29,9 @@ export component AppWindow inherits Window {
     default-font-family: Fonts.ui;
     default-font-size: Type.body.size;
 
+    // The living backdrop and the glass (wubble_gfx::scene), rendered by the host each frame
+    // into one opaque wgpu texture; shown at the very back while GlassLayer.scene-active.
+    in property <image> scene;
     // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
     in property <image> web-frame;
     // The part of web-frame to show, in image pixels from the top left. CEF
@@ -144,6 +146,9 @@ export component AppWindow inherits Window {
     changed active-space-id => {
         root.shell-model-changed();
     }
+    changed pinned-tabs => {
+        root.shell-model-changed();
+    }
 
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;
@@ -218,7 +223,20 @@ export component AppWindow inherits Window {
         MouseCursor.nwse-resize,
     ];
 
+    // The bottom layer: the scene (the design's demo.slint `Image { source: root.scene }`, first
+    // child), rounded with the window; without the scene the plain ground.
+    if GlassLayer.scene-active: Rectangle {
+        clip: true;
+        border-radius: root.window-radius;
+        Image {
+            width: 100%;
+            height: 100%;
+            source: root.scene;
+            image-fit: fill;
+        }
+    }
     ground := Rectangle {
+        visible: !GlassLayer.scene-active;
         background: Palette.abyss;
         border-radius: root.window-radius;
     }
@@ -317,6 +335,21 @@ export component AppWindow inherits Window {
             width: Chrome.inset + sidebar.width;
             height: parent.height;
 
+            // The sidebar's Regular glass, drawn by the scene up to the seam. Slint-only glass has
+            // no sidebar panel (the plain ground shows), as before the scene.
+            GlassPanel {
+                key: GlassKeys.sidebar;
+                x: sidebar.x;
+                y: sidebar.y;
+                width: root.sidebar-width;
+                height: sidebar.height;
+                tier: GlassTier.regular;
+                radius: Radius.lg;
+                over-wgpu: true;
+                visible: GlassLayer.scene-active;
+                present: !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
+            }
+
             // the peek's own glass (.wb-side-peek: thick, radius 20)
             GlassPanel {
                 x: sidebar.x;
@@ -337,12 +370,17 @@ export component AppWindow inherits Window {
                 height: parent.height - 2 * Chrome.inset;
                 opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
                 compact: root.hidden-at-rest ? false : root.sidebar-rail;
+                // Over the peek's Slint glass (and the page) the scene cannot show: Slint draws.
+                glass-over-wgpu: GlassLayer.scene-active && !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
                 window-movable: !root.full-screen;
                 new-tab-requested => {
                     root.request-new-tab();
                 }
                 address-activated => {
                     root.request-address-focus();
+                }
+                sidebar-toggle-requested => {
+                    root.toggle-sidebar();
                 }
             }
         }

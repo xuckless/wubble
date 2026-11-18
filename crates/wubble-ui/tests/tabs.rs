@@ -186,7 +186,7 @@ fn tab_list_scenarios() {
     app.on_tab_closed(move |id| l.borrow_mut().closed.push(id));
     let l = log.clone();
     app.on_tab_moved(move |id, to| l.borrow_mut().moved.push((id, to)));
-    let driver = driver::connect(&app);
+    let driver = driver::connect(&app, wubble_core::seam::Seam::new());
     model_changed_syncs_rows(&app, &driver);
     tab_click_activates(&app, &driver, &log);
     tab_close_middle_click(&app, &driver, &log);

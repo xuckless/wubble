@@ -218,14 +218,31 @@ fn space_capsule(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
 }
 
+/// The sidebar button (right of the lights, in the top row) hides the extended sidebar.
+fn sidebar_button(app: &AppWindow, driver: &Shared) {
+    settle(app, driver);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
+    // 30 square, its right edge 4 past the sidebar's 6 px padding, in the 30 high top row
+    let x = INSET as f32 + SIDEBAR_DEFAULT as f32 - 6.0 + 4.0 - 15.0;
+    let y = INSET as f32 + 6.0 + 15.0;
+    pointer(app, x, y);
+    button(app, x, y, true);
+    button(app, x, y, false);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Hidden);
+    app.invoke_toggle_sidebar();
+    settle(app, driver);
+    pointer(app, 900.0, 300.0);
+}
+
 #[test]
 fn shell_scenarios() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
     app.show().unwrap();
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
-    let driver = driver::connect(&app);
+    let driver = driver::connect(&app, wubble_core::seam::Seam::new());
     three_modes(&app, &driver);
+    sidebar_button(&app, &driver);
     peek(&app, &driver);
     seam_drag(&app, &driver);
     space_capsule(&app, &driver);

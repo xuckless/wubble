@@ -19,10 +19,11 @@ use std::thread::JoinHandle;
 
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{self, HistoryEntry};
+use wubble_core::seam::SidebarMode;
 use wubble_core::tab::TabId;
 use wubble_store::{
-    ClosedTab, CompactMode, KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting,
-    SidebarWidth, Store, Transition,
+    ClosedTab, KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting,
+    SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 
 /// Session changes after which the session is saved at once.
@@ -107,12 +108,12 @@ impl TypedNav {
     }
 }
 
-/// UI state saved with the session: the typed settings `SidebarWidth` and
-/// `CompactMode` (Expanded or Hidden; peeking is never stored).
+/// UI state saved with the session: the typed settings `SidebarWidth` (the
+/// extended width) and `SidebarModeSetting` (peeking is never stored).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UiState {
     pub sidebar_width: f32,
-    pub compact: bool,
+    pub mode: SidebarMode,
 }
 
 /// The typed settings the host reads at start.
@@ -133,7 +134,7 @@ impl Default for Settings {
             live_suggestions: LiveSuggestions::default(),
             ui: UiState {
                 sidebar_width: SidebarWidth::default(),
-                compact: CompactMode::default(),
+                mode: SidebarModeSetting::default(),
             },
             keybinding_overrides: KeybindingOverrides::default(),
         }
@@ -332,7 +333,7 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
         live_suggestions: store.setting::<LiveSuggestions>().await?,
         ui: UiState {
             sidebar_width: store.setting::<SidebarWidth>().await?,
-            compact: store.setting::<CompactMode>().await?,
+            mode: store.setting::<SidebarModeSetting>().await?,
         },
         keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
     };
@@ -344,7 +345,7 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         Request::Save { model, ui } => {
             store.save_session(&model).await?;
             store.set_setting::<SidebarWidth>(ui.sidebar_width).await?;
-            store.set_setting::<CompactMode>(ui.compact).await?;
+            store.set_setting::<SidebarModeSetting>(ui.mode).await?;
         }
         Request::RecordVisit {
             url,
@@ -590,7 +591,7 @@ mod tests {
         }
         let ui = UiState {
             sidebar_width: 300.0,
-            compact: true,
+            mode: SidebarMode::Rail,
         };
         client.save(&model, ui);
         client.set_engine(omnibox::SearchEngine::Google);

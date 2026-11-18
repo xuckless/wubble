@@ -12,6 +12,11 @@ export global Shell {
     out property <length> edge-corner: 16px;
     // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
     out property <length> side-top: 30px;
+    // .wb-ib (the sidebar button in .wb-nav): 30 square (Chrome.controls), radius 9, white 7%
+    // on hover; .wb-side-top margin-right -4
+    out property <length> nav-radius: 9px;
+    out property <color> nav-hover: rgba(255, 255, 255, 0.07);
+    out property <length> nav-outset: 4px;
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
     out property <duration> light-fill-ms: 200ms;
     out property <duration> light-glyph-ms: 150ms;

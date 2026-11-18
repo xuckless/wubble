@@ -1,4 +1,5 @@
-//! `--smoke frames` correctness check: did the web frame reach the window?
+//! `--smoke frames` correctness checks: did the web frame reach the window, and
+//! does the scene's glass show (not a flat fill)?
 //!
 //! The smoke snapshots the window once after its last frame
 //! (`Window::take_snapshot`, which re-renders the scene through the same
@@ -31,14 +32,18 @@ pub struct Sample {
 }
 
 /// Samples a `GRID` x `GRID` grid inside `region` (cell centres, so rounded
-/// corners are skipped) and fails if it is near uniform or near black.
-pub fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region) -> Result<Sample, String> {
+/// corners are skipped): how many distinct colours, their mean luma, and the
+/// first colour (for messages).
+fn sample(
+    snapshot: &SharedPixelBuffer<Rgba8Pixel>,
+    region: Region,
+) -> Result<(Sample, [u8; 3]), String> {
     let (width, height) = (snapshot.width(), snapshot.height());
     let right = region.x.saturating_add(region.width).min(width);
     let bottom = region.y.saturating_add(region.height).min(height);
     if region.x >= right || region.y >= bottom {
         return Err(format!(
-            "content region {region:?} is empty inside the {width}x{height} snapshot"
+            "region {region:?} is empty inside the {width}x{height} snapshot"
         ));
     }
     let pixels = snapshot.as_slice();
@@ -61,15 +66,29 @@ pub fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region) -> Result
         distinct: colours.len(),
         mean_luma: luma_sum / (GRID * GRID),
     };
+    Ok((sample, colours[0]))
+}
+
+/// The region is not a near-uniform fill.
+pub fn check_varied(
+    snapshot: &SharedPixelBuffer<Rgba8Pixel>,
+    region: Region,
+) -> Result<Sample, String> {
+    let (sample, first) = sample(snapshot, region)?;
     if sample.distinct < MIN_DISTINCT {
         return Err(format!(
-            "content region {region:?} is near uniform: {} distinct colours in {} samples \
-             (first {:?}), the web frame did not reach the window",
+            "region {region:?} is near uniform: {} distinct colours in {} samples (first {first:?})",
             sample.distinct,
             GRID * GRID,
-            colours[0]
         ));
     }
+    Ok(sample)
+}
+
+/// The content rectangle shows the page: varied and not near black.
+pub fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region) -> Result<Sample, String> {
+    let sample = check_varied(snapshot, region)
+        .map_err(|e| format!("content {e}, the web frame did not reach the window"))?;
     if sample.mean_luma < MIN_MEAN_LUMA {
         return Err(format!(
             "content region {region:?} is near black: mean luma {} < {MIN_MEAN_LUMA}, \
@@ -150,6 +169,20 @@ mod tests {
             ..right
         };
         assert!(check(&b, left).is_ok());
+    }
+
+    #[test]
+    fn dark_but_varied_is_varied() {
+        let b = buffer(64, 64, |x, y| {
+            Rgba8Pixel::new(x as u8 / 4, y as u8 / 4, 8, 255)
+        });
+        assert!(check_varied(&b, ALL).is_ok());
+        let flat = buffer(64, 64, |_, _| Rgba8Pixel::new(8, 9, 13, 255));
+        assert!(
+            check_varied(&flat, ALL)
+                .unwrap_err()
+                .contains("near uniform")
+        );
     }
 
     #[test]

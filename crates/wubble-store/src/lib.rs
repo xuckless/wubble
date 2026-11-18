@@ -29,8 +29,8 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::{LoginRow, NewLogin};
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, CompactMode, HistoryRetentionDays, KeybindingOverrides,
-    LiveSuggestions, SearchEngineChoice, Setting, SidebarWidth,
+    BlockerEnabled, BlockerExceptions, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth,
 };
 
 #[derive(Debug, thiserror::Error)]

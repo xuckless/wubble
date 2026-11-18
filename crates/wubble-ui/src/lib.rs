@@ -3,6 +3,7 @@
 slint::include_modules!();
 
 pub mod driver;
+pub mod glass;
 pub mod window;
 
 #[cfg(test)]

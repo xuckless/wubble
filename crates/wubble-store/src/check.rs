@@ -315,7 +315,7 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 3);
+            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 4);
 
             // Old data intact and consistent.
             assert_eq!(s.check_consistency().await.unwrap(), Vec::<String>::new());
@@ -327,7 +327,12 @@ mod tests {
             );
             assert_eq!(s.bookmark_children(None).await.unwrap()[0].title, "Folder");
             assert_eq!(s.search_bookmarks("b.test", 5).await.unwrap().len(), 1);
-            assert!(s.setting::<crate::CompactMode>().await.unwrap());
+            // The old boolean `ui.compact` = true is the hidden mode now, and is gone.
+            assert_eq!(
+                s.setting::<crate::SidebarModeSetting>().await.unwrap(),
+                wubble_core::seam::SidebarMode::Hidden
+            );
+            assert_eq!(s.get_raw("ui.compact").await.unwrap(), None);
             assert_eq!(s.recently_closed().await.unwrap().len(), 1);
 
             // New tables work, and old paths keep working on the migrated file.

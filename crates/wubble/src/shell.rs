@@ -3,7 +3,7 @@
 //! [`view_model`] runs after every change; `bind.rs` hands its result to
 //! Slint wholesale. Nothing patches the sidebar row by row.
 
-use wubble_core::model::Model;
+use wubble_core::model::{Dest, Model};
 use wubble_core::space::{Item, Rgb, SpaceId};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
@@ -86,6 +86,51 @@ pub fn view_model(model: &Model) -> ShellView {
         host: host.into(),
         path: path.into(),
     }
+}
+
+/// Where a row dragged to slot `to` of the flat tab list ([`ShellView::tabs`]: the active
+/// Space's items with folder tabs inline) goes in the model. Dragged up, it goes before the
+/// row now at `to`; dragged down, after the row it passed (at `to` once it is taken out); in
+/// that row's folder if it has one, so the list reads as dropped. `None` for a tab that is not
+/// a row (pinned, another Space's, unknown).
+pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
+    let space = model.spaces.iter().find(|s| s.id == model.active_space)?;
+    // The other rows in flat order, as (before it, after it), indices as after the detach.
+    let mut rows = vec![];
+    let mut from = None;
+    let mut items = 0;
+    let normal = |index| Dest::Normal {
+        space: space.id,
+        index,
+    };
+    for item in &space.items {
+        match item {
+            Item::Tab(t) if *t == tab => from = Some(rows.len()),
+            Item::Tab(_) => {
+                rows.push((normal(items), normal(items + 1)));
+                items += 1;
+            }
+            Item::Folder(f) => {
+                for (index, _) in f.tabs.iter().filter(|&&t| t != tab).enumerate() {
+                    let at = |index| Dest::Folder {
+                        folder: f.id,
+                        index,
+                    };
+                    rows.push((at(index), at(index + 1)));
+                }
+                if let Some(i) = f.tabs.iter().position(|&t| t == tab) {
+                    from = Some(rows.len() - (f.tabs.len() - 1 - i));
+                }
+                items += 1;
+            }
+        }
+    }
+    let from = from?;
+    Some(if to > from {
+        rows.get(to - 1).map_or(normal(usize::MAX), |r| r.1)
+    } else {
+        rows.get(to).map_or(normal(usize::MAX), |r| r.0)
+    })
 }
 
 /// What a tab is called: its title, else its host, else "New tab".
@@ -219,6 +264,121 @@ mod tests {
         assert_eq!(view_model(&m).tabs[0].title, "Example");
         let (m, _) = new_tab(m, "");
         assert_eq!(view_model(&m).tabs[1].title, "New tab");
+    }
+
+    /// Tabs a, b, c, then a folder holding d and e; p pinned.
+    fn with_folder() -> (Model, [TabId; 6], wubble_core::space::FolderId) {
+        let mut m = Model::new(std::time::Instant::now());
+        let mut ids = vec![];
+        for url in ["a", "b", "c", "d", "e", "p"] {
+            let (next, t) = new_tab(m, &format!("https://{url}.test/"));
+            m = next;
+            ids.push(t);
+        }
+        let [a, b, c, d, e, p] = ids[..] else {
+            unreachable!()
+        };
+        let (m, _) = apply(
+            m,
+            Command::NewFolder {
+                space: SpaceId(0),
+                name: "f".into(),
+            },
+        );
+        let folder = m.spaces[0]
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::Folder(f) => Some(f.id),
+                Item::Tab(_) => None,
+            })
+            .expect("folder");
+        let mut m = m;
+        for (i, t) in [d, e].into_iter().enumerate() {
+            m = apply(
+                m,
+                Command::MoveTab {
+                    tab: t,
+                    to: Dest::Folder { folder, index: i },
+                },
+            )
+            .0;
+        }
+        let (m, _) = apply(m, Command::PinTab(p));
+        let v = view_model(&m);
+        assert_eq!(
+            titles(&v.tabs),
+            ["a.test", "b.test", "c.test", "d.test", "e.test"]
+        );
+        (m, [a, b, c, d, e, p], folder)
+    }
+
+    fn moved(m: Model, tab: TabId, to: usize) -> Vec<String> {
+        let dest = move_dest(&m, tab, to).expect("a row");
+        let (m, _) = apply(m, Command::MoveTab { tab, to: dest });
+        view_model(&m).tabs.into_iter().map(|r| r.title).collect()
+    }
+
+    #[test]
+    fn a_dragged_row_lands_on_its_slot_of_the_flat_list() {
+        let (m, [a, b, c, d, e, _], f) = with_folder();
+        let s = SpaceId(0);
+        // a down to slot 2: b c a d e
+        assert_eq!(
+            move_dest(&m, a, 2),
+            Some(Dest::Normal { space: s, index: 2 })
+        );
+        assert_eq!(
+            moved(m.clone(), a, 2),
+            ["b.test", "c.test", "a.test", "d.test", "e.test"]
+        );
+        // c up to the top
+        assert_eq!(
+            moved(m.clone(), c, 0),
+            ["c.test", "a.test", "b.test", "d.test", "e.test"]
+        );
+        // a to the last slot: after e, in its folder
+        assert_eq!(
+            move_dest(&m, a, 4),
+            Some(Dest::Folder {
+                folder: f,
+                index: 2
+            })
+        );
+        // past the list (no row there): last, out of everything
+        assert_eq!(
+            move_dest(&m, a, 9),
+            Some(Dest::Normal {
+                space: s,
+                index: usize::MAX
+            })
+        );
+        assert_eq!(
+            moved(m.clone(), a, 4),
+            ["b.test", "c.test", "d.test", "e.test", "a.test"]
+        );
+        // e within its folder, before d
+        assert_eq!(
+            moved(m.clone(), e, 3),
+            ["a.test", "b.test", "c.test", "e.test", "d.test"]
+        );
+        // d out of the folder, up between a and b
+        assert_eq!(
+            moved(m.clone(), d, 1),
+            ["a.test", "d.test", "b.test", "c.test", "e.test"]
+        );
+        // b down to where e is: into the folder before e
+        assert_eq!(
+            moved(m.clone(), b, 3),
+            ["a.test", "c.test", "d.test", "b.test", "e.test"]
+        );
+    }
+
+    #[test]
+    fn pinned_and_unknown_tabs_are_not_rows() {
+        let (m, [.., p], _) = with_folder();
+        assert_eq!(move_dest(&m, p, 0), None);
+        assert_eq!(move_dest(&m, TabId(999), 0), None);
     }
 
     #[test]

@@ -20,7 +20,7 @@
 import { Palette, Spaces, Radius, Spacing, Chrome, Glass, GlassTierStyle, Fonts, Type, Motion } from "tokens.slint";
 // wubble change: the tier is wubble's enum, `TabItem` comes from the shared model, the neutral
 // glyph and the CSS row metrics come from icon.slint / app-tokens.slint.
-import { GlassTier, TabItem } from "components/model.slint";
+import { GlassTier, GlassItem, GlassLayer, TabItem } from "components/model.slint";
 import { Icon, IconPaths } from "components/icon.slint";
 import { Shell } from "app-tokens.slint";
 
@@ -61,13 +61,52 @@ export component SpaceIcon inherits Path {
 // The film rim (touch only) fades in over 200 ms and out over 150 ms like wubble.css; Slint has
 // no conic gradient, so the rim is a linear film-colour sweep. The swirling version is the wgpu
 // film rim (uFilm).
+// wubble change: with `over-wgpu` the panel reports its rectangle, radius, tier and touch state
+// as data (`item`, through GlassLayer.report), which the host hands to the scene's `set_glass`
+// each frame it changed; nothing calls into the scene per widget.
 export component GlassPanel inherits Rectangle {
     in property <GlassTier> tier: GlassTier.regular;   // wubble change: the enum, not 0 / 1 / 2
     in property <length> radius: Radius.lg;
-    in property <bool> film: false;          // touched: hover / press / drag / focus
+    // wubble change: the touch state, split for the scene; `film` follows it.
+    in property <bool> hover: false;
+    in property <bool> pressed: false;
+    in property <bool> focused: false;
+    in property <bool> film: root.hover || root.pressed || root.focused;   // touched: hover / press / drag / focus
     in property <color> tint: transparent;   // the Space colour at 10% on sidebar glass
     in property <bool> over-wgpu: false;     // the wgpu glass pass draws the material underneath
     in property <bool> over-content: false;  // over live web content: thick uses Glass.thickOverContent
+    // wubble change: the scene's glass, as data. `key` orders the scene's list (GlassKeys);
+    // `present` is the panel's own say whether it shows.
+    in property <int> key: -1;
+    in property <bool> present: true;
+    // The press scale, about the centre. A property of its own (callers animate it): Slint
+    // reads an unbound transform-scale as 0. `absolute-position` maps the origin through the
+    // transform (scaled origin), but `width` and `height` stay unscaled.
+    in property <float> scale: 1;
+    transform-scale: root.scale;
+    out property <GlassItem> item: {
+        key: root.key,
+        x: root.absolute-position.x,
+        y: root.absolute-position.y,
+        width: root.width * root.scale,
+        height: root.height * root.scale,
+        radius: root.radius * root.scale,
+        tier: root.tier,
+        pressed: root.pressed,
+        hover: root.hover,
+        focus: root.focused,
+        present: root.over-wgpu && root.present && root.visible && root.width > 0 && root.height > 0,
+    };
+    property <int> generation: GlassLayer.generation;
+    init => {
+        GlassLayer.report(root.item);
+    }
+    changed item => {
+        GlassLayer.report(root.item);
+    }
+    changed generation => {
+        GlassLayer.report(root.item);
+    }
 
     property <GlassTierStyle> t: root.tier == GlassTier.thin ? Glass.thin : root.tier == GlassTier.regular ? Glass.regular : Glass.thick;
     property <float> shadow-alpha: root.tier == GlassTier.thin ? 0.35 : root.tier == GlassTier.regular ? 0.45 : 0.55;
@@ -112,11 +151,12 @@ export component GlassPanel inherits Rectangle {
         visible: !root.over-wgpu;
     }
 
-    // film rim, only on touch
+    // film rim, only on touch. wubble change: the scene draws its own (uFilm) over wgpu.
     Rectangle {
         border-radius: root.radius;
         border-width: 1.5px;
         border-color: @linear-gradient(120deg, Palette.sky 0%, Palette.lilac 33%, Palette.blush 66%, Palette.mint 100%);
+        visible: !root.over-wgpu;
         opacity: root.film ? 0.8 : 0;
         animate opacity { duration: root.film ? 200ms : 150ms; easing: Motion.easeOut; }
     }
@@ -130,6 +170,8 @@ export component GlassPanel inherits Rectangle {
 export component PressableButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
+    // wubble change: the side padding, so an icon button can be smaller than 40 (.wb-ib, 30)
+    in property <length> padding-x: Spacing.s3;
     callback clicked();
     out property <bool> pressed: touch.pressed;
     out property <bool> hovered: touch.has-hover;
@@ -152,8 +194,8 @@ export component PressableButton inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: Spacing.s3;
-        padding-right: Spacing.s3;
+        padding-left: root.padding-x;
+        padding-right: root.padding-x;
         spacing: Spacing.s2;
         alignment: center;
         @children

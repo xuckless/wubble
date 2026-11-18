@@ -7,6 +7,7 @@
 //! A missing or undecodable row yields the default: a bad settings row must not block startup.
 
 use wubble_core::omnibox::SearchEngine;
+use wubble_core::seam::{SIDEBAR_DEFAULT, SidebarMode};
 
 use crate::{Result, Store};
 
@@ -75,6 +76,25 @@ impl Codec for Option<SearchEngine> {
     }
 }
 
+impl Codec for SidebarMode {
+    fn encode(&self) -> String {
+        match self {
+            SidebarMode::Extended => "extended",
+            SidebarMode::Rail => "rail",
+            SidebarMode::Hidden => "hidden",
+        }
+        .into()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        match s {
+            "extended" => Some(SidebarMode::Extended),
+            "rail" => Some(SidebarMode::Rail),
+            "hidden" => Some(SidebarMode::Hidden),
+            _ => None,
+        }
+    }
+}
+
 /// A JSON array of strings; entries are opaque to the store.
 impl Codec for Vec<String> {
     fn encode(&self) -> String {
@@ -107,9 +127,10 @@ settings! {
     SearchEngineChoice: Option<SearchEngine> = "search.engine", None;
     /// Live engine suggestions; off until the user turns them on.
     LiveSuggestions: bool = "suggest.live", false;
-    /// Logical pixels; matches `Sizes.sidebar-width` in the UI tokens.
-    SidebarWidth: f32 = "ui.sidebar_width", 260.0;
-    CompactMode: bool = "ui.compact", false;
+    /// The extended sidebar's width, logical px (the seam's `saved`); the design's default.
+    SidebarWidth: f32 = "ui.sidebar_width", SIDEBAR_DEFAULT as f32;
+    /// Extended, rail or hidden (migration 4 carries the old boolean `ui.compact` over).
+    SidebarModeSetting: SidebarMode = "ui.sidebar_mode", SidebarMode::Extended;
     /// Opaque entries; the keybinding editor owns their format.
     KeybindingOverrides: Vec<String> = "keys.overrides", vec![];
     BlockerEnabled: bool = "blocker.enabled", true;
@@ -133,7 +154,7 @@ impl Store {
         self.set_raw(S::KEY, &Codec::encode(&value)).await
     }
 
-    async fn get_raw(&self, key: &str) -> Result<Option<String>> {
+    pub(crate) async fn get_raw(&self, key: &str) -> Result<Option<String>> {
         let mut rows = self
             .conn
             .query("SELECT value FROM settings WHERE key = ?1", [key])
@@ -178,8 +199,14 @@ mod tests {
             let s = Store::open_in_memory().await.unwrap();
             assert_eq!(s.setting::<SearchEngineChoice>().await.unwrap(), None);
             assert!(!s.setting::<LiveSuggestions>().await.unwrap());
-            assert_eq!(s.setting::<SidebarWidth>().await.unwrap(), 260.0);
-            assert!(!s.setting::<CompactMode>().await.unwrap());
+            assert_eq!(
+                s.setting::<SidebarWidth>().await.unwrap(),
+                SIDEBAR_DEFAULT as f32
+            );
+            assert_eq!(
+                s.setting::<SidebarModeSetting>().await.unwrap(),
+                SidebarMode::Extended
+            );
             assert!(s.setting::<KeybindingOverrides>().await.unwrap().is_empty());
             assert!(s.setting::<BlockerEnabled>().await.unwrap());
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
@@ -196,7 +223,13 @@ mod tests {
             round_trip::<LiveSuggestions>(&mut s, true).await;
             round_trip::<LiveSuggestions>(&mut s, false).await;
             round_trip::<SidebarWidth>(&mut s, 312.5).await;
-            round_trip::<CompactMode>(&mut s, true).await;
+            for mode in [
+                SidebarMode::Hidden,
+                SidebarMode::Rail,
+                SidebarMode::Extended,
+            ] {
+                round_trip::<SidebarModeSetting>(&mut s, mode).await;
+            }
             round_trip::<HistoryRetentionDays>(&mut s, 90).await;
             round_trip::<BlockerEnabled>(&mut s, false).await;
             let list = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -219,9 +252,17 @@ mod tests {
                 .unwrap();
             s.set_raw(BlockerEnabled::KEY, "").await.unwrap();
             s.set_raw(HistoryRetentionDays::KEY, "-3").await.unwrap();
+            s.set_raw(SidebarModeSetting::KEY, "peeking").await.unwrap();
+            assert_eq!(
+                s.setting::<SidebarModeSetting>().await.unwrap(),
+                SidebarMode::Extended
+            );
             assert_eq!(s.setting::<HistoryRetentionDays>().await.unwrap(), 0);
             assert!(!s.setting::<LiveSuggestions>().await.unwrap());
-            assert_eq!(s.setting::<SidebarWidth>().await.unwrap(), 260.0);
+            assert_eq!(
+                s.setting::<SidebarWidth>().await.unwrap(),
+                SIDEBAR_DEFAULT as f32
+            );
             assert_eq!(s.setting::<SearchEngineChoice>().await.unwrap(), None);
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
             assert!(s.setting::<BlockerEnabled>().await.unwrap());

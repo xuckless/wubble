@@ -7,16 +7,19 @@
 import { Palette, Chrome, Spacing, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton } from "../components.slint";
-import { GlassTier } from "model.slint";
+import { GlassTier, GlassKeys, GlassLayer } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
 export component AddressPill inherits Rectangle {
     in property <string> host;
     in property <string> path;
     in property <bool> compact: false;
-    // A page is loading. The design's border beam (chrome.tsx `Address`) is drawn by the gfx
-    // lane's shader; this is its Slint fallback: a sheen that sweeps the pill every 1.5 s and
-    // fades over 1.5 s once loading ends.
+    // The scene draws this pill's glass (and its border beam).
+    in property <bool> over-wgpu: false;
+    // A page is loading. The design's border beam (chrome.tsx `Address`) is the scene's
+    // (`set_beam` on this pill's glass rect, `lap_beam` when loading starts); this is its Slint
+    // fallback, used only without the scene: a sheen that sweeps the pill every 1.5 s and fades
+    // over 1.5 s once loading ends.
     in property <bool> loading: false;
     // Beam strength: up in 120 ms, down over 1500 ms; the sheen shows its square (lingering tail).
     property <float> strength: root.loading ? 1 : 0;
@@ -32,17 +35,21 @@ export component AddressPill inherits Rectangle {
 
     height: Chrome.address;
 
-    if !root.compact: GlassPanel {
+    // `visible`, not `if`, so the panel's glass item outlives a rail round trip.
+    GlassPanel {
+        visible: !root.compact;
+        key: GlassKeys.address;
+        over-wgpu: root.over-wgpu;
         tier: GlassTier.thin;
         radius: Shell.control-radius;
-        film: ta.has-hover;
+        hover: ta.has-hover;
+        pressed: ta.pressed;
         // useGlass(…, { shadow: 0 })
         drop-shadow-blur: 0px;
         drop-shadow-offset-y: 0px;
         drop-shadow-color: transparent;
-        transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: ta.pressed ? Shell.address-press : 1;
-        animate transform-scale {
+        scale: ta.pressed ? Shell.address-press : 1;
+        animate scale {
             duration: Shell.address-press-ms;
             easing: Motion.easeOut;
         }
@@ -54,7 +61,7 @@ export component AddressPill inherits Rectangle {
             }
         }
 
-        if root.sheen > 0: Rectangle {
+        if root.sheen > 0 && !GlassLayer.scene-active: Rectangle {
             border-radius: Shell.control-radius;
             clip: true;
             opacity: root.sheen;

@@ -7,6 +7,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../sql/001_init.sql")),
     (2, include_str!("../sql/002_core_model.sql")),
     (3, include_str!("../sql/003_logins_imports.sql")),
+    (4, include_str!("../sql/004_sidebar_mode.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {

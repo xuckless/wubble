@@ -1,3 +1,4 @@
+mod backdrop;
 mod bar;
 mod bind;
 mod cli;
@@ -15,8 +16,10 @@ mod tabs_smoke;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use backdrop::Glass;
 use cli::{Command, Phase, Smoke};
 use host::{Checks, Host};
 use nav_smoke::NavSmoke;
@@ -26,6 +29,7 @@ use session_smoke::SessionSmoke;
 use slint::ComponentHandle;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use tabs_smoke::TabsSmoke;
+use wubble_core::seam::Seam;
 use wubble_engine::app::{self, Engine, EngineConfig, EngineError, PumpScheduler};
 use wubble_engine::input::Point;
 use wubble_engine::view::Layout;
@@ -191,9 +195,20 @@ fn main() -> ExitCode {
     }
 }
 
-/// Starts the spring-driven shell: sidebar seam, compact mode, Space indicator.
-fn install_shell_driver(window: &AppWindow) -> Result<(), Box<dyn std::error::Error>> {
-    wubble_ui::driver::install(window)?;
+/// Starts the spring-driven shell (sidebar seam from the saved `ui`, tab rows, Space
+/// indicator) and hands the scene its frames from the same, single rendering notifier.
+fn install_shell_driver(
+    window: &AppWindow,
+    ui: persist::UiState,
+    glass: &Rc<RefCell<Glass>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let seam = Seam::restored(ui.sidebar_width.into(), ui.mode);
+    let glass = Rc::clone(glass);
+    wubble_ui::driver::install(window, seam, move |window, now, items| {
+        if let Ok(mut glass) = glass.try_borrow_mut() {
+            glass.frame(window, now, items);
+        }
+    })?;
     Ok(())
 }
 
@@ -437,6 +452,12 @@ fn connect_shell(window: &AppWindow) {
             command(Cmd::CloseTab(t));
         }
     });
+    // A row dragged to slot `to` of the flat tab list.
+    window.on_tab_moved(|id, to| {
+        if let (Some(tab), Ok(to)) = (shell::tab_id(id), usize::try_from(to)) {
+            with_host(|host| host.move_tab(tab, to));
+        }
+    });
     window.on_space_switched(move |id| {
         if let Some(s) = shell::space_id(id) {
             command(Cmd::SwitchSpace(s));
@@ -556,14 +577,21 @@ fn run(
     });
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
+    let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));
     connect_input(&window);
     connect_shell(&window);
     wubble_ui::window::wire(&window);
-    install_shell_driver(&window)?;
-    if loaded.settings.ui.compact {
-        window.invoke_toggle_sidebar();
-    }
-    let host = Host::new(engine, &window, gpu.presenter(), loaded, store, url, checks);
+    install_shell_driver(&window, loaded.settings.ui, &glass)?;
+    let host = Host::new(
+        engine,
+        &window,
+        gpu.presenter(),
+        glass,
+        loaded,
+        store,
+        url,
+        checks,
+    );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
     let lifecycle = slint::Timer::default();
