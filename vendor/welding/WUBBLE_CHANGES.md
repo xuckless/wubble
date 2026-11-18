@@ -286,6 +286,23 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    cap and room again after a drain. Not unit-tested: an unknown frame id
    (needs a live browser).
 
+28. **macOS frame copy on its own Metal queue.** `metal.rs`:
+   `copy_metal_to_owned` no longer goes through `copy_to_owned` (now
+   Linux-only in `native_frame/mod.rs`): it creates the copy as a raw
+   private `MTLTexture` (`add_srgb_suffix` of the frame's format; new
+   `wgpu_format_to_mtl` arms for `Bgra8UnormSrgb`/`Rgba8UnormSrgb`), blits
+   into it on a command queue of its own (`copy_queue`, one per device,
+   thread-local: `OnAcceleratedPaint` runs on CEF's UI thread), waits for
+   that command buffer only (`waitUntilCompleted`, status checked) and wraps
+   the copy with `grafting::import_metal_texture_ref`, so wgpu counts it as
+   initialised. On wgpu's queue the wait also covered the scene and Slint's
+   frame queued before the copy (M2 Pro, `--measure scroll`: copy wait p95
+   4.8 to 5.1 ms before, 2.9 to 3.2 ms after; the UI thread is blocked for
+   it). `Cargo.toml`: objc2-metal features `MTLBlitCommandEncoder`,
+   `MTLCommandBuffer`, `MTLCommandEncoder`, `MTLCommandQueue`. Not
+   unit-tested (needs a live CEF frame); the macOS `--smoke frames` pixel and
+   glass checks run it.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
