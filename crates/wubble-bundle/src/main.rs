@@ -8,6 +8,9 @@
 //! place of `Contents/MacOS/wubble`, so it runs with the bundle's framework and
 //! helper apps.
 //!
+//! The app icon is `assets/icons/macos/mac/wubble.icns`; Finder and the Dock show it for
+//! `wubble.app` (a changed icon can need `touch wubble.app` or a Finder relaunch to refresh).
+//!
 //! The bundling itself is cef-rs's `cef::build_util::mac::bundle`
 //! (tauri-apps/cef-rs, MIT OR Apache-2.0), used as a library. The shape of a
 //! workspace bin calling it is from wgpu-weld `demo-weld-mac/src/bundle.rs`
@@ -51,7 +54,11 @@ fn main() {
         "English",
         semver::Version::new(0, 0, 0),
     );
-    let app = bundle(&out, &target, "wubble", "wubble-helper", None, info)
+    // `bundle` copies `<resources>/mac/*` into Contents/Resources and, when
+    // `mac/wubble.icns` exists, sets CFBundleIconFile in the app's Info.plist (the helper
+    // apps get no icon). The .icns is made by scripts/make-icons.py.
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/macos");
+    let app = bundle(&out, &target, "wubble", "wubble-helper", Some(resources), info)
         .unwrap_or_else(|e| fail(&e.to_string()));
     if let Some(exe) = exe {
         let to = app.join("Contents/MacOS/wubble");
