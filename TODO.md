@@ -28,7 +28,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Glass | Wubble draws its own glass (blur + saturate + tint + specular + rim) so it looks the same on every OS; the window itself is also transparent where the OS allows |
 | Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption |
 | Layout | No top toolbar. Address pill at the top of the sidebar, then pinned, tabs, new-tab row, Space switcher |
-| New tab | Ctrl+T opens the command bar over the current page; a tab is created only when something is chosen. No start page |
+| New tab | Ctrl+T opens the command bar over the current page; a tab is created only when something is chosen. The design repo's bubble start page is deferred (confirmed 2026-11-18); the repo is a kit of what we might need, not a list of what must ship |
 | Command bar state | One `CommandBarState` enum written only by a pure `next()` via `dispatch` in Slint; closing to closed is a Slint Timer equal to the out duration (no animation-finished callback) |
 | Passwords | Built-in manager (encrypted store, OS keyring) before extensions; extension password managers work once the extension pass (M6) lands |
 | Glass under load | Glass degrades automatically (lower-res blur → cached backdrop → flat tint); animation never drops frames for it |
