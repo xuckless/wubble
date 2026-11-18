@@ -28,6 +28,7 @@ its "Decided" table before proposing architecture.
     cargo test -p wubble-core
     cargo run -p wubble
     cargo run -p wubble -- --smoke boot   # CEF boots and shuts down, no window
+    cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
 
 ## Code principles
 

@@ -190,6 +190,18 @@ mod tests {
         }
     }
 
+    /// The host's drain: one open view, ticks until the view reports closed.
+    #[test]
+    fn shutdown_with_an_open_view_waits_for_its_closed_report() {
+        let (state, effects) = run(&[Initialised, BrowserOpened, ShutdownRequested, Tick, Tick]);
+        assert_eq!(state, ShuttingDown { browsers: 1 });
+        assert_eq!(effects, vec![CloseAllBrowsers, PumpOnce, PumpOnce]);
+        assert_eq!(
+            transition(state, BrowserClosed),
+            (Stopped, vec![ShutdownCef])
+        );
+    }
+
     #[test]
     fn shutting_down_waits_for_last_browser() {
         let mut state = Running { browsers: 3 };

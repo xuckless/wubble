@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use state::{Effect, Event, State};
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 
+use crate::view::{View, ViewConfig};
+
 /// Sandbox off on every platform for now (TODO.md, M1 "Sandbox enabled").
 /// wubble-helper passes the same mode to its `execute_process`; keep them
 /// equal (the helper must not depend on this crate; see the TODO.md row).
@@ -57,6 +59,10 @@ pub enum EngineError {
     HelperMissing { path: PathBuf },
     /// CEF refused to initialise.
     Init(String),
+    /// A browser view could not be created.
+    View(String),
+    /// The engine is shutting down or stopped; no new views.
+    NotRunning,
 }
 
 impl fmt::Display for EngineError {
@@ -73,6 +79,8 @@ impl fmt::Display for EngineError {
                 path.display()
             ),
             Self::Init(e) => write!(f, "CEF initialisation failed: {e}"),
+            Self::View(e) => write!(f, "cannot create a browser view: {e}"),
+            Self::NotRunning => write!(f, "the engine is not running"),
         }
     }
 }
@@ -89,6 +97,9 @@ fn helper_path(exe_dir: &Path) -> PathBuf {
 trait Platform {
     /// Per-user directory for CEF's cache, given an environment lookup.
     fn user_cache_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
+
+    /// Chromium switches every wubble process gets.
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)];
 }
 
 #[cfg(target_os = "linux")]
@@ -96,6 +107,13 @@ struct Linux;
 
 #[cfg(target_os = "linux")]
 impl Platform for Linux {
+    /// Skia on Vulkan in the GPU process. Without it, on NVIDIA's proprietary
+    /// driver (615, Wayland and X11 alike) Chromium's GL path cannot draw into
+    /// the dmabuf shared images that windowless shared-texture mode exports
+    /// ("Unable to initialize SkSurface" / "OzoneImageBacking::ProduceSkiaGanesh
+    /// failed to create GL representation") and no accelerated paint arrives.
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("enable-features", Some("Vulkan"))];
+
     /// `$XDG_DATA_HOME/wubble/cef`, else `$HOME/.local/share/wubble/cef`.
     /// Relative values are ignored, as the XDG Base Directory spec requires.
     fn user_cache_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
@@ -112,6 +130,8 @@ struct Unsupported;
 
 #[cfg(not(target_os = "linux"))]
 impl Platform for Unsupported {
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+
     fn user_cache_dir(_env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         None
     }
@@ -127,6 +147,10 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     let mut cef = CefRuntimeConfig::new(config.exe_dir.clone(), SANDBOX);
     cef.browser_subprocess_path = Some(helper_path(&config.exe_dir));
     cef.cache_path = Some(config.cache_dir.clone());
+    cef.command_line_switches = Current::CHROMIUM_SWITCHES
+        .iter()
+        .map(|(name, value)| ((*name).into(), value.map(Into::into)))
+        .collect();
     cef
 }
 
@@ -143,8 +167,16 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
         .unwrap_or("unknown")
 }
 
+/// Identifies one view owned by the [`Engine`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewId(usize);
+
 /// The running CEF process. Drive it only from the thread that started it.
 pub struct Engine {
+    /// Open views, each counted in `state` until it reports itself closed.
+    /// Declared before `runtime` so views drop before CEF shuts down.
+    views: Vec<(ViewId, View)>,
+    next_view: usize,
     /// `Some` exactly while `state` is Running or ShuttingDown: an Engine only
     /// exists after CEF initialised, and `Effect::ShutdownCef` takes it.
     runtime: Option<CefRuntime>,
@@ -166,6 +198,8 @@ impl Engine {
         }
         let runtime = CefRuntime::initialize(cef).map_err(|e| EngineError::Init(e.to_string()))?;
         let mut engine = Self {
+            views: Vec::new(),
+            next_view: 0,
             runtime: Some(runtime),
             state: State::Uninitialised,
         };
@@ -187,6 +221,27 @@ impl Engine {
         self.state == State::Stopped
     }
 
+    /// Creates a windowless browser. The engine owns it, closes it on
+    /// shutdown and waits for CEF to drop it before shutting CEF down.
+    pub fn open_view(&mut self, config: ViewConfig) -> Result<ViewId, EngineError> {
+        let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
+            return Err(EngineError::NotRunning);
+        };
+        let view = View::open(runtime, config)?;
+        let id = ViewId(self.next_view);
+        self.next_view += 1;
+        self.views.push((id, view));
+        self.apply(Event::BrowserOpened);
+        Ok(id)
+    }
+
+    /// The view, until it has closed.
+    pub fn view(&mut self, id: ViewId) -> Option<&mut View> {
+        self.views
+            .iter_mut()
+            .find_map(|(view_id, view)| (*view_id == id).then_some(view))
+    }
+
     fn apply(&mut self, event: Event) {
         let (next, effects) = state::transition(self.state, event);
         self.state = next;
@@ -205,14 +260,26 @@ impl Engine {
                 if let Some(runtime) = &self.runtime {
                     runtime.do_message_loop_work();
                 }
+                self.reap_closed_views();
             }
-            // No browsers exist yet (M1 "View lifecycle" adds them). Nothing
-            // emits BrowserOpened, so this is unreachable today. When browsers
-            // land, this MUST close them and their close callbacks MUST report
-            // Event::BrowserClosed: the host's drain loop ends only on Stopped.
-            Effect::CloseAllBrowsers => {}
+            // Each closing view reports Event::BrowserClosed from a later
+            // pump (`reap_closed_views`); the host's drain loop ends on Stopped.
+            Effect::CloseAllBrowsers => {
+                for (_, view) in &mut self.views {
+                    view.close();
+                }
+            }
             // Dropping the runtime calls cef::shutdown.
             Effect::ShutdownCef => self.runtime = None,
+        }
+    }
+
+    /// Drops views CEF has let go of and reports each one to the lifecycle.
+    fn reap_closed_views(&mut self) {
+        let before = self.views.len();
+        self.views.retain_mut(|(_, view)| !view.poll_closed());
+        for _ in self.views.len()..before {
+            self.apply(Event::BrowserClosed);
         }
     }
 }
@@ -250,6 +317,16 @@ mod tests {
         assert_eq!(
             cef.cache_path.as_deref(),
             Some(Path::new("/run/user/1/wubble-smoke-7"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_enables_vulkan_for_shared_textures() {
+        let cef = cef_config(&config("/opt/wubble", "/c"));
+        assert_eq!(
+            cef.command_line_switches,
+            vec![("enable-features".to_string(), Some("Vulkan".to_string()))]
         );
     }
 

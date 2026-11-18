@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- Bundled page for `wubble --smoke frames=N`: animates every frame so CEF
+     keeps painting, and loads nothing from the network. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble smoke</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: linear-gradient(120deg, #7aa2ff, #c39bff, #ff9bc8, #8ef0c4);
+    background-size: 400% 400%;
+    animation: drift 4s linear infinite;
+    font: 600 32px system-ui, sans-serif;
+    color: #111114;
+  }
+  @keyframes drift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+  /* Fixed colour swatches to check channel order and gamma by eye. */
+  .swatches { position: absolute; left: 24px; top: 24px; display: flex; gap: 8px; }
+  .swatches div { width: 64px; height: 64px; }
+  canvas { position: absolute; inset: 0; }
+  #count { position: absolute; left: 24px; bottom: 24px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="swatches">
+  <div style="background:#ff0000"></div>
+  <div style="background:#00ff00"></div>
+  <div style="background:#0000ff"></div>
+  <div style="background:#808080"></div>
+</div>
+<div id="count">frame 0</div>
+<script>
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const count = document.getElementById("count");
+  let frame = 0;
+  function draw() {
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+    const x = (frame * 4) % canvas.width;
+    ctx.fillStyle = "#111114";
+    ctx.fillRect(x, canvas.height / 2 - 40, 80, 80);
+    count.textContent = "frame " + frame + "  " + innerWidth + "x" + innerHeight + " @" + devicePixelRatio;
+    frame += 1;
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>
+</body>
+</html>

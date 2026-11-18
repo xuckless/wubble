@@ -12,3 +12,23 @@
 
 pub mod import;
 pub mod pacing;
+
+pub use import::{FramePresenter, GfxError, GpuContext, NativeFrame};
+
+/// A size in physical pixels: frames, views and the content rectangle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl FrameSize {
+    pub const fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    /// The same size with each side at least 1 pixel (CEF and wgpu reject 0).
+    pub fn at_least_one(self) -> Self {
+        Self::new(self.width.max(1), self.height.max(1))
+    }
+}
