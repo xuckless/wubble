@@ -50,7 +50,7 @@ Hard rules:
 - Crate boundaries: only wubble-engine names CEF types; only wubble-gfx touches native texture handles; wubble-core has no CEF, wgpu or Slint.
 - Commits: plain \`git commit\` with the repo's configured identity, short imperative subject, NO trailers (no Co-Authored-By, no links). Never git stash, never push, never touch other branches.
 - Copy first: where the research note names code to copy or port, do that rather than writing your own. Every copied or ported piece gets a source comment (project, path, licence) and an entry in THIRD_PARTY_NOTICES.md at the repo root.
-- No test may depend on machine speed: no timing thresholds, fps assertions or benchmarks in `cargo test` or CI. Performance is measured by hand on the owner's Linux box or the macOS box, never asserted.
+- No test may depend on machine speed: no timing thresholds, fps assertions or benchmarks in \`cargo test\` or CI. Performance is measured by hand on the owner's Linux box or the macOS box, never asserted.
 - If something cannot work as specified, stop and report status 'blocked' with evidence (error text, API docs, source lines). Do not fake a result or silently substitute a different approach.
 `
 
