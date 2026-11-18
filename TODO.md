@@ -249,18 +249,17 @@ After daily-drive
 ## Built in instead of extensions (owner, 2026-11-18)
 
 Extensions wait for M6, so the things people install first are built into wubble, where we own
-the process and can optimise it. Decided: the content blocker and a media downloader. The rest
-are candidates until the owner picks.
+the process and can optimise it. All of the following are decided (owner, 2026-11-18).
 
-- [~] Content blocker (Brave `adblock-rust`): network and cosmetic filtering are in; badge and per-site switch follow
-- [ ] Media downloader (the owner's ask, modelled on Video DownloadHelper): detect media in the request path (direct files, HLS and DASH manifests), offer qualities, download and join segments. Never touches DRM-protected streams
-- [ ] Candidate: cookie-banner dismissal and tracking-parameter stripping (extra lists and `$removeparam` rules in the same blocker engine)
-- [ ] Candidate: dark mode for pages (Chromium's own forced-dark feature, per-site switch)
-- [ ] Candidate: reader mode (Mozilla Readability, Apache-2.0)
-- [ ] Candidate: video controls on every page (speed, picture-in-picture, loop) from one overlay
-- [ ] Candidate: full-page and region screenshots
-- [ ] Candidate: keyboard link hints
-- [ ] Candidate: sponsor-segment skipping (needs a third-party lookup, so off by default)
+- [~] Content blocker at uBlock Origin's level: the engine stays Brave's `adblock-rust` (it reads uBO's filter syntax), shipped with uBO's default list set and uBO's scriptlet resources (GPL-3.0, compatible). Network and cosmetic filtering are in; badge, per-site switch, generic cosmetic rules and scriptlet coverage follow. The raw extension cannot run before M6
+- [ ] Media downloader (the owner's ask, modelled on Video DownloadHelper): detect media in the request path (direct files, HLS and DASH manifests), offer qualities, download and join segments; YouTube included (owner). Never touches DRM-protected streams
+- [ ] cookie-banner dismissal and tracking-parameter stripping (extra lists and `$removeparam` rules in the same blocker engine)
+- [ ] dark mode for pages (Chromium's own forced-dark feature, per-site switch)
+- [ ] reader mode (Mozilla Readability, Apache-2.0)
+- [ ] video controls on every page (speed, picture-in-picture, loop) from one overlay
+- [ ] full-page and region screenshots
+- [ ] keyboard link hints
+- [ ] Sponsor-segment skipping on YouTube, built in against SponsorBlock's public API with its privacy-preserving hash-prefix lookup (the raw extension cannot run before M6). It is a request wubble itself makes, so it is a setting that starts off, offered on the first YouTube video
 - Already on the roadmap and covering what an extension would: passwords and autofill (M4), tab sleeping (M3), Boosts for per-site CSS and JS (M5)
 
 ## Performance pass (after M5, before hardening; owner, 2026-11-18)
