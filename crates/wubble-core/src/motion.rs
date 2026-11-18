@@ -252,9 +252,66 @@ pub mod ease {
     pub const r#in: [f64; 4] = [0.55, 0.0, 1.0, 0.45];
 }
 
+/// A CSS `cubic-bezier(x1, y1, x2, y2)` easing at `t` (0..1): the curve's y where its x is `t`,
+/// for tweens a driver times itself (the same curve Slint's `animate` runs). wubble: the design
+/// has CSS run them. x is solved by bisection (the x polynomial is monotonic for x1, x2 in 0..1).
+pub fn bezier(p: [f64; 4], t: f64) -> f64 {
+    // the ends exactly, so a finished tween rests on 1 (an opacity of 0.99999 still costs a layer)
+    if t <= 0.0 || t >= 1.0 {
+        return t.clamp(0.0, 1.0);
+    }
+    let at = |a: f64, b: f64, u: f64| {
+        3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u) + u.powi(3)
+    };
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..40 {
+        let mid = (lo + hi) / 2.0;
+        if at(p[0], p[2], mid) < t {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    at(p[1], p[3], (lo + hi) / 2.0)
+}
+
+/// How far the Overlap entrance (`wb-in` in core/wubble.css: 240 ms on the ease-out curve) is,
+/// 0..1, `secs` after it began. The drawing side maps it as `wb-in` does: opacity e, 7 px below
+/// → in place, scale 0.98 → 1 (Slint `Entering`; the 4 px blur is left out).
+pub fn overlap_in(secs: f64) -> f64 {
+    bezier(ease::out, secs / OVERLAP_IN)
+}
+
+/// `motion.overlap.in` in tokens.ts, seconds.
+pub const OVERLAP_IN: f64 = 0.24;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bezier_matches_the_css_curves() {
+        assert_eq!(bezier(ease::out, 0.0), 0.0);
+        assert!((bezier(ease::out, 1.0) - 1.0).abs() < 1e-9);
+        // linear control points are the identity
+        assert!((bezier([1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0], 0.3) - 0.3).abs() < 1e-9);
+        // ease-out is front-loaded, in-out symmetric
+        assert!(bezier(ease::out, 0.25) > 0.6);
+        assert!((bezier(ease::inOut, 0.5) - 0.5).abs() < 1e-9);
+        // the spring curve overshoots
+        assert!((0..100).any(|i| bezier(ease::spring, i as f64 / 100.0) > 1.0));
+    }
+
+    #[test]
+    fn overlap_in_runs_from_below_into_place() {
+        assert_eq!(overlap_in(0.0), 0.0);
+        assert_eq!(overlap_in(OVERLAP_IN), 1.0);
+        assert!(
+            overlap_in(0.06) > 0.5,
+            "ease-out: most of the way in a quarter of the time"
+        );
+        assert_eq!(overlap_in(10.0), overlap_in(OVERLAP_IN));
+    }
 
     #[test]
     fn spring_settles_exactly_on_target() {

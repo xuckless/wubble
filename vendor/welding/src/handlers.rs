@@ -585,7 +585,7 @@ cef::wrap_request_handler! {
             1
         }
 
-        // wubble change (30): a link the page opens elsewhere (a middle or Ctrl
+        // wubble change (31): a link the page opens elsewhere (a middle or Ctrl
         // click, Shift click) goes to the host as a new-window request, as
         // `on_before_popup` does; without this CEF navigates in place
         // (windowless browsers have no tab strip to put it in). Shape from

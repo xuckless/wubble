@@ -286,7 +286,23 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    cap and room again after a drain. Not unit-tested: an unknown frame id
    (needs a live browser).
 
-28. **Switches for child processes.** `runtime.rs`: new
+28. **macOS frame copy on its own Metal queue.** `metal.rs`:
+   `copy_metal_to_owned` no longer goes through `copy_to_owned` (now
+   Linux-only in `native_frame/mod.rs`): it creates the copy as a raw
+   private `MTLTexture` (`add_srgb_suffix` of the frame's format; new
+   `wgpu_format_to_mtl` arms for `Bgra8UnormSrgb`/`Rgba8UnormSrgb`), blits
+   into it on a command queue of its own (`copy_queue`, one per device,
+   thread-local: `OnAcceleratedPaint` runs on CEF's UI thread), waits for
+   that command buffer only (`waitUntilCompleted`, status checked) and wraps
+   the copy with `grafting::import_metal_texture_ref`, so wgpu counts it as
+   initialised. On wgpu's queue the wait also covered the scene and Slint's
+   frame queued before the copy (M2 Pro, `--measure scroll`: copy wait p95
+   4.8 to 5.1 ms before, 2.9 to 3.2 ms after; the UI thread is blocked for
+   it). `Cargo.toml`: objc2-metal features `MTLBlitCommandEncoder`,
+   `MTLCommandBuffer`, `MTLCommandEncoder`, `MTLCommandQueue`. Not
+   unit-tested (needs a live CEF frame); the macOS `--smoke frames` pixel and
+   glass checks run it.
+29. **Switches for child processes.** `runtime.rs`: new
    `CefRuntimeConfig::child_process_switches`, added to every child
    process's command line by the browser process handler's new
    `on_before_child_process_launch` (`app.rs`, `WeldApp::build` takes them).
@@ -294,17 +310,17 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    helper reads (wubble's `--wubble-clipboard-bridge`, which turns on its
    clipboard content script on change 26's channel) cannot go in
    `command_line_switches`.
-29. **Media state on the context menu.** `NavigationEvent::
+30. **Media state on the context menu.** `NavigationEvent::
    ContextMenuRequested` gains `media_flags` (`cef_context_menu_media_state_
    flags_t`: paused, muted, loop, controls, ...), read in `handlers.rs`
    `run_context_menu`.
-30. **Links opened elsewhere reach the host.** `handlers.rs`: the request
+31. **Links opened elsewhere reach the host.** `handlers.rs`: the request
    handler's new `on_open_urlfrom_tab` (a middle or Ctrl click on a link)
    reports `NavigationEvent::NewWindowRequested` and cancels CEF's in-place
    navigation; `NewWindowRequested` gains `background` (the disposition is
    `CEF_WOD_NEW_BACKGROUND_TAB`, `surface::background_disposition`), also set
    by `on_before_popup` on all three platforms.
-31. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
+32. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
    with the new `Panning` (middle, middle vertical/horizontal, eight compass
    points; exported from `lib.rs`); `cursor.rs` `from_cef` maps CEF's
    `CT_*PANNING` types to it (`CT_MIDDLEPANNING` was `Move`).

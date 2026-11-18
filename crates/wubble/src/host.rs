@@ -493,6 +493,14 @@ impl Host {
             clipboard: Default::default(),
         };
         host.replay_settings();
+        if host.checks.check_pixels {
+            // The glass check is a correctness check of the scene's full rendering: the governor
+            // would otherwise pick the level from how fast this machine runs (and at `Flat` the
+            // glass is legitimately one flat colour).
+            host.glass
+                .borrow_mut()
+                .set_setting(wubble_core::apply::GlassSetting::Full);
+        }
         host.render_downloads(window);
         host.session_icon_setup();
         match open {
@@ -648,8 +656,17 @@ impl Host {
             &self.favicons,
         );
         self.render_surfaces(&window);
-        let page = self.view().map(|view| view.nav().page.clone());
-        crate::bind::render_history(&window, page.as_ref());
+        let nav = self.view().map(|view| {
+            (
+                view.nav().page.clone(),
+                matches!(view.nav().phase, Phase::Loading { .. }),
+            )
+        });
+        crate::bind::render_history(
+            &window,
+            nav.as_ref().map(|n| &n.0),
+            nav.as_ref().is_some_and(|n| n.1),
+        );
         self.render_pages();
     }
 
@@ -842,10 +859,12 @@ impl Host {
             .record_accelerated(self.last_present.map(|last| now - last));
         self.last_present = Some(now);
         self.idle_runs = 0;
+        // Once: a frame the loop shows before the quit takes effect (on macOS the pump runs
+        // outside winit's handler, so one more can arrive) is not checked again.
         if self
             .checks
             .quit_after
-            .is_some_and(|n| self.stats.accelerated >= n)
+            .is_some_and(|n| self.stats.accelerated == n)
         {
             if let Some(tab) = self.model.visible_tab()
                 && let Some(frame) = self.frames.get(&tab)
@@ -877,7 +896,9 @@ impl Host {
     }
 
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame.
+    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame. The
+    /// smoke pins the glass at `Full` (`Host::new`), so the verdict never depends on the
+    /// quality governor; the line says the level it checked.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
         if !self.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
@@ -890,9 +911,11 @@ impl Host {
             .get(key)
             .cloned()
             .ok_or("the sidebar's glass never reached the scene")?;
-        // The band below the tab list and above the Space switcher: glass, no text.
+        // The window's glass under the sidebar, left of the page card: the band below the tab
+        // list and above the Space switcher, glass and no text.
         let scale = window.window().scale_factor();
-        let (x, w) = (side.x + side.radius, side.width - 2.0 * side.radius);
+        let x = side.x + side.radius;
+        let w = window.get_content_x() - side.radius - x;
         let (y, h) = (side.y + side.height * 0.45, side.height * 0.25);
         let region = pixels::Region {
             x: physical(x, scale),
@@ -908,7 +931,14 @@ impl Host {
             .readback()
             .ok_or("the scene has no frame")?;
         let diff = pixels::check_shows_scene(shot, &scene, region)?;
-        println!("smoke: glass ok distinct={} diff={diff}", sample.distinct);
+        println!(
+            "smoke: glass ok quality={} distinct={} diff={diff}",
+            self.glass
+                .borrow()
+                .quality()
+                .map_or("n/a".into(), |q| format!("{q:?}")),
+            sample.distinct
+        );
         Ok(())
     }
 
@@ -1455,7 +1485,15 @@ impl Host {
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
-            Some(settings_smoke::Action::Open) => self.perform(Action::OpenSettings),
+            Some(settings_smoke::Action::Open) => {
+                if crate::shot::requested() {
+                    let host = std::cell::RefCell::new(&mut *self);
+                    crate::shot::seed(&mut |c| host.borrow_mut().dispatch(c), || {
+                        host.borrow().model.clone()
+                    });
+                }
+                self.perform(Action::OpenSettings)
+            }
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
                 // which it calls back into. The read is queued after the write it causes.
@@ -1757,14 +1795,21 @@ impl Host {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
             }
-            // A left press anywhere sends a wave through the scene (the page gets it too). Raw,
-            // so the side buttons navigate over the shell too, without a wave.
+            // A left press on the shell sends a wave through the scene: through the glass under
+            // it, else through the liquid. Not over the page, which covers the scene (the
+            // design's web view never ripples the backdrop). Raw, so the side buttons navigate
+            // over the shell too, without a wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
-                if input::taps_backdrop(*button) {
+                if input::taps_backdrop(*button)
+                    && !self
+                        .input
+                        .pointer
+                        .is_some_and(|p| input::over_content(&window, p))
+                {
                     self.glass.borrow_mut().tap();
                 }
                 if let Some(action) = input::button_action(*button) {

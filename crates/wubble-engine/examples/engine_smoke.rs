@@ -115,6 +115,7 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
         content_filter: None,
         clipboard_bridge: false,
         features: Default::default(),
+        profile: wubble_engine::app::ProfileKind::Throwaway,
     })
     .map_err(|e| e.to_string())?;
     engine.set_request_mode(mode);

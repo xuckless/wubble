@@ -1,7 +1,6 @@
 //! The bowed string as data: one curve, sampled into an [`EdgeTable`] that the edges it separates
 //! follow (wubble's, at the owner's request: "the sidebar not acting rubberlike"). The sidebar's
-//! sections, the sidebar glass's right edge (wgpu scene and the Slint-only outline) and the page's
-//! masked edge all read the same table, so they bow exactly along the drawn string.
+//! sections and the page's masked edge read the same table, so they bow exactly along the drawn string.
 //!
 //! The curve is the design's (the owner's design repo, `src/wubble/browser/seam.ts` `clip()` and
 //! `browser/split.ts` `stringRect`): two cubics per edge meeting at the grab height. The two files

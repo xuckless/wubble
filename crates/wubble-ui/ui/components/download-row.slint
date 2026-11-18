@@ -65,7 +65,7 @@ export component DownloadRow inherits Rectangle {
                     background: Palette.sky;
                     opacity: root.item.progress < 0 ? 0.35 : 1;
                     animate width {
-                        duration: Shell.menu-in;
+                        duration: Motion.dropdownIn;
                         easing: Motion.easeOut;
                     }
                 }

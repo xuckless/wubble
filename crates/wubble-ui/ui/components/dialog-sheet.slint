@@ -82,7 +82,8 @@ export component DialogSheet inherits SheetFrame {
             vertical-alignment: center;
             single-line: true;
             color: Palette.ink;
-            selection-background-color: Palette.rim;
+            selection-background-color: Shell.selection-fill;
+            selection-foreground-color: Shell.selection-ink;
             font-family: Fonts.ui;
             font-size: Type.body.size;
             accepted => {
@@ -123,7 +124,8 @@ export component DialogSheet inherits SheetFrame {
             single-line: true;
             input-type: password;
             color: Palette.ink;
-            selection-background-color: Palette.rim;
+            selection-background-color: Shell.selection-fill;
+            selection-foreground-color: Shell.selection-ink;
             font-family: Fonts.ui;
             font-size: Type.body.size;
             accepted => {

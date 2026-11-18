@@ -752,14 +752,14 @@ pub enum CursorShape {
     Grabbing,
     ZoomIn,
     ZoomOut,
-    /// wubble change (31): middle-click autoscroll's cursors (CEF `CT_*PANNING`).
+    /// wubble change (32): middle-click autoscroll's cursors (CEF `CT_*PANNING`).
     Panning(Panning),
     /// Anything the shared vocabulary has no name for. `"none"` means CEF
     /// asked for a hidden cursor, which the vocabulary cannot express.
     Custom(String),
 }
 
-/// wubble change (31): which autoscroll cursor Chromium asked for: still (both
+/// wubble change (32): which autoscroll cursor Chromium asked for: still (both
 /// axes, or one), or scrolling toward a compass point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Panning {
@@ -1868,7 +1868,7 @@ pub enum NavigationEvent {
     NewWindowRequested {
         url: String,
         user_gesture: bool,
-        /// wubble change (30): the page asked for a tab behind the current one
+        /// wubble change (31): the page asked for a tab behind the current one
         /// (a middle or Ctrl click: `CEF_WOD_NEW_BACKGROUND_TAB`).
         background: bool,
     },
@@ -1944,7 +1944,7 @@ pub enum NavigationEvent {
         /// wubble change: CEF's `cef_context_menu_edit_state_flags_t`
         /// (can undo, redo, cut, copy, paste, delete, select all, ...).
         edit_flags: u32,
-        /// wubble change (29): CEF's `cef_context_menu_media_state_flags_t` for the
+        /// wubble change (30): CEF's `cef_context_menu_media_state_flags_t` for the
         /// media element clicked on (paused, muted, loop, controls, ...).
         media_flags: u32,
         /// wubble change: the misspelled word under the cursor, if any, and
@@ -2201,7 +2201,7 @@ pub enum ContextMenuMedia {
 }
 
 /// Whether CEF's `cef_window_open_disposition_t` asks for a background tab.
-/// wubble change (30).
+/// wubble change (31).
 #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
 pub(crate) fn background_disposition(raw: i64) -> bool {
     raw == 4 // CEF_WOD_NEW_BACKGROUND_TAB

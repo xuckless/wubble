@@ -6,7 +6,7 @@
 //! `src/wubble/slint`, owner's code, moved into that one notifier): the scene renders under the
 //! UI and its image is the window's bottom layer. The scene is fed from data only: the glass
 //! list the panels report (`wubble_ui::glass`), the active Space's tint, the address pill's
-//! `loading`, the pointer (from the host's winit filter) and, for the quality governor, each
+//! beam (`address-beam`, the driver's), the pointer (from the host's winit filter) and, for the quality governor, each
 //! frame's load ([`frame_load`]).
 
 use std::time::{Duration, Instant};
@@ -16,7 +16,7 @@ use slint::winit_030::WinitWindowAccessor;
 use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::{
-    BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Tier,
+    Beam, BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
@@ -95,8 +95,6 @@ pub struct SceneHost {
     budget: Option<Duration>,
     /// The tint the palette was last dyed from.
     tint: Option<Rgb>,
-    /// The address pill's `loading` last frame (the beam laps on its rising edge).
-    loading: bool,
     /// The last logical pointer position, for taps.
     pointer: Option<(f32, f32)>,
     image_error_logged: bool,
@@ -125,18 +123,24 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
         Renderer::try_new(gpu, SceneOptions::default())
     }) {
         Ok(renderer) => {
-            if !renderer.measures_cost() {
-                eprintln!("wubble: glass: no GPU timestamps, quality follows dropped frames only");
-            }
+            let signal = if renderer.measures_cost() {
+                Signal::SceneCost
+            } else {
+                eprintln!(
+                    "wubble: glass: no GPU timestamps ({}), quality follows dropped frames, \
+                     a step down kept only when it helps",
+                    renderer.timestamp_features()
+                );
+                Signal::Lateness
+            };
             eprintln!("wubble: glass: scene");
             window.global::<GlassLayer>().set_scene_active(true);
             Glass::Scene(Box::new(SceneHost {
                 renderer,
-                governor: Governor::new(Quality::Full),
+                governor: Governor::new(Quality::Full, signal),
                 setting: GlassSetting::Auto,
                 budget: None,
                 tint: None,
-                loading: false,
                 pointer: None,
                 image_error_logged: false,
             }))
@@ -157,7 +161,12 @@ pub fn to_rect(item: &GlassItem) -> GlassRect {
         pressed: item.pressed,
         hover: item.hover,
         focus: item.focus,
-        bow: item.bow,
+        // transparent: no tint (the scene's black)
+        tint: if item.tint.alpha() == 0 {
+            [0.0; 3]
+        } else {
+            [item.tint.red(), item.tint.green(), item.tint.blue()].map(|c| f32::from(c) / 255.0)
+        },
     }
 }
 
@@ -194,6 +203,14 @@ impl Glass {
             Glass::SlintOnly => None,
         }
     }
+    /// The scene's current level, `None` without the scene.
+    pub fn quality(&self) -> Option<Quality> {
+        match self {
+            Glass::Scene(s) => Some(s.governor.quality()),
+            Glass::SlintOnly => None,
+        }
+    }
+
     pub fn is_scene(&self) -> bool {
         matches!(self, Glass::Scene(_))
     }
@@ -209,7 +226,7 @@ impl Glass {
         }
         s.setting = setting;
         let (best, _) = levels(setting);
-        s.governor = Governor::new(best);
+        s.governor = Governor::new(best, s.governor.signal());
         s.renderer.set_quality(best);
     }
 
@@ -230,16 +247,6 @@ impl Glass {
         if let Some(items) = glass {
             s.set_items(window, items);
         }
-        // the sidebar glass's right edge follows the seam's string (the driver's table)
-        use slint::Model as _;
-        let offset: Vec<f32> = window.get_seam_edge().iter().collect();
-        s.renderer
-            .scene
-            .set_bow((offset.len() > 1).then(|| wubble_gfx::Edge {
-                y0: 0.0,
-                step: window.get_seam_edge_step(),
-                offset: &offset,
-            }));
         let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint
@@ -247,11 +254,16 @@ impl Glass {
             s.renderer.scene.set_palette(dye(t).map(rgb01));
             s.tint = tint;
         }
-        let loading = window.get_address_loading();
-        if loading && !s.loading {
-            s.renderer.scene.lap_beam();
-        }
-        s.loading = loading;
+        // the driver owns the beam's lap (wubble_core::beam); the scene draws this frame's shape
+        let b = window.get_address_beam();
+        s.renderer
+            .scene
+            .set_beam_shape((b.strength > 0.0).then_some(Beam {
+                head: b.head.into(),
+                length: b.length.into(),
+                strength: b.strength.into(),
+                hue: b.hue.into(),
+            }));
 
         let interval = s
             .renderer
@@ -328,7 +340,7 @@ impl SceneHost {
         self.governor = if after == next.quality() {
             next
         } else {
-            Governor::new(after)
+            Governor::new(after, self.governor.signal())
         };
         if after != before {
             // The load that moved it: the smoothed load of the level it left.
@@ -360,7 +372,7 @@ mod tests {
             pressed: true,
             hover: false,
             focus: true,
-            bow: true,
+            tint: Default::default(),
             present: true,
         };
         assert_eq!(
@@ -372,9 +384,15 @@ mod tests {
                 pressed: true,
                 hover: false,
                 focus: true,
-                bow: true,
+                tint: [0.0; 3],
             }
         );
+        // a Space colour is mixed in (0..1); transparent is none
+        let tinted = GlassItem {
+            tint: slint::Color::from_rgb_u8(255, 0, 51),
+            ..item
+        };
+        assert_eq!(to_rect(&tinted).tint, [1.0, 0.0, 0.2]);
     }
 
     #[test]
@@ -441,7 +459,7 @@ mod tests {
     fn frames_paced_at_300_hz_are_not_late() {
         // 3.33 ms apart, scene at 1 ms of GPU: well inside the budget at Full, held there
         let budget = frame_budget(Some(300_002));
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..10_000 {
             let load = frame_load(
                 Some(Duration::from_millis(1)),
@@ -457,7 +475,7 @@ mod tests {
     fn a_scene_over_its_share_degrades_the_glass_before_the_frame_drops() {
         // 5 ms of scene in an 8.33 ms frame: the frame still fits, the glass steps down
         let (budget, scene) = (DEFAULT_BUDGET, Duration::from_millis(5));
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..wubble_gfx::scene::SETTLE_FRAMES {
             g = g.next(
                 frame_load(Some(scene), Some(budget), budget).unwrap(),
@@ -470,7 +488,7 @@ mod tests {
     #[test]
     fn dropped_frames_degrade_the_glass_without_timestamps() {
         let budget = DEFAULT_BUDGET;
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..wubble_gfx::scene::SETTLE_FRAMES {
             g = g.next(frame_load(None, Some(budget * 2), budget).unwrap(), budget);
         }

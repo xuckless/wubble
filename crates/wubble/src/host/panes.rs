@@ -469,9 +469,11 @@ impl Host {
             let measured = (Some(rect.tab) == focused)
                 .then(|| measure::Frame::of(&frame, layout.frame_size()));
             let slot = self.slot_for(rect.tab);
+            let blit = Instant::now();
             let image = self.presenters[slot]
                 .present(frame)
                 .map_err(|e| e.to_string())?;
+            measure::stage(measure::Metric::Blit, blit);
             if let Some(measured) = measured {
                 let presenter = &self.presenters[slot];
                 measure::taken(measured, || {

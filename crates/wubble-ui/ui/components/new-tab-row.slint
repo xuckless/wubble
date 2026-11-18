@@ -17,7 +17,7 @@ export component NewTabRow inherits Rectangle {
         x: root.compact ? (root.width - self.width) / 2 : 0px;
         width: root.compact ? Shell.rail-item : root.width;
         border-radius: Radius.sm;
-        background: ta.has-hover ? Palette.shell : transparent;
+        background: ta.has-hover ? Shell.row-hover : transparent;   // .wb-newtab:hover white 4.5 %
         animate background {
             duration: Motion.pressRelease;
             easing: Motion.easeOut;
@@ -46,14 +46,14 @@ export component NewTabRow inherits Rectangle {
                     path: IconPaths.plus;
                     size: Shell.new-tab-icon;
                     weight: Shell.new-tab-stroke;
-                    tint: ta.has-hover ? Palette.ink : Palette.mist;
+                    tint: Palette.ink;   // .wb button: ink (as IconButton)
                 }
             }
             if !root.compact: Text {
                 text: "New tab";
                 horizontal-stretch: 1;
                 vertical-alignment: center;
-                color: ta.has-hover ? Palette.ink : Palette.mist;
+                color: Palette.ink;
                 font-family: Fonts.ui;
                 font-size: Type.body.size;
                 font-weight: Type.body.weight;

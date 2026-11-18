@@ -5,7 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
@@ -23,13 +23,15 @@ import { Sidebar } from "components/sidebar.slint";
 import { GlowRing } from "components/glow-ring.slint";
 import { AutoscrollCursor } from "components/autoscroll-cursor.slint";
 import { WindowEdges, MoveArea } from "components/window-frame.slint";
+import { Entering } from "components/entering.slint";
+import { PageScroll } from "components/page-scroll.slint";
 
 import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { AutofillAnswer, AutofillView }
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
+export { AutofillAnswer, AutofillView, PageScroll }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -116,8 +118,11 @@ export component AppWindow inherits Window {
     // Square when full screen or maximised, or when the platform cannot show the corners.
     out property <length> window-radius: root.rounded-corners && !root.full-screen && !root.maximized ? Radius.window : 0px;
     out property <bool> window-resizable: !root.full-screen && !root.maximized;
-    in property <bool> address-loading <=> sidebar.address-loading;
-    // The loading sheen's opacity (0 at rest).
+    // The visible page is loading (the host); the driver turns it and the active tab into the
+    // address pill's border beam (wubble_core::beam), drawn by the scene or, without it, by Slint.
+    in property <bool> address-loading;
+    in property <BeamShape> address-beam <=> sidebar.address-beam;
+    // The Slint beam's strength (0 at rest, and wherever the scene draws the beam).
     out property <float> address-sheen <=> sidebar.address-sheen;
     out property <int> command-shown-rows <=> bar.shown-rows;
 
@@ -140,6 +145,11 @@ export component AppWindow inherits Window {
     // tabs.rs: rows, the indicator (its row, -1 for none), the Space capsule
     in property <[length]> row-y <=> sidebar.row-y;
     in property <[float]> row-scale <=> sidebar.row-scale;
+    in property <[float]> row-enter <=> sidebar.row-enter;
+    in property <[LeavingRow]> leaving-rows <=> sidebar.leaving-rows;
+    in property <float> space-enter <=> sidebar.space-enter;
+    // The shown page's entrance after a tab switch, 0..1 (the driver; 1 at rest).
+    in property <float> page-enter: 1;
     in property <int> selected-row <=> sidebar.selected;
     in property <length> indicator-y <=> sidebar.indicator-y;
     in property <float> indicator-stretch <=> sidebar.indicator-stretch;
@@ -163,8 +173,6 @@ export component AppWindow inherits Window {
     // glass edge and the page's edge follow it.
     in property <[length]> seam-edge;
     in property <length> seam-edge-step;
-    // The sidebar glass's bowed outline for Slint-only glass (string_rect_of), "" when straight.
-    in property <string> sidebar-outline;
     // A pane shows its frame cut along a bowed string (SplitPane.edge): the content area neither
     // clips nor fills, so the bulge shows. The host sets it with the panes.
     in property <bool> edge-bowed: false;
@@ -223,6 +231,8 @@ export component AppWindow inherits Window {
     in-out property <Origin> command-origin <=> bar.origin;
     in property <[CommandResult]> command-results <=> bar.results;
     in-out property <string> command-query <=> bar.query;
+    // The command bar's beam while you type (the driver; wubble_core::beam::Thinking).
+    in property <BeamShape> command-beam <=> bar.beam;
     callback command-query-changed <=> bar.query-changed;
     callback command-result-chosen <=> bar.result-chosen;
     callback command-dismissed <=> bar.dismissed;
@@ -511,6 +521,24 @@ export component AppWindow inherits Window {
         background: Palette.abyss;
         border-radius: root.window-radius;
     }
+    // The active Space's colour: the window's glass, the split ring and the settings' controls.
+    property <color> space-accent: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : Palette.sky;
+    // The window's own glass (design desktop.tsx: one Regular surface the window's size, radius
+    // `radius.window`, shadow 1). The sidebar has no panel of its own: it is this glass, and the
+    // page card sits on it `Chrome.inset` from the window's top, right and bottom and from the
+    // sidebar (browser.css .wb-side / .wb-main: inset 8). Drawn by the scene under GlassKeys.sidebar,
+    // the key the scene's sidebar glass had; without the scene the plain ground shows.
+    GlassPanel {
+        key: GlassKeys.sidebar;
+        width: 100%;
+        height: 100%;
+        tier: GlassTier.regular;
+        radius: root.window-radius;
+        tint: root.space-accent;
+        over-wgpu: GlassLayer.scene-active;
+        visible: GlassLayer.scene-active;
+        present: !root.page-fullscreen;
+    }
     // The design's `wb-frame-drag`: the gutters and any glass without a control move the window.
     MoveArea {
         enabled: !root.full-screen;
@@ -555,46 +583,51 @@ export component AppWindow inherits Window {
                 changed has-focus => {
                     root.web-focus-changed(self.has-focus);
                 }
-                SplitView {
-                    panes: root.panes;
-                    seams: root.seams;
-                    ring: root.focus-ring;
-                    accent: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : Palette.sky;
-                    radius: root.page-fullscreen ? 0px : Radius.md;
-                    cursor: root.cursors[root.web-cursor];
-                    pointer-pressed(pane, button, x, y) => {
-                        web-focus.focus();
-                        root.web-pointer-pressed(pane, button, x, y);
-                    }
-                    pointer-released(pane, button, x, y) => {
-                        root.web-pointer-released(pane, button, x, y);
-                    }
-                    pointer-moved(pane, x, y) => {
-                        root.web-pointer-moved(pane, x, y);
-                    }
-                    pointer-left(pane, x, y) => {
-                        root.web-pointer-left(pane, x, y);
-                    }
-                    pointer-cancelled(pane) => {
-                        root.web-pointer-cancelled(pane);
-                    }
-                    scrolled(pane, x, y, dx, dy) => {
-                        root.web-scrolled(pane, x, y, dx, dy);
-                    }
-                    seam-grab(j, x, y) => {
-                        root.split-grab(j, x, y);
-                    }
-                    seam-drag(x, y) => {
-                        root.split-drag(x, y);
-                    }
-                    seam-release => {
-                        root.split-release();
-                    }
-                    seam-even => {
-                        root.split-even();
-                    }
-                    pane-close(id) => {
-                        root.pane-close(id);
+                // A newly shown page arrives with the Overlap entrance (webview.tsx: the shown
+                // view gets `wb-in`), timed by the driver on a tab switch.
+                Entering {
+                    e: root.page-enter;
+                    SplitView {
+                        panes: root.panes;
+                        seams: root.seams;
+                        ring: root.focus-ring;
+                        accent: root.space-accent;
+                        radius: root.page-fullscreen ? 0px : Radius.md;
+                        cursor: root.cursors[root.web-cursor];
+                        pointer-pressed(pane, button, x, y) => {
+                            web-focus.focus();
+                            root.web-pointer-pressed(pane, button, x, y);
+                        }
+                        pointer-released(pane, button, x, y) => {
+                            root.web-pointer-released(pane, button, x, y);
+                        }
+                        pointer-moved(pane, x, y) => {
+                            root.web-pointer-moved(pane, x, y);
+                        }
+                        pointer-left(pane, x, y) => {
+                            root.web-pointer-left(pane, x, y);
+                        }
+                        pointer-cancelled(pane) => {
+                            root.web-pointer-cancelled(pane);
+                        }
+                        scrolled(pane, x, y, dx, dy) => {
+                            root.web-scrolled(pane, x, y, dx, dy);
+                        }
+                        seam-grab(j, x, y) => {
+                            root.split-grab(j, x, y);
+                        }
+                        seam-drag(x, y) => {
+                            root.split-drag(x, y);
+                        }
+                        seam-release => {
+                            root.split-release();
+                        }
+                        seam-even => {
+                            root.split-even();
+                        }
+                        pane-close(id) => {
+                            root.pane-close(id);
+                        }
                     }
                 }
             }
@@ -631,6 +664,7 @@ export component AppWindow inherits Window {
             // The settings page fills the content area of its tab (no web view under it).
             settings-ui := SettingsPage {
                 open: root.settings-open;
+                accent: root.space-accent;
             }
             history-ui := HistoryPage {
                 open: root.page == InternalPageKind.history;
@@ -778,25 +812,6 @@ export component AppWindow inherits Window {
             width: Chrome.inset + sidebar.width;
             height: parent.height;
 
-            // The sidebar's Regular glass, drawn by the scene up to the seam; its right edge bows
-            // with the seam's string. Slint-only glass has no sidebar panel at rest (the plain
-            // ground shows), as before the scene; while the string bends it draws the bowed
-            // outline, so the edge still reads as rubber.
-            GlassPanel {
-                key: GlassKeys.sidebar;
-                x: sidebar.x;
-                y: sidebar.y;
-                width: root.sidebar-width;
-                height: sidebar.height;
-                tier: GlassTier.regular;
-                radius: Radius.lg;
-                over-wgpu: GlassLayer.scene-active;
-                follows-seam: true;
-                outline: root.hidden-at-rest ? "" : root.sidebar-outline;
-                visible: GlassLayer.scene-active || self.outline != "";
-                present: !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open && !root.page-fullscreen;
-            }
-
             // the peek's own glass (.wb-side-peek: thick, radius 20)
             GlassPanel {
                 x: sidebar.x;
@@ -811,7 +826,6 @@ export component AppWindow inherits Window {
                 GlowRing {
                     radius: Radius.lg;
                     strength: root.peek-glow;
-                    sweep: false;
                 }
             }
 

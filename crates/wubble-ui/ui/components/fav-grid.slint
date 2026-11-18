@@ -83,7 +83,7 @@ export component FavGrid inherits Rectangle {
                     height: parent.height;
                 }
                 if tab.favicon.width == 0: Icon {
-                    path: IconPaths.globe;
+                    path: IconPaths.page(tab.url);
                     size: Shell.fav-icon;
                     tint: tab.id == root.active-tab-id ? Palette.ink : Palette.mist;
                 }

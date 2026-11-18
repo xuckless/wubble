@@ -56,6 +56,15 @@ pub fn from_cli_arg(arg: &str) -> String {
 /// The two halves the address pill shows: the host (with the scheme for
 /// URLs without one, such as `about:`) and everything after it.
 pub fn address_parts(url: &str) -> (&str, &str) {
+    // wubble's own pages: the scheme is the name, the rest is quiet (the design's address
+    // pill: `wubble` in ink, `://settings` in haze).
+    let scheme = "wubble:";
+    if url
+        .get(..scheme.len())
+        .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+    {
+        return url.split_at(scheme.len() - 1);
+    }
     if let Some((_, rest)) = url.split_once("://") {
         rest.split_at(rest.find('/').unwrap_or(rest.len()))
     } else if let Some(colon) = url.find(':') {
@@ -164,6 +173,7 @@ mod tests {
             ("http://localhost:8080/", ("localhost:8080", "/")),
             ("file:///tmp/x.html", ("", "/tmp/x.html")),
             ("about:blank", ("about:", "blank")),
+            ("wubble://settings", ("wubble", "://settings")),
             ("data:text/html,x", ("data:", "text/html,x")),
             ("", ("", "")),
         ];

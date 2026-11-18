@@ -8,9 +8,9 @@ import { Palette, Chrome, Spacing, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
 import { IconButton } from "nav-buttons.slint";
-import { GlassTier, GlassKeys } from "model.slint";
+import { GlassTier, GlassKeys, BeamShape } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
-import { GlowRing } from "glow-ring.slint";
+import { BorderBeam } from "border-beam.slint";
 
 export component AddressPill inherits Rectangle {
     in property <string> host;
@@ -21,21 +21,13 @@ export component AddressPill inherits Rectangle {
     // The window x range the sidebar shows: the glass is cut to it (GlassPanel `clip-start`).
     in property <length> glass-clip-start: -Shell.no-clip;
     in property <length> glass-clip-end: Shell.no-clip;
-    // A page is loading. The design's border beam (chrome.tsx `Address`) is the scene's
-    // (`set_beam` on this pill's glass rect, `lap_beam` when loading starts); this is its Slint
-    // fallback (GlowRing), used wherever the scene does not draw this pill (no scene, or the
-    // hidden sidebar's peek): the ring, and a sheen that sweeps the pill every 1.5 s, fading
-    // over 1.5 s once loading ends.
-    in property <bool> loading: false;
-    // Beam strength: up in 120 ms, down over 1500 ms; the ring shows it, the sheen its square.
-    property <float> strength: root.loading ? 1 : 0;
-    animate strength {
-        duration: root.loading ? Shell.beam-in : Shell.beam-ms;
-        easing: Motion.easeOut;
-    }
+    // The design's border beam (chrome.tsx `Address`): it laps the pill when another page is
+    // shown and while a page loads (wubble_core::beam, stepped by the driver). The scene draws it
+    // round this pill's glass; BorderBeam is its Slint fallback wherever the scene does not
+    // draw this pill (no scene, or the hidden sidebar's peek over the page).
+    in property <BeamShape> beam;
     // The Slint fallback's strength: nothing where the scene draws the beam.
-    property <float> glow: root.over-wgpu ? 0 : root.strength;
-    out property <float> sheen: root.glow * root.glow;
+    out property <float> sheen: root.over-wgpu ? 0 : root.beam.strength;
     callback activated();
     // wubble: the design's Address has no slot for these, so they sit at the pill's right end.
     // The visible page can be bookmarked (a web page): the star, filled when it is.
@@ -79,9 +71,9 @@ export component AddressPill inherits Rectangle {
             }
         }
 
-        GlowRing {
+        BorderBeam {
             radius: Shell.control-radius;
-            strength: root.glow;
+            shape: { head: root.beam.head, length: root.beam.length, strength: root.sheen, hue: root.beam.hue };
         }
 
         HorizontalLayout {
@@ -98,24 +90,29 @@ export component AddressPill inherits Rectangle {
                     tint: Palette.mint;
                 }
             }
-            Text {
-                text: root.host;
-                color: Palette.ink;
-                font-family: Fonts.mono;
-                font-size: Type.address.size;
-                font-weight: Type.address.weight;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            Text {
-                text: root.path;
+            // host and path run on, one string in two colours (.wb-address-text span)
+            HorizontalLayout {
                 horizontal-stretch: 1;
-                color: Palette.haze;
-                font-family: Fonts.mono;
-                font-size: Type.address.size;
-                font-weight: Type.address.weight;
-                vertical-alignment: center;
-                overflow: elide;
+                spacing: 0px;
+                Text {
+                    text: root.host;
+                    color: Palette.ink;
+                    font-family: Fonts.mono;
+                    font-size: Type.address.size;
+                    font-weight: Type.address.weight;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.path;
+                    horizontal-stretch: 1;
+                    color: Palette.haze;
+                    font-family: Fonts.mono;
+                    font-size: Type.address.size;
+                    font-weight: Type.address.weight;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
             // Above the whole-pill TouchArea, so a click here is not an address click.
             if root.blocker-visible: badge := Rectangle {

@@ -15,9 +15,9 @@
 
 import { Palette, Radius, Spacing, Chrome, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
-import { TabRow, OverlapLayer, WubbleScroller, SpaceIcon, PressableButton } from "../components.slint";
+import { TabRow, WubbleScroller, SpaceIcon, PressableButton } from "../components.slint";
 import { Icon, IconPaths } from "icon.slint";
-import { TabItem, SpaceItem, Origin } from "model.slint";
+import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
 import { NewTabRow } from "new-tab-row.slint";
@@ -25,6 +25,8 @@ import { WindowLights } from "window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
 import { MoveArea } from "window-frame.slint";
 import { Wobble } from "wobble.slint";
+import { Raised } from "raised.slint";
+import { Entering } from "entering.slint";
 import { SideEdges } from "model.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
@@ -67,6 +69,12 @@ export component Sidebar inherits Rectangle {
     in property <int> selected: -1;
     in property <[length]> row-y;
     in property <[float]> row-scale;
+    // each row's entrance, 0..1 (wubble_core::tabs: a new tab, or every row after a Space switch)
+    in property <[float]> row-enter;
+    // closed rows on their way out (`wb-tab-out`: 190 ms in-out to clear at 0.94)
+    in property <[LeavingRow]> leaving-rows;
+    // the Space name's entrance after a Space switch, 0..1
+    in property <float> space-enter: 1;
     in property <length> indicator-y: 0px;
     in property <float> indicator-stretch: 1;
     in property <float> indicator-origin: 0.3;
@@ -82,8 +90,8 @@ export component Sidebar inherits Rectangle {
     in property <bool> floating: false;
     // The window can be moved by dragging the sidebar's glass (off in full screen).
     in property <bool> window-movable: true;
-    // The address pill is loading a page (see AddressPill).
-    in property <bool> address-loading: false;
+    // The address pill's border beam this frame (see AddressPill).
+    in property <BeamShape> address-beam;
     out property <float> address-sheen: pill.sheen;
     // Where the command bar grows from when opened from the pill / the new-tab row, in window
     // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
@@ -126,7 +134,6 @@ export component Sidebar inherits Rectangle {
     // Right of the download button, level with its top, in window coordinates: the popover opens
     // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
     out property <Origin> downloads-anchor: { x: downloads.absolute-position.x + downloads.width + Shell.prompt-gap, y: downloads.absolute-position.y };
-    in property <bool> rows-shown: true;     // flip to replay the row entrance
     // the tab list's scroller
     in property <length> scroll-y;
     in property <length> thumb-top;
@@ -241,7 +248,7 @@ export component Sidebar inherits Rectangle {
                 over-wgpu: root.glass-over-wgpu;
                 glass-clip-start: root.absolute-position.x;
                 glass-clip-end: root.absolute-position.x + root.width;
-                loading: root.address-loading;
+                beam: root.address-beam;
                 host: root.address-host;
                 path: root.address-path;
                 bookmarkable: root.address-bookmarkable;
@@ -282,8 +289,11 @@ export component Sidebar inherits Rectangle {
         if !root.compact && root.space-index >= 0 && root.space-index < root.spaces.length: Ride {
             ride: root.ride;
             step: root.ride-step;
-            Rectangle {
+            // A new Space's name arrives with the Overlap entrance (chrome.tsx keys the span by
+            // the Space: `wb-in`).
+            Entering {
                 height: Shell.space-name-height;
+                e: root.space-enter;
                 Text {
                     x: Shell.side-grid;
                     y: Shell.space-name-top;
@@ -351,14 +361,35 @@ export component Sidebar inherits Rectangle {
                         // the indicator: under the rows, stretched along y about `origin`, squashed along x
                         property <length> h: Chrome.row * root.indicator-stretch;
                         property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
-                        Rectangle {
+                        // .wb-tab-ind: raised, with its top highlight, rim and drop shadow
+                        indicator := Raised {
                             x: (parent.width - parent.w) / 2;
                             y: root.indicator-y + (Chrome.row - parent.h) * root.indicator-origin;
                             width: parent.w;
                             height: parent.h;
-                            border-radius: Radius.sm;
-                            background: Palette.rim;
+                            radius: Radius.sm;
+                            fill: Shell.selected-fill;
+                            highlight: Shell.selected-highlight;
+                            rim: Shell.selected-rim;
+                            shadow-y: Shell.selected-shadow-y;
+                            shadow-blur: Shell.selected-shadow-blur;
+                            shadow: Shell.selected-shadow;
                             visible: root.selected >= 0 && root.selected < root.tabs.length;
+                        }
+
+                        for gone in root.leaving-rows: Rectangle {
+                            x: parent.row-x;
+                            y: gone.y;
+                            width: parent.row-w;
+                            height: Chrome.row;
+                            opacity: 1 - gone.e;
+                            transform-origin: { x: self.width / 2, y: self.height / 2 };
+                            transform-scale: 1 - Shell.tab-exit-shrink * gone.e;
+                            TabRow {
+                                width: parent.width;
+                                tab: gone.tab;
+                                compact: root.compact;
+                            }
                         }
 
                         for tab[i] in root.tabs: Rectangle {
@@ -369,9 +400,8 @@ export component Sidebar inherits Rectangle {
                             height: Chrome.row;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale: i < root.row-scale.length ? root.row-scale[i] : 1;
-                            OverlapLayer {
-                                shown: root.rows-shown;
-                                index: i;
+                            Entering {
+                                e: i < root.row-enter.length ? root.row-enter[i] : 1;
                                 width: parent.width;
                                 height: parent.height;
                                 TabRow {
@@ -419,28 +449,48 @@ export component Sidebar inherits Rectangle {
         switcher := Rectangle {
             property <length> pitch: Shell.space-tile + Shell.space-gap;
             property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            height: root.compact ? self.span + Shell.side-bottom-gap-rail + settings.height + (downloads.visible ? Shell.side-bottom-gap-rail + downloads.height : 0px) : Shell.space-tile;
+            // the buttons at the end of the row, in order (chrome.tsx @ 21838b8: Source, then
+            // Settings, side by side; .wb-side-bottom-rail stacks them 10 apart under the Spaces)
+            // dev tools gives way when the row has no room for all three (downloads shown on a
+            // narrow sidebar); F12 still opens them
+            property <bool> tools: root.compact || !root.has-downloads || self.width >= self.span + 3 * Shell.side-bottom-button;
+            property <int> buttons: (root.has-downloads ? 1 : 0) + (self.tools ? 1 : 0) + 1;
+            property <length> rail-pitch: Shell.side-bottom-button + Shell.side-bottom-gap-rail;
+            height: root.compact ? self.span + self.buttons * self.rail-pitch : Shell.space-tile;
 
-            // icons.tsx `download`, left of the settings button (above it on the rail)
+            // wubble: the downloads list (the design has no downloads), first of the buttons
             downloads := IconButton {
                 visible: root.has-downloads;
                 width: Shell.side-bottom-button;
                 height: Shell.side-bottom-button;
                 border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width - settings.width - Shell.space-gap;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - parent.buttons * self.width;
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.download;
                 clicked => {
                     root.downloads-requested();
                 }
             }
-            // wubble: the settings entry, always at the far end
+            // the design's Source button (`code`): wubble's is the page's dev tools
+            dev-tools := IconButton {
+                visible: parent.tools;
+                width: Shell.side-bottom-button;
+                height: Shell.side-bottom-button;
+                border-radius: Shell.control-radius;
+                x: root.compact ? (parent.width - self.width) / 2 : parent.width - 2 * self.width;
+                y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
+                icon-path: IconPaths.code;
+                clicked => {
+                    root.action("dev-tools");
+                }
+            }
+            // the settings entry, always at the far end
             settings := IconButton {
                 width: Shell.side-bottom-button;
                 height: Shell.side-bottom-button;
                 border-radius: Shell.control-radius;
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
-                y: root.compact ? parent.span + Shell.side-bottom-gap-rail + (downloads.visible ? downloads.height + Shell.side-bottom-gap-rail : 0px) : 0px;
+                y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.settings;
                 clicked => {
                     root.settings-requested();
@@ -500,7 +550,8 @@ export component Sidebar inherits Rectangle {
                             // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
                             stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
                             kind: space.icon;
-                            tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                            // .wb button: ink (the capsule under the active one carries its colour)
+                            tint: Palette.ink;
                         }
                     }
                 }

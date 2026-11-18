@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use slint::{Color, Model, ModelRc, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use wubble_core::space::Rgb;
 use wubble_core::tab::TabId;
 use wubble_engine::nav::Page;
@@ -88,10 +88,16 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
     window.invoke_shell_model_changed();
 }
 
-/// Back and forward follow the visible view's history (none without a view).
-pub fn render_history(window: &AppWindow, page: Option<&Page>) {
+/// Back and forward follow the visible view's history (none without a view), and the address
+/// pill's beam its loading. Nothing on screen reads `address-loading` (the driver turns it into
+/// the beam), so a change asks for the frame that lets the driver see it.
+pub fn render_history(window: &AppWindow, page: Option<&Page>, loading: bool) {
     window.set_can_go_back(page.is_some_and(|p| p.can_go_back));
     window.set_can_go_forward(page.is_some_and(|p| p.can_go_forward));
+    if window.get_address_loading() != loading {
+        window.set_address_loading(loading);
+        window.window().request_redraw();
+    }
 }
 
 pub fn render_bar(

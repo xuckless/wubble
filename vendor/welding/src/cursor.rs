@@ -28,7 +28,7 @@ impl LatestCursor {
     }
 }
 
-/// wubble change (31): CEF's autoscroll cursors.
+/// wubble change (32): CEF's autoscroll cursors.
 #[cfg(feature = "cef-runtime")]
 fn panning(type_: cef::CursorType) -> Option<crate::surface::Panning> {
     use crate::surface::Panning as P;
@@ -78,7 +78,7 @@ pub(crate) fn from_cef(type_: cef::CursorType) -> CursorShape {
     } else if type_ == C::HELP {
         CursorShape::Help
     } else if let Some(panning) = panning(type_) {
-        // wubble change (31): autoscroll's cursors, by name.
+        // wubble change (32): autoscroll's cursors, by name.
         CursorShape::Panning(panning)
     } else if type_ == C::MOVE {
         CursorShape::Move

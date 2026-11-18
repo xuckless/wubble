@@ -108,7 +108,7 @@ pub struct CefRuntimeConfig {
     /// [`CefRuntime::do_message_loop_work`] on its own timer.
     pub pump_scheduler: Option<PumpScheduler>,
 
-    /// wubble change (28): bare switches added to every child process's command
+    /// wubble change (29): bare switches added to every child process's command
     /// line (CEF `OnBeforeChildProcessLaunch`), such as a switch that tells
     /// the helper which context scripts to run. Chromium hands only switches
     /// it knows on to renderers, so these cannot go in `command_line_switches`.
