@@ -176,3 +176,53 @@ fn scene_builds_and_has_no_cost_before_a_frame() {
         .expect("the scene builds on the test device");
     assert_eq!(r.take_cost(), None);
 }
+
+/// A glass rect that grows (the sidebar dragged wider) is drawn at its new width at once,
+/// across all of it: owner, "the glass effect doesn't grow past a certain size".
+#[test]
+fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
+    use wubble_gfx::scene::{GlassRect, Rect, Renderer, Tier};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (w, h, dpr) = VIEW;
+    let side = |width| GlassRect {
+        rect: Rect::new(8.0, 8.0, width, h - 16.0),
+        radius: 20.0,
+        tier: Tier::Regular,
+        pressed: false,
+        hover: false,
+        focus: false,
+    };
+    // the same liquid each run; `grow` widens the panel for the last frame
+    let run = |glass: Option<(f32, f32)>| {
+        let mut r = Renderer::from_device(device.clone(), queue.clone(), Default::default())
+            .expect("the scene builds");
+        r.set_quality(Quality::Full);
+        for i in 0..FRAMES {
+            if let Some((narrow, wide)) = glass {
+                if i == 1 {
+                    r.scene.set_glass(&[side(narrow)]);
+                }
+                if i == FRAMES - 1 {
+                    r.scene.set_glass(&[side(wide)]);
+                }
+            }
+            r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+        }
+        wubble_gfx::scene::readback_rgba8(&device, &queue, r.output().unwrap())
+    };
+    let without = run(None);
+    let grown = run(Some((100.0, 280.0)));
+    let tw = (w * dpr) as u32;
+    // a column well inside the wide panel and past the narrow one, clear of its corners
+    for x in [150.0, 200.0, 250.0] {
+        let column = (x, 40.0, 4.0, h - 80.0);
+        assert_ne!(
+            region(&grown, tw, column),
+            region(&without, tw, column),
+            "no glass at x {x} of a panel 280 wide"
+        );
+    }
+}

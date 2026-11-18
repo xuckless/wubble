@@ -84,18 +84,22 @@ export component GlassPanel inherits Rectangle {
     // transform (scaled origin), but `width` and `height` stay unscaled.
     in property <float> scale: 1;
     transform-scale: root.scale;
+    // wubble change: the window x range a clipping parent shows (the sidebar clips its
+    // contents); the scene's glass is cut to it, so it never shows where Slint clips the panel.
+    in property <length> clip-start: -Shell.no-clip;
+    in property <length> clip-end: Shell.no-clip;
     out property <GlassItem> item: {
         key: root.key,
-        x: root.absolute-position.x,
+        x: max(root.absolute-position.x, root.clip-start),
         y: root.absolute-position.y,
-        width: root.width * root.scale,
+        width: max(0px, root.width * root.scale - max(0px, root.clip-start - root.absolute-position.x) - max(0px, root.absolute-position.x + root.width * root.scale - root.clip-end)),
         height: root.height * root.scale,
         radius: root.radius * root.scale,
         tier: root.tier,
         pressed: root.pressed,
         hover: root.hover,
         focus: root.focused,
-        present: root.over-wgpu && root.present && root.visible && root.width > 0 && root.height > 0,
+        present: root.over-wgpu && root.present && root.visible && min(root.absolute-position.x + root.width * root.scale, root.clip-end) > max(root.absolute-position.x, root.clip-start) && root.height > 0,
     };
     property <int> generation: GlassLayer.generation;
     init => {
@@ -621,8 +625,9 @@ export component SplitView inherits Rectangle {
             opacity: 0.6;
         }
         TouchArea {
-            x: s.x - 6px;
-            width: 12px;
+            // wubble change: the web design's 20 px strip (Shell.split-grab), not the port's 12
+            x: s.x - Shell.split-grab / 2;
+            width: Shell.split-grab;
             mouse-cursor: col-resize;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) { root.seam-grab(j, self.x + self.mouse-x, self.mouse-y); }

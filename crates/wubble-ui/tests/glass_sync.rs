@@ -14,6 +14,8 @@ use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer};
 
 /// 120 Hz.
 const FRAME: Duration = Duration::from_micros(8_333);
+/// app-tokens.slint `Shell.sidebar-open`.
+const SIDEBAR_OPEN: f32 = 0.5;
 /// Frames a transition may take before the test calls it stalled. A count, not a clock.
 const MAX_FRAMES: usize = 2_000;
 
@@ -38,12 +40,14 @@ fn run_to_rest(
         // What Slint draws this frame: the sidebar's glass up to the seam.
         let width = app.get_sidebar_width();
         let item = sidebar(scene, key);
-        if width > 1.0 {
+        // app-tokens.slint `Shell.sidebar-open`: the sidebar (and its glass) shows past it
+        if width > SIDEBAR_OPEN {
             let item = item.unwrap_or_else(|| panic!("frame {frame}: no sidebar glass at {width}"));
-            assert_eq!(
-                (item.x, item.y, item.width),
-                (INSET as f32, INSET as f32, width),
-                "frame {frame}: the scene's glass is not this frame's sidebar"
+            // f32 layout arithmetic: a few ulps
+            assert!(
+                (item.x, item.y) == (INSET as f32, INSET as f32)
+                    && (item.width - width).abs() < 0.01,
+                "frame {frame}: the scene's glass {item:?} is not this frame's sidebar ({width})"
             );
         } else {
             assert!(
@@ -51,6 +55,7 @@ fn run_to_rest(
                 "frame {frame}: glass left at width {width}: {item:?}"
             );
         }
+        check_inside(app, scene, frame);
         now += FRAME;
         if !again {
             return now;
@@ -83,9 +88,107 @@ fn sidebar_glass_follows_every_frame_of_a_mode_change() {
             AppWindow::invoke_sidebar_toggle_requested,
             Seam::new().saved,
         ),
+        // Extended -> Rail -> Hidden -> Extended (owner: the pill's glass in rail mode)
+        (AppWindow::invoke_seam_double_clicked, SEAM::rail),
+        (AppWindow::invoke_sidebar_toggle_requested, 0.0),
+        (
+            AppWindow::invoke_sidebar_toggle_requested,
+            Seam::new().saved,
+        ),
     ] {
         toggle(&app);
         now = run_to_rest(&app, &wired, &mut scene, now);
         assert_eq!(f64::from(app.get_sidebar_width()), want, "at rest");
     }
+
+    // A seam drag (owner: "the glass doesn't grow past a certain size"): to the minimum, wider,
+    // the maximum, past it (the rubber band), and back; every held frame and at rest.
+    for target in [SEAM::min, 300.0, SEAM::max, SEAM::max + 120.0, 260.0] {
+        now = drag_seam_to(&app, &wired, &mut scene, now, target as f32);
+        let rest = app.get_sidebar_width();
+        let want = (target as f32).clamp(SEAM::min as f32, SEAM::max as f32);
+        assert!(
+            (rest - want).abs() < 0.5,
+            "dragged to {target}: at rest {rest}, want {want}"
+        );
+    }
+}
+
+/// Window x of the seam for a sidebar `w` wide (app.slint: the Seam's frame starts at the inset,
+/// the string half an inset past the sidebar).
+fn seam_x(w: f32) -> f32 {
+    INSET as f32 + w + INSET as f32 / 2.0
+}
+
+/// One frame of a drag: the scene's sidebar and address pill glass are the ones Slint lays out.
+fn check_drag_frame(app: &AppWindow, scene: &[GlassItem], frame: usize) {
+    let keys = app.global::<GlassKeys>();
+    let edges = app.get_side_edges();
+    let side = sidebar(scene, keys.get_sidebar())
+        .unwrap_or_else(|| panic!("frame {frame}: no sidebar glass"));
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(
+        near(side.width, edges.end - edges.start) && near(side.width, app.get_sidebar_width()),
+        "frame {frame}: the sidebar's glass {side:?} is not the sidebar {edges:?}"
+    );
+    check_inside(app, scene, frame);
+}
+
+/// Every glass the scene holds lies inside the sidebar, which clips what it shows (none may
+/// reach under the page), and the address pill's is the pill Slint shows: none on the rail,
+/// where the pill is a search button without glass (.wb-rail-addr).
+fn check_inside(app: &AppWindow, scene: &[GlassItem], frame: usize) {
+    let keys = app.global::<GlassKeys>();
+    let edges = app.get_side_edges();
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    for item in scene {
+        assert!(
+            item.x >= edges.start - 0.01 && item.x + item.width <= edges.end + 0.01,
+            "frame {frame}: glass {item:?} reaches outside the sidebar {edges:?}"
+        );
+    }
+    let pill = sidebar(scene, keys.get_address());
+    if app.get_sidebar_rail() || app.get_sidebar_width() <= SIDEBAR_OPEN {
+        assert!(
+            pill.is_none(),
+            "frame {frame}: pill glass on the rail: {pill:?}"
+        );
+    } else {
+        let pill = pill.unwrap_or_else(|| panic!("frame {frame}: no address glass"));
+        // the pill as the sidebar shows it: cut where it rides past the sidebar's edges
+        let (x0, x1) = (edges.pill.max(edges.start), edges.pill_end.min(edges.end));
+        assert!(
+            near(pill.x, x0) && near(pill.width, x1 - x0),
+            "frame {frame}: the pill's glass {pill:?} is not the pill {edges:?}"
+        );
+    }
+}
+
+/// Press the seam, move the pointer to where the sidebar is `target` wide over 30 frames, hold
+/// it there until the width settles, release and run to rest; checks every frame.
+fn drag_seam_to(
+    app: &AppWindow,
+    wired: &Wired,
+    scene: &mut Vec<GlassItem>,
+    mut now: Instant,
+    target: f32,
+) -> Instant {
+    let from = seam_x(app.get_sidebar_width());
+    // seam.rs: a held seam's width is the pointer's x less the inset
+    let to = INSET as f32 + target;
+    app.invoke_seam_grab(from, 300.0);
+    for frame in 0..400 {
+        let k = ((frame + 1) as f32 / 30.0).min(1.0);
+        app.invoke_seam_drag(from + (to - from) * k, 300.0);
+        let (_, out) = wired.frame(app, now);
+        if let Some(glass) = out.glass {
+            *scene = glass;
+        }
+        check_drag_frame(app, scene, frame);
+        now += FRAME;
+    }
+    app.invoke_seam_release();
+    let now = run_to_rest(app, wired, scene, now);
+    check_drag_frame(app, scene, usize::MAX);
+    now
 }

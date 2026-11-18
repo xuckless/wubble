@@ -102,6 +102,13 @@ export global Shell {
     // chrome.tsx: the sidebar takes room beside the web view once wider than this
     out property <length> sidebar-open: 0.5px;
 
+    // browser.css .wb-split-grab: a split seam's hit strip, centred on the seam (chrome.tsx
+    // `sm.x - 10`); the Slint port's 12 px left 2 px of page each side of the 8 px gap
+    out property <length> split-grab: 20px;
+
+    // A glass panel's clip range when nothing clips it (GlassPanel `clip-start`/`clip-end`)
+    out property <length> no-clip: 100000px;
+
     // chrome.tsx: a hidden sidebar peeks 60 ms after the pointer reaches the edge strip and
     // hides 260 ms after it leaves; .wb-side-peek slides in over .34 s from 20 % opacity,
     // 16 px past its own width.
