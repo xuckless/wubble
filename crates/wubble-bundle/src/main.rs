@@ -58,8 +58,15 @@ fn main() {
     // `mac/wubble.icns` exists, sets CFBundleIconFile in the app's Info.plist (the helper
     // apps get no icon). The .icns is made by scripts/make-icons.py.
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons/macos");
-    let app = bundle(&out, &target, "wubble", "wubble-helper", Some(resources), info)
-        .unwrap_or_else(|e| fail(&e.to_string()));
+    let app = bundle(
+        &out,
+        &target,
+        "wubble",
+        "wubble-helper",
+        Some(resources),
+        info,
+    )
+    .unwrap_or_else(|e| fail(&e.to_string()));
     if let Some(exe) = exe {
         let to = app.join("Contents/MacOS/wubble");
         std::fs::copy(&exe, &to)

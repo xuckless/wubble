@@ -101,8 +101,28 @@ pub const UP_FRACTION: f64 = 0.6;
 /// The level above is predicted to fit when its last measured load is under
 /// this fraction: below the down line, so the prediction keeps a margin.
 pub const FIT_FRACTION: f64 = 0.8;
+/// Without the scene's own cost ([`Signal::Lateness`]), a step down counts as
+/// having helped when the lower level's load is at most this fraction of the
+/// load that moved it.
+pub const HELP_FRACTION: f64 = 0.75;
 /// Under `Cached`, one real render per this many calls.
 pub const CACHED_REFRESH_CALLS: u32 = 8;
+
+/// What the load fed to [`Governor::next`] measures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    /// The scene's own GPU time (timestamps): a load over the line is the
+    /// scene's, and a cheaper level lowers it.
+    SceneCost,
+    /// Only the frame's lateness (no GPU timestamps, wgpu on Metal here): the
+    /// whole frame, which can be late for reasons no level changes (the UI
+    /// thread blocked elsewhere, a slow page). Each step down is a trial: if
+    /// the lower level does not cut the load to [`HELP_FRACTION`] of what it
+    /// was, the governor steps back up and holds there for
+    /// `HOLD_FRAMES << backoff` frames, the back-off growing with each failed
+    /// trial. A frame slow at every level so stays at `Full`.
+    Lateness,
+}
 
 /// The governor's state, owned by the host and moved only by
 /// [`Governor::next`].
@@ -124,24 +144,39 @@ pub struct Governor {
     /// This level was entered by stepping up and has not yet held for
     /// `PROBE_FRAMES`.
     probing: bool,
-    /// Failed upgrades in a row; a step up against the prediction waits
-    /// `HOLD_FRAMES << backoff` frames.
+    /// Failed changes in a row (an upgrade soon undone, a downgrade that did
+    /// not help); a step up against the prediction, or a step down after a
+    /// trial that did not help, waits `HOLD_FRAMES << backoff` frames.
     backoff: u32,
+    signal: Signal,
+    /// [`Signal::Lateness`]: the level this one was entered from by a step
+    /// down that has not yet shown it helped.
+    trial: Option<Quality>,
+    /// Frames left during which this level does not step down (after a trial
+    /// that did not help).
+    held: u32,
 }
 
 impl Governor {
-    pub const fn new(quality: Quality) -> Self {
+    pub const fn new(quality: Quality, signal: Signal) -> Self {
         Self {
             quality,
             load: [None; 4],
             frames: 0,
             probing: false,
             backoff: 0,
+            signal,
+            trial: None,
+            held: 0,
         }
     }
 
     pub const fn quality(&self) -> Quality {
         self.quality
+    }
+
+    pub const fn signal(&self) -> Signal {
+        self.signal
     }
 
     /// The smoothed load last measured at `quality`, `None` if it never ran.
@@ -152,10 +187,12 @@ impl Governor {
     /// The state after one frame whose load was `cost`, against `budget`
     /// (`backdrop::frame_load` and `backdrop::frame_budget`). Steps down one
     /// level when, after `SETTLE_FRAMES`, the level's smoothed load is over
-    /// `budget * DOWN_FRACTION`. Steps up one level when, after `HOLD_FRAMES`,
-    /// it is under `budget * UP_FRACTION` and either the level above last
-    /// measured under `budget * FIT_FRACTION` (or never ran) or
-    /// `HOLD_FRAMES << backoff` frames have passed. Otherwise holds.
+    /// `budget * DOWN_FRACTION` (unless held, see [`Signal::Lateness`]).
+    /// Steps up one level when, after `HOLD_FRAMES`, it is under
+    /// `budget * UP_FRACTION` and either the level above last measured under
+    /// `budget * FIT_FRACTION` (or never ran) or `HOLD_FRAMES << backoff`
+    /// frames have passed. Under [`Signal::Lateness`] a step down that did
+    /// not help is undone first. Otherwise holds.
     #[must_use]
     pub fn next(self, cost: Duration, budget: Duration) -> Self {
         let sample = cost.min(budget.mul_f64(SAMPLE_CAP));
@@ -168,15 +205,30 @@ impl Governor {
         };
         let mut load = self.load;
         load[here] = Some(avg);
-        let change = |quality, probing, backoff| Self {
+        let change = |quality, probing, backoff, trial, held| Self {
             quality,
             load,
             frames: 0,
             probing,
             backoff,
+            signal: self.signal,
+            trial,
+            held,
         };
+        let settled = frames >= SETTLE_FRAMES;
+        // A step down on lateness alone, judged once this level has settled:
+        // no clear drop means the scene was not what made frames late.
+        if let Some(from) = self.trial.filter(|_| settled)
+            && !load[from.index()].is_some_and(|was| avg <= was.mul_f64(HELP_FRACTION))
+        {
+            let backoff = (self.backoff + 1).min(MAX_BACKOFF);
+            return change(from, false, backoff, None, HOLD_FRAMES << self.backoff);
+        }
+        let trial = self.trial.filter(|_| !settled);
+        let held = self.held.saturating_sub(1);
         if self.quality != Quality::Flat
-            && frames >= SETTLE_FRAMES
+            && settled
+            && self.held == 0
             && avg > budget.mul_f64(DOWN_FRACTION)
         {
             let backoff = if self.probing {
@@ -184,7 +236,11 @@ impl Governor {
             } else {
                 self.backoff
             };
-            return change(self.quality.lower(), false, backoff);
+            let trial = match self.signal {
+                Signal::SceneCost => None,
+                Signal::Lateness => Some(self.quality),
+            };
+            return change(self.quality.lower(), false, backoff, trial, 0);
         }
         if self.quality != Quality::Full
             && frames >= HOLD_FRAMES
@@ -193,16 +249,19 @@ impl Governor {
             let above = load[self.quality.higher().index()];
             let fits = above.is_none_or(|c| c < budget.mul_f64(FIT_FRACTION));
             if fits || frames >= HOLD_FRAMES << self.backoff {
-                return change(self.quality.higher(), true, self.backoff);
+                return change(self.quality.higher(), true, self.backoff, None, 0);
             }
         }
-        let held = self.probing && frames >= PROBE_FRAMES;
+        let survived = self.probing && frames >= PROBE_FRAMES;
         Self {
             quality: self.quality,
             load,
             frames,
-            probing: self.probing && !held,
-            backoff: if held { 0 } else { self.backoff },
+            probing: self.probing && !survived,
+            backoff: if survived { 0 } else { self.backoff },
+            signal: self.signal,
+            trial,
+            held,
         }
     }
 }
@@ -312,9 +371,18 @@ mod tests {
     fn run(
         start: Quality,
         frames: usize,
+        cost: impl FnMut(Quality, usize) -> Duration,
+    ) -> (Governor, Vec<(usize, Quality)>, [usize; 4]) {
+        run_on(Signal::SceneCost, start, frames, cost)
+    }
+
+    fn run_on(
+        signal: Signal,
+        start: Quality,
+        frames: usize,
         mut cost: impl FnMut(Quality, usize) -> Duration,
     ) -> (Governor, Vec<(usize, Quality)>, [usize; 4]) {
-        let mut g = Governor::new(start);
+        let mut g = Governor::new(start, signal);
         let mut changes = vec![];
         let mut at = [0; 4];
         for frame in 0..frames {
@@ -411,7 +479,7 @@ mod tests {
 
     #[test]
     fn a_cheap_scene_climbs_to_full_one_hold_per_level() {
-        let mut g = Governor::new(Quality::Flat);
+        let mut g = Governor::new(Quality::Flat, Signal::SceneCost);
         for expected in [Quality::Cached, Quality::HalfRes, Quality::Full] {
             g = feed(g, [of(0.2); HOLD_FRAMES as usize - 1]);
             assert_ne!(g.quality(), expected);
@@ -422,7 +490,7 @@ mod tests {
 
     #[test]
     fn a_level_measured_not_to_fit_waits_out_the_back_off() {
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         // Full fails, HalfRes is calm, and Full is retried and fails again:
         // each failed retry doubles the wait.
         let mut waits = vec![];
@@ -445,7 +513,7 @@ mod tests {
 
     #[test]
     fn surviving_a_probe_forgets_the_back_off() {
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..3 {
             g = feed(g, [of(1.3); SETTLE_FRAMES as usize]);
             while g.quality() == Quality::HalfRes {
@@ -455,6 +523,75 @@ mod tests {
         assert_eq!(g.backoff, 2);
         g = feed(g, [of(0.3); PROBE_FRAMES as usize]);
         assert_eq!((g.quality(), g.backoff), (Quality::Full, 0));
+    }
+
+    #[test]
+    fn without_timestamps_a_frame_late_at_every_level_settles_at_full() {
+        // The whole frame is half a budget late whatever the scene does (the
+        // UI thread blocked elsewhere): stepping down never helps.
+        let frames = 300_000;
+        let (g, changes, at) = run_on(
+            Signal::Lateness,
+            Quality::Full,
+            frames,
+            gpu([0.5 / DOWN_FRACTION + 0.4; 4]),
+        );
+        assert_eq!(g.quality(), Quality::Full);
+        // Each trial goes one level down and comes back: never further.
+        assert!(
+            changes.iter().all(|&(_, q)| q <= Quality::HalfRes),
+            "{changes:?}"
+        );
+        // Trials thin out like upgrades do: the hold doubles up to its cap.
+        let capped = frames / (HOLD_FRAMES << MAX_BACKOFF) as usize;
+        assert!(
+            changes.len() <= 2 * (MAX_BACKOFF as usize + capped + 1),
+            "{} changes: {changes:?}",
+            changes.len()
+        );
+        assert!(at[Quality::Full.index()] * 1000 >= frames * 995, "{at:?}");
+    }
+
+    #[test]
+    fn without_timestamps_a_scene_that_is_the_cause_still_steps_down() {
+        // Late at Full and at HalfRes, on time from Cached: two trials that
+        // help, then it stays.
+        let frames = 100_000;
+        let (g, changes, at) = run_on(
+            Signal::Lateness,
+            Quality::Full,
+            frames,
+            gpu([1.6, 1.0, 0.1, 0.0]),
+        );
+        assert_eq!(g.quality(), Quality::Cached);
+        assert!(at[Quality::Cached.index()] * 100 >= frames * 97, "{at:?}");
+        assert_eq!(
+            changes[..2],
+            [(31, Quality::HalfRes), (63, Quality::Cached)]
+        );
+    }
+
+    #[test]
+    fn without_timestamps_a_step_that_did_not_help_is_undone_and_held() {
+        let mut g = Governor::new(Quality::Full, Signal::Lateness);
+        g = feed(g, [of(1.5); SETTLE_FRAMES as usize]);
+        assert_eq!(g.quality(), Quality::HalfRes);
+        // As late at HalfRes: back to Full once HalfRes has settled.
+        g = feed(g, [of(1.5); SETTLE_FRAMES as usize]);
+        assert_eq!((g.quality(), g.backoff), (Quality::Full, 1));
+        // Held at Full, however late, for one hold.
+        g = feed(g, [of(1.5); HOLD_FRAMES as usize]);
+        assert_eq!(g.quality(), Quality::Full);
+        g = feed(g, [of(1.5)]);
+        assert_eq!(g.quality(), Quality::HalfRes);
+    }
+
+    #[test]
+    fn with_timestamps_steps_down_are_not_trials() {
+        // The scene's own cost: a level whose cost is the same keeps going
+        // down, as before (the Linux behaviour).
+        let (g, _, _) = run(Quality::Full, 2_000, gpu([1.5; 4]));
+        assert_eq!(g.quality(), Quality::Flat);
     }
 
     #[test]

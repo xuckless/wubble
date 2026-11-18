@@ -86,6 +86,26 @@ pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
 /// The Wayland app id and X11 window class: the name of `wubble.desktop` and of the icon.
 pub const APP_ID: &str = "wubble";
 
+/// Turns the OS's own window restoration off for this process, before the event loop starts.
+/// wubble restores its session itself (`persist`). macOS: AppKit's restoration ("Resume") is
+/// what shows "wubble quit unexpectedly while reopening windows" as a modal alert at launch
+/// after a crash or a killed run, and that alert holds the UI thread before the first frame (a
+/// sampled `--smoke frames` run sat in `-[NSPersistentUIRestorer
+/// promptToIgnorePersistentStateWithCrashHistory:]` until its timeout). Registered, not saved:
+/// `ApplePersistenceIgnoreState` in `NSUserDefaults`' registration domain. Elsewhere nothing.
+pub fn no_os_window_restoration() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSDictionary, NSNumber, NSString, NSUserDefaults};
+        let key = NSString::from_str("ApplePersistenceIgnoreState");
+        let yes = NSNumber::new_bool(true);
+        let defaults = NSDictionary::from_slices(&[&*key], &[yes.as_ref()]);
+        // SAFETY: the dictionary maps an `NSString` to an `NSNumber`, which is what
+        // `registerDefaults:` takes.
+        unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&defaults) };
+    }
+}
+
 /// The window's mode. Not stored: it is read from the window each time (one owner).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame {

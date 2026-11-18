@@ -6,7 +6,10 @@
 //! (`RenderingState::AfterRendering`, which with FIFO present follows the
 //! display), how many CEF frames were replaced before the host took one, and
 //! for `typing` the time from an injected key or click to the first rendered
-//! frame whose probe pixel changed. It prints a table (nearest-rank
+//! frame whose probe pixel changed. It also times the UI thread's stages: each
+//! run of CEF work and the gap between runs, the presenter's blit, the scene's
+//! CPU side and Slint's render (`BeforeRendering` to `AfterRendering`). The
+//! report is printed (and the CSV written) before CEF shuts down. It prints a table (nearest-rank
 //! p50/p95/p99/max), counts and histograms, and writes the samples as CSV.
 //!
 //! The numbers are printed, never asserted: nothing here runs in `cargo
@@ -117,10 +120,22 @@ pub enum Metric {
     KeyToPixels,
     /// Injected click to the render of the first frame that shows it.
     PointerToPixels,
+    /// One run of CEF work on the host (`do_message_loop_work`, which runs
+    /// `OnAcceleratedPaint` and its copy, then the host's handling).
+    PumpWork,
+    /// Between the starts of two runs of CEF work.
+    PumpGap,
+    /// The presenter's import and blit of one taken frame (CPU side).
+    Blit,
+    /// The scene's step, encode and submit in the rendering notifier (CPU side).
+    Scene,
+    /// Slint's `BeforeRendering` to `AfterRendering`: the shell step, the
+    /// scene, femtovg's encode and the surface acquire.
+    SlintRender,
 }
 
 impl Metric {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 13] = [
         Self::TakenInterval,
         Self::Copy,
         Self::CopyWait,
@@ -129,6 +144,11 @@ impl Metric {
         Self::PresentInterval,
         Self::KeyToPixels,
         Self::PointerToPixels,
+        Self::PumpWork,
+        Self::PumpGap,
+        Self::Blit,
+        Self::Scene,
+        Self::SlintRender,
     ];
 
     pub fn name(self) -> &'static str {
@@ -141,6 +161,11 @@ impl Metric {
             Self::PresentInterval => "present_interval",
             Self::KeyToPixels => "key_to_pixels",
             Self::PointerToPixels => "pointer_to_pixels",
+            Self::PumpWork => "pump_work",
+            Self::PumpGap => "pump_gap",
+            Self::Blit => "blit",
+            Self::Scene => "scene_cpu",
+            Self::SlintRender => "slint_render",
         }
     }
 }
@@ -181,8 +206,18 @@ pub enum Event {
         frame: Frame,
         probe: Option<[u8; 4]>,
     },
+    /// Slint started rendering the window (`BeforeRendering`).
+    RenderBegan(Instant),
     /// Slint finished rendering the window.
     Rendered(Instant),
+    /// A run of CEF work started at `at` and took `took`.
+    Pumped {
+        at: Instant,
+        took: Duration,
+    },
+    /// One stage of the frame path took this long ([`Metric::Blit`],
+    /// [`Metric::Scene`]).
+    Stage(Metric, Duration),
     Injected {
         at: Instant,
         kind: InputKind,
@@ -245,6 +280,8 @@ pub struct Recorder {
     last_generation: Option<u64>,
     last_arrived: Option<Instant>,
     last_render: Option<Instant>,
+    render_began: Option<Instant>,
+    last_pump: Option<Instant>,
     /// The taken frame not rendered yet: when CEF painted it, if known.
     awaiting_render: Option<Option<Instant>>,
     new_frame: bool,
@@ -264,7 +301,15 @@ impl Recorder {
     pub fn record(&mut self, event: Event) {
         match event {
             Event::Taken { at, frame, probe } => self.taken(at, frame, probe),
+            Event::RenderBegan(at) => self.render_began = Some(at),
             Event::Rendered(at) => self.rendered(at),
+            Event::Pumped { at, took } => {
+                if let Some(last) = self.last_pump.replace(at) {
+                    self.push(Metric::PumpGap, at.saturating_duration_since(last));
+                }
+                self.push(Metric::PumpWork, took);
+            }
+            Event::Stage(metric, took) => self.push(metric, took),
             Event::Injected { at, kind } => {
                 self.counts.inputs += 1;
                 if self.input.is_some() {
@@ -339,6 +384,9 @@ impl Recorder {
 
     fn rendered(&mut self, at: Instant) {
         self.counts.renders += 1;
+        if let Some(began) = self.render_began.take() {
+            self.push(Metric::SlintRender, at.saturating_duration_since(began));
+        }
         if let Some(last) = self.last_render {
             self.push(Metric::PresentInterval, at.saturating_duration_since(last));
             if !self.new_frame {
@@ -601,6 +649,32 @@ pub fn rendered() {
         let now = Instant::now();
         if s.recording(now) {
             s.recorder.record(Event::Rendered(now));
+        }
+    });
+}
+
+/// Rendering-notifier hook: Slint is about to render (`BeforeRendering`, stamped `at`).
+pub fn render_began(at: Instant) {
+    record(at, Event::RenderBegan(at));
+}
+
+/// Host hook: a run of CEF work started at `at` and ended now.
+pub fn pumped(at: Instant) {
+    let took = at.elapsed();
+    record(at, Event::Pumped { at, took });
+}
+
+/// A stage of the frame path that started at `at` ended now.
+pub fn stage(metric: Metric, at: Instant) {
+    let took = at.elapsed();
+    record(at, Event::Stage(metric, took));
+}
+
+/// Records `event` when a session is recording at `at`.
+fn record(at: Instant, event: Event) {
+    with_session(|s| {
+        if s.recording(at) {
+            s.recorder.record(event);
         }
     });
 }
@@ -947,6 +1021,33 @@ mod tests {
              present_interval,1,9.000\n\
              arrival_to_present,0,9.000\n"
         );
+    }
+
+    #[test]
+    fn stages_pumps_and_render_spans_from_a_fixed_sequence() {
+        let t0 = Instant::now();
+        let mut r = Recorder::default();
+        for e in [
+            Event::Pumped {
+                at: at(t0, 0),
+                took: Duration::from_millis(2),
+            },
+            Event::RenderBegan(at(t0, 3)),
+            Event::Stage(Metric::Scene, Duration::from_millis(1)),
+            Event::Rendered(at(t0, 6)),
+            Event::Pumped {
+                at: at(t0, 5),
+                took: Duration::from_millis(1),
+            },
+            // A render without its start adds no render span.
+            Event::Rendered(at(t0, 14)),
+        ] {
+            r.record(e);
+        }
+        assert_eq!(r.values(Metric::PumpWork), vec![2.0, 1.0]);
+        assert_eq!(r.values(Metric::PumpGap), vec![5.0]);
+        assert_eq!(r.values(Metric::Scene), vec![1.0]);
+        assert_eq!(r.values(Metric::SlintRender), vec![3.0]);
     }
 
     #[test]
