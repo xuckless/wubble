@@ -23,6 +23,7 @@ import { NewTabRow } from "new-tab-row.slint";
 import { WindowLights } from "window-lights.slint";
 import { NavButtons } from "nav-buttons.slint";
 import { MoveArea } from "window-frame.slint";
+import { Wobble } from "wobble.slint";
 
 export component Sidebar inherits Rectangle {
     in property <string> address-host;
@@ -307,7 +308,9 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                for space[i] in root.spaces: Rectangle {
+                for space[i] in root.spaces: tile := Rectangle {
+                    // tabs.tsx SpaceSwitcher: each click wobbles the icon once more
+                    property <bool> hit: false;
                     x: root.compact ? 0px : i * switcher.pitch;
                     y: root.compact ? i * switcher.pitch : 0px;
                     width: Shell.space-tile;
@@ -321,19 +324,25 @@ export component Sidebar inherits Rectangle {
                     }
                     ta := TouchArea {
                         clicked => {
+                            tile.hit = !tile.hit;
                             root.space-switched(space.id);
                         }
                     }
                     // the model has no icon per Space yet: the three drawn icons in turn
-                    SpaceIcon {
+                    Wobble {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         width: Shell.space-glyph;
                         height: Shell.space-glyph;
-                        // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
-                        stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                        kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
-                        tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                        hit: tile.hit;
+                        SpaceIcon {
+                            width: parent.width;
+                            height: parent.height;
+                            // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
+                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
+                            kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
+                            tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                        }
                     }
                 }
             }
