@@ -63,6 +63,7 @@ use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
 use crate::page_error::ErrorEvent;
 use crate::page_smoke::{self, PageSmoke};
+use crate::pages_smoke::{self, PagesSmoke};
 use crate::panes::Panes;
 use crate::perform::{self, Plan, ViewOp};
 use crate::persist::{self, Loaded, SaveState, StoreClient, TypedNav, UiState};
@@ -210,6 +211,7 @@ pub struct Checks {
     pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
     pub settings_smoke: Option<SettingsSmoke>,
+    pub pages_smoke: Option<PagesSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -289,6 +291,7 @@ pub struct Host {
     session_icon: Option<bool>,
     pub split_passed: bool,
     pub settings_passed: bool,
+    pub pages_passed: bool,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
     pub(crate) input: InputState,
@@ -426,6 +429,7 @@ impl Host {
             session_icon: None,
             split_passed: false,
             settings_passed: false,
+            pages_passed: false,
             settings_read: None,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
@@ -720,6 +724,7 @@ impl Host {
         self.tabs_smoke_step();
         self.session_smoke_step();
         self.settings_smoke_step();
+        self.pages_smoke_step();
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
@@ -1402,6 +1407,55 @@ impl Host {
                 quit();
             }
             Some(settings_smoke::Action::Fail(reason)) => self.fail(reason),
+            None => {}
+        }
+    }
+
+    fn pages_smoke_step(&mut self) {
+        use slint::Model;
+        let Some(state) = self.checks.pages_smoke.take() else {
+            return;
+        };
+        let Some(window) = self.window.upgrade() else {
+            self.checks.pages_smoke = Some(state);
+            return;
+        };
+        let page = self.shown_page();
+        let rows = match page {
+            Some(InternalPage::History) => window.get_history_lines().row_count(),
+            Some(InternalPage::Bookmarks) => window.get_bookmark_lines().row_count(),
+            Some(InternalPage::Downloads) => window.get_downloads().row_count(),
+            Some(InternalPage::Passwords) => window.get_logins().row_count(),
+            Some(InternalPage::Settings) | None => 0,
+        };
+        let seen = pages_smoke::Seen {
+            ready: self.frame_rate.is_some(),
+            page,
+            rows,
+            unlocked: window.get_passwords_view().state == wubble_ui::VaultState::Unlocked,
+            views: self.engine.view_count(),
+        };
+        let (state, action) = pages_smoke::next(state, &seen);
+        self.checks.pages_smoke = Some(state);
+        match action {
+            Some(pages_smoke::Action::Open(page)) => self.perform(match page {
+                InternalPage::History => Action::OpenHistory,
+                InternalPage::Bookmarks => Action::OpenBookmarks,
+                InternalPage::Downloads => Action::OpenDownloads,
+                InternalPage::Passwords => Action::OpenPasswords,
+                InternalPage::Settings => Action::OpenSettings,
+            }),
+            // The page's own button callback, as a click sends it: later, outside the host.
+            Some(pages_smoke::Action::Unlock) => {
+                let _ = self
+                    .window
+                    .upgrade_in_event_loop(|window| window.invoke_passwords_unlock());
+            }
+            Some(pages_smoke::Action::Pass) => {
+                self.pages_passed = true;
+                quit();
+            }
+            Some(pages_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
         }
     }

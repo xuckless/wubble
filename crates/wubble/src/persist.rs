@@ -529,6 +529,13 @@ impl StoreClient {
     }
 }
 
+/// The name the profile's vault key is filed under: the profile directory's, as `db` sits in it.
+pub fn profile_name(db: &Path) -> String {
+    db.parent()
+        .and_then(|dir| dir.file_name())
+        .map_or_else(|| "default".into(), |n| n.to_string_lossy().into_owned())
+}
+
 /// The store thread: open, load, then serve requests until the client is gone. The thread owns
 /// the vault over the store (`StoreLogins`), so the unlocked key stays here; every other
 /// request reaches the store through `vault.store_mut().store_mut()`.
@@ -548,12 +555,7 @@ fn serve<K: KeyRing>(
             return;
         }
     };
-    // One vault per profile: the key's account is the profile directory's name.
-    let profile = path
-        .parent()
-        .and_then(|dir| dir.file_name())
-        .map_or_else(|| "default".into(), |n| n.to_string_lossy().into_owned());
-    let mut vault = Vault::new(keyring, StoreLogins::new(store), &profile);
+    let mut vault = Vault::new(keyring, StoreLogins::new(store), &profile_name(path));
     while let Ok(first) = rx.recv() {
         let batch: Vec<Request> = std::iter::once(first).chain(rx.try_iter()).collect();
         for request in latest_save_only(batch) {

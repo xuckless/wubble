@@ -133,13 +133,13 @@ export component AddressPill inherits Rectangle {
                         vertical-alignment: center;
                     }
                 }
-                TouchArea {
+                badge-area := TouchArea {
                     clicked => {
                         root.blocker-requested(badge.absolute-position.x, badge.absolute-position.y + badge.height);
                     }
                 }
             }
-            if root.bookmarkable: Rectangle {
+            if root.bookmarkable: star := Rectangle {
                 width: Shell.address-icon;
                 Icon {
                     y: (parent.height - self.height) / 2;
@@ -149,7 +149,7 @@ export component AddressPill inherits Rectangle {
                     fill: root.bookmarked ? Palette.amber : transparent;
                     tint: root.bookmarked ? Palette.amber : Palette.haze;
                 }
-                TouchArea {
+                star-area := TouchArea {
                     clicked => {
                         root.bookmark-requested();
                     }

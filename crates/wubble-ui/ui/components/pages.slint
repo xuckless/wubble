@@ -233,7 +233,7 @@ export component BookmarksPage inherits PageFrame {
     if root.lines.length == 0: EmptyNote {
         text: root.searching ? "No bookmarks match" : "No bookmarks yet. Press Ctrl+D on a page to add one.";
     }
-    for line in root.lines: OpenRow {
+    for line in root.lines: bookmark-row := OpenRow {
         opened => {
             if line.is-folder {
                 root.toggled(line.id);
@@ -413,7 +413,7 @@ export component PasswordsPage inherits Rectangle {
         if root.view.state == VaultState.unlocked && root.logins.length == 0: EmptyNote {
             text: "No saved passwords";
         }
-        for login in root.logins: Rectangle {
+        for login in root.logins: login-row := Rectangle {
             height: Shell.page-row;
             HorizontalLayout {
                 padding-left: Spacing.s3;

@@ -13,6 +13,7 @@ mod menu;
 mod nav_smoke;
 mod page_error;
 mod page_smoke;
+mod pages_smoke;
 mod panes;
 mod perform;
 mod persist;
@@ -249,6 +250,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: settings FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Pages) => {
+            match with_smoke_dir(|config, dir| run(Mode::Pages, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    pages_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: pages ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: pages FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: pages FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -523,6 +547,7 @@ struct Outcome {
     split_passed: bool,
     /// `--smoke settings` reached its end.
     settings_passed: bool,
+    pages_passed: bool,
     /// `--measure`'s report and CSV.
     measured: Option<(String, String)>,
 }
@@ -548,6 +573,8 @@ enum Mode {
     Block,
     /// `--smoke settings`.
     Settings,
+    /// `--smoke pages`.
+    Pages,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -870,12 +897,19 @@ fn run(
     profile: &Path,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     // The database loads while the GPU and CEF start.
-    let (store, loaded) = StoreClient::spawn(
-        Profile {
-            dir: profile.into(),
-        }
-        .db_path(),
-    );
+    let db = Profile {
+        dir: profile.into(),
+    }
+    .db_path();
+    // The pages smoke fills the profile first, and gives the store thread the fake keyring its
+    // vault key went into (no OS keyring prompt).
+    let (store, loaded) = if matches!(mode, Mode::Pages) {
+        let keyring = wubble_vault::FakeKeyRing::default();
+        pages_smoke::seed(&db, &keyring)?;
+        StoreClient::spawn_with(db, keyring)
+    } else {
+        StoreClient::spawn(db)
+    };
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
     slint::BackendSelector::new()
@@ -901,6 +935,7 @@ fn run(
         block_smoke: None,
         split_smoke: None,
         settings_smoke: None,
+        pages_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -959,6 +994,13 @@ fn run(
             Some(bundled()),
             Checks {
                 settings_smoke: Some(settings_smoke::SettingsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Pages => (
+            Some(bundled()),
+            Checks {
+                pages_smoke: Some(pages_smoke::PagesSmoke::default()),
                 ..none
             },
         ),
@@ -1087,6 +1129,7 @@ fn run(
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
         settings_passed: host.settings_passed,
+        pages_passed: host.pages_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,
