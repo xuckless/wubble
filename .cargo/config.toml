@@ -1,5 +1,7 @@
 # cef-dll-sys copies libcef.so and its resources into target/<profile>/ but sets
 # no rpath. `$ORIGIN` covers wubble and wubble-helper; `$ORIGIN/..` covers test
-# binaries in target/<profile>/deps/.
+# binaries in target/<profile>/deps/ and examples/; `$ORIGIN/../../../..` covers
+# test binaries that newer cargo (build-dir layout v2) runs from
+# target/<profile>/build/<package>/<hash>/out/.
 [target.'cfg(target_os = "linux")']
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/.."]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/..:$ORIGIN/../../../.."]

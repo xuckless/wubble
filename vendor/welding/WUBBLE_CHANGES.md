@@ -366,6 +366,11 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    copied. wubble's media downloader detects video, audio, HLS and DASH by
    the response's MIME type, which the request hook cannot see. Test: the
    header reading and a panicking observer.
+37. **Resource types as `u32` on Windows too.** `handlers.rs`: the request
+   filter's and the response observer's raw resource type is
+   `get_raw() as u32` (clippy's `unnecessary_cast` allowed): CEF's enum raw
+   type is `i32` on Windows and `u32` elsewhere, so the Windows CI build
+   failed. No behaviour change.
 
 ## Not changed, on purpose
 

@@ -25,6 +25,9 @@ jobs:
   check:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # A cold build compiles CEF's wrapper and Slint; a hung step must not hold
+    # a runner for the 6 hour default.
+    timeout-minutes: 60
     # Windows is built on CI only and may trail the other platforms: its
     # failures do not fail the run until it has had a first green run (see
     # the "Windows CI" item in TODO.md). Drop this line then.
@@ -46,7 +49,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Keyed by job (OS) automatically; failures still save the build so a
+      # retry starts warm. The toolchain version is part of the key too.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       # Linux build needs: a C++ toolchain, cmake and ninja (cef-dll-sys builds
       # libcef_dll_wrapper), libclang (bindgen), fontconfig (Slint text),
@@ -80,7 +87,8 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ninja -y --no-progress
 
-      # Windows has no rpath: test binaries run from target/debug/deps and need
+      # Windows has no rpath: test binaries run from target/debug/deps (or, with
+      # newer cargo, target/debug/build/<pkg>/<hash>/out) and need
       # libcef.dll, which cef-dll-sys copies into target/debug.
       - name: Put libcef.dll on PATH (Windows)
         if: runner.os == 'Windows'
