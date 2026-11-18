@@ -42,8 +42,18 @@ Every change is marked `wubble change` in the source.
    (default 60) and `CefSurfaceConfig::external_begin_frame` (default false),
    the values welding hardcoded before; wired into `BrowserSettings` and
    `WindowInfo` in `linux_cef/mod.rs`, `macos_cef/mod.rs`, `windows_cef/mod.rs`.
-5. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
-   (`frame_timing_defaults_match_upstream`, `BrowserClosed` added to
+5. **Loading state and favicon events.** `surface.rs`: new
+   `NavigationEvent::LoadingStateChanged { loading, can_go_back,
+   can_go_forward }` and `NavigationEvent::FaviconUrlsChanged { urls }`, plus
+   `borrowed_string_list` (reads a `CefStringList` CEF still owns;
+   `CefStringList::clone` would copy a borrowed list into an empty one).
+   Pushed from new `WeldLoadHandler::on_loading_state_change` and
+   `WeldDisplayHandler::on_favicon_urlchange` on Linux, macOS and Windows
+   (`*/cef_backed.rs`). welding had no source for either: `can_go_back` /
+   `can_go_forward` were only queryable, favicons not reported at all.
+6. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
+   (`frame_timing_defaults_match_upstream`; `BrowserClosed`,
+   `LoadingStateChanged` and `FaviconUrlsChanged` added to
    `mixed_callbacks_keep_observation_order`).
 
 ## Not changed, on purpose
@@ -51,6 +61,10 @@ Every change is marked `wubble change` in the source.
 - **No `Browser` accessor.** wubble already reaches the browser host through
   `cef::browser_host_get_browser_by_identifier(producer.browser_id())`, and
   `CefSurfaceProducer` already has input, navigation and `set_visible`.
+- **Input untouched.** wubble-engine sends mouse, wheel and key events to the
+  `BrowserHost` itself: welding's input path has no click count, mouse
+  leave, wheel precision flag, `is_system_key` or key table, and fixing it
+  would mean three platform copies of the change.
 - **Texture import format/usage (the per-frame blit in wubble-gfx stays).**
   Slint 1.19's `Image::try_from(wgpu::Texture)` takes only `Rgba8Unorm` /
   `Rgba8UnormSrgb` with `TEXTURE_BINDING | RENDER_ATTACHMENT`

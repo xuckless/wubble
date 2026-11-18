@@ -99,6 +99,17 @@ pub enum CefSurfaceEvent {
     BrowserClosed,
 }
 
+/// The strings of a list CEF passed to a callback, which still owns it.
+/// wubble change, see `WUBBLE_CHANGES.md`.
+#[cfg(feature = "cef-runtime")]
+pub(crate) fn borrowed_string_list(list: &mut cef::CefStringList) -> Vec<String> {
+    // `CefStringList::clone` copies a borrowed list into an empty one, so
+    // iterate a second borrowed view of the same pointer instead; neither
+    // view frees it.
+    let raw: *mut cef::sys::_cef_string_list_t = list.into();
+    cef::CefStringList::from(raw).into_iter().collect()
+}
+
 /// Shared callback queue used by every platform producer.
 #[derive(Debug, Default)]
 pub(crate) struct WebEventQueue(Mutex<VecDeque<CefSurfaceEvent>>);
@@ -135,6 +146,14 @@ mod web_event_tests {
         events.push(CefSurfaceEvent::Navigation(NavigationEvent::TitleChanged {
             title: "last".into(),
         }));
+        events.push(CefSurfaceEvent::Navigation(NavigationEvent::LoadingStateChanged {
+            loading: false,
+            can_go_back: true,
+            can_go_forward: false,
+        }));
+        events.push(CefSurfaceEvent::Navigation(NavigationEvent::FaviconUrlsChanged {
+            urls: vec!["https://example.com/favicon.ico".into()],
+        }));
         events.push(CefSurfaceEvent::BrowserClosed);
 
         assert!(matches!(
@@ -150,6 +169,19 @@ mod web_event_tests {
             events.poll(),
             Some(CefSurfaceEvent::Navigation(NavigationEvent::TitleChanged { title }))
                 if title == "last"
+        ));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::Navigation(NavigationEvent::LoadingStateChanged {
+                loading: false,
+                can_go_back: true,
+                can_go_forward: false,
+            }))
+        ));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::Navigation(NavigationEvent::FaviconUrlsChanged { urls }))
+                if urls == ["https://example.com/favicon.ico"]
         ));
         assert!(matches!(events.poll(), Some(CefSurfaceEvent::BrowserClosed)));
         assert!(events.poll().is_none());
@@ -1490,6 +1522,20 @@ pub enum NavigationEvent {
     },
     AddressChanged {
         url: String,
+    },
+    /// CEF's `OnLoadingStateChange`: the browser started or stopped loading
+    /// (any frame), with the history state at that moment. The only source
+    /// of `can_go_back` / `can_go_forward` changes. wubble change, see
+    /// `WUBBLE_CHANGES.md`.
+    LoadingStateChanged {
+        loading: bool,
+        can_go_back: bool,
+        can_go_forward: bool,
+    },
+    /// CEF's `OnFaviconURLChange`: the page's icon URLs, possibly empty.
+    /// wubble change, see `WUBBLE_CHANGES.md`.
+    FaviconUrlsChanged {
+        urls: Vec<String>,
     },
     /// The render process backing this browser died. The browser object
     /// itself survives, and `reload()` brings the page back: Chromium spawns a

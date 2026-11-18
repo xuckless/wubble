@@ -512,6 +512,23 @@ cef::wrap_load_handler! {
     }
 
     impl LoadHandler {
+        // wubble change: loading state and history flags for the host.
+        fn on_loading_state_change(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            is_loading: ::std::os::raw::c_int,
+            can_go_back: ::std::os::raw::c_int,
+            can_go_forward: ::std::os::raw::c_int,
+        ) {
+            self.inner.events.push(CefSurfaceEvent::Navigation(
+                crate::surface::NavigationEvent::LoadingStateChanged {
+                    loading: is_loading != 0,
+                    can_go_back: can_go_back != 0,
+                    can_go_forward: can_go_forward != 0,
+                },
+            ));
+        }
+
         fn on_load_start(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -583,6 +600,18 @@ cef::wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        // wubble change: favicon URLs for the host.
+        fn on_favicon_urlchange(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            icon_urls: Option<&mut cef::CefStringList>,
+        ) {
+            let urls = icon_urls.map(crate::surface::borrowed_string_list).unwrap_or_default();
+            self.inner.events.push(CefSurfaceEvent::Navigation(
+                crate::surface::NavigationEvent::FaviconUrlsChanged { urls },
+            ));
+        }
+
         fn on_address_change(
             &self,
             _browser: Option<&mut cef::Browser>,
