@@ -51,6 +51,13 @@ export component Sidebar inherits Rectangle {
     in property <length> ride-step;
     in property <string> address-host;
     in property <string> address-path;
+    in property <bool> address-bookmarkable: false;
+    in property <bool> address-bookmarked: false;
+    in property <bool> address-blocker-visible: false;
+    in property <bool> address-blocker-allowed: false;
+    in property <int> address-blocked: 0;
+    callback address-bookmark-requested();
+    callback address-blocker-requested(length, length);
     in property <[TabItem]> pinned-tabs;
     in property <[TabItem]> tabs;
     in property <[SpaceItem]> spaces;
@@ -235,6 +242,17 @@ export component Sidebar inherits Rectangle {
                 loading: root.address-loading;
                 host: root.address-host;
                 path: root.address-path;
+                bookmarkable: root.address-bookmarkable;
+                bookmarked: root.address-bookmarked;
+                blocker-visible: root.address-blocker-visible;
+                blocker-allowed: root.address-blocker-allowed;
+                blocked: root.address-blocked;
+                bookmark-requested => {
+                    root.address-bookmark-requested();
+                }
+                blocker-requested(x, y) => {
+                    root.address-blocker-requested(x, y);
+                }
                 compact: root.compact;
                 activated => {
                     root.address-activated();

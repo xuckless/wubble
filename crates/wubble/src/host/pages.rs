@@ -5,14 +5,25 @@
 //! redraws it. The state here is the one owner of what each page shows; the store is the truth.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use slint::ComponentHandle;
+use wubble_core::apply::{self, Applied};
 use wubble_core::model::Command;
-use wubble_core::pages::{self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage};
+use wubble_core::pages::{
+    self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage, LoginView, VaultStatus,
+};
+use wubble_core::settings as defs;
 use wubble_store::Favicon;
 use wubble_ui::{AppWindow, BookmarkSheetView, InternalPageKind};
+use wubble_vault::{RecordId, VaultAnswer, VaultCommand};
+use zeroize::Zeroizing;
 
 use super::{Host, now_ms};
 use crate::bind::favicon_image;
+use crate::menu::MenuEvent;
 use crate::persist::{BookmarksPage, HistoryClear, VisitsPage};
 use crate::with_host;
 
@@ -73,6 +84,58 @@ struct Bookmarks {
     loaded: bool,
 }
 
+/// How long a revealed password stays on the page.
+const REVEAL_FOR: Duration = Duration::from_secs(30);
+
+/// A password the user asked to see: shown until `until`, or until the page is left.
+struct Revealed {
+    id: String,
+    password: Zeroizing<String>,
+    until: Instant,
+}
+
+impl fmt::Debug for Revealed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Revealed")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct Passwords {
+    status: VaultStatus,
+    /// Empty while locked: nothing is shown without the key.
+    rows: Vec<LoginView>,
+    revealed: Option<Revealed>,
+    query: String,
+    /// The last import's report or the last refusal, under the status card.
+    notice: String,
+}
+
+impl Default for Passwords {
+    fn default() -> Self {
+        Self {
+            status: VaultStatus::Locked,
+            rows: vec![],
+            revealed: None,
+            query: String::new(),
+            notice: String::new(),
+        }
+    }
+}
+
+/// What a vault answer is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Then {
+    /// Take it into the page's state.
+    Apply,
+    /// Show the revealed password of this login.
+    Show(String),
+    /// Put the revealed password on the clipboard and forget it.
+    Copy,
+}
+
 /// What the native pages hold of their own.
 #[derive(Debug, Default)]
 pub(super) struct PagesState {
@@ -80,6 +143,59 @@ pub(super) struct PagesState {
     shown: Option<InternalPage>,
     history: History,
     bookmarks: Bookmarks,
+    passwords: Passwords,
+}
+
+impl Passwords {
+    /// Takes `answer` in; the command to send next, if any (a list after an unlock, say).
+    /// A password answer is returned for the host to copy, never stored on a `Copy`.
+    fn apply(
+        &mut self,
+        then: Then,
+        answer: VaultAnswer,
+        now: Instant,
+    ) -> (Option<VaultCommand>, Option<Zeroizing<String>>) {
+        match answer {
+            VaultAnswer::Status(status) => {
+                let open = matches!(
+                    status,
+                    VaultStatus::Unlocked | VaultStatus::Unreadable { .. }
+                );
+                if !open {
+                    self.rows.clear();
+                    self.revealed = None;
+                }
+                self.status = status;
+                self.notice.clear();
+                (open.then_some(VaultCommand::List), None)
+            }
+            VaultAnswer::Entries(rows) => {
+                self.rows = rows;
+                (None, None)
+            }
+            VaultAnswer::Revealed(password) => match then {
+                Then::Show(id) => {
+                    self.revealed = Some(Revealed {
+                        id,
+                        password,
+                        until: now + REVEAL_FOR,
+                    });
+                    (None, None)
+                }
+                Then::Copy => (None, Some(password)),
+                Then::Apply => (None, None),
+            },
+            VaultAnswer::Done => (Some(VaultCommand::List), None),
+            VaultAnswer::Imported(line) => {
+                self.notice = line;
+                (Some(VaultCommand::List), None)
+            }
+            VaultAnswer::Failed(why) => {
+                self.notice = why;
+                (None, None)
+            }
+        }
+    }
 }
 
 /// The sheet's fields for `kind` (pure).
@@ -225,6 +341,9 @@ impl Host {
             self.bookmarks_request(None);
         }
         if self.pages.shown != page {
+            if self.pages.shown == Some(InternalPage::Passwords) {
+                self.passwords_left();
+            }
             self.pages.shown = page;
             match page {
                 Some(InternalPage::History) => self.history_fetch(false),
@@ -233,6 +352,78 @@ impl Host {
             }
         }
         self.render_settings();
+        self.render_passwords(&window);
+        self.render_pill(&window);
+    }
+
+    // ----- the address pill: the bookmark star and the blocker badge
+
+    /// The hosts the blocker skips, from the stored setting.
+    fn blocker_exceptions(&self) -> Vec<String> {
+        match apply::effect_of(defs::BLOCKER_EXCEPTIONS.key, &self.settings.stored) {
+            Some(Applied::BlockerExceptions(hosts)) => hosts,
+            _ => vec![],
+        }
+    }
+
+    fn render_pill(&mut self, window: &AppWindow) {
+        let tab = self.model.visible_tab();
+        let url = tab
+            .and_then(|t| self.model.tabs.get(&t))
+            .map(|t| t.url.clone())
+            .unwrap_or_default();
+        let web = wubble_core::url::is_recordable(&url);
+        let star = web && pages::bookmark_for_url(&self.pages.bookmarks.rows, &url).is_some();
+        let count = tab.and_then(|t| self.blocked_of(t)).unwrap_or(0);
+        let badge = pages::blocker_state(count, &url, &self.blocker_exceptions());
+        window.set_address_bookmarkable(web);
+        window.set_address_bookmarked(star);
+        window.set_address_blocker_visible(web && badge.visible);
+        window.set_address_blocker_allowed(badge.site_allowed);
+        window.set_address_blocked(i32::try_from(badge.count).unwrap_or(i32::MAX));
+    }
+
+    /// The badge was clicked: the blocker menu opens under it (`x`, `y` in window pixels).
+    pub(crate) fn blocker_menu_requested(&mut self, x: f32, y: f32) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let Some(tab) = self.model.visible_tab() else {
+            return;
+        };
+        let url = self
+            .model
+            .tabs
+            .get(&tab)
+            .map(|t| t.url.clone())
+            .unwrap_or_default();
+        let Some(host) = wubble_core::zoom::host_of(&url) else {
+            return;
+        };
+        let allowed = self.blocker_exceptions().contains(&host);
+        let count = self.blocked_of(tab).unwrap_or(0);
+        let scale = window.window().scale_factor();
+        let at = ((x * scale) as i32, (y * scale) as i32);
+        let entries = crate::menu::blocker_entries(count, &host, allowed);
+        self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
+        self.render_surfaces(&window);
+    }
+
+    /// The menu's switch: the site joins or leaves the blocker's exceptions (the stored setting
+    /// the settings page shows).
+    pub(super) fn toggle_blocker(&mut self, host: &str) {
+        let key = defs::BLOCKER_EXCEPTIONS.key;
+        if self.blocker_exceptions().iter().any(|h| h == host) {
+            self.setting_entry_removed(key, host);
+        } else {
+            self.setting_entry_added(key, host);
+        }
+        self.render_pages();
+    }
+
+    /// Mod+D, or the star: the bookmark sheet for the visible page.
+    pub(crate) fn bookmark_star_clicked(&mut self) {
+        self.bookmark_page();
     }
 
     // ----- history
@@ -493,6 +684,142 @@ impl Host {
     }
 }
 
+impl Host {
+    // ----- passwords
+
+    fn vault_request(&mut self, command: VaultCommand, then: Then) {
+        self.store.vault(command, move |answer| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| host.vault_answered(then, answer));
+            });
+        });
+    }
+
+    fn vault_answered(&mut self, then: Then, answer: VaultAnswer) {
+        let (next, copy) = self.pages.passwords.apply(then, answer, Instant::now());
+        if let Some(password) = copy {
+            self.copy(&password);
+            if let Some(window) = self.window.upgrade() {
+                self.toast(&window, "Password copied");
+            }
+        }
+        if let Some(command) = next {
+            self.vault_request(command, Then::Apply);
+        }
+        if let Some(window) = self.window.upgrade() {
+            self.render_passwords(&window);
+        }
+    }
+
+    /// The page was left: lock the vault and forget everything it showed.
+    fn passwords_left(&mut self) {
+        self.pages.passwords = Passwords::default();
+        self.vault_request(VaultCommand::Lock, Then::Apply);
+        if let Some(window) = self.window.upgrade() {
+            self.render_passwords(&window);
+        }
+    }
+
+    /// Hides a revealed password once its time is up (the lifecycle tick).
+    pub(super) fn passwords_tick(&mut self, now: Instant) {
+        let p = &mut self.pages.passwords;
+        if p.revealed.as_ref().is_some_and(|r| r.until <= now) {
+            p.revealed = None;
+            if let Some(window) = self.window.upgrade() {
+                self.render_passwords(&window);
+            }
+        }
+    }
+
+    pub(super) fn render_passwords(&self, window: &AppWindow) {
+        let p = &self.pages.passwords;
+        window.set_passwords_view(wubble_ui::pages::passwords_view(&p.status, &p.notice));
+        let shown = pages::passwords_list(&p.rows, &p.query);
+        let revealed = p
+            .revealed
+            .as_ref()
+            .map(|r| (r.id.as_str(), r.password.as_str()));
+        crate::bind::sync(
+            window.get_logins(),
+            wubble_ui::pages::login_items(&shown, revealed),
+            |m| window.set_logins(m),
+        );
+    }
+
+    pub(crate) fn passwords_query(&mut self, query: &str) {
+        query.clone_into(&mut self.pages.passwords.query);
+        if let Some(window) = self.window.upgrade() {
+            self.render_passwords(&window);
+        }
+    }
+
+    pub(crate) fn passwords_unlock(&mut self) {
+        self.vault_request(VaultCommand::Unlock, Then::Apply);
+    }
+
+    pub(crate) fn login_reveal(&mut self, id: &str) {
+        self.vault_request(
+            VaultCommand::Reveal(RecordId(id.to_owned())),
+            Then::Show(id.to_owned()),
+        );
+    }
+
+    pub(crate) fn login_hide(&mut self, _id: &str) {
+        self.pages.passwords.revealed = None;
+        if let Some(window) = self.window.upgrade() {
+            self.render_passwords(&window);
+        }
+    }
+
+    pub(crate) fn login_copy(&mut self, id: &str) {
+        self.vault_request(VaultCommand::Reveal(RecordId(id.to_owned())), Then::Copy);
+    }
+
+    pub(crate) fn login_deleted(&mut self, id: &str) {
+        self.vault_request(VaultCommand::Delete(RecordId(id.to_owned())), Then::Apply);
+    }
+
+    pub(crate) fn login_added(&mut self, site: &str, username: &str, password: &str) {
+        let command = VaultCommand::Add {
+            site: site.to_owned(),
+            username: username.to_owned(),
+            password: Zeroizing::new(password.to_owned()),
+        };
+        self.vault_request(command, Then::Apply);
+    }
+
+    /// "Import CSV": the OS file chooser, then the vault reads the file on the store thread.
+    pub(crate) fn passwords_import_requested(&mut self) {
+        use crate::chooser::{self, DialogSpec, Pick};
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let spec = DialogSpec {
+            pick: Pick::File,
+            title: "Import passwords".into(),
+            directory: None,
+            file_name: None,
+            filters: vec![("CSV".into(), vec!["csv".into()])],
+        };
+        let dialog = chooser::dialog(&spec, Some(window.window()));
+        let task = slint::spawn_local(async move {
+            if let Some(path) = chooser::pick(spec, dialog)
+                .await
+                .and_then(|p| p.into_iter().next())
+            {
+                with_host(|host| host.import_passwords(path));
+            }
+        });
+        if let Err(e) = task {
+            eprintln!("wubble: cannot show the file dialog: {e}");
+        }
+    }
+
+    fn import_passwords(&mut self, path: PathBuf) {
+        self.vault_request(VaultCommand::ImportCsv(path), Then::Apply);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -617,5 +944,88 @@ mod tests {
         let v = sheet_view(&SheetKind::Rename { id: 2 }, &rows, 5);
         assert!(v.show_name && !v.show_folders && v.name == "L");
         assert!(!sheet_view(&page(None), &rows, 6).can_remove);
+    }
+
+    fn login(id: &str) -> LoginView {
+        LoginView {
+            id: id.into(),
+            origin: "https://a.test".into(),
+            username: Some("me".into()),
+            created_ms: 0,
+            last_used_ms: None,
+            times_used: 0,
+        }
+    }
+
+    #[test]
+    fn an_unlock_asks_for_the_list_and_a_lock_forgets_it() {
+        let now = Instant::now();
+        let mut p = Passwords::default();
+        let (next, _) = p.apply(Then::Apply, VaultAnswer::Status(VaultStatus::Unlocked), now);
+        assert!(matches!(next, Some(VaultCommand::List)));
+        p.apply(Then::Apply, VaultAnswer::Entries(vec![login("1")]), now);
+        p.apply(
+            Then::Show("1".into()),
+            VaultAnswer::Revealed(Zeroizing::new("pw".into())),
+            now,
+        );
+        assert_eq!(p.rows.len(), 1);
+        assert!(p.revealed.is_some());
+        let (next, _) = p.apply(Then::Apply, VaultAnswer::Status(VaultStatus::Locked), now);
+        assert!(next.is_none() && p.rows.is_empty() && p.revealed.is_none());
+        // The unreadable and unavailable cases: unreadable still lists (new logins save).
+        let (next, _) = p.apply(
+            Then::Apply,
+            VaultAnswer::Status(VaultStatus::Unreadable { rows: 2 }),
+            now,
+        );
+        assert!(matches!(next, Some(VaultCommand::List)));
+        let (next, _) = p.apply(
+            Then::Apply,
+            VaultAnswer::Status(VaultStatus::Unavailable("x".into())),
+            now,
+        );
+        assert!(next.is_none() && p.rows.is_empty());
+    }
+
+    #[test]
+    fn a_password_to_copy_is_handed_out_and_not_kept() {
+        let now = Instant::now();
+        let mut p = Passwords::default();
+        let (_, copy) = p.apply(
+            Then::Copy,
+            VaultAnswer::Revealed(Zeroizing::new("pw".into())),
+            now,
+        );
+        assert_eq!(copy.as_deref().map(String::as_str), Some("pw"));
+        assert!(p.revealed.is_none());
+    }
+
+    #[test]
+    fn changes_and_refusals_are_followed_by_a_list_or_a_notice() {
+        let now = Instant::now();
+        let mut p = Passwords::default();
+        for answer in [
+            VaultAnswer::Done,
+            VaultAnswer::Imported("Imported 2".into()),
+        ] {
+            let (next, _) = p.apply(Then::Apply, answer, now);
+            assert!(matches!(next, Some(VaultCommand::List)));
+        }
+        assert_eq!(p.notice, "Imported 2");
+        let (next, _) = p.apply(Then::Apply, VaultAnswer::Failed("not a site".into()), now);
+        assert!(next.is_none());
+        assert_eq!(p.notice, "not a site");
+    }
+
+    #[test]
+    fn the_page_state_never_prints_a_revealed_password() {
+        let mut state = PagesState::default();
+        state.passwords.apply(
+            Then::Show("1".into()),
+            VaultAnswer::Revealed(Zeroizing::new("hunter2-secret".into())),
+            Instant::now(),
+        );
+        assert!(!format!("{state:?}").contains("hunter2-secret"));
     }
 }

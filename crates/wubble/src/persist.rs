@@ -31,8 +31,10 @@ use wubble_store::{
     BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, HistoryDeleted,
     Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
 };
+use wubble_vault::{KeyRing, OsKeyRing, StoreLogins, Vault, VaultAnswer, VaultCommand};
 
 use crate::blocking::BlockerSettings;
+use crate::host::now_ms;
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
@@ -273,6 +275,11 @@ enum Request {
     },
     /// Forgets history, then replies with what went.
     ClearHistory(HistoryClear, Reply<HistoryDeleted>),
+    /// One command of the vault, which this thread owns (answered by `serve`).
+    Vault {
+        command: VaultCommand,
+        reply: Reply<VaultAnswer>,
+    },
     /// Applies one bookmark edit (`None`: only reads), and replies with every row (`None`: the
     /// store refused or failed).
     Bookmarks(Option<(BookmarkEdit, i64)>, Reply<Option<BookmarksPage>>),
@@ -313,11 +320,19 @@ impl StoreClient {
     /// Starts the store thread on the database at `path`. The receiver gets
     /// the loaded session and settings, or why there are none.
     pub fn spawn(path: PathBuf) -> (StoreClient, mpsc::Receiver<Result<Loaded, String>>) {
+        Self::spawn_with(path, OsKeyRing)
+    }
+
+    /// [`StoreClient::spawn`] with the keyring the vault uses (a smoke injects a fake one).
+    pub fn spawn_with<K: KeyRing + Send + 'static>(
+        path: PathBuf,
+        keyring: K,
+    ) -> (StoreClient, mpsc::Receiver<Result<Loaded, String>>) {
         let (tx, rx) = mpsc::channel();
         let (loaded_tx, loaded_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("wubble-store".into())
-            .spawn(move || serve(&path, rx, loaded_tx));
+            .spawn(move || serve(&path, keyring, rx, loaded_tx));
         let thread = match thread {
             Ok(thread) => Some(thread),
             Err(e) => {
@@ -484,6 +499,14 @@ impl StoreClient {
         self.send(Request::ClearHistory(what, Box::new(reply)));
     }
 
+    /// `reply` runs on the store thread, which may wait on the OS keyring for an unlock.
+    pub fn vault(&self, command: VaultCommand, reply: impl FnOnce(VaultAnswer) + Send + 'static) {
+        self.send(Request::Vault {
+            command,
+            reply: Box::new(reply),
+        });
+    }
+
     /// `reply` runs on the store thread.
     pub fn bookmarks(
         &self,
@@ -506,9 +529,16 @@ impl StoreClient {
     }
 }
 
-/// The store thread: open, load, then serve requests until the client is gone.
-fn serve(path: &Path, rx: mpsc::Receiver<Request>, loaded: mpsc::Sender<Result<Loaded, String>>) {
-    let mut store = match pollster::block_on(open_and_load(path)) {
+/// The store thread: open, load, then serve requests until the client is gone. The thread owns
+/// the vault over the store (`StoreLogins`), so the unlocked key stays here; every other
+/// request reaches the store through `vault.store_mut().store_mut()`.
+fn serve<K: KeyRing>(
+    path: &Path,
+    keyring: K,
+    rx: mpsc::Receiver<Request>,
+    loaded: mpsc::Sender<Result<Loaded, String>>,
+) {
+    let store = match pollster::block_on(open_and_load(path)) {
         Ok((store, value)) => {
             let _ = loaded.send(Ok(value));
             store
@@ -518,10 +548,20 @@ fn serve(path: &Path, rx: mpsc::Receiver<Request>, loaded: mpsc::Sender<Result<L
             return;
         }
     };
+    // One vault per profile: the key's account is the profile directory's name.
+    let profile = path
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .map_or_else(|| "default".into(), |n| n.to_string_lossy().into_owned());
+    let mut vault = Vault::new(keyring, StoreLogins::new(store), &profile);
     while let Ok(first) = rx.recv() {
         let batch: Vec<Request> = std::iter::once(first).chain(rx.try_iter()).collect();
         for request in latest_save_only(batch) {
-            if let Err(e) = pollster::block_on(handle(&mut store, request)) {
+            if let Request::Vault { command, reply } = request {
+                reply(vault.run(command, now_ms()));
+            } else if let Err(e) =
+                pollster::block_on(handle(vault.store_mut().store_mut(), request))
+            {
                 eprintln!("wubble: store: {e}");
             }
         }
@@ -692,6 +732,8 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
             reply(deleted.as_ref().copied().unwrap_or_default());
             deleted?;
         }
+        // The vault is not the store's: `serve` answers it.
+        Request::Vault { .. } => {}
         Request::Bookmarks(edit, reply) => {
             let rows = match edit {
                 Some((edit, now_ms)) => store.apply_bookmark_edit(&edit, now_ms).await,
@@ -986,6 +1028,89 @@ mod tests {
         let (pop_tx, pop_rx) = mpsc::channel();
         client.pop_closed(move |tab| pop_tx.send(tab).unwrap());
         assert_eq!(pop_rx.recv().unwrap(), Some(closed("https://gone.test/")));
+        client.shutdown();
+    }
+
+    #[test]
+    fn the_page_requests_round_trip_on_the_store_thread() {
+        use wubble_vault::FakeKeyRing;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p/wubble.db");
+        let (client, loaded) = StoreClient::spawn_with(path, FakeKeyRing::default());
+        loaded.recv().unwrap().unwrap();
+        client.record_visit("https://a.test/", "Apple", 100, Transition::Link);
+        client.record_visit("https://b.test/", "Bread", 200, Transition::Link);
+        client.put_favicon("https://a.test/", &icon("https://a.test/i.png", 7), 100);
+
+        let (tx, rx) = mpsc::channel();
+        let t = tx.clone();
+        client.visits("app", None, 10, move |page| t.send(page).unwrap());
+        let page = rx.recv().unwrap();
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].url, "https://a.test/");
+        assert!(page.icons.contains_key("https://a.test/"));
+
+        // Clearing a range answers after the delete, and the next read sees it.
+        let (dtx, drx) = mpsc::channel();
+        client.clear_history(HistoryClear::Range(0, 150), move |d| dtx.send(d).unwrap());
+        assert_eq!(drx.recv().unwrap().visits, 1);
+        client.visits("", None, 10, move |page| tx.send(page).unwrap());
+        assert_eq!(rx.recv().unwrap().rows.len(), 1);
+
+        // A bookmark edit answers with every row; a refused one answers nothing.
+        let (btx, brx) = mpsc::channel();
+        let add = BookmarkEdit::Add {
+            parent: None,
+            title: "A".into(),
+            url: "https://a.test/".into(),
+        };
+        let t = btx.clone();
+        client.bookmarks(Some((add, 5)), move |p| t.send(p).unwrap());
+        assert_eq!(brx.recv().unwrap().unwrap().rows.len(), 1);
+        let bad = BookmarkEdit::Delete { id: 999 };
+        let t = btx.clone();
+        client.bookmarks(Some((bad, 6)), move |p| t.send(p).unwrap());
+        assert_eq!(brx.recv().unwrap().map(|p| p.rows.len()), Some(1));
+        let refuse = BookmarkEdit::Add {
+            parent: None,
+            title: "x".into(),
+            url: "javascript:1".into(),
+        };
+        client.bookmarks(Some((refuse, 7)), move |p| btx.send(p).unwrap());
+        assert!(brx.recv().unwrap().is_none());
+
+        // The vault lives on the same thread: unlock, add, list, reveal.
+        let (vtx, vrx) = mpsc::channel();
+        let ask = |command: VaultCommand| {
+            let t = vtx.clone();
+            client.vault(command, move |a| t.send(a).unwrap());
+            vrx.recv().unwrap()
+        };
+        assert!(matches!(
+            ask(VaultCommand::List),
+            VaultAnswer::Status(wubble_core::pages::VaultStatus::Locked)
+        ));
+        assert!(matches!(
+            ask(VaultCommand::Unlock),
+            VaultAnswer::Status(wubble_core::pages::VaultStatus::Unlocked)
+        ));
+        assert!(matches!(
+            ask(VaultCommand::Add {
+                site: "a.test".into(),
+                username: "me".into(),
+                password: zeroize::Zeroizing::new("pw".into()),
+            }),
+            VaultAnswer::Done
+        ));
+        let VaultAnswer::Entries(rows) = ask(VaultCommand::List) else {
+            panic!("no list")
+        };
+        assert_eq!(rows[0].username.as_deref(), Some("me"));
+        let id = wubble_vault::RecordId(rows[0].id.clone());
+        let VaultAnswer::Revealed(pw) = ask(VaultCommand::Reveal(id)) else {
+            panic!("no password")
+        };
+        assert_eq!(&*pw, "pw");
         client.shutdown();
     }
 

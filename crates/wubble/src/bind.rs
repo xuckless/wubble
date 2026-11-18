@@ -54,6 +54,7 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
             audible: r.audible,
             muted: r.muted,
             in_split: r.in_split,
+            blocked: i32::try_from(r.blocked).unwrap_or(i32::MAX),
         })
         .collect()
 }

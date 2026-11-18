@@ -114,14 +114,14 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         let mut created = false;
         for effect in effects {
             created |= effect == Effect::CreateKey;
-            let event = self.run(effect);
+            let event = self.perform(effect);
             created |= self.dispatch(event);
         }
         created
     }
 
     /// The only impure step: talk to the keyring.
-    fn run(&self, effect: Effect) -> Event {
+    fn perform(&self, effect: Effect) -> Event {
         let (service, account) = (keyring::SERVICE, self.account.as_str());
         let read = |keyring: &K| match keyring.get(service, account) {
             Ok(Some(bytes)) => match <[u8; 32]>::try_from(bytes.as_slice()) {
@@ -218,6 +218,21 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         Ok(self.store.all()?.iter().map(Meta::from).collect())
     }
 
+    /// Metadata with each login's username, for the passwords page: `None` where a row does not
+    /// open with the current key. Needs the vault unlocked, so nothing lists while locked.
+    pub fn entries(&self) -> Result<Vec<(Meta, Option<String>)>, VaultError> {
+        let key = self.key()?;
+        Ok(self
+            .store
+            .all()?
+            .iter()
+            .map(|r| {
+                let username = open_string(key, r, Field::Username, &r.username_enc).ok();
+                (Meta::from(r), username.map(|u| u.to_string()))
+            })
+            .collect())
+    }
+
     pub fn reveal(&self, id: &RecordId) -> Result<Zeroizing<String>, VaultError> {
         let key = self.key()?;
         let row = self.store.get(id)?.ok_or(StoreError::NotFound)?;
@@ -284,6 +299,18 @@ mod tests {
 
     fn key_of(v: &V) -> [u8; 32] {
         **v.key().unwrap()
+    }
+
+    #[test]
+    fn entries_need_the_key_and_show_usernames() {
+        let mut v = vault(&FakeKeyRing::default());
+        assert_eq!(v.entries().unwrap_err(), VaultError::NotUnlocked);
+        v.unlock();
+        v.save(login("https://a.test", "alice", "pw"), 1).unwrap();
+        let rows = v.entries().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.as_deref(), Some("alice"));
+        assert_eq!(rows[0].0.created_ms, 1);
     }
 
     #[test]

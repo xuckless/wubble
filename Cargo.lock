@@ -7891,6 +7891,8 @@ dependencies = [
  "wubble-gfx",
  "wubble-store",
  "wubble-ui",
+ "wubble-vault",
+ "zeroize",
 ]
 
 [[package]]
