@@ -7,6 +7,13 @@
 //! the UI thread never waits on the disk, except once after the window has
 //! closed ([`StoreClient::shutdown`]).
 //!
+//! The thread also owns the password vault (`wubble_vault::Vault` over the
+//! same `Store`, as the vault crate prescribes): every other request reaches
+//! the database through `vault.store_mut().store_mut()`, and
+//! [`StoreClient::vault`] runs a closure on the vault there. The vault is
+//! unlocked on the first such request, not at start, so a profile that
+//! never meets a sign-in form never touches the OS keyring.
+//!
 //! Save policy, idea only (no code copied): a dirty count plus "save when
 //! enough changed or the session went quiet", always on orderly shutdown, as
 //! Chromium's `ImportantFileWriter::ScheduleWrite` (BSD-3-Clause) and
@@ -28,9 +35,10 @@ use wubble_core::zoom::ZoomTable;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
     BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon,
-    KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting,
-    SidebarWidth, SiteZoom, Store, Transition,
+    KeybindingOverrides, LiveSuggestions, PasswordsAutofill, PasswordsOfferToSave,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, Store, Transition,
 };
+use wubble_vault::{KeyRing, StoreLogins, UnlockOutcome, Vault};
 
 use crate::blocking::BlockerSettings;
 
@@ -124,6 +132,29 @@ pub struct UiState {
     pub mode: SidebarMode,
 }
 
+/// The vault on the store thread, over whichever keyring the run uses.
+pub type HostVault = Vault<Box<dyn KeyRing + Send>, StoreLogins>;
+
+/// The keyring account's profile name. One per user for now: every
+/// `--profile` shares the key (the key lives only in the OS keyring).
+const VAULT_PROFILE: &str = "default";
+
+/// `passwords.*` (`wubble_core::settings`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PasswordSettings {
+    pub offer_to_save: bool,
+    pub autofill: bool,
+}
+
+impl Default for PasswordSettings {
+    fn default() -> Self {
+        Self {
+            offer_to_save: PasswordsOfferToSave::default(),
+            autofill: PasswordsAutofill::default(),
+        }
+    }
+}
+
 /// The typed settings the host reads at start.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -136,6 +167,7 @@ pub struct Settings {
     /// Per-site zoom (`wubble_core::zoom`).
     pub site_zoom: ZoomTable,
     pub blocker: BlockerSettings,
+    pub passwords: PasswordSettings,
 }
 
 impl Default for Settings {
@@ -150,6 +182,7 @@ impl Default for Settings {
             keybinding_overrides: KeybindingOverrides::default(),
             site_zoom: SiteZoom::default(),
             blocker: BlockerSettings::default(),
+            passwords: PasswordSettings::default(),
         }
     }
 }
@@ -235,6 +268,8 @@ enum Request {
     AddDownload(DownloadEntry),
     UpdateDownload(DownloadEntry),
     RemoveDownload(i64),
+    /// Runs on the vault (unlocked first, once per run).
+    Vault(Box<dyn FnOnce(&mut HostVault) + Send>),
 }
 
 /// The host's handle on the store thread. If the database could not be
@@ -246,14 +281,18 @@ pub struct StoreClient {
 }
 
 impl StoreClient {
-    /// Starts the store thread on the database at `path`. The receiver gets
-    /// the loaded session and settings, or why there are none.
-    pub fn spawn(path: PathBuf) -> (StoreClient, mpsc::Receiver<Result<Loaded, String>>) {
+    /// Starts the store thread on the database at `path`, with the vault's
+    /// key in `keyring`. The receiver gets the loaded session and settings,
+    /// or why there are none.
+    pub fn spawn(
+        path: PathBuf,
+        keyring: Box<dyn KeyRing + Send>,
+    ) -> (StoreClient, mpsc::Receiver<Result<Loaded, String>>) {
         let (tx, rx) = mpsc::channel();
         let (loaded_tx, loaded_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("wubble-store".into())
-            .spawn(move || serve(&path, rx, loaded_tx));
+            .spawn(move || serve(&path, keyring, rx, loaded_tx));
         let thread = match thread {
             Ok(thread) => Some(thread),
             Err(e) => {
@@ -375,6 +414,12 @@ impl StoreClient {
         self.send(Request::RemoveDownload(id));
     }
 
+    /// Runs `f` on the vault, on the store thread, after every request sent
+    /// before it. Secrets cross the thread inside `f` and its reply only.
+    pub fn vault(&self, f: impl FnOnce(&mut HostVault) + Send + 'static) {
+        self.send(Request::Vault(Box::new(f)));
+    }
+
     /// Lets the thread finish what is queued, close the database and end.
     /// Blocks until it has; a thread that already ended returns at once.
     pub fn shutdown(self) {
@@ -389,8 +434,13 @@ impl StoreClient {
 }
 
 /// The store thread: open, load, then serve requests until the client is gone.
-fn serve(path: &Path, rx: mpsc::Receiver<Request>, loaded: mpsc::Sender<Result<Loaded, String>>) {
-    let mut store = match pollster::block_on(open_and_load(path)) {
+fn serve(
+    path: &Path,
+    keyring: Box<dyn KeyRing + Send>,
+    rx: mpsc::Receiver<Request>,
+    loaded: mpsc::Sender<Result<Loaded, String>>,
+) {
+    let store = match pollster::block_on(open_and_load(path)) {
         Ok((store, value)) => {
             let _ = loaded.send(Ok(value));
             store
@@ -400,12 +450,36 @@ fn serve(path: &Path, rx: mpsc::Receiver<Request>, loaded: mpsc::Sender<Result<L
             return;
         }
     };
+    let mut vault: HostVault = Vault::new(keyring, StoreLogins::new(store), VAULT_PROFILE);
+    let mut unlock: Option<UnlockOutcome> = None;
     while let Ok(first) = rx.recv() {
         let batch: Vec<Request> = std::iter::once(first).chain(rx.try_iter()).collect();
         for request in latest_save_only(batch) {
-            if let Err(e) = pollster::block_on(handle(&mut store, request)) {
+            if let Request::Vault(f) = request {
+                if unlock.is_none() {
+                    let outcome = vault.unlock();
+                    report_unlock(&outcome);
+                    unlock = Some(outcome);
+                }
+                f(&mut vault);
+                continue;
+            }
+            if let Err(e) = pollster::block_on(handle(vault.store_mut().store_mut(), request)) {
                 eprintln!("wubble: store: {e}");
             }
+        }
+    }
+}
+
+/// What the first unlock found, for the log (the shell has no notice for it yet).
+fn report_unlock(outcome: &UnlockOutcome) {
+    match outcome {
+        UnlockOutcome::Ready | UnlockOutcome::NewKey { unreadable: 0 } => {}
+        UnlockOutcome::NewKey { unreadable: rows } | UnlockOutcome::Unreadable { rows } => {
+            eprintln!("wubble: {rows} saved password(s) cannot be read with this keyring");
+        }
+        UnlockOutcome::Unavailable(why) => {
+            eprintln!("wubble: saved passwords are off: {why}");
         }
     }
 }
@@ -439,6 +513,10 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             enabled: store.setting::<BlockerEnabled>().await?,
             exceptions: store.setting::<BlockerExceptions>().await?,
             lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
+        },
+        passwords: PasswordSettings {
+            offer_to_save: store.setting::<PasswordsOfferToSave>().await?,
+            autofill: store.setting::<PasswordsAutofill>().await?,
         },
     };
     let site_permissions = store.site_permissions().await?.into_iter().collect();
@@ -541,6 +619,8 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         Request::AddDownload(entry) => store.add_download(&entry).await?,
         Request::UpdateDownload(entry) => store.update_download(&entry).await?,
         Request::RemoveDownload(id) => store.remove_download(id).await?,
+        // Run by `serve` on the vault.
+        Request::Vault(_) => {}
     }
     Ok(())
 }
@@ -715,7 +795,11 @@ mod tests {
     }
 
     fn start(path: &Path) -> (StoreClient, Loaded) {
-        let (client, loaded) = StoreClient::spawn(path.to_path_buf());
+        start_with(path, wubble_vault::FakeKeyRing::default())
+    }
+
+    fn start_with(path: &Path, keyring: wubble_vault::FakeKeyRing) -> (StoreClient, Loaded) {
+        let (client, loaded) = StoreClient::spawn(path.to_path_buf(), Box::new(keyring));
         let loaded = loaded.recv().unwrap().unwrap();
         (client, loaded)
     }
@@ -818,7 +902,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("wubble.db");
         std::fs::write(&path, b"not a database, and longer than one header").unwrap();
-        let (client, loaded) = StoreClient::spawn(path.clone());
+        let (client, loaded) =
+            StoreClient::spawn(path.clone(), Box::new(wubble_vault::FakeKeyRing::default()));
         assert!(loaded.recv().unwrap().is_err());
         client.save(
             &Model::new(std::time::Instant::now()),
@@ -896,6 +981,49 @@ mod tests {
         let hits = rx.recv().unwrap();
         assert_eq!(hits.entries.len(), 1);
         assert!(hits.icons.is_empty(), "no icon stored for b.test");
+        client.shutdown();
+    }
+
+    #[test]
+    fn the_vault_runs_on_the_store_thread_in_request_order() {
+        use wubble_vault::{NewLogin, Origin};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wubble.db");
+        let keyring = wubble_vault::FakeKeyRing::default();
+        let (client, _) = start_with(&path, keyring.clone());
+        let origin = Origin::parse("http://127.0.0.1:8080").unwrap();
+        let o = origin.clone();
+        client.vault(move |v| {
+            v.save(
+                NewLogin {
+                    origin: o,
+                    form_action_origin: None,
+                    username: "alice".into(),
+                    password: zeroize::Zeroizing::new("pw".into()),
+                },
+                1,
+            )
+            .unwrap();
+        });
+        // Other requests still reach the same database between vault requests.
+        client.record_visit("https://a.test/", "A", 5, Transition::Typed);
+        let (tx, rx) = mpsc::channel();
+        let o = origin.clone();
+        client.vault(move |v| {
+            let found = v.find_for_origin(&o).unwrap();
+            tx.send((
+                found[0].username.clone(),
+                v.reveal(&found[0].id).unwrap().to_string(),
+            ))
+            .unwrap();
+        });
+        assert_eq!(rx.recv().unwrap(), ("alice".to_string(), "pw".to_string()));
+        client.shutdown();
+        // The row and the key survive a restart.
+        let (client, _) = start_with(&path, keyring);
+        let (tx, rx) = mpsc::channel();
+        client.vault(move |v| tx.send(v.find_for_origin(&origin).unwrap().len()).unwrap());
+        assert_eq!(rx.recv().unwrap(), 1);
         client.shutdown();
     }
 

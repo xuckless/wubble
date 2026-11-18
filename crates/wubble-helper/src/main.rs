@@ -6,13 +6,22 @@
 
 use welding::{CefRuntime, CefSandboxMode};
 
+/// Runs in every frame of every renderer (welding change 26): the password
+/// autofill content script. It lives here because the helper is the renderer;
+/// the browser side is `crates/wubble/src/autofill.rs`.
+const CONTEXT_SCRIPT: &str = include_str!("autofill.js");
+
 fn main() {
     #[cfg(target_os = "macos")]
     let _framework = load_framework();
     // Must match `SANDBOX` in wubble-engine/src/app.rs. Duplicated on purpose:
     // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
     let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
-    std::process::exit(CefRuntime::run_subprocess(&cef::args::Args::new(), sandbox));
+    std::process::exit(CefRuntime::run_subprocess_with_script(
+        &cef::args::Args::new(),
+        sandbox,
+        Some(CONTEXT_SCRIPT),
+    ));
 }
 
 /// macOS helpers live in `wubble.app/Contents/Frameworks/wubble Helper*.app`

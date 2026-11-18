@@ -6,6 +6,7 @@ use crate::origin::Origin;
 use crate::record::{Candidate, Meta, NewLogin, RecordId, StoredRecord};
 use crate::state::{Effect, Event, Key, VaultState, transition};
 use crate::store::{LoginStore, StoreError};
+use wubble_core::autofill::SaveVerdict;
 use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -222,6 +223,30 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         let key = self.key()?;
         let row = self.store.get(id)?.ok_or(StoreError::NotFound)?;
         open_string(key, &row, Field::Password, &row.password_enc)
+    }
+
+    /// What the vault already holds for a submitted login on `origin`: nothing for that
+    /// username (`New`), the same password (`Same`) or another one (`Differs`, with the
+    /// record to update). Usernames compare exactly, as Chromium's do. An unreadable row
+    /// is skipped, as in `find_for_origin`. Never `SaveVerdict::Unavailable`: that is an `Err`.
+    pub fn save_verdict(
+        &self,
+        origin: &Origin,
+        username: &str,
+        password: &str,
+    ) -> Result<SaveVerdict, VaultError> {
+        let Some(found) = self
+            .find_for_origin(origin)?
+            .into_iter()
+            .find(|c| c.username == username)
+        else {
+            return Ok(SaveVerdict::New);
+        };
+        Ok(if self.reveal(&found.id)?.as_str() == password {
+            SaveVerdict::Same
+        } else {
+            SaveVerdict::Differs(found.id.0)
+        })
     }
 
     pub fn mark_used(&mut self, id: &RecordId, now_ms: i64) -> Result<(), VaultError> {
@@ -498,6 +523,56 @@ mod tests {
         other.save(login("https://c.test", "u", "p"), 2).unwrap();
         other.lock();
         assert_eq!(other.unlock(), UnlockOutcome::Unreadable { rows: 2 });
+    }
+
+    #[test]
+    fn save_verdicts() {
+        let mut v = unlocked();
+        let page = Origin::parse("https://a.test").unwrap();
+        assert_eq!(
+            v.save_verdict(&page, "alice", "pw").unwrap(),
+            SaveVerdict::New
+        );
+        let id = v.save(login("https://a.test", "alice", "pw"), 1).unwrap();
+        assert_eq!(
+            v.save_verdict(&page, "alice", "pw").unwrap(),
+            SaveVerdict::Same
+        );
+        assert_eq!(
+            v.save_verdict(&page, "alice", "other").unwrap(),
+            SaveVerdict::Differs(id.0.clone())
+        );
+        // Another username, another site, http for an https login: new.
+        assert_eq!(
+            v.save_verdict(&page, "Alice", "pw").unwrap(),
+            SaveVerdict::New
+        );
+        let b = Origin::parse("https://b.test").unwrap();
+        assert_eq!(v.save_verdict(&b, "alice", "pw").unwrap(), SaveVerdict::New);
+        let http = Origin::parse("http://a.test").unwrap();
+        assert_eq!(
+            v.save_verdict(&http, "alice", "pw").unwrap(),
+            SaveVerdict::New
+        );
+        v.lock();
+        assert_eq!(
+            v.save_verdict(&page, "alice", "pw").unwrap_err(),
+            VaultError::NotUnlocked
+        );
+    }
+
+    #[test]
+    fn save_verdict_skips_an_unreadable_row() {
+        let mut v = unlocked();
+        let page = Origin::parse("https://a.test").unwrap();
+        v.save(login("https://a.test", "alice", "old"), 1).unwrap();
+        // The row was sealed under a key that is gone.
+        let mut v2 = unlocked();
+        v2.store = std::mem::take(&mut v.store);
+        assert_eq!(
+            v2.save_verdict(&page, "alice", "pw").unwrap(),
+            SaveVerdict::New
+        );
     }
 
     #[test]

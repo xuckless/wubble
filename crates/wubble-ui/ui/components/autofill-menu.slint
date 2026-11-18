@@ -1,0 +1,168 @@
+import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, OverlapLayer } from "../components.slint";
+import { GlassTier } from "model.slint";
+import { SheetButton } from "sheet-button.slint";
+import { IconButton } from "nav-buttons.slint";
+
+// Password autofill (wubble host/autofill.rs): the key chip a sign-in form shows, its menu of
+// saved logins (and "Suggest a strong password" on a sign-up form), and the save / update prompt
+// after a sign-in. Written from scratch: the design repo has no password UI. The menu's rows are
+// the context menu's (context-menu.slint: Ultra Reactivate `.ur-o-surface`, rows 40 high,
+// radius 9, staggered in), the prompt is the permission prompt's (permission-prompt.slint: thick
+// glass, radius 14, 42-high buttons, drop-in at .95 over 200 ms from its top left). Placed by the
+// parent under the address pill. Never modal and never focused: no keystroke meant for the page
+// can pick a login or answer the prompt (keyjacking). Intents only; the host fills and saves.
+export struct AutofillView {
+    chip: bool,
+    menu-open: bool,
+    rows: [string],
+    // 0: none, 1: save, 2: update.
+    prompt: int,
+    title: string,
+    detail: string,
+}
+
+export component AutofillMenu inherits Rectangle {
+    in property <AutofillView> view;
+    // -1: open the menu, -2: close it, i >= 0: row i was clicked.
+    callback menu(int);
+    // 0: save (or update), 1: never for this site, 2: not now.
+    callback answer(int);
+
+    // A key on the icon family's 24 grid (icon.slint has none): the bow, the shaft, two teeth.
+    property <string> key-path: "M8 11a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM10.8 12.2 20 3M16.5 6.5l2.5 2.5M14 9l2 2";
+    property <bool> prompting: root.view.prompt != 0;
+
+    width: Shell.prompt-width;
+    height: root.prompting ? prompt.preferred-height : chip.height + (root.view.menu-open ? Shell.prompt-gap + list.preferred-height : 0px);
+    visible: root.view.chip || root.prompting;
+
+    chip := IconButton {
+        x: 0px;
+        y: 0px;
+        visible: root.view.chip;
+        icon-path: root.key-path;
+        clicked => {
+            root.menu(root.view.menu-open ? -2 : -1);
+        }
+    }
+
+    menu-panel := GlassPanel {
+        x: 0px;
+        y: chip.height + Shell.prompt-gap;
+        width: Shell.menu-width;
+        height: list.preferred-height;
+        visible: root.view.chip;
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        transform-origin: { x: 0px, y: 0px };
+        transform-scale: root.view.menu-open ? 1 : Motion.dropdownFrom;
+        opacity: root.view.menu-open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: root.view.menu-open ? Shell.menu-in : Shell.menu-out;
+            easing: root.view.menu-open ? Motion.easeOut : Motion.easeIn;
+        }
+        TouchArea {
+            enabled: root.view.menu-open;
+        }
+
+        list := VerticalLayout {
+            padding: Shell.menu-pad;
+            for row[i] in root.view.rows: OverlapLayer {
+                shown: root.view.menu-open;
+                index: i;
+                height: Shell.menu-row;
+                Rectangle {
+                    border-radius: Shell.menu-row-radius;
+                    background: row-touch.has-hover ? Shell.command-selected : transparent;
+                    animate background {
+                        duration: Shell.menu-hover-ms;
+                        easing: Motion.easeOut;
+                    }
+                    row-touch := TouchArea {
+                        enabled: root.view.menu-open;
+                        clicked => {
+                            root.menu(i);
+                        }
+                    }
+                    Text {
+                        x: Shell.menu-row-pad;
+                        width: parent.width - 2 * Shell.menu-row-pad;
+                        height: parent.height;
+                        text: row;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        color: Palette.ink;
+                        font-family: Fonts.ui;
+                        font-size: Type.body.size;
+                    }
+                }
+            }
+        }
+    }
+
+    GlassPanel {
+        width: root.width;
+        height: prompt.preferred-height;
+        visible: root.prompting;
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        transform-origin: { x: 0px, y: 0px };
+        transform-scale: root.prompting ? 1 : Motion.dropdownFrom;
+        opacity: root.prompting ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: root.prompting ? Shell.menu-in : Shell.menu-out;
+            easing: root.prompting ? Motion.easeOut : Motion.easeIn;
+        }
+        TouchArea { }
+
+        prompt := VerticalLayout {
+            padding: Spacing.s4;
+            spacing: Spacing.s2;
+            Text {
+                text: root.view.title;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Type.heading.size;
+                font-weight: Type.heading.weight;
+                overflow: elide;
+            }
+            Text {
+                text: root.view.detail;
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: Spacing.s1;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: Spacing.s2;
+                SheetButton {
+                    text: "Never";
+                    clicked => {
+                        root.answer(1);
+                    }
+                }
+                SheetButton {
+                    text: "Not now";
+                    clicked => {
+                        root.answer(2);
+                    }
+                }
+                SheetButton {
+                    text: root.view.prompt == 2 ? "Update" : "Save";
+                    primary: true;
+                    clicked => {
+                        root.answer(0);
+                    }
+                }
+            }
+        }
+    }
+}

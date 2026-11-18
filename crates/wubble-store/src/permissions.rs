@@ -128,6 +128,21 @@ mod tests {
     }
 
     #[test]
+    fn never_save_passwords_round_trips() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let a = "http://127.0.0.1:8080";
+            s.set_site_permission(a, SavePasswords, Decision::Block, 1)
+                .await
+                .unwrap();
+            assert_eq!(
+                s.site_permissions().await.unwrap(),
+                vec![(a.to_string(), SavePasswords, Decision::Block)]
+            );
+        });
+    }
+
+    #[test]
     fn unknown_kinds_are_skipped_and_bad_decisions_are_corrupt() {
         pollster::block_on(async {
             let s = Store::open_in_memory().await.unwrap();

@@ -7882,6 +7882,7 @@ dependencies = [
  "opener",
  "pollster 0.4.0",
  "rfd",
+ "serde_json",
  "slint",
  "tempfile",
  "wubble-blocker",
@@ -7890,6 +7891,8 @@ dependencies = [
  "wubble-gfx",
  "wubble-store",
  "wubble-ui",
+ "wubble-vault",
+ "zeroize",
 ]
 
 [[package]]
@@ -7917,6 +7920,7 @@ version = "0.0.0"
 dependencies = [
  "serde_json",
  "url",
+ "zeroize",
 ]
 
 [[package]]

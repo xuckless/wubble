@@ -34,8 +34,8 @@ pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
     BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, HistoryRetentionDays,
-    KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting,
-    SidebarWidth, SiteZoom,
+    KeybindingOverrides, LiveSuggestions, PasswordsAutofill, PasswordsOfferToSave,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -154,6 +154,8 @@ settings! {
     HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
     /// Per-site zoom (`wubble_core::zoom`): hosts at 100 % are absent.
     SiteZoom: ZoomTable = defs::SITE_ZOOM;
+    PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
+    PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
 }
 
 impl Store {

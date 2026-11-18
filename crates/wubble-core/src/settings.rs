@@ -168,6 +168,25 @@ pub const SITE_ZOOM: SettingDef = SettingDef {
     restart: false,
 };
 
+/// Offer to save a password after a sign-in (the save prompt).
+pub const PASSWORDS_OFFER_TO_SAVE: SettingDef = SettingDef {
+    key: "passwords.offer_to_save",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Offer to save passwords",
+    section: Section::Privacy,
+    restart: false,
+};
+/// The key chip on sign-in forms: saved logins and generated passwords.
+pub const PASSWORDS_AUTOFILL: SettingDef = SettingDef {
+    key: "passwords.autofill",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Offer saved passwords on sign-in forms",
+    section: Section::Privacy,
+    restart: false,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -180,6 +199,8 @@ pub const ALL: &[&SettingDef] = &[
     &BLOCKER_LISTS_AUTO_UPDATE,
     &HISTORY_RETENTION_DAYS,
     &SITE_ZOOM,
+    &PASSWORDS_OFFER_TO_SAVE,
+    &PASSWORDS_AUTOFILL,
 ];
 
 #[cfg(test)]

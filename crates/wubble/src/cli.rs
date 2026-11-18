@@ -65,6 +65,7 @@ enum SmokeArg {
     Page,
     Block,
     Session,
+    Autofill,
     SessionPhase(Phase),
 }
 
@@ -77,6 +78,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "page" => Ok(SmokeArg::Page),
         None if value == "block" => Ok(SmokeArg::Block),
         None if value == "session" => Ok(SmokeArg::Session),
+        None if value == "autofill" => Ok(SmokeArg::Autofill),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -84,8 +86,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `session` or \
-             `session-phase=1|2`"
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `session`, \
+             `autofill` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -113,6 +115,8 @@ pub enum Smoke {
     Block,
     /// Runs both session phases on a temporary profile.
     Session,
+    /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
+    Autofill,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -195,6 +199,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
+            (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
         };
         Ok(Command::Smoke(smoke))
     }
