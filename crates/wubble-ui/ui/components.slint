@@ -130,6 +130,8 @@ export component GlassPanel inherits Rectangle {
 export component PressableButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
+    // wubble change: the side padding, so an icon-only button (.wb-ib, 30 square) fits
+    in property <length> padding-x: Spacing.s3;
     callback clicked();
     out property <bool> pressed: touch.pressed;
     out property <bool> hovered: touch.has-hover;
@@ -152,8 +154,8 @@ export component PressableButton inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: Spacing.s3;
-        padding-right: Spacing.s3;
+        padding-left: root.padding-x;
+        padding-right: root.padding-x;
         spacing: Spacing.s2;
         alignment: center;
         @children

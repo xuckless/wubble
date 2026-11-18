@@ -9,7 +9,7 @@ import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, Com
 import { GlassBackdrops } from "components/backdrops.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
-import { WindowEdges } from "components/window-frame.slint";
+import { WindowEdges, MoveArea } from "components/window-frame.slint";
 
 import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
@@ -66,6 +66,15 @@ export component AppWindow inherits Window {
     callback window-minimise-requested <=> sidebar.window-minimise-requested;
     callback window-toggle-fullscreen-requested <=> sidebar.window-toggle-fullscreen-requested;
     callback window-begin-resize(WindowEdge);
+    // A drag on bare chrome (the gutters, the sidebar's glass) moves the window; a double-click
+    // there maximises it or restores it.
+    callback window-begin-move();
+    callback window-toggle-maximise-requested();
+    // The visible page's history, for the sidebar's back and forward buttons.
+    in property <bool> can-go-back <=> sidebar.can-go-back;
+    in property <bool> can-go-forward <=> sidebar.can-go-forward;
+    // A shell button asks for a wubble `Action`, by its id (wubble-core action.rs).
+    callback shell-action <=> sidebar.action;
     // The platform can show a transparent window background (window.rs `Platform`).
     in property <bool> rounded-corners: false;
     // Square when full screen or maximised, or when the platform cannot show the corners.
@@ -189,6 +198,8 @@ export component AppWindow inherits Window {
             root.peek = false;
         }
     }
+    // The pointer is in the strip a hidden sidebar peeks from.
+    property <bool> at-edge: edge.has-hover || edges.west-hovered;
     property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && root.sidebar-width <= Shell.sidebar-open;
     property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
     property <float> peek-alpha: root.peeking ? 1 : Shell.peek-from;
@@ -223,13 +234,22 @@ export component AppWindow inherits Window {
         border-radius: root.window-radius;
     }
     // The design's `wb-frame-drag`: the gutters and any glass without a control move the window.
-    WindowMoveArea {
+    MoveArea {
         enabled: !root.full-screen;
+        begin-move => {
+            root.window-begin-move();
+        }
+        toggle-maximise => {
+            root.window-toggle-maximise-requested();
+        }
     }
 
     // Shortcuts are routed in Rust (wubble `input::key_route`, the
     // `wubble_core::keys` table), not here.
     root-keys := FocusScope {
+        // It fills the window: taking focus on a click would swallow every press on bare
+        // chrome (the gutters), so the move area under it would never see one.
+        focus-on-click: false;
         content := Rectangle {
             x: Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px);
             y: Chrome.inset;
@@ -286,24 +306,25 @@ export component AppWindow inherits Window {
             }
         }
 
-        // The strip a hidden sidebar peeks from (.wb-peek-edge).
+        // The strip a hidden sidebar peeks from (.wb-peek-edge, 18 wide from the left edge). The
+        // west resize strip lies over its first pixels and counts as the strip too, so a pointer
+        // pushed against the screen's edge peeks, whether or not the window can be resized.
         edge := TouchArea {
-            // Right of the window's west resize strip, which takes the pointer there.
-            x: Shell.edge-width;
-            width: Chrome.peekEdge + Chrome.inset - Shell.edge-width;
+            x: 0px;
+            width: Chrome.peekEdge + Chrome.inset;
             height: parent.height;
             enabled: root.sidebar-mode == SidebarMode.hidden;
         }
         Timer {
             interval: Shell.peek-in;
-            running: edge.has-hover && root.sidebar-mode == SidebarMode.hidden && !root.peek;
+            running: root.at-edge && root.sidebar-mode == SidebarMode.hidden && !root.peek;
             triggered => {
                 root.peek = true;
             }
         }
         Timer {
             interval: Shell.peek-out;
-            running: root.peeking && !zone.has-hover && !edge.has-hover;
+            running: root.peeking && !zone.has-hover && !root.at-edge;
             triggered => {
                 root.peek = false;
             }
@@ -338,6 +359,12 @@ export component AppWindow inherits Window {
                 opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
                 compact: root.hidden-at-rest ? false : root.sidebar-rail;
                 window-movable: !root.full-screen;
+                window-move-requested => {
+                    root.window-begin-move();
+                }
+                window-maximise-requested => {
+                    root.window-toggle-maximise-requested();
+                }
                 new-tab-requested => {
                     root.request-new-tab();
                 }
@@ -374,7 +401,7 @@ export component AppWindow inherits Window {
     }
 
     // Above everything: the resize zones of the frameless window.
-    WindowEdges {
+    edges := WindowEdges {
         resizable: root.window-resizable;
         begin(edge) => {
             root.window-begin-resize(edge);

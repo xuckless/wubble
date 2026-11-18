@@ -21,6 +21,8 @@ import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
 import { NewTabRow } from "new-tab-row.slint";
 import { WindowLights } from "window-lights.slint";
+import { NavButtons } from "nav-buttons.slint";
+import { MoveArea } from "window-frame.slint";
 
 export component Sidebar inherits Rectangle {
     in property <string> address-host;
@@ -70,6 +72,13 @@ export component Sidebar inherits Rectangle {
     callback window-close-requested();
     callback window-minimise-requested();
     callback window-toggle-fullscreen-requested();
+    callback window-move-requested();
+    callback window-maximise-requested();
+    // The visible page's history, for the header's back and forward.
+    in property <bool> can-go-back: false;
+    in property <bool> can-go-forward: false;
+    // A header button: the id of the wubble `Action` it runs.
+    callback action(string);
     callback address-activated();
     callback space-switched(int);    // space id
     callback scroll-wheel(length);
@@ -87,9 +96,15 @@ export component Sidebar inherits Rectangle {
     clip: true;
 
     // Under everything: the glass the controls do not claim moves the window (the design's
-    // `wb-side-top` drag, wider). Slint's WindowMoveArea starts the compositor's move.
-    WindowMoveArea {
+    // `wb-side-top` drag, wider), and a double-click on it maximises.
+    MoveArea {
         enabled: root.window-movable;
+        begin-move => {
+            root.window-move-requested();
+        }
+        toggle-maximise => {
+            root.window-maximise-requested();
+        }
     }
 
     VerticalLayout {
@@ -111,6 +126,17 @@ export component Sidebar inherits Rectangle {
                 }
                 toggle-fullscreen-requested => {
                     root.window-toggle-fullscreen-requested();
+                }
+            }
+            // .wb-nav: right-aligned, pulled 4 px past the padding (.wb-side-top margin-right -4)
+            if !root.compact: NavButtons {
+                x: parent.width - self.preferred-width + Shell.nav-pull;
+                y: 0px;
+                height: parent.height;
+                can-go-back: root.can-go-back;
+                can-go-forward: root.can-go-forward;
+                action(id) => {
+                    root.action(id);
                 }
             }
         }

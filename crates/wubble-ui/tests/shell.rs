@@ -120,6 +120,15 @@ fn peek(app: &AppWindow, driver: &Shared) {
     pump(100);
     assert!(!app.get_peeking());
 
+    // Pushed against the window's edge, over the west resize strip: it peeks too.
+    pump(400);
+    pointer(app, 2.0, 300.0);
+    pump(100);
+    assert!(app.get_peeking());
+    pointer(app, 900.0, 300.0);
+    pump(300);
+    assert!(!app.get_peeking());
+
     // A peek never outlives the hidden mode (once the sidebar has slid away from the edge).
     pump(400);
     pointer(app, 10.0, 300.0);

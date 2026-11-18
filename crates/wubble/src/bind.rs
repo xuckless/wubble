@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use slint::{Color, ModelRc, VecModel};
 use wubble_core::space::Rgb;
+use wubble_engine::nav::Page;
 use wubble_ui::{AppWindow, CommandResult, SpaceItem, TabItem};
 
 use crate::bar::BarRow;
@@ -49,6 +50,12 @@ pub fn render(window: &AppWindow, v: &ShellView) {
     window.set_active_space_id(v.active_space);
     window.set_address_host(v.host.as_str().into());
     window.set_address_path(v.path.as_str().into());
+}
+
+/// Back and forward follow the visible view's history (none without a view).
+pub fn render_history(window: &AppWindow, page: Option<&Page>) {
+    window.set_can_go_back(page.is_some_and(|p| p.can_go_back));
+    window.set_can_go_forward(page.is_some_and(|p| p.can_go_forward));
 }
 
 pub fn render_bar(window: &AppWindow, rows: &[BarRow]) {

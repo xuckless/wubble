@@ -371,6 +371,8 @@ impl Host {
         }
         self.sync_focus(&window);
         crate::bind::render(&window, &crate::shell::view_model(&self.model));
+        let page = self.view().map(|view| view.nav().page.clone());
+        crate::bind::render_history(&window, page.as_ref());
     }
 
     fn tab_view(&mut self, tab: TabId) -> Option<&mut View> {

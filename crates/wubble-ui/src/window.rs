@@ -1,9 +1,8 @@
 //! The frameless window's behaviour: the shell reports intents (close, minimise, full screen,
 //! begin a resize) and this module is the only place that acts on them.
 //!
-//! Moving needs no code here: Slint's `WindowMoveArea` starts the compositor's move
-//! (winit `drag_window`) itself. A resize is handed to the compositor the same way
-//! (`drag_resize_window`), because on Wayland a client cannot position or size itself during a
+//! A move and a resize are handed to the compositor (winit `drag_window`,
+//! `drag_resize_window`), because on Wayland a client cannot position or size itself during a
 //! grab. Minimise goes straight to winit rather than through Slint's `minimized` property: on
 //! Wayland winit cannot report the state back, so Slint's flag would stay set and the button would
 //! work once.
@@ -56,6 +55,8 @@ pub enum Frame {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Intent {
     ToggleFullscreen,
+    ToggleMaximise,
+    BeginMove,
     Minimise,
     Close,
     BeginResize(WindowEdge),
@@ -64,6 +65,8 @@ pub enum Intent {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Effect {
     SetFullscreen(bool),
+    SetMaximised(bool),
+    DragMove,
     Minimise,
     Quit,
     DragResize(WindowEdge),
@@ -75,6 +78,18 @@ pub fn transition(frame: Frame, intent: Intent) -> (Frame, Vec<Effect>) {
             (Frame::Normal, vec![Effect::SetFullscreen(false)])
         }
         (_, Intent::ToggleFullscreen) => (Frame::Fullscreen, vec![Effect::SetFullscreen(true)]),
+        (Frame::Normal, Intent::ToggleMaximise) => {
+            (Frame::Maximised, vec![Effect::SetMaximised(true)])
+        }
+        (Frame::Maximised, Intent::ToggleMaximise) => {
+            (Frame::Normal, vec![Effect::SetMaximised(false)])
+        }
+        // A full-screen window has no chrome to move or maximise from.
+        (Frame::Fullscreen, Intent::ToggleMaximise | Intent::BeginMove) => {
+            (Frame::Fullscreen, vec![])
+        }
+        // Dragging a maximised window is the compositor's to restore (GNOME and KWin do).
+        (frame, Intent::BeginMove) => (frame, vec![Effect::DragMove]),
         (frame, Intent::Minimise) => (frame, vec![Effect::Minimise]),
         (frame, Intent::Close) => (frame, vec![Effect::Quit]),
         // Only a normal window has edges to drag.
@@ -112,6 +127,12 @@ fn frame_of(window: &slint::Window) -> Frame {
 fn execute(window: &slint::Window, effect: Effect) {
     match effect {
         Effect::SetFullscreen(on) => window.set_fullscreen(on),
+        Effect::SetMaximised(on) => window.set_maximized(on),
+        Effect::DragMove => {
+            if let Some(Err(e)) = window.with_winit_window(|w| w.drag_window()) {
+                eprintln!("wubble: move: {e}");
+            }
+        }
         Effect::Quit => {
             if let Err(e) = slint::quit_event_loop() {
                 eprintln!("wubble: quit: {e}");
@@ -157,6 +178,8 @@ pub fn wire(app: &AppWindow) {
     app.on_window_close_requested(on(Intent::Close));
     app.on_window_minimise_requested(on(Intent::Minimise));
     app.on_window_toggle_fullscreen_requested(on(Intent::ToggleFullscreen));
+    app.on_window_toggle_maximise_requested(on(Intent::ToggleMaximise));
+    app.on_window_begin_move(on(Intent::BeginMove));
     let weak = app.as_weak();
     app.on_window_begin_resize(move |edge| {
         if let Some(app) = weak.upgrade() {
@@ -239,6 +262,30 @@ mod tests {
             assert_eq!(
                 transition(frame, Intent::Minimise),
                 (frame, vec![Effect::Minimise])
+            );
+        }
+    }
+
+    #[test]
+    fn maximise_toggles_and_move_needs_chrome() {
+        assert_eq!(
+            transition(Frame::Normal, Intent::ToggleMaximise),
+            (Frame::Maximised, vec![Effect::SetMaximised(true)])
+        );
+        assert_eq!(
+            transition(Frame::Maximised, Intent::ToggleMaximise),
+            (Frame::Normal, vec![Effect::SetMaximised(false)])
+        );
+        for frame in [Frame::Normal, Frame::Maximised] {
+            assert_eq!(
+                transition(frame, Intent::BeginMove),
+                (frame, vec![Effect::DragMove])
+            );
+        }
+        for intent in [Intent::ToggleMaximise, Intent::BeginMove] {
+            assert_eq!(
+                transition(Frame::Fullscreen, intent),
+                (Frame::Fullscreen, vec![])
             );
         }
     }
