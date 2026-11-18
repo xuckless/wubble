@@ -197,7 +197,7 @@ pub struct Host {
     pub nav_title: Option<String>,
     pub tabs_passed: bool,
     pub session_passed: bool,
-    input: InputState,
+    pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
     page_first: PendingKeys,
@@ -385,6 +385,7 @@ impl Host {
             window.set_web_frame(slint::Image::default());
             window.set_web_frame_clip_width(0);
             window.set_web_frame_clip_height(0);
+            window.set_web_frame_current(false);
             window.set_web_cursor(Cursor::Default as i32);
         }
         self.sync_focus(&window);
@@ -397,7 +398,7 @@ impl Host {
     }
 
     /// The visible tab's view, the only one that gets frames and input.
-    fn view(&mut self) -> Option<&mut View> {
+    pub(crate) fn view(&mut self) -> Option<&mut View> {
         self.tab_view(self.model.visible_tab()?)
     }
 
@@ -509,6 +510,7 @@ impl Host {
         self.presented = self.model.visible_tab();
         window.set_web_frame_clip_width(slint_int(clip.width));
         window.set_web_frame_clip_height(slint_int(clip.height));
+        window.set_web_frame_current(frame_size == layout.frame_size());
         let now = Instant::now();
         self.stats
             .record_accelerated(self.last_present.map(|last| now - last));
@@ -817,6 +819,7 @@ impl Host {
 
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
+        self.follow_frame_rate();
         self.dispatch(Command::Tick {
             now,
             pressure: Pressure::None,
@@ -993,11 +996,6 @@ impl Host {
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
             }
             WindowEvent::CursorLeft { .. } => self.input.pointer = None,
-            // CEF hears the new size at the resize, not at its next pump;
-            // queued so the shell has laid out the new size first.
-            WindowEvent::Resized(_) => {
-                let _ = slint::invoke_from_event_loop(|| with_host(Host::follow_layout));
-            }
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
                 self.sync_focus(&window);
@@ -1029,9 +1027,11 @@ impl Host {
                 if matches!(
                     route,
                     KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
-                ) && let Some(view) = self.input_view()
-                {
-                    view.key(&key);
+                ) {
+                    self.pace(PaceEvent::Wake);
+                    if let Some(view) = self.view() {
+                        view.key(&key);
+                    }
                 }
                 match route {
                     KeyRoute::Perform(action) => {
@@ -1054,16 +1054,15 @@ impl Host {
         EventResult::Propagate
     }
 
-    /// Tells the visible view the content area's current layout, and every
-    /// view the frame rate if the window is on a display with another one.
-    fn follow_layout(&mut self) {
+    /// Tells every view the frame rate if the window is now on a display
+    /// with another refresh rate. Polled from the lifecycle tick: winit has
+    /// no event for a move to another monitor at the same scale, and on
+    /// Wayland the first rate comes from the fastest monitor because the
+    /// surface has not entered an output yet.
+    fn follow_frame_rate(&mut self) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        let layout = content_layout(&window);
-        if let Some(view) = self.input_view() {
-            view.set_layout(layout);
-        }
         let rate = window
             .window()
             .with_winit_window(display_refresh_mhz)
@@ -1080,18 +1079,13 @@ impl Host {
         }
     }
 
-    /// The visible view, for input: input wakes the begin-frame driver.
-    pub(crate) fn input_view(&mut self) -> Option<&mut View> {
-        self.pace(PaceEvent::Wake);
-        self.view()
-    }
-
-    /// Steps the begin-frame driver, if this run uses external begin frames.
+    /// Steps the begin-frame driver, if this run uses external begin frames
+    /// (views open only once the frame rate is known).
     pub fn pace(&mut self, event: PaceEvent) {
-        let Some(pace) = self.pace.as_mut() else {
+        let (Some(pace), Some(rate)) = (self.pace.as_mut(), self.frame_rate) else {
             return;
         };
-        let period = Duration::from_secs_f64(1.0 / f64::from(self.frame_rate.unwrap_or(1)));
+        let period = Duration::from_secs_f64(1.0 / f64::from(rate));
         let (state, effects) = pacing::transition(pace.state, event, period);
         pace.state = state;
         for effect in effects {
@@ -1114,14 +1108,16 @@ impl Host {
 
     pub fn pointer_moved(&mut self, point: Point) {
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.input_view() {
+        self.pace(PaceEvent::Wake);
+        if let Some(view) = self.view() {
             view.mouse_move(point, &modifiers, now);
         }
     }
 
     pub fn pointer_left(&mut self, point: Point) {
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.input_view() {
+        self.pace(PaceEvent::Wake);
+        if let Some(view) = self.view() {
             view.mouse_leave(point, &modifiers, now);
         }
     }
@@ -1138,7 +1134,8 @@ impl Host {
         for button in sent {
             self.input.buttons = self.input.buttons.with(button, pressed);
             let (modifiers, now) = (self.input.modifiers(), self.input.now());
-            if let Some(view) = self.input_view() {
+            self.pace(PaceEvent::Wake);
+            if let Some(view) = self.view() {
                 view.mouse_button(button, pressed, point, &modifiers, now);
             }
         }
@@ -1153,7 +1150,8 @@ impl Host {
 
     pub fn scrolled(&mut self, point: Point, dx: f32, dy: f32) {
         let modifiers = self.input.modifiers();
-        if let Some(view) = self.input_view() {
+        self.pace(PaceEvent::Wake);
+        if let Some(view) = self.view() {
             view.wheel(point, dx, dy, &modifiers);
         }
     }

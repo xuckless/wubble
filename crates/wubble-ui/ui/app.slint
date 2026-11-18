@@ -38,6 +38,11 @@ export component AppWindow inherits Window {
     // than the whole frame resampled.
     in property <int> web-frame-clip-width;
     in property <int> web-frame-clip-height;
+    // web-frame is the size CEF paints for the current rectangle. That can
+    // be a pixel short of it at scales above 2 (wubble-engine
+    // `Layout::frame_size`), so a current frame fills the rectangle; only a
+    // stale one is shown at its own size.
+    in property <bool> web-frame-current;
     // The rectangle the web frame fills, in logical pixels. The host sizes
     // the browser from these and the window's scale factor.
     out property <length> content-width: content.width;
@@ -239,15 +244,16 @@ export component AppWindow inherits Window {
             border-radius: Radius.md;
             clip: true;
             background: Palette.web;
-            // One image pixel per physical pixel, anchored top left, never
-            // scaled: a frame smaller than the area (stale during a resize)
-            // shows at its own size over Palette.web, not stretched
-            // (wubble-gfx `FrameSize::cropped_to`).
+            // One image pixel per physical pixel, anchored top left: a stale
+            // frame smaller than the area (during a resize) shows at its own
+            // size over Palette.web, not stretched (wubble-gfx
+            // `FrameSize::cropped_to`). A current frame fills the area,
+            // which stretches it by at most the pixel CEF painted short.
             Image {
                 x: 0;
                 y: 0;
-                width: root.web-frame-clip-width * 1phx;
-                height: root.web-frame-clip-height * 1phx;
+                width: root.web-frame-current ? parent.width : root.web-frame-clip-width * 1phx;
+                height: root.web-frame-current ? parent.height : root.web-frame-clip-height * 1phx;
                 source: root.web-frame;
                 source-clip-width: root.web-frame-clip-width;
                 source-clip-height: root.web-frame-clip-height;

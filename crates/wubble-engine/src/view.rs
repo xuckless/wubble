@@ -1509,11 +1509,26 @@ mod tests {
             ((1000, 750), 1.25, (1000, 750)),
             ((1000, 777), 1.5, (1001, 777)),
             ((1, 1), 2.0, (2, 2)),
+            // Above scale 2 CEF can paint a pixel short of the rectangle
+            // (333 DIP at 3.0 is 999 px), so the shell fills it with a
+            // current frame instead of showing it at its own size.
+            ((1000, 600), 3.0, (999, 600)),
+            ((1001, 600), 2.5, (1000, 600)),
         ];
         for ((w, h), scale, (fw, fh)) in cases {
             let layout = layout(FrameSize::new(w, h), scale);
             assert_eq!(layout.frame_size(), FrameSize::new(fw, fh), "{layout:?}");
         }
+    }
+
+    #[test]
+    fn a_frame_a_pixel_short_of_the_rectangle_is_current() {
+        let wanted = layout(FrameSize::new(1000, 600), 3.0);
+        let (state, _) = run(live(), &[Layout(wanted)]);
+        assert_eq!(
+            transition(state, Frame(FrameSize::new(999, 600))),
+            (Live { layout: wanted }, vec![Present])
+        );
     }
 
     #[test]

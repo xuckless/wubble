@@ -23,6 +23,7 @@ use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::keyboard::{Key, KeyCode, KeyLocation, PhysicalKey};
 use wubble_engine::input::{Buttons, KeyInput, Modifiers, MouseButton, Point};
+use wubble_gfx::pacing::PaceEvent;
 use wubble_gfx::{FrameSize, FrameTiming, NativeFrame};
 use wubble_ui::AppWindow;
 
@@ -46,8 +47,9 @@ const TICKS_PER_INPUT: u32 = 12;
 pub const PROBE: (u32, u32) = (16, 16);
 
 /// Where injected clicks land, in view-relative logical pixels: on the probe
-/// square.
-const CLICK_AT: Point = Point { x: 16.0, y: 16.0 };
+/// square, alternating between two points further apart than a click series
+/// may move, so every injected click is a single click.
+const CLICK_AT: [Point; 2] = [Point { x: 16.0, y: 16.0 }, Point { x: 48.0, y: 48.0 }];
 
 /// How far `resize` sweeps the window, in logical pixels, and per tick.
 const RESIZE_SWEEP: f32 = 320.0;
@@ -97,8 +99,10 @@ impl Scenario {
 /// One recorded series, in milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Metric {
-    /// Between two `OnAcceleratedPaint` entries of taken frames.
-    ArrivalInterval,
+    /// Between the `OnAcceleratedPaint` entries of two frames the host took.
+    /// Not CEF's paint interval: a paint replaced before the host took it
+    /// (coalesced) is skipped, so that interval reads double.
+    TakenInterval,
     /// The whole in-callback copy (import, submit, wait).
     Copy,
     /// The `device.poll(Wait)` part of `Copy`.
@@ -117,7 +121,7 @@ pub enum Metric {
 
 impl Metric {
     pub const ALL: [Self; 8] = [
-        Self::ArrivalInterval,
+        Self::TakenInterval,
         Self::Copy,
         Self::CopyWait,
         Self::ArrivalToTake,
@@ -129,7 +133,7 @@ impl Metric {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::ArrivalInterval => "cef_arrival_interval",
+            Self::TakenInterval => "taken_paint_interval",
             Self::Copy => "callback_copy",
             Self::CopyWait => "callback_copy_wait",
             Self::ArrivalToTake => "arrival_to_take",
@@ -282,7 +286,7 @@ impl Recorder {
         if let Some(t) = frame.timing {
             if let Some(last) = self.last_arrived {
                 self.push(
-                    Metric::ArrivalInterval,
+                    Metric::TakenInterval,
                     t.arrived.saturating_duration_since(last),
                 );
             }
@@ -620,7 +624,7 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
             } else {
                 InputKind::Pointer
             };
-            inject(host, kind);
+            inject(host, kind, step / TICKS_PER_INPUT);
         }
         _ => {}
     }
@@ -628,8 +632,11 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
 
 /// One key press and release, or one click, sent through the same `View`
 /// calls real input uses; stamped just before sending.
-fn inject(host: &mut Host, kind: InputKind) {
-    let Some(view) = host.input_view() else {
+/// `n` counts the injections.
+fn inject(host: &mut Host, kind: InputKind, n: u32) {
+    host.pace(PaceEvent::Wake);
+    let now = host.input.now();
+    let Some(view) = host.view() else {
         return;
     };
     let at = Instant::now();
@@ -651,13 +658,13 @@ fn inject(host: &mut Host, kind: InputKind) {
             }
         }
         InputKind::Pointer => {
-            let now = at.elapsed();
+            let point = CLICK_AT[n as usize % CLICK_AT.len()];
             for pressed in [true, false] {
                 let modifiers = Modifiers {
                     buttons: Buttons::default().with(MouseButton::Left, pressed),
                     ..Modifiers::default()
                 };
-                view.mouse_button(MouseButton::Left, pressed, CLICK_AT, &modifiers, now);
+                view.mouse_button(MouseButton::Left, pressed, point, &modifiers, now);
             }
         }
     }
@@ -666,8 +673,9 @@ fn inject(host: &mut Host, kind: InputKind) {
 
 /// Ends the run: the report text and the CSV, `None` if none was started.
 /// `adapter` names the GPU for the header.
+/// A run in which no frame arrived recorded nothing and is `None` too.
 pub fn finish(adapter: &str) -> Option<(String, String)> {
-    let session = SESSION.take()?;
+    let session = SESSION.take().filter(|s| s.first_frame.is_some())?;
     let period = session
         .refresh_mhz
         .filter(|&m| m > 0)
@@ -794,7 +802,7 @@ mod tests {
         assert_eq!(c.renders, 3);
         assert_eq!(c.repeats, 1);
         assert_eq!(r.values(Metric::PresentInterval), vec![8.0, 17.0]);
-        assert_eq!(r.values(Metric::ArrivalInterval), vec![9.0, 3.0]);
+        assert_eq!(r.values(Metric::TakenInterval), vec![9.0, 3.0]);
         assert_eq!(r.values(Metric::ArrivalToTake), vec![2.0, 1.0, 1.0]);
         assert_eq!(r.values(Metric::ArrivalToPresent), vec![8.0, 4.0]);
         assert_eq!(r.values(Metric::CopyWait), vec![0.3, 0.3, 0.3]);
@@ -897,6 +905,26 @@ mod tests {
              present_interval,1,9.000\n\
              arrival_to_present,0,9.000\n"
         );
+    }
+
+    #[test]
+    fn a_run_without_frames_reports_nothing() {
+        begin(Scenario::Scroll, 1);
+        assert_eq!(finish("test"), None);
+        begin(Scenario::Scroll, 1);
+        with_session(|s| s.first_frame = Some(Instant::now()));
+        assert!(finish("test").is_some());
+    }
+
+    #[test]
+    fn every_injected_click_is_a_single_click() {
+        let mut clicks = wubble_engine::input::ClickTracker::default();
+        // The same instant for every press: only the alternating point keeps
+        // each one out of the previous click's series.
+        for n in 0..6 {
+            let at = CLICK_AT[n % CLICK_AT.len()];
+            assert_eq!(clicks.press(Duration::ZERO, at, MouseButton::Left), 1);
+        }
     }
 
     #[test]
