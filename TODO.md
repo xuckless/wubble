@@ -246,6 +246,34 @@ After daily-drive
 - [ ] Picture-in-picture on tab switch
 - [ ] Sync (deferred)
 
+## Built in instead of extensions (owner, 2026-11-18)
+
+Extensions wait for M6, so the things people install first are built into wubble, where we own
+the process and can optimise it. Decided: the content blocker and a media downloader. The rest
+are candidates until the owner picks.
+
+- [~] Content blocker (Brave `adblock-rust`): network and cosmetic filtering are in; badge and per-site switch follow
+- [ ] Media downloader (the owner's ask, modelled on Video DownloadHelper): detect media in the request path (direct files, HLS and DASH manifests), offer qualities, download and join segments. Never touches DRM-protected streams
+- [ ] Candidate: cookie-banner dismissal and tracking-parameter stripping (extra lists and `$removeparam` rules in the same blocker engine)
+- [ ] Candidate: dark mode for pages (Chromium's own forced-dark feature, per-site switch)
+- [ ] Candidate: reader mode (Mozilla Readability, Apache-2.0)
+- [ ] Candidate: video controls on every page (speed, picture-in-picture, loop) from one overlay
+- [ ] Candidate: full-page and region screenshots
+- [ ] Candidate: keyboard link hints
+- [ ] Candidate: sponsor-segment skipping (needs a third-party lookup, so off by default)
+- Already on the roadmap and covering what an extension would: passwords and autofill (M4), tab sleeping (M3), Boosts for per-site CSS and JS (M5)
+
+## Performance pass (after M5, before hardening; owner, 2026-11-18)
+
+Measured by hand on the owner's machines, never in tests. Each item starts with a number and ends with one.
+
+- [ ] Start-up: time to first window and to first page pixels; lazy work moved off the start path
+- [ ] Page load: time to first paint and to load end against Chromium on the same machine; cache, preconnect and blocker cost
+- [ ] Input: key and pointer to pixels, scroll smoothness at the display rate
+- [ ] Memory: per-tab cost live, frozen and discarded; shell and scene baseline; renderer process limits
+- [ ] CPU and GPU at idle and during video: no redraw when nothing changes, scene paused when hidden, glass cost
+- [ ] Release build settings (LTO, codegen units, symbols) and binary size
+
 ## M6 — Own engine: ungoogled Chromium + CEF
 
 Needs ~150 GB free and several hours per full build per platform.
