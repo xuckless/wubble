@@ -58,6 +58,8 @@ export component Sidebar inherits Rectangle {
     in property <int> address-blocked: 0;
     callback address-bookmark-requested();
     callback address-blocker-requested(length, length);
+    in property <int> address-popups-blocked: 0;
+    callback address-popups-requested(length, length);
     in property <[TabItem]> pinned-tabs;
     in property <[TabItem]> tabs;
     in property <[SpaceItem]> spaces;
@@ -249,6 +251,10 @@ export component Sidebar inherits Rectangle {
                 blocker-visible: root.address-blocker-visible;
                 blocker-allowed: root.address-blocker-allowed;
                 blocked: root.address-blocked;
+                popups-blocked: root.address-popups-blocked;
+                popups-requested(x, y) => {
+                    root.address-popups-requested(x, y);
+                }
                 bookmark-requested => {
                     root.address-bookmark-requested();
                 }

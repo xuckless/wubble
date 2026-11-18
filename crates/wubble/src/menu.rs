@@ -23,6 +23,7 @@ use wubble_core::action::Action;
 use wubble_core::model::Model;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::TabId;
+use wubble_core::window::{WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -61,6 +62,12 @@ pub enum Command {
     Perform(Action),
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
+    /// Show the tab in another window, or a new one.
+    MoveToWindow(TabId, WindowTarget),
+    /// Open the pop-ups the page's tab held back.
+    OpenBlockedPopups,
+    /// Let the site open pop-ups from now on (`Permission::Popups`), and open the held ones.
+    AllowPopups(String),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -276,6 +283,63 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
 /// a page chosen beside it; another tab of the Space goes beside the focused page; a pane leaves
 /// its split.
 pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let mut out = split_entries(model, tab);
+    if !out.is_empty() {
+        out.push(Entry {
+            label: String::new(),
+            command: Command::Separator,
+            enabled: false,
+        });
+    }
+    out.extend(window_entries(model, tab));
+    out
+}
+
+/// "Move to New Window", then a row per other Main window, named after the Space it shows
+/// (the always-available path where a drag cannot reach another window, Wayland).
+pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let entry = |label: String, to| Entry {
+        label,
+        command: Command::MoveToWindow(tab, to),
+        enabled: true,
+    };
+    let own = model.window_of(tab);
+    let others = model.windows.iter().filter(|w| {
+        w.kind == WindowKind::Main
+            && Some(w.id) != own
+            && w.space() != model.location(tab).map(|l| l.0)
+    });
+    std::iter::once(entry("Move to New Window".into(), WindowTarget::New))
+        .chain(others.filter_map(|w| {
+            let space = model.spaces.iter().find(|s| Some(s.id) == w.space())?;
+            Some(entry(
+                format!("Move to Window: {}", space.name),
+                WindowTarget::Existing(w.id),
+            ))
+        }))
+        .collect()
+}
+
+/// The address pill's pop-up menu: open what the page asked for, or allow the site.
+pub fn popup_entries(count: usize, site: Option<&str>) -> Vec<Entry> {
+    let mut out = vec![Entry {
+        label: if count == 1 {
+            "Open the Blocked Pop-up".into()
+        } else {
+            format!("Open {count} Blocked Pop-ups")
+        },
+        command: Command::OpenBlockedPopups,
+        enabled: true,
+    }];
+    out.extend(site.map(|site| Entry {
+        label: format!("Always Allow Pop-ups on {site}"),
+        command: Command::AllowPopups(site.to_owned()),
+        enabled: true,
+    }));
+    out
+}
+
+fn split_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     let entry = |label: &str, command| Entry {
         label: label.into(),
         command,
@@ -739,7 +803,7 @@ mod tests {
     fn a_tab_row_offers_the_split_entries_that_apply() {
         use wubble_core::model::{Command as Cmd, apply};
         let commands = |m: &Model, t: u64| -> Vec<Command> {
-            tab_entries(m, TabId(t))
+            split_entries(m, TabId(t))
                 .into_iter()
                 .map(|e| e.command)
                 .collect()
@@ -761,6 +825,61 @@ mod tests {
         let (m, _) = apply(m, Cmd::Unsplit(TabId(2)));
         let (m, _) = apply(m, Cmd::SplitWith(TabId(2)));
         assert!(commands(&m, 99).is_empty());
+    }
+
+    #[test]
+    fn a_tab_row_offers_the_other_windows() {
+        use wubble_core::model::{Command as Cmd, apply};
+        use wubble_core::window::WindowId;
+        let m = tabs(2);
+        let rows = |m: &Model, t: u64| -> Vec<(String, Command)> {
+            window_entries(m, TabId(t))
+                .into_iter()
+                .map(|e| (e.label, e.command))
+                .collect()
+        };
+        let new = |t| {
+            (
+                "Move to New Window".to_string(),
+                Command::MoveToWindow(TabId(t), WindowTarget::New),
+            )
+        };
+        assert_eq!(rows(&m, 1), [new(1)]);
+        let (m, _) = apply(m, Cmd::NewWindow { space: None });
+        let to_first = (
+            "Move to Window: Space 1".to_string(),
+            Command::MoveToWindow(TabId(1), WindowTarget::Existing(WindowId(0))),
+        );
+        let to_second = (
+            "Move to Window: Space 2".to_string(),
+            Command::MoveToWindow(TabId(1), WindowTarget::Existing(WindowId(1))),
+        );
+        assert_eq!(rows(&m, 1), [new(1), to_second]);
+        let (m, _) = apply(
+            m,
+            Cmd::MoveTabToWindow {
+                tab: TabId(1),
+                to: WindowTarget::Existing(WindowId(1)),
+            },
+        );
+        // the window showing its Space is not offered; the other one is
+        assert_eq!(rows(&m, 1), [new(1), to_first]);
+        // the tab menu ends with them, after a separator
+        let all = tab_entries(&m, TabId(1));
+        assert_eq!(all.last().map(|e| &e.command), Some(&rows(&m, 1)[1].1));
+    }
+
+    #[test]
+    fn the_popup_menu() {
+        let e = popup_entries(2, Some("a.test"));
+        assert_eq!(e[0].label, "Open 2 Blocked Pop-ups");
+        assert_eq!(e[0].command, Command::OpenBlockedPopups);
+        assert_eq!(e[1].command, Command::AllowPopups("a.test".into()));
+        assert_eq!(
+            popup_entries(1, None).len(),
+            1,
+            "an opaque origin is not remembered"
+        );
     }
 
     #[test]

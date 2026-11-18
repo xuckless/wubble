@@ -1065,6 +1065,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_address_blocker_requested(move |x, y| {
         with_host_in(win, |host| host.blocker_menu_requested(x, y))
     });
+    window.on_address_popups_requested(move |x, y| {
+        with_host_in(win, |host| host.popups_menu_requested(x, y))
+    });
     window.on_downloads_cleared(move || with_host_in(win, Host::downloads_cleared));
     window.on_passwords_query_changed(move |q| with_host_in(win, |host| host.passwords_query(&q)));
     window.on_passwords_unlock(move || with_host_in(win, Host::passwords_unlock));

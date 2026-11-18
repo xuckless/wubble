@@ -120,6 +120,8 @@ export component AppWindow inherits Window {
     in property <int> address-blocked <=> sidebar.address-blocked;
     callback address-bookmark-requested <=> sidebar.address-bookmark-requested;
     callback address-blocker-requested <=> sidebar.address-blocker-requested;
+    in property <int> address-popups-blocked <=> sidebar.address-popups-blocked;
+    callback address-popups-requested <=> sidebar.address-popups-requested;
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
     in property <[TabItem]> tabs <=> sidebar.tabs;
     in property <[SpaceItem]> spaces <=> sidebar.spaces;

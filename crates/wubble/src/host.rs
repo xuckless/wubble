@@ -41,14 +41,14 @@ use wubble_core::model::{self, Command, Effect, Model};
 use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
-use wubble_core::site::SitePermissions;
+use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::sleep::Pressure;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::window::WindowId;
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, Point};
-use wubble_engine::nav::{Cursor, Phase, WebEvent};
+use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
 use wubble_store::{ClosedTab, Transition};
@@ -77,6 +77,9 @@ use crate::{
     NAV_PAGE, SMOKE_MAX_IDLE_RUNS, SMOKE_PAGE, TAB3_PAGE, Wake, deliver, display_refresh_mhz,
     page_url, physical, quit, with_host,
 };
+
+/// Pop-ups a tab holds back at most; later ones are dropped.
+const MAX_HELD_POPUPS: usize = 8;
 
 /// How far ahead `--smoke tabs` ticks the lifecycle: past the discard delay.
 const SMOKE_DISCARD_AFTER: Duration = Duration::from_secs(20 * 60);
@@ -309,6 +312,9 @@ pub struct Host {
     pub failure: Option<String>,
     /// The page's own UI per tab (one owner); only the visible tab's shows.
     surfaces: BTreeMap<TabId, Surfaces>,
+    /// Pop-ups each tab's page asked for and the policy held back (`wubble_core::popup`),
+    /// until the page commits another URL; the address pill offers them.
+    held_popups: BTreeMap<TabId, Vec<PopupRequest>>,
     /// Window and page fullscreen.
     screen: Screen,
     /// The page's IME composition.
@@ -432,6 +438,7 @@ impl Host {
             committed,
             failure: None,
             surfaces: BTreeMap::new(),
+            held_popups: BTreeMap::new(),
             screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
@@ -586,6 +593,7 @@ impl Host {
         // Surfaces outlive a sleeping tab's view, not the tab.
         let tabs = &self.model.tabs;
         self.surfaces.retain(|tab, _| tabs.contains_key(tab));
+        self.held_popups.retain(|tab, _| tabs.contains_key(tab));
         self.after_change();
         if persist::should_save(self.save) {
             self.save_now();
@@ -730,6 +738,11 @@ impl Host {
             &crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked),
             &self.favicons,
         );
+        let held = self
+            .shown()
+            .and_then(|t| self.held_popups.get(&t))
+            .map_or(0, Vec::len);
+        window.set_address_popups_blocked(i32::try_from(held).unwrap_or(i32::MAX));
         self.render_surfaces(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
@@ -1062,6 +1075,7 @@ impl Host {
                 }
             }
             WebEvent::UrlChanged(url) => {
+                self.held_popups.remove(&tab);
                 self.autofill_navigated(tab, &url);
                 self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
@@ -1077,7 +1091,7 @@ impl Host {
                 }
                 self.dispatch(Command::TitleChanged { tab, title });
             }
-            WebEvent::PopupRequested(request) => self.dispatch(new_tab(request.url, Some(tab))),
+            WebEvent::PopupRequested(request) => self.popup_requested(tab, request),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -1104,6 +1118,74 @@ impl Host {
                 }
             }
         }
+    }
+
+    // ----- pop-ups
+
+    /// A page's `window.open` or `target=_blank`: what the policy table says (a tab, a Popup
+    /// window, or held back for the address pill).
+    fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
+        use wubble_core::popup::{self, Outcome};
+        let site = self.site_of(tab);
+        let remembered = site
+            .as_deref()
+            .and_then(|o| self.site_permissions.get(o, Permission::Popups));
+        match popup::decide(request.opened, request.gesture, remembered) {
+            Outcome::Tab { foreground } => {
+                self.dispatch(new_tab(request.url, Some(tab)));
+                if !foreground {
+                    self.dispatch(Command::ActivateTab(tab));
+                }
+            }
+            Outcome::PopupWindow => self.dispatch(Command::OpenPopupWindow {
+                url: request.url,
+                opener: tab,
+                size: request.size,
+            }),
+            Outcome::Blocked => {
+                let held = self.held_popups.entry(tab).or_default();
+                if held.len() < MAX_HELD_POPUPS {
+                    held.push(request);
+                }
+                self.after_change();
+            }
+        }
+    }
+
+    /// Opens what `tab`'s page asked for and the policy held back, as if it had been clicked.
+    fn open_held_popups(&mut self, tab: TabId) {
+        for request in self.held_popups.remove(&tab).unwrap_or_default() {
+            self.popup_requested(
+                tab,
+                PopupRequest {
+                    gesture: true,
+                    ..request
+                },
+            );
+        }
+        self.after_change();
+    }
+
+    /// The origin of `tab`'s page, for remembered site choices.
+    fn site_of(&self, tab: TabId) -> Option<String> {
+        let url = self.model.tabs.get(&tab)?.url.as_str();
+        wubble_core::site::origin_of(url)
+    }
+
+    /// The pill's pop-up badge, at the badge.
+    pub(crate) fn popups_menu_requested(&mut self, x: f32, y: f32) {
+        let (Some(window), Some(tab)) = (self.w.window.upgrade(), self.shown()) else {
+            return;
+        };
+        let count = self.held_popups.get(&tab).map_or(0, Vec::len);
+        if count == 0 {
+            return;
+        }
+        let scale = window.window().scale_factor();
+        let at = ((x * scale) as i32, (y * scale) as i32);
+        let entries = crate::menu::popup_entries(count, self.site_of(tab).as_deref());
+        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
+        self.render_surfaces(&window);
     }
 
     // ----- command bar

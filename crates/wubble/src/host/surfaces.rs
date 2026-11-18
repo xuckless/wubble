@@ -10,6 +10,7 @@ use slint::winit_030::winit::event::Ime as WinitIme;
 use std::path::PathBuf;
 
 use wubble_core::model::Command;
+use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
@@ -260,6 +261,21 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
+                MenuEffect::Run(MenuCommand::MoveToWindow(t, to)) => {
+                    self.dispatch(Command::MoveTabToWindow { tab: t, to });
+                }
+                MenuEffect::Run(MenuCommand::OpenBlockedPopups) => self.open_held_popups(tab),
+                MenuEffect::Run(MenuCommand::AllowPopups(site)) => {
+                    self.site_permissions
+                        .set(&site, Permission::Popups, Decision::Allow);
+                    self.store.set_site_permission(
+                        &site,
+                        Permission::Popups,
+                        Decision::Allow,
+                        now_ms(),
+                    );
+                    self.open_held_popups(tab);
+                }
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
         }
