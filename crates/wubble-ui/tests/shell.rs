@@ -12,7 +12,7 @@ use slint::{
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
 use wubble_core::tabs::SpaceSwitcher;
 use wubble_ui::driver::{self, Driver};
-use wubble_ui::{AppWindow, SidebarMode, SpaceItem};
+use wubble_ui::{AppWindow, PopupView, SidebarMode, SpaceItem};
 
 const DT: f32 = 0.016;
 
@@ -234,6 +234,32 @@ fn sidebar_button(app: &AppWindow, driver: &Shared) {
     pointer(app, 900.0, 300.0);
 }
 
+/// A popup moved to fit the window is drawn where it fits, but a press on it reaches the page
+/// at the engine's own rect, where CEF hit-tests the popup.
+fn popup_input(app: &AppWindow) {
+    let got = std::rc::Rc::new(std::cell::Cell::new(None));
+    let sink = got.clone();
+    app.on_web_pointer_pressed(move |_, x, y| sink.set(Some((x, y))));
+    app.set_popup(PopupView {
+        shown: true,
+        // Drawn 100 px further left and 20 px lower than the engine put it.
+        x: 1000.0,
+        y: 100.0,
+        width: 200.0,
+        height: 100.0,
+        origin_x: 1100.0,
+        origin_y: 80.0,
+    });
+    pump(1);
+    pointer(app, 1010.0, 110.0);
+    button(app, 1010.0, 110.0, true);
+    button(app, 1010.0, 110.0, false);
+    assert_eq!(got.get(), Some((1110.0, 90.0)));
+    app.set_popup(PopupView::default());
+    pump(1);
+    pointer(app, 900.0, 300.0);
+}
+
 #[test]
 fn shell_scenarios() {
     init_integration_test_with_mock_time();
@@ -246,4 +272,5 @@ fn shell_scenarios() {
     peek(&app, &driver);
     seam_drag(&app, &driver);
     space_capsule(&app, &driver);
+    popup_input(&app);
 }

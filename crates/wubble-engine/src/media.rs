@@ -92,6 +92,11 @@ pub enum ProbeInput {
     /// A script finished: `Some(audible)`, or `None` when it threw or its
     /// result was not a boolean.
     Answered { id: u64, audible: Option<bool> },
+    /// The main frame's address changed: a reply in flight may have been
+    /// dropped with the old document (welding fails pending scripts only
+    /// when the browser closes or the renderer exits), so stop waiting for
+    /// it. A late reply is then ignored by its id.
+    Navigated,
 }
 
 impl AudioProbe {
@@ -118,6 +123,7 @@ pub fn probe(state: AudioProbe, input: ProbeInput) -> (AudioProbe, Option<PageEv
             let event = (now != audible).then_some(PageEvent::Audible(now));
             (Idle { audible: now }, event)
         }
+        (Waiting { audible, .. }, ProbeInput::Navigated) => (Idle { audible }, None),
         (state, _) => (state, None),
     }
 }
@@ -188,6 +194,39 @@ mod tests {
             audible: Some(false),
         };
         assert_eq!(probe(s, late), (s, None));
+    }
+
+    #[test]
+    fn navigating_while_waiting_frees_the_probe() {
+        let (s, _) = probe(AudioProbe::Idle { audible: true }, ProbeInput::Sent(1));
+        // The reply was dropped with the old document: the probe is free
+        // again and keeps the last answer.
+        let (s, e) = probe(s, ProbeInput::Navigated);
+        assert_eq!((s, e), (AudioProbe::Idle { audible: true }, None));
+        assert!(s.idle());
+        // The next probe is answered; the orphan's late reply is ignored.
+        let (s, _) = probe(s, ProbeInput::Sent(2));
+        let orphan = ProbeInput::Answered {
+            id: 1,
+            audible: Some(true),
+        };
+        assert_eq!(probe(s, orphan), (s, None));
+        let (s, e) = probe(
+            s,
+            ProbeInput::Answered {
+                id: 2,
+                audible: Some(false),
+            },
+        );
+        assert_eq!(
+            (s, e),
+            (
+                AudioProbe::Idle { audible: false },
+                Some(PageEvent::Audible(false))
+            )
+        );
+        // Navigating while idle changes nothing.
+        assert_eq!(probe(s, ProbeInput::Navigated), (s, None));
     }
 
     #[test]

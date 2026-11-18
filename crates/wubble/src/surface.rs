@@ -290,7 +290,6 @@ pub enum Routed {
     Find(FindEvent),
     Popup(Option<Rect>),
     Fullscreen(bool),
-    Zoom(u32),
     Muted(bool),
     Audible(bool),
     /// IME composition bounds, physical pixels relative to the view.
@@ -329,7 +328,9 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::FindResult {
             matches, active, ..
         } => Routed::Find(FindEvent::Result { matches, active }),
-        PageEvent::ZoomChanged { percent } => Routed::Zoom(percent),
+        // The host reads the zoom back when the user zooms; the view's own
+        // reports (a load, an address change) are not the user's.
+        PageEvent::ZoomChanged { .. } => Routed::Ignore,
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
@@ -631,7 +632,7 @@ mod tests {
         );
         assert_eq!(
             route(PageEvent::ZoomChanged { percent: 110 }),
-            Routed::Zoom(110)
+            Routed::Ignore
         );
         assert_eq!(
             route(PageEvent::FullscreenChanged(true)),

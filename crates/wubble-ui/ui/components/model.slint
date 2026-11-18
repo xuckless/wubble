@@ -156,8 +156,13 @@ export struct FindView {
 // The page's popup widget (`<select>` list, date picker, autofill) in window coordinates.
 export struct PopupView {
     shown: bool,
+    // Where the layer is drawn: window coordinates, kept inside the window.
     x: length,
     y: length,
     width: length,
     height: length,
+    // The engine's own top left of the popup, relative to the web view: CEF hit-tests the popup
+    // there, so pointer input maps back through it even when the layer was moved to fit.
+    origin-x: length,
+    origin-y: length,
 }

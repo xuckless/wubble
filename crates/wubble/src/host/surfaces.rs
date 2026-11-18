@@ -17,16 +17,15 @@ use super::{Host, new_tab};
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
 use crate::screen::{self, Screen, ScreenEffect, ScreenEvent};
-use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, Routed, Surfaces};
+use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, Routed};
 
-/// What the shell last drew: the tab and its surfaces, so unchanged ones are
-/// not rewritten (a rewritten menu model would restart its rows' motion).
+/// What the shell last drew: the tab, and its menu. Slint skips setting a
+/// property to an equal value, but a menu's rows are a fresh `ModelRc`
+/// (equal only by pointer), and a rewritten model restarts the rows' motion.
 #[derive(Default)]
 pub(super) struct Drawn {
     tab: Option<TabId>,
-    surfaces: Surfaces,
-    page_fullscreen: bool,
-    find_focus: i32,
+    menu: Menu,
 }
 
 impl Host {
@@ -68,7 +67,6 @@ impl Host {
             Routed::Fullscreen(false) => {
                 self.apply_screen(window, ScreenEvent::PageLeft(tab));
             }
-            Routed::Zoom(percent) => self.zoomed(window, tab, percent),
             Routed::Muted(muted) => {
                 self.audio.entry(tab).or_default().muted = muted;
                 self.after_change();
@@ -180,9 +178,6 @@ impl Host {
             self.surfaces.insert(tab, s.view_gone());
         }
         self.audio.remove(&tab);
-        if self.zoom_asked == Some(tab) {
-            self.zoom_asked = None;
-        }
         if let Some(window) = self.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
         }
@@ -206,7 +201,8 @@ impl Host {
         }
     }
 
-    /// Writes the visible tab's surfaces into the shell where they changed.
+    /// Writes the visible tab's surfaces into the shell (Slint ignores
+    /// values that did not change; the menu is compared here, see [`Drawn`]).
     pub(super) fn render_surfaces(&mut self, window: &AppWindow) {
         let tab = self.model.visible_tab();
         if self.drawn.tab != tab
@@ -219,33 +215,20 @@ impl Host {
             .and_then(|t| self.surfaces.get(&t))
             .cloned()
             .unwrap_or_default();
-        let page_fullscreen = matches!(self.screen, Screen::Page { .. });
-        let fresh = self.drawn.tab != tab;
-        let drawn = &self.drawn;
-        let scale = window.window().scale_factor();
-        if fresh || drawn.surfaces.menu != current.menu {
+        if self.drawn.tab != tab || self.drawn.menu != current.menu {
+            let scale = window.window().scale_factor();
             window.set_menu(menu_view(&current.menu, scale));
         }
-        if fresh || drawn.surfaces.dialog != current.dialog {
-            window.set_dialog(dialog_view(&current.dialog));
+        window.set_dialog(dialog_view(&current.dialog));
+        window.set_find(find_view(&current.find, self.find_focus));
+        window.set_popup(popup_view(window, current.popup));
+        if current.popup.is_none() {
+            window.set_popup_frame(slint::Image::default());
         }
-        if fresh || drawn.surfaces.find != current.find || drawn.find_focus != self.find_focus {
-            window.set_find(find_view(&current.find, self.find_focus));
-        }
-        if fresh || drawn.surfaces.popup != current.popup {
-            window.set_popup(popup_view(window, current.popup));
-            if current.popup.is_none() {
-                window.set_popup_frame(slint::Image::default());
-            }
-        }
-        if fresh || drawn.page_fullscreen != page_fullscreen {
-            window.set_page_fullscreen(page_fullscreen);
-        }
+        window.set_page_fullscreen(matches!(self.screen, Screen::Page { .. }));
         self.drawn = Drawn {
             tab,
-            surfaces: current,
-            page_fullscreen,
-            find_focus: self.find_focus,
+            menu: current.menu,
         };
     }
 
@@ -305,22 +288,20 @@ impl Host {
 
     // ----- zoom
 
-    /// The view reports a new zoom. Only one the user asked for (a zoom key)
-    /// is stored for the site and shown; the rest are the shell's own
-    /// corrections or CEF re-reading the level after a load.
-    fn zoomed(&mut self, window: &AppWindow, tab: TabId, percent: u32) {
-        if self.zoom_asked != Some(tab) {
-            return;
-        }
-        self.zoom_asked = None;
+    /// The user zoomed the visible `tab` (a zoom key) and its view now shows
+    /// `percent` (CEF zooms at once, so the view read it back in the same
+    /// call): stored for the site and shown, even when a limit left it
+    /// unchanged. The view's own zoom reports (CEF re-reading the level after
+    /// a load, the shell's corrections) are never stored.
+    pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
         let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
         if let Some(host) = url.as_deref().and_then(zoom::host_of) {
             let table = std::mem::take(&mut self.site_zoom);
             self.site_zoom = zoom::next_table(table, &host, percent);
             self.store.set_site_zoom(self.site_zoom.clone());
         }
-        if self.model.visible_tab() == Some(tab) {
-            self.toast(window, &format!("{percent}%"));
+        if let Some(window) = self.window.upgrade() {
+            self.toast(&window, &format!("{percent}%"));
         }
     }
 
@@ -461,7 +442,9 @@ fn find_view(find: &FindBar, focus: i32) -> FindView {
     }
 }
 
-/// The popup in window coordinates, kept inside the window.
+/// The popup in window coordinates, kept inside the window. Input maps
+/// back through `origin`, the engine's own rect: CEF hit-tests the popup
+/// there, wherever the layer was moved to fit.
 fn popup_view(window: &AppWindow, popup: Option<Rect>) -> PopupView {
     let Some(r) = popup else {
         return PopupView::default();
@@ -480,6 +463,7 @@ fn popup_view(window: &AppWindow, popup: Option<Rect>) -> PopupView {
         width: size.width,
         height: size.height,
     };
+    let origin = r;
     let r = surface::clamp_into(at, bounds);
     PopupView {
         shown: true,
@@ -487,5 +471,7 @@ fn popup_view(window: &AppWindow, popup: Option<Rect>) -> PopupView {
         y: r.y as f32 / scale,
         width: r.width as f32 / scale,
         height: r.height as f32 / scale,
+        origin_x: origin.x as f32 / scale,
+        origin_y: origin.y as f32 / scale,
     }
 }

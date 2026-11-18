@@ -520,8 +520,6 @@ export component AppWindow inherits Window {
     PopupLayer {
         popup: root.popup;
         frame: root.popup-frame;
-        view-x: content.x;
-        view-y: content.y;
         pointer-moved(x, y) => {
             root.web-pointer-moved(x, y);
         }

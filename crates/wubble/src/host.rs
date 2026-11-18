@@ -238,8 +238,6 @@ pub struct Host {
     audio: AudioMap,
     /// Per-site zoom; stored through the store, applied on each commit.
     site_zoom: ZoomTable,
-    /// The tab a zoom key was sent to: its next reported zoom is the user's.
-    zoom_asked: Option<TabId>,
     /// Bumped per notice and per find-bar focus request.
     toast_serial: i32,
     find_focus: i32,
@@ -317,7 +315,6 @@ impl Host {
             ime: Ime::default(),
             audio: AudioMap::new(),
             site_zoom,
-            zoom_asked: None,
             toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
@@ -347,6 +344,9 @@ impl Host {
             self.pending.extend(effects);
             queue.extend(self.flush());
         }
+        // Surfaces outlive a sleeping tab's view, not the tab.
+        let tabs = &self.model.tabs;
+        self.surfaces.retain(|tab, _| tabs.contains_key(tab));
         self.after_change();
         if persist::should_save(self.save) {
             self.save_now();
@@ -810,24 +810,29 @@ impl Host {
                 if let Some(tab) = self.model.visible_tab() {
                     self.typed_nav.ended(tab);
                 }
-                if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
-                    self.zoom_asked = self.model.visible_tab();
-                }
-                if let Some(view) = self.view() {
-                    match op {
-                        ViewOp::Reload => view.reload(),
-                        ViewOp::HardReload => view.hard_reload(),
-                        ViewOp::Stop => view.stop(),
-                        ViewOp::Back => view.back(),
-                        ViewOp::Forward => view.forward(),
-                        ViewOp::ZoomIn => view.zoom_in(),
-                        ViewOp::ZoomOut => view.zoom_out(),
-                        ViewOp::ZoomReset => view.zoom_reset(),
-                        ViewOp::ToggleMute => {
-                            let muted = view.is_muted();
-                            view.set_muted(!muted);
-                        }
+                let Some(tab) = self.model.visible_tab() else {
+                    return;
+                };
+                let Some(view) = self.tab_view(tab) else {
+                    return;
+                };
+                match op {
+                    ViewOp::Reload => view.reload(),
+                    ViewOp::HardReload => view.hard_reload(),
+                    ViewOp::Stop => view.stop(),
+                    ViewOp::Back => view.back(),
+                    ViewOp::Forward => view.forward(),
+                    ViewOp::ZoomIn => view.zoom_in(),
+                    ViewOp::ZoomOut => view.zoom_out(),
+                    ViewOp::ZoomReset => view.zoom_reset(),
+                    ViewOp::ToggleMute => {
+                        let muted = view.is_muted();
+                        view.set_muted(!muted);
                     }
+                }
+                if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
+                    let percent = view.zoom_percent();
+                    self.user_zoomed(tab, percent);
                 }
             }
             Plan::Find(event) => self.find_event(event),

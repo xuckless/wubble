@@ -501,6 +501,9 @@ impl View {
                 if input == NavInput::RendererTerminated {
                     eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
                 }
+                if matches!(input, NavInput::Address(_)) {
+                    self.apply_probe(ProbeInput::Navigated);
+                }
                 self.apply_nav(input);
             }
             Route::Page(event) => {

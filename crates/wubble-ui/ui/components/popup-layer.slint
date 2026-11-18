@@ -4,14 +4,11 @@ import { PopupView } from "model.slint";
 // second frame stream, the host hands it over as `frame` and places it at the engine's rectangle
 // (window coordinates, kept inside the window). Written from scratch: nothing in the design repo
 // draws engine frames. Pointer input over it goes back to the page with view-relative
-// coordinates (`view-x/y` is the view's top left here), and CEF routes it to the popup widget
-// by its own hit test; keys keep going to the page, which forwards them to its open popup.
+// coordinates, and CEF routes it to the popup widget by its own hit test at the popup's unmoved
+// rect (`popup.origin-x/y`); keys keep going to the page, which forwards them to its open popup.
 export component PopupLayer inherits Rectangle {
     in property <PopupView> popup;
     in property <image> frame;
-    // The web view's top left, in the same coordinates as `popup`.
-    in property <length> view-x;
-    in property <length> view-y;
     callback pointer-moved(length, length);
     callback pointer-pressed(PointerEventButton, length, length);
     callback pointer-released(PointerEventButton, length, length);
@@ -30,8 +27,8 @@ export component PopupLayer inherits Rectangle {
         image-fit: fill;
     }
     TouchArea {
-        property <length> dx: root.popup.x - root.view-x;
-        property <length> dy: root.popup.y - root.view-y;
+        property <length> dx: root.popup.origin-x;
+        property <length> dy: root.popup.origin-y;
         pointer-event(event) => {
             if event.kind == PointerEventKind.down {
                 root.pointer-pressed(event.button, self.mouse-x + self.dx, self.mouse-y + self.dy);
