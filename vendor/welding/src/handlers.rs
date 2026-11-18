@@ -187,7 +187,13 @@ pub(crate) struct Requests {
 /// The lock is released before any answer: a CEF callback may call straight
 /// back into a handler that takes it.
 fn hold<C: Answer>(table: &Mutex<Held<C>>, callback: C) -> Option<RequestId> {
-    let held = table.lock().unwrap().hold(callback);
+    // wubble change: CEF asks a new question from no callback's frame, so
+    // the handles it closed itself (`Held::retire`) are released here.
+    let (held, retired) = {
+        let mut table = table.lock().unwrap();
+        (table.hold(callback), table.take_retired())
+    };
+    drop(retired);
     match held {
         Ok(id) => Some(id),
         Err(callback) => {
@@ -205,7 +211,11 @@ fn take<C: Answer>(table: &Mutex<Held<C>>, id: RequestId) -> Option<C> {
 /// Answer everything in `table` with its default, outside the lock. Returns
 /// the ids that were waiting.
 fn drain<C: Answer>(table: &Mutex<Held<C>>) -> Vec<RequestId> {
-    let pending = table.lock().unwrap().drain();
+    let (pending, retired) = {
+        let mut table = table.lock().unwrap();
+        (table.drain(), table.take_retired())
+    };
+    drop(retired);
     pending
         .into_iter()
         .map(|(id, callback)| {
@@ -937,14 +947,26 @@ cef::wrap_context_menu_handler! {
             1
         }
 
-        // CEF closed the menu (answered, navigated away, or cancelled it
-        // itself). Anything still held is stale.
+        // CEF closed the menu: the host answered it, or CEF cancelled it
+        // itself (`CefMenuManager::CancelContextMenu`: the view blurred or
+        // hid, a non-right mouse press or a wheel reached the page, the
+        // browser is closing). Either way CEF has already run the callback
+        // (menu_manager.cc `ExecuteCommandCallback` is what calls
+        // `MenuClosed`), so anything still held is stale.
+        //
+        // wubble change: retired, not drained. On a cancel CEF calls
+        // `Continue` through a raw pointer it holds no reference for, and
+        // this runs inside that `Continue`; dropping the held handle here
+        // released the last reference and freed the callback before
+        // `Continue` returned (SIGSEGV in `BindStateHolder::Reset` under
+        // `CefRenderWidgetHostViewOSR::SetFocus`). Answering it again would
+        // also be a second answer.
         fn on_context_menu_dismissed(
             &self,
             _browser: Option<&mut cef::Browser>,
             _frame: Option<&mut cef::Frame>,
         ) {
-            if !drain(&self.requests.menus).is_empty() {
+            if !self.requests.menus.lock().unwrap().retire().is_empty() {
                 push(&self.events, NavigationEvent::ContextMenuDismissed);
             }
         }

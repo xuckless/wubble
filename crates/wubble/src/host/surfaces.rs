@@ -444,9 +444,9 @@ impl Host {
         self.menu_event(MenuEvent::Chosen(index));
     }
 
-    /// Whether exactly one answer reached the engine (the page smoke checks).
-    pub fn menu_dismissed(&mut self) -> bool {
-        self.menu_event(MenuEvent::Dismiss) == 1
+    /// How many answers reached the engine (the page smoke checks).
+    pub fn menu_dismissed(&mut self) -> usize {
+        self.menu_event(MenuEvent::Dismiss)
     }
 
     fn menu_event(&mut self, event: MenuEvent) -> usize {

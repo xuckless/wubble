@@ -53,12 +53,16 @@ fn next_id() -> RequestId {
 
 pub(crate) struct Held<C: Answer> {
     pending: HashMap<RequestId, C>,
+    /// wubble change: callbacks CEF answered itself ([`Held::retire`]),
+    /// unanswerable but still referenced until [`Held::take_retired`].
+    retired: Vec<C>,
 }
 
 impl<C: Answer> Default for Held<C> {
     fn default() -> Self {
         Self {
             pending: HashMap::new(),
+            retired: Vec::new(),
         }
     }
 }
@@ -98,6 +102,25 @@ impl<C: Answer> Held<C> {
     /// CEF callback may call straight back into a handler that takes it.
     pub(crate) fn drain(&mut self) -> Vec<(RequestId, C)> {
         self.pending.drain().collect()
+    }
+
+    /// wubble change: CEF closed every waiting request itself and already
+    /// ran its callback. Their ids go stale and nothing is answered, but the
+    /// handles are kept, not dropped: CEF may be reporting the close from
+    /// inside that very callback's `Continue` (the context menu: CEF cancels
+    /// through a raw pointer and `OnContextMenuDismissed` runs before
+    /// `Continue` returns), and releasing what is then the last reference
+    /// frees the object under it. Release them later, from a call CEF did not
+    /// make from inside a callback, with [`Held::take_retired`].
+    pub(crate) fn retire(&mut self) -> Vec<RequestId> {
+        let (ids, callbacks): (Vec<_>, Vec<_>) = self.pending.drain().unzip();
+        self.retired.extend(callbacks);
+        ids
+    }
+
+    /// wubble change: the retired handles, to drop outside any lock.
+    pub(crate) fn take_retired(&mut self) -> Vec<C> {
+        std::mem::take(&mut self.retired)
     }
 
     /// Answer everything still waiting with its default.
@@ -344,6 +367,55 @@ pub(crate) mod tests {
         assert_eq!(held.outstanding(), 1);
         drop(held);
         assert_eq!(log.answered(), vec![1], "the dismissed one was answered too");
+    }
+
+    /// How many fakes sharing `log` are still alive (held, retired or out).
+    fn alive(log: &Log) -> usize {
+        Rc::strong_count(&log.0) - 1
+    }
+
+    #[test]
+    fn retire_answers_nothing_and_keeps_the_handles() {
+        let log = Log::default();
+        let mut held = Held::default();
+        let one = held.hold(Fake(1, log.clone())).ok().unwrap();
+        let two = held.hold(Fake(2, log.clone())).ok().unwrap();
+        let mut ids = held.retire();
+        ids.sort_unstable();
+        let mut want = vec![one, two];
+        want.sort_unstable();
+        assert_eq!(ids, want);
+        assert_eq!(held.outstanding(), 0);
+        assert_eq!(alive(&log), 2, "a retired handle was released during the dismissal");
+        assert!(held.take(one).is_none(), "a retired request answered after CEF closed it");
+        held.drain_default();
+        assert!(log.answered().is_empty(), "CEF already answered a retired request");
+        assert_eq!(alive(&log), 2);
+        let retired = held.take_retired();
+        assert_eq!(retired.len(), 2);
+        drop(retired);
+        assert_eq!(alive(&log), 0);
+        assert!(log.answered().is_empty());
+    }
+
+    #[test]
+    fn every_request_is_answered_exactly_once_whoever_closes_it() {
+        // The host answers one, CEF closes the next, the browser closes with
+        // the third waiting: three requests, three answers, one each.
+        let log = Log::default();
+        let mut held = Held::default();
+        let host = held.hold(Fake(1, log.clone())).ok().unwrap();
+        held.take(host).unwrap().answer_default();
+        assert!(held.retire().is_empty(), "the host's answered request was retired too");
+        let cef = held.hold(Fake(2, log.clone())).ok().unwrap();
+        // CEF ran callback 2 itself: record it as CEF's answer.
+        log.0.borrow_mut().push(2);
+        assert_eq!(held.retire(), vec![cef]);
+        assert!(held.take(cef).is_none());
+        held.hold(Fake(3, log.clone())).ok().unwrap();
+        drop(held);
+        assert_eq!(log.answered(), vec![1, 2, 3]);
+        assert_eq!(alive(&log), 0, "a retired handle leaked past the table");
     }
 
     #[test]

@@ -7,10 +7,15 @@
 //!    click the page beside it: the popup hides.
 //! 3. Click the button that calls `alert()`: the dialog arrives, the sheet's
 //!    state accepts it, and the page's title changes after `alert` returns.
-//! 4. Right-click the link: the menu lists "Open Link in New Tab"; it is
-//!    dismissed and answered exactly once.
+//! 4. Right-click the link: the menu lists "Open Link in New Tab". CEF then
+//!    cancels it itself, once per way it does (`CANCELS`: the page blurs, the
+//!    page hides as on a tab switch, a left press reaches the page); each
+//!    time the shell's menu closes with no answer left for the host. The next
+//!    one is dismissed through the menu's path and answered exactly once.
 //! 5. Find "needle" through the find bar: 2 matches.
 //! 6. Zoom in: the page reports a zoom above 100 %.
+//! 7. Right-click once more and quit with the menu open: closing the browser
+//!    cancels it.
 //!
 //! Real pointer and key use of the popup, the dialog's feel and the
 //! clipboard are left to a human.
@@ -43,10 +48,30 @@ pub enum Step {
     PopupHidden,
     Dialog,
     Alerted,
-    Menu,
+    /// Waiting for the menu of round `n`: an index into `CANCELS`, or
+    /// `CANCELS.len()` for the one the host dismisses.
+    Menu(usize),
+    /// Waiting for CEF to close the menu `CANCELS[n]` cancelled.
+    Cancelled(usize),
     Found,
     Zoomed,
+    /// Waiting for the last menu, left open at exit, with the zoom to pass.
+    Exit(u32),
 }
+
+/// The ways CEF cancels a page's context menu itself (the callers of
+/// `CefMenuManager::CancelContextMenu` in its OSR view).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cancel {
+    /// `SetFocus(false)`: the page loses keyboard focus.
+    Blur,
+    /// `WasHidden`: its tab is switched away from.
+    Hide,
+    /// A left press on the page beside the menu.
+    Press,
+}
+
+pub const CANCELS: [Cancel; 3] = [Cancel::Blur, Cancel::Hide, Cancel::Press];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageSmoke {
@@ -84,6 +109,13 @@ pub enum Action {
     /// Dismiss the open menu through the menu's path; fails unless that
     /// answered exactly once.
     DismissMenu,
+    /// Make CEF cancel the open menu this way.
+    CancelMenu(Cancel),
+    /// Undo what `CancelMenu` did to the page (its focus, its visibility).
+    Restore(Cancel),
+    /// CEF closed the menu: fails unless the shell's menu closed too and a
+    /// dismissal answers nothing.
+    MenuGone,
     Find(&'static str),
     ZoomIn,
     Pass(u32),
@@ -124,19 +156,27 @@ pub fn next(state: PageSmoke, input: Input) -> (PageSmoke, Vec<Action>) {
             }),
         ) => (to(Alerted), vec![Action::AcceptDialog]),
         (Alerted, Web(WebEvent::TitleChanged(title))) if title == ALERTED => {
-            (to(Menu), vec![Action::RightClick(LINK_AT)])
+            (to(Menu(0)), vec![Action::RightClick(LINK_AT)])
         }
-        (Menu, Page(PageEvent::ContextMenuRequested { menu, .. })) => {
+        (Menu(round), Page(PageEvent::ContextMenuRequested { menu, .. })) => {
             let entries = menu::entries(menu, NavFlags::default());
-            if entries.iter().any(|e| e.label == "Open Link in New Tab") {
-                (to(Found), vec![Action::DismissMenu, Action::Find(NEEDLE)])
+            if !entries.iter().any(|e| e.label == "Open Link in New Tab") {
+                let fail = Action::Fail(format!("no link entries in {entries:?}"));
+                (PageSmoke::Done, vec![fail])
+            } else if let Some(&cancel) = CANCELS.get(round) {
+                (to(Cancelled(round)), vec![Action::CancelMenu(cancel)])
             } else {
-                (
-                    PageSmoke::Done,
-                    vec![Action::Fail(format!("no link entries in {entries:?}"))],
-                )
+                (to(Found), vec![Action::DismissMenu, Action::Find(NEEDLE)])
             }
         }
+        (Cancelled(round), Page(PageEvent::ContextMenuDismissed)) => (
+            to(Menu(round + 1)),
+            vec![
+                Action::MenuGone,
+                Action::Restore(CANCELS[round]),
+                Action::RightClick(LINK_AT),
+            ],
+        ),
         (
             Found,
             Page(PageEvent::FindResult {
@@ -152,7 +192,10 @@ pub fn next(state: PageSmoke, input: Input) -> (PageSmoke, Vec<Action>) {
             ),
         },
         (Zoomed, Page(PageEvent::ZoomChanged { percent })) if *percent > 100 => {
-            (PageSmoke::Done, vec![Action::Pass(*percent)])
+            (to(Exit(*percent)), vec![Action::RightClick(LINK_AT)])
+        }
+        (Exit(percent), Page(PageEvent::ContextMenuRequested { .. })) => {
+            (PageSmoke::Done, vec![Action::Pass(percent)])
         }
         (_, Worked { .. }) => (stay(runs + 1), vec![]),
         _ => (state, vec![]),
@@ -222,8 +265,15 @@ mod tests {
             Input::Page(&alert),
             Input::Web(&title),
             Input::Page(&menu),
+            Input::Page(&PageEvent::ContextMenuDismissed),
+            Input::Page(&menu),
+            Input::Page(&PageEvent::ContextMenuDismissed),
+            Input::Page(&menu),
+            Input::Page(&PageEvent::ContextMenuDismissed),
+            Input::Page(&menu),
             Input::Page(&found),
             Input::Page(&zoom),
+            Input::Page(&menu),
         ]);
         assert_eq!(s, PageSmoke::Done);
         assert_eq!(
@@ -234,9 +284,22 @@ mod tests {
                 Action::Click(BUTTON_AT),
                 Action::AcceptDialog,
                 Action::RightClick(LINK_AT),
+                Action::CancelMenu(Cancel::Blur),
+                Action::MenuGone,
+                Action::Restore(Cancel::Blur),
+                Action::RightClick(LINK_AT),
+                Action::CancelMenu(Cancel::Hide),
+                Action::MenuGone,
+                Action::Restore(Cancel::Hide),
+                Action::RightClick(LINK_AT),
+                Action::CancelMenu(Cancel::Press),
+                Action::MenuGone,
+                Action::Restore(Cancel::Press),
+                Action::RightClick(LINK_AT),
                 Action::DismissMenu,
                 Action::Find(NEEDLE),
                 Action::ZoomIn,
+                Action::RightClick(LINK_AT),
                 Action::Pass(110),
             ]
         );
