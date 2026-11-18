@@ -76,6 +76,7 @@ fn tabs(ids: impl IntoIterator<Item = i32>) -> ModelRc<TabItem> {
             title: format!("tab {id}").into(),
             url: "".into(),
             favicon: Default::default(),
+            ..Default::default()
         })
         .collect();
     ModelRc::from(items.as_slice())

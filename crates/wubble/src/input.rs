@@ -64,6 +64,18 @@ pub fn is_modifier(key: &Key) -> bool {
     )
 }
 
+/// In page fullscreen only `Fullscreen` stays a shell key; every other
+/// binding becomes page-first, so a fullscreen game or video player gets
+/// its keys (TODO.md Decided "Key routing"; Chromium's
+/// `IsReservedCommandOrKey` drops its reserved set in fullscreen too).
+pub fn page_fullscreen_binding(binding: Option<(Action, Route)>) -> Option<(Action, Route)> {
+    binding.map(|(action, route)| match (action, route) {
+        (Action::Fullscreen, _) => (action, route),
+        (_, Route::Shell) => (action, Route::PageFirst),
+        _ => (action, route),
+    })
+}
+
 /// Where a key press goes. `binding` is what the keymap binds its chord to.
 ///
 /// - `Route::Shell` bindings always run and never reach the page or Slint.
@@ -322,6 +334,23 @@ mod tests {
 
     fn chord(s: &str) -> Option<Chord> {
         Some(Chord::parse(s).unwrap())
+    }
+
+    #[test]
+    fn page_fullscreen_keeps_only_fullscreen_a_shell_key() {
+        assert_eq!(
+            page_fullscreen_binding(Some((Action::CloseTab, Route::Shell))),
+            Some((Action::CloseTab, Route::PageFirst))
+        );
+        assert_eq!(
+            page_fullscreen_binding(Some((Action::Fullscreen, Route::Shell))),
+            Some((Action::Fullscreen, Route::Shell))
+        );
+        assert_eq!(
+            page_fullscreen_binding(Some((Action::Find, Route::PageFirst))),
+            Some((Action::Find, Route::PageFirst))
+        );
+        assert_eq!(page_fullscreen_binding(None), None);
     }
 
     #[test]

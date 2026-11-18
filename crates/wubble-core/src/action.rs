@@ -38,12 +38,14 @@ pub enum Action {
     Fullscreen,
     TogglePinTab,
     CopyUrl,
+    /// Mute or unmute the visible tab (also the sidebar's speaker glyph).
+    ToggleMute,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 30] = [
+const FIXED: [(&str, Action); 31] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -73,6 +75,7 @@ const FIXED: [(&str, Action); 30] = [
     ("fullscreen", Action::Fullscreen),
     ("toggle-pin-tab", Action::TogglePinTab),
     ("copy-url", Action::CopyUrl),
+    ("toggle-mute", Action::ToggleMute),
     ("quit", Action::Quit),
 ];
 
@@ -123,7 +126,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 6] = [
+pub const PALETTE: [ActionInfo; 7] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -150,6 +153,11 @@ pub const PALETTE: [ActionInfo; 6] = [
         keywords: "hide show tabs",
     },
     ActionInfo {
+        action: Action::ToggleMute,
+        title: "Mute Tab",
+        keywords: "sound audio unmute",
+    },
+    ActionInfo {
         action: Action::ToggleCompactMode,
         title: "Toggle Compact Mode",
         keywords: "hide show",
@@ -163,7 +171,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 48);
+        assert_eq!(all.len(), 49);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -174,7 +182,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 48);
+        assert_eq!(ids.len(), 49);
     }
 
     #[test]

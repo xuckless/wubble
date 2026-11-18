@@ -256,6 +256,8 @@ export component TabRow inherits Rectangle {
     callback drag(length);
     callback release();
     callback close();
+    // wubble change: the speaker glyph, shown while the page plays sound or is muted.
+    callback mute();
 
     height: Chrome.row;
     border-radius: Radius.sm;
@@ -310,6 +312,23 @@ export component TabRow inherits Rectangle {
             font-size: Type.body.size;
             font-weight: Type.body.weight;
             animate color { duration: 150ms; easing: Motion.easeOut; }
+        }
+        // wubble change: the speaker, before the close button (Chromium's tab alert indicator
+        // place); a click mutes or unmutes the tab.
+        if !root.compact && (root.tab.audible || root.tab.muted): Rectangle {
+            width: Shell.speaker;
+            speaker-touch := TouchArea {
+                clicked => {
+                    root.mute();
+                }
+            }
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                size: Shell.icon - 2px;
+                path: root.tab.muted ? IconPaths.speaker-muted : IconPaths.speaker;
+                tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
+            }
         }
         // wubble change: the close button's slot stays in the layout (as .wb-tab-x, which only
         // fades), and the button itself sits outside it, below.

@@ -3,14 +3,19 @@ mod bar;
 mod bind;
 mod cli;
 mod host;
+mod ime;
 mod input;
+mod menu;
 mod nav_smoke;
+mod page_smoke;
 mod perform;
 mod persist;
 mod pixels;
 mod profile;
+mod screen;
 mod session_smoke;
 mod shell;
+mod surface;
 mod tabs_smoke;
 
 use std::cell::RefCell;
@@ -54,12 +59,19 @@ pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
 /// The third page of `--smoke tabs`.
 pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
+/// The page `--smoke page` drives.
+pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
+
 /// `--smoke tabs`'s pages, in tab order.
 pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
 
 /// How often hidden tabs are checked against the sleep policy. Coarse: the
 /// policy's delays are a minute and more.
 const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
+
+/// How often live tabs are asked whether they play sound (the speaker glyph;
+/// CEF has no audible callback, see `wubble_engine::media`).
+const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os()) {
@@ -129,6 +141,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: tabs FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Page) => {
+            match with_smoke_dir(|config, dir| run(Mode::Page, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    page_zoom: Some(zoom),
+                    ..
+                }) => {
+                    println!("smoke: page ok zoom={zoom}%");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: page FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: page FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -305,6 +340,8 @@ struct Outcome {
     tabs_passed: bool,
     /// The `--smoke session` phase reached its end.
     session_passed: bool,
+    /// The zoom `--smoke page` passed with.
+    page_zoom: Option<u32>,
 }
 
 /// What the window is for.
@@ -317,6 +354,8 @@ enum Mode {
     Nav,
     /// `--smoke tabs`.
     Tabs,
+    /// `--smoke page`.
+    Page,
     /// One phase of `--smoke session`.
     Session(Phase),
 }
@@ -483,6 +522,37 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
+    window.on_tab_mute_toggled(|id| {
+        if let Some(tab) = shell::tab_id(id) {
+            with_host(|host| host.toggle_mute(tab));
+        }
+    });
+}
+
+/// Hands the page's own UI (menu, dialog sheet, find bar) to the host.
+fn connect_surfaces(window: &AppWindow) {
+    use surface::FindEvent;
+    window.on_menu_chosen(|i| {
+        if let Ok(i) = usize::try_from(i) {
+            with_host(|host| host.menu_chosen(i));
+        }
+    });
+    window.on_menu_dismissed(|| {
+        with_host(|host| {
+            host.menu_dismissed();
+        })
+    });
+    window.on_dialog_answered(|accept, text| with_host(|host| host.dialog_answered(accept, &text)));
+    window.on_find_edited(|q| with_host(|host| host.find_event(FindEvent::Query(q.into()))));
+    window.on_find_step(|forward| {
+        let event = if forward {
+            FindEvent::Next
+        } else {
+            FindEvent::Prev
+        };
+        with_host(|host| host.find_event(event));
+    });
+    window.on_find_closed(|| with_host(|host| host.find_event(FindEvent::Close)));
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
@@ -520,6 +590,7 @@ fn run(
         nav_smoke: None,
         tabs_smoke: None,
         session_smoke: None,
+        page_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
     // `url` is opened in a new tab; without one a fresh profile gets the
@@ -552,6 +623,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Page => (
+            Some(page_url(PAGE_PAGE)),
+            Checks {
+                page_smoke: Some(page_smoke::PageSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Session(phase) => (
             None,
             Checks {
@@ -581,12 +659,13 @@ fn run(
     let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));
     connect_input(&window);
     connect_shell(&window);
+    connect_surfaces(&window);
     wubble_ui::window::wire(&window);
     let panels = install_shell_driver(&window, loaded.settings.ui, &glass)?;
     let host = Host::new(
         engine,
         &window,
-        gpu.presenter(),
+        [gpu.presenter(), gpu.presenter()],
         glass,
         panels,
         loaded,
@@ -597,9 +676,13 @@ fn run(
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
     let lifecycle = slint::Timer::default();
+    let audible = slint::Timer::default();
     if browsing {
         lifecycle.start(slint::TimerMode::Repeated, LIFECYCLE_TICK, || {
             with_host(|host| host.tick(Instant::now()))
+        });
+        audible.start(slint::TimerMode::Repeated, AUDIBLE_PROBE_EVERY, || {
+            with_host(Host::probe_audible)
         });
     }
 
@@ -607,6 +690,7 @@ fn run(
     // Read while the window still exists.
     let ui = host::ui_state(&window);
     drop(lifecycle);
+    drop(audible);
     drop(window);
     let mut host = HOST.take().ok_or("the host went missing")?;
     host.shutdown(ui);
@@ -619,5 +703,6 @@ fn run(
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         session_passed: host.session_passed,
+        page_zoom: host.page_zoom,
     })
 }

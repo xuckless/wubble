@@ -21,9 +21,10 @@ use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{self, HistoryEntry};
 use wubble_core::seam::SidebarMode;
 use wubble_core::tab::TabId;
+use wubble_core::zoom::ZoomTable;
 use wubble_store::{
     ClosedTab, KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting,
-    SidebarModeSetting, SidebarWidth, Store, Transition,
+    SidebarModeSetting, SidebarWidth, SiteZoom, Store, Transition,
 };
 
 /// Session changes after which the session is saved at once.
@@ -125,6 +126,8 @@ pub struct Settings {
     pub ui: UiState,
     /// Opaque entries, decoded by `input::keymap`.
     pub keybinding_overrides: Vec<String>,
+    /// Per-site zoom (`wubble_core::zoom`).
+    pub site_zoom: ZoomTable,
 }
 
 impl Default for Settings {
@@ -137,6 +140,7 @@ impl Default for Settings {
                 mode: SidebarModeSetting::default(),
             },
             keybinding_overrides: KeybindingOverrides::default(),
+            site_zoom: SiteZoom::default(),
         }
     }
 }
@@ -183,6 +187,7 @@ enum Request {
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
     SetEngine(omnibox::SearchEngine),
+    SetSiteZoom(ZoomTable),
 }
 
 /// The host's handle on the store thread. If the database could not be
@@ -277,6 +282,11 @@ impl StoreClient {
         self.send(Request::SetEngine(engine));
     }
 
+    /// The whole per-site zoom table (one settings row).
+    pub fn set_site_zoom(&self, table: ZoomTable) {
+        self.send(Request::SetSiteZoom(table));
+    }
+
     /// Lets the thread finish what is queued, close the database and end.
     /// Blocks until it has; a thread that already ended returns at once.
     pub fn shutdown(self) {
@@ -336,6 +346,7 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             mode: store.setting::<SidebarModeSetting>().await?,
         },
         keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
+        site_zoom: store.setting::<SiteZoom>().await?,
     };
     Ok((store, Loaded { model, settings }))
 }
@@ -387,6 +398,7 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 .set_setting::<SearchEngineChoice>(Some(engine))
                 .await?;
         }
+        Request::SetSiteZoom(table) => store.set_setting::<SiteZoom>(table).await?,
     }
     Ok(())
 }
@@ -595,6 +607,8 @@ mod tests {
         };
         client.save(&model, ui);
         client.set_engine(omnibox::SearchEngine::Google);
+        let zoom = ZoomTable::from([("a.test".to_string(), 125)]);
+        client.set_site_zoom(zoom.clone());
         client.record_visit("https://a.test/", "", 5, Transition::Typed);
         client.update_title("https://a.test/", "A");
         client.push_closed(closed("https://gone.test/"));
@@ -627,6 +641,7 @@ mod tests {
         }
         assert_eq!(loaded.settings.engine, Some(omnibox::SearchEngine::Google));
         assert_eq!(loaded.settings.ui, ui);
+        assert_eq!(loaded.settings.site_zoom, zoom);
         let (pop_tx, pop_rx) = mpsc::channel();
         client.pop_closed(move |tab| pop_tx.send(tab).unwrap());
         assert_eq!(pop_rx.recv().unwrap(), Some(closed("https://gone.test/")));

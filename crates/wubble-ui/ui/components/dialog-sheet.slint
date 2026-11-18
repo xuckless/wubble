@@ -1,0 +1,167 @@
+import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, PressableButton } from "../components.slint";
+import { DialogView, GlassTier } from "model.slint";
+
+// A JS dialog (alert, confirm, prompt, beforeunload) as a sheet over the page; fills its parent
+// (the content area), whose scrim blocks the page, so the dialog is tab-modal: the sidebar and
+// other tabs stay usable. Written from scratch: the design repo has no dialog. Looks and timings
+// are Ultra Reactivate's `.ur-o-dialog` (src/ultra-reactivate/overlays.css, the owner's
+// library): min(380, width - 32) wide, padding 26, radius 20, title 19 / 560, body 14.5 muted,
+// actions right-aligned 8 apart, buttons 42 high with radius 11; it grows in over 300 ms. On
+// thick glass over content (GlassPanel), anchored to the top of the page like a sheet.
+// Enter accepts, Escape cancels. `answered` is the intent; the host answers the engine.
+export component DialogSheet inherits Rectangle {
+    in property <DialogView> dialog;
+    callback answered(bool, string);
+
+    property <bool> open: root.dialog.open;
+
+    public function take-focus() {
+        if root.dialog.prompt {
+            input.focus();
+            input.select-all();
+        } else {
+            keys.focus();
+        }
+    }
+
+    function confirm() {
+        root.answered(true, root.dialog.prompt ? input.text : "");
+    }
+
+    function cancel() {
+        root.answered(false, "");
+    }
+
+    // A new dialog (here or on the tab switched to) starts from the page's proposed text and
+    // takes the keyboard, even when it replaced one still showing.
+    property <int> serial: root.dialog.serial;
+    changed serial => {
+        input.text = root.dialog.input;
+        if root.dialog.open {
+            root.take-focus();
+        }
+    }
+
+    visible: root.open;
+
+    // The scrim: the page under it gets no pointer events while the dialog waits.
+    TouchArea {
+        scroll-event(e) => {
+            accept
+        }
+    }
+    Rectangle {
+        background: Shell.scrim;
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.cancel();
+                return accept;
+            }
+            if event.text == Key.Return {
+                root.confirm();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    panel := GlassPanel {
+        width: min(Shell.sheet-width, root.width - 2 * Shell.sheet-margin);
+        height: body.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: Shell.command-bar-top;
+        tier: GlassTier.thick;
+        radius: Shell.sheet-radius;
+        over-content: true;
+        transform-origin: { x: self.width / 2, y: 0px };
+        transform-scale: root.open ? 1 : Shell.sheet-from;
+        opacity: root.open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: Shell.sheet-in;
+            easing: Motion.easeOut;
+        }
+        TouchArea { }
+
+        body := VerticalLayout {
+            padding: Shell.sheet-pad;
+            spacing: Spacing.s2;
+            Text {
+                text: root.dialog.title;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Shell.sheet-title;
+                font-weight: Shell.sheet-title-weight;
+                overflow: elide;
+            }
+            Text {
+                text: root.dialog.message;
+                visible: self.text != "";
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Shell.sheet-body;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                visible: root.dialog.prompt;
+                height: root.dialog.prompt ? Shell.sheet-input : 0px;
+                border-radius: Shell.sheet-button-radius;
+                background: Palette.shell;
+                input := TextInput {
+                    x: Spacing.s3;
+                    width: parent.width - 2 * Spacing.s3;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    single-line: true;
+                    color: Palette.ink;
+                    selection-background-color: Palette.rim;
+                    font-family: Fonts.ui;
+                    font-size: Type.body.size;
+                    accepted => {
+                        root.confirm();
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            root.cancel();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            // .ur-o-dialog p: 22 below the message.
+            Rectangle {
+                height: Spacing.s3;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: Spacing.s2;
+                if root.dialog.cancel != "": PressableButton {
+                    text: root.dialog.cancel;
+                    height: Shell.sheet-button;
+                    padding-x: Shell.sheet-button-pad;
+                    border-radius: Shell.sheet-button-radius;
+                    clicked => {
+                        root.cancel();
+                    }
+                }
+                PressableButton {
+                    text: root.dialog.accept;
+                    height: Shell.sheet-button;
+                    padding-x: Shell.sheet-button-pad;
+                    border-radius: Shell.sheet-button-radius;
+                    background: self.hovered ? Palette.rim : Palette.shell;
+                    clicked => {
+                        root.confirm();
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble page</title>
+<style>
+body { margin: 0; background: #101820; color: #e8eef4; font: 16px sans-serif; }
+#pick { position: absolute; left: 20px; top: 20px; width: 200px; height: 30px; }
+#ask { position: absolute; left: 20px; top: 80px; width: 120px; height: 30px; }
+#go { position: absolute; left: 20px; top: 140px; line-height: 30px; }
+#text { position: absolute; left: 20px; top: 200px; }
+</style>
+</head>
+<body>
+<select id="pick"><option>one</option><option>two</option><option>three</option></select>
+<button id="ask" onclick="alert('hello from the page'); document.title = 'wubble page alerted'">alert</button>
+<a id="go" href="https://example.invalid/next">a link</a>
+<p id="text">The first needle, and the second needle: <code>--smoke page</code>.</p>
+</body>
+</html>

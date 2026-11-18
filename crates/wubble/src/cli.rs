@@ -15,8 +15,9 @@ struct Cli {
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
     /// stops, no window), `frames=N` (show N zero-copy frames, then exit; on
     /// the bundled page, also check the window shows it), `nav` (navigate between two bundled pages, then exit), `tabs` (open,
-    /// switch, sleep, restore and close tabs on bundled pages, then exit) or
-    /// `session` (open two tabs, quit, start again and check they come back).
+    /// switch, sleep, restore and close tabs on bundled pages, then exit), `page`
+    /// (a bundled page's select popup, alert, context menu, find and zoom,
+    /// then exit) or `session` (open two tabs, quit, start again and check they come back).
     /// `session-phase=1|2` is one half of `session`, run by it.
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke)]
     smoke: Option<SmokeArg>,
@@ -35,6 +36,7 @@ enum SmokeArg {
     Frames(NonZeroU32),
     Nav,
     Tabs,
+    Page,
     Session,
     SessionPhase(Phase),
 }
@@ -44,6 +46,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "boot" => Ok(SmokeArg::Boot),
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
+        None if value == "page" => Ok(SmokeArg::Page),
         None if value == "session" => Ok(SmokeArg::Session),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
@@ -52,7 +55,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `session` or `session-phase=1|2`".into(),
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `page`, `session` or `session-phase=1|2`"
+                .into(),
         ),
     }
 }
@@ -70,6 +74,8 @@ pub enum Smoke {
     Nav,
     /// Three tabs on bundled pages: switch, sleep, restore, close.
     Tabs,
+    /// The bundled page's select popup, alert, context menu, find and zoom.
+    Page,
     /// Runs both session phases on a temporary profile.
     Session,
     /// One half of `Session`, on the profile in `profile`.
@@ -128,6 +134,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
+            (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
         };
         Ok(Command::Smoke(smoke))
@@ -198,8 +205,17 @@ mod tests {
     }
 
     #[test]
+    fn smoke_page() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "page"]).ok(),
+            Some(Command::Smoke(Smoke::Page))
+        );
+        assert!(parse(["wubble", "--smoke", "page", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
     fn a_url_does_not_combine_with_a_smoke() {
-        for smoke in ["boot", "nav", "tabs", "frames=3", "session"] {
+        for smoke in ["boot", "nav", "tabs", "page", "frames=3", "session"] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),
                 "{smoke}"
@@ -251,7 +267,7 @@ mod tests {
                 profile: Some("/tmp/p".into()),
             })
         );
-        for smoke in ["boot", "nav", "tabs", "frames=3", "session"] {
+        for smoke in ["boot", "nav", "tabs", "page", "frames=3", "session"] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "--profile", "/tmp/p"]).is_err(),
                 "{smoke}"

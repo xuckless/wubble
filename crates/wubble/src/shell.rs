@@ -3,6 +3,8 @@
 //! [`view_model`] runs after every change; `bind.rs` hands its result to
 //! Slint wholesale. Nothing patches the sidebar row by row.
 
+use std::collections::BTreeMap;
+
 use wubble_core::model::{Dest, Model};
 use wubble_core::space::{Item, Rgb, SpaceId};
 use wubble_core::tab::{Tab, TabId};
@@ -14,7 +16,19 @@ pub struct TabRow {
     pub id: i32,
     pub title: String,
     pub url: String,
+    pub audible: bool,
+    pub muted: bool,
 }
+
+/// What a tab's page does with sound, as its view last reported
+/// (`PageEvent::Audible`, `PageEvent::MutedChanged`). Gone with the view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Audio {
+    pub audible: bool,
+    pub muted: bool,
+}
+
+pub type AudioMap = BTreeMap<TabId, Audio>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceRow {
@@ -38,15 +52,18 @@ pub struct ShellView {
     pub path: String,
 }
 
-pub fn view_model(model: &Model) -> ShellView {
+pub fn view_model(model: &Model, audio: &AudioMap) -> ShellView {
     let space = model.spaces.iter().find(|s| s.id == model.active_space);
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
         ids.filter_map(|id| {
             let tab = model.tabs.get(&id)?;
+            let sound = audio.get(&id).copied().unwrap_or_default();
             Some(TabRow {
                 id: slint_id(id.0)?,
                 title: tab_title(tab),
                 url: tab.url.clone(),
+                audible: sound.audible,
+                muted: sound.muted,
             })
         })
         .collect()
@@ -188,7 +205,7 @@ mod tests {
 
     #[test]
     fn an_empty_model_shows_nothing_active() {
-        let v = view_model(&Model::new(std::time::Instant::now()));
+        let v = view_model(&Model::new(std::time::Instant::now()), &AudioMap::new());
         assert_eq!((v.pinned.len(), v.tabs.len()), (0, 0));
         assert_eq!(v.active_tab, -1);
         assert_eq!(v.active_space, 0);
@@ -224,7 +241,7 @@ mod tests {
                 to: Dest::Folder { folder, index: 0 },
             },
         );
-        let v = view_model(&m);
+        let v = view_model(&m, &AudioMap::new());
         assert_eq!(titles(&v.pinned), ["a.test"]);
         assert_eq!(titles(&v.tabs), ["c.test", "b.test"]);
         assert_eq!(v.active_tab, i32::try_from(c.0).unwrap());
@@ -244,7 +261,7 @@ mod tests {
         );
         let (m, _) = apply(m, Command::SwitchSpace(SpaceId(1)));
         let (m, _) = new_tab(m, "https://w.test/");
-        let v = view_model(&m);
+        let v = view_model(&m, &AudioMap::new());
         assert_eq!(titles(&v.tabs), ["w.test"]);
         assert_eq!(v.tabs[0].url, "https://w.test/");
         assert_eq!(v.spaces[1].tint, Rgb(1, 2, 3));
@@ -254,12 +271,42 @@ mod tests {
     }
 
     #[test]
+    fn rows_carry_their_tab_s_sound() {
+        let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
+        let (m, b) = new_tab(m, "https://b.test/");
+        let audio = AudioMap::from([
+            (
+                a,
+                Audio {
+                    audible: true,
+                    muted: false,
+                },
+            ),
+            (
+                b,
+                Audio {
+                    audible: false,
+                    muted: true,
+                },
+            ),
+        ]);
+        let v = view_model(&m, &audio);
+        let sound: Vec<_> = v.tabs.iter().map(|r| (r.audible, r.muted)).collect();
+        assert_eq!(sound, [(true, false), (false, true)]);
+        let quiet = view_model(&m, &AudioMap::new());
+        assert!(quiet.tabs.iter().all(|r| !r.audible && !r.muted));
+    }
+
+    #[test]
     fn titles_fall_back_to_host_then_new_tab() {
         let (m, t) = new_tab(
             Model::new(std::time::Instant::now()),
             "https://example.com/x",
         );
-        assert_eq!(view_model(&m).tabs[0].title, "example.com");
+        assert_eq!(
+            view_model(&m, &AudioMap::new()).tabs[0].title,
+            "example.com"
+        );
         let (m, _) = apply(
             m,
             Command::TitleChanged {
@@ -267,9 +314,9 @@ mod tests {
                 title: "Example".into(),
             },
         );
-        assert_eq!(view_model(&m).tabs[0].title, "Example");
+        assert_eq!(view_model(&m, &AudioMap::new()).tabs[0].title, "Example");
         let (m, _) = new_tab(m, "");
-        assert_eq!(view_model(&m).tabs[1].title, "New tab");
+        assert_eq!(view_model(&m, &AudioMap::new()).tabs[1].title, "New tab");
     }
 
     /// Tabs a, b, c, then a folder holding d and e; p pinned.
@@ -311,7 +358,7 @@ mod tests {
             .0;
         }
         let (m, _) = apply(m, Command::PinTab(p));
-        let v = view_model(&m);
+        let v = view_model(&m, &AudioMap::new());
         assert_eq!(
             titles(&v.tabs),
             ["a.test", "b.test", "c.test", "d.test", "e.test"]
@@ -322,7 +369,11 @@ mod tests {
     fn moved(m: Model, tab: TabId, to: usize) -> Vec<String> {
         let dest = move_dest(&m, tab, to).expect("a row");
         let (m, _) = apply(m, Command::MoveTab { tab, to: dest });
-        view_model(&m).tabs.into_iter().map(|r| r.title).collect()
+        view_model(&m, &AudioMap::new())
+            .tabs
+            .into_iter()
+            .map(|r| r.title)
+            .collect()
     }
 
     #[test]

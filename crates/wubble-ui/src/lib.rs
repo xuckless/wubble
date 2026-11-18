@@ -40,9 +40,173 @@ mod tests {
     /// The testing platform can be installed once per process, so every
     /// scenario runs in this single test, on one window.
     #[test]
-    fn command_bar_lifecycle() {
+    fn shell_scenarios() {
         init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
+        app.window()
+            .set_size(slint::LogicalSize::new(1280.0, 800.0));
+        command_bar_lifecycle(&app);
+        page_surfaces(&app);
+    }
+
+    fn count(cell: &Rc<Cell<i32>>) -> impl Fn() + 'static {
+        let c = cell.clone();
+        move || c.set(c.get() + 1)
+    }
+
+    fn click(app: &AppWindow, x: f32, y: f32) {
+        let position = slint::LogicalPosition::new(x, y);
+        let button = slint::platform::PointerEventButton::Left;
+        app.window()
+            .dispatch_event(WindowEvent::PointerPressed { position, button });
+        app.window()
+            .dispatch_event(WindowEvent::PointerReleased { position, button });
+    }
+
+    fn entry(label: &str, separator: bool) -> MenuEntry {
+        MenuEntry {
+            label: label.into(),
+            enabled: true,
+            separator,
+        }
+    }
+
+    /// The context menu, the dialog sheet, the find bar and page
+    /// fullscreen: each reports its intents once and takes the keyboard.
+    fn page_surfaces(app: &AppWindow) {
+        let chosen = Rc::new(std::cell::RefCell::new(vec![]));
+        let c = chosen.clone();
+        app.on_menu_chosen(move |i| c.borrow_mut().push(i));
+        let dismissed = Rc::new(Cell::new(0));
+        app.on_menu_dismissed(count(&dismissed));
+        let page_presses = Rc::new(Cell::new(0));
+        let p = page_presses.clone();
+        app.on_web_pointer_pressed(move |_, _, _| p.set(p.get() + 1));
+
+        // ── Menu: arrow keys skip the divider, Enter chooses, Escape and an
+        // outside click dismiss.
+        let entries = [
+            entry("Back", false),
+            entry("", true),
+            entry("Reload", false),
+        ];
+        let open_menu = |x: f32| {
+            app.set_menu(MenuView {
+                open: true,
+                x,
+                y: 40.0,
+                entries: ModelRc::from(entries.as_slice()),
+            });
+            settle();
+        };
+        open_menu(40.0);
+        assert!(!app.get_web_focused(), "the menu takes the keyboard");
+        press(app, Key::DownArrow);
+        press(app, Key::DownArrow);
+        press(app, Key::Return);
+        assert_eq!(*chosen.borrow(), vec![2], "the divider is skipped");
+        press(app, Key::Escape);
+        assert_eq!(dismissed.get(), 1);
+        // A click outside the panel is the menu's, not the page's.
+        click(app, 1200.0, 700.0);
+        assert_eq!((dismissed.get(), page_presses.get()), (2, 0));
+        // Near the right edge the panel opens to the pointer's left.
+        let width = app.window().size().width as f32 / app.window().scale_factor();
+        open_menu(width - 40.0);
+        assert!(app.get_menu_panel_x() + 220.0 <= width);
+        app.set_menu(MenuView::default());
+        settle();
+        assert!(
+            app.get_web_focused(),
+            "closing gives the keyboard back to the page"
+        );
+
+        // ── Dialog: Enter accepts, Escape cancels, a prompt answers its text,
+        // the scrim keeps the page from the pointer.
+        let answers = Rc::new(std::cell::RefCell::new(vec![]));
+        let a = answers.clone();
+        app.on_dialog_answered(move |accept, text| a.borrow_mut().push((accept, text.to_string())));
+        let dialog = |prompt: bool, serial: i32| DialogView {
+            open: true,
+            title: "a.test says".into(),
+            message: "hello".into(),
+            accept: "OK".into(),
+            cancel: "Cancel".into(),
+            prompt,
+            input: "seed".into(),
+            serial,
+        };
+        app.set_dialog(dialog(false, 1));
+        settle();
+        assert!(!app.get_web_focused());
+        click(
+            app,
+            app.get_content_x() + 20.0,
+            app.get_content_y() + app.get_content_height() - 20.0,
+        );
+        assert_eq!(page_presses.get(), 0, "the scrim blocks the page");
+        press(app, Key::Return);
+        press(app, Key::Escape);
+        app.set_dialog(dialog(true, 2));
+        settle();
+        // The prompt's field holds the keyboard with the seed selected.
+        press(app, "x");
+        press(app, Key::Return);
+        assert_eq!(
+            *answers.borrow(),
+            vec![
+                (true, String::new()),
+                (false, String::new()),
+                (true, "x".to_string())
+            ]
+        );
+        app.set_dialog(DialogView::default());
+        settle();
+        assert!(app.get_web_focused());
+
+        // ── Find bar: typing searches, Enter / Shift+Enter step, Escape closes.
+        let edits = Rc::new(std::cell::RefCell::new(vec![]));
+        let e = edits.clone();
+        app.on_find_edited(move |q| e.borrow_mut().push(q.to_string()));
+        let steps = Rc::new(std::cell::RefCell::new(vec![]));
+        let s = steps.clone();
+        app.on_find_step(move |forward| s.borrow_mut().push(forward));
+        let closed = Rc::new(Cell::new(0));
+        app.on_find_closed(count(&closed));
+        app.set_find(FindView {
+            open: true,
+            query: "".into(),
+            counter: "".into(),
+            focus_serial: 1,
+        });
+        settle();
+        press(app, "n");
+        press(app, Key::Return);
+        app.window().dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Shift.into(),
+        });
+        press(app, Key::Return);
+        app.window().dispatch_event(WindowEvent::KeyReleased {
+            text: Key::Shift.into(),
+        });
+        press(app, Key::Escape);
+        assert_eq!(*edits.borrow(), vec!["n".to_string()]);
+        assert_eq!(*steps.borrow(), vec![true, false]);
+        assert_eq!(closed.get(), 1);
+        app.set_find(FindView::default());
+        settle();
+        assert!(app.get_web_focused());
+
+        // ── Page fullscreen: the page fills the window.
+        assert!(app.get_content_x() > 0.0);
+        app.set_page_fullscreen(true);
+        assert_eq!((app.get_content_x(), app.get_content_y()), (0.0, 0.0));
+        assert_eq!(app.get_content_width(), width);
+        app.set_page_fullscreen(false);
+        assert!(app.get_content_x() > 0.0);
+    }
+
+    fn command_bar_lifecycle(app: &AppWindow) {
         let rows: Vec<_> = (0..3).map(|i| result(&format!("r{i}"))).collect();
         app.set_command_results(ModelRc::from(rows.as_slice()));
         let chosen = Rc::new(Cell::new(0));
@@ -52,6 +216,7 @@ mod tests {
         let d = dismissed.clone();
         app.on_command_dismissed(move || d.set(d.get() + 1));
         app.show().unwrap();
+        settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
         // Open, growing from the new-tab row.
@@ -63,9 +228,9 @@ mod tests {
         assert_eq!(app.get_command_shown_rows(), 3);
 
         // A second Enter while closing must not choose again.
-        press(&app, "\n");
+        press(app, "\n");
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
-        press(&app, "\n");
+        press(app, "\n");
         assert_eq!(chosen.get(), 1);
         // The close timer is the dropdown's out duration (176 ms).
         mock_elapsed_time(Duration::from_millis(170));
@@ -82,8 +247,8 @@ mod tests {
         let nine: Vec<_> = (0..9).map(|i| result(&format!("n{i}"))).collect();
         app.set_command_results(ModelRc::from(nine.as_slice()));
         assert_eq!(app.get_command_shown_rows(), 7);
-        press(&app, Key::Escape);
-        press(&app, Key::Escape);
+        press(app, Key::Escape);
+        press(app, Key::Escape);
         assert_eq!(dismissed.get(), 1);
         settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);

@@ -19,3 +19,4 @@ pub mod suggest;
 pub mod tab;
 pub mod tabs;
 pub mod url;
+pub mod zoom;

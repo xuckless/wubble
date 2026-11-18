@@ -83,6 +83,7 @@ fn glass_panels_report_their_items() {
         title: "a".into(),
         url: "https://a.test/".into(),
         favicon: Default::default(),
+        ..Default::default()
     };
     app.set_pinned_tabs(ModelRc::from([tab].as_slice()));
     pump(1);

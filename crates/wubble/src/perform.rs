@@ -7,6 +7,8 @@ use wubble_core::model::{Command, Model};
 use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 
+use crate::surface::FindEvent;
+
 /// Actions with no implementation yet, each with the reason.
 pub const NOT_YET: &[(Action, &str)] = &[
     (Action::NewWindow, "one window only (TODO.md, multi-window)"),
@@ -15,16 +17,8 @@ pub const NOT_YET: &[(Action, &str)] = &[
         Action::ToggleCompactMode,
         "the shell's one sidebar toggle is ToggleSidebar",
     ),
-    (Action::Find, "find in page is not built"),
-    (Action::FindNext, "find in page is not built"),
-    (Action::FindPrev, "find in page is not built"),
-    (Action::ZoomIn, "the engine does not expose zoom yet"),
-    (Action::ZoomOut, "the engine does not expose zoom yet"),
-    (Action::ZoomReset, "the engine does not expose zoom yet"),
     (Action::DevTools, "DevTools are not wired"),
     (Action::ViewSource, "view-source is not wired"),
-    (Action::Fullscreen, "fullscreen is not built"),
-    (Action::CopyUrl, "no clipboard access yet"),
 ];
 
 /// Engine calls on the visible tab's view.
@@ -35,6 +29,10 @@ pub enum ViewOp {
     Stop,
     Back,
     Forward,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    ToggleMute,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,6 +44,12 @@ pub enum Plan {
     /// Take the newest entry off the store's recently-closed list and open it.
     ReopenClosed,
     ToggleSidebar,
+    /// An event for the visible tab's find bar.
+    Find(FindEvent),
+    /// F11: the window, or leave page fullscreen (`screen.rs`).
+    Fullscreen,
+    /// Put the text on the clipboard.
+    Copy(String),
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -64,6 +68,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         space.map_or(Plan::Nothing, |s| Plan::Model(Command::SwitchSpace(s)))
     };
     let view = |op| visible.map_or(Plan::Nothing, |_| Plan::View(op));
+    let find = |event| visible.map_or(Plan::Nothing, |_| Plan::Find(event));
     match action {
         Action::NewTab => Plan::Model(Command::OpenCommandBar),
         Action::CloseTab => on_visible(Command::CloseTab),
@@ -93,20 +98,24 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             Some(t) => Plan::Model(Command::PinTab(t)),
             None => Plan::Nothing,
         },
+        Action::Find => find(FindEvent::Open),
+        Action::FindNext => find(FindEvent::Next),
+        Action::FindPrev => find(FindEvent::Prev),
+        Action::ZoomIn => view(ViewOp::ZoomIn),
+        Action::ZoomOut => view(ViewOp::ZoomOut),
+        Action::ZoomReset => view(ViewOp::ZoomReset),
+        Action::ToggleMute => view(ViewOp::ToggleMute),
+        Action::Fullscreen => Plan::Fullscreen,
+        Action::CopyUrl => visible
+            .and_then(|t| model.tabs.get(&t))
+            .filter(|t| !t.url.is_empty())
+            .map_or(Plan::Nothing, |t| Plan::Copy(t.url.clone())),
         Action::Quit => Plan::Quit,
         Action::NewWindow
         | Action::NewSpace
         | Action::ToggleCompactMode
-        | Action::Find
-        | Action::FindNext
-        | Action::FindPrev
-        | Action::ZoomIn
-        | Action::ZoomOut
-        | Action::ZoomReset
         | Action::DevTools
-        | Action::ViewSource
-        | Action::Fullscreen
-        | Action::CopyUrl => Plan::NotYet,
+        | Action::ViewSource => Plan::NotYet,
     }
 }
 
@@ -184,6 +193,15 @@ mod tests {
         );
         assert_eq!(plan(Action::Reload, &m), Plan::View(ViewOp::Reload));
         assert_eq!(plan(Action::HardReload, &m), Plan::View(ViewOp::HardReload));
+        assert_eq!(plan(Action::ZoomIn, &m), Plan::View(ViewOp::ZoomIn));
+        assert_eq!(plan(Action::ToggleMute, &m), Plan::View(ViewOp::ToggleMute));
+        assert_eq!(plan(Action::Find, &m), Plan::Find(FindEvent::Open));
+        assert_eq!(plan(Action::FindPrev, &m), Plan::Find(FindEvent::Prev));
+        assert_eq!(plan(Action::Fullscreen, &m), Plan::Fullscreen);
+        assert_eq!(
+            plan(Action::CopyUrl, &m),
+            Plan::Copy("https://2.test/".into())
+        );
     }
 
     #[test]
@@ -197,6 +215,10 @@ mod tests {
             Action::TogglePinTab,
             Action::Reload,
             Action::Back,
+            Action::Find,
+            Action::ZoomOut,
+            Action::ToggleMute,
+            Action::CopyUrl,
         ] {
             assert_eq!(plan(action, &m), Plan::Nothing, "{action:?}");
         }

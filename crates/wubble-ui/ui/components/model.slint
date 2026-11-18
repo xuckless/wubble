@@ -7,6 +7,9 @@ export struct TabItem {
     title: string,
     url: string,
     favicon: image,
+    // wubble: the page plays sound (the engine's audible probe) / the tab is muted.
+    audible: bool,
+    muted: bool,
 }
 
 export struct SpaceItem {
@@ -109,4 +112,52 @@ export enum WindowEdge {
 export struct Origin {
     x: length,
     y: length,
+}
+
+// ── The page's own UI (wubble surface.rs, menu.rs): the visible tab's surfaces, written by the
+// host after every change (one writer); the components only read them and report intents.
+
+// One context-menu row; `separator` rows are dividers.
+export struct MenuEntry {
+    label: string,
+    enabled: bool,
+    separator: bool,
+}
+
+// The context menu: where the pointer was (relative to the web view), and its rows.
+export struct MenuView {
+    open: bool,
+    x: length,
+    y: length,
+    entries: [MenuEntry],
+}
+
+// A JS dialog as a sheet. `cancel` empty: no cancel button (an alert). `serial` changes for
+// every new dialog, so the sheet resets its input.
+export struct DialogView {
+    open: bool,
+    title: string,
+    message: string,
+    accept: string,
+    cancel: string,
+    prompt: bool,
+    input: string,
+    serial: int,
+}
+
+// The find bar. `focus-serial` changes when the bar should take the keyboard (Mod+F).
+export struct FindView {
+    open: bool,
+    query: string,
+    counter: string,
+    focus-serial: int,
+}
+
+// The page's popup widget (`<select>` list, date picker, autofill) in window coordinates.
+export struct PopupView {
+    shown: bool,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
 }

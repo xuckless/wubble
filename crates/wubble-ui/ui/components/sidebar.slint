@@ -69,6 +69,7 @@ export component Sidebar inherits Rectangle {
     callback tab-drag(length);
     callback tab-release(int);
     callback tab-closed(int);        // tab id
+    callback tab-mute-toggled(int);  // tab id: the speaker glyph
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
     callback window-close-requested();
@@ -265,6 +266,9 @@ export component Sidebar inherits Rectangle {
                                 }
                                 close => {
                                     root.tab-closed(tab.id);
+                                }
+                                mute => {
+                                    root.tab-mute-toggled(tab.id);
                                 }
                             }
                         }

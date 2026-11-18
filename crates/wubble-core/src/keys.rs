@@ -628,7 +628,8 @@ mod tests {
 
     #[test]
     fn every_action_is_bound_except_allow_list() {
-        let unbound = [Action::NewSpace];
+        // Chromium binds no key to muting a tab either.
+        let unbound = [Action::NewSpace, Action::ToggleMute];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
             for a in Action::all() {

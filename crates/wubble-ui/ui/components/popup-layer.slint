@@ -1,0 +1,49 @@
+import { PopupView } from "model.slint";
+
+// The page's popup widget (a `<select>` list, a date picker, autofill): CEF paints it as a
+// second frame stream, the host hands it over as `frame` and places it at the engine's rectangle
+// (window coordinates, kept inside the window). Written from scratch: nothing in the design repo
+// draws engine frames. Pointer input over it goes back to the page with view-relative
+// coordinates (`view-x/y` is the view's top left here), and CEF routes it to the popup widget
+// by its own hit test; keys keep going to the page, which forwards them to its open popup.
+export component PopupLayer inherits Rectangle {
+    in property <PopupView> popup;
+    in property <image> frame;
+    // The web view's top left, in the same coordinates as `popup`.
+    in property <length> view-x;
+    in property <length> view-y;
+    callback pointer-moved(length, length);
+    callback pointer-pressed(PointerEventButton, length, length);
+    callback pointer-released(PointerEventButton, length, length);
+    callback scrolled(length, length, length, length);
+
+    visible: root.popup.shown;
+    x: root.popup.x;
+    y: root.popup.y;
+    width: root.popup.width;
+    height: root.popup.height;
+
+    Image {
+        width: 100%;
+        height: 100%;
+        source: root.frame;
+        image-fit: fill;
+    }
+    TouchArea {
+        property <length> dx: root.popup.x - root.view-x;
+        property <length> dy: root.popup.y - root.view-y;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.pointer-pressed(event.button, self.mouse-x + self.dx, self.mouse-y + self.dy);
+            } else if event.kind == PointerEventKind.up {
+                root.pointer-released(event.button, self.mouse-x + self.dx, self.mouse-y + self.dy);
+            } else if event.kind == PointerEventKind.move {
+                root.pointer-moved(self.mouse-x + self.dx, self.mouse-y + self.dy);
+            }
+        }
+        scroll-event(event) => {
+            root.scrolled(self.mouse-x + self.dx, self.mouse-y + self.dy, event.delta-x, event.delta-y);
+            accept
+        }
+    }
+}

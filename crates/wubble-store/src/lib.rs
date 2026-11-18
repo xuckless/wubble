@@ -30,7 +30,7 @@ pub use logins::{LoginRow, NewLogin};
 pub use migrate::MIGRATIONS;
 pub use settings::{
     BlockerEnabled, BlockerExceptions, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions,
-    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
 };
 
 #[derive(Debug, thiserror::Error)]

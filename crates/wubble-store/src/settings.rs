@@ -8,6 +8,7 @@
 
 use wubble_core::omnibox::SearchEngine;
 use wubble_core::seam::{SIDEBAR_DEFAULT, SidebarMode};
+use wubble_core::zoom::ZoomTable;
 
 use crate::{Result, Store};
 
@@ -105,6 +106,16 @@ impl Codec for Vec<String> {
     }
 }
 
+/// A JSON object of host to zoom percent.
+impl Codec for ZoomTable {
+    fn encode(&self) -> String {
+        serde_json::to_string(self).expect("a string-to-number map always serialises")
+    }
+    fn decode(s: &str) -> Option<Self> {
+        serde_json::from_str(s).ok()
+    }
+}
+
 macro_rules! settings {
     ($($(#[$doc:meta])* $name:ident: $ty:ty = $key:literal, $default:expr;)*) => {
         $(
@@ -138,6 +149,8 @@ settings! {
     BlockerExceptions: Vec<String> = "blocker.exceptions", vec![];
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
     HistoryRetentionDays: u32 = "history.retention_days", 0;
+    /// Per-site zoom (`wubble_core::zoom`): hosts at 100 % are absent.
+    SiteZoom: ZoomTable = "zoom.sites", ZoomTable::new();
 }
 
 impl Store {
@@ -210,6 +223,7 @@ mod tests {
             assert!(s.setting::<KeybindingOverrides>().await.unwrap().is_empty());
             assert!(s.setting::<BlockerEnabled>().await.unwrap());
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
+            assert!(s.setting::<SiteZoom>().await.unwrap().is_empty());
         });
     }
 
@@ -237,6 +251,9 @@ mod tests {
                 .await;
             round_trip::<KeybindingOverrides>(&mut s, vec![]).await;
             round_trip::<BlockerExceptions>(&mut s, list(&["example.com", "日本.jp"])).await;
+            let zoom = ZoomTable::from([("a.test".to_string(), 125), ("日本.jp".to_string(), 67)]);
+            round_trip::<SiteZoom>(&mut s, zoom).await;
+            round_trip::<SiteZoom>(&mut s, ZoomTable::new()).await;
         });
     }
 
@@ -253,6 +270,8 @@ mod tests {
             s.set_raw(BlockerEnabled::KEY, "").await.unwrap();
             s.set_raw(HistoryRetentionDays::KEY, "-3").await.unwrap();
             s.set_raw(SidebarModeSetting::KEY, "peeking").await.unwrap();
+            s.set_raw(SiteZoom::KEY, "{\"a.test\": -5}").await.unwrap();
+            assert!(s.setting::<SiteZoom>().await.unwrap().is_empty());
             assert_eq!(
                 s.setting::<SidebarModeSetting>().await.unwrap(),
                 SidebarMode::Extended
