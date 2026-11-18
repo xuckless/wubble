@@ -13,6 +13,7 @@
 mod bookmarks;
 mod check;
 mod closed;
+mod favicon;
 mod history;
 mod import;
 mod logins;
@@ -24,6 +25,7 @@ use std::path::Path;
 
 pub use bookmarks::{BookmarkId, BookmarkKind, BookmarkNode};
 pub use closed::{ClosedTab, RECENTLY_CLOSED_MAX};
+pub use favicon::Favicon;
 pub use history::{HistoryDeleted, Transition, is_recordable, url_key};
 pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::{LoginRow, NewLogin};

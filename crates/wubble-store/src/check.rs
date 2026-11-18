@@ -315,7 +315,7 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 3);
+            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 4);
 
             // Old data intact and consistent.
             assert_eq!(s.check_consistency().await.unwrap(), Vec::<String>::new());
@@ -340,6 +340,34 @@ mod tests {
                 .unwrap();
             s.save_session(&m).await.unwrap();
             assert_eq!(s.check_consistency().await.unwrap(), Vec::<String>::new());
+        });
+    }
+
+    #[test]
+    fn a_v3_database_with_data_migrates_to_the_favicon_schema() {
+        run(async {
+            let mut s = Store::connect(":memory:").await.unwrap();
+            migrate::migrate(&mut s.conn, &MIGRATIONS[..3])
+                .await
+                .unwrap();
+            assert!(s.conn.query("SELECT * FROM favicons", ()).await.is_err());
+            s.add_bookmark(None, "Kept", "https://k.test", 1)
+                .await
+                .unwrap();
+            migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
+            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 4);
+            assert_eq!(s.bookmark_children(None).await.unwrap()[0].title, "Kept");
+            let icon = crate::Favicon {
+                icon_url: "https://k.test/i".into(),
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 4],
+            };
+            s.put_favicon("https://k.test/", &icon, 1).await.unwrap();
+            assert_eq!(
+                s.favicons_for(&["https://k.test/x"]).await.unwrap().len(),
+                1
+            );
         });
     }
 }

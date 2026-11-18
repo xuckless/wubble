@@ -197,6 +197,8 @@ pub struct View {
     drag: DragSource,
     /// Asked for a page script on each main-frame commit.
     filter: Option<Arc<dyn ContentFilter>>,
+    /// Icon downloads CEF finished, moved to `page` by [`Self::drain_events`].
+    favicons: crate::favicon::Sink,
 }
 
 /// The second frame stream: the popup widget's newest frame and where to
@@ -253,6 +255,7 @@ impl View {
             muted: false,
             zoom: Zoom::default(),
             drag: DragSource::default(),
+            favicons: Default::default(),
         })
     }
 
@@ -288,6 +291,38 @@ impl View {
     /// Reloads without the cache (CEF `ReloadIgnoreCache`).
     pub fn hard_reload(&mut self) {
         self.apply_nav(NavInput::HardReload);
+    }
+
+    /// Prints the page to a PDF file (Chromium's default page size and
+    /// margins). Completion arrives as [`PageEvent::PdfPrinted`]. The system
+    /// print dialog is not offered: it needs an embedder print handler.
+    pub fn print_to_pdf(&mut self, path: &Path) {
+        if let Err(e) = self.producer.print_to_pdf(path) {
+            eprintln!("wubble-engine: view {}: print to PDF: {e}", self.browser_id);
+        }
+    }
+
+    /// Opens DevTools in its own native window (a non-windowless `WindowInfo`;
+    /// DevTools is the allowed non-Slint exception). Focuses it if open.
+    pub fn open_devtools(&mut self) {
+        self.send(|host| {
+            host.show_dev_tools(
+                Some(&cef::WindowInfo::default()),
+                None,
+                Some(&cef::BrowserSettings::default()),
+                None,
+            )
+        });
+    }
+
+    pub fn close_devtools(&mut self) {
+        self.send(|host| host.close_dev_tools());
+    }
+
+    pub fn has_devtools(&mut self) -> bool {
+        let mut open = false;
+        self.send(|host| open = host.has_dev_tools() != 0);
+        open
     }
 
     /// Ignored unless loading.
@@ -491,6 +526,9 @@ impl View {
         let (next, event) = popup::transition(self.popup, placement);
         self.popup = next;
         self.page.extend(event);
+        let icons = std::mem::take(&mut *self.favicons.lock().unwrap_or_else(|e| e.into_inner()));
+        self.page
+            .extend(icons.into_iter().map(PageEvent::FaviconImage));
         if let Some(composition) = self.producer.poll_ime_composition() {
             self.page.push(crate::ime::bounds(composition));
         }
@@ -999,6 +1037,11 @@ impl View {
                 Ok(())
             }
             NavEffect::Stop => self.producer.stop(),
+            NavEffect::FetchFavicon(url) => {
+                let sink = self.favicons.clone();
+                self.send(|host| crate::favicon::fetch(host, url, &sink));
+                Ok(())
+            }
             NavEffect::Repaint => self.producer.request_repaint(),
         };
         if let Err(e) = result {
@@ -1195,6 +1238,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             url,
             code: error_code,
         })),
+        E::PdfPrintFinished { path, ok } => one(Route::Page(PageEvent::PdfPrinted { path, ok })),
         E::RequestsDismissed { ids } => one(Route::Page(PageEvent::RequestsDismissed(
             ids.into_iter().map(RequestId).collect(),
         ))),
@@ -1588,6 +1632,31 @@ mod tests {
         let mut routed = route(event);
         assert_eq!(routed.len(), 1, "{routed:?}");
         routed.remove(0)
+    }
+
+    #[test]
+    fn pdf_completion_routes_to_a_page_event() {
+        assert_eq!(
+            route_one(NavigationEvent::PdfPrintFinished {
+                path: "/tmp/a.pdf".into(),
+                ok: true
+            }),
+            Route::Page(PageEvent::PdfPrinted {
+                path: "/tmp/a.pdf".into(),
+                ok: true
+            })
+        );
+    }
+
+    #[test]
+    fn favicon_images_are_not_requests() {
+        let icon = PageEvent::FaviconImage(crate::favicon::FaviconImage {
+            url: "u".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+        });
+        assert_eq!(icon.request(), None);
     }
 
     #[test]

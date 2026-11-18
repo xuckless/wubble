@@ -50,9 +50,78 @@ pub fn address_parts(url: &str) -> (&str, &str) {
     }
 }
 
+/// The key favicons (and other per-site caches) are filed under:
+/// `scheme://host[:port]`, lowercase, default port elided. Only `http` and
+/// `https` pages have one; the userinfo, path, query and fragment are dropped.
+/// `www.` stays: icons differ per host.
+pub fn origin_key(url: &str) -> Option<String> {
+    let url = ::url::Url::parse(url).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    })
+}
+
+/// The `view-source:` URL for `page_url`: only for pages Chromium can show
+/// the source of (`http`, `https`, `file`, `ftp`); never for a `view-source:`
+/// URL itself or an internal page.
+pub fn view_source(page_url: &str) -> Option<String> {
+    let url = ::url::Url::parse(page_url).ok()?;
+    matches!(url.scheme(), "http" | "https" | "file" | "ftp")
+        .then(|| format!("view-source:{page_url}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_keys() {
+        let cases = [
+            ("https://Example.com/a/b?q=1#f", Some("https://example.com")),
+            ("http://example.com:80/", Some("http://example.com")),
+            ("https://example.com:443", Some("https://example.com")),
+            (
+                "https://example.com:8443/x",
+                Some("https://example.com:8443"),
+            ),
+            (
+                "http://u:p@www.example.com:8080/x",
+                Some("http://www.example.com:8080"),
+            ),
+            ("about:blank", None),
+            ("data:text/html,x", None),
+            ("file:///tmp/x.html", None),
+            ("view-source:https://example.com/", None),
+            ("not a url", None),
+            ("", None),
+        ];
+        for (url, want) in cases {
+            assert_eq!(origin_key(url).as_deref(), want, "{url}");
+        }
+    }
+
+    #[test]
+    fn view_source_urls() {
+        let cases = [
+            (
+                "https://example.com/a?b",
+                Some("view-source:https://example.com/a?b"),
+            ),
+            ("file:///tmp/x.html", Some("view-source:file:///tmp/x.html")),
+            ("view-source:https://example.com/", None),
+            ("about:blank", None),
+            ("data:text/html,x", None),
+            ("garbage", None),
+        ];
+        for (url, want) in cases {
+            assert_eq!(view_source(url).as_deref(), want, "{url}");
+        }
+    }
 
     #[test]
     fn address_parts_split_host_and_path() {
