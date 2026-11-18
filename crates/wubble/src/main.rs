@@ -444,6 +444,7 @@ fn run(
     let window = AppWindow::new()?;
     connect_input(&window);
     connect_shell(&window);
+    wubble_ui::window::wire(&window);
     install_shell_driver(&window)?;
     let host = Host::new(engine, &window, gpu.presenter(), url, checks);
     HOST.set(Some(host));

@@ -1,329 +1,306 @@
-//! Deterministic motion maths: springs, rubber band, stretch, easing constants.
+// Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
+// `src/wubble/slint/motion.rs`, copied verbatim except the marked `wubble change`s.
+// wubble change: `FrameClock` is not here (it reads `Instant`; wubble-core has no clocks).
+// The frame clock lives in `wubble_ui::driver`.
+
+//! Wubble physics, ported 1:1 from `core/physics.ts`: springs, rubber bands, stretch and
+//! velocity tracking. Framework-free and `std`-only.
 //!
-//! Ported from the wubble design pack (owner-authored, same repo):
-//! `ux/pack/project/Components.dc.html` lines 331-338 and 357-364, and
-//! `ux/pack/project/RoomToPlay.dc.html` lines 99-106 and 118-132
-//! (`springStep`, `band`, `bandClamp`, presets). Easing values come from the
-//! Motion section of `ux/pack/project/Tokens.dc.html`.
+//! Why this lives in Rust and not in Slint: Slint's `animate` blocks are duration + easing
+//! tweens. They have no spring, no velocity and cannot retarget from the current velocity, so
+//! anything that follows the finger, overshoots once, or is flung (tab indicator, seams,
+//! window, the bubble) is integrated here and pushed into Slint `in` properties each frame
+//! (see `driver.rs`). Plain fades and the 0.97 press stay in Slint `animate`.
 //!
-//! Everything is pure data plus pure functions. No clocks, no hidden state.
+//! Numerics: JS numbers are f64, so everything here is f64. dt is in seconds.
 
-/// Longest time step a spring will integrate, in seconds.
-pub const MAX_DT: f32 = 0.032;
-/// A spring rests when speed and distance to target are both under this.
-pub const REST_EPS: f32 = 0.02;
-
-/// Spring stiffness `k` and damping `c`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Params {
-    pub k: f32,
-    pub c: f32,
-}
-
-// The one preset table.
-pub const FOLLOW: Params = Params { k: 300.0, c: 15.0 };
-pub const STRETCH: Params = Params { k: 700.0, c: 24.0 };
-pub const SEAM_HELD: Params = Params { k: 150.0, c: 20.0 };
-pub const SEAM: Params = Params { k: 260.0, c: 24.0 };
-pub const SEAM_WOBBLE: Params = Params { k: 520.0, c: 9.0 };
-pub const CONTENTS: Params = Params { k: 210.0, c: 21.0 };
-
-/// A spring is plain data; advance it with [`step`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Spring {
-    pub value: f32,
-    pub velocity: f32,
-    pub target: f32,
-    pub params: Params,
-}
-
-impl Spring {
-    /// A spring resting at `value`.
-    pub fn at(value: f32, params: Params) -> Self {
-        Self {
-            value,
-            velocity: 0.0,
-            target: value,
-            params,
-        }
-    }
-
-    /// Aim at a new target, keeping current value and velocity.
-    /// A non-finite target is ignored.
-    pub fn retarget(self, target: f32) -> Self {
-        if !target.is_finite() {
-            return self;
-        }
-        Self { target, ..self }
-    }
-
-    pub fn is_at_rest(&self) -> bool {
-        self.velocity.abs() < REST_EPS && (self.value - self.target).abs() < REST_EPS
+// @source slint-rubber-band
+/// `Math.sign` semantics: 0 stays 0 (Rust's `f64::signum(0.0)` is 1.0, which would differ).
+#[inline]
+pub fn js_sign(v: f64) -> f64 {
+    if v > 0.0 {
+        1.0
+    } else if v < 0.0 {
+        -1.0
+    } else {
+        v // keeps 0.0 / -0.0 / NaN like Math.sign
     }
 }
 
-/// Semi-implicit Euler step. `dt` is clamped to [0, MAX_DT]; a non-finite or
-/// non-positive `dt` returns the spring unchanged. Snaps to target when at rest.
-pub fn step(s: Spring, dt: f32) -> Spring {
-    if !dt.is_finite() || dt <= 0.0 {
-        return s;
-    }
-    let dt = dt.min(MAX_DT);
-    let a = -s.params.k * (s.value - s.target) - s.params.c * s.velocity;
-    let mut out = s;
-    out.velocity += a * dt;
-    out.value += out.velocity * dt;
-    // Poisoned state (NaN or inf in value, velocity or target) snaps to a
-    // finite target, or rests where it is when the target is bad too.
-    if !(out.value.is_finite() && out.velocity.is_finite()) {
-        out.value = if out.target.is_finite() {
-            out.target
-        } else {
-            0.0
-        };
-        out.target = out.value;
-        out.velocity = 0.0;
-    }
-    if out.is_at_rest() {
-        out.value = out.target;
-        out.velocity = 0.0;
-    }
-    out
+/// Rubber band: an overshoot `d` (px) maps onto an asymptote of `k` px.
+/// `k·(1 − 1/(|d|/k + 1))`. k 26 on controls, 34 on seams and scroll ends, 60 on window size.
+#[inline]
+pub fn band(d: f64, k: f64) -> f64 {
+    js_sign(d) * k * (1.0 - 1.0 / (d.abs() / k + 1.0))
 }
 
-pub const BAND_CONTROL: f32 = 26.0;
-pub const BAND_SEAM: f32 = 34.0;
-pub const BAND_SEAM_BEND: f32 = 70.0;
-
-/// Rubber band: `k * (1 - 1 / (|d| / k + 1))`, sign preserved, bounded by `k`.
-/// A non-positive or non-finite `k` gives 0.
-pub fn rubber_band(d: f32, k: f32) -> f32 {
-    if !(k.is_finite() && k > 0.0) || d == 0.0 || d.is_nan() {
-        return 0.0;
-    }
-    d.signum() * k * (1.0 - 1.0 / (d.abs() / k + 1.0))
-}
-
-/// Identity inside `[lo, hi]`, rubber-banded beyond either end.
-pub fn rubber_band_clamp(v: f32, lo: f32, hi: f32, k: f32) -> f32 {
-    if v < lo {
-        lo + rubber_band(v - lo, k)
-    } else if v > hi {
-        hi + rubber_band(v - hi, k)
+/// Clamp with rubber banding past both ends.
+#[inline]
+pub fn band_clamp(v: f64, min: f64, max: f64, k: f64) -> f64 {
+    if v < min {
+        min + band(v - min, k)
+    } else if v > max {
+        max + band(v - max, k)
     } else {
         v
     }
 }
 
-pub const STRETCH_MAX: f32 = 0.55;
-pub const STRETCH_REF_SPEED: f32 = 1500.0;
-
-/// Target scale along the travel axis for a speed in px/s.
-/// A non-finite speed gives no stretch.
-pub fn stretch_target(speed: f32) -> f32 {
-    if !speed.is_finite() {
-        return 1.0;
-    }
-    1.0 + (speed.abs() / STRETCH_REF_SPEED).min(STRETCH_MAX)
+/// `Math.max(min, Math.min(max, v))`.
+#[inline]
+pub fn clamp(v: f64, min: f64, max: f64) -> f64 {
+    min.max(max.min(v))
 }
 
-/// Cross-axis scale that preserves volume for along-axis scale `s`.
-/// A non-positive or non-finite `s` gives 1.
-pub fn cross_scale(s: f32) -> f32 {
-    if !(s.is_finite() && s > 0.0) {
-        return 1.0;
+#[inline]
+pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    a + (b - a) * t
+}
+
+// @source slint-spring
+/// A damped spring's state: position and velocity.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Spring {
+    pub x: f64,
+    pub v: f64,
+}
+
+/// `spring(x = 0)`: at rest at `x`.
+#[inline]
+pub const fn spring(x: f64) -> Spring {
+    Spring { x, v: 0.0 }
+}
+
+// @source slint-physics-constants
+/// Rubber-band limits (k, px) per kind of thing being pulled past its end (`BAND_K` in physics.ts).
+#[allow(non_snake_case, non_upper_case_globals)]
+pub mod BAND_K {
+    pub const controls: f64 = 26.0;
+    pub const seams: f64 = 34.0;
+    pub const scroll: f64 = 34.0;
+    pub const window: f64 = 60.0;
+}
+/// Rest threshold: a spring rests when |v| and |x − target| are both under this.
+pub const REST: f64 = 0.02;
+/// dt cap in seconds (32 ms), so a stalled tab never explodes a spring. Applied by the frame
+/// driver (`wubble_ui::driver`), not by `step`.
+pub const DT_CAP: f64 = 0.032;
+
+/// One semi-implicit Euler step of a damped spring. Returns true while still moving.
+/// Velocity first, then position from the new velocity (same order as physics.ts).
+#[inline]
+pub fn step(s: &mut Spring, target: f64, k: f64, c: f64, dt: f64) -> bool {
+    let a = -k * (s.x - target) - c * s.v;
+    s.v += a * dt;
+    s.x += s.v * dt;
+    if s.v.abs() < REST && (s.x - target).abs() < REST {
+        s.x = target;
+        s.v = 0.0;
+        return false;
     }
+    true
+}
+
+// @source slint-spring-presets
+/// Spring presets from the tokens board: `[k, c]`. Same names as `K` in physics.ts.
+#[allow(non_snake_case, non_upper_case_globals)]
+pub mod K {
+    pub const follow: [f64; 2] = [300.0, 15.0];
+    pub const stretch: [f64; 2] = [700.0, 24.0];
+    pub const window: [f64; 2] = [380.0, 30.0];
+    pub const seamHeld: [f64; 2] = [150.0, 20.0];
+    pub const seamRelease: [f64; 2] = [260.0, 24.0];
+    pub const seamBend: [f64; 2] = [520.0, 9.0];
+    pub const contents: [f64; 2] = [210.0, 21.0];
+    pub const pop: [f64; 2] = [520.0, 16.0];
+}
+
+/// Convenience: `step` with a `[k, c]` preset.
+#[inline]
+pub fn step_k(s: &mut Spring, target: f64, kc: [f64; 2], dt: f64) -> bool {
+    step(s, target, kc[0], kc[1], dt)
+}
+
+// @source slint-stretch
+/// Stretch factor for a moving part: grows with speed up to +35%, springing on its own so it
+/// lags and overshoots a little. Pair with `squash_of` for the cross axis.
+#[derive(Clone, Debug)]
+pub struct Stretch {
+    pub s: Spring,
+    pub vel: f64,
+    pub dir: f64,
+    last: f64, // NaN until the first update, like the TS
+}
+
+impl Default for Stretch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Stretch {
+    pub fn new() -> Self {
+        Stretch {
+            s: spring(1.0),
+            vel: 0.0,
+            dir: 1.0,
+            last: f64::NAN,
+        }
+    }
+
+    /// Feed the moving value once per frame (defaults `max = 0.35`, `full = 1500` px/s).
+    /// Returns true while the stretch is still settling.
+    pub fn update(&mut self, value: f64, dt: f64) -> bool {
+        self.update_with(value, dt, 0.35, 1500.0)
+    }
+
+    pub fn update_with(&mut self, value: f64, dt: f64, max: f64, full: f64) -> bool {
+        let inst = if self.last.is_nan() {
+            0.0
+        } else {
+            (value - self.last) / dt.max(1e-3)
+        };
+        self.last = value;
+        self.vel = self.vel * 0.6 + inst * 0.4;
+        if self.vel.abs() > 30.0 {
+            self.dir = js_sign(self.vel);
+        }
+        let moving = step(
+            &mut self.s,
+            1.0 + max.min(self.vel.abs() / full),
+            K::stretch[0],
+            K::stretch[1],
+            dt,
+        );
+        moving || self.vel.abs() > 1.0
+    }
+
+    #[inline]
+    pub fn x(&self) -> f64 {
+        self.s.x
+    }
+}
+
+/// Cross-axis scale that keeps area constant.
+#[inline]
+pub fn squash_of(s: f64) -> f64 {
     1.0 / s.sqrt()
 }
 
-/// Velocity smoothing used before driving the stretch target.
-pub fn smooth_velocity(prev: f32, instant: f32) -> f32 {
-    prev * 0.6 + instant * 0.4
+// @source slint-velocity
+/// Tracks pointer velocity (px/s) over the last ~80 ms, for flings.
+/// `t` is in milliseconds (the TS uses `performance.now()`); pass your event timestamp.
+#[derive(Clone, Debug, Default)]
+pub struct Velocity {
+    pts: std::collections::VecDeque<(f64, f64, f64)>, // (t ms, x, y)
 }
 
-/// CSS-style cubic-bezier control points. Slint evaluates the curve itself.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Bezier(pub f32, pub f32, pub f32, pub f32);
+impl Velocity {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-pub const EASE: Bezier = Bezier(0.22, 1.0, 0.36, 1.0);
-pub const SPRING_EASE: Bezier = Bezier(0.3, 1.55, 0.5, 1.0);
-pub const SPRING_SOFT: Bezier = Bezier(0.3, 1.35, 0.5, 1.0);
-pub const IN_OUT: Bezier = Bezier(0.65, 0.0, 0.35, 1.0);
+    pub fn push(&mut self, x: f64, y: f64, t: f64) {
+        self.pts.push_back((t, x, y));
+        while self.pts.len() > 2 && t - self.pts[0].0 > 80.0 {
+            self.pts.pop_front();
+        }
+    }
+
+    /// `{ x, y }` in px/s.
+    pub fn get(&self) -> (f64, f64) {
+        if self.pts.len() < 2 {
+            return (0.0, 0.0);
+        }
+        let a = self.pts[0];
+        let b = self.pts[self.pts.len() - 1];
+        let dt = (b.0 - a.0).max(1.0) / 1000.0;
+        ((b.1 - a.1) / dt, (b.2 - a.2) / dt)
+    }
+
+    pub fn reset(&mut self) {
+        self.pts.clear();
+    }
+}
+
+// @source slint-ease
+/// CSS easings from the tokens, as cubic-bezier control points (x1, y1, x2, y2).
+/// The same curves are Slint `easing` values in `tokens.slint` (`Motion.ease-*`).
+#[allow(non_upper_case_globals)]
+pub mod ease {
+    pub const out: [f64; 4] = [0.22, 1.0, 0.36, 1.0];
+    pub const inOut: [f64; 4] = [0.65, 0.0, 0.35, 1.0];
+    pub const spring: [f64; 4] = [0.3, 1.55, 0.5, 1.0];
+    /// Only in physics.ts `EASE.in` (not in tokens.ts).
+    pub const r#in: [f64; 4] = [0.55, 0.0, 1.0, 0.45];
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const PRESETS: [Params; 6] = [FOLLOW, STRETCH, SEAM_HELD, SEAM, SEAM_WOBBLE, CONTENTS];
-    // Step-count bound, not a time bound: 60 s of simulated frames.
-    const BOUND: usize = 4000;
-
     #[test]
-    fn presets_converge_exactly() {
-        for p in PRESETS {
-            let mut s = Spring::at(0.0, p).retarget(100.0);
-            let mut n = 0;
-            while !s.is_at_rest() || s.value != s.target {
-                s = step(s, 0.016);
-                n += 1;
-                assert!(n < BOUND, "no convergence for {p:?}");
-            }
-            assert_eq!(s.value, 100.0);
-            assert_eq!(s.velocity, 0.0);
+    fn spring_settles_exactly_on_target() {
+        let mut s = spring(0.0);
+        let mut n = 0;
+        while step(&mut s, 100.0, K::follow[0], K::follow[1], 1.0 / 60.0) {
+            n += 1;
+            assert!(n < 10_000);
         }
+        assert_eq!(s.x, 100.0);
+        assert_eq!(s.v, 0.0);
     }
 
     #[test]
-    fn rest_thresholds() {
-        let p = FOLLOW;
-        let near = Spring {
-            value: 0.019,
-            velocity: 0.019,
-            target: 0.0,
-            params: p,
-        };
-        assert!(near.is_at_rest());
-        let far = Spring {
-            value: 0.021,
-            ..near
-        };
-        assert!(!far.is_at_rest());
-        let fast = Spring {
-            velocity: 0.021,
-            ..near
-        };
-        assert!(!fast.is_at_rest());
-        // Snapping: a tiny residual after a step lands exactly on target.
-        let s = step(Spring::at(5.0, p), 0.016);
-        assert_eq!((s.value, s.velocity), (5.0, 0.0));
+    fn band_is_asymptotic_and_signed() {
+        assert_eq!(band(0.0, 26.0), 0.0);
+        assert!(band(1e9, 26.0) < 26.0);
+        assert!((band(-26.0, 26.0) + 13.0).abs() < 1e-12);
+        assert_eq!(band_clamp(5.0, 0.0, 10.0, 26.0), 5.0);
     }
 
     #[test]
-    fn bad_dt_is_finite_or_unchanged() {
-        let s = Spring::at(0.0, STRETCH).retarget(50.0);
-        for dt in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0] {
-            assert_eq!(step(s, dt), s);
+    fn stretch_rests_at_one() {
+        let mut st = Stretch::new();
+        let mut y = 0.0;
+        for _ in 0..20 {
+            y += 20.0;
+            st.update(y, 1.0 / 60.0);
         }
-        for dt in [1.0, 10.0, 1e9, f32::MAX] {
-            let o = step(s, dt);
-            assert_eq!(o, step(s, MAX_DT));
+        assert!(st.x() > 1.0);
+        let mut n = 0;
+        while st.update(y, 1.0 / 60.0) {
+            n += 1;
+            assert!(n < 10_000);
         }
+        // rests at 1 + |vel|/1500 with |vel| <= 1, i.e. within 0.0007 of 1 (same as the TS)
+        assert!((st.x() - 1.0).abs() < 1.0 / 1500.0 + 1e-12);
     }
 
+    /// The stretch and banded-spring part of the design repo's parity example, against the TS
+    /// run stored in the fixture (second line). Exact comparison.
     #[test]
-    fn huge_dt_long_run_stays_bounded() {
-        for p in PRESETS {
-            let mut s = Spring::at(0.0, p).retarget(100.0);
-            for _ in 0..BOUND {
-                s = step(s, 10.0);
-                assert!(s.value.is_finite() && s.velocity.is_finite());
-                assert!(s.value.abs() < 1000.0);
-            }
+    fn parity_with_ts() {
+        let line = include_str!("../tests/fixtures/ts_parity.jsonl")
+            .lines()
+            .nth(1)
+            .unwrap();
+        let ts: serde_json::Value = serde_json::from_str(line).unwrap();
+        let dt = 1.0 / 60.0;
+        let mut st = Stretch::new();
+        let mut y = 0.0;
+        let mut out = vec![];
+        for i in 0..40 {
+            y += if i < 15 { 25.0 } else { 0.0 };
+            st.update(y, dt);
+            out.push(st.x());
         }
-    }
-
-    #[test]
-    fn one_step_matches_reference() {
-        let s = step(Spring::at(0.0, FOLLOW).retarget(100.0), 0.016);
-        assert!((s.velocity - 480.0).abs() < 1e-3);
-        assert!((s.value - 7.68).abs() < 1e-3);
-    }
-
-    #[test]
-    fn retarget_keeps_value_and_velocity() {
-        let mut s = Spring::at(0.0, FOLLOW).retarget(100.0);
-        for _ in 0..5 {
-            s = step(s, 0.016);
+        assert_eq!(out[10], ts["st10"].as_f64().unwrap());
+        assert_eq!(out[39], ts["st39"].as_f64().unwrap());
+        let mut sp = spring(0.0);
+        for _ in 0..50 {
+            step(&mut sp, band(300.0, 34.0), 300.0, 15.0, dt);
         }
-        let r = s.retarget(-40.0);
-        assert_eq!(r.value.to_bits(), s.value.to_bits());
-        assert_eq!(r.velocity.to_bits(), s.velocity.to_bits());
-        assert_eq!(r.target, -40.0);
-    }
-
-    #[test]
-    fn rubber_band_properties() {
-        assert_eq!(rubber_band(0.0, 26.0), 0.0);
-        assert!((rubber_band(26.0, 26.0) - 13.0).abs() < 1e-5);
-        assert_eq!(rubber_band(-30.0, 26.0), -rubber_band(30.0, 26.0));
-        let mut prev = 0.0;
-        for i in 1..2000 {
-            let r = rubber_band(i as f32, 34.0);
-            assert!(r > prev && r < 34.0);
-            prev = r;
-        }
-        assert!(rubber_band(1e30, 26.0) <= 26.0);
-        for k in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            assert_eq!(rubber_band(10.0, k), 0.0);
-        }
-        assert_eq!(rubber_band(f32::NAN, 26.0), 0.0);
-    }
-
-    #[test]
-    fn rubber_band_clamp_identity_and_continuity() {
-        assert_eq!(rubber_band_clamp(5.0, 0.0, 10.0, 26.0), 5.0);
-        assert_eq!(rubber_band_clamp(0.0, 0.0, 10.0, 26.0), 0.0);
-        assert_eq!(rubber_band_clamp(10.0, 0.0, 10.0, 26.0), 10.0);
-        assert!(rubber_band_clamp(-5.0, 0.0, 10.0, 26.0) < 0.0);
-        assert!(rubber_band_clamp(15.0, 0.0, 10.0, 26.0) > 10.0);
-        assert!(rubber_band_clamp(-1e-3, 0.0, 10.0, 26.0).abs() <= 1.1e-3);
-        assert!(rubber_band_clamp(1e9, 0.0, 10.0, 26.0) <= 36.0);
-    }
-
-    #[test]
-    fn stretch_and_volume() {
-        assert_eq!(stretch_target(0.0), 1.0);
-        assert!((stretch_target(1500.0) - 1.55).abs() < 1e-6);
-        assert!((stretch_target(-1500.0) - 1.55).abs() < 1e-6);
-        assert_eq!(stretch_target(1e9), 1.55);
-        for i in 0..=200 {
-            let s = stretch_target(i as f32 * 10.0);
-            let c = cross_scale(s);
-            assert!((s * c * c - 1.0).abs() < 1e-5);
-        }
-    }
-
-    #[test]
-    fn non_finite_inputs_are_contained() {
-        assert_eq!(stretch_target(f32::NAN), 1.0);
-        assert_eq!(stretch_target(f32::INFINITY), 1.0);
-        for s in [0.0, -1.0, f32::NAN, f32::INFINITY] {
-            assert_eq!(cross_scale(s), 1.0);
-        }
-        let s = Spring::at(3.0, FOLLOW);
-        for t in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            assert_eq!(s.retarget(t), s);
-        }
-        let bad = Spring {
-            value: f32::NAN,
-            velocity: f32::NAN,
-            target: 7.0,
-            params: FOLLOW,
-        };
-        let o = step(bad, 0.016);
-        assert_eq!((o.value, o.velocity), (7.0, 0.0));
-        let worse = Spring {
-            target: f32::NAN,
-            ..bad
-        };
-        let o = step(worse, 0.016);
-        assert!(o.value.is_finite() && o.target.is_finite() && o.is_at_rest());
-    }
-
-    #[test]
-    fn smoothing_weights() {
-        assert!((smooth_velocity(10.0, 10.0) - 10.0).abs() < 1e-6);
-        let mut v = 0.0;
-        for _ in 0..100 {
-            v = smooth_velocity(v, 500.0);
-        }
-        assert!((v - 500.0).abs() < 1e-2);
-    }
-
-    #[test]
-    fn bezier_constants() {
-        for b in [EASE, SPRING_EASE, SPRING_SOFT, IN_OUT] {
-            assert!((0.0..=1.0).contains(&b.0) && (0.0..=1.0).contains(&b.2));
-        }
+        assert_eq!(sp.x, ts["s"].as_f64().unwrap());
     }
 }

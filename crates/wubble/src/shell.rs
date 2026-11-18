@@ -13,8 +13,7 @@ use wubble_core::url;
 pub struct TabRow {
     pub id: i32,
     pub title: String,
-    pub glyph: String,
-    pub tint: Rgb,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,20 +38,15 @@ pub struct ShellView {
     pub path: String,
 }
 
-/// Placeholder glyph for a tab without a host to take a letter from.
-const NO_GLYPH: &str = "•";
-
 pub fn view_model(model: &Model) -> ShellView {
     let space = model.spaces.iter().find(|s| s.id == model.active_space);
-    let tint = space.map_or(Rgb(0, 0, 0), |s| s.tint);
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
         ids.filter_map(|id| {
             let tab = model.tabs.get(&id)?;
             Some(TabRow {
                 id: slint_id(id.0)?,
                 title: tab_title(tab),
-                glyph: glyph(&tab.url),
-                tint,
+                url: tab.url.clone(),
             })
         })
         .collect()
@@ -102,15 +96,6 @@ pub fn tab_title(tab: &Tab) -> String {
         .find(|s| !s.is_empty())
         .unwrap_or("New tab")
         .to_string()
-}
-
-/// The host's first letter or digit, upper-cased.
-fn glyph(address: &str) -> String {
-    url::address_parts(address)
-        .0
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map_or_else(|| NO_GLYPH.into(), |c| c.to_uppercase().collect())
 }
 
 fn slint_id(id: impl TryInto<i32>) -> Option<i32> {
@@ -210,7 +195,8 @@ mod tests {
         let (m, _) = new_tab(m, "https://w.test/");
         let v = view_model(&m);
         assert_eq!(titles(&v.tabs), ["w.test"]);
-        assert_eq!(v.tabs[0].tint, Rgb(1, 2, 3));
+        assert_eq!(v.tabs[0].url, "https://w.test/");
+        assert_eq!(v.spaces[1].tint, Rgb(1, 2, 3));
         assert_eq!(v.active_space, 1);
         let names: Vec<_> = v.spaces.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Space 1", "Work"]);
@@ -233,16 +219,6 @@ mod tests {
         assert_eq!(view_model(&m).tabs[0].title, "Example");
         let (m, _) = new_tab(m, "");
         assert_eq!(view_model(&m).tabs[1].title, "New tab");
-    }
-
-    #[test]
-    fn glyphs_come_from_the_host() {
-        assert_eq!(glyph("https://example.com/"), "E");
-        assert_eq!(glyph("https://www.x.test/"), "W");
-        assert_eq!(glyph("data:text/html,x"), "D");
-        assert_eq!(glyph("https://ünï.test/"), "Ü");
-        assert_eq!(glyph(""), NO_GLYPH);
-        assert_eq!(glyph("file:///tmp/x"), NO_GLYPH);
     }
 
     #[test]

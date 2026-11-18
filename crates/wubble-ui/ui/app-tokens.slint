@@ -1,0 +1,104 @@
+// Values wubble's own components need that tokens.slint (the design repo's port) has no token
+// for. Each comes from the design repo's web chrome, `src/wubble/browser/browser.css` and
+// `icons.tsx` (xuckless/the-wallpaper-project @ 6c840da), named by its CSS rule. Nothing here
+// repeats a value tokens.slint already has.
+
+export global Shell {
+    // One logical pixel: divide a length by it to get a plain number.
+    out property <length> px: 1px;
+    // demo.slint preferred size
+    // desktop.tsx WIN: resize edge strips 7, corner squares 16
+    out property <length> edge-width: 7px;
+    out property <length> edge-corner: 16px;
+    // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
+    out property <length> side-top: 30px;
+    out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
+    out property <duration> light-fill-ms: 200ms;
+    out property <duration> light-glyph-ms: 150ms;
+    out property <color> beam-sheen: rgba(255, 255, 255, 0.35);
+    out property <length> light: 12px;
+    out property <length> light-gap: 8px;
+    out property <length> light-gap-rail: 6px;
+    out property <length> light-glyph: 8px;
+    out property <color> light-rest: rgba(255, 255, 255, 0.18);
+    out property <color> light-glyph-ink: rgba(8, 9, 13, 0.7);
+    out property <float> light-press-x: 0.8;
+    out property <float> light-press-y: 1.15;
+    // chrome.tsx Address border beam: 1500 ms, brightens in 120 ms
+    out property <duration> beam-ms: 1500ms;
+    out property <duration> beam-in: 120ms;
+    out property <length> window-width: 1280px;
+    out property <length> window-height: 800px;
+
+    // .wb-side: padding 6; the content edge is 14 px from the window (inset 8 + 6), and every
+    // icon and label starts 10 px further in, at 24.
+    out property <length> side-pad: 6px;
+    out property <length> side-grid: 10px;
+    // controls inside the sidebar: 12 (the web view's 14 minus the 2 px they sit inside)
+    out property <length> control-radius: 12px;
+    // .wb-tabs-rail .wb-tab, .wb-rail-addr, .wb-favs-rail: 40 wide, favourites 6 apart
+    out property <length> rail-item: 40px;
+    out property <length> rail-gap: 6px;
+
+    // icons.tsx: 24 grid, 1.7 stroke, round caps
+    out property <length> icon: 16px;
+    out property <float> icon-stroke: 1.7;
+    out property <float> icon-grid: 24;
+    // .wb-tab-icon box (the favicon inside it is `icon`)
+    out property <length> tab-icon: 18px;
+    // .wb-address: icon 13 at stroke 1.9, pressed to .985 over .2 s
+    out property <length> address-icon: 13px;
+    out property <float> address-icon-stroke: 1.9;
+    out property <float> address-press: 0.985;
+    out property <duration> address-press-ms: 200ms;
+    // .wb-favs: 4 columns; .wb-fav > .wb-icon 18, scale 1.1 on hover over .36 s (spring ease)
+    out property <int> fav-columns: 4;
+    out property <length> fav-icon: 18px;
+    out property <float> fav-hover-scale: 1.1;
+    out property <duration> fav-hover-ms: 360ms;
+    // .wb-tab-ind: white 12 %, the selected favourite's fill
+    out property <color> selected-fill: rgba(255, 255, 255, 0.12);
+    // .wb-newtab: plus 15 at stroke 2
+    out property <length> new-tab-icon: 15px;
+    out property <float> new-tab-stroke: 2;
+    // .wb-space-name: 18 high, 2 px top padding
+    out property <length> space-name-height: 18px;
+    out property <length> space-name-top: 2px;
+    // .wb-spaces: 36 tiles 2 apart (pitch 38 = SpaceSwitcher::PITCH), drawn at 17;
+    // .wb-spaces-ind: accent at 20 %, colour change over .4 s
+    out property <length> space-tile: 36px;
+    out property <length> space-gap: 2px;
+    out property <length> space-glyph: 17px;
+    out property <float> capsule-alpha: 0.2;
+    out property <duration> capsule-colour-ms: 400ms;
+
+    // chrome.tsx: the sidebar takes room beside the web view once wider than this
+    out property <length> sidebar-open: 0.5px;
+
+    // chrome.tsx: a hidden sidebar peeks 60 ms after the pointer reaches the edge strip and
+    // hides 260 ms after it leaves; .wb-side-peek slides in over .34 s from 20 % opacity,
+    // 16 px past its own width.
+    out property <duration> peek-in: 60ms;
+    out property <duration> peek-out: 260ms;
+    out property <duration> peek-slide: 340ms;
+    out property <float> peek-from: 0.2;
+    out property <length> peek-travel: 16px;
+
+    // .wb-cmd: 600 wide, 72 from the top, padding 6 8 8, radius 20; .wb-cmd-in 52 high at 17;
+    // .wb-cmd-head padding 0 4 0 12; .wb-cmd-row 44 high, padding 0 12, gap 12;
+    // .wb-cmd-sel white 8 %; .wb-scrim black-blue 32 %; .wb-cmd-icon 18
+    out property <length> command-bar-width: 600px;
+    out property <length> command-bar-top: 72px;
+    out property <length> command-input-height: 52px;
+    out property <length> command-input-font: 17px;
+    out property <length> command-row-height: 44px;
+    out property <length> command-icon: 18px;
+    out property <int> command-max-rows: 7;   // command.tsx CMD.rows
+    out property <duration> scrim-in: 200ms;
+    out property <duration> scrim-out: 160ms;
+    out property <duration> command-sel-ms: 180ms;
+    out property <duration> command-sel-fade: 150ms;
+    out property <length> shortcut-hint-width: 72px;
+    out property <color> command-selected: rgba(255, 255, 255, 0.08);
+    out property <color> scrim: rgba(5, 6, 9, 0.32);
+}
