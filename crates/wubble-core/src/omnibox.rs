@@ -65,10 +65,6 @@ pub fn fill(template: &str, query: &str) -> String {
     out
 }
 
-pub fn search_url(engine: SearchEngine, query: &str) -> String {
-    fill(engine.info().search, query)
-}
-
 pub fn suggest_url(engine: SearchEngine, query: &str) -> String {
     fill(engine.info().suggest, query)
 }
@@ -89,6 +85,13 @@ const OPAQUE_SCHEMES: [&str; 3] = ["about", "data", "view-source"];
 const HIER_SCHEMES: [&str; 4] = ["http", "https", "ftp", "file"];
 /// Reserved TLDs that only count as a host with a subdomain (Chromium).
 const RESERVED_TLDS: [&str; 4] = ["example", "test", "local", "internal"];
+
+/// Looks like a file name, not a TLD, when typed after a dot.
+const FILE_EXTENSIONS: [&str; 32] = [
+    "txt", "md", "rs", "py", "js", "ts", "tsx", "jsx", "json", "toml", "yaml", "yml", "xml",
+    "html", "htm", "css", "csv", "log", "lock", "sh", "rb", "pl", "cs", "so", "exe", "zip", "pdf",
+    "png", "jpg", "jpeg", "gif", "svg",
+];
 
 pub fn classify(input: &str) -> Intent {
     let s = input.trim();
@@ -131,6 +134,12 @@ fn parse_url_intent(s: &str) -> Option<String> {
         hostport.rsplit_once(':').map_or(hostport, |(h, _)| h)
     };
 
+    // Judge the typed port, not `url.port()`: the url crate drops `:80`.
+    let typed_port = hostport
+        .rsplit_once(':')
+        .map(|(_, p)| p)
+        .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+
     let local = match host {
         Host::Ipv6(_) => true,
         Host::Ipv4(ip) => {
@@ -149,15 +158,15 @@ fn parse_url_intent(s: &str) -> Option<String> {
         return None;
     }
     let is_url = local
-        || url.port().is_some()
+        || typed_port.is_some()
         || rest.ends_with('/')
-        || non_host_components(&url) > 1
+        || non_host_components(&url, typed_port.is_some()) > 1
         || matches!(host_of(&url), Some(d) if has_known_tld(d));
     if !is_url {
         return None;
     }
-    // Scheme-less hosts get https; IP and localhost stay http.
-    if !local {
+    // Scheme-less hosts get https; IP, localhost and a typed `:80` stay http.
+    if !local && typed_port != Some("80") {
         url.set_scheme("https").ok()?;
     }
     Some(url.into())
@@ -171,9 +180,9 @@ fn host_of(url: &Url) -> Option<&str> {
 }
 
 /// Port, path, query, fragment and userinfo each count once.
-fn non_host_components(url: &Url) -> usize {
+fn non_host_components(url: &Url, has_port: bool) -> usize {
     [
-        url.port().is_some(),
+        has_port,
         url.path().len() > 1,
         url.query().is_some(),
         url.fragment().is_some(),
@@ -185,7 +194,9 @@ fn non_host_components(url: &Url) -> usize {
 }
 
 /// Heuristic stand-in for a public-suffix lookup; the one place to swap for
-/// the `psl` crate if exactness ever matters.
+/// the `psl` crate if exactness ever matters. Common file extensions are
+/// refused even where they are real ccTLDs (`.rs`, `.md`, `.py`), so file
+/// names and identifiers search instead of navigating.
 fn has_known_tld(domain: &str) -> bool {
     let domain = domain.strip_suffix('.').unwrap_or(domain);
     let Some((_, tld)) = domain.rsplit_once('.') else {
@@ -194,6 +205,9 @@ fn has_known_tld(domain: &str) -> bool {
     let labels = domain.split('.').count();
     if RESERVED_TLDS.contains(&tld) {
         return labels > 2;
+    }
+    if FILE_EXTENSIONS.contains(&tld) {
+        return false;
     }
     tld.starts_with("xn--") || (tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_alphabetic()))
 }
@@ -305,7 +319,6 @@ pub struct OmniResult {
     pub title: String,
     pub subtitle: String,
     pub target: Target,
-    pub score: u32,
 }
 
 const CLASS_UNIT: u32 = 1_000_000;
@@ -326,131 +339,135 @@ pub fn rank(
     let intent = classify(query);
     let mut out = Vec::new();
     match &intent {
-        Intent::Url(u) => out.push(row(
-            Kind::Search,
-            u,
-            "Open",
-            Target::Url(u.clone()),
-            u32::MAX,
-        )),
+        Intent::Url(u) => out.push(row(Kind::Search, u, "Open", Target::Url(u.clone()))),
         Intent::Search(q) if q.is_empty() => return out,
         Intent::Search(q) => out.push(row(
             Kind::Search,
             q,
             &format!("Search {}", engine.info().name),
             Target::Search(q.clone()),
-            u32::MAX,
         )),
     }
     let terms: Vec<String> = query
         .trim()
         .trim_start_matches('?')
         .split_whitespace()
-        .map(str::to_lowercase)
+        .map(|t| {
+            let t = t.to_lowercase();
+            let t = t.split_once("://").map_or(t.as_str(), |(_, r)| r);
+            t.strip_prefix("www.").unwrap_or(t).to_owned()
+        })
+        .filter(|t| !t.is_empty())
         .collect();
 
-    let mut scored: Vec<OmniResult> = Vec::new();
+    let mut scored: Vec<(u32, OmniResult)> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
-    for t in cands.tabs {
-        if let Some(class) = match_class(&terms, host_text(&t.url), &t.title, "") {
-            seen.push(&t.url);
-            let score = class * CLASS_UNIT + TAB_BONUS;
-            scored.push(row(
+    let sources = cands
+        .tabs
+        .iter()
+        .map(|t| {
+            (
                 Kind::OpenTab,
                 &t.title,
                 &t.url,
                 Target::OpenTab(t.id),
-                score,
-            ));
-        }
-    }
-    for h in cands.history {
-        if seen.contains(&h.url.as_str()) {
-            continue;
-        }
-        if let Some(class) = match_class(&terms, host_text(&h.url), &h.title, "") {
-            seen.push(&h.url);
-            let score = class * CLASS_UNIT + history_bonus(h, now_ms);
-            scored.push(row(
+                TAB_BONUS,
+            )
+        })
+        .chain(cands.history.iter().map(|h| {
+            let target = Target::Url(h.url.clone());
+            (
                 Kind::History,
                 &h.title,
                 &h.url,
-                Target::Url(h.url.clone()),
-                score,
-            ));
-        }
-    }
-    for b in cands.bookmarks {
-        if seen.contains(&b.url.as_str()) {
-            continue;
-        }
-        if let Some(class) = match_class(&terms, host_text(&b.url), &b.title, "") {
-            seen.push(&b.url);
-            let score = class * CLASS_UNIT;
-            scored.push(row(
+                target,
+                history_bonus(h, now_ms),
+            )
+        }))
+        .chain(cands.bookmarks.iter().map(|b| {
+            (
                 Kind::Bookmark,
                 &b.title,
                 &b.url,
                 Target::Url(b.url.clone()),
-                score,
-            ));
+                0,
+            )
+        }));
+    for (kind, title, url, target, bonus) in sources {
+        if kind != Kind::OpenTab && seen.contains(&url.as_str()) {
+            continue;
+        }
+        if let Some(class) = match_class(&terms, site_text(url), title, "") {
+            seen.push(url);
+            scored.push((class * CLASS_UNIT + bonus, row(kind, title, url, target)));
         }
     }
     for a in &ACTIONS {
         if let Some(class) = match_class(&terms, "", a.title, a.keywords) {
-            scored.push(row(
-                Kind::Action,
-                a.title,
-                "",
-                Target::Action(a.id),
+            scored.push((
                 class * CLASS_UNIT,
+                row(Kind::Action, a.title, "", Target::Action(a.id)),
             ));
         }
     }
-    let own_query = match &intent {
-        Intent::Search(q) => q.as_str(),
-        Intent::Url(_) => "",
-    };
+    let mut shown: Vec<String> = vec![match &intent {
+        Intent::Search(q) => q.to_lowercase(),
+        Intent::Url(_) => String::new(),
+    }];
     for s in cands.suggestions {
-        if s != own_query {
-            scored.push(row(Kind::Search, s, "", Target::Search(s.clone()), 0));
+        let lower = s.to_lowercase();
+        if !shown.contains(&lower) {
+            shown.push(lower);
+            scored.push((0, row(Kind::Search, s, "", Target::Search(s.clone()))));
         }
     }
     // Stable sort: ties keep input order, then kind order.
-    scored.sort_by(|a, b| b.score.cmp(&a.score).then(a.kind.cmp(&b.kind)));
-    out.extend(scored);
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.kind.cmp(&b.1.kind)));
+    out.extend(scored.into_iter().map(|(_, r)| r));
     out.truncate(limit);
     out
 }
 
-fn row(kind: Kind, title: &str, subtitle: &str, target: Target, score: u32) -> OmniResult {
+fn row(kind: Kind, title: &str, subtitle: &str, target: Target) -> OmniResult {
     OmniResult {
         kind,
         title: title.to_owned(),
         subtitle: subtitle.to_owned(),
         target,
-        score,
     }
 }
 
-/// Host without scheme, userinfo and a leading `www.`, lowercased by the caller.
-fn host_text(url: &str) -> &str {
+/// URL without scheme, userinfo and a leading `www.`: `host/path?query`.
+fn site_text(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let rest = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let rest = rest.rsplit_once('@').map_or(rest, |(_, h)| h);
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let rest = match rest[..end].rfind('@') {
+        Some(at) => &rest[at + 1..],
+        None => rest,
+    };
     rest.strip_prefix("www.").unwrap_or(rest)
 }
 
 /// Lowest per-term class (3 host prefix, 2 title-word prefix, 1 substring);
 /// `None` when any term does not match or there are no terms.
-fn match_class(terms: &[String], host: &str, title: &str, keywords: &str) -> Option<u32> {
-    let host = host.to_lowercase();
+fn match_class(terms: &[String], site: &str, title: &str, keywords: &str) -> Option<u32> {
+    let site = site.to_lowercase();
+    let host = site.split(['/', '?', '#']).next().unwrap_or("");
     let title = title.to_lowercase();
     let keywords = keywords.to_lowercase();
     terms
         .iter()
         .map(|t| {
-            if host.starts_with(t.as_str()) {
+            if t.contains('/') {
+                // A term with a path matches against host + path.
+                if site.starts_with(t.as_str()) {
+                    Some(3)
+                } else if site.contains(t.as_str()) {
+                    Some(1)
+                } else {
+                    None
+                }
+            } else if host.starts_with(t.as_str()) {
                 Some(3)
             } else if title
                 .split_whitespace()
@@ -535,6 +552,14 @@ mod tests {
             ("a.test", search("a.test")),
             ("www.a.test", url("https://www.a.test/")),
             ("http://", search("http://")),
+            ("example.com:80", url("http://example.com/")),
+            ("foo:80", url("http://foo/")),
+            ("example.com:443", url("https://example.com/")),
+            ("file.txt", search("file.txt")),
+            ("main.rs", search("main.rs")),
+            ("README.md", search("README.md")),
+            ("package.json", search("package.json")),
+            ("main.rs/", url("https://main.rs/")),
         ];
         for (input, want) in cases {
             assert_eq!(classify(input), want, "{input:?}");
@@ -549,7 +574,7 @@ mod tests {
             assert_eq!(e.engine.info(), e);
         }
         assert_eq!(
-            search_url(SearchEngine::DuckDuckGo, "c++ & rust"),
+            fill(SearchEngine::DuckDuckGo.info().search, "c++ & rust"),
             "https://duckduckgo.com/?q=c%2B%2B%20%26%20rust"
         );
         assert_eq!(
@@ -661,6 +686,34 @@ mod tests {
             ["github slint", "Slint repo"]
         );
         assert_eq!(titles(&run("zzz", &c)), ["zzz"]);
+    }
+
+    #[test]
+    fn url_shaped_query_finds_site_rows() {
+        let tabs = [tab(1, "GH", "https://www.github.com/x")];
+        let history = [hist("https://github.com/x/y", "Repo", 1, 0, 0)];
+        let c = Candidates {
+            tabs: &tabs,
+            history: &history,
+            ..Default::default()
+        };
+        for q in ["https://github.com", "github.com/x", "www.github.com/x"] {
+            let r = run(q, &c);
+            assert_eq!(r.len(), 3, "{q}");
+            assert_eq!(r[1].kind, Kind::OpenTab, "{q}");
+        }
+        assert_eq!(run("github.com/zzz", &c).len(), 1);
+        assert_eq!(run("http://", &c).len(), 1);
+    }
+
+    #[test]
+    fn suggestions_dedupe_case_insensitively() {
+        let sugg = ["Rust", "rust book", "rust", "Rust Book"].map(String::from);
+        let c = Candidates {
+            suggestions: &sugg,
+            ..Default::default()
+        };
+        assert_eq!(titles(&run("rust", &c)), ["rust", "rust book"]);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! unless the user turns them on.
 
 pub use crate::omnibox::SearchEngine;
-use crate::omnibox::{Intent, classify, suggest_url};
+use crate::omnibox::suggest_url;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiveSuggestions {
@@ -30,6 +30,14 @@ pub enum Source {
     Remote { url: String },
 }
 
+/// Anything that could be a (partial) address stays on this machine, even
+/// when `classify` would still call it a search (`192.168.0`, `http://`).
+fn looks_like_address(q: &str) -> bool {
+    q.contains(['.', '/', '@'])
+        || q.contains("://")
+        || q.to_ascii_lowercase().starts_with("localhost")
+}
+
 /// Sources to consult for `query`, in display order.
 pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
     let query = query.trim();
@@ -37,7 +45,7 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
         return Vec::new();
     }
     let mut out = vec![Source::Local];
-    if settings.live == LiveSuggestions::On && matches!(classify(query), Intent::Search(_)) {
+    if settings.live == LiveSuggestions::On && !looks_like_address(query) {
         out.push(Source::Remote {
             url: suggest_url(settings.engine, query),
         });
@@ -100,6 +108,11 @@ mod tests {
             "github.com/foo",
             "https://bank.example/login",
             "localhost:3000",
+            "192.168.0",
+            "http://",
+            "foo/bar",
+            "foo.",
+            "user@host.com",
         ] {
             assert_eq!(
                 sources(q, &settings(LiveSuggestions::On)),
