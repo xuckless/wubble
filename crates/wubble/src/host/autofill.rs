@@ -24,7 +24,7 @@ use wubble_core::secret::Secret;
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_engine::page::FrameInfo;
-use wubble_ui::{AppWindow, AutofillView};
+use wubble_ui::{AppWindow, AutofillAnswer, AutofillView};
 use wubble_vault::{GeneratorOptions, NewLogin, Origin, RecordId};
 use zeroize::Zeroizing;
 
@@ -86,6 +86,9 @@ impl Host {
                 is_main,
                 forms,
             },
+            // A new main document; an iframe's own start changes nothing.
+            ScriptMessage::Start if is_main => Event::Navigated,
+            ScriptMessage::Start => return,
         };
         self.autofill_event(tab, event);
     }
@@ -208,7 +211,11 @@ impl Host {
                         .save_verdict(&o, &creds.username, creds.password.expose())
                         .ok()
                 });
-                Event::Verdict(verdict.unwrap_or(SaveVerdict::Unavailable))
+                Event::Verdict {
+                    origin,
+                    creds,
+                    verdict: verdict.unwrap_or(SaveVerdict::Unavailable),
+                }
             }),
             Effect::Save { origin, creds } => self.store.vault(move |vault| {
                 let Ok(origin) = Origin::parse(&origin) else {
@@ -294,16 +301,15 @@ impl Host {
         self.autofill_event(tab, event);
     }
 
-    /// The save prompt: 0 save (or update), 1 never for this site, 2 not now.
-    pub fn autofill_answer(&mut self, answer: i32) {
+    /// A button of the save prompt.
+    pub fn autofill_answer(&mut self, answer: AutofillAnswer) {
         let Some(tab) = self.model.visible_tab() else {
             return;
         };
         let answer = match answer {
-            0 => autofill::Answer::Save,
-            1 => autofill::Answer::Never,
-            2 => autofill::Answer::NotNow,
-            _ => return,
+            AutofillAnswer::Save => autofill::Answer::Save,
+            AutofillAnswer::Never => autofill::Answer::Never,
+            AutofillAnswer::NotNow => autofill::Answer::NotNow,
         };
         self.autofill_event(tab, Event::Answer(answer));
     }
@@ -355,7 +361,7 @@ impl Host {
                     self.pointer_button(pane, left, true, at);
                     self.pointer_button(pane, left, false, at);
                 }
-                autofill_smoke::Action::Save => self.autofill_answer(0),
+                autofill_smoke::Action::Save => self.autofill_answer(AutofillAnswer::Save),
                 autofill_smoke::Action::ReadBack => {
                     let Some(origin) = self
                         .model

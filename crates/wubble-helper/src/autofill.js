@@ -12,9 +12,10 @@
 // The script only reports what the page holds and fills what the browser names:
 // which field is the username or a password is decided once, in Rust
 // (wubble-core `autofill.rs`). It fills only after the user picked a row in
-// wubble's own menu, never a hidden, read-only or disabled field, never in a
-// sandboxed (opaque-origin) frame, and only while the frame is still on the
-// origin the browser named.
+// wubble's own menu, never a hidden, read-only or disabled field, and only while
+// the frame is still on the origin the browser named. A sandboxed
+// (opaque-origin) frame gets nothing: no reports, no fill, since the browser
+// would take its reports for the frame URL's origin.
 //
 // Isolation: closure capture, not an isolated world. The page shares the heap and
 // the DOM; the builtins used below are captured before page scripts run, and
@@ -33,11 +34,9 @@
   const W = window;
   const D = document;
   const loc = W.location;
-  if (loc.protocol !== "http:" && loc.protocol !== "https:") {
+  if ((loc.protocol !== "http:" && loc.protocol !== "https:") || W.origin === "null") {
     return;
   }
-  // A sandboxed frame has an opaque origin: never filled.
-  const sandboxed = W.origin === "null";
 
   const listen = EventTarget.prototype.addEventListener;
   const dispatch = EventTarget.prototype.dispatchEvent;
@@ -153,6 +152,9 @@
     }
   }
 
+  // A new document: what the frame's last one offered is gone.
+  post({ t: "start" });
+
   // ----- reports
 
   let lastForms = stringify([]);
@@ -216,11 +218,10 @@
     if (!e.isTrusted || !(e.target instanceof Element)) {
       return;
     }
-    const control = closest.call(
-      e.target,
-      "button, input[type=submit], input[type=image], [role=button]",
-    );
-    if (control) {
+    // Submit controls only: a show-password toggle (type=button) or any other
+    // button is no submit.
+    const control = closest.call(e.target, "button, input[type=submit], input[type=image]");
+    if (control && (control.type === "submit" || control.type === "image")) {
       submitLike(control.form || closest.call(control, "form"));
     }
   }, true);
@@ -277,9 +278,6 @@
   }
 
   register((text) => {
-    if (sandboxed) {
-      return;
-    }
     let message;
     try {
       message = parse(text);

@@ -91,6 +91,8 @@ pub enum ScriptMessage {
     Gone(FormSnapshot),
     /// The document finished loading; its forms then.
     Settled(Vec<FormSnapshot>),
+    /// The script started in a new document (sent before any page script).
+    Start,
 }
 
 /// The script's JSON, or `None` for anything else.
@@ -111,6 +113,7 @@ pub fn parse_message(text: &str) -> Option<ScriptMessage> {
         "settled" => Some(ScriptMessage::Settled(forms(&v)?)),
         "submit" => Some(ScriptMessage::Submit(parse_form(v.get("form")?)?)),
         "gone" => Some(ScriptMessage::Gone(parse_form(v.get("form")?)?)),
+        "start" => Some(ScriptMessage::Start),
         _ => None,
     }
 }
@@ -439,10 +442,12 @@ impl std::fmt::Debug for Creds {
 }
 
 /// What the user submitted in `form`: the username and the password that
-/// is now theirs (the new one on a sign-up or change form).
-pub fn submitted(form: &FormSnapshot) -> Option<Creds> {
+/// is now theirs (the new one on a sign-up or change form), and whether the
+/// form was a sign-in (not a sign-up or change) form.
+pub fn submitted(form: &FormSnapshot) -> Option<(Creds, bool)> {
     let value = |id: FieldId| form.fields.iter().find(|f| f.id == id).map(|f| &f.value);
-    let (username, password) = match classify(form, Mode::Saving) {
+    let class = classify(form, Mode::Saving);
+    let (username, password) = match class {
         FormClass::NotAForm => return None,
         FormClass::Login { username, password } => (username, password),
         FormClass::SignUp {
@@ -456,13 +461,14 @@ pub fn submitted(form: &FormSnapshot) -> Option<Creds> {
             ..
         } => (username, new_password),
     };
-    Some(Creds {
+    let creds = Creds {
         username: username
             .and_then(value)
             .map(|s| s.expose().to_owned())
             .unwrap_or_default(),
         password: value(password)?.clone(),
-    })
+    };
+    Some((creds, matches!(class, FormClass::Login { .. })))
 }
 
 /// The form to offer on: the first a saved login can fill, else the first
@@ -564,6 +570,9 @@ pub struct Pending {
     pub frame: String,
     pub origin: String,
     pub creds: Creds,
+    /// From a sign-in form: only then does the form coming back mean the
+    /// submit failed (a sign-up often lands on the site's sign-in page).
+    pub sign_in: bool,
 }
 
 /// What the vault already holds for submitted credentials.
@@ -656,9 +665,15 @@ pub enum Event {
         is_main: bool,
         forms: Vec<FormSnapshot>,
     },
-    /// The main frame committed a page of another origin.
+    /// The main frame began a new document (or committed a page of another
+    /// origin): what the old one offered is gone, whatever frame offered it.
     Navigated,
-    Verdict(SaveVerdict),
+    /// The vault's answer to `CheckSave` for these credentials.
+    Verdict {
+        origin: String,
+        creds: Creds,
+        verdict: SaveVerdict,
+    },
     Answer(Answer),
     /// The tab or its view is gone.
     Closed,
@@ -718,16 +733,16 @@ pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
                 origin,
                 forms,
             },
-        ) => offer(state, frame, origin, &forms, false, policy),
-        (
+        )
+        | (
             state @ (S::Idle | S::Offer(_) | S::Menu(_)),
             Event::Settled {
                 frame,
                 origin,
-                is_main,
                 forms,
+                ..
             },
-        ) => offer(state, frame, origin, &forms, is_main, policy),
+        ) => offer(state, frame, origin, &forms, policy),
         (S::Offer(mut o), Event::Logins { origin, candidates }) if o.origin == origin => {
             o.candidates = candidates;
             (S::Offer(o), vec![])
@@ -762,23 +777,23 @@ pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
             None => (state, vec![]),
         },
         (
-            S::Submitted(p),
+            state @ (S::Submitted(_) | S::Checking(_) | S::Prompt { .. }),
             Event::Settled {
                 frame,
                 origin,
                 is_main,
                 forms,
             },
-        ) if is_main || frame == p.frame => {
-            if origin == p.origin && has_login_form(&forms) {
-                // The sign-in form is back: the login failed. Offer it again.
-                offer(S::Idle, frame, origin, &forms, is_main, policy)
-            } else {
-                check(p)
-            }
-        }
+        ) => settled_after_submit(state, frame, origin, is_main, &forms, policy),
         (S::Offer(_) | S::Menu(_), Event::Navigated) => (S::Idle, vec![]),
-        (S::Checking(p), Event::Verdict(verdict)) => match verdict {
+        (
+            S::Checking(p),
+            Event::Verdict {
+                origin,
+                creds,
+                verdict,
+            },
+        ) if origin == p.origin && creds == p.creds => match verdict {
             SaveVerdict::New => (
                 S::Prompt {
                     kind: SaveKind::New,
@@ -816,15 +831,16 @@ pub fn transition(state: AutofillState, event: Event, policy: Policy) -> Step {
     }
 }
 
-/// A report of `forms` in `frame` while nothing is submitted. A main
-/// document that settled without a form ends any offer: CEF may give the
-/// main frame a new id when a navigation changes process.
+/// A report of `forms` in `frame` while nothing is submitted. A frame
+/// without a form ends only its own offer: an offer in a same-origin iframe
+/// outlives the main document settling (its `load` waits for the iframe's).
+/// A new main document (CEF may give it a new frame id) ends any offer
+/// through `Event::Navigated`.
 fn offer(
     state: AutofillState,
     frame: String,
     origin: String,
     forms: &[FormSnapshot],
-    main_settled: bool,
     policy: Policy,
 ) -> Step {
     use AutofillState as S;
@@ -835,7 +851,7 @@ fn offer(
     let Some((form, class)) = offered_form(forms).filter(|_| policy.autofill) else {
         // This frame has no form (any more): its offer goes.
         return match current {
-            Some(o) if o.frame == frame || main_settled || !policy.autofill => (S::Idle, vec![]),
+            Some(o) if o.frame == frame || !policy.autofill => (S::Idle, vec![]),
             _ => (state, vec![]),
         };
     };
@@ -893,11 +909,43 @@ fn pending(frame: String, origin: String, form: &FormSnapshot, policy: Policy) -
     if !policy.offer_to_save || policy.never_save {
         return None;
     }
+    let (creds, sign_in) = submitted(form)?;
     Some(Pending {
         frame,
         origin,
-        creds: submitted(form)?,
+        creds,
+        sign_in,
     })
+}
+
+/// The main document (or the submitting frame) settled after a submit. A
+/// sign-in form of the same origin back on the page means the sign-in
+/// failed, also after the form had already gone (a page that hid the form
+/// while it waited for the server): the credentials are dropped and the
+/// form offered again. Otherwise a submit counts as done; a check or a
+/// prompt already under way stays.
+fn settled_after_submit(
+    state: AutofillState,
+    frame: String,
+    origin: String,
+    is_main: bool,
+    forms: &[FormSnapshot],
+    policy: Policy,
+) -> Step {
+    use AutofillState as S;
+    let (S::Submitted(p) | S::Checking(p) | S::Prompt { pending: p, .. }) = &state else {
+        return (state, vec![]);
+    };
+    if !is_main && frame != p.frame {
+        return (state, vec![]);
+    }
+    if p.sign_in && origin == p.origin && has_login_form(forms) {
+        return offer(S::Idle, frame, origin, forms, policy);
+    }
+    match state {
+        S::Submitted(p) => check(p),
+        state => (state, vec![]),
+    }
 }
 
 fn check(p: Pending) -> Step {
@@ -1030,6 +1078,10 @@ mod tests {
             parse_message(r#"{"t":"gone","form":{"id":0,"fields":[]}}"#),
             Some(ScriptMessage::Gone(_))
         ));
+        assert_eq!(
+            parse_message(r#"{"t":"start"}"#),
+            Some(ScriptMessage::Start)
+        );
         for bad in ["", "{}", r#"{"t":"other"}"#, r#"{"t":"submit"}"#, "[1]"] {
             assert_eq!(parse_message(bad), None, "{bad}");
         }
@@ -1295,24 +1347,26 @@ mod tests {
     #[test]
     fn submitted_takes_the_password_that_is_now_theirs() {
         let signin = form(vec![with_value(text(1), "alice"), with_value(pw(2), "pw")]);
-        let c = submitted(&signin).unwrap();
+        let (c, sign_in) = submitted(&signin).unwrap();
         assert_eq!((c.username.as_str(), c.password.expose()), ("alice", "pw"));
+        assert!(sign_in);
         let change = form(vec![
             with_value(text(1), "alice"),
             with_value(pw(2), "old"),
             with_value(pw(3), "new"),
             with_value(pw(4), "new"),
         ]);
-        assert_eq!(submitted(&change).unwrap().password.expose(), "new");
+        let (c, sign_in) = submitted(&change).unwrap();
+        assert_eq!((c.password.expose(), sign_in), ("new", false));
         let signup = form(vec![
             with_value(field(1, "email"), "a@b.test"),
             with_value(pw(2), "fresh"),
             with_value(pw(3), "fresh"),
         ]);
-        let c = submitted(&signup).unwrap();
+        let (c, sign_in) = submitted(&signup).unwrap();
         assert_eq!(
-            (c.username.as_str(), c.password.expose()),
-            ("a@b.test", "fresh")
+            (c.username.as_str(), c.password.expose(), sign_in),
+            ("a@b.test", "fresh", false)
         );
         assert_eq!(submitted(&form(vec![text(1), pw(2)])), None);
     }
@@ -1482,6 +1536,29 @@ mod tests {
             })
     }
 
+    fn creds(user: &str, pass: &str) -> Creds {
+        Creds {
+            username: user.into(),
+            password: Secret::from(pass),
+        }
+    }
+
+    fn verdict(user: &str, pass: &str, verdict: SaveVerdict) -> Event {
+        Event::Verdict {
+            origin: ORIGIN.into(),
+            creds: creds(user, pass),
+            verdict,
+        }
+    }
+
+    fn gone(user: &str, pass: &str) -> Event {
+        Event::Gone {
+            frame: "main".into(),
+            origin: ORIGIN.into(),
+            form: filled_login(user, pass),
+        }
+    }
+
     fn logins() -> Event {
         Event::Logins {
             origin: ORIGIN.into(),
@@ -1575,12 +1652,34 @@ mod tests {
     }
 
     #[test]
-    fn a_main_document_without_a_form_ends_the_offer_whatever_its_frame_id() {
-        let (s, _) = run(vec![forms("main", login_page()), logins()], ON);
-        let (s2, _) = transition(s.clone(), settled("sub", false, vec![]), ON);
-        assert!(matches!(s2, AutofillState::Offer(_)));
-        let (s, _) = transition(s, settled("main-after-swap", true, vec![]), ON);
-        assert_eq!(s, AutofillState::Idle);
+    fn an_offer_in_a_same_origin_iframe_outlives_the_main_document_settling() {
+        // The iframe loads first; the main frame's `load` (no form of its own) comes after.
+        let (s, _) = run(
+            vec![
+                settled("frame", false, login_page()),
+                logins(),
+                settled("main", true, vec![]),
+            ],
+            ON,
+        );
+        assert!(matches!(&s, AutofillState::Offer(o) if o.frame == "frame"));
+        assert!(view(&s).chip);
+        let (s, _) = transition(s, Event::Open, ON);
+        let (_, effects) = transition(s, Event::Choose(0), ON);
+        assert!(matches!(&effects[..], [Effect::Fill { frame, .. }] if frame == "frame"));
+    }
+
+    #[test]
+    fn a_new_main_document_ends_the_offer_whatever_its_frame_id() {
+        for offered in ["main", "frame"] {
+            let (s, _) = run(vec![forms(offered, login_page()), logins()], ON);
+            // The main document settling with no form ends only the main frame's own offer.
+            let (s2, _) = transition(s.clone(), settled("main", true, vec![]), ON);
+            assert_eq!(matches!(s2, AutofillState::Idle), offered == "main");
+            // A new main document (its script's `start`, perhaps under a new frame id).
+            let (s, _) = transition(s, Event::Navigated, ON);
+            assert_eq!(s, AutofillState::Idle, "{offered}");
+        }
     }
 
     #[test]
@@ -1618,10 +1717,7 @@ mod tests {
             ],
             ON,
         );
-        let creds = Creds {
-            username: "alice".into(),
-            password: Secret::from("pw"),
-        };
+        let creds = creds("alice", "pw");
         assert!(matches!(s, AutofillState::Checking(_)));
         assert_eq!(
             effects.last(),
@@ -1630,7 +1726,7 @@ mod tests {
                 creds: creds.clone(),
             })
         );
-        let (s, _) = transition(s, Event::Verdict(SaveVerdict::New), ON);
+        let (s, _) = transition(s, verdict("alice", "pw", SaveVerdict::New), ON);
         assert_eq!(
             view(&s).prompt,
             Some((SaveKind::New, "alice".into(), ORIGIN.into()))
@@ -1655,7 +1751,7 @@ mod tests {
         .0;
         let (s, _) = transition(
             checking.clone(),
-            Event::Verdict(SaveVerdict::Differs("r1".into())),
+            verdict("alice", "pw", SaveVerdict::Differs("r1".into())),
             ON,
         );
         assert!(matches!(
@@ -1665,7 +1761,7 @@ mod tests {
         let (_, effects) = transition(s, Event::Answer(Answer::Save), ON);
         assert!(matches!(&effects[..], [Effect::Update { record, .. }] if record == "r1"));
         for nothing in [SaveVerdict::Same, SaveVerdict::Unavailable] {
-            let (s, _) = transition(checking.clone(), Event::Verdict(nothing), ON);
+            let (s, _) = transition(checking.clone(), verdict("alice", "pw", nothing), ON);
             assert_eq!(s, AutofillState::Idle);
         }
     }
@@ -1676,7 +1772,7 @@ mod tests {
             vec![
                 submit("alice", "pw"),
                 settled("main", true, vec![]),
-                Event::Verdict(SaveVerdict::New),
+                verdict("alice", "pw", SaveVerdict::New),
             ],
             ON,
         )
@@ -1711,6 +1807,101 @@ mod tests {
     }
 
     #[test]
+    fn a_sign_up_landing_on_the_sign_in_page_still_asks_to_save() {
+        let signup = form(vec![
+            with_value(text(1), "alice"),
+            with_value(pw(2), "generated"),
+            with_value(pw(3), "generated"),
+        ]);
+        let (s, effects) = run(
+            vec![
+                Event::Submit {
+                    frame: "main".into(),
+                    origin: ORIGIN.into(),
+                    form: signup,
+                },
+                // "Account created, please sign in."
+                settled("main", true, login_page()),
+            ],
+            ON,
+        );
+        assert!(matches!(s, AutofillState::Checking(_)));
+        assert_eq!(
+            effects,
+            [Effect::CheckSave {
+                origin: ORIGIN.into(),
+                creds: creds("alice", "generated"),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failed_sign_in_after_the_form_hid_drops_the_check_and_the_prompt() {
+        // The page hid the form while it waited; the server then sent the form back.
+        let checking = run(vec![submit("alice", "wrong"), gone("alice", "wrong")], ON).0;
+        assert!(matches!(checking, AutofillState::Checking(_)));
+        let prompt = transition(
+            checking.clone(),
+            verdict("alice", "wrong", SaveVerdict::Differs("r1".into())),
+            ON,
+        )
+        .0;
+        for state in [checking, prompt] {
+            let (s, effects) = transition(state, settled("main", true, login_page()), ON);
+            assert!(matches!(s, AutofillState::Offer(_)), "offered again");
+            assert_eq!(view(&s).prompt, None);
+            assert!(!effects.iter().any(|e| matches!(e, Effect::Update { .. })));
+        }
+        // A page without the form keeps the prompt.
+        let prompt = run(
+            vec![
+                submit("alice", "pw"),
+                gone("alice", "pw"),
+                verdict("alice", "pw", SaveVerdict::New),
+                settled("main", true, vec![]),
+            ],
+            ON,
+        )
+        .0;
+        assert!(view(&prompt).prompt.is_some());
+    }
+
+    #[test]
+    fn a_verdict_for_other_credentials_is_dropped() {
+        let (s, _) = run(
+            vec![
+                submit("alice", "pw"),
+                gone("alice", "pw"),
+                submit("bob", "pw2"),
+                gone("bob", "pw2"),
+            ],
+            ON,
+        );
+        // Alice's late verdict must not become Bob's update of Alice's record.
+        let (s, _) = transition(
+            s,
+            verdict("alice", "pw", SaveVerdict::Differs("alice-record".into())),
+            ON,
+        );
+        assert!(matches!(&s, AutofillState::Checking(p) if p.creds.username == "bob"));
+        let (s, _) = transition(s, verdict("bob", "pw2", SaveVerdict::New), ON);
+        assert_eq!(
+            view(&s).prompt,
+            Some((SaveKind::New, "bob".into(), ORIGIN.into()))
+        );
+        let other_origin = Event::Verdict {
+            origin: "https://b.test".into(),
+            creds: creds("bob", "pw2"),
+            verdict: SaveVerdict::New,
+        };
+        let checking = run(vec![submit("bob", "pw2"), gone("bob", "pw2")], ON).0;
+        assert!(matches!(
+            transition(checking, other_origin, ON).0,
+            AutofillState::Checking(_)
+        ));
+    }
+
+    #[test]
     fn another_frame_settling_does_not_decide() {
         let (s, effects) = run(
             vec![submit("alice", "pw"), settled("ad-frame", false, vec![])],
@@ -1722,11 +1913,7 @@ mod tests {
 
     #[test]
     fn a_single_page_sign_in_is_seen_when_the_form_goes() {
-        let gone = Event::Gone {
-            frame: "main".into(),
-            origin: ORIGIN.into(),
-            form: filled_login("alice", "pw"),
-        };
+        let gone = gone("alice", "pw");
         let (s, effects) = run(vec![submit("alice", "pw"), gone.clone()], ON);
         assert!(matches!(s, AutofillState::Checking(_)));
         assert!(matches!(&effects[..], [Effect::CheckSave { .. }]));
@@ -1769,7 +1956,7 @@ mod tests {
             vec![
                 submit("alice", "pw"),
                 settled("main", true, vec![]),
-                Event::Verdict(SaveVerdict::New),
+                verdict("alice", "pw", SaveVerdict::New),
             ],
             ON,
         )
@@ -1786,7 +1973,7 @@ mod tests {
             vec![
                 submit("alice", "pw"),
                 settled("main", true, vec![]),
-                Event::Verdict(SaveVerdict::New),
+                verdict("alice", "pw", SaveVerdict::New),
                 submit("bob", "pw2"),
             ],
             ON,

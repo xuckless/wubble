@@ -12,7 +12,10 @@
 //! the database through `vault.store_mut().store_mut()`, and
 //! [`StoreClient::vault`] runs a closure on the vault there. The vault is
 //! unlocked on the first such request, not at start, so a profile that
-//! never meets a sign-in form never touches the OS keyring.
+//! never meets a sign-in form never touches the OS keyring. The keyring read
+//! that unlock needs runs on a thread of its own ([`PrefetchedKeyRing`]): a
+//! locked OS keyring asking the user to unlock it holds up the vault
+//! requests only, never session saves or shutdown.
 //!
 //! Save policy, idea only (no code copied): a dirty count plus "save when
 //! enough changed or the session went quiet", always on orderly shutdown, as
@@ -22,7 +25,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 
 use wubble_core::download::{self, DownloadEntry};
@@ -38,7 +41,9 @@ use wubble_store::{
     KeybindingOverrides, LiveSuggestions, PasswordsAutofill, PasswordsOfferToSave,
     SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, Store, Transition,
 };
+use wubble_vault::keyring::KeyRingError;
 use wubble_vault::{KeyRing, StoreLogins, UnlockOutcome, Vault};
+use zeroize::Zeroizing;
 
 use crate::blocking::BlockerSettings;
 
@@ -134,6 +139,9 @@ pub struct UiState {
 
 /// The vault on the store thread, over whichever keyring the run uses.
 pub type HostVault = Vault<Box<dyn KeyRing + Send>, StoreLogins>;
+
+/// A request's work on the vault.
+type VaultJob = Box<dyn FnOnce(&mut HostVault) + Send>;
 
 /// The keyring account's profile name. One per user for now: every
 /// `--profile` shares the key (the key lives only in the OS keyring).
@@ -269,7 +277,13 @@ enum Request {
     UpdateDownload(DownloadEntry),
     RemoveDownload(i64),
     /// Runs on the vault (unlocked first, once per run).
-    Vault(Box<dyn FnOnce(&mut HostVault) + Send>),
+    Vault(VaultJob),
+    /// The keyring read for the unlock is done (sent by the store thread's
+    /// key thread).
+    KeyFetched,
+    /// Finish: what is queued before this runs, vault requests still
+    /// waiting on the keyring are dropped.
+    Shutdown,
 }
 
 /// The host's handle on the store thread. If the database could not be
@@ -292,7 +306,10 @@ impl StoreClient {
         let (loaded_tx, loaded_rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("wubble-store".into())
-            .spawn(move || serve(&path, keyring, rx, loaded_tx));
+            .spawn({
+                let tx = tx.clone();
+                move || serve(&path, keyring, tx, rx, loaded_tx)
+            });
         let thread = match thread {
             Ok(thread) => Some(thread),
             Err(e) => {
@@ -422,9 +439,10 @@ impl StoreClient {
 
     /// Lets the thread finish what is queued, close the database and end.
     /// Blocks until it has; a thread that already ended returns at once.
+    /// Never waits on the OS keyring.
     pub fn shutdown(self) {
         let StoreClient { tx, thread } = self;
-        drop(tx);
+        let _ = tx.send(Request::Shutdown);
         if let Some(thread) = thread
             && thread.join().is_err()
         {
@@ -433,10 +451,78 @@ impl StoreClient {
     }
 }
 
-/// The store thread: open, load, then serve requests until the client is gone.
+/// A keyring read, as `KeyRing::get` answers it.
+type KeyRead = Result<Option<Zeroizing<Vec<u8>>>, KeyRingError>;
+
+/// The vault's keyring: the unlock's first read is answered from what the
+/// key thread fetched ([`fetch_key`]); every other call reaches the keyring.
+#[derive(Clone)]
+struct PrefetchedKeyRing {
+    keyring: Arc<Mutex<Box<dyn KeyRing + Send>>>,
+    /// (service, account, answer), taken by the first matching `get`.
+    fetched: Arc<Mutex<Option<(String, String, KeyRead)>>>,
+}
+
+impl KeyRing for PrefetchedKeyRing {
+    fn get(&self, service: &str, account: &str) -> KeyRead {
+        let mut fetched = self.fetched.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((s, a, _)) = fetched.as_ref()
+            && (s.as_str(), a.as_str()) == (service, account)
+            && let Some((_, _, read)) = fetched.take()
+        {
+            return read;
+        }
+        drop(fetched);
+        let keyring = self.keyring.lock().unwrap_or_else(|e| e.into_inner());
+        keyring.get(service, account)
+    }
+
+    fn set(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyRingError> {
+        let keyring = self.keyring.lock().unwrap_or_else(|e| e.into_inner());
+        keyring.set(service, account, secret)
+    }
+}
+
+/// Reads the vault's key on a thread of its own and tells the store thread.
+/// The thread is not joined: one blocked on an OS prompt ends with the process.
+fn fetch_key(ring: PrefetchedKeyRing, done: mpsc::Sender<Request>) {
+    let PrefetchedKeyRing { keyring, fetched } = ring;
+    let finished = done.clone();
+    let spawned = std::thread::Builder::new()
+        .name("wubble-keyring".into())
+        .spawn(move || {
+            let service = wubble_vault::keyring::SERVICE;
+            let account = wubble_vault::keyring::account(VAULT_PROFILE);
+            let read = keyring
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(service, &account);
+            *fetched.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((service.to_owned(), account, read));
+            let _ = finished.send(Request::KeyFetched);
+        });
+    if let Err(e) = spawned {
+        // The unlock then reads the keyring itself, on the store thread.
+        eprintln!("wubble: cannot start the keyring thread: {e}");
+        let _ = done.send(Request::KeyFetched);
+    }
+}
+
+/// Where the vault's unlock stands on the store thread.
+enum Unlock {
+    /// No vault request yet.
+    NotAsked,
+    /// The key thread is reading the keyring; these wait for it, in order.
+    Fetching(Vec<VaultJob>),
+    /// Unlocked (or found unusable): vault requests run at once.
+    Done,
+}
+
+/// The store thread: open, load, then serve requests until shut down.
 fn serve(
     path: &Path,
     keyring: Box<dyn KeyRing + Send>,
+    tx: mpsc::Sender<Request>,
     rx: mpsc::Receiver<Request>,
     loaded: mpsc::Sender<Result<Loaded, String>>,
 ) {
@@ -450,22 +536,43 @@ fn serve(
             return;
         }
     };
-    let mut vault: HostVault = Vault::new(keyring, StoreLogins::new(store), VAULT_PROFILE);
-    let mut unlock: Option<UnlockOutcome> = None;
+    let ring = PrefetchedKeyRing {
+        keyring: Arc::new(Mutex::new(keyring)),
+        fetched: Arc::new(Mutex::new(None)),
+    };
+    let mut fetch = Some((ring.clone(), tx));
+    let mut vault: HostVault = Vault::new(Box::new(ring), StoreLogins::new(store), VAULT_PROFILE);
+    let mut unlock = Unlock::NotAsked;
     while let Ok(first) = rx.recv() {
         let batch: Vec<Request> = std::iter::once(first).chain(rx.try_iter()).collect();
         for request in latest_save_only(batch) {
-            if let Request::Vault(f) = request {
-                if unlock.is_none() {
-                    let outcome = vault.unlock();
-                    report_unlock(&outcome);
-                    unlock = Some(outcome);
+            match (request, &mut unlock) {
+                (Request::Shutdown, _) => return,
+                (Request::Vault(f), Unlock::Done) => f(&mut vault),
+                (Request::Vault(f), Unlock::Fetching(waiting)) => waiting.push(f),
+                (Request::Vault(f), Unlock::NotAsked) => {
+                    if let Some((ring, tx)) = fetch.take() {
+                        fetch_key(ring, tx);
+                    }
+                    unlock = Unlock::Fetching(vec![f]);
                 }
-                f(&mut vault);
-                continue;
-            }
-            if let Err(e) = pollster::block_on(handle(vault.store_mut().store_mut(), request)) {
-                eprintln!("wubble: store: {e}");
+                (Request::KeyFetched, _) => {
+                    let Unlock::Fetching(waiting) = std::mem::replace(&mut unlock, Unlock::Done)
+                    else {
+                        continue;
+                    };
+                    report_unlock(&vault.unlock());
+                    for f in waiting {
+                        f(&mut vault);
+                    }
+                }
+                (request, _) => {
+                    if let Err(e) =
+                        pollster::block_on(handle(vault.store_mut().store_mut(), request))
+                    {
+                        eprintln!("wubble: store: {e}");
+                    }
+                }
             }
         }
     }
@@ -620,7 +727,7 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         Request::UpdateDownload(entry) => store.update_download(&entry).await?,
         Request::RemoveDownload(id) => store.remove_download(id).await?,
         // Run by `serve` on the vault.
-        Request::Vault(_) => {}
+        Request::Vault(_) | Request::KeyFetched | Request::Shutdown => {}
     }
     Ok(())
 }
@@ -1025,6 +1132,71 @@ mod tests {
         client.vault(move |v| tx.send(v.find_for_origin(&origin).unwrap().len()).unwrap());
         assert_eq!(rx.recv().unwrap(), 1);
         client.shutdown();
+    }
+
+    /// A keyring whose reads wait until the test opens the gate (drops its
+    /// sender), as a locked OS keyring waits on the user.
+    struct GatedKeyRing {
+        gate: Mutex<mpsc::Receiver<()>>,
+        inner: wubble_vault::FakeKeyRing,
+    }
+
+    impl KeyRing for GatedKeyRing {
+        fn get(&self, service: &str, account: &str) -> KeyRead {
+            let _ = self.gate.lock().unwrap().recv();
+            self.inner.get(service, account)
+        }
+
+        fn set(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyRingError> {
+            self.inner.set(service, account, secret)
+        }
+    }
+
+    fn start_gated(path: &Path) -> (StoreClient, mpsc::Sender<()>) {
+        let (gate, wait) = mpsc::channel();
+        let keyring = GatedKeyRing {
+            gate: Mutex::new(wait),
+            inner: wubble_vault::FakeKeyRing::default(),
+        };
+        let (client, loaded) = StoreClient::spawn(path.to_path_buf(), Box::new(keyring));
+        loaded.recv().unwrap().unwrap();
+        (client, gate)
+    }
+
+    #[test]
+    fn a_keyring_waiting_on_the_user_holds_up_only_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, gate) = start_gated(&dir.path().join("wubble.db"));
+        let (vault_tx, vault_rx) = mpsc::channel();
+        client.vault(move |v| vault_tx.send(v.list().is_ok()).unwrap());
+        // A request sent after it is answered while the keyring still waits
+        // (this test would hang, not fail, if the store thread waited too).
+        let (tx, rx) = mpsc::channel();
+        client.pop_closed(move |t| tx.send(t.is_none()).unwrap());
+        assert!(rx.recv().unwrap());
+        assert!(vault_rx.try_recv().is_err(), "the vault request waits");
+        drop(gate);
+        assert!(vault_rx.recv().unwrap());
+        // Later vault requests run at once, in order.
+        let (tx, rx) = mpsc::channel();
+        client.vault(move |v| {
+            tx.send(matches!(
+                v.state(),
+                wubble_vault::VaultState::Unlocked { .. }
+            ))
+            .unwrap()
+        });
+        assert!(rx.recv().unwrap());
+        client.shutdown();
+    }
+
+    #[test]
+    fn shutdown_does_not_wait_on_the_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let (client, gate) = start_gated(&dir.path().join("wubble.db"));
+        client.vault(|_| unreachable!("the keyring never answered"));
+        client.shutdown();
+        drop(gate);
     }
 
     #[test]

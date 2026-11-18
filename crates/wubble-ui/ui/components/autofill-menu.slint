@@ -13,6 +13,9 @@ import { IconButton } from "nav-buttons.slint";
 // glass, radius 14, 42-high buttons, drop-in at .95 over 200 ms from its top left). Placed by the
 // parent under the address pill. Never modal and never focused: no keystroke meant for the page
 // can pick a login or answer the prompt (keyjacking). Intents only; the host fills and saves.
+// The save prompt's buttons (host/autofill.rs `autofill_answer`).
+export enum AutofillAnswer { save, never, not-now }
+
 export struct AutofillView {
     chip: bool,
     menu-open: bool,
@@ -27,8 +30,7 @@ export component AutofillMenu inherits Rectangle {
     in property <AutofillView> view;
     // -1: open the menu, -2: close it, i >= 0: row i was clicked.
     callback menu(int);
-    // 0: save (or update), 1: never for this site, 2: not now.
-    callback answer(int);
+    callback answer(AutofillAnswer);
 
     // A key on the icon family's 24 grid (icon.slint has none): the bow, the shaft, two teeth.
     property <string> key-path: "M8 11a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM10.8 12.2 20 3M16.5 6.5l2.5 2.5M14 9l2 2";
@@ -146,20 +148,20 @@ export component AutofillMenu inherits Rectangle {
                 SheetButton {
                     text: "Never";
                     clicked => {
-                        root.answer(1);
+                        root.answer(AutofillAnswer.never);
                     }
                 }
                 SheetButton {
                     text: "Not now";
                     clicked => {
-                        root.answer(2);
+                        root.answer(AutofillAnswer.not-now);
                     }
                 }
                 SheetButton {
                     text: root.view.prompt == 2 ? "Update" : "Save";
                     primary: true;
                     clicked => {
-                        root.answer(0);
+                        root.answer(AutofillAnswer.save);
                     }
                 }
             }
