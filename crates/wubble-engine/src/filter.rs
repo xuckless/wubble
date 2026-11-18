@@ -52,6 +52,10 @@ pub enum RequestAction {
     Block,
     /// Load this URL instead.
     Redirect(String),
+    /// Answer with the content of this base64 `data:` URL instead of
+    /// sending the request (a blocker's stub resource); the request is
+    /// cancelled if it does not parse.
+    Serve(String),
 }
 
 /// The host's content filter.
@@ -124,6 +128,7 @@ pub(crate) fn request_filter(filter: Arc<dyn ContentFilter>) -> welding::Request
             RequestAction::Allow => welding::RequestAction::Allow,
             RequestAction::Block => welding::RequestAction::Cancel,
             RequestAction::Redirect(url) => welding::RequestAction::Redirect(url),
+            RequestAction::Serve(data_url) => welding::RequestAction::Serve(data_url),
         }
     })
 }

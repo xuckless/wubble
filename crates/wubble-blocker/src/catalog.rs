@@ -252,17 +252,28 @@ pub struct Selection {
 }
 
 impl Default for Selection {
+    /// The settings' defaults (`wubble_core::settings`): no list switched,
+    /// no custom list, the optional categories as their rows say.
     fn default() -> Self {
+        use wubble_core::settings::{BLOCKER_COOKIE_BANNERS, BLOCKER_STRIP_PARAMS};
         Self {
             lists: BTreeMap::new(),
-            cookie_banners: true,
-            strip_params: true,
+            cookie_banners: BLOCKER_COOKIE_BANNERS.default == "1",
+            strip_params: BLOCKER_STRIP_PARAMS.default == "1",
             custom: Vec::new(),
         }
     }
 }
 
 impl Selection {
+    /// Every catalog list off: only the list directory's own files.
+    pub fn none() -> Self {
+        Self {
+            lists: LISTS.iter().map(|l| (l.id.to_owned(), 0)).collect(),
+            ..Self::default()
+        }
+    }
+
     /// Whether `list` is on: its category's switch, then its own.
     pub fn includes(&self, list: &ListDef) -> bool {
         let category = match list.category {

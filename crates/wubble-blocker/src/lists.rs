@@ -1,8 +1,9 @@
 //! Where a blocker's lists come from, compiled once and cached.
 //!
 //! A [`Source`] is one list: a catalog list ([`crate::catalog::LISTS`]) from
-//! its downloaded copy in the profile's list directory (`<id>.txt`) when
-//! there is one, else from the snapshot bundled in the binary; or a list of
+//! its downloaded copy in the profile's list directory (`<id>.txt`, with
+//! `<id>.src` naming the list's current URL) when there is one, else from
+//! the snapshot bundled in the binary; or a list of
 //! the user's own (any other `*.txt` there, and the downloaded custom lists).
 //! Bundled and downloaded lists take the same path.
 //!
@@ -101,25 +102,11 @@ fn head(text: &str) -> u64 {
 }
 
 /// The sources for `selection` from the list directory `dir`: each enabled
-/// catalog list (downloaded copy, else bundled; a list with neither is
-/// skipped), then every other `*.txt` in `dir` sorted by name (the user's
-/// own, and the selected custom lists that were downloaded).
+/// catalog list (its [`ListSpec::downloaded`] copy, else bundled; a list
+/// with neither is skipped), then every other `*.txt` in `dir` sorted by
+/// name (the user's own, and the selected custom lists that were downloaded).
 pub fn sources(dir: &Path, selection: &Selection) -> Vec<Source> {
-    let mut out: Vec<Source> = selection
-        .enabled()
-        .filter_map(|def| {
-            let file = dir.join(format!("{}.txt", def.id));
-            let origin = if file.is_file() {
-                Origin::File(file)
-            } else {
-                Origin::Bundled(def.bundled?)
-            };
-            Some(Source {
-                def: Some(def),
-                origin,
-            })
-        })
-        .collect();
+    let mut out = catalog_sources(selection, |def| ListSpec::from(def).downloaded(dir));
     let custom: Vec<String> = selection
         .custom
         .iter()
@@ -144,9 +131,30 @@ pub fn sources(dir: &Path, selection: &Selection) -> Vec<Source> {
     out
 }
 
-/// The bundled lists of `selection` alone.
+/// The bundled lists of `selection` alone; nothing is read from disk.
 pub fn bundled_sources(selection: &Selection) -> Vec<Source> {
-    sources(Path::new(""), selection)
+    catalog_sources(selection, |_| None)
+}
+
+/// The enabled catalog lists of `selection`: the `downloaded` file, else
+/// the bundled copy.
+fn catalog_sources(
+    selection: &Selection,
+    downloaded: impl Fn(&ListDef) -> Option<PathBuf>,
+) -> Vec<Source> {
+    selection
+        .enabled()
+        .filter_map(|def| {
+            let origin = match downloaded(def) {
+                Some(file) => Origin::File(file),
+                None => Origin::Bundled(def.bundled?),
+            };
+            Some(Source {
+                def: Some(def),
+                origin,
+            })
+        })
+        .collect()
 }
 
 impl Blocker {
@@ -255,17 +263,6 @@ mod tests {
         }
     }
 
-    /// No catalog list: only the directory's own files.
-    fn none() -> Selection {
-        Selection {
-            lists: catalog::LISTS
-                .iter()
-                .map(|l| (l.id.to_owned(), 0))
-                .collect(),
-            ..Selection::default()
-        }
-    }
-
     fn blocks(b: &Blocker, url: &str, ty: ResourceType) -> bool {
         let req = NetRequest {
             url,
@@ -292,7 +289,7 @@ mod tests {
         d.write("a.txt", "||a.test^\n");
         d.write("b.txt", "||b.test^\n");
         d.write("c.md", "||c.test^\n");
-        let s = sources(&d.lists(), &none());
+        let s = sources(&d.lists(), &Selection::none());
         assert_eq!(names(&s), ["a.txt", "b.txt"]);
         let b = Blocker::from_sources_cached(&s, &d.cache());
         assert!(blocks(&b, "https://a.test/x", ResourceType::Script));
@@ -304,7 +301,12 @@ mod tests {
     fn a_downloaded_copy_overrides_the_bundled_list_and_disabled_ones_are_skipped() {
         let d = Dir::new("override");
         d.write("easylist.txt", "||e.test^\n");
+        d.write("easylist.src", catalog::find("easylist").unwrap().url);
         d.write("ublock-filters.txt", "||off.test^\n");
+        d.write(
+            "ublock-filters.src",
+            catalog::find("ublock-filters").unwrap().url,
+        );
         let sel = Selection {
             lists: [("ublock-filters".to_owned(), 0)].into(),
             ..Selection::default()
@@ -318,6 +320,34 @@ mod tests {
         assert!(!n.iter().any(|n| n.contains("plowe-0")), "{n:?}");
     }
 
+    /// A `ublock-filters.txt` fetched from uBO's old URL (only `!#include`
+    /// lines) must not replace the bundled list.
+    #[test]
+    fn a_copy_from_an_old_url_falls_back_to_the_bundled_list() {
+        let d = Dir::new("old-url");
+        d.write("ublock-filters.txt", "!#include filters-2025.txt\n");
+        d.write(
+            "ublock-filters.src",
+            "https://ublockorigin.github.io/uAssets/filters/filters.txt",
+        );
+        d.write("easylist.txt", "||e.test^\n");
+        let n = names(&sources(&d.lists(), &Selection::default()));
+        assert!(n.contains(&"bundled ublock-filters".to_owned()), "{n:?}");
+        assert!(n.contains(&"bundled easylist".to_owned()), "{n:?}");
+        // Neither is read as a list of the user's own either.
+        assert!(!n.iter().any(|n| n.ends_with(".txt")), "{n:?}");
+    }
+
+    /// The bundled sources never look at the working directory.
+    #[test]
+    fn bundled_sources_read_no_files() {
+        assert!(
+            bundled_sources(&Selection::default())
+                .iter()
+                .all(|s| matches!(s.origin, Origin::Bundled(_)))
+        );
+    }
+
     #[test]
     fn custom_lists_load_only_while_selected() {
         let d = Dir::new("custom");
@@ -325,10 +355,13 @@ mod tests {
         let file = ListSpec::custom(url).file_name();
         d.write(&file, "||c.test^\n");
         d.write("user.txt", "||u.test^\n");
-        assert_eq!(names(&sources(&d.lists(), &none())), ["user.txt"]);
+        assert_eq!(
+            names(&sources(&d.lists(), &Selection::none())),
+            ["user.txt"]
+        );
         let sel = Selection {
             custom: vec![url.to_owned()],
-            ..none()
+            ..Selection::none()
         };
         assert_eq!(
             names(&sources(&d.lists(), &sel)),
@@ -341,7 +374,7 @@ mod tests {
         let d = Dir::new("empty");
         let b = Blocker::from_sources_cached(&[], &d.cache());
         assert!(!blocks(&b, "https://a.test/x", ResourceType::Script));
-        assert!(sources(&d.0.join("missing"), &none()).is_empty());
+        assert!(sources(&d.0.join("missing"), &Selection::none()).is_empty());
         assert!(!d.cache().exists());
     }
 
@@ -349,7 +382,7 @@ mod tests {
     fn a_matching_cache_is_loaded_instead_of_the_lists() {
         let d = Dir::new("hit");
         d.write("a.txt", "||a.test^\n");
-        let s = sources(&d.lists(), &none());
+        let s = sources(&d.lists(), &Selection::none());
         assert!(Blocker::from_cache(&s, &d.cache()).is_none());
         Blocker::from_sources_cached(&s, &d.cache());
         assert!(key_path(&d.cache()).exists());
@@ -366,7 +399,7 @@ mod tests {
     fn a_changed_list_or_selection_rebuilds() {
         let d = Dir::new("miss");
         d.write("a.txt", "||a.test^\n");
-        let s = sources(&d.lists(), &none());
+        let s = sources(&d.lists(), &Selection::none());
         Blocker::from_sources_cached(&s, &d.cache());
         d.write("a.txt", "||a.test^\n||more.test^\n");
         assert!(Blocker::from_cache(&s, &d.cache()).is_none());
@@ -382,7 +415,7 @@ mod tests {
     fn a_corrupt_cache_rebuilds() {
         let d = Dir::new("corrupt");
         d.write("a.txt", "||a.test^\n");
-        let s = sources(&d.lists(), &none());
+        let s = sources(&d.lists(), &Selection::none());
         Blocker::from_sources_cached(&s, &d.cache());
         std::fs::write(d.cache(), b"garbage").unwrap();
         assert!(Blocker::from_cache(&s, &d.cache()).is_none());

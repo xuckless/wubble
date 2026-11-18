@@ -13,7 +13,8 @@
 //! engine is cached in `<profile>/blocker-engine.bin`. Nothing is downloaded
 //! unless `blocker.lists_auto_update` is on (TODO.md, Decided).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -25,10 +26,7 @@ use wubble_blocker::{
     Blocker, Decision, Due, NetRequest, ResourceType, Shields, SiteOverrides, Source,
 };
 use wubble_engine::filter::{ContentFilter, RequestAction, RequestInfo, RequestKind};
-use wubble_store::{
-    BlockerCookieBanners, BlockerCustomLists, BlockerEnabled, BlockerExceptions, BlockerLists,
-    BlockerListsAutoUpdate, BlockerStripParams, Setting,
-};
+use wubble_store::{BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, Setting};
 
 /// The list directory inside a profile.
 const LISTS_DIR: &str = "blocklists";
@@ -45,11 +43,9 @@ pub struct BlockerSettings {
     /// Hosts the blocker skips (with their subdomains).
     pub exceptions: Vec<String>,
     pub lists_auto_update: bool,
-    pub cookie_banners: bool,
-    pub strip_params: bool,
-    pub custom_lists: Vec<String>,
-    /// Catalog lists switched from their default.
-    pub lists: BTreeMap<String, u32>,
+    /// Which lists are on (`blocker.lists`, `blocker.cookie_banners`,
+    /// `blocker.strip_params`, `blocker.custom_lists`).
+    pub selection: Selection,
 }
 
 impl Default for BlockerSettings {
@@ -58,22 +54,7 @@ impl Default for BlockerSettings {
             enabled: BlockerEnabled::default(),
             exceptions: BlockerExceptions::default(),
             lists_auto_update: BlockerListsAutoUpdate::default(),
-            cookie_banners: BlockerCookieBanners::default(),
-            strip_params: BlockerStripParams::default(),
-            custom_lists: BlockerCustomLists::default(),
-            lists: BlockerLists::default(),
-        }
-    }
-}
-
-impl BlockerSettings {
-    /// Which lists these settings turn on.
-    pub fn selection(&self) -> Selection {
-        Selection {
-            lists: self.lists.clone(),
-            cookie_banners: self.cookie_banners,
-            strip_params: self.strip_params,
-            custom: self.custom_lists.clone(),
+            selection: Selection::default(),
         }
     }
 }
@@ -81,13 +62,19 @@ impl BlockerSettings {
 /// Fetches one URL; the network is reached only through this.
 type Fetch = fn(&str) -> Result<String, String>;
 
+/// Distinct blocked URLs a page keeps track of; past this the count stops
+/// growing, so a long-lived page's beacons with cache-busting query strings
+/// cannot grow it without bound.
+const MAX_PAGE_BLOCKS: usize = 4096;
+
 /// What was blocked on a view's page since its last main-frame request.
 /// Counted by distinct URL: Blink may ask for a blocked resource twice (its
 /// preload scanner, then the parser once the first load failed), which is
 /// one thing blocked, not two.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageBlocks {
-    urls: BTreeSet<String>,
+    /// A hash of each blocked URL, at most [`MAX_PAGE_BLOCKS`].
+    urls: HashSet<u64>,
     /// Distinct blocked URLs per host.
     by_host: BTreeMap<String, u32>,
 }
@@ -95,7 +82,9 @@ pub struct PageBlocks {
 impl PageBlocks {
     /// Records a blocked request.
     fn record(&mut self, url: &str) {
-        if self.urls.insert(url.to_owned()) {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        url.hash(&mut h);
+        if self.urls.len() < MAX_PAGE_BLOCKS && self.urls.insert(h.finish()) {
             let host = wubble_core::zoom::host_of(url).unwrap_or_default();
             *self.by_host.entry(host).or_insert(0) += 1;
         }
@@ -122,7 +111,7 @@ pub struct Blocking {
     overrides: RwLock<SiteOverrides>,
     enabled: AtomicBool,
     /// Per view ([`wubble_engine::view::View::browser_id`]), since its last
-    /// main-frame request.
+    /// main-frame request; dropped when the view goes ([`Self::keep_views`]).
     blocked: Mutex<HashMap<i32, PageBlocks>>,
 }
 
@@ -153,7 +142,7 @@ impl Blocking {
         fetch: Fetch,
     ) -> Option<JoinHandle<()>> {
         let (dir, cache) = paths(profile);
-        let selection = settings.selection();
+        let selection = settings.selection.clone();
         let sources = wubble_blocker::sources(&dir, &selection);
         let compiled = self.load_cached(settings, &sources, &cache);
         let update = settings.lists_auto_update;
@@ -260,6 +249,12 @@ impl Blocking {
             .get(&browser_id)
             .map(PageBlocks::hosts)
             .unwrap_or_default()
+    }
+
+    /// Forgets what views other than `live` had blocked: called when a
+    /// view goes, so a closed or slept tab's page does not stay counted.
+    pub fn keep_views(&self, live: &[i32]) {
+        self.counts().retain(|id, _| live.contains(id));
     }
 
     fn counts(&self) -> std::sync::MutexGuard<'_, HashMap<i32, PageBlocks>> {
@@ -389,20 +384,24 @@ impl ContentFilter for Blocking {
             source_url: top,
             resource_type: resource_type(request.kind),
         };
-        match self.current().decide(net, self.shields_for(top)) {
-            Decision::Allow => RequestAction::Allow,
-            Decision::Rewrite { url } => RequestAction::Redirect(url),
-            // A `$redirect` resource is a `data:` URL, which Chromium may
-            // refuse as a redirect target for a web request (not verified);
-            // blocked until it is served through a resource handler (TODO.md, M4).
-            Decision::Block | Decision::Redirect { .. } => {
-                self.counts()
-                    .entry(request.browser_id)
-                    .or_default()
-                    .record(request.url);
-                RequestAction::Block
+        let action = match self.current().decide(net, self.shields_for(top)) {
+            Decision::Allow => return RequestAction::Allow,
+            Decision::Rewrite { url } => return RequestAction::Redirect(url),
+            // A `$redirect` stub (uBO's `noop.js`, `googletagmanager_gtm.js`,
+            // ...) stands in for the blocked resource so the page does not
+            // break; a page itself is never replaced by one.
+            Decision::Redirect { data_url } if request.kind != RequestKind::Document => {
+                RequestAction::Serve(data_url)
             }
-        }
+            Decision::Block | Decision::Redirect { .. } => RequestAction::Block,
+        };
+        // Counted as blocked either way, as uBO and Brave count redirects:
+        // the real resource was not loaded.
+        self.counts()
+            .entry(request.browser_id)
+            .or_default()
+            .record(request.url);
+        action
     }
 
     fn page_script(&self, top_url: &str) -> Option<String> {
@@ -451,15 +450,9 @@ mod tests {
 example.com##.sponsor
 ";
 
-    const RES: &str = r#"[{"name":"1x1.gif","aliases":[],"kind":{"mime":"image/gif"},"content":"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"}]"#;
-
     fn blocking(list: &str) -> Arc<Blocking> {
         let b = Blocking::new();
-        b.replace_blocker(
-            Blocker::from_lists(&[list])
-                .with_resources_json(RES)
-                .unwrap(),
-        );
+        b.replace_blocker(Blocker::from_lists(&[list]).with_bundled_resources());
         b
     }
 
@@ -478,7 +471,7 @@ example.com##.sponsor
         b.check(&req(url, top, kind))
     }
 
-    use RequestAction::{Allow, Block, Redirect};
+    use RequestAction::{Allow, Block, Redirect, Serve};
     use RequestKind::*;
 
     #[test]
@@ -499,8 +492,53 @@ example.com##.sponsor
             ),
             Redirect("https://q.test/?a=2".into())
         );
-        // A `$redirect` data URL is blocked, not redirected.
-        assert_eq!(check(&b, "https://img.test/a.png", SITE, Image), Block);
+    }
+
+    /// uBO's `$redirect` stubs are served in place of the resource (and
+    /// counted as blocked); a page is never replaced by one.
+    #[test]
+    fn redirect_resources_are_served_except_for_pages() {
+        let b = blocking(TEST_LIST);
+        let img = "https://img.test/a.png";
+        assert!(
+            matches!(check(&b, img, SITE, Image), Serve(u) if u.starts_with("data:image/gif;base64,"))
+        );
+        assert_eq!(b.blocked(1), 1);
+        let gtm = "https://www.googletagmanager.com/gtm.js?id=GTM-X";
+        let b = blocking("||googletagmanager.com/gtm.js$script,redirect=googletagmanager_gtm.js\n");
+        assert!(
+            matches!(check(&b, gtm, SITE, Script), Serve(u) if u.starts_with("data:application/javascript;base64,"))
+        );
+        let b = blocking("||img.test^$document,redirect=noop.html\n");
+        assert_eq!(
+            check(&b, "https://img.test/", "https://img.test/", Document),
+            Block
+        );
+    }
+
+    #[test]
+    fn a_long_lived_page_s_blocks_stay_bounded_and_go_with_the_view() {
+        let b = blocking(TEST_LIST);
+        for i in 0..MAX_PAGE_BLOCKS + 10 {
+            check(
+                &b,
+                &format!("https://ads.example/beacon?t={i}"),
+                SITE,
+                Image,
+            );
+        }
+        assert_eq!(b.blocked(1), MAX_PAGE_BLOCKS as u32);
+        assert_eq!(
+            b.blocked_hosts(1),
+            [("ads.example".to_owned(), MAX_PAGE_BLOCKS as u32)]
+        );
+        b.check(&RequestInfo {
+            browser_id: 2,
+            ..req("https://ads.example/x.js", SITE, Script)
+        });
+        b.keep_views(&[2]);
+        assert_eq!((b.blocked(1), b.blocked(2)), (0, 1));
+        assert_eq!(b.counts().len(), 1);
     }
 
     #[test]
@@ -679,19 +717,15 @@ example.com##.sponsor
     /// Every catalog list off: only the profile's own files.
     fn only_own_lists() -> BlockerSettings {
         BlockerSettings {
-            lists: wubble_blocker::catalog::LISTS
-                .iter()
-                .map(|l| (l.id.to_owned(), 0))
-                .collect(),
+            selection: Selection::none(),
             ..BlockerSettings::default()
         }
     }
 
     #[test]
-    fn the_defaults_select_ubo_s_lists_and_both_optional_categories() {
+    fn the_defaults_block_and_never_fetch() {
         let d = BlockerSettings::default();
-        assert!(d.enabled && d.cookie_banners && d.strip_params && !d.lists_auto_update);
-        assert_eq!(d.selection(), Selection::default());
+        assert!(d.enabled && !d.lists_auto_update);
     }
 
     #[test]
@@ -703,7 +737,12 @@ example.com##.sponsor
             .expect("compiles");
         compile.join().expect("no fetch");
         let ad = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
-        assert_eq!(check(&b, ad, "https://news.example/", Script), Block);
+        // uBO's filters replace it with their `adsbygoogle` stub.
+        assert!(matches!(
+            check(&b, ad, "https://news.example/", Script),
+            Serve(u) if u.starts_with("data:application/javascript;base64,")
+        ));
+        assert_eq!(b.blocked(1), 1);
         // Tracking parameters are stripped from a page load.
         let page = "https://news.example/a?utm_source=x&id=1";
         assert_eq!(

@@ -642,6 +642,16 @@ impl Host {
         ))
     }
 
+    /// Drops the blocker's counts of views that are gone.
+    pub(super) fn forget_gone_blocks(&mut self) {
+        let ids: Vec<_> = self.views.values().copied().collect();
+        let live: Vec<i32> = ids
+            .into_iter()
+            .filter_map(|id| Some(self.engine.view(id)?.browser_id()))
+            .collect();
+        self.blocking.keep_views(&live);
+    }
+
     /// The blocker's count for each tab with a view.
     fn blocked_counts(&mut self) -> crate::shell::BlockedMap {
         let tabs: Vec<_> = self.views.keys().copied().collect();

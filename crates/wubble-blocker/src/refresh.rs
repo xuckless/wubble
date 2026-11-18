@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use crate::catalog::{ListDef, Selection};
@@ -62,6 +62,20 @@ impl ListSpec {
     pub fn file_name(&self) -> String {
         format!("{}.txt", self.id)
     }
+
+    /// The file beside it naming the URL it was fetched from.
+    fn source_name(&self) -> String {
+        format!("{}.src", self.id)
+    }
+
+    /// The list's downloaded copy in `dir`, if it was fetched from this
+    /// list's URL. A copy from another URL (a catalog list whose source
+    /// moved, such as uBO's filters before their CDN copy) is not this list.
+    pub fn downloaded(&self, dir: &Path) -> Option<PathBuf> {
+        let source = std::fs::read_to_string(dir.join(self.source_name())).ok()?;
+        let file = dir.join(self.file_name());
+        (source == self.url && file.is_file()).then_some(file)
+    }
 }
 
 impl From<&ListDef> for ListSpec {
@@ -96,12 +110,13 @@ pub fn is_list_url(url: &str) -> bool {
 }
 
 /// When each list in `dir` was last fetched: its file's modification time
-/// (unix seconds). Lists without a file are missing, so [`due`].
+/// (unix seconds). Lists without a [`ListSpec::downloaded`] copy are
+/// missing, so [`due`].
 pub fn last_fetch(dir: &Path, lists: &[ListSpec]) -> BTreeMap<String, u64> {
     lists
         .iter()
         .filter_map(|l| {
-            let modified = std::fs::metadata(dir.join(l.file_name()))
+            let modified = std::fs::metadata(l.downloaded(dir)?)
                 .ok()?
                 .modified()
                 .ok()?;
@@ -144,7 +159,13 @@ pub fn refresh(
         };
         let path = dir.join(list.file_name());
         let tmp = dir.join(format!("{}.tmp", list.file_name()));
-        match std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path)) {
+        // The source is named after the list is in place: a crash between
+        // the two leaves a list that is not trusted yet, never a list
+        // trusted under another URL.
+        let written_ok = std::fs::write(&tmp, text)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .and_then(|()| std::fs::write(dir.join(list.source_name()), &list.url));
+        match written_ok {
             Ok(()) => written.push(list.id.clone()),
             Err(e) => eprintln!("wubble-blocker: {} not written: {e}", path.display()),
         }
@@ -292,6 +313,29 @@ mod tests {
         assert_eq!(*fetched.borrow(), ["u"]);
         // An update the user asked for fetches everything.
         assert_eq!(refresh(&d.0, &lists, Due::All, &fetch), ["a", "b"]);
+    }
+
+    /// A copy fetched from a list's old URL (uBO's filters moved to their
+    /// CDN copy) is neither used nor counted as fresh.
+    #[test]
+    fn a_copy_from_another_url_is_not_the_list() {
+        let d = dir("moved");
+        let old = spec("a", "https://old.example/a.txt", 100);
+        let ok = |_: &str| Ok("||old.test^\n".to_owned());
+        refresh(&d.0, std::slice::from_ref(&old), Due::At(now()), &ok);
+        assert_eq!(old.downloaded(&d.0), Some(d.0.join("a.txt")));
+        let moved = spec("a", "https://new.example/a.txt", 100);
+        assert_eq!(moved.downloaded(&d.0), None);
+        assert!(last_fetch(&d.0, std::slice::from_ref(&moved)).is_empty());
+        // A copy without a source file (written before sources were named).
+        std::fs::remove_file(d.0.join("a.src")).unwrap();
+        assert_eq!(old.downloaded(&d.0), None);
+        // The next refresh fetches it from the new URL.
+        assert_eq!(
+            refresh(&d.0, std::slice::from_ref(&moved), Due::At(now()), &ok),
+            ["a"]
+        );
+        assert_eq!(moved.downloaded(&d.0), Some(d.0.join("a.txt")));
     }
 
     #[test]

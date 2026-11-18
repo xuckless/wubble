@@ -315,13 +315,14 @@ impl Host {
     }
 
     /// The tab's view closed: its surfaces close without answering (welding
-    /// answered every held request), its fullscreen and sound end.
+    /// answered every held request), its fullscreen, sound and blocked count end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }
         self.downloads_lost(tab);
         self.autofill_gone(tab);
+        self.forget_gone_blocks();
         self.audio.remove(&tab);
         if let Some(window) = self.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));

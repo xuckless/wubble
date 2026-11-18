@@ -51,6 +51,7 @@ use zeroize::Zeroizing;
 
 use crate::blocking::BlockerSettings;
 use crate::host::now_ms;
+use wubble_blocker::catalog::Selection;
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
@@ -782,10 +783,12 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             enabled: store.setting::<BlockerEnabled>().await?,
             exceptions: store.setting::<BlockerExceptions>().await?,
             lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
-            cookie_banners: store.setting::<BlockerCookieBanners>().await?,
-            strip_params: store.setting::<BlockerStripParams>().await?,
-            custom_lists: store.setting::<BlockerCustomLists>().await?,
-            lists: store.setting::<BlockerLists>().await?,
+            selection: Selection {
+                lists: store.setting::<BlockerLists>().await?,
+                cookie_banners: store.setting::<BlockerCookieBanners>().await?,
+                strip_params: store.setting::<BlockerStripParams>().await?,
+                custom: store.setting::<BlockerCustomLists>().await?,
+            },
         },
         stored: store.all_settings().await?,
     };

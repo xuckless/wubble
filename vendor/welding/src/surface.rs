@@ -794,6 +794,11 @@ pub enum RequestAction {
     Cancel,
     /// Load this URL instead (CEF treats a changed URL as a redirect).
     Redirect(String),
+    /// wubble change 28: answer with the content of this base64 `data:` URL
+    /// (status 200) instead of sending the request; cancelled when it does
+    /// not parse. Served through a CEF resource handler, because Chromium
+    /// refuses a `data:` URL as the redirect target of a web request.
+    Serve(String),
 }
 
 /// wubble change: decides every request before it is sent. Called on CEF's

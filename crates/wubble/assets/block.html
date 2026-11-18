@@ -5,10 +5,14 @@
 <title>wubble block</title>
 </head>
 <body>
-<!-- --smoke block: two requests the smoke's list blocks (nothing is fetched:
-     the blocker answers before the network), one it allows (a data: URL). -->
+<!-- --smoke block: two requests the smoke's list blocks, one script it
+     replaces with uBO's noop.js stub (nothing is fetched: the blocker answers
+     before the network), one it allows (a data: URL). -->
 <img src="https://blocked.wubble.test/ad.png" width="8" height="8" alt="">
 <script src="https://blocked.wubble.test/ad.js"></script>
+<script src="https://served.wubble.test/gtm.js"
+  onload="document.title = 'wubble block served'"
+  onerror="document.title = 'wubble block refused'"></script>
 <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="8" height="8" alt="">
 <p>bundled page for <code>--smoke block</code></p>
 </body>

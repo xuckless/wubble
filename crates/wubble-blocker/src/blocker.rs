@@ -14,8 +14,6 @@ use crate::types::NetRequest;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockerError {
-    #[error("invalid resources json: {0}")]
-    Resources(#[from] serde_json::Error),
     #[error("compiled cache is unreadable: {0:?}")]
     Cache(adblock::engine::DeserializationError),
     #[error("cache io: {0}")]
@@ -125,15 +123,10 @@ fn parse_options(source: &Source) -> ParseOptions {
 }
 
 impl Blocker {
-    /// Compile filter list texts.
+    /// Compile filter list texts (lists of the user's own), without resources.
     pub fn from_lists(lists: &[&str]) -> Self {
-        let mut set = FilterSet::new(false);
-        for text in lists {
-            set.add_filter_list((*text).to_owned(), ParseOptions::default());
-        }
-        Self {
-            engine: Engine::new_with_filter_set(set),
-        }
+        let sources: Vec<Source> = lists.iter().map(|text| Source::text(*text)).collect();
+        Self::from_parsed(&sources)
     }
 
     /// Compiles `sources` after uBO's preprocessor and each list's dropped
@@ -164,18 +157,12 @@ impl Blocker {
         self
     }
 
-    /// Load redirect/scriptlet resources (`Vec<Resource>` JSON, Brave adblock-resources).
-    /// Must be re-applied after `from_bytes`/`load`: the cache does not store them.
-    pub fn with_resources_json(mut self, json: &str) -> Result<Self, BlockerError> {
-        self.use_resources_json(json)?;
-        Ok(self)
-    }
-
-    /// [`Self::with_resources_json`] in place; on error nothing changes.
-    pub fn use_resources_json(&mut self, json: &str) -> Result<(), BlockerError> {
-        let resources: Vec<Resource> = serde_json::from_str(json)?;
+    /// With these resources instead (`Vec<Resource>` JSON), for tests.
+    #[cfg(test)]
+    fn with_resources_json(mut self, json: &str) -> Self {
+        let resources: Vec<Resource> = serde_json::from_str(json).expect("test resources");
         self.engine.use_resources(resources);
-        Ok(())
+        self
     }
 
     /// Serialise the compiled filters (not resources). Only valid for the same adblock
@@ -339,8 +326,6 @@ mod tests {
         assert_eq!(decide(&b, "https://s.test/a", SITE, Xhr), Decision::Allow);
     }
 
-    const RES: &str = r#"[{"name":"1x1.gif","aliases":[],"kind":{"mime":"image/gif"},"content":"R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"}]"#;
-
     #[test]
     fn redirect_needs_resources() {
         let list = "||img.test^$image,redirect=1x1.gif\n";
@@ -349,22 +334,13 @@ mod tests {
             decide(&b, "https://img.test/a.png", SITE, Image),
             Decision::Block
         );
-        let b = b.with_resources_json(RES).unwrap();
+        let b = b.with_bundled_resources();
         match decide(&b, "https://img.test/a.png", SITE, Image) {
             Decision::Redirect { data_url } => {
                 assert!(data_url.starts_with("data:image/gif;base64,"))
             }
             d => panic!("{d:?}"),
         }
-    }
-
-    #[test]
-    fn bad_resources_json_errs() {
-        assert!(
-            Blocker::from_lists(&[])
-                .with_resources_json("nope")
-                .is_err()
-        );
     }
 
     #[test]
@@ -464,9 +440,7 @@ mod tests {
         // dep-user.js:  `function depUser(){safeSelf();}`
         let res = r#"[{"name":"safe-self.fn","kind":{"mime":"fn/javascript"},"content":"ZnVuY3Rpb24gc2FmZVNlbGYoKXtpZihzY3JpcHRsZXRHbG9iYWxzLnNhZmVTZWxmKXtyZXR1cm4gc2NyaXB0bGV0R2xvYmFscy5zYWZlU2VsZjt9cmV0dXJuIHNjcmlwdGxldEdsb2JhbHMuc2FmZVNlbGY9e307fQ=="},
             {"name":"dep-user.js","kind":{"mime":"application/javascript"},"content":"ZnVuY3Rpb24gZGVwVXNlcigpe3NhZmVTZWxmKCk7fQ==","dependencies":["safe-self.fn"]}]"#;
-        let b = Blocker::from_lists(&["example.com##+js(dep-user)\n"])
-            .with_resources_json(res)
-            .unwrap();
+        let b = Blocker::from_lists(&["example.com##+js(dep-user)\n"]).with_resources_json(res);
         let script = b
             .cosmetic("https://example.com/", Shields::On)
             .page_script()
@@ -529,15 +503,14 @@ mod tests {
     #[test]
     fn resources_reapplied_after_load() {
         let bytes = Blocker::from_lists(&[LIST])
-            .with_resources_json(RES)
-            .unwrap()
+            .with_bundled_resources()
             .to_bytes();
         let b = Blocker::from_bytes(&bytes).unwrap();
         assert_eq!(
             decide(&b, "https://img.test/a.png", SITE, Image),
             Decision::Block
         );
-        let b = b.with_resources_json(RES).unwrap();
+        let b = b.with_bundled_resources();
         assert!(matches!(
             decide(&b, "https://img.test/a.png", SITE, Image),
             Decision::Redirect { .. }

@@ -285,6 +285,17 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    accessor). Tests: order with the other events, the size cap, the pending
    cap and room again after a drain. Not unit-tested: an unknown frame id
    (needs a live browser).
+28. **Served responses.** `surface.rs`: `RequestAction::Serve(data_url)`.
+   `handlers.rs`: `WeldResourceRequestHandler` gains a `served` slot;
+   `on_before_resource_load` decodes the base64 `data:` URL into `Served`
+   (MIME type, body; `RV_CANCEL` when it does not parse) and returns
+   `RV_CONTINUE`, and its new `resource_handler` hands the slot to a new
+   `WeldServedResource` (`open` handles at once, `response_headers` gives
+   200, the MIME type, the length and `Access-Control-Allow-Origin: *`,
+   `read` copies from memory). Contract from CEF `cef_resource_handler.h`
+   and libcef_dll `CefStreamResourceHandler` (BSD-3-Clause), no code copied.
+   Lets the content blocker serve uBO's `$redirect=` stubs, which Chromium
+   would refuse as a `data:` redirect target. Test: the data URL parsing.
 
 ## Not changed, on purpose
 

@@ -152,7 +152,8 @@ pub const BLOCKER_LISTS_AUTO_UPDATE: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: true,
 };
-/// The cookie-notice lists (EasyList and uBlock's): banners are hidden, never clicked.
+/// The cookie-notice lists (EasyList and uBlock's): banners are hidden, never clicked. Until generic
+/// class/id hiding is wired, only their site-specific and complex generic rules apply.
 pub const BLOCKER_COOKIE_BANNERS: SettingDef = SettingDef {
     key: "blocker.cookie_banners",
     kind: SettingKind::Bool,
