@@ -85,7 +85,7 @@ impl Host {
             Applied::SearchEngine(engine) => self.search_engine = engine,
             Applied::LiveSuggestions(on) => self.live_suggestions = on,
             Applied::SidebarMode(mode) => {
-                if let Some(window) = self.window.upgrade()
+                if let Some(window) = self.w.window.upgrade()
                     && SidebarMode::from(window.get_sidebar_mode()) != mode
                 {
                     window.invoke_sidebar_mode_requested(mode.into());
@@ -108,7 +108,7 @@ impl Host {
                     self.dispatch(Command::SetSleepPolicy(policy));
                 }
             }
-            Applied::Glass(setting) => self.glass.borrow_mut().set_setting(setting),
+            Applied::Glass(setting) => self.w.glass.borrow_mut().set_setting(setting),
             Applied::Passwords(settings) => self.autofill.set_settings(settings),
             Applied::RestartOnly => {}
         }
@@ -265,7 +265,7 @@ impl Host {
     /// closed (and any recording cancelled) while another tab is shown. The window's `page`
     /// property is set by `render_pages`, which calls this.
     pub(super) fn render_settings(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         if self.shown_page() != Some(InternalPage::Settings) {

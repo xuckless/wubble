@@ -126,7 +126,7 @@ impl Host {
         for effect in effects {
             self.autofill_effect(tab, effect);
         }
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_surfaces(&window);
         }
     }

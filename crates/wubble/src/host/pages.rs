@@ -330,7 +330,7 @@ impl Host {
     /// Tells the window which page shows, fetching a page's data when it is entered, and draws
     /// the page. The one place the page layer changes.
     pub(super) fn render_pages(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let page = self.shown_page();
@@ -384,7 +384,7 @@ impl Host {
 
     /// The badge was clicked: the blocker menu opens under it (`x`, `y` in window pixels).
     pub(crate) fn blocker_menu_requested(&mut self, x: f32, y: f32) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let Some(tab) = self.model.visible_tab() else {
@@ -456,7 +456,7 @@ impl Host {
     }
 
     pub(super) fn render_history(&self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let h = &self.pages.history;
@@ -552,7 +552,7 @@ impl Host {
     }
 
     pub(super) fn render_bookmarks(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let b = &self.pages.bookmarks;
@@ -638,7 +638,7 @@ impl Host {
     /// Mod+D: the sheet for the visible web page. Not while an engine dialog waits for its
     /// answer (one sheet at a time).
     pub(crate) fn bookmark_page(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let Some(tab) = self
@@ -695,14 +695,14 @@ impl Host {
         let (next, copy) = self.pages.passwords.apply(then, answer, Instant::now());
         if let Some(password) = copy {
             self.copy(&password);
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.w.window.upgrade() {
                 self.toast(&window, "Password copied");
             }
         }
         if let Some(command) = next {
             self.vault_request(command, Then::Apply);
         }
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -711,7 +711,7 @@ impl Host {
     fn passwords_left(&mut self) {
         self.pages.passwords = Passwords::default();
         self.vault_request(VaultCommand::Lock, Then::Apply);
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -721,7 +721,7 @@ impl Host {
         let p = &mut self.pages.passwords;
         if p.revealed.as_ref().is_some_and(|r| r.until <= now) {
             p.revealed = None;
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.w.window.upgrade() {
                 self.render_passwords(&window);
             }
         }
@@ -744,7 +744,7 @@ impl Host {
 
     pub(crate) fn passwords_query(&mut self, query: &str) {
         query.clone_into(&mut self.pages.passwords.query);
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -762,7 +762,7 @@ impl Host {
 
     pub(crate) fn login_hide(&mut self) {
         self.pages.passwords.revealed = None;
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -787,7 +787,7 @@ impl Host {
     /// "Import CSV": the OS file chooser, then the vault reads the file on the store thread.
     pub(crate) fn passwords_import_requested(&mut self) {
         use crate::chooser::{self, DialogSpec, Pick};
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let spec = DialogSpec {

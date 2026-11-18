@@ -20,11 +20,12 @@ mod pages;
 mod panes;
 mod settings;
 mod surfaces;
+mod window;
 
-use std::cell::RefCell;
+pub(crate) use window::WindowHost;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,7 +43,6 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::site::SitePermissions;
 use wubble_core::sleep::Pressure;
-use wubble_core::space::MAX_PANES;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::window::WindowId;
 use wubble_core::zoom::ZoomTable;
@@ -50,13 +50,10 @@ use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, Point};
 use wubble_engine::nav::{Cursor, Phase, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
-use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
 use wubble_store::{ClosedTab, Transition};
-use wubble_ui::glass::GlassRegistry;
 use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 
-use crate::backdrop::Glass;
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::block_smoke::{self, BlockSmoke};
 use crate::blocking::Blocking;
@@ -66,7 +63,6 @@ use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
 use crate::page_error::ErrorEvent;
 use crate::page_smoke::{self, PageSmoke};
 use crate::pages_smoke::{self, PagesSmoke};
-use crate::panes::Panes;
 use crate::perform::{self, Plan, ViewOp};
 use crate::persist::{self, Loaded, SaveState, StoreClient, TypedNav, UiState};
 use crate::pixels;
@@ -260,20 +256,11 @@ struct Pace {
 /// Everything the pump drives. Owned by `HOST` in `main.rs`.
 pub struct Host {
     pub engine: Engine,
-    window: slint::Weak<AppWindow>,
+    /// The window the host works on now (`window.rs`); the others are parked.
+    w: WindowHost,
+    parked: BTreeMap<WindowId, WindowHost>,
     /// The engine's single-shot pump timer.
     pub timer: slint::Timer,
-    /// One ring of textures per pane on screen (each pane has its own frame size), and the tab
-    /// each slot presents; a tab keeps its slot while it stays on screen.
-    presenters: [FramePresenter; MAX_PANES],
-    slots: [Option<TabId>; MAX_PANES],
-    /// The popup widget's frames: a ring of their own, since a popup's size
-    /// differs from the page's and changes with every popup.
-    popup_presenter: FramePresenter,
-    /// The window's glass, shared with the shell's rendering notifier.
-    glass: Rc<RefCell<Glass>>,
-    /// The glass the panels report (the list's one owner), for the pixel smoke.
-    panels: Rc<RefCell<GlassRegistry>>,
     /// The one owner of tabs and Spaces.
     model: Model,
     /// The view of every live tab.
@@ -285,14 +272,6 @@ pub struct Host {
     bar: Bar,
     /// The view last told about keyboard focus.
     focus_view: Option<ViewId>,
-    /// The last frame of each tab on screen (the `panes` the shell shows).
-    frames: BTreeMap<TabId, PaneFrame>,
-    /// Where the pages on screen sit: the split physics, stepped per rendered frame.
-    panes: Panes,
-    /// The previous pane frame's time while the strings or a pane's stretch move.
-    panes_last: Option<Instant>,
-    /// What the strings settled, waiting to be dispatched outside rendering.
-    split_commands: Vec<Command>,
     pub stats: FrameStats,
     last_present: Option<Instant>,
     idle_runs: u32,
@@ -326,8 +305,6 @@ pub struct Host {
     pub failure: Option<String>,
     /// The page's own UI per tab (one owner); only the visible tab's shows.
     surfaces: BTreeMap<TabId, Surfaces>,
-    /// What of `surfaces` the shell last drew.
-    drawn: surfaces::Drawn,
     /// Window and page fullscreen.
     screen: Screen,
     /// The page's IME composition.
@@ -374,10 +351,7 @@ impl Host {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         engine: Engine,
-        window: &AppWindow,
-        presenters: [FramePresenter; MAX_PANES + 1],
-        glass: Rc<RefCell<Glass>>,
-        panels: Rc<RefCell<GlassRegistry>>,
+        w: WindowHost,
         loaded: Loaded,
         store: StoreClient,
         open: Option<String>,
@@ -405,20 +379,15 @@ impl Host {
             .collect();
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
-        let [a, b, c, popup_presenter] = presenters;
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
         let begin_frames = checks.begin_frames;
         let mut host = Self {
             engine,
-            window: window.as_weak(),
+            w,
+            parked: BTreeMap::new(),
             timer: slint::Timer::default(),
-            presenters: [a, b, c],
-            slots: [None; MAX_PANES],
-            popup_presenter,
-            glass,
-            panels,
             model,
             views: BTreeMap::new(),
             pending: restore.into(),
@@ -432,10 +401,6 @@ impl Host {
                 generation: 0,
             },
             focus_view: None,
-            frames: BTreeMap::new(),
-            panes: Panes::default(),
-            panes_last: None,
-            split_commands: vec![],
             stats: FrameStats::default(),
             last_present: None,
             idle_runs: 0,
@@ -460,7 +425,6 @@ impl Host {
             committed,
             failure: None,
             surfaces: BTreeMap::new(),
-            drawn: Default::default(),
             screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
@@ -485,13 +449,34 @@ impl Host {
             }),
         };
         host.replay_settings();
-        host.render_downloads(window);
+        if let Some(window) = host.w.window.upgrade() {
+            host.render_downloads(&window);
+        }
         host.session_icon_setup();
         match open {
             Some(url) => host.dispatch(new_tab(url, None)),
             None => host.after_change(),
         }
         host
+    }
+
+    /// Makes window `id` the one the host works on (`window.rs`). False if it has no window
+    /// (closed, or not opened yet): the host stays on the one it was on.
+    pub fn enter(&mut self, id: WindowId) -> bool {
+        if self.w.id == id {
+            return true;
+        }
+        let Some(mut next) = self.parked.remove(&id) else {
+            return false;
+        };
+        std::mem::swap(&mut self.w, &mut next);
+        self.parked.insert(next.id, next);
+        true
+    }
+
+    /// Enters the model's focused window, if it has one open.
+    pub fn enter_focused(&mut self) {
+        self.enter(self.model.focused());
     }
 
     /// The only way tabs change: apply, then execute the effects.
@@ -546,7 +531,7 @@ impl Host {
     fn execute(&mut self, c: Call, frame_rate: u32) -> Option<Command> {
         match c {
             Call::OpenView { tab, url } => {
-                let window = self.window.upgrade()?;
+                let window = self.w.window.upgrade()?;
                 if self.views.contains_key(&tab) {
                     return None;
                 }
@@ -555,7 +540,7 @@ impl Host {
                     layout: self.pane_layout(&window, tab),
                     frame_rate,
                     begin_frames: self.pace.is_some(),
-                    gpu: self.presenters[0].context().clone(),
+                    gpu: self.w.presenters[0].context().clone(),
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {
@@ -599,6 +584,7 @@ impl Host {
             // Later, outside the host: opening the bar calls back into it.
             Call::ShowCommandBar => {
                 let _ = self
+                    .w
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
             }
@@ -611,15 +597,15 @@ impl Host {
 
     /// Re-derives the shell from the model.
     fn after_change(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         // Another tab's frame (and cursor) must not stay on screen while
         // input already goes to the tabs shown now: blank until they paint.
         let kept = self.framed_tabs();
-        let before = self.frames.len();
-        self.frames.retain(|tab, _| kept.contains(tab));
-        if self.frames.len() != before {
+        let before = self.w.frames.len();
+        self.w.frames.retain(|tab, _| kept.contains(tab));
+        if self.w.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
         }
         self.settle_panes(&window);
@@ -731,7 +717,7 @@ impl Host {
         if !worked {
             return;
         }
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         for (view, event) in events {
@@ -754,7 +740,7 @@ impl Host {
         let framed = self
             .model
             .visible_tab()
-            .is_some_and(|t| self.frames.contains_key(&t));
+            .is_some_and(|t| self.w.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
         if self.checks.block_smoke.is_some() {
             let blocked = self.visible_blocked();
@@ -832,7 +818,7 @@ impl Host {
             .is_some_and(|n| self.stats.accelerated >= n)
         {
             if let Some(tab) = self.model.visible_tab()
-                && let Some(frame) = self.frames.get(&tab)
+                && let Some(frame) = self.w.frames.get(&tab)
             {
                 let layout = self.pane_layout(window, tab);
                 eprintln!(
@@ -863,12 +849,13 @@ impl Host {
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
     /// refracted, moving backdrop), not a flat fill, and be the scene's current frame.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
-        if !self.glass.borrow().is_scene() {
+        if !self.w.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
             return Ok(());
         }
         let key = window.global::<GlassKeys>().get_sidebar();
         let side = self
+            .w
             .panels
             .borrow()
             .get(key)
@@ -887,6 +874,7 @@ impl Host {
         let sample = pixels::check_varied(shot, region)?;
         // What the window shows there is the scene's frame of this render, not an older one.
         let (_, _, scene) = self
+            .w
             .glass
             .borrow()
             .readback()
@@ -918,7 +906,7 @@ impl Host {
                 // once the host is free again, so the shape shows without
                 // waiting for the mouse to move.
                 if let Some(position) = self.input.pointer {
-                    let _ = self.window.upgrade_in_event_loop(move |window| {
+                    let _ = self.w.window.upgrade_in_event_loop(move |window| {
                         window
                             .window()
                             .dispatch_event(slint::platform::WindowEvent::PointerMoved { position })
@@ -1019,7 +1007,7 @@ impl Host {
         }
         self.bar.history = hits.entries;
         self.bar.icons = hits.icons;
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_bar(&window);
         }
     }
@@ -1115,7 +1103,7 @@ impl Host {
             }
             Plan::Find(event) => self.find_event(event),
             Plan::Fullscreen => {
-                if let Some(window) = self.window.upgrade() {
+                if let Some(window) = self.w.window.upgrade() {
                     self.apply_screen(&window, ScreenEvent::Toggle);
                 }
             }
@@ -1125,6 +1113,7 @@ impl Host {
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {
                 let _ = self
+                    .w
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_address_focus());
             }
@@ -1136,7 +1125,7 @@ impl Host {
                 }
             }),
             Plan::ToggleSidebar => {
-                if let Some(window) = self.window.upgrade() {
+                if let Some(window) = self.w.window.upgrade() {
                     window.invoke_toggle_sidebar();
                 }
             }
@@ -1204,7 +1193,7 @@ impl Host {
     }
 
     fn save_now(&mut self) {
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.store.save(&self.model, ui_state(&window));
             self.save = SaveState::default();
         }
@@ -1279,7 +1268,7 @@ impl Host {
             shown_is_visible: shown,
             stale_frame: {
                 let kept = self.framed_tabs();
-                self.frames.keys().any(|t| !kept.contains(t))
+                self.w.frames.keys().any(|t| !kept.contains(t))
             },
         }
     }
@@ -1338,11 +1327,16 @@ impl Host {
                 })
                 .collect(),
             visible_views: self.engine.visible_views(),
-            at_rest: self.panes_last.is_none()
-                && self.split_commands.is_empty()
-                && !self.panes.held()
-                && self.frames.values().all(|f| f.view.is_live()),
-            masked: self.frames.values().filter(|f| f.masked.is_some()).count(),
+            at_rest: self.w.panes_last.is_none()
+                && self.w.split_commands.is_empty()
+                && !self.w.panes.held()
+                && self.w.frames.values().all(|f| f.view.is_live()),
+            masked: self
+                .w
+                .frames
+                .values()
+                .filter(|f| f.masked.is_some())
+                .count(),
         };
         let (state, action) = split_smoke::next(state, &seen);
         self.checks.split_smoke = Some(state);
@@ -1378,7 +1372,7 @@ impl Host {
                     _ => split_smoke::BEND,
                 };
                 let height = window.get_content_height();
-                match self.panes.seams(height.into()).first() {
+                match self.w.panes.seams(height.into()).first() {
                     Some(&(x, _)) => {
                         let (x, y) = (x as f32, height / 2.0);
                         self.split_grab(0, x, y);
@@ -1409,7 +1403,7 @@ impl Host {
         let Some(state) = self.checks.settings_smoke.take() else {
             return;
         };
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             self.checks.settings_smoke = Some(state);
             return;
         };
@@ -1433,7 +1427,7 @@ impl Host {
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
                 // which it calls back into. The read is queued after the write it causes.
-                let _ = self.window.upgrade_in_event_loop(move |window| {
+                let _ = self.w.window.upgrade_in_event_loop(move |window| {
                     window.invoke_setting_changed(key.into(), value.into());
                     with_host(|host| {
                         host.store.read_settings(move |rows| {
@@ -1462,7 +1456,7 @@ impl Host {
         let Some(state) = self.checks.pages_smoke.take() else {
             return;
         };
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             self.checks.pages_smoke = Some(state);
             return;
         };
@@ -1494,6 +1488,7 @@ impl Host {
             // The page's own button callback, as a click sends it: later, outside the host.
             Some(pages_smoke::Action::Unlock) => {
                 let _ = self
+                    .w
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_passwords_unlock());
             }
@@ -1564,7 +1559,7 @@ impl Host {
                     page_smoke::Cancel::Blur => {
                         // Back to what the shell's focus says.
                         self.input.forget_view_focus();
-                        if let Some(window) = self.window.upgrade() {
+                        if let Some(window) = self.w.window.upgrade() {
                             self.sync_focus(&window);
                         }
                     }
@@ -1713,7 +1708,7 @@ impl Host {
     /// Raw winit events, before Slint sees them: keys for the page,
     /// modifiers and window focus.
     pub fn window_event(&mut self, event: &WindowEvent) -> EventResult {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return EventResult::Propagate;
         };
         match event {
@@ -1721,11 +1716,14 @@ impl Host {
             WindowEvent::CursorMoved { position, .. } => {
                 let position = position.to_logical(window.window().scale_factor().into());
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
-                self.glass.borrow_mut().pointer_move(position.x, position.y);
+                self.w
+                    .glass
+                    .borrow_mut()
+                    .pointer_move(position.x, position.y);
             }
             WindowEvent::CursorLeft { .. } => {
                 self.input.pointer = None;
-                self.glass.borrow_mut().pointer_leave();
+                self.w.glass.borrow_mut().pointer_leave();
             }
             // A left press anywhere sends a wave through the scene (the page gets it too). Raw,
             // so the side buttons navigate over the shell too, without a wave.
@@ -1735,7 +1733,7 @@ impl Host {
                 ..
             } => {
                 if input::taps_backdrop(*button) {
-                    self.glass.borrow_mut().tap();
+                    self.w.glass.borrow_mut().tap();
                 }
                 if let Some(action) = input::button_action(*button) {
                     self.perform(action);
@@ -1837,7 +1835,7 @@ impl Host {
     /// Wayland the first rate comes from the fastest monitor because the
     /// surface has not entered an output yet.
     fn follow_frame_rate(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let rate = window

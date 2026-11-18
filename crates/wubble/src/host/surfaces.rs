@@ -321,7 +321,7 @@ impl Host {
         self.downloads_lost(tab);
         self.autofill_gone(tab);
         self.audio.remove(&tab);
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
         }
     }
@@ -348,21 +348,21 @@ impl Host {
     /// values that did not change; the menu is compared here, see [`Drawn`]).
     pub(super) fn render_surfaces(&mut self, window: &AppWindow) {
         let tab = self.model.visible_tab();
-        if self.drawn.tab != tab
-            && let Some(old) = self.drawn.tab
+        if self.w.drawn.tab != tab
+            && let Some(old) = self.w.drawn.tab
         {
-            self.drawn.tab = tab;
+            self.w.drawn.tab = tab;
             self.left_visible(window, old);
         }
         let current = tab
             .and_then(|t| self.surfaces.get(&t))
             .cloned()
             .unwrap_or_default();
-        if self.drawn.tab != tab || self.drawn.menu != current.menu {
+        if self.w.drawn.tab != tab || self.w.drawn.menu != current.menu {
             let scale = window.window().scale_factor();
             window.set_menu(menu_view(&current.menu, scale, self.focus_origin(window)));
         }
-        if self.drawn.tab != tab || self.drawn.permission != current.permission {
+        if self.w.drawn.tab != tab || self.w.drawn.permission != current.permission {
             window.set_permission(permission_view(&current.permission));
         }
         // The sign-in sheet blocks the load; a JS dialog waits behind it.
@@ -378,7 +378,7 @@ impl Host {
         }
         window.set_page_fullscreen(matches!(self.screen, Screen::Page { .. }));
         self.render_autofill(window, tab);
-        self.drawn = Drawn {
+        self.w.drawn = Drawn {
             tab,
             menu: current.menu,
             permission: current.permission,
@@ -483,7 +483,7 @@ impl Host {
     }
 
     fn redraw_surfaces(&mut self) {
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_surfaces(&window);
         }
     }
@@ -505,7 +505,7 @@ impl Host {
                 &wubble_store::text_of::<wubble_store::SiteZoom>(&table),
             );
         }
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.toast(&window, &format!("{percent}%"));
         }
     }
@@ -569,7 +569,7 @@ impl Host {
     }
 
     pub(super) fn copy(&self, text: &str) {
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             window.invoke_copy_text(text.into());
         }
     }

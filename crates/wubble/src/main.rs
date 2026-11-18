@@ -647,12 +647,13 @@ thread_local! {
     static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
 }
 
-/// Runs `f` on the host, if there is one and nothing else is using it.
+/// Runs `f` on the host, if there is one and nothing else is using it, in the focused window.
 /// Called on the Slint thread only.
 fn with_host(f: impl FnOnce(&mut Host)) {
     HOST.with(|cell| match cell.try_borrow_mut() {
         Ok(mut host) => {
             if let Some(host) = host.as_mut() {
+                host.enter_focused();
                 f(host);
             }
         }
@@ -1136,9 +1137,10 @@ fn run(
     connect_surfaces(&window);
     wubble_ui::window::wire(&window);
     let panels = install_shell_driver(&window, loaded.settings.ui, &glass)?;
-    let host = Host::new(
-        engine,
-        &window,
+    let first = host::WindowHost::new(
+        wubble_core::window::WindowId(0),
+        wubble_core::window::WindowKind::Main,
+        window.clone_strong(),
         [
             gpu.presenter(),
             gpu.presenter(),
@@ -1147,12 +1149,9 @@ fn run(
         ],
         glass,
         panels,
-        loaded,
-        store,
-        url,
-        checks,
-        downloads,
-        blocking,
+    );
+    let host = Host::new(
+        engine, first, loaded, store, url, checks, downloads, blocking,
     );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
