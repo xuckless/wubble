@@ -69,55 +69,63 @@ impl Quality {
         }
     }
 
-    /// Over-budget frames among the last `WINDOW` that step this level down.
-    /// `Cached` renders once per `CACHED_REFRESH_CALLS` frames, so one
-    /// over-budget frame in the window is already its refresh failing.
-    const fn down_count(self) -> u32 {
-        match self {
-            Quality::Full | Quality::HalfRes => DOWN_COUNT,
-            Quality::Cached => 1,
-            // Nothing cheaper to go to.
-            Quality::Flat => u32::MAX,
-        }
+    /// Position in [`Governor`]'s per-level memory.
+    const fn index(self) -> usize {
+        self as usize
     }
 }
 
-/// Number of most recent frame costs the down rule looks at (bits of `u8`).
-pub const WINDOW: u32 = 8;
-/// `Full` and `HalfRes` step down when this many of the window are over the
-/// down line.
-pub const DOWN_COUNT: u32 = 3;
-/// The down line, as a fraction of the frame budget.
+/// Weight of the newest frame in a level's smoothed load once the level has
+/// run `1 / AVG_WEIGHT` frames; before that the load is their plain mean, so
+/// the first frame after a change does not stand for the level.
+pub const AVG_WEIGHT: f64 = 1.0 / 16.0;
+/// One frame counts as at most this many budgets: a hitch (a shader compile,
+/// a resize, an idle gap) moves the average by a bounded step, so only a
+/// sustained overrun steps down.
+pub const SAMPLE_CAP: f64 = 2.0;
+/// Frames a level runs before its load may step it down.
+pub const SETTLE_FRAMES: u32 = 32;
+/// Frames a level runs before it may step up: 1.2 s at 300 Hz, 3 s at 120 Hz.
+pub const HOLD_FRAMES: u32 = 360;
+/// A step down within this many frames of a step up is a failed upgrade.
+pub const PROBE_FRAMES: u32 = 4 * HOLD_FRAMES;
+/// Cap on the retry back-off: a level known not to fit is retried after at
+/// most `HOLD_FRAMES << MAX_BACKOFF` frames (about 77 s at 300 Hz).
+pub const MAX_BACKOFF: u32 = 6;
+/// The down line: a level whose smoothed load is above this fraction of the
+/// budget steps down.
 pub const DOWN_FRACTION: f64 = 0.9;
-/// Calm frames are under this fraction of the budget.
+/// A level whose smoothed load is under this fraction of the budget has the
+/// headroom to step up.
 pub const UP_FRACTION: f64 = 0.6;
+/// The level above is predicted to fit when its last measured load is under
+/// this fraction: below the down line, so the prediction keeps a margin.
+pub const FIT_FRACTION: f64 = 0.8;
 /// Under `Cached`, one real render per this many calls.
 pub const CACHED_REFRESH_CALLS: u32 = 8;
-/// A step down within this many frames of a step up is a failed retry.
-pub const PROBE_FRAMES: u32 = 4 * WINDOW;
-/// Cap on the retry backoff: at most `WINDOW << MAX_BACKOFF` calm frames
-/// (about 9 minutes at 120 Hz) before retrying a level that failed.
-pub const MAX_BACKOFF: u32 = 16;
 
 /// The governor's state, owned by the host and moved only by
-/// [`Governor::next`]. Remembers why it last stepped down, so a level that
-/// fails under steady load is retried after exponentially longer calm runs
-/// instead of every `WINDOW` frames.
+/// [`Governor::next`].
+///
+/// Each level's load is a smoothed average of the frames run at it, kept
+/// after leaving it. Stepping up needs headroom at this level and a
+/// prediction, from the load last measured at the level above, that it
+/// fits. A level predicted not to fit is retried after a hold that doubles
+/// each time a step up is soon followed by a step down, so a GPU that cannot
+/// afford a level settles below it instead of cycling, and a transient spike
+/// costs at most one round trip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Governor {
     quality: Quality,
-    /// Bit `i` set: the frame `i` calls ago was over the down line.
-    /// Cleared on every change, so each level is judged on its own frames.
-    over: u8,
-    /// Consecutive calm frames at this level.
-    calm: u32,
+    /// Smoothed load per level ([`Quality::index`]), `None` until measured.
+    load: [Option<Duration>; 4],
     /// Frames at this level.
     frames: u32,
-    /// This level was entered by stepping up, so failing it soon is a
-    /// failed retry.
+    /// This level was entered by stepping up and has not yet held for
+    /// `PROBE_FRAMES`.
     probing: bool,
-    /// Failed retries in a row; the up rule needs `WINDOW << backoff` calm
-    /// frames.
+    /// Failed upgrades in a row; a step up against the prediction waits
+    /// `HOLD_FRAMES << backoff` frames.
     backoff: u32,
 }
 
@@ -125,8 +133,7 @@ impl Governor {
     pub const fn new(quality: Quality) -> Self {
         Self {
             quality,
-            over: 0,
-            calm: 0,
+            load: [None; 4],
             frames: 0,
             probing: false,
             backoff: 0,
@@ -137,46 +144,65 @@ impl Governor {
         self.quality
     }
 
-    /// The state after one frame that cost `cost`, against `budget`
-    /// (8.33 ms at 120 Hz). Steps down one level when the window holds
-    /// `down_count` costs over `budget * DOWN_FRACTION`; steps up one level
-    /// after `WINDOW << backoff` consecutive costs under `budget * UP_FRACTION`;
-    /// otherwise holds. A step down within `PROBE_FRAMES` of a step up doubles
-    /// the calm run the next step up needs; a level that survives
-    /// `PROBE_FRAMES` after a step up resets it.
+    /// The smoothed load last measured at `quality`, `None` if it never ran.
+    pub const fn load_at(&self, quality: Quality) -> Option<Duration> {
+        self.load[quality.index()]
+    }
+
+    /// The state after one frame whose load was `cost`, against `budget`
+    /// (`backdrop::frame_load` and `backdrop::frame_budget`). Steps down one
+    /// level when, after `SETTLE_FRAMES`, the level's smoothed load is over
+    /// `budget * DOWN_FRACTION`. Steps up one level when, after `HOLD_FRAMES`,
+    /// it is under `budget * UP_FRACTION` and either the level above last
+    /// measured under `budget * FIT_FRACTION` (or never ran) or
+    /// `HOLD_FRAMES << backoff` frames have passed. Otherwise holds.
     #[must_use]
     pub fn next(self, cost: Duration, budget: Duration) -> Self {
-        let over = (self.over << 1) | u8::from(cost > budget.mul_f64(DOWN_FRACTION));
-        let calm = if cost < budget.mul_f64(UP_FRACTION) {
-            self.calm.saturating_add(1)
-        } else {
-            0
-        };
+        let sample = cost.min(budget.mul_f64(SAMPLE_CAP));
         let frames = self.frames.saturating_add(1);
-        let changed = |quality, probing, backoff| Self {
+        let here = self.quality.index();
+        let weight = (1.0 / f64::from(frames)).max(AVG_WEIGHT);
+        let avg = match self.load[here] {
+            Some(avg) if self.frames > 0 => avg.mul_f64(1.0 - weight) + sample.mul_f64(weight),
+            _ => sample,
+        };
+        let mut load = self.load;
+        load[here] = Some(avg);
+        let change = |quality, probing, backoff| Self {
+            quality,
+            load,
+            frames: 0,
             probing,
             backoff,
-            ..Self::new(quality)
         };
-        if over.count_ones() >= self.quality.down_count() {
+        if self.quality != Quality::Flat
+            && frames >= SETTLE_FRAMES
+            && avg > budget.mul_f64(DOWN_FRACTION)
+        {
             let backoff = if self.probing {
                 (self.backoff + 1).min(MAX_BACKOFF)
             } else {
                 self.backoff
             };
-            return changed(self.quality.lower(), false, backoff);
+            return change(self.quality.lower(), false, backoff);
         }
-        if self.quality != Quality::Full && calm >= WINDOW << self.backoff {
-            return changed(self.quality.higher(), true, self.backoff);
+        if self.quality != Quality::Full
+            && frames >= HOLD_FRAMES
+            && avg < budget.mul_f64(UP_FRACTION)
+        {
+            let above = load[self.quality.higher().index()];
+            let fits = above.is_none_or(|c| c < budget.mul_f64(FIT_FRACTION));
+            if fits || frames >= HOLD_FRAMES << self.backoff {
+                return change(self.quality.higher(), true, self.backoff);
+            }
         }
-        let survived = self.probing && frames >= PROBE_FRAMES;
+        let held = self.probing && frames >= PROBE_FRAMES;
         Self {
             quality: self.quality,
-            over,
-            calm,
+            load,
             frames,
-            probing: self.probing && !survived,
-            backoff: if survived { 0 } else { self.backoff },
+            probing: self.probing && !held,
+            backoff: if held { 0 } else { self.backoff },
         }
     }
 }
@@ -246,10 +272,11 @@ mod tests {
     use super::*;
 
     const BUDGET: Duration = Duration::from_micros(8333);
-    const OVER: Duration = Duration::from_millis(9);
-    const CALM: Duration = Duration::from_millis(3);
-    /// Between the up and the down line.
-    const MIDDLE: Duration = Duration::from_millis(6);
+
+    /// `fraction` of the budget.
+    fn of(fraction: f64) -> Duration {
+        BUDGET.mul_f64(fraction)
+    }
 
     fn feed(mut g: Governor, costs: impl IntoIterator<Item = Duration>) -> Governor {
         for cost in costs {
@@ -271,139 +298,163 @@ mod tests {
         }
     }
 
-    #[test]
-    fn over_budget_steps_down_one_level_to_flat() {
-        let mut g = Governor::new(Quality::Full);
-        g = feed(g, [CALM, OVER, CALM, OVER]);
-        assert_eq!(g.quality(), Quality::Full);
-        g = feed(g, [OVER]);
-        assert_eq!(g.quality(), Quality::HalfRes);
-        g = feed(g, [OVER; 3]);
-        assert_eq!(g.quality(), Quality::Cached);
-        // One over-budget frame is enough at Cached: it is the refresh.
-        g = feed(g, [OVER]);
-        assert_eq!(g.quality(), Quality::Flat);
-        g = feed(g, [OVER; 20]);
-        assert_eq!(g.quality(), Quality::Flat);
+    /// A deterministic jitter in `-spread..spread` (an LCG), so traces are
+    /// noisy without being random.
+    fn jitter(seed: &mut u64, spread: f64) -> f64 {
+        *seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((*seed >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0) * spread
     }
 
-    #[test]
-    fn calm_run_steps_up_one_level_to_full() {
-        let mut g = Governor::new(Quality::Flat);
-        for expected in [Quality::Cached, Quality::HalfRes, Quality::Full] {
-            g = feed(g, [CALM; WINDOW as usize - 1]);
-            assert_ne!(g.quality(), expected);
-            g = feed(g, [CALM]);
-            assert_eq!(g.quality(), expected);
-        }
-        g = feed(g, [CALM; 100]);
-        assert_eq!(g.quality(), Quality::Full);
-    }
-
-    #[test]
-    fn mixed_and_middle_costs_hold() {
-        let start = Governor::new(Quality::HalfRes);
-        let held = |costs: &[Duration]| feed(start, costs.iter().copied()).quality();
-        assert_eq!(held(&[]), Quality::HalfRes);
-        assert_eq!(
-            held(&[CALM, OVER, CALM, CALM, OVER, CALM, CALM, CALM]),
-            Quality::HalfRes
-        );
-        assert_eq!(held(&[MIDDLE; 100]), Quality::HalfRes);
-        // A cost exactly on the down line is not over it.
-        assert_eq!(
-            held(&[BUDGET.mul_f64(DOWN_FRACTION); 100]),
-            Quality::HalfRes
-        );
-    }
-
-    #[test]
-    fn only_the_last_window_counts_down() {
-        // Two old over-budget frames slide out before the third arrives.
-        let mut costs = vec![OVER, OVER];
-        costs.extend([MIDDLE; WINDOW as usize - 1]);
-        costs.push(OVER);
-        let g = feed(Governor::new(Quality::Full), costs);
-        assert_eq!(g.quality(), Quality::Full);
-    }
-
-    /// Runs the governor over `frames` frames whose cost `cost(quality,
-    /// rendered)` depends on the level (`rendered` is 1 on a `Cached`
-    /// refresh); returns the end state and how many frames went over budget.
+    /// Runs `frames` frames whose load is `cost(quality, frame)`; returns
+    /// the end state, the level changes, and the frames spent per level.
     fn run(
         start: Quality,
         frames: usize,
-        cost: impl Fn(Quality, u32) -> Duration,
-    ) -> (Governor, usize) {
+        mut cost: impl FnMut(Quality, usize) -> Duration,
+    ) -> (Governor, Vec<(usize, Quality)>, [usize; 4]) {
         let mut g = Governor::new(start);
-        let mut clock = BackdropClock::new();
-        let mut over = 0;
-        for _ in 0..frames {
+        let mut changes = vec![];
+        let mut at = [0; 4];
+        for frame in 0..frames {
             let q = g.quality();
-            let render = clock.tick(q, 1.0 / 120.0, false).is_some();
-            let c = cost(q, u32::from(render));
-            over += usize::from(c > BUDGET);
-            g = g.next(c, BUDGET);
+            at[q.index()] += 1;
+            g = g.next(cost(q, frame), BUDGET);
+            if g.quality() != q {
+                changes.push((frame, g.quality()));
+            }
         }
-        (g, over)
+        (g, changes, at)
+    }
+
+    /// Per-level loads, as fractions of the budget, with ±10 % noise.
+    fn gpu(loads: [f64; 4]) -> impl FnMut(Quality, usize) -> Duration {
+        let mut seed = 7;
+        move |q, _| of(loads[q.index()] * (1.0 + jitter(&mut seed, 0.1)))
     }
 
     #[test]
-    fn steady_load_does_not_flap_between_two_levels() {
-        // Full 9 ms (over), HalfRes 4 ms (calm). Without memory this drops
-        // 3 frames in every 11; with backoff the retries thin out.
-        let frames = 100_000;
-        let (g, over) = run(Quality::Full, frames, |q, _| {
-            if q == Quality::Full {
-                OVER
+    fn a_gpu_that_cannot_afford_full_settles_below_it() {
+        // Full is 20 % over the budget, HalfRes comfortably under.
+        let frames = 300_000;
+        let (g, changes, at) = run(Quality::Full, frames, gpu([1.2, 0.45, 0.3, 0.1]));
+        assert_eq!(g.quality(), Quality::HalfRes);
+        // Retries of Full thin out: the back-off doubles up to its cap, then
+        // one retry per capped hold. Each is two changes.
+        let capped = frames / (HOLD_FRAMES << MAX_BACKOFF) as usize;
+        let bound = 1 + 2 * (MAX_BACKOFF as usize + capped + 1);
+        assert!(
+            changes.len() <= bound,
+            "{} changes: {changes:?}",
+            changes.len()
+        );
+        // Never below HalfRes, and nearly all the time at it.
+        assert!(
+            changes.iter().all(|&(_, q)| q <= Quality::HalfRes),
+            "{changes:?}"
+        );
+        assert!(at[Quality::HalfRes.index()] * 100 >= frames * 98, "{at:?}");
+    }
+
+    #[test]
+    fn a_gpu_that_affords_only_flat_goes_there_and_stays() {
+        let (g, changes, at) = run(Quality::Full, 200_000, gpu([3.0, 2.0, 1.1, 0.2]));
+        assert_eq!(g.quality(), Quality::Flat);
+        assert!(at[Quality::Flat.index()] * 100 >= 200_000 * 97, "{at:?}");
+        assert!(changes.len() <= 40, "{} changes", changes.len());
+    }
+
+    #[test]
+    fn steady_costs_never_change_the_level() {
+        // Under the down line, above the up line: noise included, no change.
+        for start in [Quality::Full, Quality::HalfRes, Quality::Cached] {
+            let (g, changes, _) = run(start, 100_000, gpu([0.75; 4]));
+            assert_eq!((g.quality(), changes.len()), (start, 0));
+        }
+        // Calm at Full: nothing to change either.
+        let (_, changes, _) = run(Quality::Full, 100_000, gpu([0.3; 4]));
+        assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn a_short_spike_changes_nothing() {
+        // 5 frames at 10 budgets (a hitch) in a calm run.
+        let (g, changes, _) = run(Quality::Full, 10_000, |_, f| {
+            if (5_000..5_005).contains(&f) {
+                of(10.0)
             } else {
-                Duration::from_millis(4)
+                of(0.3)
             }
         });
-        assert_eq!(g.quality(), Quality::HalfRes);
-        // Each retry costs DOWN_COUNT frames; retries double their spacing,
-        // so there are about log2(frames / WINDOW) of them.
-        let retries = (frames as f64 / WINDOW as f64).log2().ceil() as usize + 1;
-        assert!(
-            over <= DOWN_COUNT as usize * retries,
-            "{over} over-budget frames"
+        assert_eq!(g.quality(), Quality::Full);
+        assert!(changes.is_empty(), "{changes:?}");
+    }
+
+    #[test]
+    fn a_transient_overload_is_not_a_permanent_downgrade() {
+        // A second of real overload (say a heavy page animating), then calm.
+        let (g, changes, _) = run(Quality::Full, 20_000, |_, f| {
+            if (5_000..5_300).contains(&f) {
+                of(1.5)
+            } else {
+                of(0.3)
+            }
+        });
+        assert_eq!(g.quality(), Quality::Full);
+        assert_eq!(g.backoff, 0);
+        // The overload is the same at every level, so it goes down to Flat
+        // during it and back up one level per hold after it.
+        assert!(changes.len() <= 6, "{changes:?}");
+        assert_eq!(changes.last().map(|c| c.1), Some(Quality::Full));
+    }
+
+    #[test]
+    fn a_cheap_scene_climbs_to_full_one_hold_per_level() {
+        let mut g = Governor::new(Quality::Flat);
+        for expected in [Quality::Cached, Quality::HalfRes, Quality::Full] {
+            g = feed(g, [of(0.2); HOLD_FRAMES as usize - 1]);
+            assert_ne!(g.quality(), expected);
+            g = feed(g, [of(0.2)]);
+            assert_eq!(g.quality(), expected);
+        }
+    }
+
+    #[test]
+    fn a_level_measured_not_to_fit_waits_out_the_back_off() {
+        let mut g = Governor::new(Quality::Full);
+        // Full fails, HalfRes is calm, and Full is retried and fails again:
+        // each failed retry doubles the wait.
+        let mut waits = vec![];
+        for _ in 0..4 {
+            g = feed(g, [of(1.3); SETTLE_FRAMES as usize]);
+            assert_eq!(g.quality(), Quality::HalfRes);
+            let mut waited = 0;
+            while g.quality() == Quality::HalfRes {
+                g = g.next(of(0.3), BUDGET);
+                waited += 1;
+            }
+            waits.push(waited);
+        }
+        assert_eq!(
+            waits,
+            [1, 2, 4, 8].map(|n| n * HOLD_FRAMES),
+            "the first retry follows the first failure, which was not a probe"
         );
     }
 
     #[test]
-    fn slow_cached_refresh_steps_down_and_flat_does_not_flap() {
-        // Only the Cached refresh frame is slow; HalfRes and Full are too.
-        let frames = 100_000;
-        let (g, over) = run(Quality::Cached, frames, |q, rendered| match q {
-            Quality::Flat => CALM,
-            Quality::Cached if rendered == 0 => CALM,
-            _ => OVER,
-        });
-        assert_eq!(g.quality(), Quality::Flat);
-        let retries = (frames as f64 / WINDOW as f64).log2().ceil() as usize + 1;
-        assert!(over <= retries, "{over} over-budget frames");
-    }
-
-    #[test]
-    fn a_retry_that_holds_resets_the_backoff() {
+    fn surviving_a_probe_forgets_the_back_off() {
         let mut g = Governor::new(Quality::Full);
-        // Fail Full a few times from HalfRes.
-        for _ in 0..4 {
-            g = feed(g, [OVER; DOWN_COUNT as usize]);
-            assert_eq!(g.quality(), Quality::HalfRes);
+        for _ in 0..3 {
+            g = feed(g, [of(1.3); SETTLE_FRAMES as usize]);
             while g.quality() == Quality::HalfRes {
-                g = g.next(CALM, BUDGET);
+                g = g.next(of(0.3), BUDGET);
             }
         }
-        assert_eq!(g.backoff, 3);
-        // The load is gone: Full holds past the probe and the memory clears.
-        g = feed(g, [CALM; PROBE_FRAMES as usize]);
+        assert_eq!(g.backoff, 2);
+        g = feed(g, [of(0.3); PROBE_FRAMES as usize]);
         assert_eq!((g.quality(), g.backoff), (Quality::Full, 0));
-        // A fresh spike then recovers after one plain calm window.
-        g = feed(g, [OVER; DOWN_COUNT as usize]);
-        assert_eq!(g.quality(), Quality::HalfRes);
-        g = feed(g, [CALM; WINDOW as usize]);
-        assert_eq!(g.quality(), Quality::Full);
     }
 
     #[test]

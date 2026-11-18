@@ -321,6 +321,16 @@ pub enum Menu {
     },
 }
 
+impl Menu {
+    /// Whether the page keeps keyboard focus while this menu holds the shell's: a page's own
+    /// menu is part of it, as Chromium's native menu, which never blurs the page. Blurring it
+    /// would make CEF cancel the request the menu is about to answer (`SetFocus(false)` calls
+    /// `CancelContextMenu`), closing the menu the moment it takes focus.
+    pub fn keeps_page_focus(&self) -> bool {
+        matches!(self, Menu::Open { .. })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuEvent {
     Requested {
@@ -614,6 +624,23 @@ mod tests {
         let (s, fx) = transition(s, MenuEvent::Chosen(99));
         assert!(fx.is_empty());
         assert!(matches!(s, Menu::Open { .. }));
+    }
+
+    #[test]
+    fn only_the_page_s_own_menu_keeps_its_focus() {
+        let open = transition(Menu::Closed, requested(1, link())).0;
+        assert!(open.keeps_page_focus());
+        assert!(!Menu::Closed.keeps_page_focus());
+        let shell = Menu::Shell {
+            at: (0, 0),
+            entries: vec![],
+        };
+        assert!(
+            !shell.keeps_page_focus(),
+            "the shell's menu is not the page's"
+        );
+        // CEF closed it (window blurred, tab hidden): the page is free to blur.
+        assert!(!transition(open, MenuEvent::Reset).0.keeps_page_focus());
     }
 
     #[test]

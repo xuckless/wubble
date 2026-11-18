@@ -23,25 +23,39 @@ use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
 /// Set to `slint` to force the Slint-only glass (by hand, to see the fallback).
 pub const GLASS_ENV: &str = "WUBBLE_GLASS";
 
-/// The frame budget when the display's refresh rate is unknown: 120 Hz.
+/// The frame budget the glass is held to: 120 Hz (AGENTS.md). Also the budget when the
+/// display's refresh rate is unknown.
 const DEFAULT_BUDGET: Duration = Duration::from_micros(8_333);
 
-/// The scene's share of one display period: its GPU time is judged against this fraction of
-/// the frame, so the glass steps down while Slint and the page still fit in the rest
+/// The scene's share of one frame: its GPU time is judged against this fraction of the frame
+/// budget, so the glass steps down while Slint and the page still fit in the rest
 /// (TODO.md Decided, "Glass cost").
 pub const SCENE_SHARE: f64 = 0.5;
 
-/// One frame's load for the governor, as a cost against one display `period`: the larger of
-/// the scene's GPU time over its share (when timestamps came back) and the frame's lateness,
-/// its interval past one period (the scene redraws every frame, so a longer interval is a
-/// dropped frame, whatever the device measures). `None` when there is neither.
+/// The frame budget for a display refreshing at `mhz`: one display period, but never less
+/// than the 120 Hz budget. A faster display (300 Hz VRR: 3.33 ms) does not ask the glass for
+/// more than 120 Hz: with one period as the budget, `Full` never fit there and the governor
+/// cycled through every level (TODO.md Decided, "Glass cost").
+pub fn frame_budget(mhz: Option<u32>) -> Duration {
+    mhz.filter(|&mhz| mhz > 0)
+        .map_or(DEFAULT_BUDGET, |mhz| {
+            Duration::from_secs_f64(1000.0 / f64::from(mhz))
+        })
+        .max(DEFAULT_BUDGET)
+}
+
+/// One frame's load for the governor, as a cost against the frame `budget`
+/// ([`frame_budget`]): the larger of the scene's GPU time over its share (when timestamps
+/// came back) and the frame's lateness, its interval past the budget (the scene redraws every
+/// frame, so a longer interval is a dropped frame, whatever the device measures). `None` when
+/// there is neither.
 pub fn frame_load(
     gpu: Option<Duration>,
     interval: Option<Duration>,
-    period: Duration,
+    budget: Duration,
 ) -> Option<Duration> {
     let scene = gpu.map(|c| c.div_f64(SCENE_SHARE));
-    let late = interval.map(|i| i.saturating_sub(period));
+    let late = interval.map(|i| i.saturating_sub(budget));
     scene.max(late)
 }
 
@@ -57,7 +71,7 @@ pub enum Glass {
 pub struct SceneHost {
     renderer: Renderer,
     governor: Governor,
-    /// One display period, once the window knows its monitor.
+    /// The frame budget ([`frame_budget`]), once the window knows its monitor.
     budget: Option<Duration>,
     /// The tint the palette was last dyed from.
     tint: Option<Rgb>,
@@ -228,14 +242,12 @@ impl SceneHost {
     /// Feeds the governor this frame's load ([`frame_load`]), at the edge, and applies its level.
     fn govern(&mut self, window: &AppWindow, interval: Option<Duration>) {
         let budget = *self.budget.get_or_insert_with(|| {
-            window
-                .window()
-                .with_winit_window(crate::display_refresh_mhz)
-                .flatten()
-                .filter(|&mhz| mhz > 0)
-                .map_or(DEFAULT_BUDGET, |mhz| {
-                    Duration::from_secs_f64(1000.0 / f64::from(mhz))
-                })
+            frame_budget(
+                window
+                    .window()
+                    .with_winit_window(crate::display_refresh_mhz)
+                    .flatten(),
+            )
         });
         let Some(cost) = frame_load(self.renderer.take_cost(), interval, budget) else {
             return;
@@ -244,7 +256,13 @@ impl SceneHost {
         self.governor = self.governor.next(cost, budget);
         let after = self.governor.quality();
         if after != before {
-            eprintln!("wubble: glass quality {before:?} -> {after:?}");
+            // The load that moved it: the smoothed load of the level it left.
+            let load = self.governor.load_at(before).unwrap_or_default();
+            eprintln!(
+                "wubble: glass quality {before:?} -> {after:?} (load {:.2} ms of {:.2} ms)",
+                load.as_secs_f64() * 1e3,
+                budget.as_secs_f64() * 1e3,
+            );
             self.renderer.set_quality(after);
         }
     }
@@ -311,27 +329,60 @@ mod tests {
     #[test]
     fn a_frame_is_judged_by_the_scene_share_and_by_lateness() {
         let ms = Duration::from_millis;
-        let period = ms(8);
+        let budget = ms(8);
         // the scene's GPU time counts against its share of the frame
-        assert_eq!(frame_load(Some(ms(3)), None, period), Some(ms(6)));
-        // a frame on time is no load; one period late (a dropped frame) is a full period
-        assert_eq!(frame_load(None, Some(ms(8)), period), Some(ms(0)));
-        assert_eq!(frame_load(None, Some(ms(16)), period), Some(ms(8)));
+        assert_eq!(frame_load(Some(ms(3)), None, budget), Some(ms(6)));
+        // a frame on time is no load; one budget late (a dropped frame) is a full budget
+        assert_eq!(frame_load(None, Some(ms(8)), budget), Some(ms(0)));
+        assert_eq!(frame_load(None, Some(ms(16)), budget), Some(ms(8)));
         // the larger signal wins
-        assert_eq!(frame_load(Some(ms(1)), Some(ms(16)), period), Some(ms(8)));
-        assert_eq!(frame_load(Some(ms(5)), Some(ms(8)), period), Some(ms(10)));
-        assert_eq!(frame_load(None, None, period), None);
+        assert_eq!(frame_load(Some(ms(1)), Some(ms(16)), budget), Some(ms(8)));
+        assert_eq!(frame_load(Some(ms(5)), Some(ms(8)), budget), Some(ms(10)));
+        assert_eq!(frame_load(None, None, budget), None);
+    }
+
+    #[test]
+    fn the_glass_is_never_asked_for_more_than_120_hz() {
+        // the owner's 300 Hz display: 120 Hz, not one 3.33 ms period
+        assert_eq!(frame_budget(Some(300_002)), DEFAULT_BUDGET);
+        assert_eq!(frame_budget(Some(144_000)), DEFAULT_BUDGET);
+        let at_120 = frame_budget(Some(120_000));
+        assert!(
+            at_120.abs_diff(DEFAULT_BUDGET) < Duration::from_micros(1),
+            "{at_120:?}"
+        );
+        // a slower display gives its whole period
+        let sixty = frame_budget(Some(60_000));
+        assert!(sixty > Duration::from_micros(16_600) && sixty < Duration::from_micros(16_700));
+        assert_eq!(frame_budget(None), DEFAULT_BUDGET);
+        assert_eq!(frame_budget(Some(0)), DEFAULT_BUDGET);
+    }
+
+    #[test]
+    fn frames_paced_at_300_hz_are_not_late() {
+        // 3.33 ms apart, scene at 1 ms of GPU: well inside the budget at Full, held there
+        let budget = frame_budget(Some(300_002));
+        let mut g = Governor::new(Quality::Full);
+        for _ in 0..10_000 {
+            let load = frame_load(
+                Some(Duration::from_millis(1)),
+                Some(Duration::from_micros(3_333)),
+                budget,
+            );
+            g = g.next(load.unwrap(), budget);
+        }
+        assert_eq!(g.quality(), Quality::Full);
     }
 
     #[test]
     fn a_scene_over_its_share_degrades_the_glass_before_the_frame_drops() {
         // 5 ms of scene in an 8.33 ms frame: the frame still fits, the glass steps down
-        let (period, scene) = (DEFAULT_BUDGET, Duration::from_millis(5));
+        let (budget, scene) = (DEFAULT_BUDGET, Duration::from_millis(5));
         let mut g = Governor::new(Quality::Full);
-        for _ in 0..wubble_gfx::scene::DOWN_COUNT {
+        for _ in 0..wubble_gfx::scene::SETTLE_FRAMES {
             g = g.next(
-                frame_load(Some(scene), Some(period), period).unwrap(),
-                period,
+                frame_load(Some(scene), Some(budget), budget).unwrap(),
+                budget,
             );
         }
         assert_eq!(g.quality(), Quality::HalfRes);
@@ -339,10 +390,10 @@ mod tests {
 
     #[test]
     fn dropped_frames_degrade_the_glass_without_timestamps() {
-        let period = DEFAULT_BUDGET;
+        let budget = DEFAULT_BUDGET;
         let mut g = Governor::new(Quality::Full);
-        for _ in 0..wubble_gfx::scene::DOWN_COUNT {
-            g = g.next(frame_load(None, Some(period * 2), period).unwrap(), period);
+        for _ in 0..wubble_gfx::scene::SETTLE_FRAMES {
+            g = g.next(frame_load(None, Some(budget * 2), budget).unwrap(), budget);
         }
         assert_eq!(g.quality(), Quality::HalfRes);
     }

@@ -64,8 +64,9 @@ mod render;
 mod state;
 
 pub use quality::{
-    BackdropClock, CACHED_REFRESH_CALLS, DOWN_COUNT, DOWN_FRACTION, Governor, MAX_BACKDROP_DT,
-    MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality, UP_FRACTION, WINDOW, should_render,
+    AVG_WEIGHT, BackdropClock, CACHED_REFRESH_CALLS, DOWN_FRACTION, FIT_FRACTION, Governor,
+    HOLD_FRAMES, MAX_BACKDROP_DT, MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality, SAMPLE_CAP,
+    SETTLE_FRAMES, UP_FRACTION, should_render,
 };
 pub use render::{Renderer, readback_rgba8};
 pub use state::{
