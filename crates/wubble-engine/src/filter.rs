@@ -103,11 +103,18 @@ const KINDS: &[(cef::ResourceType, RequestKind)] = {
     ]
 };
 
+/// A resource type's raw value as welding carries it. CEF's enum raw type is
+/// `i32` on Windows and `u32` elsewhere; the values are small and non-negative.
+#[allow(clippy::unnecessary_cast)]
+fn raw(t: cef::ResourceType) -> u32 {
+    t.get_raw() as u32
+}
+
 /// The kind of CEF's raw `cef_resource_type_t`; unknown values are `Other`.
 pub fn kind_of(cef_type: u32) -> RequestKind {
     KINDS
         .iter()
-        .find(|(t, _)| t.get_raw() == cef_type)
+        .find(|(t, _)| raw(*t) == cef_type)
         .map_or(RequestKind::Other, |(_, kind)| *kind)
 }
 
@@ -137,19 +144,19 @@ mod tests {
     /// for removed types) is in the table exactly once.
     #[test]
     fn the_table_covers_every_cef_type_once() {
-        let raw: Vec<u32> = KINDS.iter().map(|(t, _)| t.get_raw()).collect();
-        let unique: HashSet<u32> = raw.iter().copied().collect();
-        assert_eq!(unique.len(), raw.len(), "a CEF type is listed twice");
-        let num = cef::ResourceType::NUM_VALUES.get_raw();
-        assert!(raw.iter().all(|&r| r < num));
+        let all: Vec<u32> = KINDS.iter().map(|(t, _)| raw(*t)).collect();
+        let unique: HashSet<u32> = all.iter().copied().collect();
+        assert_eq!(unique.len(), all.len(), "a CEF type is listed twice");
+        let num = raw(cef::ResourceType::NUM_VALUES);
+        assert!(all.iter().all(|&r| r < num));
         // cef_resource_type_t lists 20 named types below RT_NUM_VALUES.
-        assert_eq!(raw.len(), 20);
+        assert_eq!(all.len(), 20);
     }
 
     #[test]
     fn kinds_follow_the_table() {
         use cef::ResourceType as T;
-        let k = |t: T| kind_of(t.get_raw());
+        let k = |t: T| kind_of(raw(t));
         assert_eq!(k(T::MAIN_FRAME), RequestKind::Document);
         assert_eq!(k(T::SUB_FRAME), RequestKind::Subdocument);
         assert_eq!(k(T::SCRIPT), RequestKind::Script);
@@ -182,7 +189,7 @@ mod tests {
         let check = |url: &str| {
             filter.check(&welding::ResourceRequest {
                 url: url.into(),
-                resource_type: cef::ResourceType::SCRIPT.get_raw(),
+                resource_type: raw(cef::ResourceType::SCRIPT),
                 ..Default::default()
             })
         };

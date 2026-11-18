@@ -705,7 +705,9 @@ cef::wrap_resource_request_handler! {
                 ),
                 url,
                 initiator: self.initiator.clone(),
-                resource_type: resource_type.get_raw(),
+                // wubble change: CEF's enum raw type is i32 on Windows, u32 elsewhere.
+                #[allow(clippy::unnecessary_cast)]
+                resource_type: resource_type.get_raw() as u32,
                 is_navigation: self.is_navigation,
                 browser_id: browser.map_or(0, |b| b.identifier()),
             };
