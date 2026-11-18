@@ -304,6 +304,33 @@ impl Model {
             .and_then(|si| self.spaces[si].active)
     }
 
+    /// The tab `delta` steps from the visible one in the active Space's
+    /// order (pinned first), wrapping at both ends.
+    pub fn tab_step(&self, delta: isize) -> Option<TabId> {
+        cycle(&self.order(self.active_space), self.visible_tab(), delta)
+    }
+
+    /// The active Space's tab at `index` (0-based) in its order, if there is one.
+    pub fn nth_tab(&self, index: usize) -> Option<TabId> {
+        self.order(self.active_space).get(index).copied()
+    }
+
+    /// The active Space's last tab in its order.
+    pub fn last_tab(&self) -> Option<TabId> {
+        self.order(self.active_space).last().copied()
+    }
+
+    /// The Space `delta` steps from the active one, wrapping at both ends.
+    pub fn space_step(&self, delta: isize) -> Option<SpaceId> {
+        let ids: Vec<SpaceId> = self.spaces.iter().map(|s| s.id).collect();
+        cycle(&ids, Some(self.active_space), delta)
+    }
+
+    /// The Space at `index` (0-based), if there is one.
+    pub fn nth_space(&self, index: usize) -> Option<SpaceId> {
+        self.spaces.get(index).map(|s| s.id)
+    }
+
     /// Tabs whose page is alive (not discarded): each has one engine view.
     pub fn live_tabs(&self) -> usize {
         self.tabs
@@ -935,6 +962,20 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
     };
     fx.extend(m.settle(&before));
     (m, fx)
+}
+
+/// The item `delta` places from `current` in `items`, wrapping. Without a
+/// current item (or one not in `items`) the first step lands on the first
+/// item going forward and on the last going back.
+fn cycle<T: Copy + PartialEq>(items: &[T], current: Option<T>, delta: isize) -> Option<T> {
+    let len = isize::try_from(items.len()).ok().filter(|&n| n > 0)?;
+    let from = current.and_then(|c| items.iter().position(|&i| i == c));
+    let index = match from {
+        Some(i) => (i as isize + delta).rem_euclid(len),
+        None if delta >= 0 => 0,
+        None => len - 1,
+    };
+    items.get(index as usize).copied()
 }
 
 #[cfg(test)]

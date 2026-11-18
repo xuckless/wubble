@@ -53,8 +53,9 @@ impl EngineConfig {
         let exe_dir = exe
             .parent()
             .ok_or_else(|| EngineError::ExeDir(format!("{} has no parent", exe.display())))?;
-        let cache_dir =
-            Current::user_cache_dir(&|key| std::env::var_os(key)).ok_or(EngineError::CacheDir)?;
+        let cache_dir = user_data_dir()
+            .map(|dir| dir.join(CEF_CACHE))
+            .ok_or(EngineError::CacheDir)?;
         Ok(Self {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
@@ -107,10 +108,19 @@ fn helper_path(exe_dir: &Path) -> PathBuf {
     exe_dir.join(format!("wubble-helper{}", std::env::consts::EXE_SUFFIX))
 }
 
+/// CEF's cache inside the per-user data directory.
+pub const CEF_CACHE: &str = "cef";
+
+/// The per-user data directory (profile): wubble's database and, under
+/// [`CEF_CACHE`], CEF's cache. `None` when the environment names none.
+pub fn user_data_dir() -> Option<PathBuf> {
+    Current::user_data_dir(&|key| std::env::var_os(key))
+}
+
 /// What differs per OS. One impl per OS, chosen by cfg into [`Current`].
 trait Platform {
-    /// Per-user directory for CEF's cache, given an environment lookup.
-    fn user_cache_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
+    /// Per-user data directory, given an environment lookup.
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
 
     /// Chromium switches every wubble process gets.
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)];
@@ -128,14 +138,35 @@ impl Platform for Linux {
     /// failed to create GL representation") and no accelerated paint arrives.
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("enable-features", Some("Vulkan"))];
 
-    /// `$XDG_DATA_HOME/wubble/cef`, else `$HOME/.local/share/wubble/cef`.
-    /// Relative values are ignored, as the XDG Base Directory spec requires.
-    fn user_cache_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-        let absolute = |key| env(key).map(PathBuf::from).filter(|p| p.is_absolute());
-        let data_home = absolute("XDG_DATA_HOME")
-            .or_else(|| absolute("HOME").map(|home| home.join(".local/share")))?;
-        Some(data_home.join("wubble/cef"))
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        xdg_data_dir(env)
     }
+}
+
+/// An environment variable holding an absolute path; relative values are
+/// ignored, as the XDG Base Directory spec requires.
+fn absolute_var(env: &dyn Fn(&str) -> Option<OsString>, key: &str) -> Option<PathBuf> {
+    env(key).map(PathBuf::from).filter(|p| p.is_absolute())
+}
+
+/// Linux: `$XDG_DATA_HOME/wubble`, else `$HOME/.local/share/wubble`.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn xdg_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let data_home = absolute_var(env, "XDG_DATA_HOME")
+        .or_else(|| absolute_var(env, "HOME").map(|home| home.join(".local/share")))?;
+    Some(data_home.join("wubble"))
+}
+
+/// macOS: `$HOME/Library/Application Support/wubble`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn mac_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    absolute_var(env, "HOME").map(|home| home.join("Library/Application Support/wubble"))
+}
+
+/// Windows: `%APPDATA%\wubble` (the roaming application data folder).
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn windows_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    absolute_var(env, "APPDATA").map(|appdata| appdata.join("wubble"))
 }
 
 /// Placeholder until macOS and Windows get their own impl.
@@ -146,8 +177,12 @@ struct Unsupported;
 impl Platform for Unsupported {
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
 
-    fn user_cache_dir(_env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-        None
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        if cfg!(target_os = "macos") {
+            mac_data_dir(env)
+        } else {
+            windows_data_dir(env)
+        }
     }
 }
 
@@ -470,27 +505,63 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |key| {
+            vars.iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
     #[test]
-    fn linux_cache_dir_follows_xdg() {
-        let dir = |vars: &[(&str, &str)]| {
-            Linux::user_cache_dir(&|key| {
-                vars.iter()
-                    .find(|(k, _)| *k == key)
-                    .map(|(_, v)| OsString::from(v))
-            })
-        };
+    fn linux_data_dir_follows_xdg() {
+        let dir = |vars: &[(&str, &str)]| xdg_data_dir(&lookup(vars));
         let home = ("HOME", "/home/u");
         assert_eq!(
             dir(&[("XDG_DATA_HOME", "/data"), home]),
-            Some(PathBuf::from("/data/wubble/cef"))
+            Some(PathBuf::from("/data/wubble"))
         );
-        let fallback = Some(PathBuf::from("/home/u/.local/share/wubble/cef"));
+        let fallback = Some(PathBuf::from("/home/u/.local/share/wubble"));
         assert_eq!(dir(&[home]), fallback);
         assert_eq!(dir(&[("XDG_DATA_HOME", "rel"), home]), fallback);
         assert_eq!(dir(&[("XDG_DATA_HOME", ""), home]), fallback);
         assert_eq!(dir(&[("HOME", "rel")]), None);
         assert_eq!(dir(&[]), None);
+    }
+
+    #[test]
+    fn mac_and_windows_data_dirs() {
+        assert_eq!(
+            mac_data_dir(&lookup(&[("HOME", "/Users/u")])),
+            Some(PathBuf::from("/Users/u/Library/Application Support/wubble"))
+        );
+        assert_eq!(mac_data_dir(&lookup(&[("HOME", "rel")])), None);
+        assert_eq!(mac_data_dir(&lookup(&[])), None);
+        // `Path::is_absolute` is per host OS, so test a path absolute on both.
+        let appdata = if cfg!(windows) {
+            r"C:\Users\u\AppData\Roaming"
+        } else {
+            "/appdata"
+        };
+        assert_eq!(
+            windows_data_dir(&lookup(&[("APPDATA", appdata)])),
+            Some(PathBuf::from(appdata).join("wubble"))
+        );
+        assert_eq!(windows_data_dir(&lookup(&[("APPDATA", "rel")])), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_cef_cache_keeps_its_old_place() {
+        let vars = lookup(&[("HOME", "/home/u")]);
+        assert_eq!(
+            Linux::user_data_dir(&vars).map(|d| d.join(CEF_CACHE)),
+            Some(PathBuf::from("/home/u/.local/share/wubble/cef"))
+        );
     }
 
     #[test]
