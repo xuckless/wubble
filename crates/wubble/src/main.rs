@@ -48,7 +48,7 @@ use slint::winit_030::{EventResult, WinitWindowAccessor};
 use split_smoke::SplitSmoke;
 use tabs_smoke::TabsSmoke;
 use wubble_core::seam::Seam;
-use wubble_engine::app::{self, Engine, EngineConfig, EngineError, PumpScheduler};
+use wubble_engine::app::{self, Engine, EngineConfig, EngineError, ProfileKind, PumpScheduler};
 use wubble_engine::input::Point;
 use wubble_engine::view::Layout;
 use wubble_gfx::pacing::FrameStats;
@@ -496,6 +496,7 @@ fn with_smoke_dir<T>(
     let profile = Profile { dir: dir.clone() };
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
+        profile: ProfileKind::Throwaway,
         ..config
     });
     let result = f(config, &dir);
