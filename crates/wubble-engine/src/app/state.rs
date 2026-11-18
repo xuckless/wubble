@@ -14,13 +14,21 @@ pub enum State {
     Stopped,
 }
 
+impl State {
+    /// CEF is initialised, so its message loop may be pumped.
+    pub fn pumps(self) -> bool {
+        matches!(self, Self::Running { .. } | Self::ShuttingDown { .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     Initialised,
     BrowserOpened,
     BrowserClosed,
     ShutdownRequested,
-    /// The host loop gives CEF a chance to do its work.
+    /// The host asks for one synchronous run of CEF's work (no event loop:
+    /// `--smoke boot` and the shutdown drain).
     Tick,
 }
 
@@ -53,7 +61,7 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
         (Running { browsers }, ShutdownRequested) => {
             (ShuttingDown { browsers }, vec![CloseAllBrowsers])
         }
-        (Running { .. } | ShuttingDown { .. }, Tick) => (state, vec![PumpOnce]),
+        (_, Tick) if state.pumps() => (state, vec![PumpOnce]),
         (ShuttingDown { browsers: 1 }, BrowserClosed) => (Stopped, vec![ShutdownCef]),
         (ShuttingDown { browsers }, BrowserClosed) if browsers > 1 => (
             ShuttingDown {

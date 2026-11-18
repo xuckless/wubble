@@ -5,8 +5,7 @@
 //! custody) and runs the effects. Views are owned by [`crate::app::Engine`],
 //! which closes them on shutdown and reports each one closed to its lifecycle.
 
-use cef::{ImplBrowser, ImplBrowserHost};
-use welding::{CefRuntime, CefSurfaceProducer, PlatformCefProducer};
+use welding::{CefRuntime, CefSurfaceEvent, CefSurfaceProducer, PlatformCefProducer};
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::EngineError;
@@ -64,7 +63,7 @@ pub enum ViewEvent {
     /// CEF delivered a frame of this physical size.
     Frame(FrameSize),
     CloseRequested,
-    /// CEF no longer knows the browser.
+    /// CEF destroyed the browser (`OnBeforeClose`), asked to or not.
     GoneFromCef,
 }
 
@@ -114,7 +113,8 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
         }
         (Resizing { .. }, Frame(_), _) => (state, vec![Present]),
         (Live { .. } | Resizing { .. }, CloseRequested, _) => (Closing, vec![Close]),
-        (Closing, GoneFromCef, _) => (Closed, vec![ReportClosed]),
+        // From Live or Resizing the page closed itself (`window.close()`).
+        (Live { .. } | Resizing { .. } | Closing, GoneFromCef, _) => (Closed, vec![ReportClosed]),
         _ => (state, vec![]),
     }
 }
@@ -131,8 +131,7 @@ pub struct ViewConfig {
 /// One live windowless browser.
 pub struct View {
     producer: PlatformCefProducer,
-    /// Saved at creation: welding zeroes its own copy on close, and the id is
-    /// how a closed browser is detected (CEF stops resolving it).
+    /// For log lines; saved at creation because welding zeroes its own copy on close.
     browser_id: i32,
     state: ViewState,
 }
@@ -140,16 +139,8 @@ pub struct View {
 impl View {
     pub(crate) fn open(runtime: &CefRuntime, config: ViewConfig) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let producer = new_producer(runtime, config.url, layout)?;
+        let producer = new_producer(runtime, config.url, layout, config.frame_rate)?;
         let browser_id = producer.browser_id();
-        // welding creates the browser at a fixed 60 fps; apply ours now.
-        let rate = i32::try_from(config.frame_rate).unwrap_or(i32::MAX);
-        match cef::browser_host_get_browser_by_identifier(browser_id)
-            .and_then(|browser| browser.host())
-        {
-            Some(host) => host.set_windowless_frame_rate(rate),
-            None => eprintln!("wubble-engine: view {browser_id}: no host; frame rate stays 60"),
-        }
         Ok(Self {
             producer,
             browser_id,
@@ -177,16 +168,26 @@ impl View {
         self.apply(ViewEvent::CloseRequested);
     }
 
-    /// While closing, checks whether CEF has let go of the browser. Returns
-    /// true exactly once, when the view reports itself closed.
-    pub(crate) fn poll_closed(&mut self) -> bool {
-        if self.state != ViewState::Closing
-            || cef::browser_host_get_browser_by_identifier(self.browser_id).is_some()
-        {
-            return false;
+    /// CPU `OnPaint` frames CEF sent instead of shared textures so far;
+    /// `None` where welding does not count them.
+    pub fn cpu_fallback_frames(&self) -> Option<u64> {
+        self.producer.cpu_paint_count()
+    }
+
+    /// Takes the callbacks welding queued since the last call. Returns true
+    /// exactly once, when the view reports itself closed. Only the close is
+    /// used so far; navigation and the other events are dropped here (so the
+    /// queue does not grow) until something consumes them.
+    pub(crate) fn drain_events(&mut self) -> bool {
+        let mut closed = false;
+        while let Some(event) = self.producer.poll_web_event() {
+            if let CefSurfaceEvent::BrowserClosed = event {
+                closed |= self
+                    .apply(ViewEvent::GoneFromCef)
+                    .contains(&ViewEffect::ReportClosed);
+            }
         }
-        self.apply(ViewEvent::GoneFromCef)
-            .contains(&ViewEffect::ReportClosed)
+        closed
     }
 
     /// Runs the transition and its CEF effects. Returns the effects meant for
@@ -226,6 +227,7 @@ fn new_producer(
     runtime: &CefRuntime,
     url: String,
     layout: Layout,
+    frame_rate: u32,
 ) -> Result<PlatformCefProducer, EngineError> {
     PlatformCefProducer::new(
         runtime,
@@ -234,6 +236,7 @@ fn new_producer(
                 initial_url: url,
                 initial_size: dpi_size(layout.size),
                 scale_factor: layout.scale,
+                windowless_frame_rate: frame_rate,
                 ..welding::CefSurfaceConfig::default()
             },
         },
@@ -248,6 +251,7 @@ fn new_producer(
     _runtime: &CefRuntime,
     _url: String,
     _layout: Layout,
+    _frame_rate: u32,
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
         "windowless views are not supported on Windows yet".into(),
@@ -325,7 +329,7 @@ mod tests {
             (Live { .. } | Resizing { .. }, Layout(_)) => (resizing(one, 1.0), vec![Resize(one)]),
             (Resizing { .. }, Frame(BIG)) => (live_at(BIG), vec![Present]),
             (Resizing { .. }, Frame(_)) => (state, vec![Present]),
-            (Closing, GoneFromCef) => (Closed, vec![ReportClosed]),
+            (Live { .. } | Resizing { .. } | Closing, GoneFromCef) => (Closed, vec![ReportClosed]),
             _ => (state, vec![]),
         }
     }
@@ -456,11 +460,11 @@ mod tests {
                 GoneFromCef,
             ],
             &[
-                GoneFromCef,
                 CloseRequested,
                 CloseRequested,
                 GoneFromCef,
                 CloseRequested,
+                GoneFromCef,
             ],
         ];
         for path in paths {
@@ -469,6 +473,19 @@ mod tests {
             let reports = effects.iter().filter(|e| **e == ReportClosed).count();
             let closes = effects.iter().filter(|e| **e == Close).count();
             assert_eq!((reports, closes), (1, 1), "{path:?}");
+        }
+    }
+
+    /// A page that closes itself (`window.close()`) is reported without a
+    /// close request, and nothing asks CEF to close it again.
+    #[test]
+    fn a_page_initiated_close_is_reported_once() {
+        let resizing = Resizing {
+            wanted: layout(BIG, 1.0),
+        };
+        for start in [live(), resizing] {
+            let (state, effects) = run(start, &[GoneFromCef, CloseRequested, GoneFromCef]);
+            assert_eq!((state, effects), (Closed, vec![ReportClosed]), "{start:?}");
         }
     }
 }

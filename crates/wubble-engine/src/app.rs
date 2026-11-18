@@ -2,18 +2,25 @@
 //!
 //! [`Engine`] owns the CEF runtime (via `welding::CefRuntime`, which sets
 //! windowless rendering, the external message pump and `cef::shutdown` on drop).
-//! The host loop calls [`Engine::tick`] repeatedly on the thread that started
-//! the engine; every lifecycle change goes through [`state::transition`] and
-//! its effects run in one place, `Engine::execute`.
+//! CEF schedules its own pumping: [`EngineConfig::pump_scheduler`] receives
+//! each request on any thread, the host hands it to [`Engine::schedule_pump`]
+//! on the thread that started the engine and runs the one timer the engine
+//! asks for ([`PumpOutcome`]). The scheduling rules are the pure
+//! [`wubble_core::pump::transition`]; every lifecycle change goes through
+//! [`state::transition`]. Their effects run in `Engine::pump` and
+//! `Engine::execute`.
 
 pub mod state;
 
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use state::{Effect, Event, State};
+pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
+use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
 use crate::view::{View, ViewConfig};
 
@@ -31,6 +38,11 @@ pub struct EngineConfig {
     /// Never left to CEF's shared default (`~/.config/cef_user_data`), which
     /// other CEF apps and concurrent wubble processes would also lock.
     pub cache_dir: PathBuf,
+    /// Receives CEF's pump requests (delay in ms, `<= 0` = now) on any thread;
+    /// it must only forward them to [`Engine::schedule_pump`] on the engine's
+    /// thread. `None` without a host event loop: the caller drives CEF with
+    /// [`Engine::tick`] instead.
+    pub pump_scheduler: Option<PumpScheduler>,
 }
 
 impl EngineConfig {
@@ -45,6 +57,7 @@ impl EngineConfig {
         Ok(Self {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
+            pump_scheduler: None,
         })
     }
 }
@@ -151,6 +164,7 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
         .iter()
         .map(|(name, value)| ((*name).into(), value.map(Into::into)))
         .collect();
+    cef.pump_scheduler = config.pump_scheduler.clone();
     cef
 }
 
@@ -171,6 +185,23 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewId(usize);
 
+/// What the host must do with its single-shot pump timer after a pump call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PumpTimer {
+    /// (Re)arm it; call [`Engine::pump_timer_fired`] when it fires.
+    Start(Duration),
+    Cancel,
+}
+
+/// The result of one pump call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PumpOutcome {
+    /// The last timer request (a later one replaces an earlier one).
+    pub timer: Option<PumpTimer>,
+    /// CEF did work, so views may have new frames.
+    pub worked: bool,
+}
+
 /// The running CEF process. Drive it only from the thread that started it.
 pub struct Engine {
     /// Open views, each counted in `state` until it reports itself closed.
@@ -181,6 +212,7 @@ pub struct Engine {
     /// exists after CEF initialised, and `Effect::ShutdownCef` takes it.
     runtime: Option<CefRuntime>,
     state: State,
+    pump: PumpState,
 }
 
 impl Engine {
@@ -202,12 +234,26 @@ impl Engine {
             next_view: 0,
             runtime: Some(runtime),
             state: State::Uninitialised,
+            pump: PumpState::default(),
         };
         engine.apply(Event::Initialised);
         Ok(engine)
     }
 
-    /// Lets CEF do its pending work. Call regularly from the host loop.
+    /// CEF asked (through [`EngineConfig::pump_scheduler`]) for work after
+    /// `delay_ms`. The host should also call it once with 0 to start pumping.
+    pub fn schedule_pump(&mut self, delay_ms: i64) -> PumpOutcome {
+        self.pump(PumpEvent::Schedule(delay_ms))
+    }
+
+    /// The timer from the last [`PumpTimer::Start`] fired.
+    pub fn pump_timer_fired(&mut self) -> PumpOutcome {
+        self.pump(PumpEvent::TimerFired)
+    }
+
+    /// Runs CEF's pending work now, for callers without an event loop
+    /// (`--smoke boot`, the shutdown drain). Timer requests are dropped: the
+    /// caller simply ticks again.
     pub fn tick(&mut self) {
         self.apply(Event::Tick);
     }
@@ -250,17 +296,46 @@ impl Engine {
         }
     }
 
+    /// Feeds `event` to the pump scheduler and runs its effects: work runs
+    /// here, each followed by its `WorkDone`; timer requests go to the host.
+    /// Nothing happens unless CEF is up.
+    fn pump(&mut self, event: PumpEvent) -> PumpOutcome {
+        let mut outcome = PumpOutcome::default();
+        if !self.state.pumps() {
+            return outcome;
+        }
+        let mut next = Some(event);
+        while let Some(event) = next.take() {
+            let (state, effects) = pump::transition(self.pump, event);
+            self.pump = state;
+            for effect in effects {
+                match effect {
+                    PumpEffect::StartTimer(delay) => outcome.timer = Some(PumpTimer::Start(delay)),
+                    PumpEffect::CancelTimer => outcome.timer = Some(PumpTimer::Cancel),
+                    PumpEffect::RunWork => {
+                        self.run_work();
+                        outcome.worked = true;
+                        next = Some(PumpEvent::WorkDone);
+                    }
+                }
+            }
+        }
+        outcome
+    }
+
+    /// One `do_message_loop_work`, then the views' callbacks (closes) it produced.
+    fn run_work(&mut self) {
+        if let Some(runtime) = &self.runtime {
+            runtime.do_message_loop_work();
+        }
+        self.reap_closed_views();
+    }
+
     /// The only place lifecycle effects touch CEF.
     fn execute(&mut self, effect: Effect) {
         match effect {
-            // Re-entrancy cannot happen yet: `tick` takes `&mut self` and no
-            // CEF callback reaches the Engine. Port CEF's guard
-            // (main_message_loop_external_pump.cc) with the schedule-driven pump.
             Effect::PumpOnce => {
-                if let Some(runtime) = &self.runtime {
-                    runtime.do_message_loop_work();
-                }
-                self.reap_closed_views();
+                self.pump(PumpEvent::Schedule(0));
             }
             // Each closing view reports Event::BrowserClosed from a later
             // pump (`reap_closed_views`); the host's drain loop ends on Stopped.
@@ -274,10 +349,10 @@ impl Engine {
         }
     }
 
-    /// Drops views CEF has let go of and reports each one to the lifecycle.
+    /// Drops views CEF reported closed and reports each one to the lifecycle.
     fn reap_closed_views(&mut self) {
         let before = self.views.len();
-        self.views.retain_mut(|(_, view)| !view.poll_closed());
+        self.views.retain_mut(|(_, view)| !view.drain_events());
         for _ in self.views.len()..before {
             self.apply(Event::BrowserClosed);
         }
@@ -292,6 +367,7 @@ mod tests {
         EngineConfig {
             exe_dir: PathBuf::from(exe_dir),
             cache_dir: PathBuf::from(cache_dir),
+            pump_scheduler: None,
         }
     }
 
@@ -354,6 +430,20 @@ mod tests {
     }
 
     #[test]
+    fn pump_scheduler_reaches_welding() {
+        assert!(
+            cef_config(&config("/opt/wubble", "/c"))
+                .pump_scheduler
+                .is_none()
+        );
+        let with = EngineConfig {
+            pump_scheduler: Some(PumpScheduler::new(|_| {})),
+            ..config("/opt/wubble", "/c")
+        };
+        assert!(cef_config(&with).pump_scheduler.is_some());
+    }
+
+    #[test]
     fn helper_missing_says_how_to_fix_it() {
         let err = EngineError::HelperMissing {
             path: PathBuf::from("/x/wubble-helper"),
@@ -369,6 +459,7 @@ mod tests {
         let err = Engine::start(EngineConfig {
             exe_dir: dir.clone(),
             cache_dir: dir,
+            pump_scheduler: None,
         })
         .err();
         assert!(matches!(err, Some(EngineError::HelperMissing { .. })));

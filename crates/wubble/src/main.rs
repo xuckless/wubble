@@ -3,28 +3,25 @@ mod cli;
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::ExitCode;
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use cli::{Command, Smoke};
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
-use wubble_engine::app::{self, Engine, EngineConfig, EngineError, ViewId};
+use wubble_engine::app::{
+    self, Engine, EngineConfig, EngineError, PumpOutcome, PumpScheduler, PumpTimer, ViewId,
+};
 use wubble_engine::view::{Layout, ViewConfig};
 use wubble_gfx::pacing::{self, FrameStats};
 use wubble_gfx::{FramePresenter, FrameSize, GpuContext};
 use wubble_ui::AppWindow;
 
-/// How often the Slint loop pumps CEF. Interim: replaced by compositor-driven
-/// ticks in the M0 "Frame pacing" item.
-const PUMP_INTERVAL: Duration = Duration::from_millis(8);
-
 /// Pumps `--smoke boot` gives CEF before shutting down. A count, not a clock.
 const SMOKE_TICKS: usize = 10;
 
-/// Pumps `--smoke frames` waits for the next frame before it gives up. A
-/// count, not a clock: it only stops a smoke that would otherwise hang.
-const SMOKE_MAX_IDLE_TICKS: u32 = 2_000;
+/// Runs of CEF work `--smoke frames` waits for the next frame before it gives
+/// up. A count, not a clock: it only stops a smoke that would otherwise hang.
+const SMOKE_MAX_IDLE_RUNS: u32 = 2_000;
 
 /// The bundled animated test page.
 const SMOKE_PAGE: &str = include_str!("../assets/smoke.html");
@@ -63,7 +60,6 @@ fn main() -> ExitCode {
             match with_smoke_cache(|config| run(mode, config)) {
                 Ok(Outcome { stats, failure }) => {
                     println!("{}", stats.summary_line());
-                    eprintln!("smoke: {}", pacing::CPU_FALLBACK_UNOBSERVED);
                     match failure {
                         None if stats.is_success() => ExitCode::SUCCESS,
                         None => {
@@ -148,21 +144,56 @@ enum Mode {
 
 /// Where the one web view is.
 enum Content {
-    /// Opened on the first pump, once the window and its monitor exist.
+    /// Opened on the first pump after winit has created the window.
     Waiting {
         url: String,
     },
     Open(ViewId),
 }
 
-/// Everything the pump timer drives. Owned by the timer closure via `Rc`.
+/// A pump request for the host, from CEF or from the host's own timer.
+#[derive(Clone, Copy, Debug)]
+enum Wake {
+    /// CEF's `OnScheduleMessagePumpWork(delay_ms)`.
+    Schedule(i64),
+    TimerFired,
+}
+
+thread_local! {
+    /// The windowed run's host, on the Slint thread. Lives here because CEF's
+    /// wake-ups arrive through `invoke_from_event_loop`, whose closures must be
+    /// `Send` and so cannot hold it. Empty before and after the Slint loop.
+    static HOST: RefCell<Option<Host>> = const { RefCell::new(None) };
+}
+
+/// Hands a pump request to the host. Called on the Slint thread only.
+fn deliver(wake: Wake) {
+    HOST.with_borrow_mut(|host| {
+        if let Some(host) = host {
+            host.pump(wake);
+        }
+    });
+}
+
+/// CEF's pump requests, from any thread, onto the Slint loop. After the loop
+/// has ended they are dropped: the shutdown drain pumps by itself.
+fn pump_scheduler() -> PumpScheduler {
+    PumpScheduler::new(|delay_ms| {
+        let _ = slint::invoke_from_event_loop(move || deliver(Wake::Schedule(delay_ms)));
+    })
+}
+
+/// Everything the pump drives. Owned by [`HOST`].
 struct Host {
     engine: Engine,
+    window: slint::Weak<AppWindow>,
+    /// The engine's single-shot pump timer.
+    timer: slint::Timer,
     presenter: FramePresenter,
     content: Content,
     stats: FrameStats,
     last_present: Option<Instant>,
-    idle_ticks: u32,
+    idle_runs: u32,
     /// Accelerated frames after which the loop quits (`--smoke frames`).
     quit_after: Option<u64>,
     /// Why the loop was quit early, if it was.
@@ -170,16 +201,35 @@ struct Host {
 }
 
 impl Host {
-    fn pump(&mut self, window: &AppWindow) {
-        self.engine.tick();
-        if let Err(e) = self.show_frame(window) {
+    fn pump(&mut self, wake: Wake) {
+        let outcome = match wake {
+            Wake::Schedule(delay_ms) => self.engine.schedule_pump(delay_ms),
+            Wake::TimerFired => self.engine.pump_timer_fired(),
+        };
+        let PumpOutcome { timer, worked } = outcome;
+        match timer {
+            Some(PumpTimer::Start(delay)) => {
+                self.timer.start(slint::TimerMode::SingleShot, delay, || {
+                    deliver(Wake::TimerFired)
+                });
+            }
+            Some(PumpTimer::Cancel) => self.timer.stop(),
+            None => {}
+        }
+        if !worked {
+            return;
+        }
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
         if self.quit_after.is_some() {
-            self.idle_ticks += 1;
-            if self.idle_ticks > SMOKE_MAX_IDLE_TICKS {
+            self.idle_runs += 1;
+            if self.idle_runs > SMOKE_MAX_IDLE_RUNS {
                 self.fail(format!(
-                    "no new frame after {SMOKE_MAX_IDLE_TICKS} pumps ({} accelerated so far)",
+                    "no new frame after {SMOKE_MAX_IDLE_RUNS} runs of CEF work ({} accelerated so far)",
                     self.stats.accelerated
                 ));
             }
@@ -190,10 +240,11 @@ impl Host {
         let layout = content_layout(window);
         let id = match &self.content {
             Content::Waiting { url } => {
-                let refresh = window
-                    .window()
-                    .with_winit_window(display_refresh_mhz)
-                    .flatten();
+                // Before winit has created the window there is no monitor to
+                // ask; CEF's next pump (at most `MAX_TIMER_DELAY` away) retries.
+                let Some(refresh) = window.window().with_winit_window(display_refresh_mhz) else {
+                    return Ok(());
+                };
                 let frame_rate = pacing::frame_rate_for(refresh);
                 eprintln!("wubble: CEF frame rate {frame_rate} (display {refresh:?} mHz)");
                 let config = ViewConfig {
@@ -210,6 +261,10 @@ impl Host {
         let Some(view) = self.engine.view(id) else {
             return Err("the web view closed unexpectedly".into());
         };
+        let new_cpu = self.stats.record_cpu_fallback(view.cpu_fallback_frames());
+        if new_cpu > 0 {
+            eprintln!("wubble: {new_cpu} CPU fallback frame(s) (OnPaint), not shown");
+        }
         view.set_layout(layout);
         let Some(frame) = view.take_frame() else {
             return Ok(());
@@ -223,7 +278,7 @@ impl Host {
         self.stats
             .record_accelerated(self.last_present.map(|last| now - last));
         self.last_present = Some(now);
-        self.idle_ticks = 0;
+        self.idle_runs = 0;
         if self.quit_after.is_some_and(|n| self.stats.accelerated >= n) {
             quit();
         }
@@ -306,32 +361,31 @@ fn run(
         Mode::Browse => (smoke_page_url(), None),
         Mode::Smoke { frames, url } => (url.unwrap_or_else(smoke_page_url), Some(frames)),
     };
-    let engine = Engine::start(config?)?;
-    let host = Rc::new(RefCell::new(Host {
+    // The first pump runs once the loop does; from there CEF schedules every
+    // pump itself.
+    slint::invoke_from_event_loop(|| deliver(Wake::Schedule(0)))?;
+    let engine = Engine::start(EngineConfig {
+        pump_scheduler: Some(pump_scheduler()),
+        ..config?
+    })?;
+    let window = AppWindow::new()?;
+    HOST.set(Some(Host {
         engine,
+        window: window.as_weak(),
+        timer: slint::Timer::default(),
         presenter: gpu.presenter(),
         content: Content::Waiting { url },
         stats: FrameStats::default(),
         last_present: None,
-        idle_ticks: 0,
+        idle_runs: 0,
         quit_after,
         failure: None,
     }));
-    let window = AppWindow::new()?;
-
-    let pump = slint::Timer::default();
-    let pumped = Rc::clone(&host);
-    let weak = window.as_weak();
-    pump.start(slint::TimerMode::Repeated, PUMP_INTERVAL, move || {
-        if let Some(window) = weak.upgrade() {
-            pumped.borrow_mut().pump(&window);
-        }
-    });
 
     let result = window.run();
-    drop(pump);
     drop(window);
-    let mut host = host.borrow_mut();
+    let mut host = HOST.take().ok_or("the host went missing")?;
+    drop(host.timer);
     drain(&mut host.engine);
     result?;
     Ok(Outcome {
