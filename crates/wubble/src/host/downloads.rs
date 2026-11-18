@@ -170,6 +170,30 @@ impl Host {
         }
     }
 
+    /// Ctrl+P: saves `tab`'s page as a PDF in the downloads folder, named after its title. The
+    /// result arrives as `PageEvent::PdfPrinted`, which toasts it (`Routed::Pdf`).
+    pub(super) fn print(&mut self, tab: TabId) {
+        let title = self
+            .model
+            .tabs
+            .get(&tab)
+            .map(crate::shell::tab_title)
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "page".into());
+        match self.download_path(&format!("{title}.pdf")) {
+            Some(path) => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.print_to_pdf(&path);
+                }
+            }
+            None => {
+                if let Some(window) = self.window.upgrade() {
+                    self.toast(&window, "Cannot print: no downloads folder");
+                }
+            }
+        }
+    }
+
     /// A unique path in the downloads directory, created if needed.
     fn download_path(&self, suggested: &str) -> Option<PathBuf> {
         let dir = self.downloads.dir.as_deref()?;

@@ -989,6 +989,11 @@ impl Host {
                 let Some(view) = self.tab_view(tab) else {
                     return;
                 };
+                // Print needs the host's downloads folder, not just the view.
+                if op == ViewOp::Print {
+                    self.print(tab);
+                    return;
+                }
                 match op {
                     ViewOp::Reload => view.reload(),
                     ViewOp::HardReload => view.hard_reload(),
@@ -1002,6 +1007,7 @@ impl Host {
                         let muted = view.is_muted();
                         view.set_muted(!muted);
                     }
+                    ViewOp::Print => {}
                 }
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
                     let percent = view.zoom_percent();
@@ -1453,14 +1459,16 @@ impl Host {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
             }
-            // A press anywhere sends a wave through the scene (the page gets it too). Raw, so
-            // the side buttons navigate over the shell too.
+            // A left press anywhere sends a wave through the scene (the page gets it too). Raw,
+            // so the side buttons navigate over the shell too, without a wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
-                self.glass.borrow_mut().tap();
+                if input::taps_backdrop(*button) {
+                    self.glass.borrow_mut().tap();
+                }
                 if let Some(action) = input::button_action(*button) {
                     self.perform(action);
                 }

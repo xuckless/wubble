@@ -339,6 +339,7 @@ pub const DEFAULTS: &[Binding] = rows![
     "Cmd+Ctrl+F", MAC, Action::Fullscreen, Shell;
     "Mod+Shift+D", ALL, Action::TogglePinTab, PageFirst;
     "Mod+Shift+C", ALL, Action::CopyUrl, PageFirst;
+    "Mod+P", ALL, Action::Print, PageFirst;
     // the design's split chord; Shift+\ types `|`, so the unsplit row names that
     "Mod+\\", ALL, Action::SplitNext, Shell;
     "Mod+|", ALL, Action::Unsplit, Shell;

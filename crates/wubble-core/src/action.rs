@@ -38,6 +38,8 @@ pub enum Action {
     Fullscreen,
     TogglePinTab,
     CopyUrl,
+    /// Save the visible page as a PDF in the downloads folder.
+    Print,
     /// Mute or unmute the visible tab (also the sidebar's speaker glyph).
     ToggleMute,
     /// Put the next tab down beside the focused page, or open a page beside it.
@@ -49,7 +51,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 33] = [
+const FIXED: [(&str, Action); 34] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -79,6 +81,7 @@ const FIXED: [(&str, Action); 33] = [
     ("fullscreen", Action::Fullscreen),
     ("toggle-pin-tab", Action::TogglePinTab),
     ("copy-url", Action::CopyUrl),
+    ("print", Action::Print),
     ("toggle-mute", Action::ToggleMute),
     ("split-next", Action::SplitNext),
     ("unsplit", Action::Unsplit),
@@ -188,7 +191,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 51);
+        assert_eq!(all.len(), 52);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -199,7 +202,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 51);
+        assert_eq!(ids.len(), 52);
     }
 
     #[test]
