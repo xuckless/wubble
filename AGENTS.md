@@ -40,6 +40,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
     cargo run -p wubble -- --smoke nav   # window navigates between two bundled pages, exits; run by hand only
     cargo run -p wubble -- --smoke tabs   # window opens, switches, sleeps, restores and closes tabs, exits; run by hand only
+    cargo run -p wubble -- --smoke windows   # a second window, a tab moved into it, both checked, closed; a Little window promoted; exits; run by hand only
     cargo run -p wubble -- --smoke split   # window splits two bundled pages, checks each pane, unsplits, exits; run by hand only
     cargo run -p wubble -- --smoke page   # window drives a select popup, an alert, a context menu, find and zoom, exits; run by hand only
     cargo run -p wubble -- --smoke session   # two tabs saved, restarted and restored on a temp profile; two windows, exits; run by hand only
