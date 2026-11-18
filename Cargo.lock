@@ -7256,6 +7256,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wgpu-profiler"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a15a635a2a2ec0b9787589f17dbbffaa7960e779bcf0348a67f73c3e7665f9eb"
+dependencies = [
+ "parking_lot",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
 name = "wgpu-types"
 version = "30.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7807,6 +7818,7 @@ dependencies = [
  "slint",
  "welding",
  "wgpu",
+ "wgpu-profiler",
 ]
 
 [[package]]

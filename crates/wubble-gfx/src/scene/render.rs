@@ -35,10 +35,13 @@
 //! arena is uploaded once per frame, and each draw binds its own slice.
 
 use std::num::NonZeroU64;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
 use super::quality::{BackdropClock, MAX_DT, Quality};
 use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
+use crate::import::poll_once;
 use crate::{GfxError, GpuContext};
 
 // @source slint-render-shaders
@@ -413,18 +416,33 @@ pub struct Renderer {
     /// When the backdrop moves, and the time of the frames it skipped.
     clock: BackdropClock,
     last_frame: Option<Instant>,
+    /// GPU timestamps around each frame's work, when the device has them
+    /// (`TIMESTAMP_QUERY` + `TIMESTAMP_QUERY_INSIDE_ENCODERS`).
+    profiler: Option<GpuProfiler>,
+    /// The GPU time of the latest frame whose timestamps came back, until taken.
+    cost: Option<Duration>,
 }
 
 impl Renderer {
     /// The scene on the one device that Slint and the frame importer share.
-    pub fn new(gpu: &GpuContext, opts: SceneOptions) -> Self {
+    /// `Err` when the device refuses the scene's shaders or pipelines (a
+    /// validation error, captured instead of panicking), so the host can fall
+    /// back to Slint-only glass. The formats need no check: `Rgba16Float` and
+    /// `Rgba8Unorm` are renderable, blendable and filterable on every WebGPU
+    /// device.
+    pub fn try_new(gpu: &GpuContext, opts: SceneOptions) -> Result<Self, GfxError> {
         Self::from_device(gpu.device().clone(), gpu.queue().clone(), opts)
     }
 
     /// The scene on a given device. Only for headless runs (tests, the
-    /// `headless` example): the app uses [`Renderer::new`], so the scene's
+    /// `headless` example): the app uses [`Renderer::try_new`], so the scene's
     /// textures live on the device Slint renders with.
-    pub fn from_device(device: wgpu::Device, queue: wgpu::Queue, opts: SceneOptions) -> Self {
+    pub fn from_device(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        opts: SceneOptions,
+    ) -> Result<Self, GfxError> {
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let p = Pipelines::new(&device);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("scene linear clamp"),
@@ -435,7 +453,30 @@ impl Renderer {
             ..Default::default()
         });
         let arena = Arena::new(&device);
-        Renderer {
+        // native wgpu resolves an error scope at once
+        match poll_once(scope.pop()) {
+            Some(None) => {}
+            Some(Some(e)) => return Err(GfxError::Device(format!("scene pipelines: {e}"))),
+            None => return Err(GfxError::Device("scene error scope did not resolve".into())),
+        }
+        let timers =
+            GpuProfiler::ALL_WGPU_TIMER_FEATURES - wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        let profiler = device
+            .features()
+            .contains(timers)
+            .then(|| {
+                GpuProfiler::new(
+                    &device,
+                    GpuProfilerSettings {
+                        enable_timer_queries: true,
+                        enable_debug_groups: false,
+                        max_num_pending_frames: 3,
+                    },
+                )
+                .ok()
+            })
+            .flatten();
+        Ok(Renderer {
             device,
             queue,
             p,
@@ -446,7 +487,22 @@ impl Renderer {
             quality: Quality::Full,
             clock: BackdropClock::new(),
             last_frame: None,
-        }
+            profiler,
+            cost: None,
+        })
+    }
+
+    /// Whether frame costs are measured: the device has GPU timestamps.
+    pub fn measures_cost(&self) -> bool {
+        self.profiler.is_some()
+    }
+
+    /// The GPU time of the scene's work in the latest frame whose
+    /// timestamps have come back (one to three frames late), once: `None`
+    /// until another frame's come back, and always when the device has no
+    /// timestamp queries. This is the cost the host feeds to the `Governor`.
+    pub fn take_cost(&mut self) -> Option<Duration> {
+        self.cost.take()
     }
 
     /// The level the host's `Governor` chose. Takes effect on the next frame.
@@ -605,6 +661,10 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("wubble scene"),
             });
+        let timer = self
+            .profiler
+            .as_ref()
+            .map(|p| p.begin_query("wubble scene", &mut enc));
         let (vw, vh, t) = (self.scene.w, self.scene.h, self.scene.time);
 
         if let Some(dt) = self.clock.tick(self.quality, dt, !sz.pyramid.drawn) {
@@ -689,10 +749,32 @@ impl Renderer {
             }
         }
 
+        if let (Some(p), Some(q)) = (self.profiler.as_mut(), timer) {
+            p.end_query(&mut enc, q);
+            p.resolve_queries(&mut enc);
+        }
         // all uniforms of this frame, then the commands that read them
         self.queue.write_buffer(&self.arena.buf, 0, &self.arena.cpu);
         self.queue.submit([enc.finish()]);
         self.sized = Some(sz);
+        self.collect_cost();
+    }
+
+    /// Closes the profiler frame and picks up any finished one. The poll does
+    /// not block: it only runs the map callbacks of work already done.
+    fn collect_cost(&mut self) {
+        let Some(p) = self.profiler.as_mut() else {
+            return;
+        };
+        if p.end_frame().is_err() {
+            return;
+        }
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        while let Some(results) = p.process_finished_frame(self.queue.get_timestamp_period()) {
+            if let Some(t) = results.first().and_then(|r| r.time.clone()) {
+                self.cost = Some(Duration::from_secs_f64((t.end - t.start).max(0.0)));
+            }
+        }
     }
 
     /// The glass uniforms of one surface. The voice glow is the deferred start
