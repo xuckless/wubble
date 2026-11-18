@@ -216,6 +216,9 @@ export component Sidebar inherits Rectangle {
         Ride {
             ride: root.ride;
             pill := AddressPill {
+                // the ride's row would otherwise hold it at its hidden glass row's width, wider
+                // than the rail
+                min-width: 0px;
                 over-wgpu: root.glass-over-wgpu;
                 loading: root.address-loading;
                 host: root.address-host;

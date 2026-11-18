@@ -594,7 +594,8 @@ export component AppWindow inherits Window {
                 // Over the peek's Slint glass (and the page) the scene cannot show: Slint draws.
                 glass-over-wgpu: GlassLayer.scene-active && !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
                 floating: root.hidden-at-rest;
-                ride: root.seam-ride;
+                // the peek floats off the seam: its sections hold still
+                ride: root.hidden-at-rest ? [] : root.seam-ride;
                 window-movable: !root.full-screen;
                 window-move-requested => {
                     root.window-begin-move();
