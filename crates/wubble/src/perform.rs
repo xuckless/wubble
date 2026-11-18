@@ -53,6 +53,8 @@ pub enum Plan {
     Fullscreen,
     /// Put the text on the clipboard.
     Copy(String),
+    /// Mod+D: the bookmark sheet for the visible page.
+    BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
     OpenBeside,
     Quit,
@@ -127,6 +129,14 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             _ => Plan::Nothing,
         },
         Action::OpenSettings => Plan::Model(Command::OpenInternal(InternalPage::Settings)),
+        Action::OpenHistory => Plan::Model(Command::OpenInternal(InternalPage::History)),
+        Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
+        Action::OpenDownloads => Plan::Model(Command::OpenInternal(InternalPage::Downloads)),
+        Action::OpenPasswords => Plan::Model(Command::OpenInternal(InternalPage::Passwords)),
+        Action::BookmarkPage => visible
+            .and_then(|t| model.tabs.get(&t))
+            .filter(|t| wubble_core::url::is_recordable(&t.url))
+            .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::Quit => Plan::Quit,
         Action::NewWindow
         | Action::NewSpace

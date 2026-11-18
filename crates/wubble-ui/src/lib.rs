@@ -4,6 +4,7 @@ slint::include_modules!();
 
 pub mod driver;
 pub mod glass;
+pub mod pages;
 pub mod settings;
 pub mod window;
 
@@ -43,6 +44,7 @@ mod tests {
             title: title.into(),
             subtitle: "".into(),
             shortcut: "".into(),
+            icon: Default::default(),
         }
     }
 

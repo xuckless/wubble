@@ -35,6 +35,8 @@ export struct CommandResult {
     title: string,
     subtitle: string,
     shortcut: string,
+    // wubble: the site's favicon (history rows); an empty image shows the kind's glyph.
+    icon: image,
 }
 
 // Lifecycle of the command bar overlay. Written only by CommandBar.dispatch.
@@ -202,6 +204,7 @@ export enum DownloadAction {
     retry,
     remove,
     reveal,
+    open,
 }
 
 // The find bar. `focus-serial` changes when the bar should take the keyboard (Mod+F).
@@ -337,4 +340,82 @@ export struct AboutView {
     chromium: string,
     licence: string,
     notices: string,
+}
+
+// ── The native pages (wubble_core::pages). One page shows at a time, in the tab on its url.
+export enum InternalPageKind {
+    none,
+    settings,
+    history,
+    bookmarks,
+    downloads,
+    passwords,
+}
+
+// One line of the history page: a day header (`header`, `label`) or a visit.
+export struct HistoryLineItem {
+    header: bool,
+    label: string,
+    title: string,
+    url: string,
+    favicon: image,
+}
+
+// One visible line of the bookmark tree (or a search hit: `path` names its folder).
+export struct BookmarkLineItem {
+    id: int,
+    depth: int,
+    title: string,
+    url: string,
+    path: string,
+    favicon: image,
+    is-folder: bool,
+    expanded: bool,
+}
+
+// One entry of the bookmark sheet's folder picker; `id` -1 is the top level.
+export struct FolderChoiceItem {
+    id: int,
+    label: string,
+    depth: int,
+}
+
+// What the bookmark sheet asks (Ctrl+D, rename, move, new folder).
+export struct BookmarkSheetView {
+    open: bool,
+    // Changes with each opening: the sheet restarts from `name` and `folder`.
+    serial: int,
+    title: string,
+    accept: string,
+    show-name: bool,
+    name: string,
+    show-folders: bool,
+    // The folder id to start on (-1: the top level).
+    folder: int,
+    // The page is already bookmarked: offer removing it.
+    can-remove: bool,
+}
+
+// One saved login. `revealed` is the password while the user asked to see it (empty otherwise).
+export struct LoginItem {
+    id: string,
+    site: string,
+    username: string,
+    revealed: string,
+    has-revealed: bool,
+}
+
+export enum VaultState {
+    locked,
+    unlocked,
+    unavailable,
+    unreadable,
+}
+
+export struct PasswordsView {
+    state: VaultState,
+    title: string,
+    body: string,
+    // The last import's report, or an error to show under the buttons.
+    notice: string,
 }

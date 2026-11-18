@@ -48,12 +48,22 @@ pub enum Action {
     Unsplit,
     /// Show the settings page (`pages::InternalPage::Settings`).
     OpenSettings,
+    /// Show the history page (`pages::InternalPage::History`).
+    OpenHistory,
+    /// Show the bookmarks page.
+    OpenBookmarks,
+    /// Show the downloads page.
+    OpenDownloads,
+    /// Show the passwords page.
+    OpenPasswords,
+    /// Bookmark the visible page: opens the name and folder sheet.
+    BookmarkPage,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 35] = [
+const FIXED: [(&str, Action); 40] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -88,6 +98,11 @@ const FIXED: [(&str, Action); 35] = [
     ("split-next", Action::SplitNext),
     ("unsplit", Action::Unsplit),
     ("open-settings", Action::OpenSettings),
+    ("open-history", Action::OpenHistory),
+    ("open-bookmarks", Action::OpenBookmarks),
+    ("open-downloads", Action::OpenDownloads),
+    ("open-passwords", Action::OpenPasswords),
+    ("bookmark-page", Action::BookmarkPage),
     ("quit", Action::Quit),
 ];
 
@@ -152,7 +167,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 10] = [
+pub const PALETTE: [ActionInfo; 15] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -204,6 +219,31 @@ pub const PALETTE: [ActionInfo; 10] = [
         title: "Settings",
         keywords: "preferences options customise keyboard shortcuts",
     },
+    ActionInfo {
+        action: Action::OpenHistory,
+        title: "History",
+        keywords: "visited pages browsing",
+    },
+    ActionInfo {
+        action: Action::OpenBookmarks,
+        title: "Bookmarks",
+        keywords: "favourites saved",
+    },
+    ActionInfo {
+        action: Action::OpenDownloads,
+        title: "Downloads",
+        keywords: "files saved",
+    },
+    ActionInfo {
+        action: Action::OpenPasswords,
+        title: "Passwords",
+        keywords: "logins credentials keys",
+    },
+    ActionInfo {
+        action: Action::BookmarkPage,
+        title: "Bookmark This Page",
+        keywords: "star save favourite",
+    },
 ];
 
 #[cfg(test)]
@@ -213,7 +253,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 53);
+        assert_eq!(all.len(), 58);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -224,7 +264,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 53);
+        assert_eq!(ids.len(), 58);
     }
 
     #[test]

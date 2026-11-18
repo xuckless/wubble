@@ -22,20 +22,7 @@ pub struct HistoryDeleted {
     pub urls: u64,
 }
 
-/// Only web pages are history; internal and file URLs never are.
-pub fn is_recordable(url: &str) -> bool {
-    ["http://", "https://"]
-        .iter()
-        .any(|p| url.len() > p.len() && url[..p.len()].eq_ignore_ascii_case(p))
-}
-
-/// Match key: lowercase, scheme and a leading `www.` removed (Places autofill idea), so
-/// typing `exa` finds `https://www.example.com/`.
-pub fn url_key(url: &str) -> String {
-    let lower = url.trim().to_lowercase();
-    let rest = lower.split_once("://").map_or(lower.as_str(), |(_, r)| r);
-    rest.strip_prefix("www.").unwrap_or(rest).to_string()
-}
+pub use wubble_core::url::{is_recordable, url_key};
 
 /// Exclusive upper bound of the keys starting with `key` (`char::MAX` sorts after any char a
 /// URL key realistically holds). Turns a prefix match into an index range scan, no LIKE escaping.
@@ -118,22 +105,26 @@ impl Store {
 
     /// One page of the history page's rows: visits strictly before the `(visit_ms, visit_id)`
     /// cursor of the last row already shown (`None`: from the newest), newest first, at most
-    /// `limit`. The id breaks ties between visits with the same millisecond. Searching and day grouping are
+    /// `limit`. The id breaks ties between visits with the same millisecond. `query` keeps the
+    /// visits whose title or url contains it (case-insensitive; empty keeps all), so a search
+    /// reaches rows older than any loaded page. Day grouping is
     /// `wubble_core::pages::history_page`.
     pub async fn list_visits(
         &self,
         limit: usize,
         before: Option<(i64, i64)>,
+        query: &str,
     ) -> Result<Vec<HistoryRow>> {
         let mut rows = self
             .conn
             .query(
                 "SELECT u.url, u.title, v.visit_time, v.id FROM visits v JOIN urls u ON u.id = v.url_id \
-                 WHERE v.visit_time < ?1 OR (v.visit_time = ?1 AND v.id < ?2) \
+                 WHERE (v.visit_time < ?1 OR (v.visit_time = ?1 AND v.id < ?2)) \
+                   AND (?4 = '' OR instr(lower(u.title), ?4) > 0 OR instr(lower(u.url), ?4) > 0) \
                  ORDER BY v.visit_time DESC, v.id DESC LIMIT ?3",
                 {
                     let (ms, id) = before.unwrap_or((i64::MAX, i64::MAX));
-                    (ms, id, limit as i64)
+                    (ms, id, limit as i64, query.trim().to_lowercase())
                 },
             )
             .await?;
@@ -346,7 +337,7 @@ mod tests {
             ] {
                 s.record_visit(url, "T", t, Transition::Link).await.unwrap();
             }
-            let all = s.list_visits(10, None).await.unwrap();
+            let all = s.list_visits(10, None, "").await.unwrap();
             let got: Vec<(&str, i64)> = all.iter().map(|r| (r.url.as_str(), r.visit_ms)).collect();
             assert_eq!(
                 got,
@@ -357,12 +348,49 @@ mod tests {
                 ]
             );
             assert_eq!(all[0].title, "T");
-            assert_eq!(s.list_visits(2, None).await.unwrap().len(), 2);
+            assert_eq!(s.list_visits(2, None, "").await.unwrap().len(), 2);
             let cur = |r: &HistoryRow| Some((r.visit_ms, r.visit_id));
-            let older = s.list_visits(10, cur(&all[1])).await.unwrap();
+            let older = s.list_visits(10, cur(&all[1]), "").await.unwrap();
             assert_eq!(older.len(), 1);
             assert_eq!(older[0].visit_ms, 10);
-            assert!(s.list_visits(10, cur(&all[2])).await.unwrap().is_empty());
+            assert!(
+                s.list_visits(10, cur(&all[2]), "")
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
+
+    #[test]
+    fn list_visits_searches_title_and_url_across_pages() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for (i, (url, title)) in [
+                ("https://a.test/one", "Apple Pie"),
+                ("https://b.test/two", "Bread"),
+                ("https://c.test/APPLE", "Cake"),
+                ("https://d.test/", "Dates"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                s.record_visit(url, title, 10 + i as i64, Transition::Link)
+                    .await
+                    .unwrap();
+            }
+            let hits = s.list_visits(10, None, " Apple ").await.unwrap();
+            let urls: Vec<&str> = hits.iter().map(|r| r.url.as_str()).collect();
+            assert_eq!(urls, ["https://c.test/APPLE", "https://a.test/one"]);
+            // Paging keeps the query.
+            let one = s.list_visits(1, None, "apple").await.unwrap();
+            let next = s
+                .list_visits(1, Some((one[0].visit_ms, one[0].visit_id)), "apple")
+                .await
+                .unwrap();
+            assert_eq!(next[0].url, "https://a.test/one");
+            assert!(s.list_visits(10, None, "zzz").await.unwrap().is_empty());
+            assert_eq!(s.list_visits(10, None, "").await.unwrap().len(), 4);
         });
     }
 
@@ -379,7 +407,7 @@ mod tests {
             let mut seen = Vec::new();
             let mut cursor = None;
             loop {
-                let page = s.list_visits(2, cursor).await.unwrap();
+                let page = s.list_visits(2, cursor, "").await.unwrap();
                 let Some(last) = page.last() else { break };
                 cursor = Some((last.visit_ms, last.visit_id));
                 seen.extend(page.into_iter().map(|r| r.url));

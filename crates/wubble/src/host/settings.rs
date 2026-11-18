@@ -260,24 +260,14 @@ impl Host {
 
     // ----- the page
 
-    /// Whether the visible tab shows the settings page.
-    fn settings_shown(&self) -> bool {
-        self.model
-            .visible_tab()
-            .and_then(|t| self.model.tabs.get(&t))
-            .and_then(|t| InternalPage::from_url(&t.url))
-            == Some(InternalPage::Settings)
-    }
-
     /// Draws the page from the stored rows, the keymap, the model and the per-site data;
-    /// closed (and any recording cancelled) while another tab is shown.
+    /// closed (and any recording cancelled) while another tab is shown. The window's `page`
+    /// property is set by `render_pages`, which calls this.
     pub(super) fn render_settings(&mut self) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        let open = self.settings_shown();
-        window.set_settings_open(open);
-        if !open {
+        if self.shown_page() != Some(InternalPage::Settings) {
             self.settings.capture = Capture::Idle;
             return;
         }

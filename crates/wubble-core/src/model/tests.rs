@@ -1733,20 +1733,25 @@ fn set_sleep_policy_changes_when_a_hidden_tab_sleeps() {
 
 #[test]
 fn open_internal_focuses_the_tab_already_on_it() {
-    let (m, ids) = with_tabs(1);
-    let (m, fx) = run(m, Command::OpenInternal(InternalPage::Settings));
-    let Effect::CreateTab {
-        tab: settings, url, ..
-    } = fx[0].clone()
-    else {
-        panic!("no CreateTab: {fx:?}")
-    };
-    assert_eq!(url, InternalPage::Settings.url());
-    assert!(m.is_internal(settings) && !m.is_internal(ids[0]));
-    let (m, _) = run(m, Command::ActivateTab(ids[0]));
-    let (m, fx) = run(m, Command::OpenInternal(InternalPage::Settings));
-    assert_eq!(fx, [Effect::ActivateTab(settings)]);
-    assert_eq!(m.tabs.len(), 2);
+    for page in InternalPage::ALL {
+        let (m, ids) = with_tabs(1);
+        let (m, fx) = run(m, Command::OpenInternal(page));
+        let Effect::CreateTab {
+            tab: shown, url, ..
+        } = fx[0].clone()
+        else {
+            panic!("no CreateTab: {fx:?}")
+        };
+        assert_eq!(url, page.url());
+        assert!(m.is_internal(shown) && !m.is_internal(ids[0]));
+        let (m, _) = run(m, Command::ActivateTab(ids[0]));
+        let (m, fx) = run(m, Command::OpenInternal(page));
+        assert_eq!(fx, [Effect::ActivateTab(shown)], "{page:?}");
+        assert_eq!(m.tabs.len(), 2);
+        // A split refuses every internal page.
+        let (m2, fx) = run(m.clone(), Command::SplitWith(shown));
+        assert!(fx.is_empty() && m2.shown_split().is_none(), "{page:?}");
+    }
 }
 
 #[test]

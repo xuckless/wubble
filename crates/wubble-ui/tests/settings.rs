@@ -16,7 +16,7 @@ use wubble_core::keys::{Platform, binding_rows};
 use wubble_core::pages::{settings_page, settings_page_from};
 use wubble_core::settings::{ALL, Section, SettingDef, SettingKind};
 use wubble_ui::settings::{binding_items, setting_items};
-use wubble_ui::{AppWindow, SettingItem};
+use wubble_ui::{AppWindow, InternalPageKind, SettingItem};
 
 fn pump() {
     mock_elapsed_time(Duration::from_millis(500));
@@ -58,7 +58,7 @@ fn settings_page_scenarios() {
     let app = AppWindow::new().unwrap();
     // Tall enough for every row of the page: the element queries see only what is on screen.
     app.window().set_size(LogicalSize::new(1280.0, 6000.0));
-    app.set_settings_open(true);
+    app.set_page(InternalPageKind::Settings);
 
     // The shipped table: a row per visible setting.
     let page = settings_page(&HashMap::new());

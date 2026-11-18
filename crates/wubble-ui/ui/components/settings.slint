@@ -128,8 +128,12 @@ export component Field inherits Rectangle {
     in property <string> placeholder;
     in property <string> icon-path: "";
     in property <bool> numeric: false;
+    // Masked text (a password).
+    in property <bool> secret: false;
     callback edited(string);
     callback accepted(string);
+    // Escape in the field: a sheet around it cancels.
+    callback escaped();
     public function take-focus() {
         input.focus();
     }
@@ -169,12 +173,19 @@ export component Field inherits Rectangle {
         vertical-alignment: center;
         horizontal-alignment: root.numeric ? right : left;
         single-line: true;
-        input-type: root.numeric ? InputType.decimal : InputType.text;
+        input-type: root.secret ? InputType.password : root.numeric ? InputType.decimal : InputType.text;
         edited => {
             root.edited(self.text);
         }
         accepted => {
             root.accepted(self.text);
+        }
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.escaped();
+                return accept;
+            }
+            return reject;
         }
     }
 }
@@ -270,7 +281,7 @@ export component Slider inherits Rectangle {
 }
 
 // A small text button: a row's Reset, a list's Remove.
-component TextButton inherits PressableButton {
+export component TextButton inherits PressableButton {
     height: Shell.icon-button;
     border-radius: Shell.icon-button-radius;
     background: self.hovered ? Shell.icon-button-hover : transparent;
@@ -330,7 +341,7 @@ export component SectionHeader inherits Text {
 }
 
 // A section's rows on a faint card.
-component Card inherits Rectangle {
+export component Card inherits Rectangle {
     border-radius: Radius.md;
     background: Shell.settings-card;
     VerticalLayout {
@@ -344,7 +355,7 @@ component Card inherits Rectangle {
 }
 
 // A label on the left, a note under it, the control on the right.
-component Line inherits HorizontalLayout {
+export component Line inherits HorizontalLayout {
     in property <string> label;
     in property <string> note;
     in property <color> note-color: Palette.haze;
@@ -515,42 +526,25 @@ component BindingRow inherits Line {
 }
 
 // The full-content settings page, over the page area like the error panel.
-export component SettingsPage inherits Rectangle {
+// The frame every native page shares: thick glass over the content area, one scroller, a
+// centred column `Shell.settings-width` wide with the page's title and search box on top and the
+// page's rows (`@children`) under them. `open` shows it; `query-changed` is the search box.
+export component PageFrame inherits Rectangle {
     in property <bool> open;
-    // the generated rows, flat: each section's first row names it
-    in property <[SettingItem]> rows;
-    in property <[BindingItem]> bindings;
-    in property <CaptureView> capture;
-    in property <[SpaceSetting]> spaces;
-    // the Sites lists: each line and what removing it names (a host, a decision's index)
-    in property <[EntryItem]> site-zoom;
-    in property <[EntryItem]> site-permissions;
-    in property <AboutView> about;
-    // the search box is blank: the sections that are not settings rows show too
-    in property <bool> searching;
+    in property <string> title;
+    in property <string> placeholder: "Search";
+    // Without a search box (the downloads page).
+    in property <bool> searchable: true;
     callback query-changed(string);
-    callback setting-changed(string, string);
-    callback setting-reset(string);
-    callback entry-removed(string, string);
-    callback entry-added(string, string);
-    callback binding-record(string);
-    callback binding-reset(string);
-    callback capture-confirm();
-    callback capture-cancel();
-    callback space-renamed(int, string);
-    callback space-tinted(int, color);
-    callback space-icon-chosen(int, string);
-    callback site-zoom-removed(string);
-    callback site-permission-removed(string);
 
-    // The Space colours: the design's film colours (tokens.slint Palette).
-    property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.coral, Palette.amber];
-    property <[string]> icons: ["personal", "work", "study"];
-    property <bool> notices-open: false;
     property <length> scroll: 0px;
 
     public function take-focus() {
         search.take-focus();
+    }
+    // Back to the top: a new query or a page switch starts there.
+    public function scroll-to-top() {
+        root.scroll = 0px;
     }
 
     visible: root.open;
@@ -581,7 +575,7 @@ export component SettingsPage inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.s4;
                         Text {
-                            text: "Settings";
+                            text: root.title;
                             color: Palette.ink;
                             font-family: Fonts.ui;
                             font-size: Type.title.size;
@@ -590,206 +584,244 @@ export component SettingsPage inherits Rectangle {
                         }
                         search := Field {
                             horizontal-stretch: 1;
+                            visible: root.searchable;
+                            max-width: root.searchable ? Shell.settings-width : 0px;
                             icon-path: IconPaths.search;
-                            placeholder: "Search settings";
+                            placeholder: root.placeholder;
                             edited(q) => {
                                 root.scroll = 0px;
                                 root.query-changed(q);
                             }
                         }
                     }
+                    @children
+                }
+            }
+        }
+    }
+}
 
-                    // A flat list (rows keep their instance across a re-render); each section's
-                    // first row carries its header, the rows draw the section's card.
-                    for row in root.rows: setting-row := VerticalLayout {
-                        spacing: Spacing.s2;
-                        padding-top: row.first ? Spacing.s6 : 0px;
-                        if row.section != "": SectionHeader {
-                            text: row.section;
-                        }
-                        Rectangle {
-                            background: Shell.settings-card;
-                            border-top-left-radius: row.first ? Radius.md : 0px;
-                            border-top-right-radius: row.first ? Radius.md : 0px;
-                            border-bottom-left-radius: row.last ? Radius.md : 0px;
-                            border-bottom-right-radius: row.last ? Radius.md : 0px;
-                            VerticalLayout {
-                                padding-left: Spacing.s4;
-                                padding-right: Spacing.s4;
-                                padding-top: row.first ? Spacing.s2 : 0px;
-                                padding-bottom: row.last ? Spacing.s2 : 0px;
-                                SettingRow {
-                                    setting: row;
-                                    changed(k, v) => {
-                                        root.setting-changed(k, v);
-                                    }
-                                    reset(k) => {
-                                        root.setting-reset(k);
-                                    }
-                                    entry-removed(k, e) => {
-                                        root.entry-removed(k, e);
-                                    }
-                                    entry-added(k, e) => {
-                                        root.entry-added(k, e);
-                                    }
-                                }
-                            }
+export component SettingsPage inherits PageFrame {
+    // the generated rows, flat: each section's first row names it
+    in property <[SettingItem]> rows;
+    in property <[BindingItem]> bindings;
+    in property <CaptureView> capture;
+    in property <[SpaceSetting]> spaces;
+    // the Sites lists: each line and what removing it names (a host, a decision's index)
+    in property <[EntryItem]> site-zoom;
+    in property <[EntryItem]> site-permissions;
+    in property <AboutView> about;
+    // the search box is blank: the sections that are not settings rows show too
+    in property <bool> searching;
+    callback setting-changed(string, string);
+    callback setting-reset(string);
+    callback entry-removed(string, string);
+    callback entry-added(string, string);
+    callback binding-record(string);
+    callback binding-reset(string);
+    callback capture-confirm();
+    callback capture-cancel();
+    callback space-renamed(int, string);
+    callback space-tinted(int, color);
+    callback space-icon-chosen(int, string);
+    callback site-zoom-removed(string);
+    callback site-permission-removed(string);
+
+    // The Space colours: the design's film colours (tokens.slint Palette).
+    property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.coral, Palette.amber];
+    property <[string]> icons: ["personal", "work", "study"];
+    property <bool> notices-open: false;
+
+    title: "Settings";
+    placeholder: "Search settings";
+
+    // A flat list (rows keep their instance across a re-render); each section's
+    // first row carries its header, the rows draw the section's card.
+    for row in root.rows: setting-row := VerticalLayout {
+        spacing: Spacing.s2;
+        padding-top: row.first ? Spacing.s6 : 0px;
+        if row.section != "": SectionHeader {
+            text: row.section;
+        }
+        Rectangle {
+            background: Shell.settings-card;
+            border-top-left-radius: row.first ? Radius.md : 0px;
+            border-top-right-radius: row.first ? Radius.md : 0px;
+            border-bottom-left-radius: row.last ? Radius.md : 0px;
+            border-bottom-right-radius: row.last ? Radius.md : 0px;
+            VerticalLayout {
+                padding-left: Spacing.s4;
+                padding-right: Spacing.s4;
+                padding-top: row.first ? Spacing.s2 : 0px;
+                padding-bottom: row.last ? Spacing.s2 : 0px;
+                SettingRow {
+                    setting: row;
+                    changed(k, v) => {
+                        root.setting-changed(k, v);
+                    }
+                    reset(k) => {
+                        root.setting-reset(k);
+                    }
+                    entry-removed(k, e) => {
+                        root.entry-removed(k, e);
+                    }
+                    entry-added(k, e) => {
+                        root.entry-added(k, e);
+                    }
+                }
+            }
+        }
+    }
+
+    if root.bindings.length > 0: VerticalLayout {
+        spacing: Spacing.s2;
+        padding-top: Spacing.s6;
+        SectionHeader {
+            text: "Keyboard shortcuts";
+        }
+        Card {
+            for b in root.bindings: BindingRow {
+                item: b;
+                capture: root.capture;
+                record(a) => {
+                    root.binding-record(a);
+                }
+                reset(a) => {
+                    root.binding-reset(a);
+                }
+                confirm => {
+                    root.capture-confirm();
+                }
+                cancel => {
+                    root.capture-cancel();
+                }
+            }
+        }
+    }
+
+    if !root.searching: VerticalLayout {
+        spacing: Spacing.s2;
+        padding-top: Spacing.s6;
+        SectionHeader {
+            text: "Spaces";
+        }
+        Card {
+            for space in root.spaces: VerticalLayout {
+                padding-top: Spacing.s2;
+                padding-bottom: Spacing.s2;
+                spacing: Spacing.s2;
+                HorizontalLayout {
+                    spacing: Spacing.s2;
+                    Field {
+                        horizontal-stretch: 1;
+                        text: space.name;
+                        placeholder: "Name";
+                        accepted(t) => {
+                            root.space-renamed(space.id, t);
                         }
                     }
-
-                    if root.bindings.length > 0: VerticalLayout {
-                        spacing: Spacing.s2;
-                        padding-top: Spacing.s6;
-                        SectionHeader {
-                            text: "Keyboard shortcuts";
-                        }
-                        Card {
-                            for b in root.bindings: BindingRow {
-                                item: b;
-                                capture: root.capture;
-                                record(a) => {
-                                    root.binding-record(a);
-                                }
-                                reset(a) => {
-                                    root.binding-reset(a);
-                                }
-                                confirm => {
-                                    root.capture-confirm();
-                                }
-                                cancel => {
-                                    root.capture-cancel();
-                                }
+                    for icon in root.icons: Rectangle {
+                        width: Shell.icon-button;
+                        height: Shell.icon-button;
+                        border-radius: Shell.icon-button-radius;
+                        background: icon == space.icon ? Shell.track : icon-ta.has-hover ? Shell.icon-button-hover : transparent;
+                        icon-ta := TouchArea {
+                            clicked => {
+                                root.space-icon-chosen(space.id, icon);
                             }
+                        }
+                        SpaceIcon {
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            width: Shell.space-glyph;
+                            height: Shell.space-glyph;
+                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
+                            kind: icon;
+                            tint: icon == space.icon ? space.tint : Palette.haze;
                         }
                     }
-
-                    if !root.searching: VerticalLayout {
-                        spacing: Spacing.s2;
-                        padding-top: Spacing.s6;
-                        SectionHeader {
-                            text: "Spaces";
-                        }
-                        Card {
-                            for space in root.spaces: VerticalLayout {
-                                padding-top: Spacing.s2;
-                                padding-bottom: Spacing.s2;
-                                spacing: Spacing.s2;
-                                HorizontalLayout {
-                                    spacing: Spacing.s2;
-                                    Field {
-                                        horizontal-stretch: 1;
-                                        text: space.name;
-                                        placeholder: "Name";
-                                        accepted(t) => {
-                                            root.space-renamed(space.id, t);
-                                        }
-                                    }
-                                    for icon in root.icons: Rectangle {
-                                        width: Shell.icon-button;
-                                        height: Shell.icon-button;
-                                        border-radius: Shell.icon-button-radius;
-                                        background: icon == space.icon ? Shell.track : icon-ta.has-hover ? Shell.icon-button-hover : transparent;
-                                        icon-ta := TouchArea {
-                                            clicked => {
-                                                root.space-icon-chosen(space.id, icon);
-                                            }
-                                        }
-                                        SpaceIcon {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            width: Shell.space-glyph;
-                                            height: Shell.space-glyph;
-                                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                                            kind: icon;
-                                            tint: icon == space.icon ? space.tint : Palette.haze;
-                                        }
-                                    }
-                                }
-                                HorizontalLayout {
-                                    spacing: Spacing.s2;
-                                    alignment: start;
-                                    for swatch in root.swatches: Rectangle {
-                                        width: Shell.swatch;
-                                        height: Shell.swatch;
-                                        border-radius: self.width / 2;
-                                        background: swatch;
-                                        border-width: swatch == space.tint ? Shell.swatch-ring : 0px;
-                                        border-color: Palette.ink;
-                                        TouchArea {
-                                            clicked => {
-                                                root.space-tinted(space.id, swatch);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if !root.searching: VerticalLayout {
-                        spacing: Spacing.s2;
-                        padding-top: Spacing.s6;
-                        SectionHeader {
-                            text: "Sites";
-                        }
-                        Card {
-                            Line {
-                                label: "Zoom levels";
-                            }
-                            EntryList {
-                                entries: root.site-zoom;
-                                empty: "No site has its own zoom";
-                                removed(k) => {
-                                    root.site-zoom-removed(k);
-                                }
-                            }
-                            Line {
-                                label: "Permissions";
-                            }
-                            EntryList {
-                                entries: root.site-permissions;
-                                empty: "No site has a remembered permission";
-                                removed(k) => {
-                                    root.site-permission-removed(k);
-                                }
-                            }
-                        }
-                    }
-
-                    if !root.searching: VerticalLayout {
-                        spacing: Spacing.s2;
-                        padding-top: Spacing.s6;
-                        SectionHeader {
-                            text: "About";
-                        }
-                        Card {
-                            Line {
-                                label: "wubble " + root.about.version;
-                                note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
-                            }
-                            Line {
-                                label: "Licence";
-                                note: root.about.licence;
-                                VerticalLayout {
-                                    alignment: center;
-                                    TextButton {
-                                        text: root.notices-open ? "Hide notices" : "Third-party notices";
-                                        clicked => {
-                                            root.notices-open = !root.notices-open;
-                                        }
-                                    }
-                                }
-                            }
-                            if root.notices-open: Text {
-                                text: root.about.notices;
-                                color: Palette.mist;
-                                font-family: Fonts.mono;
-                                font-size: Type.label.size;
-                                wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: Spacing.s2;
+                    alignment: start;
+                    for swatch in root.swatches: Rectangle {
+                        width: Shell.swatch;
+                        height: Shell.swatch;
+                        border-radius: self.width / 2;
+                        background: swatch;
+                        border-width: swatch == space.tint ? Shell.swatch-ring : 0px;
+                        border-color: Palette.ink;
+                        TouchArea {
+                            clicked => {
+                                root.space-tinted(space.id, swatch);
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    if !root.searching: VerticalLayout {
+        spacing: Spacing.s2;
+        padding-top: Spacing.s6;
+        SectionHeader {
+            text: "Sites";
+        }
+        Card {
+            Line {
+                label: "Zoom levels";
+            }
+            EntryList {
+                entries: root.site-zoom;
+                empty: "No site has its own zoom";
+                removed(k) => {
+                    root.site-zoom-removed(k);
+                }
+            }
+            Line {
+                label: "Permissions";
+            }
+            EntryList {
+                entries: root.site-permissions;
+                empty: "No site has a remembered permission";
+                removed(k) => {
+                    root.site-permission-removed(k);
+                }
+            }
+        }
+    }
+
+    if !root.searching: VerticalLayout {
+        spacing: Spacing.s2;
+        padding-top: Spacing.s6;
+        SectionHeader {
+            text: "About";
+        }
+        Card {
+            Line {
+                label: "wubble " + root.about.version;
+                note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+            }
+            Line {
+                label: "Licence";
+                note: root.about.licence;
+                VerticalLayout {
+                    alignment: center;
+                    TextButton {
+                        text: root.notices-open ? "Hide notices" : "Third-party notices";
+                        clicked => {
+                            root.notices-open = !root.notices-open;
+                        }
+                    }
+                }
+            }
+            if root.notices-open: Text {
+                text: root.about.notices;
+                color: Palette.mist;
+                font-family: Fonts.mono;
+                font-size: Type.label.size;
+                wrap: word-wrap;
             }
         }
     }

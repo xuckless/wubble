@@ -22,14 +22,14 @@ use wubble_core::apply;
 use wubble_core::download::{self, DownloadEntry};
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::HistoryEntry;
-use wubble_core::pages::InternalPage;
+use wubble_core::pages::{BookmarkEdit, BookmarkRow, HistoryRow, InternalPage};
 use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, Setting,
-    SidebarModeSetting, SidebarWidth, Store, Transition,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, HistoryDeleted,
+    Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 
 use crate::blocking::BlockerSettings;
@@ -264,6 +264,41 @@ enum Request {
     AddDownload(DownloadEntry),
     UpdateDownload(DownloadEntry),
     RemoveDownload(i64),
+    /// One page of the history page's visits, with the icons of their sites.
+    Visits {
+        query: String,
+        before: Option<(i64, i64)>,
+        limit: usize,
+        reply: Reply<VisitsPage>,
+    },
+    /// Forgets history, then replies with what went.
+    ClearHistory(HistoryClear, Reply<HistoryDeleted>),
+    /// Applies one bookmark edit (`None`: only reads), and replies with every row (`None`: the
+    /// store refused or failed).
+    Bookmarks(Option<(BookmarkEdit, i64)>, Reply<Option<BookmarksPage>>),
+}
+
+/// What a history delete names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryClear {
+    /// Visits at `[from, to)` ms.
+    Range(i64, i64),
+    /// A page and all its visits.
+    Url(String),
+}
+
+/// One page of the history page.
+#[derive(Debug, Default)]
+pub struct VisitsPage {
+    pub rows: Vec<HistoryRow>,
+    pub icons: HashMap<String, Favicon>,
+}
+
+/// Every bookmark row, with the icons of the links.
+#[derive(Debug, Default)]
+pub struct BookmarksPage {
+    pub rows: Vec<BookmarkRow>,
+    pub icons: HashMap<String, Favicon>,
 }
 
 /// The host's handle on the store thread. If the database could not be
@@ -422,6 +457,40 @@ impl StoreClient {
 
     pub fn remove_download(&self, id: i64) {
         self.send(Request::RemoveDownload(id));
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn visits(
+        &self,
+        query: &str,
+        before: Option<(i64, i64)>,
+        limit: usize,
+        reply: impl FnOnce(VisitsPage) + Send + 'static,
+    ) {
+        self.send(Request::Visits {
+            query: query.into(),
+            before,
+            limit,
+            reply: Box::new(reply),
+        });
+    }
+
+    /// `reply` runs on the store thread, after the delete.
+    pub fn clear_history(
+        &self,
+        what: HistoryClear,
+        reply: impl FnOnce(HistoryDeleted) + Send + 'static,
+    ) {
+        self.send(Request::ClearHistory(what, Box::new(reply)));
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn bookmarks(
+        &self,
+        edit: Option<(BookmarkEdit, i64)>,
+        reply: impl FnOnce(Option<BookmarksPage>) + Send + 'static,
+    ) {
+        self.send(Request::Bookmarks(edit, Box::new(reply)));
     }
 
     /// Lets the thread finish what is queued, close the database and end.
@@ -595,6 +664,52 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         Request::AddDownload(entry) => store.add_download(&entry).await?,
         Request::UpdateDownload(entry) => store.update_download(&entry).await?,
         Request::RemoveDownload(id) => store.remove_download(id).await?,
+        Request::Visits {
+            query,
+            before,
+            limit,
+            reply,
+        } => {
+            let rows = store.list_visits(limit, before, &query).await;
+            let page = match &rows {
+                Ok(rows) => {
+                    let urls: Vec<&str> = rows.iter().map(|r| r.url.as_str()).collect();
+                    VisitsPage {
+                        icons: store.favicons_for(&urls).await.unwrap_or_default(),
+                        rows: rows.clone(),
+                    }
+                }
+                Err(_) => VisitsPage::default(),
+            };
+            reply(page);
+            rows?;
+        }
+        Request::ClearHistory(what, reply) => {
+            let deleted = match what {
+                HistoryClear::Range(from, to) => store.delete_history_range(from, to).await,
+                HistoryClear::Url(url) => store.delete_history_url(&url).await,
+            };
+            reply(deleted.as_ref().copied().unwrap_or_default());
+            deleted?;
+        }
+        Request::Bookmarks(edit, reply) => {
+            let rows = match edit {
+                Some((edit, now_ms)) => store.apply_bookmark_edit(&edit, now_ms).await,
+                None => store.all_bookmarks().await,
+            };
+            let page = match &rows {
+                Ok(rows) => {
+                    let urls: Vec<&str> = rows.iter().filter_map(|r| r.url.as_deref()).collect();
+                    Some(BookmarksPage {
+                        icons: store.favicons_for(&urls).await.unwrap_or_default(),
+                        rows: rows.clone(),
+                    })
+                }
+                Err(_) => None,
+            };
+            reply(page);
+            rows?;
+        }
     }
     Ok(())
 }

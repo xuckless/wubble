@@ -1,0 +1,103 @@
+import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { SheetFrame } from "sheet-frame.slint";
+import { BookmarkSheetView, FolderChoiceItem } from "model.slint";
+import { Field } from "settings.slint";
+
+// The bookmark sheet: Ctrl+D (name and folder, Remove when the page is already bookmarked), and
+// the bookmarks page's rename, move and new folder (each shows only the fields it needs). On the
+// SheetFrame chrome; `answered` is the intent: (accept, remove, name, folder id, -1 = top level).
+// Written from scratch: the design repo has no sheet with fields.
+export component BookmarkSheet inherits SheetFrame {
+    in property <BookmarkSheetView> sheet;
+    in property <[FolderChoiceItem]> folders;
+    callback answered(bool, bool, string, int);
+
+    property <int> folder: -1;
+
+    open: root.sheet.open;
+    title: root.sheet.title;
+    accept-text: root.sheet.accept;
+    cancel-text: "Cancel";
+    accepted => {
+        root.answered(true, false, name.text, root.folder);
+    }
+    cancelled => {
+        root.answered(false, false, "", -1);
+    }
+
+    public function focus-sheet() {
+        if root.sheet.show-name {
+            name.take-focus();
+        } else {
+            root.take-focus();
+        }
+    }
+
+    // Each opening restarts from the sheet's own name and folder.
+    property <int> serial: root.sheet.serial;
+    changed serial => {
+        name.text = root.sheet.name;
+        root.folder = root.sheet.folder;
+        if root.sheet.open {
+            root.focus-sheet();
+        }
+    }
+
+    name := Field {
+        visible: root.sheet.show-name;
+        height: root.sheet.show-name ? Shell.sheet-input : 0px;
+        placeholder: "Name";
+        accepted(t) => {
+            root.answered(true, false, t, root.folder);
+        }
+        escaped => {
+            root.answered(false, false, "", -1);
+        }
+    }
+    if root.sheet.show-folders: VerticalLayout {
+        spacing: Spacing.s1;
+        Text {
+            text: "Folder";
+            color: Palette.mist;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+            font-weight: Type.label.weight;
+        }
+        for choice in root.folders: Rectangle {
+            height: Shell.icon-button;
+            border-radius: Shell.sheet-button-radius;
+            background: choice.id == root.folder ? Shell.track : ta.has-hover ? Shell.icon-button-hover : transparent;
+            ta := TouchArea {
+                clicked => {
+                    root.folder = choice.id;
+                }
+            }
+            Text {
+                x: Spacing.s3 + choice.depth * Shell.page-indent;
+                width: parent.width - self.x - Spacing.s3;
+                text: choice.label;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+    if root.sheet.can-remove: Rectangle {
+        height: Shell.icon-button;
+        Text {
+            text: "Remove bookmark";
+            color: Palette.coral;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            clicked => {
+                root.answered(false, true, "", -1);
+            }
+        }
+    }
+}

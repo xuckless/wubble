@@ -15,6 +15,7 @@
 //! keymap, and every action runs through [`Host::perform`].
 
 mod downloads;
+mod pages;
 mod panes;
 mod settings;
 mod surfaces;
@@ -189,7 +190,7 @@ struct Bar {
     /// The store's latest history hits; ranked against each new query until
     /// that query's own hits arrive.
     history: Vec<HistoryEntry>,
-    /// The icons of those hits' origins, by hit URL. Data for the rows; the shell draws none yet.
+    /// The icons of those hits' origins, by hit URL; the history rows draw them.
     icons: HashMap<String, wubble_store::Favicon>,
     /// Bumped per query; a history reply for an older one is dropped.
     generation: u64,
@@ -326,6 +327,8 @@ pub struct Host {
     zoom_default: u32,
     /// The settings page and the stored setting rows.
     settings: settings::SettingsPage,
+    /// The history, bookmarks and passwords pages.
+    pages: pages::PagesState,
     /// Bumped per notice and per find-bar focus request.
     toast_serial: i32,
     find_focus: i32,
@@ -444,6 +447,7 @@ impl Host {
             site_zoom: ZoomTable::new(),
             zoom_default: wubble_core::zoom::DEFAULT_PERCENT,
             settings: settings::SettingsPage::new(settings.stored),
+            pages: pages::PagesState::default(),
             toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
@@ -606,7 +610,7 @@ impl Host {
         self.render_surfaces(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
-        self.render_settings();
+        self.render_pages();
     }
 
     /// The blocker's count for `tab`, if it has a view.
@@ -661,6 +665,17 @@ impl Host {
     /// The visible tab's view: the focused page, the one that gets keys.
     pub(crate) fn view(&mut self) -> Option<&mut View> {
         self.tab_view(self.model.visible_tab()?)
+    }
+
+    /// The visible tab's view, else any live tab's: for work that needs a view but none in
+    /// particular (a retried download started from an internal page).
+    fn any_view(&mut self) -> Option<&mut View> {
+        let tab = self
+            .model
+            .visible_tab()
+            .filter(|t| self.views.contains_key(t))
+            .or_else(|| self.views.keys().next().copied())?;
+        self.tab_view(tab)
     }
 
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
@@ -985,7 +1000,7 @@ impl Host {
             now_ms: now_ms(),
         };
         self.bar.rows = bar::bar_rows(&inputs, &self.bar.query);
-        crate::bind::render_bar(window, &self.bar.rows);
+        crate::bind::render_bar(window, &self.bar.rows, &self.bar.icons);
     }
 
     pub fn bar_chosen(&mut self, index: i32) {
@@ -1069,6 +1084,7 @@ impl Host {
                 }
             }
             Plan::Copy(text) => self.copy(&text),
+            Plan::BookmarkPage => self.bookmark_page(),
             Plan::OpenBeside => self.open_beside(),
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {

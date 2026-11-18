@@ -110,6 +110,88 @@ pub fn history_page(
     groups
 }
 
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+
+/// Day count since 1970-01-01 of a civil date: the inverse of [`civil_from_days`].
+///
+/// Source: Howard Hinnant, "chrono-Compatible Low-Level Date Algorithms" `days_from_civil`,
+/// public domain.
+fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = (i64::from(month) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+impl DayLabel {
+    /// A group header: "Today", "Yesterday", "Mon, 3 Nov 2026".
+    pub fn text(self) -> String {
+        match self {
+            DayLabel::Today => "Today".to_owned(),
+            DayLabel::Yesterday => "Yesterday".to_owned(),
+            DayLabel::Date { year, month, day } => {
+                let weekday = WEEKDAYS[days_from_civil(year, month, day).rem_euclid(7) as usize];
+                let month = MONTHS[usize::from(month.clamp(1, 12)) - 1];
+                format!("{weekday}, {day} {month} {year}")
+            }
+        }
+    }
+}
+
+/// One line of the history page's flat list: a day header or a visit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HistoryLine {
+    Day { label: String },
+    Visit(HistoryRow),
+}
+
+/// The day groups as the flat list a Slint model shows (headers are rows, as in [`flatten`]).
+pub fn history_lines(groups: &[DayGroup]) -> Vec<HistoryLine> {
+    let mut out = Vec::new();
+    for g in groups {
+        out.push(HistoryLine::Day {
+            label: g.label.text(),
+        });
+        out.extend(g.rows.iter().cloned().map(HistoryLine::Visit));
+    }
+    out
+}
+
+/// What "Clear browsing data" removes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearRange {
+    LastHour,
+    LastDay,
+    All,
+}
+
+impl ClearRange {
+    pub const ALL: [ClearRange; 3] = [ClearRange::LastHour, ClearRange::LastDay, ClearRange::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ClearRange::LastHour => "Last hour",
+            ClearRange::LastDay => "Last 24 hours",
+            ClearRange::All => "All time",
+        }
+    }
+
+    /// The `[from, to)` span for the store's range delete.
+    pub fn bounds(self, now_ms: i64) -> (i64, i64) {
+        match self {
+            ClearRange::LastHour => (now_ms - 60 * MIN_MS, i64::MAX),
+            ClearRange::LastDay => (now_ms - DAY_MS, i64::MAX),
+            ClearRange::All => (i64::MIN, i64::MAX),
+        }
+    }
+}
+
 // -------------------------------------------------------------- bookmarks
 
 /// A bookmark or folder, flat as the store keeps it.
@@ -193,125 +275,248 @@ pub fn flatten<'a>(tree: &'a [BookmarkItem], expanded: &HashSet<i64>) -> Vec<Fla
     out
 }
 
-// -------------------------------------------------------------- downloads
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DownloadState {
-    Waiting,
-    Running,
-    Paused,
-    Failed,
-    Done,
-    Cancelled,
+/// A bookmark change as a value: the page and the sheet build it, the store thread applies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BookmarkEdit {
+    Add {
+        parent: Option<i64>,
+        title: String,
+        url: String,
+    },
+    AddFolder {
+        parent: Option<i64>,
+        title: String,
+    },
+    Rename {
+        id: i64,
+        title: String,
+    },
+    Move {
+        id: i64,
+        to: Option<i64>,
+        index: u32,
+    },
+    Delete {
+        id: i64,
+    },
 }
 
-impl DownloadState {
-    fn active(self) -> bool {
-        matches!(self, Self::Waiting | Self::Running | Self::Paused)
+/// The bookmark of `url`, if any (compared by [`crate::url::url_key`], so `www.` and the
+/// scheme do not matter): the address pill's star.
+pub fn bookmark_for_url(rows: &[BookmarkRow], url: &str) -> Option<i64> {
+    let key = |u: &str| crate::url::url_key(u).trim_end_matches('/').to_owned();
+    let want = key(url);
+    rows.iter()
+        .find(|r| r.url.as_deref().is_some_and(|u| key(u) == want))
+        .map(|r| r.id)
+}
+
+/// The title a new bookmark starts with: the page's, else its address.
+pub fn default_title(tab_title: &str, url: &str) -> String {
+    let t = tab_title.trim();
+    if t.is_empty() {
+        url.to_owned()
+    } else {
+        t.to_owned()
     }
 }
 
-/// A download as the host knows it (there is no downloads table: the host fills this from the
-/// engine's download state machine).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadRow {
-    /// Ascending in start order.
-    pub id: u64,
-    pub name: String,
-    pub url: String,
-    pub state: DownloadState,
-    pub received: u64,
-    pub total: Option<u64>,
+/// Adding the visible page under `folder`; `None` for an address that is not a web page or that
+/// is already bookmarked (the sheet then offers removing it).
+pub fn add_current(
+    rows: &[BookmarkRow],
+    tab_title: &str,
+    url: &str,
+    folder: Option<i64>,
+) -> Option<BookmarkEdit> {
+    (crate::url::is_recordable(url) && bookmark_for_url(rows, url).is_none()).then(|| {
+        BookmarkEdit::Add {
+            parent: folder,
+            title: default_title(tab_title, url),
+            url: url.to_owned(),
+        }
+    })
 }
 
+/// Moving `id` to the end of `folder`.
+pub fn move_to_end(rows: &[BookmarkRow], id: i64, folder: Option<i64>) -> BookmarkEdit {
+    let siblings = rows
+        .iter()
+        .filter(|r| r.parent == folder && r.id != id)
+        .count();
+    BookmarkEdit::Move {
+        id,
+        to: folder,
+        index: u32::try_from(siblings).unwrap_or(u32::MAX),
+    }
+}
+
+/// One entry of the folder picker.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownloadItem {
-    pub id: u64,
-    pub name: String,
-    pub url: String,
-    pub state: DownloadState,
-    /// 0..=100; `None` while the total is unknown.
-    pub percent: Option<u8>,
-    /// Second line of the row: "3.2 MB of 10.0 MB", "Paused", ...
+pub struct FolderChoice {
+    /// `None` is the top level.
+    pub id: Option<i64>,
     pub label: String,
+    pub depth: usize,
 }
 
-fn size(bytes: u64) -> String {
-    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
-    if bytes < 1024 {
-        return format!("{bytes} B");
+/// The folders a bookmark can go in, depth first, the top level first. With `moving` set, that
+/// folder and everything below it is left out (a folder cannot move into itself).
+pub fn folder_choices(rows: &[BookmarkRow], moving: Option<i64>) -> Vec<FolderChoice> {
+    fn walk(
+        items: &[BookmarkItem],
+        depth: usize,
+        moving: Option<i64>,
+        out: &mut Vec<FolderChoice>,
+    ) {
+        for item in items.iter().filter(|i| i.is_folder && Some(i.id) != moving) {
+            out.push(FolderChoice {
+                id: Some(item.id),
+                label: item.title.clone(),
+                depth,
+            });
+            walk(&item.children, depth + 1, moving, out);
+        }
     }
-    let mut v = bytes as f64 / 1024.0;
-    let mut unit = 0;
-    while v >= 1024.0 && unit < UNITS.len() - 1 {
-        v /= 1024.0;
-        unit += 1;
-    }
-    format!("{v:.1} {}", UNITS[unit])
+    let mut out = vec![FolderChoice {
+        id: None,
+        label: "Bookmarks".to_owned(),
+        depth: 0,
+    }];
+    walk(&bookmark_tree(rows), 1, moving, &mut out);
+    out
 }
 
-fn download_item(r: &DownloadRow) -> DownloadItem {
-    let percent = match (r.state, r.total) {
-        (DownloadState::Done, _) => Some(100),
-        (_, Some(t)) if t > 0 => Some((r.received.min(t) * 100 / t) as u8),
-        _ => None,
-    };
-    let progress = match r.total {
-        Some(t) => format!("{} of {}", size(r.received), size(t)),
-        None => size(r.received),
-    };
-    let label = match r.state {
-        DownloadState::Waiting => "Waiting".to_owned(),
-        DownloadState::Running => progress,
-        DownloadState::Paused => format!("Paused, {progress}"),
-        DownloadState::Failed => "Failed".to_owned(),
-        DownloadState::Cancelled => "Cancelled".to_owned(),
-        DownloadState::Done => size(r.total.unwrap_or(r.received)),
-    };
-    DownloadItem {
-        id: r.id,
-        name: r.name.clone(),
-        url: r.url.clone(),
-        state: r.state,
-        percent,
-        label,
+/// The links matching `query` (case-insensitive title or url), each with its folder path as the
+/// subtitle; the tree is not shown while searching. An empty query gives nothing.
+pub fn filter_tree(rows: &[BookmarkRow], query: &str) -> Vec<(BookmarkRow, String)> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
     }
-}
-
-/// Active downloads first, then finished ones; each group newest first.
-pub fn downloads_list(rows: &[DownloadRow]) -> Vec<DownloadItem> {
-    let mut sorted: Vec<&DownloadRow> = rows.iter().collect();
-    sorted.sort_by_key(|r| (!r.state.active(), Reverse(r.id)));
-    sorted.into_iter().map(download_item).collect()
+    let by_id: HashMap<i64, &BookmarkRow> = rows.iter().map(|r| (r.id, r)).collect();
+    let path = |r: &BookmarkRow| {
+        let mut parts = Vec::new();
+        let mut at = r.parent;
+        while let Some(p) = at.and_then(|id| by_id.get(&id)) {
+            parts.push(p.title.as_str());
+            at = p.parent;
+            if parts.len() > rows.len() {
+                break;
+            }
+        }
+        parts.reverse();
+        parts.join(" / ")
+    };
+    rows.iter()
+        .filter(|r| {
+            r.url
+                .as_deref()
+                .is_some_and(|u| contains_ci(&r.title, &needle) || contains_ci(u, &needle))
+        })
+        .map(|r| (r.clone(), path(r)))
+        .collect()
 }
 
 // -------------------------------------------------------------- passwords
 
-/// A saved login's metadata. No username and no password: both are encrypted and need the key.
+/// A saved login as the page lists it: where, and as whom. The password is never here; it is
+/// asked for on an explicit click.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoginEntry {
+pub struct LoginView {
     pub id: String,
     pub origin: String,
+    /// `None` where the row does not open with the current key.
+    pub username: Option<String>,
     pub created_ms: i64,
     pub last_used_ms: Option<i64>,
     pub times_used: u32,
 }
 
-/// Logins whose origin contains `query` (case-insensitive; empty keeps all), by site then age.
-pub fn passwords_list(rows: &[LoginEntry], query: &str) -> Vec<LoginEntry> {
+impl LoginView {
+    /// The origin without its scheme: what the row shows as the site.
+    pub fn site(&self) -> &str {
+        self.origin
+            .split_once("://")
+            .map_or(self.origin.as_str(), |(_, rest)| rest)
+    }
+}
+
+/// Logins whose site or username contains `query` (case-insensitive; empty keeps all), by site
+/// then age.
+pub fn passwords_list(rows: &[LoginView], query: &str) -> Vec<LoginView> {
     let needle = query.trim().to_lowercase();
-    let site = |e: &LoginEntry| {
-        let o = e.origin.to_lowercase();
-        o.split_once("://")
-            .map_or(o.clone(), |(_, rest)| rest.to_owned())
-    };
-    let mut out: Vec<LoginEntry> = rows
+    let mut out: Vec<LoginView> = rows
         .iter()
-        .filter(|e| needle.is_empty() || contains_ci(&e.origin, &needle))
+        .filter(|e| {
+            needle.is_empty()
+                || contains_ci(&e.origin, &needle)
+                || e.username
+                    .as_deref()
+                    .is_some_and(|u| contains_ci(u, &needle))
+        })
         .cloned()
         .collect();
-    out.sort_by_cached_key(|e| (site(e), e.created_ms, e.id.clone()));
+    out.sort_by_cached_key(|e| (e.site().to_lowercase(), e.created_ms, e.id.clone()));
     out
+}
+
+/// Whether the saved passwords can be shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultStatus {
+    /// Not unlocked: nothing is listed.
+    Locked,
+    Unlocked,
+    /// The OS keyring cannot be used; the reason is its own text.
+    Unavailable(String),
+    /// The key is new or lost and `rows` saved logins no longer open with it.
+    Unreadable {
+        rows: usize,
+    },
+}
+
+/// The status card's title and body.
+pub fn status_text(status: &VaultStatus) -> (&'static str, String) {
+    match status {
+        VaultStatus::Locked => (
+            "Passwords are locked",
+            "Unlock them with your system keyring to see saved logins.".to_owned(),
+        ),
+        VaultStatus::Unlocked => ("Saved passwords", String::new()),
+        VaultStatus::Unavailable(why) => (
+            "Passwords are unavailable",
+            format!("The system keyring cannot be used: {why}"),
+        ),
+        VaultStatus::Unreadable { rows } => (
+            "Saved passwords cannot be read",
+            format!(
+                "{rows} saved login{} no longer open with the key in your system keyring. \
+                 They stay on disk, and new logins can still be saved.",
+                if *rows == 1 { "" } else { "s" }
+            ),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------- blocker
+
+/// The address pill's blocker badge for the visible page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockerBadge {
+    pub count: u32,
+    /// The site is on the exceptions list: blocking is off there.
+    pub site_allowed: bool,
+    /// The badge shows: something was blocked, or blocking is off for the site.
+    pub visible: bool,
+}
+
+pub fn blocker_state(count: u32, page_url: &str, exceptions: &[String]) -> BlockerBadge {
+    let site_allowed = crate::zoom::host_of(page_url).is_some_and(|h| exceptions.contains(&h));
+    BlockerBadge {
+        count,
+        site_allowed,
+        visible: count > 0 || site_allowed,
+    }
 }
 
 // ---------------------------------------------------------- internal pages
@@ -321,14 +526,28 @@ pub fn passwords_list(rows: &[LoginEntry], query: &str) -> Vec<LoginEntry> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InternalPage {
     Settings,
+    History,
+    Bookmarks,
+    Downloads,
+    Passwords,
 }
 
 impl InternalPage {
-    pub const ALL: [InternalPage; 1] = [InternalPage::Settings];
+    pub const ALL: [InternalPage; 5] = [
+        InternalPage::Settings,
+        InternalPage::History,
+        InternalPage::Bookmarks,
+        InternalPage::Downloads,
+        InternalPage::Passwords,
+    ];
 
     pub fn url(self) -> &'static str {
         match self {
             InternalPage::Settings => "wubble://settings",
+            InternalPage::History => "wubble://history",
+            InternalPage::Bookmarks => "wubble://bookmarks",
+            InternalPage::Downloads => "wubble://downloads",
+            InternalPage::Passwords => "wubble://passwords",
         }
     }
 
@@ -336,6 +555,10 @@ impl InternalPage {
     pub fn title(self) -> &'static str {
         match self {
             InternalPage::Settings => "Settings",
+            InternalPage::History => "History",
+            InternalPage::Bookmarks => "Bookmarks",
+            InternalPage::Downloads => "Downloads",
+            InternalPage::Passwords => "Passwords",
         }
     }
 
@@ -744,59 +967,11 @@ mod tests {
         assert_eq!(line(&HashSet::from([2])).len(), 2);
     }
 
-    fn dl(id: u64, state: DownloadState, received: u64, total: Option<u64>) -> DownloadRow {
-        DownloadRow {
-            id,
-            name: format!("f{id}"),
-            url: format!("https://x.test/{id}"),
-            state,
-            received,
-            total,
-        }
-    }
-
-    #[test]
-    fn downloads_active_first_then_newest_first() {
-        use DownloadState::*;
-        let rows = [
-            dl(1, Done, 10, Some(10)),
-            dl(2, Running, 5, Some(10)),
-            dl(3, Failed, 0, None),
-            dl(4, Paused, 1, Some(10)),
-            dl(5, Cancelled, 0, None),
-            dl(6, Waiting, 0, None),
-        ];
-        let ids: Vec<u64> = downloads_list(&rows).iter().map(|d| d.id).collect();
-        assert_eq!(ids, [6, 4, 2, 5, 3, 1]);
-    }
-
-    #[test]
-    fn download_percent_and_labels() {
-        use DownloadState::*;
-        let item = |r| download_item(&r);
-        assert_eq!(item(dl(1, Running, 5, Some(10))).percent, Some(50));
-        assert_eq!(item(dl(1, Running, 5, None)).percent, None);
-        assert_eq!(item(dl(1, Running, 5, Some(0))).percent, None);
-        assert_eq!(item(dl(1, Running, 50, Some(10))).percent, Some(100));
-        assert_eq!(item(dl(1, Done, 7, None)).percent, Some(100));
-        assert_eq!(
-            item(dl(1, Running, 3 << 20, Some(10 << 20))).label,
-            "3.0 MB of 10.0 MB"
-        );
-        assert_eq!(item(dl(1, Running, 512, None)).label, "512 B");
-        assert_eq!(
-            item(dl(1, Paused, 1024, Some(2048))).label,
-            "Paused, 1.0 KB of 2.0 KB"
-        );
-        assert_eq!(item(dl(1, Done, 2048, Some(2048))).label, "2.0 KB");
-        assert_eq!(item(dl(1, Failed, 0, None)).label, "Failed");
-        assert_eq!(item(dl(1, Running, 1 << 40, None)).label, "1.0 TB");
-    }
-
-    fn entry(id: &str, origin: &str, created: i64) -> LoginEntry {
-        LoginEntry {
+    fn entry(id: &str, origin: &str, created: i64) -> LoginView {
+        LoginView {
             id: id.into(),
             origin: origin.into(),
+            username: Some(format!("user{id}")),
             created_ms: created,
             last_used_ms: None,
             times_used: 0,
@@ -818,6 +993,25 @@ mod tests {
         assert_eq!(ids("A.TEST"), ["3", "2", "4"]);
         assert_eq!(ids(":8443"), ["4"]);
         assert!(ids("zzz").is_empty());
+        assert_eq!(ids("USER2"), ["2"]);
+    }
+
+    #[test]
+    fn status_text_names_each_state() {
+        let t = |s| status_text(&s);
+        assert_eq!(t(VaultStatus::Locked).0, "Passwords are locked");
+        assert_eq!(t(VaultStatus::Unlocked).0, "Saved passwords");
+        let (title, body) = t(VaultStatus::Unavailable("no daemon".into()));
+        assert_eq!(title, "Passwords are unavailable");
+        assert!(body.contains("no daemon"));
+        let (title, body) = t(VaultStatus::Unreadable { rows: 1 });
+        assert_eq!(title, "Saved passwords cannot be read");
+        assert!(body.starts_with("1 saved login no longer"));
+        assert!(
+            t(VaultStatus::Unreadable { rows: 3 })
+                .1
+                .starts_with("3 saved logins")
+        );
     }
 
     fn stored(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -972,6 +1166,160 @@ mod tests {
     }
 
     #[test]
+    fn day_labels_read_as_dates() {
+        assert_eq!(DayLabel::Today.text(), "Today");
+        assert_eq!(DayLabel::Yesterday.text(), "Yesterday");
+        let d = |year, month, day| DayLabel::Date { year, month, day }.text();
+        assert_eq!(d(1970, 1, 1), "Thu, 1 Jan 1970");
+        assert_eq!(d(2026, 11, 3), "Tue, 3 Nov 2026");
+        assert_eq!(d(2024, 2, 29), "Thu, 29 Feb 2024");
+        assert_eq!(d(1969, 12, 31), "Wed, 31 Dec 1969");
+        for days in [-800, 0, 19_000, 20_400] {
+            let (y, m, dd) = civil_from_days(days);
+            assert_eq!(days_from_civil(y, m, dd), days);
+        }
+    }
+
+    #[test]
+    fn history_lines_put_a_header_before_each_day() {
+        let row = |ms| HistoryRow {
+            url: format!("https://x.test/{ms}"),
+            title: String::new(),
+            visit_ms: ms,
+            visit_id: ms,
+        };
+        let now = 3 * DAY_MS + 5;
+        let groups = history_page(&[row(now), row(now - 1), row(DAY_MS)], "", 0, now);
+        let lines = history_lines(&groups);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(
+            lines[0],
+            HistoryLine::Day {
+                label: "Today".into()
+            }
+        );
+        assert!(matches!(&lines[1], HistoryLine::Visit(r) if r.visit_ms == now));
+        assert!(matches!(&lines[3], HistoryLine::Day { label } if label == "Fri, 2 Jan 1970"));
+        assert!(history_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn clear_ranges_reach_back_from_now() {
+        assert_eq!(
+            ClearRange::LastHour.bounds(10 * MIN_MS * 60),
+            (9 * 60 * MIN_MS, i64::MAX)
+        );
+        assert_eq!(ClearRange::LastDay.bounds(2 * DAY_MS), (DAY_MS, i64::MAX));
+        assert_eq!(ClearRange::All.bounds(5), (i64::MIN, i64::MAX));
+        assert_eq!(ClearRange::ALL.len(), 3);
+    }
+
+    fn link(id: i64, parent: Option<i64>, pos: u32, title: &str, url: &str) -> BookmarkRow {
+        BookmarkRow {
+            url: Some(url.into()),
+            ..bm(id, parent, false, pos, title)
+        }
+    }
+
+    fn sample() -> Vec<BookmarkRow> {
+        vec![
+            bm(1, None, true, 0, "News"),
+            bm(2, Some(1), true, 0, "World"),
+            link(3, Some(2), 0, "Wire", "https://www.wire.test/a"),
+            link(4, None, 1, "Home", "https://home.test/"),
+        ]
+    }
+
+    #[test]
+    fn bookmark_for_url_ignores_scheme_and_www() {
+        let rows = sample();
+        assert_eq!(bookmark_for_url(&rows, "http://wire.test/a"), Some(3));
+        assert_eq!(bookmark_for_url(&rows, "https://wire.test/b"), None);
+    }
+
+    #[test]
+    fn add_current_refuses_duplicates_and_non_pages() {
+        let rows = sample();
+        assert_eq!(add_current(&rows, "T", "https://home.test", None), None);
+        assert_eq!(add_current(&rows, "T", "about:blank", None), None);
+        assert_eq!(add_current(&rows, "T", "wubble://history", None), None);
+        assert_eq!(
+            add_current(&rows, " ", "https://new.test/", Some(1)),
+            Some(BookmarkEdit::Add {
+                parent: Some(1),
+                title: "https://new.test/".into(),
+                url: "https://new.test/".into()
+            })
+        );
+    }
+
+    #[test]
+    fn move_to_end_counts_the_new_siblings() {
+        let rows = sample();
+        assert_eq!(
+            move_to_end(&rows, 4, Some(1)),
+            BookmarkEdit::Move {
+                id: 4,
+                to: Some(1),
+                index: 1
+            }
+        );
+        // Moving within the same folder does not count itself.
+        assert_eq!(
+            move_to_end(&rows, 4, None),
+            BookmarkEdit::Move {
+                id: 4,
+                to: None,
+                index: 1
+            }
+        );
+    }
+
+    #[test]
+    fn folder_choices_are_depth_first_without_the_moved_subtree() {
+        let rows = sample();
+        let labels = |m| -> Vec<(String, usize)> {
+            folder_choices(&rows, m)
+                .into_iter()
+                .map(|c| (c.label, c.depth))
+                .collect()
+        };
+        assert_eq!(
+            labels(None),
+            [
+                ("Bookmarks".into(), 0),
+                ("News".into(), 1),
+                ("World".into(), 2)
+            ]
+        );
+        assert_eq!(labels(Some(2)).len(), 2);
+        assert_eq!(labels(Some(1)).len(), 1);
+    }
+
+    #[test]
+    fn filter_tree_lists_matching_links_with_their_path() {
+        let rows = sample();
+        assert!(filter_tree(&rows, "  ").is_empty());
+        let hits = filter_tree(&rows, "WIRE");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0.id, 3);
+        assert_eq!(hits[0].1, "News / World");
+        assert_eq!(filter_tree(&rows, "home")[0].1, "");
+        // Folders are not matches.
+        assert!(filter_tree(&rows, "news").is_empty());
+    }
+
+    #[test]
+    fn blocker_badge_shows_for_a_count_or_an_allowed_site() {
+        let ex = vec!["a.test".to_owned()];
+        assert!(!blocker_state(0, "https://b.test/", &ex).visible);
+        assert!(blocker_state(2, "https://b.test/", &ex).visible);
+        let s = blocker_state(0, "https://A.test/x", &ex);
+        assert!(s.site_allowed && s.visible);
+        assert!(!blocker_state(0, "about:blank", &ex).visible);
+    }
+
+    #[test]
     fn internal_pages_round_trip_their_url() {
         for p in InternalPage::ALL {
             assert_eq!(InternalPage::from_url(p.url()), Some(p));
@@ -981,6 +1329,10 @@ mod tests {
         assert_eq!(
             InternalPage::from_url("WUBBLE://settings"),
             Some(InternalPage::Settings)
+        );
+        assert_eq!(
+            InternalPage::from_url("wubble://History/"),
+            Some(InternalPage::History)
         );
         assert_eq!(InternalPage::from_url("https://settings"), None);
         assert_eq!(InternalPage::from_url("wubble://nope"), None);

@@ -291,7 +291,7 @@ mod tests {
         let mut v = vault_at(&dir.path().join("w.db"), &FakeKeyRing::default());
         v.unlock();
         v.save(login("https://a.test", "alice", "pw1"), 5).unwrap();
-        let entries: Vec<wubble_core::pages::LoginEntry> =
+        let entries: Vec<wubble_core::pages::LoginView> =
             v.list().unwrap().iter().map(Into::into).collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(

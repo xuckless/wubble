@@ -797,6 +797,7 @@ fn connect_surfaces(window: &AppWindow) {
     });
     window.on_find_closed(|| with_host(|host| host.find_event(FindEvent::Close)));
     connect_settings(window);
+    connect_pages(window);
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
@@ -829,6 +830,26 @@ fn connect_settings(window: &AppWindow) {
     window.on_space_icon_chosen(|id, icon| with_host(|host| host.space_icon_chosen(id, &icon)));
     window.on_site_zoom_removed(|h| with_host(|host| host.site_zoom_removed(&h)));
     window.on_site_permission_removed(|i| with_host(|host| host.site_permission_removed(&i)));
+}
+
+/// The native pages' intents (history, bookmarks, downloads): each becomes one host call.
+fn connect_pages(window: &AppWindow) {
+    window.on_history_query_changed(|q| with_host(|host| host.history_query(&q)));
+    window.on_history_deleted(|url| with_host(|host| host.history_deleted(&url)));
+    window.on_history_more(|| with_host(Host::history_more));
+    window.on_history_cleared(|range| with_host(|host| host.history_cleared(range)));
+    window.on_page_opened(|url| with_host(|host| host.page_opened(&url)));
+    window.on_page_opened_new_tab(|url| with_host(|host| host.page_opened_new_tab(&url)));
+    window.on_bookmarks_query_changed(|q| with_host(|host| host.bookmarks_query(&q)));
+    window.on_bookmark_toggled(|id| with_host(|host| host.bookmark_toggled(id)));
+    window.on_bookmark_rename_requested(|id| with_host(|host| host.bookmark_rename_requested(id)));
+    window.on_bookmark_move_requested(|id| with_host(|host| host.bookmark_move_requested(id)));
+    window.on_bookmark_deleted(|id| with_host(|host| host.bookmark_deleted(id)));
+    window.on_bookmark_folder_requested(|| with_host(Host::bookmark_folder_requested));
+    window.on_bookmark_sheet_answered(|accept, remove, name, folder| {
+        with_host(|host| host.bookmark_sheet_answered(accept, remove, &name, folder))
+    });
+    window.on_downloads_cleared(|| with_host(Host::downloads_cleared));
 }
 
 fn run(

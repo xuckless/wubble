@@ -5,13 +5,15 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
 import { ErrorPanel } from "components/error-panel.slint";
 import { SettingsPage } from "components/settings.slint";
+import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage } from "components/pages.slint";
+import { BookmarkSheet } from "components/bookmark-sheet.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
@@ -24,7 +26,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -252,7 +254,9 @@ export component AppWindow inherits Window {
     in property <ErrorView> page-error;
     // The settings page (wubble://settings), shown while the visible tab is on it; the host fills
     // it from the settings table and takes every change through these callbacks.
-    in property <bool> settings-open <=> settings-ui.open;
+    // Which native page shows (the visible tab's internal page; none for a web page).
+    in property <InternalPageKind> page: InternalPageKind.none;
+    out property <bool> settings-open: root.page == InternalPageKind.settings;
     in property <[SettingItem]> settings-rows <=> settings-ui.rows;
     in property <bool> settings-searching <=> settings-ui.searching;
     in property <[BindingItem]> settings-bindings <=> settings-ui.bindings;
@@ -261,6 +265,44 @@ export component AppWindow inherits Window {
     in property <[EntryItem]> settings-site-zoom <=> settings-ui.site-zoom;
     in property <[EntryItem]> settings-site-permissions <=> settings-ui.site-permissions;
     in property <AboutView> settings-about <=> settings-ui.about;
+    // The history page: the lines (day headers and visits), the search state, "Show more".
+    in property <[HistoryLineItem]> history-lines;
+    in property <bool> history-searching;
+    in property <bool> history-has-more;
+    callback history-query-changed(string);
+    callback history-deleted(string);
+    callback history-more();
+    // (the clear range's index: last hour, last 24 hours, all)
+    callback history-cleared(int);
+    // A row of the history or bookmarks page opened (here, or in a new tab).
+    callback page-opened(string);
+    callback page-opened-new-tab(string);
+    // The bookmarks page and its sheet.
+    in property <[BookmarkLineItem]> bookmark-lines;
+    in property <bool> bookmarks-searching;
+    in property <BookmarkSheetView> bookmark-sheet-view;
+    in property <[FolderChoiceItem]> bookmark-folders;
+    callback bookmarks-query-changed(string);
+    callback bookmark-toggled(int);
+    callback bookmark-rename-requested(int);
+    callback bookmark-move-requested(int);
+    callback bookmark-deleted(int);
+    callback bookmark-folder-requested();
+    // (accept, remove, name, folder id; -1 is the top level)
+    callback bookmark-sheet-answered(bool, bool, string, int);
+    // The downloads page reads `downloads` (the popover's model) and takes `download-action`.
+    callback downloads-cleared();
+    // The passwords page: nothing is listed until unlocked.
+    in property <PasswordsView> passwords-view;
+    in property <[LoginItem]> logins;
+    callback passwords-query-changed(string);
+    callback passwords-unlock();
+    callback login-reveal(string);
+    callback login-hide(string);
+    callback login-copy(string);
+    callback login-deleted(string);
+    callback login-added(string, string, string);
+    callback passwords-import-requested();
     callback settings-requested();
     callback settings-query-changed <=> settings-ui.query-changed;
     callback setting-changed <=> settings-ui.setting-changed;
@@ -316,7 +358,7 @@ export component AppWindow inherits Window {
     property <bool> menu-open: root.menu.open;
     property <bool> dialog-open: root.dialog.open;
     property <bool> error-open: root.page-error.open;
-    property <bool> settings-shown: settings-ui.open;
+    property <bool> bookmark-open: root.bookmark-sheet-view.open;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
     property <bool> overlay-open: root.menu.open || root.downloads-open || root.dialog.open || root.page-error.open;
@@ -326,11 +368,21 @@ export component AppWindow inherits Window {
         } else if root.downloads-open {
             downloads-ui.take-focus();
         } else if root.dialog.open {
-            sheet.take-focus();
+            sheet.focus-sheet();
         } else if root.page-error.open {
             error-ui.take-focus();
-        } else if settings-ui.open {
+        } else if bookmark-sheet.open {
+            bookmark-sheet.focus-sheet();
+        } else if root.page == InternalPageKind.settings {
             settings-ui.take-focus();
+        } else if root.page == InternalPageKind.history {
+            history-ui.take-focus();
+        } else if root.page == InternalPageKind.bookmarks {
+            bookmarks-ui.take-focus();
+        } else if root.page == InternalPageKind.downloads {
+            downloads-page-ui.take-focus();
+        } else if root.page == InternalPageKind.passwords {
+            passwords-ui.take-focus();
         } else {
             web-focus.focus();
         }
@@ -344,7 +396,10 @@ export component AppWindow inherits Window {
     changed error-open => {
         root.settle-focus();
     }
-    changed settings-shown => {
+    changed page => {
+        root.settle-focus();
+    }
+    changed bookmark-open => {
         root.settle-focus();
     }
     changed downloads-open => {
@@ -545,7 +600,108 @@ export component AppWindow inherits Window {
                 }
             }
             // The settings page fills the content area of its tab (no web view under it).
-            settings-ui := SettingsPage {}
+            settings-ui := SettingsPage {
+                open: root.settings-open;
+            }
+            history-ui := HistoryPage {
+                open: root.page == InternalPageKind.history;
+                lines: root.history-lines;
+                searching: root.history-searching;
+                has-more: root.history-has-more;
+                query-changed(q) => {
+                    root.history-query-changed(q);
+                }
+                opened(u) => {
+                    root.page-opened(u);
+                }
+                opened-new-tab(u) => {
+                    root.page-opened-new-tab(u);
+                }
+                deleted(u) => {
+                    root.history-deleted(u);
+                }
+                more => {
+                    root.history-more();
+                }
+                cleared(range) => {
+                    root.history-cleared(range);
+                }
+            }
+            bookmarks-ui := BookmarksPage {
+                open: root.page == InternalPageKind.bookmarks;
+                lines: root.bookmark-lines;
+                searching: root.bookmarks-searching;
+                query-changed(q) => {
+                    root.bookmarks-query-changed(q);
+                }
+                opened(u) => {
+                    root.page-opened(u);
+                }
+                opened-new-tab(u) => {
+                    root.page-opened-new-tab(u);
+                }
+                toggled(id) => {
+                    root.bookmark-toggled(id);
+                }
+                rename-requested(id) => {
+                    root.bookmark-rename-requested(id);
+                }
+                move-requested(id) => {
+                    root.bookmark-move-requested(id);
+                }
+                deleted(id) => {
+                    root.bookmark-deleted(id);
+                }
+                folder-requested => {
+                    root.bookmark-folder-requested();
+                }
+            }
+            downloads-page-ui := DownloadsPage {
+                open: root.page == InternalPageKind.downloads;
+                items: root.downloads;
+                action(id, a) => {
+                    root.download-action(id, a);
+                }
+                clear-finished => {
+                    root.downloads-cleared();
+                }
+            }
+            passwords-ui := PasswordsPage {
+                open: root.page == InternalPageKind.passwords;
+                view: root.passwords-view;
+                logins: root.logins;
+                query-changed(q) => {
+                    root.passwords-query-changed(q);
+                }
+                unlock => {
+                    root.passwords-unlock();
+                }
+                reveal(id) => {
+                    root.login-reveal(id);
+                }
+                hide(id) => {
+                    root.login-hide(id);
+                }
+                copy(id) => {
+                    root.login-copy(id);
+                }
+                deleted(id) => {
+                    root.login-deleted(id);
+                }
+                added(site, user, password) => {
+                    root.login-added(site, user, password);
+                }
+                import-requested => {
+                    root.passwords-import-requested();
+                }
+            }
+            bookmark-sheet := BookmarkSheet {
+                sheet: root.bookmark-sheet-view;
+                folders: root.bookmark-folders;
+                answered(accept, remove, name, folder) => {
+                    root.bookmark-sheet-answered(accept, remove, name, folder);
+                }
+            }
             // Tab-modal: over the page and its find bar, under the command bar.
             sheet := DialogSheet {
                 dialog: root.dialog;

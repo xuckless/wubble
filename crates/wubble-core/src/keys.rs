@@ -345,6 +345,14 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+|", ALL, Action::Unsplit, Shell;
     // Chromium and Firefox on macOS (Cmd+,); Linux and Windows take the same chord on Ctrl
     "Mod+,", ALL, Action::OpenSettings, Shell;
+    // Chromium's chords; Cmd+H hides the app on macOS, so its rows differ
+    "Ctrl+H", LW, Action::OpenHistory, Shell;
+    "Cmd+Y", MAC, Action::OpenHistory, Shell;
+    "Ctrl+Shift+O", LW, Action::OpenBookmarks, Shell;
+    "Cmd+Alt+B", MAC, Action::OpenBookmarks, Shell;
+    "Ctrl+J", LW, Action::OpenDownloads, Shell;
+    "Cmd+Shift+J", MAC, Action::OpenDownloads, Shell;
+    "Mod+D", ALL, Action::BookmarkPage, Shell;
     "Ctrl+Q", LINUX, Action::Quit, Shell;
     "Ctrl+Shift+Q", WIN, Action::Quit, Shell;
     "Cmd+Q", MAC, Action::Quit, Shell;
@@ -810,7 +818,7 @@ mod tests {
     #[test]
     fn every_action_is_bound_except_allow_list() {
         // Chromium binds no key to muting a tab either.
-        let unbound = [Action::NewSpace, Action::ToggleMute];
+        let unbound = [Action::NewSpace, Action::ToggleMute, Action::OpenPasswords];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
             for a in Action::all() {
@@ -938,6 +946,30 @@ mod tests {
     }
 
     #[test]
+    fn page_chords_open_their_pages() {
+        let linux = Keymap::defaults(Platform::Linux);
+        let mac = Keymap::defaults(Platform::Mac);
+        let action = |m: &Keymap, c: &str| m.action_for(ch(c)).map(|r| r.0);
+        for (chord, want) in [
+            ("Ctrl+H", Action::OpenHistory),
+            ("Ctrl+Shift+O", Action::OpenBookmarks),
+            ("Ctrl+J", Action::OpenDownloads),
+            ("Ctrl+D", Action::BookmarkPage),
+        ] {
+            assert_eq!(ch(&ch(chord).to_string()), ch(chord));
+            assert_eq!(action(&linux, chord), Some(want));
+        }
+        for (chord, want) in [
+            ("Cmd+Y", Action::OpenHistory),
+            ("Cmd+Alt+B", Action::OpenBookmarks),
+            ("Cmd+Shift+J", Action::OpenDownloads),
+            ("Cmd+D", Action::BookmarkPage),
+        ] {
+            assert_eq!(action(&mac, chord), Some(want));
+        }
+    }
+
+    #[test]
     fn ctrl_comma_opens_settings() {
         let c = ch("Ctrl+,");
         assert_eq!(c.key, Key::Char(','));
@@ -970,25 +1002,28 @@ mod tests {
         assert_eq!(km.action_for(ch("Ctrl+F4")), None);
         assert_eq!(km.shortcut_for(Action::CloseTab), Some(ch("Ctrl+K")));
         // Rebinding again replaces the first rebinding.
-        let (ov, prev) = set_binding(&ov, p, Action::CloseTab, ch("Ctrl+J"));
+        let (ov, prev) = set_binding(&ov, p, Action::CloseTab, ch("Ctrl+Alt+J"));
         assert_eq!(prev, None);
         let km = Keymap::defaults(p).with_overrides(&ov);
         assert_eq!(km.action_for(ch("Ctrl+K")).unwrap().0, Action::FocusAddress);
-        assert_eq!(km.shortcut_for(Action::CloseTab), Some(ch("Ctrl+J")));
+        assert_eq!(km.shortcut_for(Action::CloseTab), Some(ch("Ctrl+Alt+J")));
         // The chord the action already has is no conflict.
-        assert_eq!(set_binding(&ov, p, Action::CloseTab, ch("Ctrl+J")).1, None);
+        assert_eq!(
+            set_binding(&ov, p, Action::CloseTab, ch("Ctrl+Alt+J")).1,
+            None
+        );
     }
 
     #[test]
     fn reset_binding_restores_the_default() {
         let p = Platform::Linux;
         let (ov, _) = set_binding(&[], p, Action::CloseTab, ch("Ctrl+B"));
-        let (ov, _) = set_binding(&ov, p, Action::Find, ch("Ctrl+J"));
+        let (ov, _) = set_binding(&ov, p, Action::Find, ch("Ctrl+Alt+J"));
         let ov = reset_binding(&ov, p, Action::CloseTab);
         let km = Keymap::defaults(p).with_overrides(&ov);
         assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::CloseTab);
         assert_eq!(km.action_for(ch("Ctrl+B")), None);
-        assert_eq!(km.shortcut_for(Action::Find), Some(ch("Ctrl+J")));
+        assert_eq!(km.shortcut_for(Action::Find), Some(ch("Ctrl+Alt+J")));
         assert_eq!(reset_binding(&ov, p, Action::Find), []);
     }
 
@@ -1037,10 +1072,10 @@ mod tests {
         // A bare letter is not taken.
         let (s, out) = capture(s, CaptureEvent::Pressed(ch("K")), &km);
         assert_eq!((s, out), (Capture::Armed(Action::Find), None));
-        let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+J")), &km);
+        let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+Alt+J")), &km);
         assert_eq!(
             (s, out),
-            (Capture::Idle, Some((Action::Find, ch("Ctrl+J"))))
+            (Capture::Idle, Some((Action::Find, ch("Ctrl+Alt+J"))))
         );
         // A chord another action runs on asks first.
         let (s, _) = capture(s, CaptureEvent::Arm(Action::Find), &km);
@@ -1062,7 +1097,7 @@ mod tests {
         assert_eq!(capture(s, CaptureEvent::Cancel, &km), (Capture::Idle, None));
         // Pressing keys while idle does nothing.
         assert_eq!(
-            capture(Capture::Idle, CaptureEvent::Pressed(ch("Ctrl+J")), &km),
+            capture(Capture::Idle, CaptureEvent::Pressed(ch("Ctrl+Alt+J")), &km),
             (Capture::Idle, None)
         );
     }
