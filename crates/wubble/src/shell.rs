@@ -13,8 +13,7 @@ use wubble_core::url;
 pub struct TabRow {
     pub id: i32,
     pub title: String,
-    pub glyph: String,
-    pub tint: Rgb,
+    pub url: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,20 +38,15 @@ pub struct ShellView {
     pub path: String,
 }
 
-/// Placeholder glyph for a tab without a host to take a letter from.
-const NO_GLYPH: &str = "•";
-
 pub fn view_model(model: &Model) -> ShellView {
     let space = model.spaces.iter().find(|s| s.id == model.active_space);
-    let tint = space.map_or(Rgb(0, 0, 0), |s| s.tint);
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
         ids.filter_map(|id| {
             let tab = model.tabs.get(&id)?;
             Some(TabRow {
                 id: slint_id(id.0)?,
                 title: tab_title(tab),
-                glyph: glyph(&tab.url),
-                tint,
+                url: tab.url.clone(),
             })
         })
         .collect()
@@ -104,15 +98,6 @@ pub fn tab_title(tab: &Tab) -> String {
         .to_string()
 }
 
-/// The host's first letter or digit, upper-cased.
-fn glyph(address: &str) -> String {
-    url::address_parts(address)
-        .0
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map_or_else(|| NO_GLYPH.into(), |c| c.to_uppercase().collect())
-}
-
 fn slint_id(id: impl TryInto<i32>) -> Option<i32> {
     id.try_into().ok()
 }
@@ -152,7 +137,7 @@ mod tests {
 
     #[test]
     fn an_empty_model_shows_nothing_active() {
-        let v = view_model(&Model::new());
+        let v = view_model(&Model::new(std::time::Instant::now()));
         assert_eq!((v.pinned.len(), v.tabs.len()), (0, 0));
         assert_eq!(v.active_tab, -1);
         assert_eq!(v.active_space, 0);
@@ -162,7 +147,7 @@ mod tests {
 
     #[test]
     fn pinned_then_normal_then_folder_tabs_in_order() {
-        let (m, a) = new_tab(Model::new(), "https://a.test/");
+        let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
         let (m, b) = new_tab(m, "https://b.test/");
         let (m, c) = new_tab(m, "https://c.test/");
         let (m, _) = apply(
@@ -197,7 +182,7 @@ mod tests {
 
     #[test]
     fn only_the_active_space_is_listed() {
-        let (m, _) = new_tab(Model::new(), "https://a.test/");
+        let (m, _) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
         let (m, _) = apply(
             m,
             Command::NewSpace {
@@ -210,7 +195,8 @@ mod tests {
         let (m, _) = new_tab(m, "https://w.test/");
         let v = view_model(&m);
         assert_eq!(titles(&v.tabs), ["w.test"]);
-        assert_eq!(v.tabs[0].tint, Rgb(1, 2, 3));
+        assert_eq!(v.tabs[0].url, "https://w.test/");
+        assert_eq!(v.spaces[1].tint, Rgb(1, 2, 3));
         assert_eq!(v.active_space, 1);
         let names: Vec<_> = v.spaces.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Space 1", "Work"]);
@@ -218,7 +204,10 @@ mod tests {
 
     #[test]
     fn titles_fall_back_to_host_then_new_tab() {
-        let (m, t) = new_tab(Model::new(), "https://example.com/x");
+        let (m, t) = new_tab(
+            Model::new(std::time::Instant::now()),
+            "https://example.com/x",
+        );
         assert_eq!(view_model(&m).tabs[0].title, "example.com");
         let (m, _) = apply(
             m,
@@ -230,16 +219,6 @@ mod tests {
         assert_eq!(view_model(&m).tabs[0].title, "Example");
         let (m, _) = new_tab(m, "");
         assert_eq!(view_model(&m).tabs[1].title, "New tab");
-    }
-
-    #[test]
-    fn glyphs_come_from_the_host() {
-        assert_eq!(glyph("https://example.com/"), "E");
-        assert_eq!(glyph("https://www.x.test/"), "W");
-        assert_eq!(glyph("data:text/html,x"), "D");
-        assert_eq!(glyph("https://ünï.test/"), "Ü");
-        assert_eq!(glyph(""), NO_GLYPH);
-        assert_eq!(glyph("file:///tmp/x"), NO_GLYPH);
     }
 
     #[test]

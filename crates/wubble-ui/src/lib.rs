@@ -3,6 +3,7 @@
 slint::include_modules!();
 
 pub mod driver;
+pub mod window;
 
 #[cfg(test)]
 mod tests {
@@ -52,24 +53,34 @@ mod tests {
         app.show().unwrap();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
-        // Open.
+        // Open, growing from the new-tab row.
         app.invoke_request_new_tab();
+        assert!(app.get_command_origin().x > 0.0);
         settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
         assert_eq!(app.get_command_results().row_count(), 3);
+        assert_eq!(app.get_command_shown_rows(), 3);
 
         // A second Enter while closing must not choose again.
         press(&app, "\n");
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
         press(&app, "\n");
         assert_eq!(chosen.get(), 1);
-        settle();
+        // The close timer is the dropdown's out duration (176 ms).
+        mock_elapsed_time(Duration::from_millis(170));
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        mock_elapsed_time(Duration::from_millis(10));
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
         // A second Escape while closing must not dismiss again.
         app.invoke_request_address_focus();
         settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
+        // Nine results show seven rows.
+        let nine: Vec<_> = (0..9).map(|i| result(&format!("n{i}"))).collect();
+        app.set_command_results(ModelRc::from(nine.as_slice()));
+        assert_eq!(app.get_command_shown_rows(), 7);
         press(&app, Key::Escape);
         press(&app, Key::Escape);
         assert_eq!(dismissed.get(), 1);

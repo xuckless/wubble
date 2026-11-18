@@ -24,8 +24,9 @@ fn tab_items(rows: &[TabRow]) -> ModelRc<TabItem> {
             .map(|r| TabItem {
                 id: r.id,
                 title: r.title.as_str().into(),
-                glyph: r.glyph.as_str().into(),
-                tint: color(r.tint),
+                url: r.url.as_str().into(),
+                // No favicon is fetched yet: the row shows the neutral glyph.
+                favicon: Default::default(),
             })
             .collect(),
     )
@@ -57,7 +58,7 @@ pub fn render_bar(window: &AppWindow, rows: &[BarRow]) {
                 kind: r.kind,
                 title: r.title.as_str().into(),
                 subtitle: r.subtitle.as_str().into(),
-                shortcut: "".into(),
+                shortcut: r.shortcut.as_str().into(),
             })
             .collect(),
     ));

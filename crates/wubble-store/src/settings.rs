@@ -6,13 +6,9 @@
 //!
 //! A missing or undecodable row yields the default: a bad settings row must not block startup.
 
-use crate::{Result, Store};
+use wubble_core::omnibox::SearchEngine;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchEngine {
-    Google,
-    DuckDuckGo,
-}
+use crate::{Result, Store};
 
 /// Text form of a setting value.
 trait Codec: Sized {
@@ -38,6 +34,15 @@ impl Codec for bool {
             "0" => Some(false),
             _ => None,
         }
+    }
+}
+
+impl Codec for u32 {
+    fn encode(&self) -> String {
+        self.to_string()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 }
 
@@ -110,6 +115,8 @@ settings! {
     BlockerEnabled: bool = "blocker.enabled", true;
     /// Hosts the blocker skips.
     BlockerExceptions: Vec<String> = "blocker.exceptions", vec![];
+    /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
+    HistoryRetentionDays: u32 = "history.retention_days", 0;
 }
 
 impl Store {
@@ -190,6 +197,7 @@ mod tests {
             round_trip::<LiveSuggestions>(&mut s, false).await;
             round_trip::<SidebarWidth>(&mut s, 312.5).await;
             round_trip::<CompactMode>(&mut s, true).await;
+            round_trip::<HistoryRetentionDays>(&mut s, 90).await;
             round_trip::<BlockerEnabled>(&mut s, false).await;
             let list = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             round_trip::<KeybindingOverrides>(&mut s, list(&["a,b", "say \"hi\"", "ctrl+ü", ""]))
@@ -210,6 +218,8 @@ mod tests {
                 .await
                 .unwrap();
             s.set_raw(BlockerEnabled::KEY, "").await.unwrap();
+            s.set_raw(HistoryRetentionDays::KEY, "-3").await.unwrap();
+            assert_eq!(s.setting::<HistoryRetentionDays>().await.unwrap(), 0);
             assert!(!s.setting::<LiveSuggestions>().await.unwrap());
             assert_eq!(s.setting::<SidebarWidth>().await.unwrap(), 260.0);
             assert_eq!(s.setting::<SearchEngineChoice>().await.unwrap(), None);

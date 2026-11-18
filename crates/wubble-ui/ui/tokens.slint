@@ -1,64 +1,66 @@
-// Design tokens. The only file with colour, px and ms literals.
-// Values from the design pack (ux/pack/project/Tokens.dc.html, Main.dc.html).
+// Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
+// `src/wubble/slint/tokens.slint`, copied verbatim except the marked `wubble change`s.
+// Dark only. The embedded fonts are imported once in app.slint.
 
-import { GlassTier } from "components/model.slint";
+// Wubble design tokens for Slint. Mirrors core/tokens.ts one-to-one: same group names
+// (Palette = `color`, Spacing = `space`, Chrome = `chrome`, Glass = `glass`, Type = `type`,
+// Motion = `motion`) and same keys, same values. tokens.ts is the source of truth; when a value
+// changes there, change it here too.
+//
+// Units: TS px are Slint logical `px`; TS ms are Slint `ms`. Colours are written as hex for
+// opaque values and rgba() where tokens.ts uses rgba, so nothing is rounded.
 
-import "fonts/Fredoka-Variable.ttf";
-import "fonts/Geist-Variable.ttf";
-import "fonts/GeistMono-Variable.ttf";
-
-export global Colors {
-    // One source of theme. Light-theme values beyond the pack are our own (see TODO Decided).
-    in property <bool> light: false;
-
-    // ground
-    out property <color> abyss: light ? #F4F5F9 : #08090D;
-    out property <color> deep: light ? #ECEEF5 : #11131A;
-    out property <color> shell: light ? #E9ECF4 : #1A1D26;
-    out property <color> rim: light ? #D9DEEA : #2A2F3B;
+// @source slint-colour
+export global Palette {
+    // ground, dark first
+    out property <color> abyss: #08090D;
+    out property <color> deep: #11131A;
+    out property <color> shell: #1A1D26;
+    out property <color> rim: #2A2F3B;
     // ink
-    out property <color> ink: light ? #11131A : #F2F4FA;
-    out property <color> mist: light ? #5A6072 : #A3A9B8;
-    out property <color> haze: light ? #6F7588 : #7E8496;
-    // film
-    out property <color> sky: light ? #1E6BD6 : #7CC8FF;
-    out property <color> lilac: light ? #7A5CE0 : #B8A6FF;
-    out property <color> blush: light ? #D1478F : #FF9ED8;
-    out property <color> mint: light ? #1B9A74 : #8AF2D0;
-    out property <color> coral: light ? #D4503F : #FF8F7F;
-    // text on a film-coloured tile (same in both themes)
-    out property <color> on-film: #0B0C12;
-    // fills
-    // Glass tier fills (pack: white 8%, #161921 42%, #1C1F28 64%; light 55/68/80% white).
-    out property <color> glass-thin: light ? #FFFFFF8C : #FFFFFF14;
-    out property <color> glass-regular: light ? #FFFFFFAD : #1619216B;
-    out property <color> glass-thick: light ? #FFFFFFCC : #1C1F28A3;
-    // Specular: white 10% fading to 0 (stop in GlassStyle).
-    out property <color> glass-specular: #FFFFFF1A;
-    out property <color> glass-specular-end: #FFFFFF00;
-    // Rim: 1 px ring (white 7%, Thick 8%) brightening to the top inset highlight (22%, Thick 24%).
-    out property <color> glass-rim: light ? #11131A14 : #FFFFFF12;
-    out property <color> glass-rim-thick: light ? #11131A1A : #FFFFFF14;
-    out property <color> glass-highlight: #FFFFFF38;
-    out property <color> glass-highlight-thick: #FFFFFF3D;
-    // Drop shadows (pack: black 35 / 45 / 55%).
-    out property <color> glass-shadow-thin: #00000059;
-    out property <color> glass-shadow-regular: #00000073;
-    out property <color> glass-shadow-thick: #0000008C;
-    out property <color> hover-fill: light ? #11131A0D : #FFFFFF0D;
-    out property <color> press-fill: light ? #11131A1A : #FFFFFF1A;
-    out property <color> scrim: light ? #11131A52 : #08090D66;
+    out property <color> ink: #F2F4FA;
+    out property <color> mist: #A3A9B8;
+    out property <color> haze: #7E8496;
+    // film: the soap-bubble sheen
+    out property <color> sky: #7CC8FF;
+    out property <color> lilac: #B8A6FF;
+    out property <color> blush: #FF9ED8;
+    out property <color> mint: #8AF2D0;
+    out property <color> coral: #FF8F7F;
+    out property <color> amber: #FFD98A;
+    out property <color> web: #0E1016;
 }
 
+// @source slint-spaces
+/// Each Space retints the liquid, the glass and the film bias. Dye colours are deep so the
+/// ground stays dark. `icon` is the 24×24 stroke path from space-icons.json.
+export struct Space {
+    id: string,
+    name: string,
+    accent: color,
+    dye: [color],
+}
+
+export global Spaces {
+    out property <[Space]> spaces: [
+        { id: "personal", name: "Personal", accent: #7CC8FF, dye: [#2F5FC4, #7563D8, #237E69] },
+        { id: "work", name: "Work", accent: #B8A6FF, dye: [#6A4FD0, #A84886, #2F5FC4] },
+        { id: "study", name: "Study", accent: #8AF2D0, dye: [#1F8A72, #2F5FC4, #5E8F3A] },
+    ];
+}
+
+// @source slint-radius
 export global Radius {
     out property <length> xs: 6px;
     out property <length> sm: 10px;
     out property <length> md: 14px;
     out property <length> lg: 20px;
     out property <length> xl: 28px;
+    out property <length> window: 22px;
     out property <length> pill: 999px;
 }
 
+/// `space` in tokens.ts uses numeric keys (1, 2, 3, 4, 6, 8, 12); Slint names need a letter.
 export global Spacing {
     out property <length> s1: 4px;
     out property <length> s2: 8px;
@@ -69,96 +71,114 @@ export global Spacing {
     out property <length> s12: 48px;
 }
 
-export global Sizes {
-    // One logical pixel: divide a length by it to get a plain number.
-    out property <length> logical-px: 1px;
-    out property <length> sidebar-width: 260px;
-    out property <length> sidebar-min: 200px;
-    out property <length> sidebar-max: 360px;
-    // Width of the draggable seam handle, and of the hover strip that reveals a hidden sidebar.
-    out property <length> seam-grab: 12px;
-    out property <length> edge-zone: 6px;
-    out property <length> peek-shadow: 24px;
-    // Distance between Space dots.
-    out property <length> space-pitch: space-dot + Spacing.s3;
-    out property <length> row-height: 36px;
-    out property <length> pinned-tile: 48px;
-    out property <length> address-height: 40px;
-    out property <length> glyph: 18px;
-    out property <length> icon-button: 20px;
-    out property <length> space-dot: 24px;
-    out property <length> hairline: 1px;
-    out property <length> ring-width: 2px;
-    out property <length> pinned-glyph: 36px;
-    out property <length> space-dot-inset: 2px;
-    out property <int> pinned-max: 4;
-    out property <length> command-bar-width: 640px;
-    out property <length> command-bar-top: 64px;
-    out property <length> command-input-height: 52px;
-    out property <int> command-max-rows: 8;
-    out property <length> overlap-shift: 7px;
-    out property <length> shortcut-hint-width: 72px;
-    out property <length> window-width: 1280px;
-    out property <length> window-height: 800px;
+// @source slint-layout
+/// Layout of the browser chrome.
+export global Chrome {
+    out property <length> inset: 8px;            // gap between the window edge, the glass and the web view
+    out property <length> sidebarMin: 200px;
+    out property <length> sidebarMax: 340px;
+    out property <length> sidebarDefault: 252px;
+    out property <length> rail: 56px;            // icon-only sidebar
+    out property <length> row: 36px;             // tab rows (44 on touch)
+    out property <length> rowGap: 4px;
+    out property <length> rowTouch: 44px;
+    out property <length> controls: 30px;
+    out property <length> address: 36px;
+    out property <length> favourite: 44px;
+    out property <length> peekEdge: 10px;        // hidden sidebar peeks when the pointer is this close to the left edge
+    // windowMin: { w, h }
+    out property <length> windowMinW: 560px;
+    out property <length> windowMinH: 380px;
 }
 
-export global Type {
+// @source slint-glass-tiers
+/// Glass tiers: backdrop blur, saturation, fill, shadow (y / blur).
+/// Slint has no backdrop-filter, so `blur` and `saturate` are only read by the wgpu glass pass
+/// (render.rs / shaders/glass.wgsl). Slint-only fallbacks use `fill` + rim + specular.
+// wubble change: renamed from `GlassTier`, which is wubble's tier enum (components/model.slint).
+export struct GlassTierStyle {
+    blur: length,
+    saturate: float,
+    fill: color,
+    shadowY: length,
+    shadowBlur: length,
+}
+
+export global Glass {
+    out property <GlassTierStyle> thin: { blur: 16px, saturate: 1.6, fill: rgba(255, 255, 255, 0.08), shadowY: 10px, shadowBlur: 24px };
+    out property <GlassTierStyle> regular: { blur: 30px, saturate: 1.8, fill: rgba(22, 25, 33, 0.42), shadowY: 18px, shadowBlur: 40px };
+    out property <GlassTierStyle> thick: { blur: 44px, saturate: 2.0, fill: rgba(28, 31, 40, 0.64), shadowY: 24px, shadowBlur: 60px };
+    /// `thickOverContent` in tokens.ts: CSS thick glass over live web content needs more body to
+    /// keep text legible (.72 instead of .64). Slint-only glass over the web view uses this.
+    out property <color> thickOverContent: rgba(28, 31, 40, 0.72);
+    // From wubble.css (not tokens.ts): the 1px rims and the specular band.
+    out property <color> rimTop: rgba(255, 255, 255, 0.22);   // inset 0 1px 0
+    out property <color> rimAll: rgba(255, 255, 255, 0.07);   // inset 0 0 0 1px
+    out property <color> specular: rgba(255, 255, 255, 0.10); // white 10% → 0 over the top 42%
+    out property <float> specularStop: 0.42;
+}
+
+// @source slint-type
+export global Fonts {
+    // Slint takes one family per element; the first family of each tokens.ts stack.
     out property <string> display: "Fredoka";
     out property <string> ui: "Geist";
     out property <string> mono: "Geist Mono";
-
-    out property <length> caption: 11px;
-    out property <length> label: 12px;
-    out property <length> body: 13px;
-    out property <length> body-lg: 14px;
-    out property <length> title: 17px;
-    out property <length> hero: 32px;
-
-    out property <int> regular: 400;
-    out property <int> medium: 500;
-    out property <int> semibold: 600;
 }
 
+/// Type scale: [size px, weight, line-height]. Slint `Text` has no line-height, so `lineHeight`
+/// is for layout code that sets row heights (size × lineHeight).
+export struct TypeStyle {
+    size: length,
+    weight: int,
+    lineHeight: float,
+}
+
+export global Type {
+    out property <TypeStyle> display: { size: 44px, weight: 600, lineHeight: 1 };
+    out property <TypeStyle> title: { size: 24px, weight: 600, lineHeight: 1.2 };
+    out property <TypeStyle> heading: { size: 15px, weight: 600, lineHeight: 1.3 };
+    out property <TypeStyle> body: { size: 14px, weight: 400, lineHeight: 1.45 };
+    out property <TypeStyle> label: { size: 12px, weight: 500, lineHeight: 1.3 };
+    out property <TypeStyle> address: { size: 13px, weight: 400, lineHeight: 1 };
+}
+
+// @source slint-motion
+/// Durations and easings for Slint `animate`. Springs are not here as easings: Slint's
+/// `animate` has no spring or velocity, so the spring presets (k, c) are listed for reference
+/// and integrated in Rust (motion.rs `K`, driven by driver.rs).
 export global Motion {
-    out property <duration> fast: 150ms;
-    // The pack's "Overlap" timings.
-    out property <duration> overlap-in: 240ms;
-    out property <duration> overlap-out: 190ms;
-    out property <duration> stagger: 30ms;
-    // Press feedback on buttons and rows (pack Tokens.dc.html: 0.97 over 200 ms).
-    out property <duration> press: 200ms;
-    out property <float> press-scale: 0.97;
-}
+    // ease: out .22,1,.36,1 · inOut .65,0,.35,1 · spring .3,1.55,.5,1
+    out property <easing> easeOut: cubic-bezier(0.22, 1, 0.36, 1);
+    out property <easing> easeInOut: cubic-bezier(0.65, 0, 0.35, 1);
+    out property <easing> easeSpring: cubic-bezier(0.3, 1.55, 0.5, 1);
+    // physics.ts EASE.in (CSS only, not in tokens.ts)
+    out property <easing> easeIn: cubic-bezier(0.55, 0, 1, 0.45);
 
-// The glass recipe per tier (pack Tokens.dc.html). Blur and saturate live in
-// wubble-gfx (`glass::Tier`); this is everything Slint layers on top.
-export global GlassStyle {
-    // Specular gradient ends this far down the panel.
-    out property <percent> specular-end: 42%;
-    // Space colour over Regular glass.
-    out property <float> space-tint-alpha: 0.1;
-    // Film rim: conic soap-film ring.
-    out property <length> film-width: 1.5px;
-    out property <float> film-opacity: 0.7;
-    out property <angle> film-from: 210deg;
+    // overlap: in 240 · out 190 · blur 4 · shift 7 · stagger 30
+    out property <duration> overlapIn: 240ms;
+    out property <duration> overlapOut: 190ms;
+    out property <length> overlapBlur: 4px;    // Slint can't blur arbitrary items; kept for the wgpu path
+    out property <length> overlapShift: 7px;
+    out property <duration> overlapStagger: 30ms;
 
-    public pure function fill(tier: GlassTier) -> color {
-        tier == GlassTier.thin ? Colors.glass-thin : tier == GlassTier.thick ? Colors.glass-thick : Colors.glass-regular
-    }
-    public pure function rim(tier: GlassTier) -> color {
-        tier == GlassTier.thick ? Colors.glass-rim-thick : Colors.glass-rim
-    }
-    public pure function highlight(tier: GlassTier) -> color {
-        tier == GlassTier.thick ? Colors.glass-highlight-thick : Colors.glass-highlight
-    }
-    public pure function shadow-color(tier: GlassTier) -> color {
-        tier == GlassTier.thin ? Colors.glass-shadow-thin : tier == GlassTier.thick ? Colors.glass-shadow-thick : Colors.glass-shadow-regular
-    }
-    // Shadow offset-y / blur (pack: 10 / 24, 18 / 40, 24 / 60).
-    public pure function shadow-y(tier: GlassTier) -> length {
-        tier == GlassTier.thin ? 10px : tier == GlassTier.thick ? 24px : 18px
-    }
-    public pure function shadow-blur(tier: GlassTier) -> length {
-        tier == GlassTier.thin ? 24px : tier == GlassTier.thick ? 60px : 40px
-    }
+    // press: 0.97 over 120 ms (release springs back over 200 ms ease-out in wubble.css)
+    out property <float> pressScale: 0.97;
+    out property <duration> pressMs: 120ms;
+    out property <duration> pressRelease: 200ms;
+
+    // dropdown: in 220 · out 176 · from 0.95
+    out property <duration> dropdownIn: 220ms;
+    out property <duration> dropdownOut: 176ms;
+    out property <float> dropdownFrom: 0.95;
+
+    // Spring presets [k, c] (README motion tokens), mirrored from physics.ts K for reference.
+    out property <float> followK: 300;      out property <float> followC: 15;
+    out property <float> stretchK: 700;     out property <float> stretchC: 24;
+    out property <float> windowK: 380;      out property <float> windowC: 30;
+    out property <float> seamHeldK: 150;    out property <float> seamHeldC: 20;
+    out property <float> seamReleaseK: 260; out property <float> seamReleaseC: 24;
+    out property <float> seamBendK: 520;    out property <float> seamBendC: 9;
+    out property <float> contentsK: 210;    out property <float> contentsC: 21;
+    out property <float> popK: 520;         out property <float> popC: 16;
 }

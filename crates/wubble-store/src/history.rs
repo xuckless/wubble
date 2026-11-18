@@ -2,7 +2,10 @@
 //! Firefox Places style frecency computed at query time from a bound `now_ms`, so nothing
 //! stored needs recalculating.
 
-use crate::{Result, Store, narrow};
+use turso::Connection;
+use wubble_core::omnibox::HistoryEntry;
+
+use crate::{HistoryRetentionDays, Result, Store, ids, narrow};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transition {
@@ -10,13 +13,12 @@ pub enum Transition {
     Typed = 1,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryHit {
-    pub url: String,
-    pub title: String,
-    pub visit_count: u32,
-    pub typed_count: u32,
-    pub last_visit_ms: i64,
+/// What a delete removed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HistoryDeleted {
+    pub visits: u64,
+    /// Urls dropped because no visit was left.
+    pub urls: u64,
 }
 
 /// Only web pages are history; internal and file URLs never are.
@@ -101,13 +103,26 @@ impl Store {
         Ok(Some(visit_id))
     }
 
-    /// Command-bar history suggestions for `prefix`, best first. An empty prefix returns nothing.
+    /// Set the stored title of an already recorded `url`, without counting a visit. An empty
+    /// title (pages report one while loading) and a URL never recorded change nothing.
+    pub async fn update_title(&mut self, url: &str, title: &str) -> Result<()> {
+        if title.is_empty() {
+            return Ok(());
+        }
+        self.conn
+            .execute("UPDATE urls SET title = ?2 WHERE url = ?1", (url, title))
+            .await?;
+        Ok(())
+    }
+
+    /// Command-bar history suggestions for `prefix`, best first. Each entry carries the frecency
+    /// inputs `wubble_core::omnibox::rank` needs (visit count, typed count, last visit). An empty prefix returns nothing.
     pub async fn query_history(
         &self,
         prefix: &str,
         now_ms: i64,
         limit: usize,
-    ) -> Result<Vec<HistoryHit>> {
+    ) -> Result<Vec<HistoryEntry>> {
         let key = url_key(prefix);
         if key.is_empty() {
             return Ok(Vec::new());
@@ -129,7 +144,7 @@ impl Store {
             .await?;
         let mut hits = Vec::new();
         while let Some(r) = rows.next().await? {
-            hits.push(HistoryHit {
+            hits.push(HistoryEntry {
                 url: r.get(0)?,
                 title: r.get(1)?,
                 visit_count: narrow(r.get(2)?, "visit_count")?,
@@ -141,9 +156,144 @@ impl Store {
     }
 }
 
+/// Fix the denormalised counters of `url_ids` from their visits and drop the urls that have no
+/// visit left. Returns how many urls were dropped. Cost scales with the affected urls only.
+pub(crate) async fn recompute_url_counters(c: &Connection, url_ids: &[i64]) -> Result<u64> {
+    let mut update = c
+        .prepare(
+            "UPDATE urls SET \
+               visit_count = (SELECT COUNT(*) FROM visits WHERE url_id = ?1), \
+               typed_count = (SELECT COUNT(*) FROM visits WHERE url_id = ?1 AND transition = ?2), \
+               last_visit_time = COALESCE((SELECT MAX(visit_time) FROM visits WHERE url_id = ?1), last_visit_time) \
+             WHERE id = ?1",
+        )
+        .await?;
+    let mut drop_empty = c
+        .prepare("DELETE FROM urls WHERE id = ?1 AND NOT EXISTS (SELECT 1 FROM visits WHERE url_id = ?1)")
+        .await?;
+    let mut dropped = 0;
+    for &id in url_ids {
+        update.execute((id, Transition::Typed as i64)).await?;
+        dropped += drop_empty.execute([id]).await?;
+    }
+    Ok(dropped)
+}
+
+/// Delete every visit with `from_ms <= visit_time < to_ms`, then recompute the counters of the
+/// urls they belonged to (Chromium `ExpireHistoryBackend` / Places `removeVisitsByFilter` idea:
+/// delete visits, fix the url row, drop it when no visit is left).
+async fn delete_visits_between(c: &Connection, from_ms: i64, to_ms: i64) -> Result<HistoryDeleted> {
+    let affected = ids(
+        c,
+        "SELECT DISTINCT url_id FROM visits WHERE visit_time >= ?1 AND visit_time < ?2",
+        (from_ms, to_ms),
+    )
+    .await?;
+    let visits = c
+        .execute(
+            "DELETE FROM visits WHERE visit_time >= ?1 AND visit_time < ?2",
+            (from_ms, to_ms),
+        )
+        .await?;
+    let urls = recompute_url_counters(c, &affected).await?;
+    Ok(HistoryDeleted { visits, urls })
+}
+
+/// Delete the given urls with all their visits.
+async fn delete_urls(c: &Connection, url_ids: &[i64]) -> Result<HistoryDeleted> {
+    let mut out = HistoryDeleted::default();
+    for &id in url_ids {
+        out.visits += c
+            .execute("DELETE FROM visits WHERE url_id = ?1", [id])
+            .await?;
+        out.urls += c.execute("DELETE FROM urls WHERE id = ?1", [id]).await?;
+    }
+    Ok(out)
+}
+
+/// Whether `key` (a `url_key`) belongs to the site `host_key`: the host, then end or a
+/// separator, so `example.com` does not match `example.community`.
+fn on_site(key: &str, host_key: &str) -> bool {
+    key.strip_prefix(host_key)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', ':', '?', '#']))
+}
+
+impl Store {
+    /// Delete visits before `cutoff_ms` (exclusive).
+    pub async fn expire_history_older_than(&mut self, cutoff_ms: i64) -> Result<HistoryDeleted> {
+        self.delete_history_range(i64::MIN, cutoff_ms).await
+    }
+
+    /// "Clear recent history": delete visits with `from_ms <= time < to_ms`.
+    pub async fn delete_history_range(
+        &mut self,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> Result<HistoryDeleted> {
+        let tx = self.conn.transaction().await?;
+        let out = delete_visits_between(&tx, from_ms, to_ms).await?;
+        tx.commit().await?;
+        Ok(out)
+    }
+
+    /// Forget one page: the url and all its visits.
+    pub async fn delete_history_url(&mut self, url: &str) -> Result<HistoryDeleted> {
+        let tx = self.conn.transaction().await?;
+        let found = ids(&tx, "SELECT id FROM urls WHERE url = ?1", [url]).await?;
+        let out = delete_urls(&tx, &found).await?;
+        tx.commit().await?;
+        Ok(out)
+    }
+
+    /// "Forget this site": every url on `host` (scheme, `www.` and path ignored). Subdomains
+    /// are other sites: there is no public-suffix list to tell them apart.
+    pub async fn delete_history_site(&mut self, host: &str) -> Result<HistoryDeleted> {
+        let host_key = url_key(host);
+        let host_key = host_key.split(['/', '?', '#']).next().unwrap_or_default();
+        if host_key.is_empty() {
+            return Ok(HistoryDeleted::default());
+        }
+        let tx = self.conn.transaction().await?;
+        let mut rows = tx
+            .query(
+                "SELECT id, url_key FROM urls WHERE url_key >= ?1 AND url_key < ?2",
+                (host_key, prefix_upper(host_key)),
+            )
+            .await?;
+        let mut found = Vec::new();
+        while let Some(r) = rows.next().await? {
+            if on_site(&r.get::<String>(1)?, host_key) {
+                found.push(r.get::<i64>(0)?);
+            }
+        }
+        drop(rows);
+        let out = delete_urls(&tx, &found).await?;
+        tx.commit().await?;
+        Ok(out)
+    }
+
+    /// Apply the retention setting: drop visits older than `HistoryRetentionDays` before
+    /// `now_ms`; nothing when it is 0 (keep everything). The app decides when to call it.
+    pub async fn expire_history(&mut self, now_ms: i64) -> Result<HistoryDeleted> {
+        match self.setting::<HistoryRetentionDays>().await? {
+            0 => Ok(HistoryDeleted::default()),
+            days => {
+                let age = i64::from(days).saturating_mul(DAY_MS);
+                self.expire_history_older_than(now_ms.saturating_sub(age))
+                    .await
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HistoryRetentionDays;
+
+    fn run<F: std::future::Future>(f: F) -> F::Output {
+        pollster::block_on(f)
+    }
 
     const NOW: i64 = 1_000 * DAY_MS;
 
@@ -213,7 +363,7 @@ mod tests {
             let hits = s.query_history("a.com", 30, 10).await.unwrap();
             assert_eq!(
                 hits,
-                vec![HistoryHit {
+                vec![HistoryEntry {
                     url: "https://a.com/".into(),
                     title: "A".into(),
                     visit_count: 2,
@@ -311,6 +461,199 @@ mod tests {
                 .unwrap();
             assert_eq!(urls(&s, "a.com/a_", 10).await, ["https://a.com/a_b"]);
             assert_eq!(urls(&s, "a.com/50%", 10).await, ["https://a.com/50%25"]);
+        });
+    }
+
+    #[test]
+    fn update_title_changes_only_the_title() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            s.record_visit("https://a.com/", "", 10, Transition::Typed)
+                .await
+                .unwrap();
+            s.update_title("https://a.com/", "A").await.unwrap();
+            s.update_title("https://a.com/", "").await.unwrap();
+            s.update_title("https://never.com/", "N").await.unwrap();
+            let hits = s.query_history("a.com", 20, 10).await.unwrap();
+            assert_eq!(
+                hits,
+                vec![HistoryEntry {
+                    url: "https://a.com/".into(),
+                    title: "A".into(),
+                    visit_count: 1,
+                    typed_count: 1,
+                    last_visit_ms: 10,
+                }]
+            );
+            assert!(s.query_history("never", 20, 10).await.unwrap().is_empty());
+        });
+    }
+
+    async fn visit(s: &mut Store, url: &str, at: i64, t: Transition) {
+        s.record_visit(url, "", at, t).await.unwrap();
+    }
+
+    async fn consistent(s: &Store) {
+        let p = s.check_consistency().await.unwrap();
+        assert!(p.is_empty(), "{p:?}");
+    }
+
+    async fn entry(s: &Store, prefix: &str) -> Option<HistoryEntry> {
+        s.query_history(prefix, NOW, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+    }
+
+    #[test]
+    fn expiry_removes_old_visits_and_fixes_counters() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            visit(&mut s, "https://a.test/", 10, Transition::Typed).await;
+            visit(&mut s, "https://a.test/", 20, Transition::Link).await;
+            visit(&mut s, "https://a.test/", 30, Transition::Link).await;
+            visit(&mut s, "https://b.test/", 5, Transition::Link).await;
+            consistent(&s).await;
+            let d = s.expire_history_older_than(20).await.unwrap(); // 20 itself stays
+            assert_eq!(d, HistoryDeleted { visits: 2, urls: 1 });
+            let a = entry(&s, "a.test").await.unwrap();
+            assert_eq!((a.visit_count, a.typed_count, a.last_visit_ms), (2, 0, 30));
+            assert!(entry(&s, "b.test").await.is_none());
+            consistent(&s).await;
+            // Everything older than the newest: last visit stays right; nothing more to do twice.
+            assert_eq!(
+                s.expire_history_older_than(20).await.unwrap(),
+                HistoryDeleted::default()
+            );
+        });
+    }
+
+    #[test]
+    fn range_is_from_inclusive_to_exclusive() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for at in [10, 20, 30, 40] {
+                visit(&mut s, "https://a.test/", at, Transition::Link).await;
+            }
+            let d = s.delete_history_range(20, 40).await.unwrap();
+            assert_eq!(d, HistoryDeleted { visits: 2, urls: 0 });
+            let a = entry(&s, "a.test").await.unwrap();
+            assert_eq!((a.visit_count, a.last_visit_ms), (2, 40));
+            let d = s.delete_history_range(0, 100).await.unwrap();
+            assert_eq!(d, HistoryDeleted { visits: 2, urls: 1 });
+            assert!(entry(&s, "a.test").await.is_none());
+            consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn range_delete_recomputes_typed_count_and_last_visit() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            visit(&mut s, "https://a.test/", 10, Transition::Typed).await;
+            visit(&mut s, "https://a.test/", 20, Transition::Typed).await;
+            visit(&mut s, "https://a.test/", 30, Transition::Link).await;
+            s.delete_history_range(25, 100).await.unwrap(); // the newest, a plain link
+            let a = entry(&s, "a.test").await.unwrap();
+            assert_eq!((a.visit_count, a.typed_count, a.last_visit_ms), (2, 2, 20));
+            s.delete_history_range(0, 15).await.unwrap(); // a typed one
+            let a = entry(&s, "a.test").await.unwrap();
+            assert_eq!((a.visit_count, a.typed_count, a.last_visit_ms), (1, 1, 20));
+            consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn delete_url_removes_only_that_url() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            visit(&mut s, "https://a.test/x", 1, Transition::Link).await;
+            visit(&mut s, "https://a.test/x", 2, Transition::Link).await;
+            visit(&mut s, "https://a.test/y", 3, Transition::Link).await;
+            let d = s.delete_history_url("https://a.test/x").await.unwrap();
+            assert_eq!(d, HistoryDeleted { visits: 2, urls: 1 });
+            assert_eq!(urls(&s, "a.test", 10).await, ["https://a.test/y"]);
+            assert_eq!(
+                s.delete_history_url("https://a.test/x").await.unwrap(),
+                HistoryDeleted::default()
+            );
+            consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn delete_site_matches_the_host_only() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for u in [
+                "https://example.com/",
+                "https://www.example.com/a?q=1",
+                "http://example.com:8080/b",
+                "https://example.community/",
+                "https://example.com.evil.test/",
+                "https://sub.example.com/",
+                "https://other.test/",
+            ] {
+                visit(&mut s, u, 1, Transition::Link).await;
+            }
+            let d = s
+                .delete_history_site("https://www.Example.com/whatever")
+                .await
+                .unwrap();
+            assert_eq!(d, HistoryDeleted { visits: 3, urls: 3 });
+            let mut left = vec![];
+            let mut rows = s
+                .conn
+                .query("SELECT url FROM urls ORDER BY url", ())
+                .await
+                .unwrap();
+            while let Some(r) = rows.next().await.unwrap() {
+                left.push(r.get::<String>(0).unwrap());
+            }
+            assert_eq!(
+                left,
+                [
+                    "https://example.com.evil.test/",
+                    "https://example.community/",
+                    "https://other.test/",
+                    "https://sub.example.com/",
+                ]
+            );
+            assert_eq!(
+                s.delete_history_site("").await.unwrap(),
+                HistoryDeleted::default()
+            );
+            consistent(&s).await;
+        });
+    }
+
+    #[test]
+    fn retention_setting_zero_keeps_everything_and_n_days_expires() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            visit(&mut s, "https://old.test/", ago(100), Transition::Link).await;
+            visit(&mut s, "https://mid.test/", ago(40), Transition::Link).await;
+            visit(&mut s, "https://new.test/", ago(1), Transition::Link).await;
+            assert_eq!(s.setting::<HistoryRetentionDays>().await.unwrap(), 0);
+            assert_eq!(
+                s.expire_history(NOW).await.unwrap(),
+                HistoryDeleted::default()
+            );
+            assert!(entry(&s, "old.test").await.is_some());
+            s.set_setting::<HistoryRetentionDays>(90).await.unwrap();
+            assert_eq!(
+                s.expire_history(NOW).await.unwrap(),
+                HistoryDeleted { visits: 1, urls: 1 }
+            );
+            s.set_setting::<HistoryRetentionDays>(30).await.unwrap();
+            assert_eq!(
+                s.expire_history(NOW).await.unwrap(),
+                HistoryDeleted { visits: 1, urls: 1 }
+            );
+            assert!(entry(&s, "mid.test").await.is_none());
+            assert!(entry(&s, "new.test").await.is_some());
+            consistent(&s).await;
         });
     }
 }

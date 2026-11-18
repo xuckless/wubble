@@ -4,22 +4,33 @@
 //! here is a plain `async fn`; the binary picks how to drive them. Write methods take
 //! `&mut self` so the borrow checker serialises transactions on the single connection
 //! (a second writer would get `Busy`). Times are unix milliseconds supplied by the caller.
-//! Passwords are out of scope.
+//! Encryption is out of scope: the `logins` table holds opaque blobs the vault crate produces.
+//!
+//! The store applies a `wubble_core::import::Imported` profile (`import.rs`), and a
+//! password vault adapts its storage trait to the plain byte-row functions in `logins.rs`;
+//! both drive the futures with whatever executor they have (`pollster::block_on` is enough).
 
+mod bookmarks;
+mod check;
 mod closed;
 mod history;
+mod import;
+mod logins;
 mod migrate;
 mod session;
 mod settings;
 
 use std::path::Path;
 
+pub use bookmarks::{BookmarkId, BookmarkKind, BookmarkNode};
 pub use closed::{ClosedTab, RECENTLY_CLOSED_MAX};
-pub use history::{HistoryHit, Transition, is_recordable, url_key};
+pub use history::{HistoryDeleted, Transition, is_recordable, url_key};
+pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
+pub use logins::{LoginRow, NewLogin};
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, CompactMode, KeybindingOverrides, LiveSuggestions,
-    SearchEngine, SearchEngineChoice, Setting, SidebarWidth,
+    BlockerEnabled, BlockerExceptions, CompactMode, HistoryRetentionDays, KeybindingOverrides,
+    LiveSuggestions, SearchEngineChoice, Setting, SidebarWidth,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +43,9 @@ pub enum Error {
     DatabaseTooNew { found: i64, supported: i64 },
     #[error("corrupt stored value: {0}")]
     Corrupt(String),
+    /// A request the data model refuses (parent is not a folder, move into own subtree, ...).
+    #[error("invalid request: {0}")]
+    Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -71,4 +85,37 @@ impl Store {
 /// Read a column as `i64` and convert to a narrower id type.
 fn narrow<T: TryFrom<i64>>(v: i64, what: &str) -> Result<T> {
     T::try_from(v).map_err(|_| Error::Corrupt(format!("{what} out of range: {v}")))
+}
+
+/// First column of every row as `i64`.
+async fn ids(
+    conn: &turso::Connection,
+    sql: &str,
+    params: impl turso::IntoParams,
+) -> Result<Vec<i64>> {
+    let mut rows = conn.query(sql, params).await?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next().await? {
+        out.push(r.get(0)?);
+    }
+    Ok(out)
+}
+
+/// The first column of the first row, if any.
+async fn scalar(
+    conn: &turso::Connection,
+    sql: &str,
+    params: impl turso::IntoParams,
+) -> Result<Option<i64>> {
+    Ok(ids(conn, sql, params).await?.into_iter().next())
+}
+
+/// A blob column. `turso::Row::get` has no `Vec<u8>` reader, so go through `Value`.
+fn blob(row: &turso::Row, idx: usize) -> Result<Vec<u8>> {
+    match row.get_value(idx)? {
+        turso::Value::Blob(b) => Ok(b),
+        other => Err(Error::Corrupt(format!(
+            "column {idx} is not a blob: {other:?}"
+        ))),
+    }
 }

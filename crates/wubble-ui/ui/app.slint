@@ -1,18 +1,34 @@
-import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
-import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent, CompactMode, GlassTier } from "components/model.slint";
-import { GlassBackdrops } from "components/glass.slint";
+// The browser window. Laid out like the design repo's port (src/wubble/slint/demo.slint,
+// xuckless/the-wallpaper-project @ 6c840da): the sidebar at the inset, the web view beside it
+// once the sidebar has width, the seam over both. Peek is from chrome.tsx (the port has none).
+
+import { Palette, Radius, Chrome, Fonts, Type, Motion } from "tokens.slint";
+import { Shell } from "app-tokens.slint";
+import { Seam, GlassPanel } from "components.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier } from "components/model.slint";
+import { GlassBackdrops } from "components/backdrops.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
+import { WindowEdges } from "components/window-frame.slint";
 
-export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState, CompactMode, Sizes, GlassTier, GlassBackdrops }
+import "fonts/Fredoka-Variable.ttf";
+import "fonts/Geist-Variable.ttf";
+import "fonts/GeistMono-Variable.ttf";
+
+export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, WindowEdge, GlassBackdrops, Chrome, Radius }
 
 export component AppWindow inherits Window {
     title: "wubble";
-    preferred-width: Sizes.window-width;
-    preferred-height: Sizes.window-height;
-    background: Colors.abyss;
-    default-font-family: Type.ui;
-    default-font-size: Type.body;
+    preferred-width: Shell.window-width;
+    preferred-height: Shell.window-height;
+    min-width: Chrome.windowMinW;
+    min-height: Chrome.windowMinH;
+    // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
+    // colour, rounded where the platform can show transparent corners.
+    no-frame: true;
+    background: transparent;
+    default-font-family: Fonts.ui;
+    default-font-size: Type.body.size;
 
     // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
     in property <image> web-frame;
@@ -45,6 +61,21 @@ export component AppWindow inherits Window {
     callback web-scrolled(x: length, y: length, delta-x: length, delta-y: length);
     callback web-focus-changed(focused: bool);
 
+    // Window frame. Intents only; wubble_ui::window acts on them.
+    callback window-close-requested <=> sidebar.window-close-requested;
+    callback window-minimise-requested <=> sidebar.window-minimise-requested;
+    callback window-toggle-fullscreen-requested <=> sidebar.window-toggle-fullscreen-requested;
+    callback window-begin-resize(WindowEdge);
+    // The platform can show a transparent window background (window.rs `Platform`).
+    in property <bool> rounded-corners: false;
+    // Square when full screen or maximised, or when the platform cannot show the corners.
+    out property <length> window-radius: root.rounded-corners && !root.full-screen && !root.maximized ? Radius.window : 0px;
+    out property <bool> window-resizable: !root.full-screen && !root.maximized;
+    in property <bool> address-loading <=> sidebar.address-loading;
+    // The loading sheen's opacity (0 at rest).
+    out property <float> address-sheen <=> sidebar.address-sheen;
+    out property <int> command-shown-rows <=> bar.shown-rows;
+
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
@@ -53,31 +84,74 @@ export component AppWindow inherits Window {
     in property <int> active-tab-id <=> sidebar.active-tab-id;
     in property <int> active-space-id <=> sidebar.active-space-id;
 
-    // Shell animation. The wubble-ui driver owns these: springs write the
-    // numbers, its pure transition writes compact-mode.
-    in-out property <length> sidebar-width: Sizes.sidebar-width;
-    in property <float> sidebar-slide: 1;
-    in property <float> content-inset: 1;
-    in property <float> space-indicator <=> sidebar.space-indicator;
-    in property <CompactMode> compact-mode: CompactMode.expanded;
-    // Pointer reports for the driver; x is in window coordinates.
-    callback seam-pressed(length);
-    callback seam-dragged(length);
-    callback seam-released();
-    callback zone-hover-changed(bool);
-    callback compact-toggle-requested();
-    callback space-changed(int);
-    changed active-space-id => {
-        root.space-changed(root.active-space-id);
+    // ── driven by wubble_ui::driver once per rendered frame ──
+    // tabs.rs: rows, the indicator (its row, -1 for none), the Space capsule
+    in property <[length]> row-y <=> sidebar.row-y;
+    in property <[float]> row-scale <=> sidebar.row-scale;
+    in property <int> selected-row <=> sidebar.selected;
+    in property <length> indicator-y <=> sidebar.indicator-y;
+    in property <float> indicator-stretch <=> sidebar.indicator-stretch;
+    in property <float> indicator-origin <=> sidebar.indicator-origin;
+    in property <int> space-index <=> sidebar.space-index;
+    in property <length> capsule-offset <=> sidebar.capsule-offset;
+    in property <float> capsule-stretch <=> sidebar.capsule-stretch;
+    in property <float> capsule-origin <=> sidebar.capsule-origin;
+    // seam.rs: the mode (Seam owns it), the width spring, contents a beat behind, the string
+    in property <SidebarMode> sidebar-mode: SidebarMode.extended;
+    in property <length> sidebar-width: Chrome.sidebarDefault;
+    in property <length> sidebar-contents: Chrome.sidebarDefault; // max(Seam.contents, w > 100 ? min : rail)
+    in property <float> sidebar-opacity: 1;                       // min(1, w / rail)²
+    in property <bool> sidebar-rail: false;
+    in property <length> sidebar-saved: Chrome.sidebarDefault;    // Seam.saved: the peek's width
+    in property <string> seam-path;
+    in property <bool> seam-bowed: false;
+    // scroller.rs: the tab list
+    in property <length> scroll-y <=> sidebar.scroll-y;
+    in property <length> thumb-top <=> sidebar.thumb-top;
+    in property <length> thumb-height <=> sidebar.thumb-height;
+    in property <bool> thumb-visible <=> sidebar.thumb-visible;
+    out property <length> row-pitch: sidebar.pitch;
+    out property <length> scroll-viewport: sidebar.scroll-viewport;
+    out property <length> scroll-content: sidebar.scroll-content;
+
+    // Pointer reports for the driver, in window coordinates.
+    callback tab-press <=> sidebar.tab-press;
+    callback tab-drag <=> sidebar.tab-drag;
+    callback tab-release <=> sidebar.tab-release;
+    callback seam-grab(length, length);
+    callback seam-drag(length, length);
+    callback seam-release();
+    callback seam-double-clicked();
+    callback scroll-wheel <=> sidebar.scroll-wheel;
+    callback scroll-touch-down <=> sidebar.scroll-touch-down;
+    callback scroll-touch-move <=> sidebar.scroll-touch-move;
+    callback scroll-touch-up <=> sidebar.scroll-touch-up;
+    callback scroll-thumb-down <=> sidebar.scroll-thumb-down;
+    callback scroll-thumb-move <=> sidebar.scroll-thumb-move;
+    callback scroll-thumb-up <=> sidebar.scroll-thumb-up;
+    callback sidebar-toggle-requested();
+    // The models or the active ids changed: the driver re-reads them.
+    callback shell-model-changed();
+    changed tabs => {
+        root.shell-model-changed();
     }
-    // The index depends on the model too: it may be set or reordered later.
+    changed active-tab-id => {
+        root.shell-model-changed();
+    }
     changed spaces => {
-        root.space-changed(root.active-space-id);
+        root.shell-model-changed();
+    }
+    changed active-space-id => {
+        root.shell-model-changed();
     }
 
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;
+    // A row was dragged to a new slot: (tab id, its new index in `tabs`).
+    callback tab-moved(int, int);
     out property <CommandBarState> command-bar-state <=> bar.state;
+    // Where the bar grows from (window coordinates); set when it opens.
+    in-out property <Origin> command-origin <=> bar.origin;
     in property <[CommandResult]> command-results <=> bar.results;
     in-out property <string> command-query <=> bar.query;
     callback command-query-changed <=> bar.query-changed;
@@ -87,21 +161,40 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
-    // Ctrl+W: close the visible tab.
-    callback close-tab-requested();
 
     public function request-new-tab() {
+        root.command-origin = sidebar.new-tab-origin;
         bar.dispatch(CommandBarEvent.open);
         root.new-tab-requested();
     }
 
-    public function toggle-compact() {
-        root.compact-toggle-requested();
+    // Hidden opens the extended sidebar; extended or rail hide it (chrome.tsx `cycleSidebar`).
+    public function toggle-sidebar() {
+        root.sidebar-toggle-requested();
     }
 
     public function request-address-focus() {
+        root.command-origin = sidebar.address-origin;
         bar.dispatch(CommandBarEvent.open);
         root.address-focus-requested();
+    }
+
+    // Peek (chrome.tsx): a hidden sidebar slides in over the page, on thick glass at its saved
+    // width, once the pointer has rested in the edge strip; it leaves once the pointer has been
+    // off it for a while. Presentation only: `peek` never outlives the hidden mode.
+    in-out property <bool> peek: false;
+    out property <bool> peeking: root.peek && root.sidebar-mode == SidebarMode.hidden;
+    changed sidebar-mode => {
+        if (root.sidebar-mode != SidebarMode.hidden) {
+            root.peek = false;
+        }
+    }
+    property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && root.sidebar-width <= Shell.sidebar-open;
+    property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
+    property <float> peek-alpha: root.peeking ? 1 : Shell.peek-from;
+    animate peek-offset, peek-alpha {
+        duration: Shell.peek-slide;
+        easing: Motion.easeOut;
     }
 
     // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
@@ -125,33 +218,26 @@ export component AppWindow inherits Window {
         MouseCursor.nwse-resize,
     ];
 
-    root-keys := FocusScope {
-        KeyBinding {
-            keys: @keys(Control + T);
-            activated => {
-                root.request-new-tab();
-            }
-        }
-        KeyBinding {
-            keys: @keys(Control + L);
-            activated => {
-                root.request-address-focus();
-            }
-        }
-        KeyBinding {
-            keys: @keys(Control + W);
-            activated => {
-                root.close-tab-requested();
-            }
-        }
+    ground := Rectangle {
+        background: Palette.abyss;
+        border-radius: root.window-radius;
+    }
+    // The design's `wb-frame-drag`: the gutters and any glass without a control move the window.
+    WindowMoveArea {
+        enabled: !root.full-screen;
+    }
 
+    // Shortcuts are routed in Rust (wubble `input::key_route`, the
+    // `wubble_core::keys` table), not here.
+    root-keys := FocusScope {
         content := Rectangle {
-            x: Spacing.s2 + root.content-inset * (root.sidebar-width + Spacing.s2);
-            y: Spacing.s2;
-            width: parent.width - self.x - Spacing.s2;
-            height: parent.height - 2 * Spacing.s2;
+            x: Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px);
+            y: Chrome.inset;
+            width: parent.width - self.x - Chrome.inset;
+            height: parent.height - 2 * Chrome.inset;
             border-radius: Radius.md;
             clip: true;
+            background: Palette.web;
             Image {
                 width: 100%;
                 height: 100%;
@@ -200,22 +286,58 @@ export component AppWindow inherits Window {
             }
         }
 
+        // The strip a hidden sidebar peeks from (.wb-peek-edge).
+        edge := TouchArea {
+            // Right of the window's west resize strip, which takes the pointer there.
+            x: Shell.edge-width;
+            width: Chrome.peekEdge + Chrome.inset - Shell.edge-width;
+            height: parent.height;
+            enabled: root.sidebar-mode == SidebarMode.hidden;
+        }
+        Timer {
+            interval: Shell.peek-in;
+            running: edge.has-hover && root.sidebar-mode == SidebarMode.hidden && !root.peek;
+            triggered => {
+                root.peek = true;
+            }
+        }
+        Timer {
+            interval: Shell.peek-out;
+            running: root.peeking && !zone.has-hover && !edge.has-hover;
+            triggered => {
+                root.peek = false;
+            }
+        }
+
         // The sidebar sits inside its hover zone, so the zone keeps has-hover
         // while the pointer is over a child row.
         zone := TouchArea {
-            x: 0px;
+            x: root.hidden-at-rest ? root.peek-offset : 0px;
             y: 0px;
+            width: Chrome.inset + sidebar.width;
             height: parent.height;
-            width: Spacing.s2 + root.sidebar-width + Spacing.s2;
-            changed has-hover => {
-                root.zone-hover-changed(self.has-hover);
+
+            // the peek's own glass (.wb-side-peek: thick, radius 20)
+            GlassPanel {
+                x: sidebar.x;
+                y: sidebar.y;
+                width: sidebar.width;
+                height: sidebar.height;
+                tier: GlassTier.thick;
+                radius: Radius.lg;
+                over-content: true;
+                visible: root.hidden-at-rest;
+                opacity: root.peek-alpha;
             }
 
             sidebar := Sidebar {
-                x: Spacing.s2 + (root.sidebar-slide - 1) * (root.sidebar-width + Spacing.s2);
-                y: Spacing.s2;
-                width: root.sidebar-width;
-                height: parent.height - 2 * Spacing.s2;
+                x: Chrome.inset;
+                y: Chrome.inset;
+                width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-contents;
+                height: parent.height - 2 * Chrome.inset;
+                opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
+                compact: root.hidden-at-rest ? false : root.sidebar-rail;
+                window-movable: !root.full-screen;
                 new-tab-requested => {
                     root.request-new-tab();
                 }
@@ -225,42 +347,39 @@ export component AppWindow inherits Window {
             }
         }
 
-        seam := TouchArea {
-            enabled: false;
-            mouse-cursor: MouseCursor.col-resize;
-            x: Spacing.s2 + root.sidebar-width + Spacing.s1 - Sizes.seam-grab / 2;
-            y: Spacing.s2;
-            width: Sizes.seam-grab;
-            height: parent.height - 2 * Spacing.s2;
-            pointer-event(event) => {
-                if (event.button != PointerEventButton.left) {
-                    return;
-                }
-                if (event.kind == PointerEventKind.down) {
-                    root.seam-pressed(self.absolute-position.x + self.mouse-x);
-                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                    root.seam-released();
-                }
+        // Over everything, so the bowed string draws on top of the web view. Its frame is the
+        // web view's frame (inset on every side), which is what Seam::clip draws in.
+        Seam {
+            x: Chrome.inset;
+            y: Chrome.inset;
+            width: parent.width - Chrome.inset * 2;
+            height: parent.height - Chrome.inset * 2;
+            visible: root.sidebar-mode != SidebarMode.hidden;
+            seam-x: root.sidebar-width + Chrome.inset / 2;
+            seam-path: root.seam-path;
+            bowed: root.seam-bowed;
+            grab(x, y) => {
+                root.seam-grab(x, y);
             }
-            moved => {
-                root.seam-dragged(self.absolute-position.x + self.mouse-x);
+            drag(x, y) => {
+                root.seam-drag(x, y);
+            }
+            release => {
+                root.seam-release();
+            }
+            double-clicked => {
+                root.seam-double-clicked();
             }
         }
     }
 
-    // Mode-dependent presentation only; the spring-driven numbers come from Rust.
-    states [
-        expanded when root.compact-mode == CompactMode.expanded: {
-            seam.enabled: true;
+    // Above everything: the resize zones of the frameless window.
+    WindowEdges {
+        resizable: root.window-resizable;
+        begin(edge) => {
+            root.window-begin-resize(edge);
         }
-        hidden when root.compact-mode == CompactMode.hidden: {
-            zone.width: Sizes.edge-zone;
-        }
-        peeking when root.compact-mode == CompactMode.peeking: {
-            sidebar.drop-shadow-blur: Sizes.peek-shadow;
-            sidebar.drop-shadow-color: Colors.scrim;
-        }
-    ]
+    }
 
     init => {
         web-focus.focus();

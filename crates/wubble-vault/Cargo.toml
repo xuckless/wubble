@@ -1,0 +1,19 @@
+[package]
+name = "wubble-vault"
+description = "wubble's encrypted password store, keyed from the OS keyring."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+aes-gcm = "0.10.3"
+zeroize = "1"
+# Default feature `v1`: one Entry over Keychain / Credential Manager / Secret Service.
+keyring = "4.2.0"
+# Same rand_core 0.6 line as aes-gcm.
+rand = "0.8"
+csv = "1.4"
+url.workspace = true
+thiserror = "2"

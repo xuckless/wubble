@@ -1,0 +1,51 @@
+// The resize zones of the frameless window: edge strips 7 px and corner squares 16 px, as in the
+// design repo's desktop.tsx (`WIN.edge`, `WIN.corner`; owner's own code, xuckless/the-wallpaper-project
+// @ 6c840da). A press reports the edge and the host hands the grab to the compositor
+// (xdg_toplevel.resize on Wayland). The corners come last, so they win over the strips.
+
+import { Shell } from "../app-tokens.slint";
+import { WindowEdge } from "model.slint";
+
+component Zone inherits TouchArea {
+    in property <WindowEdge> edge;
+    callback begin(WindowEdge);
+    // Only the press matters: the compositor swallows the release.
+    pointer-event(event) => {
+        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+            root.begin(root.edge);
+        }
+    }
+}
+
+export component WindowEdges inherits Rectangle {
+    // Invisible means no zones: nothing to press in a full-screen or maximised window.
+    in property <bool> resizable: true;
+    callback begin(WindowEdge);
+
+    property <length> e: Shell.edge-width;
+    property <length> c: Shell.edge-corner;
+    // Strips first, corners last, so a corner wins over the strip under it.
+    property <[{edge: WindowEdge, cursor: MouseCursor, x: length, y: length, w: length, h: length}]> zones: [
+        { edge: WindowEdge.n, cursor: MouseCursor.ns-resize, x: 0px, y: 0px, w: root.width, h: root.e },
+        { edge: WindowEdge.s, cursor: MouseCursor.ns-resize, x: 0px, y: root.height - root.e, w: root.width, h: root.e },
+        { edge: WindowEdge.w, cursor: MouseCursor.ew-resize, x: 0px, y: 0px, w: root.e, h: root.height },
+        { edge: WindowEdge.e, cursor: MouseCursor.ew-resize, x: root.width - root.e, y: 0px, w: root.e, h: root.height },
+        { edge: WindowEdge.nw, cursor: MouseCursor.nwse-resize, x: 0px, y: 0px, w: root.c, h: root.c },
+        { edge: WindowEdge.ne, cursor: MouseCursor.nesw-resize, x: root.width - root.c, y: 0px, w: root.c, h: root.c },
+        { edge: WindowEdge.sw, cursor: MouseCursor.nesw-resize, x: 0px, y: root.height - root.c, w: root.c, h: root.c },
+        { edge: WindowEdge.se, cursor: MouseCursor.nwse-resize, x: root.width - root.c, y: root.height - root.c, w: root.c, h: root.c },
+    ];
+
+    visible: root.resizable;
+    for z in root.zones: Zone {
+        edge: z.edge;
+        mouse-cursor: z.cursor;
+        x: z.x;
+        y: z.y;
+        width: z.w;
+        height: z.h;
+        begin(which) => {
+            root.begin(which);
+        }
+    }
+}

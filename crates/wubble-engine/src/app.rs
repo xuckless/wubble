@@ -23,6 +23,7 @@ use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
 use crate::nav::WebEvent;
+use crate::page::{PageEvent, PageQueue};
 use crate::view::{View, ViewConfig};
 
 /// Sandbox off on every platform for now (TODO.md, M1 "Sandbox enabled").
@@ -53,8 +54,9 @@ impl EngineConfig {
         let exe_dir = exe
             .parent()
             .ok_or_else(|| EngineError::ExeDir(format!("{} has no parent", exe.display())))?;
-        let cache_dir =
-            Current::user_cache_dir(&|key| std::env::var_os(key)).ok_or(EngineError::CacheDir)?;
+        let cache_dir = user_data_dir()
+            .map(|dir| dir.join(CEF_CACHE))
+            .ok_or(EngineError::CacheDir)?;
         Ok(Self {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
@@ -107,10 +109,19 @@ fn helper_path(exe_dir: &Path) -> PathBuf {
     exe_dir.join(format!("wubble-helper{}", std::env::consts::EXE_SUFFIX))
 }
 
+/// CEF's cache inside the per-user data directory.
+pub const CEF_CACHE: &str = "cef";
+
+/// The per-user data directory (profile): wubble's database and, under
+/// [`CEF_CACHE`], CEF's cache. `None` when the environment names none.
+pub fn user_data_dir() -> Option<PathBuf> {
+    Current::user_data_dir(&|key| std::env::var_os(key))
+}
+
 /// What differs per OS. One impl per OS, chosen by cfg into [`Current`].
 trait Platform {
-    /// Per-user directory for CEF's cache, given an environment lookup.
-    fn user_cache_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
+    /// Per-user data directory, given an environment lookup.
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
 
     /// Chromium switches every wubble process gets.
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)];
@@ -121,21 +132,41 @@ struct Linux;
 
 #[cfg(target_os = "linux")]
 impl Platform for Linux {
-    /// Skia on Vulkan in the GPU process. Without it, on NVIDIA's proprietary
-    /// driver (615, Wayland and X11 alike) Chromium's GL path cannot draw into
-    /// the dmabuf shared images that windowless shared-texture mode exports
-    /// ("Unable to initialize SkSurface" / "OzoneImageBacking::ProduceSkiaGanesh
-    /// failed to create GL representation") and no accelerated paint arrives.
-    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("enable-features", Some("Vulkan"))];
+    /// No entries: CEF 156.0.30's defaults hand over real, tiled dmabufs on
+    /// NVIDIA's proprietary driver (CEF #4237, #4313). `enable-features=Vulkan`,
+    /// which CEF 154 needed there, makes every 156 frame empty, so it is gone.
+    /// Each entry added here gets a comment saying which bug it works around.
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
 
-    /// `$XDG_DATA_HOME/wubble/cef`, else `$HOME/.local/share/wubble/cef`.
-    /// Relative values are ignored, as the XDG Base Directory spec requires.
-    fn user_cache_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-        let absolute = |key| env(key).map(PathBuf::from).filter(|p| p.is_absolute());
-        let data_home = absolute("XDG_DATA_HOME")
-            .or_else(|| absolute("HOME").map(|home| home.join(".local/share")))?;
-        Some(data_home.join("wubble/cef"))
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        xdg_data_dir(env)
     }
+}
+
+/// An environment variable holding an absolute path; relative values are
+/// ignored, as the XDG Base Directory spec requires.
+fn absolute_var(env: &dyn Fn(&str) -> Option<OsString>, key: &str) -> Option<PathBuf> {
+    env(key).map(PathBuf::from).filter(|p| p.is_absolute())
+}
+
+/// Linux: `$XDG_DATA_HOME/wubble`, else `$HOME/.local/share/wubble`.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn xdg_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let data_home = absolute_var(env, "XDG_DATA_HOME")
+        .or_else(|| absolute_var(env, "HOME").map(|home| home.join(".local/share")))?;
+    Some(data_home.join("wubble"))
+}
+
+/// macOS: `$HOME/Library/Application Support/wubble`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn mac_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    absolute_var(env, "HOME").map(|home| home.join("Library/Application Support/wubble"))
+}
+
+/// Windows: `%APPDATA%\wubble` (the roaming application data folder).
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn windows_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    absolute_var(env, "APPDATA").map(|appdata| appdata.join("wubble"))
 }
 
 /// Placeholder until macOS and Windows get their own impl.
@@ -146,8 +177,12 @@ struct Unsupported;
 impl Platform for Unsupported {
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
 
-    fn user_cache_dir(_env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-        None
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        if cfg!(target_os = "macos") {
+            mac_data_dir(env)
+        } else {
+            windows_data_dir(env)
+        }
     }
 }
 
@@ -183,7 +218,7 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
 }
 
 /// Identifies one view owned by the [`Engine`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId(usize);
 
 /// What the host must do with its single-shot pump timer after a pump call.
@@ -205,6 +240,20 @@ pub struct PumpOutcome {
     pub events: Vec<(ViewId, WebEvent)>,
 }
 
+/// What the engine does with a page's requests (dialogs, menus,
+/// permissions, file choosers, auth, certificate errors, download paths).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RequestMode {
+    /// Answer each with its default at once (cancel, deny, decline) and do
+    /// not report it: for a host that draws no prompts yet, so no page waits
+    /// on one.
+    #[default]
+    DefaultNow,
+    /// Report each as a [`PageEvent`] and wait for the host's answer (or the
+    /// view closing, which answers the default).
+    AskHost,
+}
+
 /// The running CEF process. Drive it only from the thread that started it.
 pub struct Engine {
     /// Open views, each counted in `state` until it reports itself closed.
@@ -218,6 +267,9 @@ pub struct Engine {
     runtime: Option<CefRuntime>,
     state: State,
     pump: PumpState,
+    requests: RequestMode,
+    /// What the views reported beyond navigation, until the host takes it.
+    page_events: PageQueue<ViewId>,
 }
 
 impl Engine {
@@ -241,6 +293,8 @@ impl Engine {
             runtime: Some(runtime),
             state: State::Uninitialised,
             pump: PumpState::default(),
+            requests: RequestMode::default(),
+            page_events: PageQueue::default(),
         };
         engine.apply(Event::Initialised);
         Ok(engine)
@@ -285,6 +339,25 @@ impl Engine {
         self.views.push((id, view));
         self.apply(Event::BrowserOpened);
         Ok(id)
+    }
+
+    /// How page requests are answered from now on. Requests already
+    /// reported keep waiting for the host.
+    pub fn set_request_mode(&mut self, mode: RequestMode) {
+        self.requests = mode;
+    }
+
+    /// The page events every view reported since the last call, in order.
+    /// Bounded: the oldest droppable notices (console output, intermediate
+    /// progress, find, IME, popup moves) are dropped when the host falls
+    /// behind ([`Self::page_events_dropped`]); requests and events that
+    /// start or end something never are.
+    pub fn take_page_events(&mut self) -> Vec<(ViewId, PageEvent)> {
+        self.page_events.take()
+    }
+
+    pub fn page_events_dropped(&self) -> u64 {
+        self.page_events.dropped()
     }
 
     /// The view, until it has closed.
@@ -407,9 +480,13 @@ impl Engine {
         let mut events = Vec::new();
         let before = self.views.len();
         let mut gone_cpu = 0;
+        let (mode, page_events) = (self.requests, &mut self.page_events);
         self.views.retain_mut(|(id, view)| {
-            let (new, closed) = view.drain_events();
+            let (new, page, closed) = view.drain_events(mode);
             events.extend(new.into_iter().map(|event| (*id, event)));
+            for event in page {
+                page_events.push(*id, event);
+            }
             if closed {
                 gone_cpu += view.cpu_fallback_frames().unwrap_or(0);
             }
@@ -462,35 +539,68 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_enables_vulkan_for_shared_textures() {
+    fn linux_adds_no_chromium_switches() {
         let cef = cef_config(&config("/opt/wubble", "/c"));
-        assert_eq!(
-            cef.command_line_switches,
-            vec![("enable-features".to_string(), Some("Vulkan".to_string()))]
-        );
+        assert!(cef.command_line_switches.is_empty());
     }
 
-    #[cfg(target_os = "linux")]
+    fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let vars: Vec<(String, String)> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |key| {
+            vars.iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
     #[test]
-    fn linux_cache_dir_follows_xdg() {
-        let dir = |vars: &[(&str, &str)]| {
-            Linux::user_cache_dir(&|key| {
-                vars.iter()
-                    .find(|(k, _)| *k == key)
-                    .map(|(_, v)| OsString::from(v))
-            })
-        };
+    fn linux_data_dir_follows_xdg() {
+        let dir = |vars: &[(&str, &str)]| xdg_data_dir(&lookup(vars));
         let home = ("HOME", "/home/u");
         assert_eq!(
             dir(&[("XDG_DATA_HOME", "/data"), home]),
-            Some(PathBuf::from("/data/wubble/cef"))
+            Some(PathBuf::from("/data/wubble"))
         );
-        let fallback = Some(PathBuf::from("/home/u/.local/share/wubble/cef"));
+        let fallback = Some(PathBuf::from("/home/u/.local/share/wubble"));
         assert_eq!(dir(&[home]), fallback);
         assert_eq!(dir(&[("XDG_DATA_HOME", "rel"), home]), fallback);
         assert_eq!(dir(&[("XDG_DATA_HOME", ""), home]), fallback);
         assert_eq!(dir(&[("HOME", "rel")]), None);
         assert_eq!(dir(&[]), None);
+    }
+
+    #[test]
+    fn mac_and_windows_data_dirs() {
+        assert_eq!(
+            mac_data_dir(&lookup(&[("HOME", "/Users/u")])),
+            Some(PathBuf::from("/Users/u/Library/Application Support/wubble"))
+        );
+        assert_eq!(mac_data_dir(&lookup(&[("HOME", "rel")])), None);
+        assert_eq!(mac_data_dir(&lookup(&[])), None);
+        // `Path::is_absolute` is per host OS, so test a path absolute on both.
+        let appdata = if cfg!(windows) {
+            r"C:\Users\u\AppData\Roaming"
+        } else {
+            "/appdata"
+        };
+        assert_eq!(
+            windows_data_dir(&lookup(&[("APPDATA", appdata)])),
+            Some(PathBuf::from(appdata).join("wubble"))
+        );
+        assert_eq!(windows_data_dir(&lookup(&[("APPDATA", "rel")])), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_cef_cache_keeps_its_old_place() {
+        let vars = lookup(&[("HOME", "/home/u")]);
+        assert_eq!(
+            Linux::user_data_dir(&vars).map(|d| d.join(CEF_CACHE)),
+            Some(PathBuf::from("/home/u/.local/share/wubble/cef"))
+        );
     }
 
     #[test]

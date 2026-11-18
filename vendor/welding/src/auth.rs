@@ -22,52 +22,29 @@
 //! Nothing here logs a username or a password, and no event carries one. The
 //! credentials the host supplies go straight to CEF.
 
-#[cfg(feature = "cef-runtime")]
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Identifies one auth challenge until it is answered.
-pub type AuthId = u32;
+pub type AuthId = crate::held::RequestId;
 
+// wubble change: the challenges are held in a `crate::held::Held`, which
+// gives each one an id, a cap and a default answer (cancel) when the browser
+// closes or the table is dropped.
 #[derive(Default)]
 pub(crate) struct AuthChallenges {
-    inner: Mutex<Inner>,
-}
-
-#[derive(Default)]
-struct Inner {
-    next_id: AuthId,
     /// Whether the host asked to answer challenges itself.
-    enabled: bool,
+    enabled: Mutex<bool>,
     #[cfg(feature = "cef-runtime")]
-    pending: HashMap<AuthId, cef::AuthCallback>,
+    pub(crate) pending: Mutex<crate::held::Held<cef::AuthCallback>>,
 }
 
 impl AuthChallenges {
     pub(crate) fn set_enabled(&self, enabled: bool) {
-        self.inner.lock().unwrap().enabled = enabled;
+        *self.enabled.lock().unwrap() = enabled;
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
-        self.inner.lock().unwrap().enabled
-    }
-
-    /// Allocate the id the host will answer with.
-    pub(crate) fn next_id(&self) -> AuthId {
-        let mut inner = self.inner.lock().unwrap();
-        inner.next_id = inner.next_id.wrapping_add(1);
-        inner.next_id
-    }
-
-    /// Hold a challenge until the host answers it.
-    #[cfg(feature = "cef-runtime")]
-    pub(crate) fn hold(&self, id: AuthId, callback: cef::AuthCallback) {
-        self.inner.lock().unwrap().pending.insert(id, callback);
-    }
-
-    #[cfg(feature = "cef-runtime")]
-    pub(crate) fn take(&self, id: AuthId) -> Option<cef::AuthCallback> {
-        self.inner.lock().unwrap().pending.remove(&id)
+        *self.enabled.lock().unwrap()
     }
 
     /// How many challenges are waiting on the host. A number that only grows
@@ -78,7 +55,7 @@ impl AuthChallenges {
     pub(crate) fn outstanding(&self) -> usize {
         #[cfg(feature = "cef-runtime")]
         {
-            return self.inner.lock().unwrap().pending.len();
+            return self.pending.lock().unwrap().outstanding();
         }
         #[cfg(not(feature = "cef-runtime"))]
         0
@@ -98,23 +75,6 @@ mod tests {
         );
         a.set_enabled(true);
         assert!(a.is_enabled());
-    }
-
-    #[test]
-    fn ids_are_unique_per_challenge() {
-        let a = AuthChallenges::default();
-        let ids: Vec<_> = (0..4).map(|_| a.next_id()).collect();
-        let mut sorted = ids.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "ids repeated: {ids:?}");
-    }
-
-    #[test]
-    fn zero_is_never_handed_out() {
-        // 0 reads like "no challenge" in host code, so it is skipped.
-        let a = AuthChallenges::default();
-        assert_ne!(a.next_id(), 0);
     }
 
     #[test]

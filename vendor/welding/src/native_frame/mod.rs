@@ -68,6 +68,10 @@ pub enum NativeFrame {
     MetalTextureRef(MetalTextureRef),
     /// Linux: native pixmap / DMABUF planes from accelerated OSR.
     DmaBufImage(DmaBufImage),
+    /// Linux (wubble change): a weld-owned copy of a DMABUF frame, made and
+    /// waited for inside `OnAcceleratedPaint`, so CEF may reuse its pooled
+    /// buffer as soon as the callback returns. Importing it is a no-op.
+    Copied(ImportedTexture),
     /// CPU bitmap from `OnPaint` (requires `feature = "cpu-paint-fallback"`).
     #[cfg(feature = "cpu-paint-fallback")]
     CpuBitmap(CpuBitmap),
@@ -79,6 +83,7 @@ pub enum NativeFrameKind {
     Dx12SharedTexture,
     MetalTextureRef,
     DmaBufImage,
+    Copied,
     #[cfg(feature = "cpu-paint-fallback")]
     CpuBitmap,
 }
@@ -89,6 +94,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(_) => NativeFrameKind::Dx12SharedTexture,
             NativeFrame::MetalTextureRef(_) => NativeFrameKind::MetalTextureRef,
             NativeFrame::DmaBufImage(_) => NativeFrameKind::DmaBufImage,
+            NativeFrame::Copied(_) => NativeFrameKind::Copied,
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(_) => NativeFrameKind::CpuBitmap,
         }
@@ -99,6 +105,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(frame) => frame.size(),
             NativeFrame::MetalTextureRef(frame) => frame.size(),
             NativeFrame::DmaBufImage(frame) => frame.size(),
+            NativeFrame::Copied(frame) => PhysicalSize::new(frame.size.width, frame.size.height),
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(frame) => frame.size,
         }
@@ -109,6 +116,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(frame) => frame.format(),
             NativeFrame::MetalTextureRef(frame) => frame.format(),
             NativeFrame::DmaBufImage(frame) => frame.format(),
+            NativeFrame::Copied(frame) => frame.format,
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(frame) => frame.format,
         }
@@ -125,6 +133,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(frame) => frame.generation(),
             NativeFrame::MetalTextureRef(frame) => frame.generation(),
             NativeFrame::DmaBufImage(frame) => frame.generation(),
+            NativeFrame::Copied(frame) => frame.generation,
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(frame) => frame.generation,
         }
@@ -522,6 +531,8 @@ impl HostWgpuContext {
 
 // ── Import result ─────────────────────────────────────────────────────────────
 
+// wubble change: `Debug`, for `NativeFrame::Copied`.
+#[derive(Debug)]
 pub struct ImportedTexture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -567,6 +578,8 @@ mod vulkan_dmabuf;
 
 #[cfg(target_os = "linux")]
 pub use vulkan_dmabuf::build_dmabuf_capable_device;
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_dmabuf::copy_dmabuf_to_owned;
 
 #[cfg(windows)]
 pub use dx12::D3d11CallbackFrameCopier;
@@ -592,6 +605,7 @@ impl WgpuTextureImporter {
             NativeFrame::Dx12SharedTexture(f) => Self::import_dx12(f, ctx),
             NativeFrame::MetalTextureRef(f) => Self::import_metal(f, ctx),
             NativeFrame::DmaBufImage(f) => Self::import_vulkan(f, ctx),
+            NativeFrame::Copied(f) => Ok(f),
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(f) => Self::upload_cpu(f, ctx),
         }

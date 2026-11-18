@@ -1,25 +1,63 @@
-import { Colors, Sizes, Spacing, Type } from "../tokens.slint";
-import { RowBase } from "row-base.slint";
+// The "New tab" row under the tab list. Written for wubble from the design repo's web chrome
+// (src/wubble/browser/browser.css `.wb-newtab`, `.wb-newtab-rail`, xuckless/the-wallpaper-project
+// @ 6c840da): the Slint port has no new-tab row. It is a tab row's twin: 36 high, the plus on the
+// same 24 px grid as the tab icons, hover fill and the 0.97 press of the port's TabRow.
 
-export component NewTabRow inherits RowBase {
-    HorizontalLayout {
-        padding-left: Spacing.s3;
-        spacing: Spacing.s3;
+import { Palette, Chrome, Radius, Fonts, Type, Motion } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { Icon, IconPaths } from "icon.slint";
 
-        Text {
-            text: "+";
-            color: Colors.haze;
-            font-size: Type.title;
-            width: Sizes.glyph;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+export component NewTabRow inherits Rectangle {
+    in property <bool> compact: false;
+    callback activated();
+
+    height: Chrome.row;
+
+    body := Rectangle {
+        x: root.compact ? (root.width - self.width) / 2 : 0px;
+        width: root.compact ? Shell.rail-item : root.width;
+        border-radius: Radius.sm;
+        background: ta.has-hover ? Palette.shell : transparent;
+        animate background {
+            duration: Motion.pressRelease;
+            easing: Motion.easeOut;
+        }
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: ta.pressed ? Motion.pressScale : 1;
+        animate transform-scale {
+            duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
+            easing: Motion.easeOut;
         }
 
-        Text {
-            text: "New tab";
-            color: Colors.mist;
-            font-size: Type.body;
-            vertical-alignment: center;
+        ta := TouchArea {
+            clicked => {
+                root.activated();
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: root.compact ? (body.width - Shell.tab-icon) / 2 : Shell.side-grid;
+            spacing: Shell.side-grid;
+            Rectangle {
+                width: Shell.tab-icon;
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    path: IconPaths.plus;
+                    size: Shell.new-tab-icon;
+                    weight: Shell.new-tab-stroke;
+                    tint: ta.has-hover ? Palette.ink : Palette.mist;
+                }
+            }
+            if !root.compact: Text {
+                text: "New tab";
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: ta.has-hover ? Palette.ink : Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                font-weight: Type.body.weight;
+            }
         }
     }
 }

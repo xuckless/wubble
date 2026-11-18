@@ -4,18 +4,25 @@ mod cli;
 mod host;
 mod input;
 mod nav_smoke;
+mod perform;
+mod persist;
 mod pixels;
+mod profile;
+mod session_smoke;
 mod shell;
 mod tabs_smoke;
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use cli::{Command, Smoke};
+use cli::{Command, Phase, Smoke};
 use host::{Checks, Host};
 use nav_smoke::NavSmoke;
+use persist::{Loaded, StoreClient};
+use profile::Profile;
+use session_smoke::SessionSmoke;
 use slint::ComponentHandle;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use tabs_smoke::TabsSmoke;
@@ -55,7 +62,7 @@ fn main() -> ExitCode {
         Err(e) => e.exit(),
     };
     match command {
-        Command::Run { url } => match run(Mode::Browse { url }, EngineConfig::from_current_exe()) {
+        Command::Run { url, profile } => match browse(url, profile) {
             Ok(Outcome { failure: None, .. }) => ExitCode::SUCCESS,
             Ok(Outcome {
                 failure: Some(e), ..
@@ -65,7 +72,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::Boot) => match with_smoke_cache(smoke_boot) {
+        Command::Smoke(Smoke::Boot) => match with_smoke_dir(|config, _| smoke_boot(config)) {
             Ok(()) => {
                 println!("smoke: cef boot ok {}", app::version());
                 ExitCode::SUCCESS
@@ -75,54 +82,92 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::Nav) => match with_smoke_cache(|config| run(Mode::Nav, config)) {
-            Ok(Outcome {
-                failure: None,
-                nav_title: Some(title),
-                ..
-            }) => {
-                println!("smoke: nav ok {title}");
+        Command::Smoke(Smoke::Nav) => {
+            match with_smoke_dir(|config, dir| run(Mode::Nav, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    nav_title: Some(title),
+                    ..
+                }) => {
+                    println!("smoke: nav ok {title}");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: nav FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: nav FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Tabs) => {
+            match with_smoke_dir(|config, dir| run(Mode::Tabs, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    tabs_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: tabs ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: tabs FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: tabs FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Session) => match smoke_session() {
+            Ok(()) => {
+                println!("smoke: session ok");
                 ExitCode::SUCCESS
             }
-            Ok(Outcome {
-                failure: Some(e), ..
-            })
-            | Err(e) => {
-                eprintln!("smoke: nav FAILED: {e}");
-                ExitCode::FAILURE
-            }
-            Ok(Outcome { .. }) => {
-                eprintln!("smoke: nav FAILED: the window closed first");
+            Err(e) => {
+                eprintln!("smoke: session FAILED: {e}");
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::Tabs) => match with_smoke_cache(|config| run(Mode::Tabs, config)) {
-            Ok(Outcome {
-                failure: None,
-                tabs_passed: true,
-                ..
-            }) => {
-                println!("smoke: tabs ok");
-                ExitCode::SUCCESS
+        Command::Smoke(Smoke::SessionPhase { phase, profile }) => {
+            let outcome = with_smoke_dir(|config, _| run(Mode::Session(phase), config, &profile));
+            match outcome {
+                Ok(Outcome {
+                    failure: None,
+                    session_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: session phase {phase:?} ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: session phase {phase:?} FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: session phase {phase:?} FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
             }
-            Ok(Outcome {
-                failure: Some(e), ..
-            })
-            | Err(e) => {
-                eprintln!("smoke: tabs FAILED: {e}");
-                ExitCode::FAILURE
-            }
-            Ok(Outcome { .. }) => {
-                eprintln!("smoke: tabs FAILED: the window closed first");
-                ExitCode::FAILURE
-            }
-        },
+        }
         Command::Smoke(Smoke::Frames { frames, url }) => {
             let mode = Mode::Frames {
                 frames: frames.get().into(),
                 url,
             };
-            match with_smoke_cache(|config| run(mode, config)) {
+            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
                 Ok(Outcome { stats, failure, .. }) => {
                     println!("{}", stats.summary_line());
                     match failure {
@@ -162,19 +207,56 @@ fn drain(engine: &mut Engine) {
     }
 }
 
-/// Runs `f` with a fresh per-process CEF cache, so concurrent smokes (lanes,
-/// CI jobs, a smoke next to an open browser) never share CEF's singleton
-/// lock, and removes it afterwards.
-fn with_smoke_cache<T>(
-    f: impl FnOnce(Result<EngineConfig, EngineError>) -> Result<T, Box<dyn std::error::Error>>,
-) -> Result<T, Box<dyn std::error::Error>> {
-    let cache_dir = std::env::temp_dir().join(format!("wubble-smoke-{}", std::process::id()));
+/// The browser on its profile: `--profile`, else the per-user one, which
+/// also holds CEF's cache.
+fn browse(
+    url: Option<String>,
+    profile: Option<PathBuf>,
+) -> Result<Outcome, Box<dyn std::error::Error>> {
+    let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
-        cache_dir: cache_dir.clone(),
+        cache_dir: profile.cef_cache(),
         ..config
     });
-    let result = f(config);
-    remove_cache(&cache_dir);
+    run(Mode::Browse { url }, config, &profile.dir)
+}
+
+/// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
+/// cache inside it, so concurrent smokes (lanes, CI jobs, a smoke next to an
+/// open browser) never share CEF's singleton lock, and it doubles as the
+/// smoke's throwaway profile.
+fn with_smoke_dir<T>(
+    f: impl FnOnce(Result<EngineConfig, EngineError>, &Path) -> Result<T, Box<dyn std::error::Error>>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    let dir = std::env::temp_dir().join(format!("wubble-smoke-{}", std::process::id()));
+    let profile = Profile { dir: dir.clone() };
+    let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
+        cache_dir: profile.cef_cache(),
+        ..config
+    });
+    let result = f(config, &dir);
+    remove_cache(&dir);
+    result
+}
+
+/// `--smoke session`: both phases, each its own process (CEF starts once per
+/// process), on one temporary profile.
+fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
+    let exe = std::env::current_exe()?;
+    let profile = std::env::temp_dir().join(format!("wubble-session-{}", std::process::id()));
+    let result = (|| {
+        for phase in ["session-phase=1", "session-phase=2"] {
+            let status = std::process::Command::new(&exe)
+                .args(["--smoke", phase, "--profile"])
+                .arg(&profile)
+                .status()?;
+            if !status.success() {
+                return Err(format!("{phase} exited with {status}").into());
+            }
+        }
+        Ok(())
+    })();
+    remove_cache(&profile);
     result
 }
 
@@ -205,6 +287,8 @@ struct Outcome {
     nav_title: Option<String>,
     /// `--smoke tabs` reached its end.
     tabs_passed: bool,
+    /// The `--smoke session` phase reached its end.
+    session_passed: bool,
 }
 
 /// What the window is for.
@@ -217,6 +301,8 @@ enum Mode {
     Nav,
     /// `--smoke tabs`.
     Tabs,
+    /// One phase of `--smoke session`.
+    Session(Phase),
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
@@ -356,7 +442,6 @@ fn connect_shell(window: &AppWindow) {
             command(Cmd::SwitchSpace(s));
         }
     });
-    window.on_close_tab_requested(|| with_host(Host::close_visible_tab));
     let weak = window.as_weak();
     window.on_new_tab_requested(move || {
         if let Some(window) = weak.upgrade() {
@@ -378,12 +463,21 @@ fn connect_shell(window: &AppWindow) {
     window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
 }
 
-/// Opens the window with one web view on the shared GPU device and runs the
-/// Slint loop until the window closes or the smoke ends.
+/// Opens the window on the session stored in `profile` (one web view, the
+/// visible tab's, on the shared GPU device) and runs the Slint loop until
+/// the window closes or the smoke ends, then saves the session.
 fn run(
     mode: Mode,
     config: Result<EngineConfig, EngineError>,
+    profile: &Path,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
+    // The database loads while the GPU and CEF start.
+    let (store, loaded) = StoreClient::spawn(
+        Profile {
+            dir: profile.into(),
+        }
+        .db_path(),
+    );
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
     slint::BackendSelector::new()
@@ -403,15 +497,18 @@ fn run(
         check_pixels: false,
         nav_smoke: None,
         tabs_smoke: None,
+        session_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    // `url` is opened in a new tab; without one a fresh profile gets the
+    // bundled page and a restored session opens nothing new.
     let (url, checks) = match mode {
-        Mode::Browse { url } => (url.unwrap_or_else(bundled), none),
+        Mode::Browse { url } => (url, none),
         Mode::Frames { frames, url } => {
             // Only the bundled page has known colours to check against.
             let check_pixels = url.is_none();
             (
-                url.unwrap_or_else(bundled),
+                Some(url.unwrap_or_else(bundled)),
                 Checks {
                     quit_after: Some(frames),
                     check_pixels,
@@ -420,16 +517,23 @@ fn run(
             )
         }
         Mode::Nav => (
-            bundled(),
+            Some(bundled()),
             Checks {
                 nav_smoke: Some(NavSmoke::default()),
                 ..none
             },
         ),
         Mode::Tabs => (
-            bundled(),
+            Some(bundled()),
             Checks {
                 tabs_smoke: Some(TabsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Session(phase) => (
+            None,
+            Checks {
+                session_smoke: Some(SessionSmoke::new(phase)),
                 ..none
             },
         ),
@@ -441,11 +545,25 @@ fn run(
         pump_scheduler: Some(pump_scheduler()),
         ..config?
     })?;
+    // A database that cannot be opened or loaded is left alone: the
+    // browser runs without persistence (the store thread has ended).
+    let loaded = loaded
+        .recv()
+        .unwrap_or_else(|_| Err("the store thread ended".into()));
+    let loaded = loaded.unwrap_or_else(|e| {
+        eprintln!("wubble: running without a saved session: {e}");
+        Loaded::default()
+    });
+    let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
     connect_input(&window);
     connect_shell(&window);
+    wubble_ui::window::wire(&window);
     install_shell_driver(&window)?;
-    let host = Host::new(engine, &window, gpu.presenter(), url, checks);
+    if loaded.settings.ui.compact {
+        window.invoke_toggle_sidebar();
+    }
+    let host = Host::new(engine, &window, gpu.presenter(), loaded, store, url, checks);
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
     let lifecycle = slint::Timer::default();
@@ -456,9 +574,12 @@ fn run(
     }
 
     let result = window.run();
+    // Read while the window still exists.
+    let ui = host::ui_state(&window);
     drop(lifecycle);
     drop(window);
     let mut host = HOST.take().ok_or("the host went missing")?;
+    host.shutdown(ui);
     drop(host.timer);
     drain(&mut host.engine);
     result?;
@@ -467,5 +588,6 @@ fn run(
         failure: host.failure.take().map(Into::into),
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
+        session_passed: host.session_passed,
     })
 }

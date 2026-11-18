@@ -1,8 +1,8 @@
-//! The Slint `GlassTier` mirrors `wubble_gfx::glass::Tier`. The host is the
+//! The Slint `GlassTier` mirrors `wubble_gfx::scene::Tier`. The host is the
 //! one crate that sees both, so the mirror is checked here. Exhaustive both
 //! ways: adding a variant on either side fails to compile.
 
-use wubble_gfx::glass::Tier;
+use wubble_gfx::scene::Tier;
 use wubble_ui::GlassTier;
 
 #[test]

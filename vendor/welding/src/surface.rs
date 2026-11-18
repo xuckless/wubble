@@ -12,7 +12,8 @@ use crate::{
     auth::AuthId,
     downloads::DownloadId,
     error::WeldError,
-    native_frame::{HostWgpuContext, ImportedTexture},
+    held::RequestId,
+    native_frame::{HostWgpuContext, ImportedTexture, NativeFrame},
     permissions::{PermissionId, PermissionKind},
 };
 
@@ -97,6 +98,13 @@ pub enum CefSurfaceEvent {
     /// CEF has destroyed the browser (`OnBeforeClose`); no further callbacks
     /// follow for it. wubble change, see `WUBBLE_CHANGES.md`.
     BrowserClosed,
+    /// A key-down the page did not handle (CEF `OnKeyEvent`), as CEF reports
+    /// it: its Windows key code and `EVENTFLAG_*` modifiers. wubble change,
+    /// see `WUBBLE_CHANGES.md`.
+    KeyUnhandled {
+        windows_key_code: i32,
+        modifiers: u32,
+    },
 }
 
 /// The strings of a list CEF passed to a callback, which still owns it.
@@ -154,7 +162,22 @@ mod web_event_tests {
         events.push(CefSurfaceEvent::Navigation(NavigationEvent::FaviconUrlsChanged {
             urls: vec!["https://example.com/favicon.ico".into()],
         }));
+        events.push(CefSurfaceEvent::Navigation(NavigationEvent::JsDialogRequested {
+            id: 1,
+            kind: JsDialogKind::Confirm,
+            origin_url: "https://example.com/".into(),
+            message: "sure?".into(),
+            default_text: String::new(),
+        }));
+        events.push(CefSurfaceEvent::Navigation(NavigationEvent::FullscreenChanged {
+            fullscreen: true,
+        }));
+        events.push(CefSurfaceEvent::Navigation(NavigationEvent::RequestsDismissed { ids: vec![2] }));
         events.push(CefSurfaceEvent::BrowserClosed);
+        events.push(CefSurfaceEvent::KeyUnhandled {
+            windows_key_code: 0x52,
+            modifiers: 1 << 2,
+        });
 
         assert!(matches!(
             events.poll(),
@@ -183,7 +206,33 @@ mod web_event_tests {
             Some(CefSurfaceEvent::Navigation(NavigationEvent::FaviconUrlsChanged { urls }))
                 if urls == ["https://example.com/favicon.ico"]
         ));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::Navigation(NavigationEvent::JsDialogRequested {
+                id: 1,
+                kind: JsDialogKind::Confirm,
+                ..
+            }))
+        ));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::Navigation(NavigationEvent::FullscreenChanged {
+                fullscreen: true
+            }))
+        ));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::Navigation(NavigationEvent::RequestsDismissed { ids }))
+                if ids == [2]
+        ));
         assert!(matches!(events.poll(), Some(CefSurfaceEvent::BrowserClosed)));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::KeyUnhandled {
+                windows_key_code: 0x52,
+                modifiers: 4,
+            })
+        ));
         assert!(events.poll().is_none());
     }
 
@@ -701,6 +750,12 @@ pub struct CefSurfaceConfig {
     /// The server's suggested filename is reduced to its final component, so
     /// it cannot place a file outside this directory.
     pub download_dir: Option<std::path::PathBuf>,
+    /// Ask the host where each download goes instead of using
+    /// [`Self::download_dir`]: each one arrives as
+    /// [`NavigationEvent::DownloadRequested`] and starts once the host calls
+    /// [`CefSurfaceProducer::answer_download_path`]. Off by default.
+    /// wubble change, see `WUBBLE_CHANGES.md`.
+    pub ask_download_path: bool,
     /// Display scale factor, e.g. `2.0` for a 2x HiDPI screen.
     ///
     /// `initial_size` and every other size and coordinate in this API stay in
@@ -733,6 +788,7 @@ impl Default for CefSurfaceConfig {
             handle_permission_requests: false,
             handle_auth_challenges: false,
             download_dir: None,
+            ask_download_path: false,
             scale_factor: 1.0,
             windowless_frame_rate: 60,
             external_begin_frame: false,
@@ -941,6 +997,87 @@ pub trait CefSurfaceProducer {
         ))
     }
 
+    /// Answer a permission request kind by kind: everything in `granted` is
+    /// allowed, the rest denied. A prompt request is accepted only when every
+    /// kind it asked for is granted (CEF takes one answer for the set); a
+    /// media request gets the granted subset. wubble change.
+    fn answer_permission(
+        &mut self,
+        _id: PermissionId,
+        _granted: &[PermissionKind],
+    ) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "permission requests are not wired for this producer",
+        ))
+    }
+
+    /// Answer a JS dialog ([`NavigationEvent::JsDialogRequested`]): `accept`
+    /// is OK / leave page, `text` the prompt's input. wubble change.
+    fn answer_dialog(&mut self, _id: RequestId, _accept: bool, _text: &str) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "JS dialogs are not wired for this producer",
+        ))
+    }
+
+    /// Answer a file chooser ([`NavigationEvent::FileChooserRequested`]);
+    /// `None` cancels it. wubble change.
+    fn answer_file_chooser(
+        &mut self,
+        _id: RequestId,
+        _paths: Option<&[std::path::PathBuf]>,
+    ) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "file choosers are not wired for this producer",
+        ))
+    }
+
+    /// Proceed past or cancel a certificate error
+    /// ([`NavigationEvent::CertificateError`]). wubble change.
+    fn answer_certificate(&mut self, _id: RequestId, _proceed: bool) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "certificate errors are not wired for this producer",
+        ))
+    }
+
+    /// Run one of the menu's commands, or dismiss the menu with `None`
+    /// ([`NavigationEvent::ContextMenuRequested`]). CEF runs the standard
+    /// commands itself. wubble change.
+    fn answer_context_menu(&mut self, _id: RequestId, _command: Option<i32>) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "context menus are not wired for this producer",
+        ))
+    }
+
+    /// Where a download goes ([`NavigationEvent::DownloadRequested`]); `None`
+    /// cancels it. The path is used as given. wubble change.
+    fn answer_download_path(
+        &mut self,
+        _id: RequestId,
+        _path: Option<&std::path::Path>,
+    ) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "asking for download paths is not wired for this producer",
+        ))
+    }
+
+    /// Whether a page may start a drag out of the view. Off by default: CEF
+    /// waits for the host to finish every drag it starts, so a host without
+    /// a native drag loop must refuse them (`StartDragging` returns false).
+    /// wubble change.
+    fn set_drag_source(&mut self, _enabled: bool) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "drag and drop is not wired for this producer",
+        ))
+    }
+
+    /// The newest popup-widget frame without importing it, with its placement
+    /// (physical pixels, relative to the view; it may extend outside it).
+    /// `None` while no popup is showing or nothing new was painted. Linux and
+    /// macOS; Windows imports popups inside the paint callback. wubble change.
+    fn acquire_native_popup(&mut self) -> Option<(NativeFrame, PopupRect)> {
+        None
+    }
+
     /// Answer an auth challenge.
     ///
     /// Neither the username nor the password is logged or kept; both go
@@ -966,11 +1103,9 @@ pub trait CefSurfaceProducer {
 
     /// Ask CEF to cancel, pause or resume a download.
     ///
-    /// The request is recorded and applied on that download's next update,
-    /// because CEF's download callback is callback-scoped like the paint
-    /// handles and does not exist between updates. Updates arrive promptly
-    /// while a transfer is running; a request for a download that has already
-    /// finished is simply never applied.
+    /// wubble change: applied at once through the newest callback CEF handed
+    /// over for it; an error for a download welding is not steering (not
+    /// started, finished, or cancelled).
     fn cancel_download(&mut self, _id: DownloadId) -> Result<(), WeldError> {
         Err(WeldError::PlatformUnsupported(
             "downloads are not wired for this producer",
@@ -1592,7 +1727,15 @@ pub enum NavigationEvent {
     ///
     /// `x` and `y` are **physical** pixels, like every other coordinate in this
     /// API. CEF reports them in DIP; they are converted on the way out.
+    ///
+    /// wubble change: CEF's own menu model is kept and the menu is held
+    /// until the host answers with [`CefSurfaceProducer::answer_context_menu`]
+    /// quoting `id` (a command from `items`, or `None` to dismiss). While it
+    /// waits, CEF ignores further right-clicks; it is dismissed when the
+    /// browser closes.
     ContextMenuRequested {
+        /// wubble change: the menu waiting on the host.
+        id: RequestId,
         x: i32,
         y: i32,
         /// What was under the cursor: page, frame, link, media, selection,
@@ -1606,6 +1749,24 @@ pub enum NavigationEvent {
         page_url: String,
         /// Any selected text under the cursor.
         selection_text: String,
+        /// wubble change: the URL of the frame clicked in.
+        frame_url: String,
+        /// wubble change: the media element clicked on.
+        media: ContextMenuMedia,
+        /// wubble change: whether the click was on an image that has loaded.
+        has_image_contents: bool,
+        /// wubble change: whether the click was in an editable field.
+        editable: bool,
+        /// wubble change: CEF's `cef_context_menu_edit_state_flags_t`
+        /// (can undo, redo, cut, copy, paste, delete, select all, ...).
+        edit_flags: u32,
+        /// wubble change: the misspelled word under the cursor, if any, and
+        /// the spellchecker's suggestions for it.
+        misspelled_word: String,
+        suggestions: Vec<String>,
+        /// wubble change: CEF's default menu for this click, invisible items
+        /// left out, submenus at most [`MAX_MENU_DEPTH`] deep.
+        items: Vec<MenuItem>,
     },
     /// A page asked for something Chromium gates behind a prompt: the
     /// camera, the microphone, the user's location, notifications.
@@ -1690,6 +1851,391 @@ pub enum NavigationEvent {
         source: String,
         line: i32,
     },
+    /// A download wants a destination (only with
+    /// [`CefSurfaceConfig::ask_download_path`]). Answer with
+    /// [`CefSurfaceProducer::answer_download_path`] quoting `id`;
+    /// `DownloadStarted` follows an accepted one. wubble change.
+    DownloadRequested {
+        id: RequestId,
+        download: DownloadId,
+        url: String,
+        suggested_filename: String,
+        total_bytes_expected: Option<u64>,
+    },
+    /// `alert`, `confirm`, `prompt` or a `beforeunload` confirmation. The
+    /// page waits until [`CefSurfaceProducer::answer_dialog`] quotes `id`.
+    /// wubble change.
+    JsDialogRequested {
+        id: RequestId,
+        kind: JsDialogKind,
+        origin_url: String,
+        message: String,
+        /// The prompt's default input; empty for the other kinds.
+        default_text: String,
+    },
+    /// CEF closed a context menu the host had not answered yet (navigation,
+    /// or CEF cancelled it); the host should close what it shows. wubble
+    /// change.
+    ContextMenuDismissed,
+    /// CEF dropped any JS dialog still showing (navigation, or a dialog
+    /// closed); the host should close what it shows. wubble change.
+    JsDialogsReset,
+    /// `<input type=file>` and `showOpenFilePicker`: answer with
+    /// [`CefSurfaceProducer::answer_file_chooser`]. wubble change.
+    FileChooserRequested {
+        id: RequestId,
+        mode: FileChooserMode,
+        title: String,
+        default_path: std::path::PathBuf,
+        accept: Vec<AcceptFilter>,
+    },
+    /// A certificate error on `url`. The load waits until
+    /// [`CefSurfaceProducer::answer_certificate`]; the default is cancel.
+    /// `error_code` is Chromium's net error (`ERR_CERT_*`, -200 to -219).
+    /// wubble change.
+    CertificateError {
+        id: RequestId,
+        url: String,
+        error_code: i32,
+    },
+    /// The page entered or left fullscreen (`requestFullscreen`). Under
+    /// windowless rendering the host grows the view itself. wubble change.
+    FullscreenChanged { fullscreen: bool },
+    /// A download was interrupted (network, disk or server error;
+    /// Chromium's `interrupt_reason`, `cef_download_interrupt_reason_t`).
+    /// Not an end: [`CefSurfaceProducer::resume_download`] may retry it,
+    /// CEF may resume it itself (progress follows), and
+    /// [`CefSurfaceProducer::cancel_download`] ends it. wubble change.
+    DownloadInterrupted { id: DownloadId, reason: i32 },
+    /// CEF gave up on these held requests without an answer (the page they
+    /// came from was left, or a permission prompt was dismissed): close
+    /// whatever shows them; answering them now fails. wubble change.
+    RequestsDismissed { ids: Vec<RequestId> },
+}
+
+/// Which JS dialog a page opened. wubble change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsDialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+    /// "Leave site?" before a navigation, or before a reload.
+    BeforeUnload { is_reload: bool },
+}
+
+impl JsDialogKind {
+    /// The answer a dismissed or dropped dialog of this kind gets: cancel,
+    /// except a `beforeunload`, which leaves the page so a host that dropped
+    /// it never traps the user there.
+    pub fn default_accept(self) -> bool {
+        matches!(self, Self::BeforeUnload { .. })
+    }
+}
+
+/// Map CEF's `cef_jsdialog_type_t`. An unknown value is treated as an alert,
+/// the one kind whose answer carries nothing. wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) fn js_dialog_kind(raw: i64) -> JsDialogKind {
+    match raw {
+        1 => JsDialogKind::Confirm,
+        2 => JsDialogKind::Prompt,
+        _ => JsDialogKind::Alert,
+    }
+}
+
+/// What a file chooser picks. wubble change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileChooserMode {
+    Open,
+    OpenMultiple,
+    OpenFolder,
+    Save,
+}
+
+/// Map CEF's `cef_file_dialog_mode_t`. wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) fn file_chooser_mode(raw: i64) -> FileChooserMode {
+    match raw {
+        1 => FileChooserMode::OpenMultiple,
+        2 => FileChooserMode::OpenFolder,
+        3 => FileChooserMode::Save,
+        _ => FileChooserMode::Open,
+    }
+}
+
+/// One entry of a file chooser's `accept`: a MIME type (`image/*`) or an
+/// extension (`.png`), the extensions it stands for, and a description
+/// (both possibly empty). wubble change.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AcceptFilter {
+    pub filter: String,
+    pub extensions: Vec<String>,
+    pub description: String,
+}
+
+/// Zip CEF's three parallel lists. CEF documents them as equal length; a
+/// shorter one is padded with empty values rather than dropping filters.
+/// Extensions arrive `;`-separated. wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) fn accept_filters(
+    filters: Vec<String>,
+    extensions: Vec<String>,
+    descriptions: Vec<String>,
+) -> Vec<AcceptFilter> {
+    let mut extensions = extensions.into_iter();
+    let mut descriptions = descriptions.into_iter();
+    filters
+        .into_iter()
+        .map(|filter| AcceptFilter {
+            filter,
+            extensions: extensions
+                .next()
+                .unwrap_or_default()
+                .split(';')
+                .filter(|e| !e.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            description: descriptions.next().unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// The media element a right-click landed on. wubble change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ContextMenuMedia {
+    #[default]
+    None,
+    Image,
+    Video,
+    Audio,
+    Canvas,
+    File,
+    Plugin,
+}
+
+/// Map CEF's `cef_context_menu_media_type_t`. wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) fn context_menu_media(raw: i64) -> ContextMenuMedia {
+    match raw {
+        1 => ContextMenuMedia::Image,
+        2 => ContextMenuMedia::Video,
+        3 => ContextMenuMedia::Audio,
+        4 => ContextMenuMedia::Canvas,
+        5 => ContextMenuMedia::File,
+        6 => ContextMenuMedia::Plugin,
+        _ => ContextMenuMedia::None,
+    }
+}
+
+/// One entry of CEF's context menu. wubble change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuItem {
+    /// What [`CefSurfaceProducer::answer_context_menu`] takes. 0 for a
+    /// separator.
+    pub command_id: i32,
+    pub label: String,
+    pub kind: MenuItemKind,
+    pub enabled: bool,
+    pub checked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuItemKind {
+    Command,
+    Check,
+    Radio,
+    Separator,
+    SubMenu(Vec<MenuItem>),
+}
+
+/// Submenus deeper than this are left out of
+/// [`NavigationEvent::ContextMenuRequested`]. wubble change.
+pub const MAX_MENU_DEPTH: usize = 2;
+
+/// Read access to a menu model; CEF's `MenuModel`, or a fake in tests.
+/// wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) trait MenuSource: Sized {
+    fn count(&self) -> usize;
+    /// `cef_menu_item_type_t` as an integer.
+    fn kind_at(&self, index: usize) -> i64;
+    fn command_id_at(&self, index: usize) -> i32;
+    fn label_at(&self, index: usize) -> String;
+    fn visible_at(&self, index: usize) -> bool;
+    fn enabled_at(&self, index: usize) -> bool;
+    fn checked_at(&self, index: usize) -> bool;
+    fn sub_menu_at(&self, index: usize) -> Option<Self>;
+}
+
+/// The visible items of `menu`, submenus nested at most `MAX_MENU_DEPTH`
+/// deep (`depth` is the current level, 1 for the top), with separators that
+/// hiding left at either end or next to each other removed. wubble change.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+pub(crate) fn menu_items<M: MenuSource>(menu: &M, depth: usize) -> Vec<MenuItem> {
+    let mut items: Vec<MenuItem> = Vec::new();
+    for index in 0..menu.count() {
+        if !menu.visible_at(index) {
+            continue;
+        }
+        let kind = match menu.kind_at(index) {
+            1 => MenuItemKind::Command,
+            2 => MenuItemKind::Check,
+            3 => MenuItemKind::Radio,
+            4 => MenuItemKind::Separator,
+            5 if depth < MAX_MENU_DEPTH => match menu.sub_menu_at(index) {
+                Some(sub) => MenuItemKind::SubMenu(menu_items(&sub, depth + 1)),
+                None => continue,
+            },
+            _ => continue,
+        };
+        let separator = kind == MenuItemKind::Separator;
+        if separator
+            && items
+                .last()
+                .is_none_or(|last| last.kind == MenuItemKind::Separator)
+        {
+            continue;
+        }
+        items.push(MenuItem {
+            command_id: if separator { 0 } else { menu.command_id_at(index) },
+            label: if separator { String::new() } else { menu.label_at(index) },
+            kind,
+            enabled: menu.enabled_at(index),
+            checked: menu.checked_at(index),
+        });
+    }
+    if items.last().is_some_and(|last| last.kind == MenuItemKind::Separator) {
+        items.pop();
+    }
+    items
+}
+
+#[cfg(test)]
+mod request_vocabulary_tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct Fake(Vec<(i64, i32, &'static str, bool, Option<Fake>)>);
+
+    impl MenuSource for Fake {
+        fn count(&self) -> usize {
+            self.0.len()
+        }
+        fn kind_at(&self, i: usize) -> i64 {
+            self.0[i].0
+        }
+        fn command_id_at(&self, i: usize) -> i32 {
+            self.0[i].1
+        }
+        fn label_at(&self, i: usize) -> String {
+            self.0[i].2.into()
+        }
+        fn visible_at(&self, i: usize) -> bool {
+            self.0[i].3
+        }
+        fn enabled_at(&self, _: usize) -> bool {
+            true
+        }
+        fn checked_at(&self, _: usize) -> bool {
+            false
+        }
+        fn sub_menu_at(&self, i: usize) -> Option<Self> {
+            self.0[i].4.clone()
+        }
+    }
+
+    const SEP: (i64, i32, &str, bool, Option<Fake>) = (4, 0, "", true, None);
+
+    fn labels(items: &[MenuItem]) -> Vec<&str> {
+        items.iter().map(|i| i.label.as_str()).collect()
+    }
+
+    #[test]
+    fn js_dialog_types_decode() {
+        assert_eq!(js_dialog_kind(0), JsDialogKind::Alert);
+        assert_eq!(js_dialog_kind(1), JsDialogKind::Confirm);
+        assert_eq!(js_dialog_kind(2), JsDialogKind::Prompt);
+        assert_eq!(js_dialog_kind(77), JsDialogKind::Alert);
+    }
+
+    #[test]
+    fn only_beforeunload_defaults_to_accept() {
+        for kind in [JsDialogKind::Alert, JsDialogKind::Confirm, JsDialogKind::Prompt] {
+            assert!(!kind.default_accept(), "{kind:?}");
+        }
+        assert!(JsDialogKind::BeforeUnload { is_reload: false }.default_accept());
+        assert!(JsDialogKind::BeforeUnload { is_reload: true }.default_accept());
+    }
+
+    #[test]
+    fn file_chooser_modes_decode() {
+        let got: Vec<_> = (0..5).map(file_chooser_mode).collect();
+        use FileChooserMode::*;
+        assert_eq!(got, vec![Open, OpenMultiple, OpenFolder, Save, Open]);
+    }
+
+    #[test]
+    fn accept_filters_zip_and_pad() {
+        let got = accept_filters(
+            vec!["image/*".into(), ".txt".into()],
+            vec![".png;.jpg".into()],
+            vec!["Images".into(), "Text".into(), "extra".into()],
+        );
+        assert_eq!(
+            got,
+            vec![
+                AcceptFilter {
+                    filter: "image/*".into(),
+                    extensions: vec![".png".into(), ".jpg".into()],
+                    description: "Images".into(),
+                },
+                AcceptFilter {
+                    filter: ".txt".into(),
+                    extensions: vec![],
+                    description: "Text".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn hidden_items_and_dangling_separators_are_left_out() {
+        let menu = Fake(vec![
+            SEP,
+            (1, 100, "Back", true, None),
+            (1, 101, "Forward", false, None),
+            SEP,
+            SEP,
+            (1, 102, "Reload", true, None),
+            (1, 132, "View source", false, None),
+            SEP,
+        ]);
+        let items = menu_items(&menu, 1);
+        assert_eq!(labels(&items), vec!["Back", "", "Reload"]);
+        assert_eq!(items[1].kind, MenuItemKind::Separator);
+        assert_eq!(items[1].command_id, 0);
+        assert_eq!(items[2].command_id, 102);
+    }
+
+    #[test]
+    fn submenus_nest_up_to_the_depth_cap() {
+        let deepest = Fake(vec![(1, 3, "three", true, None)]);
+        let deeper = Fake(vec![(1, 2, "two", true, None), (5, 0, "more", true, Some(deepest))]);
+        let menu = Fake(vec![(1, 1, "one", true, None), (5, 0, "sub", true, Some(deeper))]);
+        let items = menu_items(&menu, 1);
+        assert_eq!(labels(&items), vec!["one", "sub"]);
+        let MenuItemKind::SubMenu(sub) = &items[1].kind else { panic!("{items:?}") };
+        // Level 2 is shown, its own submenu (level 3) is not.
+        assert_eq!(labels(sub), vec!["two"]);
+    }
+
+    #[test]
+    fn media_types_decode() {
+        assert_eq!(context_menu_media(0), ContextMenuMedia::None);
+        assert_eq!(context_menu_media(1), ContextMenuMedia::Image);
+        assert_eq!(context_menu_media(6), ContextMenuMedia::Plugin);
+        assert_eq!(context_menu_media(99), ContextMenuMedia::None);
+    }
 }
 
 #[cfg(test)]

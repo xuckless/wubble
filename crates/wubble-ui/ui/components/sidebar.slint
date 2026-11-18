@@ -1,111 +1,314 @@
-import { Colors, Radius, Sizes, Spacing } from "../tokens.slint";
-import { Glass } from "glass.slint";
-import { TabItem, SpaceItem } from "model.slint";
-import { ScrollView } from "std-widgets.slint";
+// The sidebar. Adapted from the port's `Sidebar` (design repo src/wubble/slint/components.slint,
+// @source slint-sidebar, xuckless/the-wallpaper-project @ 6c840da): the same Rust-driven tab rows,
+// stretching indicator and drawn Space icons. wubble changes: it binds to wubble's models (ids,
+// pinned tabs, Spaces), and gains what the port's Sidebar lacks and the web chrome has
+// (browser.css, chrome.tsx, tabs.tsx): the address pill, the favourites grid, the Space name,
+// the new-tab row, the Space capsule and a scrolling tab list. Layout follows browser.css: padding
+// 6, 12 between groups, rows on a 40 px pitch.
+//
+// Everything that moves is driven from Rust (wubble_core::tabs + scroller via wubble_ui::driver):
+//   row-y / row-scale  each row's spring (slot·pitch) and drag lift, in list coordinates
+//   indicator-*        the Follow spring, its stretch and transform origin
+//   capsule-*          the Space capsule (SpaceSwitcher): offset along the switcher, stretch
+//   scroll-y, thumb-*  the tab list's scroller
+// Nothing here tweens a value Rust owns; only hover fades and the 0.97 press use `animate`.
+
+import { Palette, Radius, Spacing, Chrome, Fonts, Type, Motion } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { TabRow, OverlapLayer, WubbleScroller, SpaceIcon } from "../components.slint";
+import { TabItem, SpaceItem, Origin } from "model.slint";
 import { AddressPill } from "address-pill.slint";
-import { PinnedTile } from "pinned-tile.slint";
-import { TabRow } from "tab-row.slint";
+import { FavGrid } from "fav-grid.slint";
 import { NewTabRow } from "new-tab-row.slint";
-import { SpaceDot } from "space-dot.slint";
+import { WindowLights } from "window-lights.slint";
 
-export component Sidebar inherits Glass {
-    in property <string> address-host: "wubble.dev";
-    in property <string> address-path: "/start";
-    in property <[TabItem]> pinned-tabs: [
-        { id: 1, title: "Mail", glyph: "M", tint: Colors.sky },
-        { id: 2, title: "Docs", glyph: "D", tint: Colors.mint },
-    ];
-    in property <[TabItem]> tabs: [
-        { id: 3, title: "Welcome", glyph: "W", tint: Colors.lilac },
-        { id: 4, title: "A tab with a very long title that must elide", glyph: "A", tint: Colors.blush },
-        { id: 5, title: "Search", glyph: "S", tint: Colors.coral },
-    ];
-    in property <[SpaceItem]> spaces: [
-        { id: 1, name: "Home", tint: Colors.sky },
-        { id: 2, name: "Work", tint: Colors.lilac },
-        { id: 3, name: "Play", tint: Colors.mint },
-    ];
-    in property <int> active-tab-id: 3;
-    in property <int> active-space-id: 1;
-    // Position of the active-Space ring, in dot pitches. Driven by a spring.
-    in property <float> space-indicator: 0;
+export component Sidebar inherits Rectangle {
+    in property <string> address-host;
+    in property <string> address-path;
+    in property <[TabItem]> pinned-tabs;
+    in property <[TabItem]> tabs;
+    in property <[SpaceItem]> spaces;
+    in property <int> active-tab-id: -1;
+    in property <int> active-space-id: -1;
+    // the indicator's row (TabRows::active); -1 when the active tab is not a row
+    in property <int> selected: -1;
+    in property <[length]> row-y;
+    in property <[float]> row-scale;
+    in property <length> indicator-y: 0px;
+    in property <float> indicator-stretch: 1;
+    in property <float> indicator-origin: 0.3;
+    in property <bool> compact: false;       // the 56px icon rail
+    // The window can be moved by dragging the sidebar's glass (off in full screen).
+    in property <bool> window-movable: true;
+    // The address pill is loading a page (see AddressPill).
+    in property <bool> address-loading: false;
+    out property <float> address-sheen: pill.sheen;
+    // Where the command bar grows from when opened from the pill / the new-tab row, in window
+    // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
+    out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
+    out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
+    in property <bool> rows-shown: true;     // flip to replay the row entrance
+    // the tab list's scroller
+    in property <length> scroll-y;
+    in property <length> thumb-top;
+    in property <length> thumb-height;
+    in property <bool> thumb-visible;
+    out property <length> scroll-viewport: list.viewport-height;
+    out property <length> scroll-content: list.content-height;
+    // the Space capsule; `space-index` is the active Space's row in `spaces`, -1 for none
+    in property <int> space-index: -1;
+    in property <length> capsule-offset: 0px;
+    in property <float> capsule-stretch: 1;
+    in property <float> capsule-origin: 0.3;
 
-    callback tab-activated(int);
-    callback tab-closed(int);
+    callback tab-press(int, length);
+    callback tab-drag(length);
+    callback tab-release(int);
+    callback tab-closed(int);        // tab id
+    callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
-    callback space-switched(int);
+    callback window-close-requested();
+    callback window-minimise-requested();
+    callback window-toggle-fullscreen-requested();
     callback address-activated();
+    callback space-switched(int);    // space id
+    callback scroll-wheel(length);
+    callback scroll-touch-down(length);
+    callback scroll-touch-move(length);
+    callback scroll-touch-up();
+    callback scroll-thumb-down(length);
+    callback scroll-thumb-move(length);
+    callback scroll-thumb-up();
+    // row geometry for Rust: slot i sits at i × pitch
+    out property <length> pitch: Chrome.row + Chrome.rowGap;
+    property <length> list-height: max(0px, root.tabs.length * root.pitch - Chrome.rowGap);
+
+    background: transparent;   // the glass under it is the window's (the wgpu GlassSurface later)
+    clip: true;
+
+    // Under everything: the glass the controls do not claim moves the window (the design's
+    // `wb-side-top` drag, wider). Slint's WindowMoveArea starts the compositor's move.
+    WindowMoveArea {
+        enabled: root.window-movable;
+    }
 
     VerticalLayout {
-        padding: Spacing.s3;
+        padding: Shell.side-pad;
         spacing: Spacing.s3;
 
-        AddressPill {
+        // .wb-side-top: 30 high, lights 10 in (centred on the rail)
+        Rectangle {
+            height: Shell.side-top;
+            WindowLights {
+                x: root.compact ? (parent.width - self.width) / 2 : Shell.side-grid;
+                y: (parent.height - self.height) / 2;
+                compact: root.compact;
+                close-requested => {
+                    root.window-close-requested();
+                }
+                minimise-requested => {
+                    root.window-minimise-requested();
+                }
+                toggle-fullscreen-requested => {
+                    root.window-toggle-fullscreen-requested();
+                }
+            }
+        }
+
+        pill := AddressPill {
+            loading: root.address-loading;
             host: root.address-host;
             path: root.address-path;
+            compact: root.compact;
             activated => {
                 root.address-activated();
             }
         }
 
-        // Positioned by hand so tiles beyond Sizes.pinned-max take no space.
-        Rectangle {
-            height: Sizes.pinned-tile;
-            for tab[index] in root.pinned-tabs: PinnedTile {
-                x: index * (Sizes.pinned-tile + Spacing.s2);
-                visible: index < Sizes.pinned-max;
-                item: tab;
-                active: tab.id == root.active-tab-id;
-                activated => {
-                    root.tab-activated(tab.id);
-                }
+        if root.pinned-tabs.length > 0: FavGrid {
+            tabs: root.pinned-tabs;
+            active-tab-id: root.active-tab-id;
+            compact: root.compact;
+            activated(id) => {
+                root.tab-activated(id);
             }
         }
 
-        ScrollView {
+        // .wb-space-name
+        if !root.compact && root.space-index >= 0 && root.space-index < root.spaces.length: Rectangle {
+            height: Shell.space-name-height;
+            Text {
+                x: Shell.side-grid;
+                y: Shell.space-name-top;
+                width: parent.width - Shell.side-grid * 2;
+                height: parent.height - Shell.space-name-top;
+                text: root.spaces[root.space-index].name;
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.label.size;
+                font-weight: Type.label.weight;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        // .wb-tabs-wrap: the list, then the new-tab row right under it
+        VerticalLayout {
             vertical-stretch: 1;
-            VerticalLayout {
-                spacing: Spacing.s1;
-                alignment: start;
-                for tab in root.tabs: TabRow {
-                    item: tab;
-                    active: tab.id == root.active-tab-id;
-                    activated => {
-                        root.tab-activated(tab.id);
+            spacing: Chrome.rowGap;
+            alignment: start;
+
+            list := WubbleScroller {
+                // as tall as the rows, less when the sidebar runs out of room (then it scrolls)
+                min-height: 0px;
+                preferred-height: root.list-height;
+                max-height: root.list-height;
+                vertical-stretch: 1;
+                content-y: root.scroll-y;
+                thumb-top: root.thumb-top;
+                thumb-height: root.thumb-height;
+                thumb-visible: root.thumb-visible;
+                wheel(d) => {
+                    root.scroll-wheel(d);
+                }
+                touch-down(y) => {
+                    root.scroll-touch-down(y);
+                }
+                touch-move(y) => {
+                    root.scroll-touch-move(y);
+                }
+                touch-up => {
+                    root.scroll-touch-up();
+                }
+                thumb-down(y) => {
+                    root.scroll-thumb-down(y);
+                }
+                thumb-move(y) => {
+                    root.scroll-thumb-move(y);
+                }
+                thumb-up => {
+                    root.scroll-thumb-up();
+                }
+
+                rows := Rectangle {
+                    height: root.list-height;
+                    // on the rail rows are 40 wide and centred (.wb-tabs-rail)
+                    property <length> row-w: root.compact ? Shell.rail-item : self.width;
+                    property <length> row-x: (self.width - self.row-w) / 2;
+
+                    // the indicator: under the rows, stretched along y about `origin`, squashed along x
+                    property <length> h: Chrome.row * root.indicator-stretch;
+                    property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
+                    Rectangle {
+                        x: (parent.width - parent.w) / 2;
+                        y: root.indicator-y + (Chrome.row - parent.h) * root.indicator-origin;
+                        width: parent.w;
+                        height: parent.h;
+                        border-radius: Radius.sm;
+                        background: Palette.rim;
+                        visible: root.selected >= 0 && root.selected < root.tabs.length;
                     }
-                    closed => {
-                        root.tab-closed(tab.id);
+
+                    for tab[i] in root.tabs: Rectangle {
+                        // the spring position from Rust; before the first frame, the slot
+                        x: parent.row-x;
+                        y: i < root.row-y.length ? root.row-y[i] : i * root.pitch;
+                        width: parent.row-w;
+                        height: Chrome.row;
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-scale: i < root.row-scale.length ? root.row-scale[i] : 1;
+                        OverlapLayer {
+                            shown: root.rows-shown;
+                            index: i;
+                            width: parent.width;
+                            height: parent.height;
+                            TabRow {
+                                width: parent.width;
+                                tab: tab;
+                                selected: tab.id == root.active-tab-id;
+                                compact: root.compact;
+                                press(y) => {
+                                    root.tab-press(i, y);
+                                }
+                                drag(y) => {
+                                    root.tab-drag(y);
+                                }
+                                release => {
+                                    root.tab-release(i);
+                                }
+                                close => {
+                                    root.tab-closed(tab.id);
+                                }
+                            }
+                        }
                     }
+                }
+            }
+
+            new-tab := NewTabRow {
+                compact: root.compact;
+                activated => {
+                    root.new-tab-requested();
                 }
             }
         }
 
-        NewTabRow {
-            activated => {
-                root.new-tab-requested();
-            }
-        }
+        // Space switcher (.wb-spaces): the drawn icons, in a row, or a column on the rail, with
+        // the capsule that follows the active one and stretches between them
+        switcher := Rectangle {
+            property <length> pitch: Shell.space-tile + Shell.space-gap;
+            property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
+            height: root.compact ? self.span : Shell.space-tile;
 
-        // Dots sit on a fixed pitch so the ring can slide between them.
-        Rectangle {
-            height: Sizes.space-dot;
             Rectangle {
-                width: max(0px, root.spaces.length * Sizes.space-pitch - Spacing.s3);
-                x: (parent.width - self.width) / 2;
-                for space[index] in root.spaces: SpaceDot {
-                    x: index * Sizes.space-pitch;
-                    item: space;
-                    activated => {
-                        root.space-switched(space.id);
+                x: root.compact ? (parent.width - self.width) / 2 : 0px;
+                width: root.compact ? Shell.space-tile : parent.span;
+                // along the axis: stretched about `origin`; across it: squashed
+                property <length> along: Shell.space-tile * root.capsule-stretch;
+                property <length> across: Shell.space-tile / Math.sqrt(root.capsule-stretch);
+                property <length> at: root.capsule-offset + (Shell.space-tile - self.along) * root.capsule-origin;
+                Rectangle {
+                    x: root.compact ? (Shell.space-tile - parent.across) / 2 : parent.at;
+                    y: root.compact ? parent.at : (Shell.space-tile - parent.across) / 2;
+                    width: root.compact ? parent.across : parent.along;
+                    height: root.compact ? parent.along : parent.across;
+                    border-radius: Shell.control-radius;
+                    background: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : transparent;
+                    opacity: Shell.capsule-alpha;
+                    animate background {
+                        duration: Shell.capsule-colour-ms;
+                        easing: Motion.easeInOut;
                     }
                 }
-                Rectangle {
-                    x: root.space-indicator * Sizes.space-pitch;
-                    width: Sizes.space-dot;
-                    height: Sizes.space-dot;
-                    border-radius: Radius.pill;
-                    border-width: Sizes.ring-width;
-                    border-color: Colors.ink;
+
+                for space[i] in root.spaces: Rectangle {
+                    x: root.compact ? 0px : i * switcher.pitch;
+                    y: root.compact ? i * switcher.pitch : 0px;
+                    width: Shell.space-tile;
+                    height: Shell.space-tile;
+                    border-radius: Shell.control-radius;
+                    transform-origin: { x: self.width / 2, y: self.height / 2 };
+                    transform-scale: ta.pressed ? Motion.pressScale : 1;
+                    animate transform-scale {
+                        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
+                        easing: Motion.easeOut;
+                    }
+                    ta := TouchArea {
+                        clicked => {
+                            root.space-switched(space.id);
+                        }
+                    }
+                    // the model has no icon per Space yet: the three drawn icons in turn
+                    SpaceIcon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        width: Shell.space-glyph;
+                        height: Shell.space-glyph;
+                        // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
+                        stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
+                        kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
+                        tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                    }
                 }
             }
         }

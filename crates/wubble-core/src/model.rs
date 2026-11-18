@@ -159,21 +159,18 @@ pub struct Model {
     /// The time hides are stamped with: set at creation and by `Command::Tick`,
     /// so `apply` itself never reads a clock.
     clock: Instant,
+    /// The memory pressure of the last `Command::Tick`. With `clock` it lets a
+    /// hidden tab that becomes eligible for sleep between ticks be judged at once.
+    pressure: Pressure,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
     next_container: u32,
 }
 
-impl Default for Model {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Model {
-    /// One empty Space and the Default container.
-    pub fn new() -> Self {
+    /// One empty Space and the Default container; `now` starts the model's clock.
+    pub fn new(now: Instant) -> Self {
         let space = Space {
             id: SpaceId(0),
             name: "Space 1".into(),
@@ -191,7 +188,8 @@ impl Model {
                 name: "Default".into(),
             }],
             tabs: BTreeMap::new(),
-            clock: Instant::now(),
+            clock: now,
+            pressure: Pressure::None,
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
@@ -199,14 +197,20 @@ impl Model {
         }
     }
 
+    /// The model's clock: the time it was started with or last ticked to.
+    pub fn clock(&self) -> Instant {
+        self.clock
+    }
+
     /// Rebuilds a model from stored parts. The id counters are not part of the parts: they are
     /// derived as the highest id in use plus one, so new ids never collide with restored ones.
-    /// The result must pass [`Model::check`].
+    /// `now` starts the model's clock. The result must pass [`Model::check`].
     pub fn from_parts(
         spaces: Vec<Space>,
         containers: Vec<Container>,
         tabs: Vec<Tab>,
         active_space: SpaceId,
+        now: Instant,
     ) -> Result<Model, String> {
         let next = |max: Option<u64>, floor: u64| max.map_or(floor, |m| m + 1);
         let next_folder = spaces
@@ -227,7 +231,8 @@ impl Model {
             containers,
             tabs: tabs.into_iter().map(|t| (t.id, t)).collect(),
             active_space,
-            clock: Instant::now(),
+            clock: now,
+            pressure: Pressure::None,
         };
         m.check()?;
         Ok(m)
@@ -302,6 +307,33 @@ impl Model {
     pub fn visible_tab(&self) -> Option<TabId> {
         self.space_idx(self.active_space)
             .and_then(|si| self.spaces[si].active)
+    }
+
+    /// The tab `delta` steps from the visible one in the active Space's
+    /// order (pinned first), wrapping at both ends.
+    pub fn tab_step(&self, delta: isize) -> Option<TabId> {
+        cycle(&self.order(self.active_space), self.visible_tab(), delta)
+    }
+
+    /// The active Space's tab at `index` (0-based) in its order, if there is one.
+    pub fn nth_tab(&self, index: usize) -> Option<TabId> {
+        self.order(self.active_space).get(index).copied()
+    }
+
+    /// The active Space's last tab in its order.
+    pub fn last_tab(&self) -> Option<TabId> {
+        self.order(self.active_space).last().copied()
+    }
+
+    /// The Space `delta` steps from the active one, wrapping at both ends.
+    pub fn space_step(&self, delta: isize) -> Option<SpaceId> {
+        let ids: Vec<SpaceId> = self.spaces.iter().map(|s| s.id).collect();
+        cycle(&ids, Some(self.active_space), delta)
+    }
+
+    /// The Space at `index` (0-based), if there is one.
+    pub fn nth_space(&self, index: usize) -> Option<SpaceId> {
+        self.spaces.get(index).map(|s| s.id)
     }
 
     /// Tabs whose page is alive (not discarded): each has one engine view.
@@ -807,6 +839,33 @@ impl Model {
         fx
     }
 
+    /// Judges again, by the last tick's time and pressure, every tab that the
+    /// command made eligible for sleep (it stopped being busy, or was unpinned),
+    /// so it is not left awake until a next tick that may never come. Runs after
+    /// [`Self::settle`], so a tab the same command brings into view is Active by
+    /// then and the tick leaves it alone.
+    fn rejudge(&mut self, before: &BTreeMap<TabId, Lifecycle>) -> Vec<Effect> {
+        let eligible: Vec<TabId> = before
+            .iter()
+            .filter(|&(id, was)| {
+                self.tabs.get(id).is_some_and(|t| {
+                    let now = t.lifecycle;
+                    (was.activity == Activity::Busy && now.activity == Activity::Idle)
+                        || (was.pin == Pin::Pinned && now.pin == Pin::Unpinned)
+                })
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        let tick = lifecycle::Event::Tick {
+            now: self.clock,
+            pressure: self.pressure,
+        };
+        eligible
+            .into_iter()
+            .flat_map(|tab| self.lifecycle(tab, tick))
+            .collect()
+    }
+
     fn set_url(&mut self, tab: TabId, url: &str) -> bool {
         match self.tabs.get_mut(&tab) {
             Some(t) => {
@@ -833,7 +892,8 @@ fn step(tab: TabId, state: Lifecycle, event: lifecycle::Event) -> (Lifecycle, Ve
 /// Tab lifecycles are settled at the end: whatever the command, the result has
 /// exactly one visible, Active tab (if any), every other tab hidden, and the
 /// lifecycle effects of getting there appended as [`Effect::Lifecycle`]
-/// (closed tabs first, then hides, then the show).
+/// (closed tabs first, then hides, then the show, then the sleep of any hidden
+/// tab the command made eligible for it).
 pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
     let before: BTreeMap<TabId, Lifecycle> =
         m.tabs.iter().map(|(&id, t)| (id, t.lifecycle)).collect();
@@ -927,6 +987,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),
         Command::Tick { now, pressure } => {
             m.clock = now;
+            m.pressure = pressure;
             let ids: Vec<TabId> = m.tabs.keys().copied().collect();
             ids.into_iter()
                 .flat_map(|t| m.lifecycle(t, lifecycle::Event::Tick { now, pressure }))
@@ -934,7 +995,22 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
     };
     fx.extend(m.settle(&before));
+    fx.extend(m.rejudge(&before));
     (m, fx)
+}
+
+/// The item `delta` places from `current` in `items`, wrapping. Without a
+/// current item (or one not in `items`) the first step lands on the first
+/// item going forward and on the last going back.
+fn cycle<T: Copy + PartialEq>(items: &[T], current: Option<T>, delta: isize) -> Option<T> {
+    let len = isize::try_from(items.len()).ok().filter(|&n| n > 0)?;
+    let from = current.and_then(|c| items.iter().position(|&i| i == c));
+    let index = match from {
+        Some(i) => (i as isize + delta).rem_euclid(len),
+        None if delta >= 0 => 0,
+        None => len - 1,
+    };
+    items.get(index as usize).copied()
 }
 
 #[cfg(test)]

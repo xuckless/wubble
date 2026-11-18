@@ -12,6 +12,7 @@
 //! top-level tabs and folders share one position sequence per Space (their index in `items`).
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use wubble_core::lifecycle::{Activity, Lifecycle, Pin};
 use wubble_core::model::Model;
@@ -38,8 +39,9 @@ fn tab_id(t: TabId) -> Result<i64> {
 }
 
 impl Store {
-    /// The saved session; `Model::new()` if none was ever saved.
-    pub async fn load_session(&self) -> Result<Model> {
+    /// The saved session; `Model::new(now)` if none was ever saved. `now` starts
+    /// the model's clock.
+    pub async fn load_session(&self, now: Instant) -> Result<Model> {
         let c = &self.conn;
         let mut containers = vec![];
         let mut rows = c
@@ -52,7 +54,7 @@ impl Store {
             });
         }
 
-        let default_tint = Model::new().spaces[0].tint;
+        let default_tint = Model::new(now).spaces[0].tint;
         let mut spaces: Vec<Space> = vec![];
         let mut space_at: HashMap<SpaceId, usize> = HashMap::new();
         let mut rows = c
@@ -79,7 +81,7 @@ impl Store {
             });
         }
         if spaces.is_empty() {
-            return Ok(Model::new());
+            return Ok(Model::new(now));
         }
 
         // Top-level items per Space with their shared position, merged after both are read.
@@ -186,7 +188,7 @@ impl Store {
         for t in tabs.iter_mut().filter(|t| Some(t.id) == shown) {
             t.lifecycle.liveness = Liveness::Active;
         }
-        Model::from_parts(spaces, containers, tabs, active_space).map_err(Error::Corrupt)
+        Model::from_parts(spaces, containers, tabs, active_space, now).map_err(Error::Corrupt)
     }
 
     /// Replace the stored session with `model`, in one transaction. A model that fails
@@ -197,22 +199,32 @@ impl Store {
     pub async fn save_session(&mut self, model: &Model) -> Result<()> {
         model.check().map_err(Error::Corrupt)?;
         let tx = self.conn.transaction().await?;
-        // Children first; foreign keys are enforced per statement.
-        for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
-            tx.execute(format!("DELETE FROM {table}"), ()).await?;
-        }
-        write_containers(&tx, model).await?;
-        write_spaces(&tx, model).await?;
-        write_folders(&tx, model).await?;
-        write_tabs(&tx, model).await?;
-        tx.execute(
-            "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
-            (model.active_space.0,),
-        )
-        .await?;
+        write_model(&tx, model).await?;
         tx.commit().await?;
         Ok(())
     }
+}
+
+/// Delete the whole stored session and write `model` in its place, inside `tx`. The caller has
+/// run `Model::check`. Shared by `save_session` and `apply_import`.
+pub(crate) async fn write_model(
+    tx: &turso::transaction::Transaction<'_>,
+    model: &Model,
+) -> Result<()> {
+    // Children first; foreign keys are enforced per statement.
+    for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
+        tx.execute(format!("DELETE FROM {table}"), ()).await?;
+    }
+    write_containers(tx, model).await?;
+    write_spaces(tx, model).await?;
+    write_folders(tx, model).await?;
+    write_tabs(tx, model).await?;
+    tx.execute(
+        "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
+        (model.active_space.0,),
+    )
+    .await?;
+    Ok(())
 }
 
 async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
@@ -311,6 +323,12 @@ mod tests {
 
     const D: ContainerId = ContainerId::DEFAULT;
 
+    /// The time every model here is built or loaded at.
+    fn now() -> Instant {
+        static NOW: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        *NOW.get_or_init(Instant::now)
+    }
+
     fn run<F: std::future::Future>(f: F) -> F::Output {
         pollster::block_on(f)
     }
@@ -333,7 +351,7 @@ mod tests {
     /// container override, per-Space active tabs, and the second Space shown.
     fn rich() -> Model {
         let ap = |m, c| apply(m, c).0;
-        let mut m = Model::new();
+        let mut m = Model::new(now());
         m = ap(
             m,
             Command::NewContainer {
@@ -424,10 +442,17 @@ mod tests {
                 t.lifecycle.liveness = Liveness::Active;
             }
         }
-        Model::from_parts(m.spaces.clone(), m.containers.clone(), tabs, m.active_space).unwrap()
+        Model::from_parts(
+            m.spaces.clone(),
+            m.containers.clone(),
+            tabs,
+            m.active_space,
+            now(),
+        )
+        .unwrap()
     }
 
-    /// Model equality without the clock, which differs between any two models.
+    /// Model equality without the clock and last tick, which the store does not keep.
     #[track_caller]
     fn assert_same(a: &Model, b: &Model) {
         assert_eq!(a.spaces, b.spaces);
@@ -440,7 +465,10 @@ mod tests {
     fn empty_store_loads_a_new_model() {
         run(async {
             let store = Store::open_in_memory().await.unwrap();
-            assert_same(&store.load_session().await.unwrap(), &Model::new());
+            assert_same(
+                &store.load_session(now()).await.unwrap(),
+                &Model::new(now()),
+            );
         });
     }
 
@@ -459,7 +487,7 @@ mod tests {
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
             store.save_session(&m).await.unwrap();
-            assert_same(&store.load_session().await.unwrap(), &restored(&m));
+            assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
         });
     }
 
@@ -468,7 +496,7 @@ mod tests {
         run(async {
             let mut store = Store::open_in_memory().await.unwrap();
             store.save_session(&rich()).await.unwrap();
-            let loaded = store.load_session().await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
             let (m, fx) = apply(
                 loaded,
                 Command::NewTab {
@@ -489,9 +517,9 @@ mod tests {
         run(async {
             let mut store = Store::open_in_memory().await.unwrap();
             store.save_session(&rich()).await.unwrap();
-            let small = new_tab(Model::new(), "https://x.test", None, None);
+            let small = new_tab(Model::new(now()), "https://x.test", None, None);
             store.save_session(&small).await.unwrap();
-            assert_same(&store.load_session().await.unwrap(), &restored(&small));
+            assert_same(&store.load_session(now()).await.unwrap(), &restored(&small));
         });
     }
 
@@ -507,7 +535,7 @@ mod tests {
                 store.save_session(&bad).await,
                 Err(Error::Corrupt(_))
             ));
-            assert_same(&store.load_session().await.unwrap(), &restored(&good));
+            assert_same(&store.load_session(now()).await.unwrap(), &restored(&good));
         });
     }
 
@@ -515,7 +543,7 @@ mod tests {
     fn oversized_tab_id_is_rejected_at_save() {
         run(async {
             let mut store = Store::open_in_memory().await.unwrap();
-            let m = new_tab(Model::new(), "https://x.test", None, None);
+            let m = new_tab(Model::new(now()), "https://x.test", None, None);
             let mut bad = m.clone();
             let mut tab = bad.tabs.remove(&TabId(1)).unwrap();
             tab.id = TabId(u64::MAX);
@@ -528,7 +556,7 @@ mod tests {
                 store.save_session(&bad).await,
                 Err(Error::Corrupt(_))
             ));
-            assert_same(&store.load_session().await.unwrap(), &restored(&m));
+            assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
         });
     }
 
@@ -547,9 +575,9 @@ mod tests {
                 .execute("UPDATE spaces SET tint = NULL WHERE id = 2", ())
                 .await
                 .unwrap();
-            let m = store.load_session().await.unwrap();
-            assert_eq!(m.spaces[1].tint, Model::new().spaces[0].tint);
-            assert_eq!(m.spaces[2].tint, Model::new().spaces[0].tint);
+            let m = store.load_session(now()).await.unwrap();
+            assert_eq!(m.spaces[1].tint, Model::new(now()).spaces[0].tint);
+            assert_eq!(m.spaces[2].tint, Model::new(now()).spaces[0].tint);
         });
     }
 
@@ -597,7 +625,7 @@ mod tests {
                 store.save_session(&m).await.unwrap();
             }
             let store = Store::open(&path).await.unwrap();
-            assert_same(&store.load_session().await.unwrap(), &restored(&m));
+            assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
         });
     }
 
@@ -628,7 +656,10 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&store.conn).await.unwrap(), 2);
+            assert_eq!(
+                migrate::schema_version(&store.conn).await.unwrap(),
+                migrate::latest(MIGRATIONS)
+            );
 
             for dropped in [
                 "SELECT liveness FROM tabs",
@@ -674,7 +705,7 @@ mod tests {
                 Space {
                     id: SpaceId(1),
                     name: "Jobs".into(),
-                    tint: Model::new().spaces[0].tint,
+                    tint: Model::new(now()).spaces[0].tint,
                     container: ContainerId(1),
                     pinned: vec![],
                     items: vec![Item::Tab(TabId(20)), Item::Tab(TabId(21))],
@@ -700,11 +731,11 @@ mod tests {
             ];
             // Space 1 is shown, so its active tab is the one live tab.
             tabs[4].lifecycle.liveness = Liveness::Active;
-            let expected = Model::from_parts(spaces, containers, tabs, SpaceId(1)).unwrap();
-            assert_same(&store.load_session().await.unwrap(), &expected);
+            let expected = Model::from_parts(spaces, containers, tabs, SpaceId(1), now()).unwrap();
+            assert_same(&store.load_session(now()).await.unwrap(), &expected);
             // The migrated database also accepts a normal save.
             store.save_session(&expected).await.unwrap();
-            assert_same(&store.load_session().await.unwrap(), &expected);
+            assert_same(&store.load_session(now()).await.unwrap(), &expected);
         });
     }
 
@@ -729,7 +760,7 @@ mod tests {
                 .unwrap();
             migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
             // No session row.
-            let m = store.load_session().await.unwrap();
+            let m = store.load_session(now()).await.unwrap();
             assert_eq!(m.active_space, SpaceId(3));
             assert_eq!(m.spaces[0].pinned, vec![TabId(1)]);
             m.check().unwrap();
@@ -744,7 +775,10 @@ mod tests {
                     )
                     .await
                     .unwrap();
-                assert_eq!(store.load_session().await.unwrap().active_space, SpaceId(3));
+                assert_eq!(
+                    store.load_session(now()).await.unwrap().active_space,
+                    SpaceId(3)
+                );
             }
         });
     }
