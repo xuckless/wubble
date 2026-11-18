@@ -18,7 +18,9 @@ use winit::keyboard::PhysicalKey;
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::EngineError;
-use crate::input::{self, CefKey, ClickTracker, KeyInput, Modifiers, MouseButton, Point};
+use crate::input::{
+    self, CefKey, ClickTracker, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
+};
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 
 /// Physical size and device scale of the rectangle a view fills.
@@ -151,6 +153,7 @@ pub struct View {
     /// Looked up on first input; CEF's own handle, released with the view.
     host: Option<cef::BrowserHost>,
     clicks: ClickTracker,
+    wheel: WheelRemainder,
     /// KEYUPs owed for keys pressed and not yet released, sent if focus
     /// leaves first so no key sticks.
     held_keys: Vec<(PhysicalKey, CefKey)>,
@@ -169,6 +172,7 @@ impl View {
             events: Vec::new(),
             host: None,
             clicks: ClickTracker::default(),
+            wheel: WheelRemainder::default(),
             held_keys: Vec::new(),
         })
     }
@@ -237,7 +241,7 @@ impl View {
 
     /// Deltas in logical pixels, positive = up / left.
     pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, modifiers: &Modifiers) {
-        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers);
+        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers, &mut self.wheel);
         let event = cef::MouseEvent {
             modifiers: flags,
             ..input::mouse_event(point, modifiers)

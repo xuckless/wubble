@@ -59,6 +59,14 @@ impl Buttons {
         }
         self
     }
+
+    pub fn is_down(self, button: MouseButton) -> bool {
+        match button {
+            MouseButton::Left => self.left,
+            MouseButton::Middle => self.middle,
+            MouseButton::Right => self.right,
+        }
+    }
 }
 
 /// Keyboard modifiers (winit's, not Slint's: Slint swaps Ctrl and Cmd on
@@ -197,18 +205,41 @@ impl ClickTracker {
     }
 }
 
+/// Wheel motion not yet sent, per axis. CEF takes whole DIP and touchpads
+/// send fractions of one, so the fraction is carried to the next event
+/// instead of rounded away; a reversal drops what was carried.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WheelRemainder {
+    x: f64,
+    y: f64,
+}
+
+impl WheelRemainder {
+    fn axis(rest: &mut f64, delta: f32) -> i32 {
+        let delta = f64::from(delta);
+        if delta * *rest < 0.0 {
+            *rest = 0.0;
+        }
+        *rest += delta;
+        let whole = rest.trunc();
+        *rest -= whole;
+        whole as i32
+    }
+}
+
 /// Wheel deltas in DIP (positive = up / left, as both winit and CEF use) and
 /// the event flags. Shift turns a vertical-only scroll horizontal
-/// (cefclient win); deltas are pixel-precise (cefclient GTK smooth scroll).
-pub fn wheel_deltas(dx: f32, dy: f32, m: &Modifiers) -> (i32, i32, u32) {
+/// (cefclient win); deltas are pixel-precise (cefclient GTK smooth scroll),
+/// with sub-pixel motion carried in `rest`.
+pub fn wheel_deltas(dx: f32, dy: f32, m: &Modifiers, rest: &mut WheelRemainder) -> (i32, i32, u32) {
     let (dx, dy) = if m.keys.shift_key() && dx == 0.0 {
         (dy, 0.0)
     } else {
         (dx, dy)
     };
     (
-        dx.round() as i32,
-        dy.round() as i32,
+        WheelRemainder::axis(&mut rest.x, dx),
+        WheelRemainder::axis(&mut rest.y, dy),
         cef_modifiers(m) | flag::PRECISION_SCROLLING_DELTA,
     )
 }
@@ -760,15 +791,42 @@ mod tests {
     }
 
     #[test]
-    fn wheel_deltas_round_swap_and_flag() {
+    fn wheel_deltas_swap_and_flag() {
         let none = mods(ModifiersState::empty());
         let shift = mods(ModifiersState::SHIFT);
         let p = flag::PRECISION_SCROLLING_DELTA;
-        assert_eq!(wheel_deltas(0.0, 60.0, &none), (0, 60, p));
-        assert_eq!(wheel_deltas(-1.4, -2.6, &none), (-1, -3, p));
-        assert_eq!(wheel_deltas(0.0, -60.0, &shift), (-60, 0, p | flag::SHIFT));
+        let mut rest = WheelRemainder::default();
+        assert_eq!(wheel_deltas(0.0, 60.0, &none, &mut rest), (0, 60, p));
+        assert_eq!(
+            wheel_deltas(0.0, -60.0, &shift, &mut rest),
+            (-60, 0, p | flag::SHIFT)
+        );
         // A real horizontal delta is left alone.
-        assert_eq!(wheel_deltas(5.0, 7.0, &shift), (5, 7, p | flag::SHIFT));
+        assert_eq!(
+            wheel_deltas(5.0, 7.0, &shift, &mut rest),
+            (5, 7, p | flag::SHIFT)
+        );
+    }
+
+    #[test]
+    fn sub_pixel_wheel_motion_adds_up() {
+        let none = mods(ModifiersState::empty());
+        let mut rest = WheelRemainder::default();
+        let (mut x, mut y) = (0, 0);
+        for _ in 0..10 {
+            let (dx, dy, _) = wheel_deltas(-0.3, 0.3, &none, &mut rest);
+            (x, y) = (x + dx, y + dy);
+        }
+        assert_eq!((x, y), (-3, 3));
+    }
+
+    #[test]
+    fn a_wheel_reversal_drops_the_carried_fraction() {
+        let none = mods(ModifiersState::empty());
+        let mut rest = WheelRemainder::default();
+        assert_eq!(wheel_deltas(0.0, 0.9, &none, &mut rest).1, 0);
+        assert_eq!(wheel_deltas(0.0, -0.5, &none, &mut rest).1, 0);
+        assert_eq!(wheel_deltas(0.0, -0.6, &none, &mut rest).1, -1);
     }
 
     fn key(code: KeyCode, unmodified: Key, text: Option<&str>) -> KeyInput {

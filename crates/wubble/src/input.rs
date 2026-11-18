@@ -1,6 +1,6 @@
 //! Host side of web-content input: which keys go to the page, the state
-//! every event carries (modifiers, held buttons, a clock), and the mapping
-//! of the engine's cursor onto the shell's.
+//! every event carries (modifiers, held buttons, a clock), what the view was
+//! told about focus, and where the pointer is in the window.
 //!
 //! The keyboard comes from raw winit events (`on_winit_window_event`):
 //! Slint's own key events carry only text, so they lose the physical key,
@@ -17,8 +17,6 @@ use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 use slint::winit_030::winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
 use wubble_engine::input::{Buttons, KeyInput, Modifiers, MouseButton};
-use wubble_engine::nav::Cursor;
-use wubble_ui::WebCursor;
 
 /// The modifier the shell's own shortcuts use (Slint maps `Control` in
 /// `@keys` to Cmd on Apple).
@@ -77,25 +75,16 @@ pub fn mouse_button(button: PointerEventButton) -> Option<MouseButton> {
     }
 }
 
-pub fn web_cursor(cursor: Cursor) -> WebCursor {
-    match cursor {
-        Cursor::Default => WebCursor::Default,
-        Cursor::None => WebCursor::None,
-        Cursor::Pointer => WebCursor::Pointer,
-        Cursor::Text => WebCursor::Text,
-        Cursor::Wait => WebCursor::Wait,
-        Cursor::Progress => WebCursor::Progress,
-        Cursor::Crosshair => WebCursor::Crosshair,
-        Cursor::Move => WebCursor::Move,
-        Cursor::NotAllowed => WebCursor::NotAllowed,
-        Cursor::Help => WebCursor::Help,
-        Cursor::Grab => WebCursor::Grab,
-        Cursor::Grabbing => WebCursor::Grabbing,
-        Cursor::ResizeNs => WebCursor::NsResize,
-        Cursor::ResizeEw => WebCursor::EwResize,
-        Cursor::ResizeNeSw => WebCursor::NeswResize,
-        Cursor::ResizeNwSe => WebCursor::NwseResize,
-    }
+/// The releases to send when `button` is released while `held` are down:
+/// `button`, then every other held button. Slint's `TouchArea` ends its
+/// pointer grab on any release (i-slint-core 1.19 `items/input_items.rs`,
+/// `MouseEvent::Released`), so the other buttons' releases could land
+/// outside the web content and CEF would never hear them.
+pub fn releases(held: Buttons, button: MouseButton) -> Vec<MouseButton> {
+    let others = [MouseButton::Left, MouseButton::Middle, MouseButton::Right]
+        .into_iter()
+        .filter(|&other| other != button && held.is_down(other));
+    std::iter::once(button).chain(others).collect()
 }
 
 /// The input state the host owns.
@@ -106,7 +95,9 @@ pub struct InputState {
     epoch: Instant,
     pub window_focused: bool,
     /// What the view was last told about keyboard focus.
-    pub view_focused: bool,
+    view_focused: bool,
+    /// The pointer in window logical pixels, while it is over the window.
+    pub pointer: Option<slint::LogicalPosition>,
 }
 
 impl Default for InputState {
@@ -117,6 +108,7 @@ impl Default for InputState {
             epoch: Instant::now(),
             window_focused: false,
             view_focused: false,
+            pointer: None,
         }
     }
 }
@@ -127,6 +119,16 @@ impl InputState {
             keys: self.keys,
             buttons: self.buttons,
         }
+    }
+
+    /// The keyboard focus to tell the view, if it differs from what it was
+    /// last told. Without an open view nothing is recorded, so the view
+    /// hears the focus once it opens.
+    pub fn focus_change(&mut self, focused: bool, view_open: bool) -> Option<bool> {
+        (view_open && focused != self.view_focused).then(|| {
+            self.view_focused = focused;
+            focused
+        })
     }
 
     /// A monotonic time for double-click detection.
@@ -228,27 +230,28 @@ mod tests {
     }
 
     #[test]
-    fn every_engine_cursor_has_a_shell_cursor() {
-        let cases = [
-            (Cursor::Default, WebCursor::Default),
-            (Cursor::None, WebCursor::None),
-            (Cursor::Pointer, WebCursor::Pointer),
-            (Cursor::Text, WebCursor::Text),
-            (Cursor::Wait, WebCursor::Wait),
-            (Cursor::Progress, WebCursor::Progress),
-            (Cursor::Crosshair, WebCursor::Crosshair),
-            (Cursor::Move, WebCursor::Move),
-            (Cursor::NotAllowed, WebCursor::NotAllowed),
-            (Cursor::Help, WebCursor::Help),
-            (Cursor::Grab, WebCursor::Grab),
-            (Cursor::Grabbing, WebCursor::Grabbing),
-            (Cursor::ResizeNs, WebCursor::NsResize),
-            (Cursor::ResizeEw, WebCursor::EwResize),
-            (Cursor::ResizeNeSw, WebCursor::NeswResize),
-            (Cursor::ResizeNwSe, WebCursor::NwseResize),
-        ];
-        for (cursor, web) in cases {
-            assert_eq!(web_cursor(cursor), web, "{cursor:?}");
-        }
+    fn focus_before_the_view_opens_reaches_it_once_open() {
+        let mut input = InputState::default();
+        assert_eq!(input.focus_change(true, false), None);
+        assert_eq!(input.focus_change(true, true), Some(true));
+        assert_eq!(input.focus_change(true, true), None);
+        assert_eq!(input.focus_change(false, true), Some(false));
+    }
+
+    #[test]
+    fn a_release_releases_every_held_button() {
+        let held = Buttons {
+            left: true,
+            middle: false,
+            right: true,
+        };
+        assert_eq!(
+            releases(held, MouseButton::Right),
+            vec![MouseButton::Right, MouseButton::Left]
+        );
+        assert_eq!(
+            releases(Buttons::default(), MouseButton::Left),
+            vec![MouseButton::Left]
+        );
     }
 }

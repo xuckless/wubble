@@ -5,26 +5,6 @@ import { Sidebar } from "components/sidebar.slint";
 
 export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }
 
-// The pointer shapes a page can ask for: the engine's `Cursor`, one to one.
-export enum WebCursor {
-    default,
-    none,
-    pointer,
-    text,
-    wait,
-    progress,
-    crosshair,
-    move,
-    not-allowed,
-    help,
-    grab,
-    grabbing,
-    ns-resize,
-    ew-resize,
-    nesw-resize,
-    nwse-resize,
-}
-
 export component AppWindow inherits Window {
     title: "wubble";
     preferred-width: Sizes.window-width;
@@ -47,7 +27,8 @@ export component AppWindow inherits Window {
 
     // Input over the web content, in view-relative logical pixels. The host
     // forwards it to the page; nothing here interprets it.
-    in property <WebCursor> web-cursor;
+    // The page's pointer shape: an index into `cursors`.
+    in property <int> web-cursor;
     // The web content has keyboard focus (the host sends it keys only then).
     out property <bool> web-focused: web-focus.has-focus;
     callback web-pointer-moved(x: length, y: length);
@@ -90,24 +71,26 @@ export component AppWindow inherits Window {
         root.address-focus-requested();
     }
 
-    pure function mouse-cursor(cursor: WebCursor) -> MouseCursor {
-        if cursor == WebCursor.none { return MouseCursor.none; }
-        if cursor == WebCursor.pointer { return MouseCursor.pointer; }
-        if cursor == WebCursor.text { return MouseCursor.text; }
-        if cursor == WebCursor.wait { return MouseCursor.wait; }
-        if cursor == WebCursor.progress { return MouseCursor.progress; }
-        if cursor == WebCursor.crosshair { return MouseCursor.crosshair; }
-        if cursor == WebCursor.move { return MouseCursor.move; }
-        if cursor == WebCursor.not-allowed { return MouseCursor.not-allowed; }
-        if cursor == WebCursor.help { return MouseCursor.help; }
-        if cursor == WebCursor.grab { return MouseCursor.grab; }
-        if cursor == WebCursor.grabbing { return MouseCursor.grabbing; }
-        if cursor == WebCursor.ns-resize { return MouseCursor.ns-resize; }
-        if cursor == WebCursor.ew-resize { return MouseCursor.ew-resize; }
-        if cursor == WebCursor.nesw-resize { return MouseCursor.nesw-resize; }
-        if cursor == WebCursor.nwse-resize { return MouseCursor.nwse-resize; }
-        return MouseCursor.default;
-    }
+    // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
+    // out of range shows the default.
+    property <[MouseCursor]> cursors: [
+        MouseCursor.default,
+        MouseCursor.none,
+        MouseCursor.pointer,
+        MouseCursor.text,
+        MouseCursor.wait,
+        MouseCursor.progress,
+        MouseCursor.crosshair,
+        MouseCursor.move,
+        MouseCursor.not-allowed,
+        MouseCursor.help,
+        MouseCursor.grab,
+        MouseCursor.grabbing,
+        MouseCursor.ns-resize,
+        MouseCursor.ew-resize,
+        MouseCursor.nesw-resize,
+        MouseCursor.nwse-resize,
+    ];
 
     root-keys := FocusScope {
         KeyBinding {
@@ -157,7 +140,7 @@ export component AppWindow inherits Window {
                         root.web-focus-changed(self.has-focus);
                     }
                     TouchArea {
-                        mouse-cursor: root.mouse-cursor(root.web-cursor);
+                        mouse-cursor: root.cursors[root.web-cursor];
                         pointer-event(event) => {
                             if event.kind == PointerEventKind.down {
                                 web-focus.focus();

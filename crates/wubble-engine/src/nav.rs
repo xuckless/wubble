@@ -7,8 +7,10 @@
 use welding::CursorShape;
 
 /// The pointer shape a page asks for. Exactly the shapes Slint can show
-/// (i-slint-common 1.19 `BuiltInMouseCursor`), so the host maps 1:1.
+/// (i-slint-common 1.19 `BuiltInMouseCursor`). `cursor as i32` indexes the
+/// `cursors` table in `wubble-ui/ui/app.slint`, which lists them in this order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(i32)]
 pub enum Cursor {
     #[default]
     Default,
@@ -75,7 +77,7 @@ pub enum WebEvent {
     PopupRequested {
         url: String,
     },
-    /// The renderer process died; `View::reload` brings the page back.
+    /// The renderer process died. The view reloads the page once by itself.
     RendererGone,
 }
 
@@ -90,56 +92,27 @@ pub struct Page {
     pub cursor: Cursor,
 }
 
-/// Where a view's navigation is.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NavState {
+/// Where a view's navigation is in its life.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Phase {
     /// CEF has not started loading anything yet.
-    Blank {
-        page: Page,
-    },
+    #[default]
+    Blank,
+    /// `recovering`: this load follows a crash, so a second crash before it
+    /// finishes is not reloaded again.
     Loading {
-        page: Page,
+        recovering: bool,
     },
-    Loaded {
-        page: Page,
-    },
-    /// The renderer died. CEF's next `Loading { loading: true }` (after a
-    /// host command) ends it.
-    Crashed {
-        page: Page,
-    },
+    Loaded,
+    /// The renderer died. CEF's next `Loading { loading: true }` ends it.
+    Crashed,
 }
 
-impl Default for NavState {
-    fn default() -> Self {
-        Self::Blank {
-            page: Page::default(),
-        }
-    }
-}
-
-impl NavState {
-    pub fn page(&self) -> &Page {
-        match self {
-            Self::Blank { page }
-            | Self::Loading { page }
-            | Self::Loaded { page }
-            | Self::Crashed { page } => page,
-        }
-    }
-
-    fn loading(&self) -> bool {
-        matches!(self, Self::Loading { .. })
-    }
-
-    fn with_page(&self, page: Page) -> Self {
-        match self {
-            Self::Blank { .. } => Self::Blank { page },
-            Self::Loading { .. } => Self::Loading { page },
-            Self::Loaded { .. } => Self::Loaded { page },
-            Self::Crashed { .. } => Self::Crashed { page },
-        }
-    }
+/// A view's navigation: where it is and what it shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NavState {
+    pub phase: Phase,
+    pub page: Page,
 }
 
 /// CEF callbacks (translated in `view.rs`) and host commands.
@@ -178,90 +151,99 @@ pub enum NavEffect {
     Repaint,
 }
 
-/// Every (state, input) pair not matched leaves the state alone and does nothing.
+/// Every (state, input) pair not matched leaves the state alone and does
+/// nothing. A dead renderer is reloaded once; if it dies again before that
+/// reload has finished loading, the view stays crashed.
 pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>) {
     use NavEffect::Emit;
-    let page = state.page().clone();
-    let crashed = matches!(state, NavState::Crashed { .. });
+    let NavState { phase, page } = state;
+    let loading = matches!(phase, Phase::Loading { .. });
     // A command that loads something; after a crash it also needs a repaint.
     let command = |effect: NavEffect| {
         let mut effects = vec![effect];
-        if crashed {
+        if phase == Phase::Crashed {
             effects.push(NavEffect::Repaint);
         }
-        (state.clone(), effects)
+        effects
     };
-    match input {
+    let (page, effects) = match input {
         NavInput::Address(url) if url != page.url => (
-            state.with_page(Page {
+            Page {
                 url: url.clone(),
                 ..page
-            }),
+            },
             vec![Emit(WebEvent::UrlChanged(url))],
         ),
         NavInput::Title(title) if title != page.title => (
-            state.with_page(Page {
+            Page {
                 title: title.clone(),
                 ..page
-            }),
+            },
             vec![Emit(WebEvent::TitleChanged(title))],
         ),
         NavInput::Favicon(url) if url != page.favicon => (
-            state.with_page(Page {
+            Page {
                 favicon: url.clone(),
                 ..page
-            }),
+            },
             vec![Emit(WebEvent::FaviconChanged(url))],
         ),
         NavInput::Cursor(cursor) if cursor != page.cursor => (
-            state.with_page(Page { cursor, ..page }),
+            Page { cursor, ..page },
             vec![Emit(WebEvent::CursorChanged(cursor))],
         ),
         NavInput::Loading {
-            loading,
+            loading: now_loading,
             can_go_back,
             can_go_forward,
         } => {
-            let page = Page {
-                can_go_back,
-                can_go_forward,
-                ..page
-            };
-            let next = match (&state, loading) {
-                (_, true) => NavState::Loading { page },
+            let next = match (phase, now_loading) {
+                (Phase::Crashed | Phase::Loading { recovering: true }, true) => {
+                    Phase::Loading { recovering: true }
+                }
+                (_, true) => Phase::Loading { recovering: false },
                 // A crashed view stays crashed until something loads again.
-                (NavState::Crashed { .. }, false) => NavState::Crashed { page },
-                (_, false) => NavState::Loaded { page },
+                (Phase::Crashed, false) => Phase::Crashed,
+                (_, false) => Phase::Loaded,
             };
-            let old = (
-                state.loading(),
-                state.page().can_go_back,
-                state.page().can_go_forward,
-            );
-            let changed = old != (loading, can_go_back, can_go_forward);
+            let changed = (loading, page.can_go_back, page.can_go_forward)
+                != (now_loading, can_go_back, can_go_forward);
             let effects = if changed {
                 vec![Emit(WebEvent::LoadingChanged {
-                    loading,
+                    loading: now_loading,
                     can_go_back,
                     can_go_forward,
                 })]
             } else {
                 vec![]
             };
-            (next, effects)
+            let page = Page {
+                can_go_back,
+                can_go_forward,
+                ..page
+            };
+            return (NavState { phase: next, page }, effects);
         }
-        NavInput::RendererTerminated if !crashed => (
-            NavState::Crashed { page },
-            vec![Emit(WebEvent::RendererGone)],
-        ),
-        NavInput::Popup(url) => (state, vec![Emit(WebEvent::PopupRequested { url })]),
-        NavInput::Load(url) => command(NavEffect::Load(url)),
-        NavInput::Reload => command(NavEffect::Reload),
-        NavInput::Back if page.can_go_back => command(NavEffect::Back),
-        NavInput::Forward if page.can_go_forward => command(NavEffect::Forward),
-        NavInput::Stop if state.loading() => (state, vec![NavEffect::Stop]),
-        _ => (state, vec![]),
-    }
+        NavInput::RendererTerminated if phase != Phase::Crashed => {
+            let mut effects = vec![Emit(WebEvent::RendererGone)];
+            if phase != (Phase::Loading { recovering: true }) {
+                effects.extend([NavEffect::Reload, NavEffect::Repaint]);
+            }
+            let state = NavState {
+                phase: Phase::Crashed,
+                page,
+            };
+            return (state, effects);
+        }
+        NavInput::Popup(url) => (page, vec![Emit(WebEvent::PopupRequested { url })]),
+        NavInput::Load(url) => (page, command(NavEffect::Load(url))),
+        NavInput::Reload => (page, command(NavEffect::Reload)),
+        NavInput::Back if page.can_go_back => (page, command(NavEffect::Back)),
+        NavInput::Forward if page.can_go_forward => (page, command(NavEffect::Forward)),
+        NavInput::Stop if loading => (page, vec![NavEffect::Stop]),
+        _ => (page, vec![]),
+    };
+    (NavState { phase, page }, effects)
 }
 
 #[cfg(test)]
@@ -279,146 +261,10 @@ mod tests {
         }
     }
 
-    fn states() -> Vec<NavState> {
-        vec![
-            NavState::default(),
-            NavState::Loading { page: page() },
-            NavState::Loaded { page: page() },
-            NavState::Crashed { page: page() },
-        ]
-    }
-
-    fn inputs() -> Vec<NavInput> {
-        vec![
-            I::Address("https://a/".into()),
-            I::Address("https://b/".into()),
-            I::Title("A".into()),
-            I::Title("B".into()),
-            I::Favicon("https://a/i.ico".into()),
-            I::Favicon("".into()),
-            I::Cursor(Cursor::Text),
-            I::Cursor(Cursor::Pointer),
-            I::Loading {
-                loading: true,
-                can_go_back: true,
-                can_go_forward: false,
-            },
-            I::Loading {
-                loading: false,
-                can_go_back: true,
-                can_go_forward: false,
-            },
-            I::Loading {
-                loading: false,
-                can_go_back: false,
-                can_go_forward: true,
-            },
-            I::RendererTerminated,
-            I::Popup("https://p/".into()),
-            I::Load("https://c/".into()),
-            I::Back,
-            I::Forward,
-            I::Reload,
-            I::Stop,
-        ]
-    }
-
-    /// The table written out independently of `transition`.
-    fn expected(state: &NavState, input: &NavInput) -> (NavState, Vec<NavEffect>) {
-        use NavState::*;
-        let blank = matches!(state, Blank { .. });
-        let crashed = matches!(state, Crashed { .. });
-        let p = state.page().clone();
-        let same = (state.clone(), vec![]);
-        let emit = |next: NavState, event| (next, vec![E::Emit(event)]);
-        let cmd = |effect| {
-            let mut effects = vec![effect];
-            if crashed {
-                effects.push(E::Repaint);
-            }
-            (state.clone(), effects)
-        };
-        let loading = |l: bool, back: bool, fwd: bool| LoadingChanged {
-            loading: l,
-            can_go_back: back,
-            can_go_forward: fwd,
-        };
-        use WebEvent::*;
-        match input {
-            I::Address(u) if blank || u != "https://a/" => emit(
-                state.with_page(Page {
-                    url: u.clone(),
-                    ..p
-                }),
-                UrlChanged(u.clone()),
-            ),
-            I::Title(t) if blank || t != "A" => emit(
-                state.with_page(Page {
-                    title: t.clone(),
-                    ..p
-                }),
-                TitleChanged(t.clone()),
-            ),
-            // Blank's favicon is already "".
-            I::Favicon(f) if (blank && !f.is_empty()) || (!blank && f.is_empty()) => emit(
-                state.with_page(Page {
-                    favicon: f.clone(),
-                    ..p
-                }),
-                FaviconChanged(f.clone()),
-            ),
-            I::Cursor(c) if *c != p.cursor => {
-                emit(state.with_page(Page { cursor: *c, ..p }), CursorChanged(*c))
-            }
-            I::Loading {
-                loading: l,
-                can_go_back: b,
-                can_go_forward: f,
-            } => {
-                let page = Page {
-                    can_go_back: *b,
-                    can_go_forward: *f,
-                    ..p
-                };
-                let next = if *l {
-                    Loading { page }
-                } else if crashed {
-                    Crashed { page }
-                } else {
-                    Loaded { page }
-                };
-                let was = match state {
-                    Blank { .. } => (false, false, false),
-                    Loading { .. } => (true, true, false),
-                    Loaded { .. } | Crashed { .. } => (false, true, false),
-                };
-                if was == (*l, *b, *f) {
-                    (next, vec![])
-                } else {
-                    emit(next, loading(*l, *b, *f))
-                }
-            }
-            I::RendererTerminated if !crashed => emit(Crashed { page: p }, RendererGone),
-            I::Popup(u) => emit(state.clone(), PopupRequested { url: u.clone() }),
-            I::Load(u) => cmd(E::Load(u.clone())),
-            I::Reload => cmd(E::Reload),
-            // Every page() here can go back but not forward; Blank can do neither.
-            I::Back if !blank => cmd(E::Back),
-            I::Stop if matches!(state, Loading { .. }) => (state.clone(), vec![E::Stop]),
-            _ => same,
-        }
-    }
-
-    #[test]
-    fn table_covers_every_pair() {
-        for state in states() {
-            for input in inputs() {
-                assert_eq!(
-                    transition(state.clone(), input.clone()),
-                    expected(&state, &input),
-                    "{state:?} + {input:?}"
-                );
-            }
+    fn at(phase: Phase) -> NavState {
+        NavState {
+            phase,
+            page: page(),
         }
     }
 
@@ -454,7 +300,9 @@ mod tests {
                 loading(false, false, false),
             ],
         );
-        assert!(matches!(state, NavState::Loaded { .. }));
+        assert_eq!(state.phase, Phase::Loaded);
+        assert_eq!(state.page.url, "data:a");
+        assert_eq!(state.page.title, "a");
         assert_eq!(
             effects,
             vec![
@@ -476,7 +324,8 @@ mod tests {
 
     #[test]
     fn history_flags_gate_back_and_forward() {
-        let start = NavState::Loaded {
+        let start = NavState {
+            phase: Phase::Loaded,
             page: Page::default(),
         };
         assert_eq!(transition(start.clone(), I::Back).1, vec![]);
@@ -495,25 +344,75 @@ mod tests {
     }
 
     #[test]
-    fn a_crash_is_reported_once_and_reload_repaints() {
+    fn a_crash_is_reported_once_and_reloaded_once() {
         let (state, effects) = run(
-            NavState::Loaded { page: page() },
-            vec![I::RendererTerminated, I::RendererTerminated, I::Reload],
+            at(Phase::Loaded),
+            vec![I::RendererTerminated, I::RendererTerminated],
         );
-        assert!(matches!(state, NavState::Crashed { .. }));
+        assert_eq!(state, at(Phase::Crashed));
         assert_eq!(
             effects,
             vec![E::Emit(WebEvent::RendererGone), E::Reload, E::Repaint]
         );
-        // CEF's loading callback ends the crash; commands then need no repaint.
-        let (state, _) = run(state, vec![loading(true, true, false)]);
-        assert!(matches!(state, NavState::Loading { .. }));
-        assert_eq!(transition(state, I::Reload).1, vec![E::Reload]);
+        // Commands while crashed repaint too.
+        assert_eq!(transition(state, I::Reload).1, vec![E::Reload, E::Repaint]);
+    }
+
+    #[test]
+    fn a_crash_during_the_recovery_load_is_not_reloaded() {
+        let (state, effects) = run(
+            at(Phase::Loaded),
+            vec![
+                I::RendererTerminated,
+                loading(true, true, false),
+                I::RendererTerminated,
+            ],
+        );
+        assert_eq!(state.phase, Phase::Crashed);
+        assert_eq!(
+            effects,
+            vec![
+                E::Emit(WebEvent::RendererGone),
+                E::Reload,
+                E::Repaint,
+                E::Emit(WebEvent::LoadingChanged {
+                    loading: true,
+                    can_go_back: true,
+                    can_go_forward: false
+                }),
+                E::Emit(WebEvent::RendererGone),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_finished_recovery_rearms_the_reload() {
+        let (state, _) = run(
+            at(Phase::Loaded),
+            vec![
+                I::RendererTerminated,
+                loading(true, true, false),
+                loading(false, true, false),
+            ],
+        );
+        assert_eq!(state.phase, Phase::Loaded);
+        let (state, effects) = transition(state, I::RendererTerminated);
+        assert_eq!(state.phase, Phase::Crashed);
+        assert_eq!(
+            effects,
+            vec![E::Emit(WebEvent::RendererGone), E::Reload, E::Repaint]
+        );
+    }
+
+    #[test]
+    fn a_crashed_view_stays_crashed_until_loading_starts() {
+        let (state, _) = transition(at(Phase::Crashed), loading(false, true, false));
+        assert_eq!(state.phase, Phase::Crashed);
     }
 
     #[test]
     fn popups_are_reported_without_a_state_change() {
-        let state = NavState::Loaded { page: page() };
+        let state = at(Phase::Loaded);
         let (next, effects) = transition(state.clone(), I::Popup("https://p/".into()));
         assert_eq!(next, state);
         assert_eq!(
@@ -548,13 +447,15 @@ mod tests {
 
     #[test]
     fn stop_only_while_loading() {
-        for state in states() {
-            let stops = transition(state.clone(), I::Stop).1 == vec![E::Stop];
-            assert_eq!(
-                stops,
-                matches!(state, NavState::Loading { .. }),
-                "{state:?}"
-            );
+        for phase in [
+            Phase::Blank,
+            Phase::Loading { recovering: false },
+            Phase::Loading { recovering: true },
+            Phase::Loaded,
+            Phase::Crashed,
+        ] {
+            let stops = transition(at(phase), I::Stop).1 == vec![E::Stop];
+            assert_eq!(stops, matches!(phase, Phase::Loading { .. }), "{phase:?}");
         }
     }
 

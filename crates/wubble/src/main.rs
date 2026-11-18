@@ -242,9 +242,6 @@ struct Host {
     /// `--smoke nav`'s progress.
     nav_smoke: Option<NavSmoke>,
     nav_title: Option<String>,
-    /// The URL last reloaded after its renderer died, so a page that keeps
-    /// crashing (out of memory, say) is reloaded once, not in a loop.
-    crash_reloaded: Option<String>,
     input: InputState,
     /// Why the loop was quit early, if it was.
     failure: Option<String>,
@@ -355,7 +352,22 @@ impl Host {
     fn on_web_event(&mut self, window: &AppWindow, event: WebEvent) {
         self.smoke_step(SmokeInput::Event(&event));
         match event {
-            WebEvent::CursorChanged(cursor) => window.set_web_cursor(input::web_cursor(cursor)),
+            WebEvent::CursorChanged(cursor) => {
+                window.set_web_cursor(cursor as i32);
+                // Slint applies a TouchArea's cursor only while it handles a
+                // mouse event (i-slint-core 1.19 `window.rs`, after
+                // `process_mouse_input`), and CEF reports the shape after
+                // the move that caused it. Replay the pointer where it is,
+                // once the host is free again, so the shape shows without
+                // waiting for the mouse to move.
+                if let Some(position) = self.input.pointer {
+                    let _ = self.window.upgrade_in_event_loop(move |window| {
+                        window
+                            .window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position })
+                    });
+                }
+            }
             WebEvent::UrlChanged(url) => {
                 let (host, path) = wubble_core::url::address_parts(&url);
                 window.set_address_host(host.into());
@@ -363,19 +375,9 @@ impl Host {
             }
             // No tabs yet: a later item decides where popups go.
             WebEvent::PopupRequested { url } => eprintln!("wubble: popup not opened: {url}"),
-            WebEvent::RendererGone => {
-                let Some(url) = self.view().map(|view| view.nav().page().url.clone()) else {
-                    return;
-                };
-                if self.crash_reloaded.as_ref() == Some(&url) {
-                    eprintln!("wubble: renderer gone again on {url}, not reloading");
-                } else if let Some(view) = self.view() {
-                    eprintln!("wubble: renderer gone on {url}, reloading");
-                    view.reload();
-                    self.crash_reloaded = Some(url);
-                }
-            }
-            WebEvent::TitleChanged(_)
+            // The view reloads once by itself (`nav::transition`).
+            WebEvent::RendererGone
+            | WebEvent::TitleChanged(_)
             | WebEvent::LoadingChanged { .. }
             | WebEvent::FaviconChanged(_) => {}
         }
@@ -407,11 +409,11 @@ impl Host {
     /// focus and the web content is the shell's focused item.
     fn sync_focus(&mut self, window: &AppWindow) {
         let focused = self.input.window_focused && window.get_web_focused();
-        if focused != self.input.view_focused {
-            self.input.view_focused = focused;
-            if let Some(view) = self.view() {
-                view.focus(focused);
-            }
+        let view_open = self.view().is_some();
+        if let Some(focused) = self.input.focus_change(focused, view_open)
+            && let Some(view) = self.view()
+        {
+            view.focus(focused);
         }
     }
 
@@ -423,6 +425,11 @@ impl Host {
         };
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
+            WindowEvent::CursorMoved { position, .. } => {
+                let position = position.to_logical(window.window().scale_factor().into());
+                self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
+            }
+            WindowEvent::CursorLeft { .. } => self.input.pointer = None,
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
                 self.sync_focus(&window);
@@ -472,10 +479,17 @@ impl Host {
         let Some(button) = input::mouse_button(button) else {
             return;
         };
-        self.input.buttons = self.input.buttons.with(button, pressed);
-        let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.view() {
-            view.mouse_button(button, pressed, point, &modifiers, now);
+        let sent = if pressed {
+            vec![button]
+        } else {
+            input::releases(self.input.buttons, button)
+        };
+        for button in sent {
+            self.input.buttons = self.input.buttons.with(button, pressed);
+            let (modifiers, now) = (self.input.modifiers(), self.input.now());
+            if let Some(view) = self.view() {
+                view.mouse_button(button, pressed, point, &modifiers, now);
+            }
         }
     }
 
@@ -619,7 +633,6 @@ fn run(
         quit_after,
         nav_smoke,
         nav_title: None,
-        crash_reloaded: None,
         input: InputState::default(),
         failure: None,
     }));
