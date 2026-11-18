@@ -26,8 +26,9 @@ fn literals(line: &str) -> Vec<String> {
         let c = chars[i];
         if c == '#' && chars.get(i + 1).is_some_and(|n| n.is_ascii_hexdigit()) {
             found.push(
-                code[i..]
-                    .chars()
+                chars[i..]
+                    .iter()
+                    .copied()
                     .enumerate()
                     .take_while(|(k, h)| *k == 0 || h.is_ascii_hexdigit())
                     .map(|(_, h)| h)
@@ -91,5 +92,6 @@ fn scanner_flags_literals() {
     assert_eq!(literals("width: 12px;"), ["12px"]);
     assert_eq!(literals("duration: 150ms;"), ["150ms"]);
     assert!(literals("color: rgba(0, 0, 0, 1);").contains(&"rgba(".to_string()));
+    assert_eq!(literals("text: \"\u{d7}\"; background: #fff;"), ["#fff"]);
     assert!(literals("x: 0px; y: Spacing.s2; // 12px #fff").is_empty());
 }

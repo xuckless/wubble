@@ -22,6 +22,7 @@ export component RowBase inherits Rectangle {
 
     ta := TouchArea {
         clicked => {
+            focus.focus();
             root.activated();
         }
     }

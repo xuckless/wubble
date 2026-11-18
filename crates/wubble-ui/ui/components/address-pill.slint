@@ -1,4 +1,4 @@
-import { Colors, Motion, Radius, Sizes, Spacing, Type } from "../tokens.slint";
+import { Colors, Radius, Sizes, Spacing, Type } from "../tokens.slint";
 import { RowBase } from "row-base.slint";
 
 export component AddressPill inherits RowBase {
@@ -19,6 +19,7 @@ export component AddressPill inherits RowBase {
             font-family: Type.mono;
             font-size: Type.body;
             vertical-alignment: center;
+            overflow: elide;
         }
 
         Text {

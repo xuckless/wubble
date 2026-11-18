@@ -1,4 +1,4 @@
-import { Colors, Motion, Radius, Sizes, Spacing, Type } from "../tokens.slint";
+import { Colors, Radius, Sizes, Spacing, Type } from "../tokens.slint";
 import { TabItem } from "model.slint";
 import { RowBase } from "row-base.slint";
 
@@ -34,30 +34,18 @@ export component TabRow inherits RowBase {
             overflow: elide;
         }
 
-        close := Rectangle {
-            visible: root.hovered || root.active;
+        close := RowBase {
+            visible: root.hovered || self.hovered || root.active;
             width: Sizes.icon-button;
             height: Sizes.icon-button;
             border-radius: Radius.xs;
-            background: transparent;
-            animate background { duration: Motion.fast; }
-            states [
-                pressed when close-ta.pressed: {
-                    background: Colors.press-fill;
-                }
-                hover when close-ta.has-hover: {
-                    background: Colors.hover-fill;
-                }
-            ]
+            activated => {
+                root.closed();
+            }
             Text {
                 text: "×";
                 color: Colors.haze;
                 font-size: Type.body-lg;
-            }
-            close-ta := TouchArea {
-                clicked => {
-                    root.closed();
-                }
             }
         }
     }

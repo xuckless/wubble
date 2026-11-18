@@ -2,7 +2,7 @@ import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
 import { TabItem, SpaceItem } from "components/model.slint";
 import { Sidebar } from "components/sidebar.slint";
 
-export { TabItem, SpaceItem }
+export { TabItem, SpaceItem, Colors }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -15,59 +15,26 @@ export component AppWindow inherits Window {
     // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
     in property <image> web-frame;
 
-    in property <string> address-host: "wubble.dev";
-    in property <string> address-path: "/start";
-    in property <[TabItem]> pinned-tabs: [
-        { id: 1, title: "Mail", glyph: "M", tint: Colors.sky },
-        { id: 2, title: "Docs", glyph: "D", tint: Colors.mint },
-    ];
-    in property <[TabItem]> tabs: [
-        { id: 3, title: "Welcome", glyph: "W", tint: Colors.lilac },
-        { id: 4, title: "A tab with a very long title that must elide", glyph: "A", tint: Colors.blush },
-        { id: 5, title: "Search", glyph: "S", tint: Colors.coral },
-    ];
-    in property <[SpaceItem]> spaces: [
-        { id: 1, name: "Home", tint: Colors.sky },
-        { id: 2, name: "Work", tint: Colors.lilac },
-        { id: 3, name: "Play", tint: Colors.mint },
-    ];
-    in property <int> active-tab-id: 3;
-    in property <int> active-space-id: 1;
+    in property <string> address-host <=> sidebar.address-host;
+    in property <string> address-path <=> sidebar.address-path;
+    in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
+    in property <[TabItem]> tabs <=> sidebar.tabs;
+    in property <[SpaceItem]> spaces <=> sidebar.spaces;
+    in property <int> active-tab-id <=> sidebar.active-tab-id;
+    in property <int> active-space-id <=> sidebar.active-space-id;
 
-    callback tab-activated(int);
-    callback tab-closed(int);
-    callback new-tab-requested();
-    callback space-switched(int);
-    callback address-activated();
+    callback tab-activated <=> sidebar.tab-activated;
+    callback tab-closed <=> sidebar.tab-closed;
+    callback new-tab-requested <=> sidebar.new-tab-requested;
+    callback space-switched <=> sidebar.space-switched;
+    callback address-activated <=> sidebar.address-activated;
 
     HorizontalLayout {
         padding: Spacing.s2;
         spacing: Spacing.s2;
 
-        Sidebar {
+        sidebar := Sidebar {
             width: Sizes.sidebar-width;
-            address-host: root.address-host;
-            address-path: root.address-path;
-            pinned-tabs: root.pinned-tabs;
-            tabs: root.tabs;
-            spaces: root.spaces;
-            active-tab-id: root.active-tab-id;
-            active-space-id: root.active-space-id;
-            tab-activated(id) => {
-                root.tab-activated(id);
-            }
-            tab-closed(id) => {
-                root.tab-closed(id);
-            }
-            new-tab-requested => {
-                root.new-tab-requested();
-            }
-            space-switched(id) => {
-                root.space-switched(id);
-            }
-            address-activated => {
-                root.address-activated();
-            }
         }
 
         Rectangle {

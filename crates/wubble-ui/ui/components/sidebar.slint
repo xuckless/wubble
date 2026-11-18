@@ -1,6 +1,7 @@
-import { Spacing } from "../tokens.slint";
+import { Colors, Sizes, Spacing } from "../tokens.slint";
 import { Glass } from "glass.slint";
 import { TabItem, SpaceItem } from "model.slint";
+import { ScrollView } from "std-widgets.slint";
 import { AddressPill } from "address-pill.slint";
 import { PinnedTile } from "pinned-tile.slint";
 import { TabRow } from "tab-row.slint";
@@ -8,13 +9,24 @@ import { NewTabRow } from "new-tab-row.slint";
 import { SpaceDot } from "space-dot.slint";
 
 export component Sidebar inherits Glass {
-    in property <string> address-host;
-    in property <string> address-path;
-    in property <[TabItem]> pinned-tabs;
-    in property <[TabItem]> tabs;
-    in property <[SpaceItem]> spaces;
-    in property <int> active-tab-id;
-    in property <int> active-space-id;
+    in property <string> address-host: "wubble.dev";
+    in property <string> address-path: "/start";
+    in property <[TabItem]> pinned-tabs: [
+        { id: 1, title: "Mail", glyph: "M", tint: Colors.sky },
+        { id: 2, title: "Docs", glyph: "D", tint: Colors.mint },
+    ];
+    in property <[TabItem]> tabs: [
+        { id: 3, title: "Welcome", glyph: "W", tint: Colors.lilac },
+        { id: 4, title: "A tab with a very long title that must elide", glyph: "A", tint: Colors.blush },
+        { id: 5, title: "Search", glyph: "S", tint: Colors.coral },
+    ];
+    in property <[SpaceItem]> spaces: [
+        { id: 1, name: "Home", tint: Colors.sky },
+        { id: 2, name: "Work", tint: Colors.lilac },
+        { id: 3, name: "Play", tint: Colors.mint },
+    ];
+    in property <int> active-tab-id: 3;
+    in property <int> active-space-id: 1;
 
     callback tab-activated(int);
     callback tab-closed(int);
@@ -34,10 +46,12 @@ export component Sidebar inherits Glass {
             }
         }
 
-        HorizontalLayout {
-            spacing: Spacing.s2;
-            alignment: start;
-            for tab in root.pinned-tabs: PinnedTile {
+        // Positioned by hand so tiles beyond Sizes.pinned-max take no space.
+        Rectangle {
+            height: Sizes.pinned-tile;
+            for tab[index] in root.pinned-tabs: PinnedTile {
+                x: index * (Sizes.pinned-tile + Spacing.s2);
+                visible: index < Sizes.pinned-max;
                 item: tab;
                 active: tab.id == root.active-tab-id;
                 activated => {
@@ -46,9 +60,8 @@ export component Sidebar inherits Glass {
             }
         }
 
-        Rectangle {
+        ScrollView {
             vertical-stretch: 1;
-            clip: true;
             VerticalLayout {
                 spacing: Spacing.s1;
                 alignment: start;

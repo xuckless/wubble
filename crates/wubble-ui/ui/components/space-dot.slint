@@ -1,4 +1,4 @@
-import { Colors, Motion, Sizes, Spacing, Radius } from "../tokens.slint";
+import { Colors, Motion, Radius, Sizes } from "../tokens.slint";
 import { SpaceItem } from "model.slint";
 
 export component SpaceDot inherits Rectangle {
@@ -9,7 +9,7 @@ export component SpaceDot inherits Rectangle {
     width: Sizes.space-dot;
     height: Sizes.space-dot;
     border-radius: Radius.pill;
-    border-width: Sizes.hairline + Sizes.hairline;
+    border-width: Sizes.ring-width;
     border-color: transparent;
     animate border-color { duration: Motion.fast; }
 
@@ -23,10 +23,10 @@ export component SpaceDot inherits Rectangle {
     ]
 
     Rectangle {
-        x: Spacing.s1 / 2;
-        y: Spacing.s1 / 2;
-        width: parent.width - Spacing.s1;
-        height: parent.height - Spacing.s1;
+        x: Sizes.space-dot-inset;
+        y: Sizes.space-dot-inset;
+        width: parent.width - Sizes.space-dot-inset - Sizes.space-dot-inset;
+        height: parent.height - Sizes.space-dot-inset - Sizes.space-dot-inset;
         border-radius: Radius.pill;
         background: root.item.tint;
     }
