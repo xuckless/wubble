@@ -165,6 +165,7 @@ Daily-drive set
 - [x] Turso schema + migrations (`wubble-store`): session, history, bookmarks table, settings
 - [x] Session restore and history recording wired into the app: the session loads at start (only the visible tab gets a view; the rest restore on activation), saves by `persist::should_save` and at shutdown; visits (typed when started from the bar) and titles are recorded for http(s) pages; closed tabs feed reopen-closed-tab; sidebar width and compact mode persist (`--smoke session`)
 - [x] First-run: search engine choice (Google / DuckDuckGo), interim: the command bar offers both as its first rows until one is stored; a proper first-run screen comes later
+- [x] Store: bookmarks tree API and command-bar search, import apply, `logins` table with byte-row CRUD for the vault, history upkeep (expire, clear range, forget URL/site, retention setting), `check_consistency` (schema v3)
 
 After daily-drive
 - [ ] Component sheet: elastic slider, toggle, pin, download button, toolbar dock + gliding tooltip, menus, checkboxes
@@ -229,7 +230,8 @@ Needs ~150 GB free and several hours per full build per platform.
 - [ ] Default-browser registration, URL handlers
 - [~] Import from Zen and Arc (Spaces, pinned tabs, history, bookmarks); Helium/Chromium profiles
   - [x] `wubble-import` readers: Zen/Firefox (profiles.ini discovery, `places.sqlite`, session, `zen-sessions.jsonlz4`, containers) and Arc `StorableSidebar.json`; pure parsers, plain `Imported` output
-  - [ ] App wiring: pick a profile, map `Imported` onto the model and store (batch history)
+  - [x] Store side (`wubble-store`): `Store::apply_import` merges Spaces/containers/tabs (appended as new Spaces, idempotent through `import_marks`), bookmarks (under `Imported from <source>`) and history (original times, deduped on url and time) in one transaction
+  - [ ] App wiring: pick a profile, call `apply_import`, replace the live model with the returned one, show the summary
   - [ ] Zen legacy `zen_workspaces`/`zen_pins` tables, Arc history, Little Arc, Helium/Chromium profiles
   - [ ] Verify Zen macOS and Arc Windows paths on real hardware
 

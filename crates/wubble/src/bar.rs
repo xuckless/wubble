@@ -12,7 +12,6 @@ use wubble_core::omnibox::{
     self, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchEngine, Target,
 };
 use wubble_core::tab::TabId;
-use wubble_store::HistoryHit;
 use wubble_ui::CommandKind;
 
 use crate::shell::tab_title;
@@ -86,23 +85,6 @@ pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
             url: t.url.clone(),
         })
         .collect()
-}
-
-pub fn history_entry(hit: HistoryHit) -> HistoryEntry {
-    let HistoryHit {
-        url,
-        title,
-        visit_count,
-        typed_count,
-        last_visit_ms,
-    } = hit;
-    HistoryEntry {
-        url,
-        title,
-        visit_count,
-        typed_count,
-        last_visit_ms,
-    }
 }
 
 /// The seam for live engine suggestions. Fetching is not implemented: with
@@ -268,7 +250,11 @@ mod tests {
 
     #[test]
     fn open_tabs_list_the_active_space_first() {
-        let (m, a) = tab(Model::new(std::time::Instant::now()), "https://mail.test/", "Inbox");
+        let (m, a) = tab(
+            Model::new(std::time::Instant::now()),
+            "https://mail.test/",
+            "Inbox",
+        );
         let (m, _) = apply(
             m,
             Command::NewSpace {
@@ -300,7 +286,11 @@ mod tests {
 
     #[test]
     fn tabs_and_actions_are_ranked_with_shortcuts() {
-        let (m, t) = tab(Model::new(std::time::Instant::now()), "https://reload.test/", "Reloaded news");
+        let (m, t) = tab(
+            Model::new(std::time::Instant::now()),
+            "https://reload.test/",
+            "Reloaded news",
+        );
         let r = rows(DDG, &open_tabs(&m), "reload");
         let found = targets(&r);
         assert!(
@@ -379,13 +369,13 @@ mod tests {
     #[test]
     fn history_rows_open_their_url() {
         let keymap = Keymap::defaults(Platform::Linux);
-        let history = [history_entry(HistoryHit {
+        let history = [HistoryEntry {
             url: "https://rust-lang.org/".into(),
             title: "Rust".into(),
             visit_count: 3,
             typed_count: 1,
             last_visit_ms: 0,
-        })];
+        }];
         let r = bar_rows(
             &BarInputs {
                 tabs: &[],

@@ -18,11 +18,11 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use wubble_core::model::{Command, Model};
-use wubble_core::omnibox;
+use wubble_core::omnibox::{self, HistoryEntry};
 use wubble_core::tab::TabId;
 use wubble_store::{
-    ClosedTab, CompactMode, HistoryHit, KeybindingOverrides, LiveSuggestions, SearchEngineChoice,
-    Setting, SidebarWidth, Store, Transition,
+    ClosedTab, CompactMode, KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting,
+    SidebarWidth, Store, Transition,
 };
 
 /// Session changes after which the session is saved at once.
@@ -177,7 +177,7 @@ enum Request {
         prefix: String,
         now_ms: i64,
         limit: usize,
-        reply: Reply<Vec<HistoryHit>>,
+        reply: Reply<Vec<HistoryEntry>>,
     },
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
@@ -253,7 +253,7 @@ impl StoreClient {
         prefix: &str,
         now_ms: i64,
         limit: usize,
-        reply: impl FnOnce(Vec<HistoryHit>) + Send + 'static,
+        reply: impl FnOnce(Vec<HistoryEntry>) + Send + 'static,
     ) {
         self.send(Request::Query {
             prefix: prefix.into(),
@@ -639,7 +639,10 @@ mod tests {
         std::fs::write(&path, b"not a database, and longer than one header").unwrap();
         let (client, loaded) = StoreClient::spawn(path.clone());
         assert!(loaded.recv().unwrap().is_err());
-        client.save(&Model::new(std::time::Instant::now()), Settings::default().ui);
+        client.save(
+            &Model::new(std::time::Instant::now()),
+            Settings::default().ui,
+        );
         client.shutdown();
         assert_eq!(
             std::fs::read(&path).unwrap(),

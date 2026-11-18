@@ -349,11 +349,13 @@ pub fn read_profile(p: &FoundProfile) -> Result<Imported, ImportError> {
             Err(e) => warnings.push(format!("{name}: {e}")),
         }
     }
+    let pl = snapshot_places(&p.dir)?;
     let mut imported = Imported::new(
         p.browser.into(),
         containers,
         layout.unwrap_or_default(),
-        snapshot_places(&p.dir)?,
+        pl.bookmarks,
+        pl.history,
     );
     imported.warnings = warnings;
     Ok(imported)
@@ -366,7 +368,8 @@ pub fn read_arc(path: &Path) -> Result<Imported, ImportError> {
         Source::Arc,
         Vec::new(),
         arc::parse(&bytes)?,
-        places::Places::default(),
+        Vec::new(),
+        Vec::new(),
     ))
 }
 

@@ -197,6 +197,11 @@ impl Model {
         }
     }
 
+    /// The model's clock: the time it was started with or last ticked to.
+    pub fn clock(&self) -> Instant {
+        self.clock
+    }
+
     /// Rebuilds a model from stored parts. The id counters are not part of the parts: they are
     /// derived as the highest id in use plus one, so new ids never collide with restored ones.
     /// `now` starts the model's clock. The result must pass [`Model::check`].

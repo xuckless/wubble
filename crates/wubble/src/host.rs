@@ -33,7 +33,7 @@ use wubble_engine::nav::{Cursor, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
-use wubble_store::{ClosedTab, HistoryHit, Transition};
+use wubble_store::{ClosedTab, Transition};
 use wubble_ui::{AppWindow, CommandBarState, SidebarMode};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
@@ -619,11 +619,11 @@ impl Host {
             });
     }
 
-    fn history_arrived(&mut self, generation: u64, hits: Vec<HistoryHit>) {
+    fn history_arrived(&mut self, generation: u64, hits: Vec<HistoryEntry>) {
         if generation != self.bar.generation {
             return;
         }
-        self.bar.history = hits.into_iter().map(bar::history_entry).collect();
+        self.bar.history = hits;
         if let Some(window) = self.window.upgrade() {
             self.render_bar(&window);
         }
@@ -1274,7 +1274,9 @@ mod tests {
             new_tab("https://b.test/".into(), None),
         ]
         .into_iter()
-        .fold(Model::new(std::time::Instant::now()), |m, c| model::apply(m, c).0);
+        .fold(Model::new(std::time::Instant::now()), |m, c| {
+            model::apply(m, c).0
+        });
         let order = m.order(m.active_space);
         let (a, b) = (order[0], order[1]);
         let mut m = m;
