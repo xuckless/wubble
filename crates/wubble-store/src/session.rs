@@ -124,8 +124,9 @@ impl Store {
                 .ok_or_else(|| Error::Corrupt(format!("tab in unknown space {space:?}")))?;
             let folder: Option<i64> = r.get(3)?;
             let pinned = r.get::<i64>(4)? != 0;
+            // v1 did not forbid a pinned tab with a folder; pinned wins, the folder is dropped.
             match (pinned, folder) {
-                (true, None) => spaces[si].pinned.push(id),
+                (true, _) => spaces[si].pinned.push(id),
                 (false, None) => top[si].push((r.get(5)?, Item::Tab(id))),
                 (false, Some(f)) => {
                     let f = FolderId(narrow(f, "folder id")?);
@@ -137,9 +138,6 @@ impl Store {
                         unreachable!("folder_at points at folders");
                     };
                     folder.tabs.push(id);
-                }
-                (true, Some(_)) => {
-                    return Err(Error::Corrupt(format!("pinned tab {id:?} in folder")));
                 }
             }
             tabs.push(Tab {
@@ -168,10 +166,18 @@ impl Store {
             Some(r) => r.get(0)?,
             None => None,
         };
-        let active_space = SpaceId(narrow(
-            active.ok_or_else(|| Error::Corrupt("no active space".into()))?,
-            "space id",
-        )?);
+        // v1 allowed no session row or a NULL active Space: fall back to the first Space.
+        let active_space = match active {
+            Some(v) => {
+                let id = SpaceId(narrow(v, "space id")?);
+                if space_at.contains_key(&id) {
+                    id
+                } else {
+                    spaces[0].id
+                }
+            }
+            None => spaces[0].id,
+        };
         Model::from_parts(spaces, containers, tabs, active_space).map_err(Error::Corrupt)
     }
 
@@ -182,9 +188,6 @@ impl Store {
     /// deletes with per-table diffs by id and reuses the same writers.
     pub async fn save_session(&mut self, model: &Model) -> Result<()> {
         model.check().map_err(Error::Corrupt)?;
-        for id in model.tabs.keys() {
-            tab_id(*id)?;
-        }
         let tx = self.conn.transaction().await?;
         // Children first; foreign keys are enforced per statement.
         for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
@@ -634,13 +637,14 @@ mod tests {
                     tint: Rgb(0xaa, 0xbb, 0xcc),
                     container: D,
                     pinned: vec![TabId(10)],
+                    // v1 never recorded the interleaving: folders first, then tabs.
                     items: vec![
-                        Item::Tab(TabId(11)),
                         Item::Folder(Folder {
                             id: FolderId(0),
                             name: "Reading".into(),
                             tabs: vec![TabId(12)],
                         }),
+                        Item::Tab(TabId(11)),
                     ],
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
                 },
@@ -676,6 +680,47 @@ mod tests {
             // The migrated database also accepts a normal save.
             store.save_session(&expected).await.unwrap();
             assert_eq!(store.load_session().await.unwrap(), expected);
+        });
+    }
+
+    #[test]
+    fn v1_without_active_space_or_with_pinned_in_folder_still_loads() {
+        run(async {
+            let mut store = Store::connect(":memory:").await.unwrap();
+            migrate::migrate(&mut store.conn, &MIGRATIONS[..1])
+                .await
+                .unwrap();
+            store
+                .conn
+                .execute_batch(
+                    "INSERT INTO containers(id, name) VALUES (0, 'Default');
+                     INSERT INTO spaces(id, name, position, tint, container_id) VALUES
+                        (3, 'First', 0, NULL, 0), (4, 'Second', 1, NULL, 0);
+                     INSERT INTO tab_folders(id, space_id, name, position) VALUES (0, 3, 'F', 0);
+                     INSERT INTO tabs(id, space_id, container_id, folder_id, pinned, position, url, title, liveness)
+                        VALUES (1, 3, 0, 0, 1, 0, 'https://a.test', 'A', 0);",
+                )
+                .await
+                .unwrap();
+            migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
+            // No session row.
+            let m = store.load_session().await.unwrap();
+            assert_eq!(m.active_space, SpaceId(3));
+            assert_eq!(m.spaces[0].pinned, vec![TabId(1)]);
+            m.check().unwrap();
+            // NULL, then a dangling active Space.
+            for v in ["NULL", "99"] {
+                store.conn.execute("DELETE FROM session", ()).await.unwrap();
+                store
+                    .conn
+                    .execute(
+                        format!("INSERT INTO session(id, active_space_id) VALUES (1, {v})"),
+                        (),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(store.load_session().await.unwrap().active_space, SpaceId(3));
+            }
         });
     }
 }

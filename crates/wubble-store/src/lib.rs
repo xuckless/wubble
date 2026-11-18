@@ -18,7 +18,7 @@ pub use closed::{ClosedTab, RECENTLY_CLOSED_MAX};
 pub use history::{HistoryHit, Transition, is_recordable, url_key};
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, Codec, CompactMode, KeybindingOverrides, LiveSuggestions,
+    BlockerEnabled, BlockerExceptions, CompactMode, KeybindingOverrides, LiveSuggestions,
     SearchEngine, SearchEngineChoice, Setting, SidebarWidth,
 };
 

@@ -9,6 +9,16 @@ ALTER TABLE spaces ADD COLUMN active_tab_id INTEGER;
 ALTER TABLE containers ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
 UPDATE containers SET position = id;
 
+-- v1 numbered folders and tabs in two separate sequences; v2 has one per Space for top-level
+-- items. v1 never recorded the interleaving, so folders go first (old order), then top-level tabs.
+UPDATE tabs SET position = position + (SELECT COUNT(*) FROM tab_folders f WHERE f.space_id = tabs.space_id)
+WHERE pinned = 0 AND folder_id IS NULL;
+UPDATE tab_folders SET position = (
+    SELECT COUNT(*) FROM tab_folders f
+    WHERE f.space_id = tab_folders.space_id
+      AND (f.position < tab_folders.position OR (f.position = tab_folders.position AND f.id < tab_folders.id))
+);
+
 -- Backfill: the first tab of each Space (pinned first), then the saved active tab for the
 -- active Space. Core requires an active tab exactly when a Space has tabs.
 UPDATE spaces SET active_tab_id = (
