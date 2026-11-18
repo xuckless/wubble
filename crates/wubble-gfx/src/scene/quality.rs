@@ -1,20 +1,33 @@
-//! Glass quality: one ordered enum and the pure governor that moves it.
+//! Scene quality: one ordered enum and the pure governor that moves it.
 //! The caller owns the clock and feeds one measured frame cost per call;
-//! nothing here reads time.
+//! nothing here reads time. Glass degrades before animation drops a frame:
+//! each level makes the backdrop (fluid, composite, blur pyramid) cheaper,
+//! and the last one also draws the glass as a flat fill. The beam and the
+//! sheen ring stay live at every level.
 
 use std::time::Duration;
 
-/// How the glass backdrop is produced, best first. `Ord` follows cost:
-/// a greater value is cheaper.
+/// How the backdrop behind the glass, and at the last level the glass, is
+/// produced, best first. `Ord` follows
+/// cost: a greater value is cheaper. Each level is a backdrop resolution
+/// ([`Quality::scale`]), a pressure-solver iteration count
+/// ([`Quality::pressure_iters`]) and a refresh rule ([`should_render`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Quality {
-    /// Dual-Kawase pyramid from the full frame, half-resolution output.
+    /// The design's backdrop: composite at half the logical size, pyramid at
+    /// 1/4 and 1/8, 18 Jacobi iterations.
     Full,
-    /// Same with a 1-tap first level and quarter-resolution output.
+    /// Composite and pyramid at half of `Full`, 9 Jacobi iterations.
     HalfRes,
-    /// Reuses the last backdrops, refreshing every `CACHED_REFRESH_CALLS`-th call.
+    /// As `HalfRes`, but the backdrop moves only every
+    /// `CACHED_REFRESH_CALLS`-th frame, by the time of all of them (see
+    /// [`BackdropClock`]); the other frames redraw the glass over the last
+    /// pyramid.
     Cached,
-    /// No backdrop: the tier's flat tint only.
+    /// Frozen backdrop (the last pyramid, rendered only when it does not
+    /// exist yet) and flat glass: one fill colour per panel, the rim, the
+    /// sheen ring and the beam; no refraction, dispersion, press waves,
+    /// specular or pointer light.
     Flat,
 }
 
@@ -34,6 +47,25 @@ impl Quality {
             Quality::Full | Quality::HalfRes => Quality::Full,
             Quality::Cached => Quality::HalfRes,
             Quality::Flat => Quality::Cached,
+        }
+    }
+
+    /// Size of the composite and blur pyramid targets relative to `Full`
+    /// (whose composite is half the logical view size). The fluid grids keep
+    /// their size, so the liquid survives a change of level.
+    pub const fn scale(self) -> f32 {
+        match self {
+            Quality::Full => 1.0,
+            Quality::HalfRes | Quality::Cached | Quality::Flat => 0.5,
+        }
+    }
+
+    /// Jacobi pressure iterations per fluid step, given the design's count
+    /// at `Full` (18).
+    pub const fn pressure_iters(self, full: u32) -> u32 {
+        match self {
+            Quality::Full => full,
+            Quality::HalfRes | Quality::Cached | Quality::Flat => full.div_ceil(2),
         }
     }
 
@@ -149,14 +181,63 @@ impl Governor {
     }
 }
 
-/// Whether `GlassBackdrop::render` does GPU work this call, given how many
-/// calls in a row it has skipped. `Cached` renders once every
+/// Whether the backdrop (fluid step, composite, blur pyramid) is rendered
+/// this frame, given how many frames in a row it has skipped. `Cached` renders once every
 /// `CACHED_REFRESH_CALLS` calls; a counter, not a clock.
 pub const fn should_render(quality: Quality, skipped: u32) -> bool {
     match quality {
         Quality::Full | Quality::HalfRes => true,
         Quality::Cached => skipped + 1 >= CACHED_REFRESH_CALLS,
         Quality::Flat => false,
+    }
+}
+
+/// Longest frame step, seconds: a stall does not fling the liquid.
+pub const MAX_DT: f32 = 0.032;
+/// Longest backdrop step, seconds: the time of one `Cached` refresh at
+/// `MAX_DT` per frame. Advection is semi-Lagrangian and vorticity is
+/// clamped, so one long step stays stable.
+pub const MAX_BACKDROP_DT: f32 = CACHED_REFRESH_CALLS as f32 * MAX_DT;
+
+/// When the backdrop moves and by how much. Frames whose backdrop is skipped
+/// bank their time, so under `Cached` the liquid keeps its real speed and
+/// only moves in coarser steps. The bank is capped at [`MAX_BACKDROP_DT`],
+/// so leaving `Flat` does not fling it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackdropClock {
+    /// Frames in a row whose backdrop was not rendered.
+    skipped: u32,
+    /// Seconds not yet stepped by the fluid.
+    banked: f32,
+}
+
+impl Default for BackdropClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BackdropClock {
+    /// The first call renders, also under `Cached`.
+    pub const fn new() -> Self {
+        Self {
+            skipped: CACHED_REFRESH_CALLS - 1,
+            banked: 0.0,
+        }
+    }
+
+    /// One frame of `dt` seconds. Returns the time to step the backdrop by
+    /// when it is rendered this frame (`should_render`, or `force` when there
+    /// is no backdrop yet), `None` when it is skipped.
+    pub fn tick(&mut self, quality: Quality, dt: f32, force: bool) -> Option<f32> {
+        self.banked = (self.banked + dt).min(MAX_BACKDROP_DT);
+        if force || should_render(quality, self.skipped) {
+            self.skipped = 0;
+            Some(std::mem::take(&mut self.banked))
+        } else {
+            self.skipped = self.skipped.saturating_add(1);
+            None
+        }
     }
 }
 
@@ -255,12 +336,11 @@ mod tests {
         cost: impl Fn(Quality, u32) -> Duration,
     ) -> (Governor, usize) {
         let mut g = Governor::new(start);
-        let mut skipped = CACHED_REFRESH_CALLS - 1;
+        let mut clock = BackdropClock::new();
         let mut over = 0;
         for _ in 0..frames {
             let q = g.quality();
-            let render = should_render(q, skipped);
-            skipped = if render { 0 } else { skipped + 1 };
+            let render = clock.tick(q, 1.0 / 120.0, false).is_some();
             let c = cost(q, u32::from(render));
             over += usize::from(c > BUDGET);
             g = g.next(c, BUDGET);
@@ -328,18 +408,63 @@ mod tests {
 
     #[test]
     fn cached_renders_on_every_eighth_call() {
-        // The pass starts with `skipped = CACHED_REFRESH_CALLS - 1` so its
-        // first call renders, then skips the next seven.
-        let mut skipped = CACHED_REFRESH_CALLS - 1;
-        let rendered: Vec<bool> = (0..17)
-            .map(|_| {
-                let render = should_render(Quality::Cached, skipped);
-                skipped = if render { 0 } else { skipped + 1 };
-                render
-            })
+        // The first call renders, then the next seven are skipped.
+        let mut clock = BackdropClock::new();
+        let calls: Vec<usize> = (0..17)
+            .filter(|_| clock.tick(Quality::Cached, 0.01, false).is_some())
             .collect();
-        let calls: Vec<usize> = (0..17).filter(|i| rendered[*i]).collect();
         assert_eq!(calls, [0, 8, 16]);
+    }
+
+    /// Seconds the backdrop steps over `frames` frames of `dt`.
+    fn stepped(quality: Quality, frames: usize, dt: f32) -> f32 {
+        let mut clock = BackdropClock::new();
+        (0..frames)
+            .filter_map(|_| clock.tick(quality, dt, false))
+            .sum()
+    }
+
+    #[test]
+    fn cached_backdrop_keeps_real_speed() {
+        // 8 renders over 64 frames: every frame's time is stepped, whether it
+        // rendered or not, at 60 Hz and at 120 Hz.
+        for dt in [1.0 / 60.0, 1.0 / 120.0] {
+            let frames = 8 * CACHED_REFRESH_CALLS as usize;
+            let full = stepped(Quality::Full, frames, dt);
+            let cached = stepped(Quality::Cached, frames, dt);
+            // the last 7 frames are banked for the next refresh
+            let banked = (CACHED_REFRESH_CALLS - 1) as f32 * dt;
+            assert!((full - frames as f32 * dt).abs() < 1e-4);
+            assert!(
+                (cached - (full - banked)).abs() < 1e-4,
+                "{cached} vs {full}"
+            );
+        }
+    }
+
+    #[test]
+    fn banked_time_is_capped_and_flat_steps_only_when_forced() {
+        let mut clock = BackdropClock::new();
+        assert_eq!(clock.tick(Quality::Flat, MAX_DT, true), Some(MAX_DT));
+        for _ in 0..100 {
+            assert_eq!(clock.tick(Quality::Flat, MAX_DT, false), None);
+        }
+        // leaving Flat steps at most one Cached refresh's worth
+        assert_eq!(
+            clock.tick(Quality::Full, MAX_DT, false),
+            Some(MAX_BACKDROP_DT)
+        );
+        assert_eq!(clock.tick(Quality::Full, 0.01, false), Some(0.01));
+    }
+
+    #[test]
+    fn cheaper_levels_shrink_the_backdrop() {
+        assert_eq!(Quality::Full.scale(), 1.0);
+        assert_eq!(Quality::Full.pressure_iters(18), 18);
+        for q in [Quality::HalfRes, Quality::Cached, Quality::Flat] {
+            assert_eq!(q.scale(), 0.5);
+            assert_eq!(q.pressure_iters(18), 9);
+        }
     }
 
     #[test]
