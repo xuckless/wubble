@@ -63,10 +63,6 @@ impl Space {
     }
 }
 
-/// Isolated cookie/cache jar. A Space has a default container; Spaces may share one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ContainerId(pub u32);
-
 #[cfg(test)]
 mod tests {
     use super::*;
