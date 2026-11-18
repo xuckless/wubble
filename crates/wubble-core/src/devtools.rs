@@ -74,6 +74,8 @@ pub enum DockEvent {
     /// The answer to [`DockEffect::AskTarget`].
     TargetId(TabId, String),
     TargetFailed(TabId),
+    /// The frontend view could not be opened (no window, nothing listening on the endpoint).
+    OpenFailed(TabId),
     /// The frontend view closed or the seam was pulled shut.
     PanelClosed,
     TabGone(TabId),
@@ -166,6 +168,11 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
             Dock::Detached { tab },
             vec![OpenDetached { tab, inspect: None }],
         ),
+        // the panel never came up: nothing to close, the window instead
+        OpenFailed(tab) if dock == (Dock::Open { tab }) => (
+            Dock::Detached { tab },
+            vec![OpenDetached { tab, inspect: None }],
+        ),
         PanelClosed if dock.is_panel_open() => (Dock::Closed, vec![CloseFrontend]),
         TabGone(tab) if dock.tab() == Some(tab) => {
             // the tab's view takes its DevTools window with it
@@ -178,9 +185,8 @@ pub fn transition(dock: Dock, mode: Mode, event: DockEvent) -> (Dock, Vec<DockEf
         }
         WindowClosed(tab) if dock == (Dock::Detached { tab }) => (Dock::Closed, vec![]),
         // stale answers and events for what is not open
-        TargetId(..) | TargetFailed(_) | PanelClosed | TabGone(_) | WindowClosed(_) => {
-            (dock, vec![])
-        }
+        TargetId(..) | TargetFailed(_) | OpenFailed(_) | PanelClosed | TabGone(_)
+        | WindowClosed(_) => (dock, vec![]),
     }
 }
 
@@ -244,6 +250,24 @@ mod tests {
         let (dock, fx) = run(DOCKED, &[Toggle(A), TargetId(A, "../x".into())]);
         assert_eq!(dock, Dock::Detached { tab: A });
         assert_eq!(fx[1], [window]);
+    }
+
+    #[test]
+    fn a_panel_that_cannot_open_falls_back_to_the_window() {
+        let (dock, fx) = run(DOCKED, &[Toggle(A), TargetId(A, ID.into()), OpenFailed(A)]);
+        assert_eq!(dock, Dock::Detached { tab: A });
+        assert_eq!(
+            fx[2],
+            [OpenDetached {
+                tab: A,
+                inspect: None
+            }]
+        );
+        // a late failure for a closed or other dock changes nothing
+        assert_eq!(run(DOCKED, &[OpenFailed(A)]).0, Dock::Closed);
+        let (dock, fx) = run(DOCKED, &[Toggle(A), TargetId(A, ID.into()), OpenFailed(B)]);
+        assert_eq!(dock, Dock::Open { tab: A });
+        assert!(fx[2].is_empty());
     }
 
     #[test]

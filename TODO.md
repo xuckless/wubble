@@ -238,7 +238,8 @@ After daily-drive
   - [x] Engine: `View::open_devtools` / `open_devtools_at` / `close_devtools` / `has_devtools` (CEF `ShowDevTools`, own native window), opened and closed once by hand on Linux (`--example favicon_smoke -- devtools`); `open_devtools` is a logged no-op off Linux until checked on macOS
   - [x] Host: F12, Ctrl+Shift+I (Cmd+Alt+I on macOS) and the context menu's "Inspect" through `wubble_core::devtools` (`Dock` state machine, `Host::dock_event`); the docked panel is the DevTools frontend loaded as an ordinary view (Decided "DevTools"), shown right of the page with the Source panel's string (`SourceSeam`, 320 to 720 px, pulled under 200 it closes); it needs the endpoint below, else the detached window opens. `--smoke page` docks and closes it on a free loopback port (run by hand)
   - [ ] Bottom dock: the design has only the right-docked Source panel, so there is no source to copy
-  - [ ] Inspect-at-point in the docked panel: no protocol path; "Inspect" opens the detached window at the point
+  - [ ] Inspect-at-point in the docked panel: no protocol path; "Inspect" opens the detached window at the point (Linux only; elsewhere it leaves the dock alone)
+  - [ ] Keyboard resize of the panel: `SourceSeam::nudge` exists in `split.rs` but no key handler calls it, so the panel is pointer-only
 - [x] Remote debugging endpoint (off by default): setting `devtools.remote_port` (Privacy, restart, 0 off, 1024 to 65535; the row's label carries the warning), `PageFeatures::remote_debugging_port` becomes the `remote-debugging-port` switch, 127.0.0.1 only
 - [x] view-source in a tab (`Action::ViewSource`, the context menu's "View Page Source": a tab beside the page on `view-source:URL`)
 - [~] Content blocker on `adblock-rust`: list fetch/refresh, network hook, cosmetic injection, per-site toggle

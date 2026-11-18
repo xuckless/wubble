@@ -54,6 +54,14 @@ impl Docked {
 }
 
 impl Host {
+    /// The panel's view when keys go to it: the last press was in it.
+    pub(super) fn keys_to_panel(&self) -> Option<ViewId> {
+        self.devtools
+            .focused
+            .then_some(self.devtools.view)
+            .flatten()
+    }
+
     /// The panel's own view.
     pub(super) fn panel_view(&mut self) -> Option<&mut wubble_engine::view::View> {
         let id = self.devtools.view?;
@@ -71,6 +79,11 @@ impl Host {
 
     /// The context menu's Inspect at `at`, physical pixels relative to the view.
     pub(super) fn inspect_at(&mut self, tab: TabId, at: (i32, i32)) {
+        // the detached window is the only way to reveal a node, and it is Linux-only for now:
+        // elsewhere the docked panel stays as it is
+        if !cfg!(target_os = "linux") {
+            return;
+        }
         let scale = self
             .window
             .upgrade()
@@ -110,7 +123,11 @@ impl Host {
                 Some(view) => view.request_target_id(),
                 None => self.dock_event(DockEvent::TargetFailed(tab)),
             },
-            DockEffect::OpenFrontend { url, .. } => self.open_panel(url),
+            DockEffect::OpenFrontend { tab, url } => {
+                if !self.open_panel(url) {
+                    self.dock_event(DockEvent::OpenFailed(tab));
+                }
+            }
             DockEffect::CloseFrontend => self.close_panel(),
             DockEffect::OpenDetached { tab, inspect } => {
                 if let Some(view) = self.tab_view(tab) {
@@ -125,12 +142,22 @@ impl Host {
         }
     }
 
-    fn open_panel(&mut self, url: String) {
+    /// Opens the panel's view; false when it cannot be (no window yet, nothing listening on
+    /// the endpoint's port, the engine refused), so the dock falls back to the window.
+    fn open_panel(&mut self, url: String) -> bool {
         let (Some(window), Some(frame_rate)) = (self.window.upgrade(), self.frame_rate) else {
-            return;
+            return false;
         };
         if self.devtools.view.is_some() {
-            return;
+            return true;
+        }
+        // Chromium skips the endpoint silently when its port is taken or unbindable; loopback
+        // answers a connect at once, so this is no wait.
+        if let Mode::Docked { port } = self.devtools.mode
+            && std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).is_err()
+        {
+            eprintln!("wubble: DevTools endpoint is not listening on port {port}");
+            return false;
         }
         // Opens at its width (the Source panel's string animates a pull, not the opening).
         let seam = &mut self.devtools.seam;
@@ -148,12 +175,13 @@ impl Host {
             Ok(id) => {
                 self.devtools.view = Some(id);
                 self.devtools.title.clear();
+                true
             }
             Err(e) => {
                 eprintln!("wubble: DevTools panel: {e}");
                 self.devtools.seam.open = false;
                 self.devtools.seam.w = spring(0.0);
-                self.devtools.dock = Dock::Closed;
+                false
             }
         }
     }
@@ -199,14 +227,36 @@ impl Host {
         }
     }
 
-    /// The panel's page events: nothing of the page's own UI applies to it, but a context menu
-    /// request must be answered or CEF waits on it.
+    /// The panel's page events: nothing of the page's own UI applies to it, but every request
+    /// must be answered or CEF waits on it (the engine is in ask-the-host mode): all are refused.
     pub(super) fn on_panel_page_event(&mut self, event: wubble_engine::page::PageEvent) {
         use wubble_engine::page::PageEvent;
-        if let PageEvent::ContextMenuRequested { id, .. } = event
-            && let Some(view) = self.panel_view()
-        {
-            view.answer_context_menu(id, None);
+        let Some(view) = self.panel_view() else {
+            return;
+        };
+        match event {
+            PageEvent::ContextMenuRequested { id, .. } => {
+                view.answer_context_menu(id, None);
+            }
+            PageEvent::DialogRequested { id, .. } => {
+                view.answer_dialog(id, false, "");
+            }
+            PageEvent::PermissionRequested { id, .. } => {
+                view.answer_permission(id, &[]);
+            }
+            PageEvent::FileChooserRequested { id, .. } => {
+                view.answer_file_chooser(id, None);
+            }
+            PageEvent::AuthRequested { id, .. } => {
+                view.answer_auth(id, None);
+            }
+            PageEvent::CertificateError { id, .. } => {
+                view.answer_certificate(id, false);
+            }
+            PageEvent::DownloadRequested { id, .. } => {
+                view.answer_download_path(id, None);
+            }
+            _ => {}
         }
     }
 
@@ -228,7 +278,7 @@ impl Host {
         match self.devtools.dock {
             Dock::Open { .. } => Panel::Docked {
                 framed: self.frames.contains_key(&PANEL_TAB),
-                titled: self.devtools.title.starts_with("DevTools"),
+                titled: self.devtools.title.starts_with("DevTools - "),
             },
             Dock::Detached { .. } => Panel::Detached,
             Dock::Closed | Dock::Resolving { .. } => Panel::Closed,

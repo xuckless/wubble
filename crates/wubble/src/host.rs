@@ -727,7 +727,7 @@ impl Host {
 
     /// The view that gets keys: the DevTools panel's after a press in it, else the page's.
     fn focused_view(&mut self) -> Option<&mut View> {
-        if self.devtools.focused && self.devtools.view.is_some() {
+        if self.keys_to_panel().is_some() {
             return self.panel_view();
         }
         self.view()
@@ -1768,8 +1768,8 @@ impl Host {
     /// window has focus and the web content is the shell's focused item.
     /// A view that stops being visible loses focus first.
     pub fn sync_focus(&mut self, window: &AppWindow) {
-        let target = if self.devtools.focused && self.devtools.view.is_some() {
-            self.devtools.view
+        let target = if let Some(panel) = self.keys_to_panel() {
+            Some(panel)
         } else {
             self.model
                 .visible_tab()

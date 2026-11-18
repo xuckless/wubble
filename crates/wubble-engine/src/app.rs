@@ -179,6 +179,15 @@ impl PageFeatures {
                 ),
                 "DevTools endpoint on 127.0.0.1 only; any local program can drive every tab",
             ),
+            (
+                self.remote_debugging_port.is_some(),
+                Switch(
+                    "remote-allow-origins",
+                    self.remote_debugging_port
+                        .map(|p| format!("http://127.0.0.1:{p}")),
+                ),
+                "the docked frontend's WebSocket carries the endpoint's own origin (Chromium 111+ refuses others); never *",
+            ),
         ]
     }
 
@@ -900,7 +909,13 @@ mod tests {
             remote_debugging_port: Some(9333),
             ..base
         };
-        assert_eq!(open.switches(), [s("remote-debugging-port", Some("9333"))]);
+        assert_eq!(
+            open.switches(),
+            [
+                s("remote-debugging-port", Some("9333")),
+                s("remote-allow-origins", Some("http://127.0.0.1:9333"))
+            ]
+        );
     }
 
     #[test]
