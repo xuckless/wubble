@@ -98,6 +98,10 @@ pub struct Page {
     pub url: String,
     pub title: String,
     pub favicon: String,
+    /// The icon URL last fetched for this page, whatever came of it: one
+    /// attempt per URL. Cleared when a load starts, so a reload or a new page
+    /// declaring the same URL fetches it again.
+    pub favicon_fetched: String,
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub cursor: Cursor,
@@ -201,20 +205,31 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             },
             vec![Emit(WebEvent::TitleChanged(title))],
         ),
-        // The icon is fetched on every report, not only on a change: a failed
-        // download, or a new page that declares the same icon URL, must still
-        // reach the host. Only the URL event is deduplicated.
-        NavInput::Favicon(url) => (
-            Page {
-                favicon: url.clone(),
-                ..page.clone()
-            },
-            (url != page.favicon)
+        // CEF reports the icon URLs again and again on one page (every
+        // `<link>` change): each URL is fetched once per load, failed or not.
+        // A new page that declares the same URL starts a load, which clears
+        // `favicon_fetched`, so its icon still reaches the host.
+        NavInput::Favicon(url) => {
+            let fetch = !url.is_empty() && url != page.favicon_fetched;
+            let mut effects: Vec<_> = (url != page.favicon)
                 .then(|| Emit(WebEvent::FaviconChanged(url.clone())))
                 .into_iter()
-                .chain((!url.is_empty()).then_some(NavEffect::FetchFavicon(url)))
-                .collect(),
-        ),
+                .collect();
+            if fetch {
+                effects.push(NavEffect::FetchFavicon(url.clone()));
+            }
+            let favicon_fetched = if fetch {
+                url.clone()
+            } else {
+                page.favicon_fetched.clone()
+            };
+            let page = Page {
+                favicon: url,
+                favicon_fetched,
+                ..page
+            };
+            (page, effects)
+        }
         NavInput::Cursor(cursor) if cursor != page.cursor => (
             Page { cursor, ..page },
             vec![Emit(WebEvent::CursorChanged(cursor))],
@@ -246,9 +261,15 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
                     can_go_forward,
                 }));
             }
+            let favicon_fetched = if now_loading && !loading {
+                String::new()
+            } else {
+                page.favicon_fetched
+            };
             let page = Page {
                 can_go_back,
                 can_go_forward,
+                favicon_fetched,
                 ..page
             };
             return (NavState { phase: next, page }, effects);
@@ -285,6 +306,7 @@ mod tests {
             url: "https://a/".into(),
             title: "A".into(),
             favicon: "https://a/i.ico".into(),
+            favicon_fetched: String::new(),
             can_go_back: true,
             can_go_forward: false,
             cursor: Cursor::Text,
@@ -502,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    fn favicon_event_and_cursor_are_deduplicated_but_the_icon_refetches() {
+    fn favicon_event_and_cursor_are_deduplicated() {
         let (_, effects) = run(
             NavState::default(),
             vec![
@@ -518,11 +540,71 @@ mod tests {
             vec![
                 E::Emit(WebEvent::FaviconChanged("https://a/i.ico".into())),
                 E::FetchFavicon("https://a/i.ico".into()),
-                E::FetchFavicon("https://a/i.ico".into()),
                 E::Emit(WebEvent::CursorChanged(Cursor::Pointer)),
                 E::Emit(WebEvent::CursorChanged(Cursor::Default)),
             ]
         );
+    }
+
+    fn fetches(effects: &[NavEffect]) -> Vec<&str> {
+        effects
+            .iter()
+            .filter_map(|e| match e {
+                E::FetchFavicon(url) => Some(url.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_icon_is_fetched_once_per_url_and_load() {
+        let a = || I::Favicon("https://a/i.png".into());
+        let b = || I::Favicon("https://a/j.png".into());
+        let (_, effects) = run(
+            NavState::default(),
+            vec![
+                loading(true, false, false),
+                // A page re-reporting its icons (YouTube does, dozens of
+                // times): one fetch, even if that one failed.
+                a(),
+                a(),
+                a(),
+                loading(false, false, false),
+                a(),
+                // A new URL is fetched; going back to the old one is a change
+                // of URL too.
+                b(),
+                b(),
+                a(),
+                // A reload (or a new page with the same icon) fetches again.
+                loading(true, false, false),
+                a(),
+                a(),
+            ],
+        );
+        assert_eq!(
+            fetches(&effects),
+            [
+                "https://a/i.png",
+                "https://a/j.png",
+                "https://a/i.png",
+                "https://a/i.png"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_history_flag_change_mid_load_does_not_refetch() {
+        let (_, effects) = run(
+            NavState::default(),
+            vec![
+                loading(true, false, false),
+                I::Favicon("https://a/i.png".into()),
+                loading(true, true, false),
+                I::Favicon("https://a/i.png".into()),
+            ],
+        );
+        assert_eq!(fetches(&effects), ["https://a/i.png"]);
     }
 
     #[test]

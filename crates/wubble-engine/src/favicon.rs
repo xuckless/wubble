@@ -7,12 +7,22 @@
 //! (cef `tests/cefclient/browser/client_handler.cc`, BSD-3-Clause), reading
 //! the image with `GetAsBitmap` as RGBA with straight alpha.
 //!
+//! CEF passes the renderer `max_image_size` times the device scale as the
+//! largest bitmap, so on a 2x display a 144 px icon comes back at 128 px (one
+//! representation at scale 2). An ICO's frames above that bound are dropped
+//! and the rest kept as representations; `as_bitmap(1.0)` picks the one
+//! closest to `MAX_ICON_PX`. An SVG is rasterised at `MAX_ICON_PX` by the
+//! renderer (blink `ImageDownloaderImpl`, `DecodeSVG` at the preferred
+//! size). Whatever arrives larger is shrunk here (`fit_rgba`), never refused.
+//! Each icon URL is fetched once per page load (`nav.rs`), so a failure is
+//! logged once.
+//!
 //! `is_favicon` is true, so no cookies are sent or stored (Chrome's rule): a
 //! deliberate deviation from "the page's cookies apply", recorded in TODO.md.
 
 use std::sync::{Arc, Mutex};
 
-use wubble_core::favicon::valid_rgba;
+use wubble_core::favicon::fit_rgba;
 
 use cef::{
     AlphaType, ColorType, DownloadImageCallback, ImplBinaryValue, ImplDownloadImageCallback,
@@ -32,12 +42,13 @@ pub struct FaviconImage {
     pub rgba: Vec<u8>,
 }
 
-/// The pixels CEF handed back, if they are a usable icon: both sides in
-/// `1..=MAX_ICON_PX` and exactly `width * height * 4` bytes. Nothing is
-/// resampled; an icon CEF could not shrink is dropped.
+/// The pixels CEF handed back as an icon, shrunk to `MAX_ICON_PX` when
+/// larger. `None` only for an empty image or a byte count that does not
+/// match its size.
 pub(crate) fn accept(url: &str, width: i32, height: i32, rgba: Vec<u8>) -> Option<FaviconImage> {
     let (width, height) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
-    valid_rgba(width, height, rgba.len()).then(|| FaviconImage {
+    let (width, height, rgba) = fit_rgba(width, height, rgba)?;
+    Some(FaviconImage {
         url: url.to_string(),
         width,
         height,
@@ -74,14 +85,15 @@ cef::wrap_download_image_callback! {
                 Some(&mut height),
             );
             // `data` copies into the Vec's length, so it must be sized first.
-            let Some(bitmap) = bitmap else { return };
-            let mut bytes = vec![0u8; bitmap.size()];
-            if bytes.is_empty() || bitmap.data(Some(&mut bytes), 0) != bytes.len() {
+            let Some(bitmap) = bitmap else {
+                eprintln!("wubble-engine: favicon {url}: no bitmap");
                 return;
-            }
-            match accept(&url, width, height, bytes) {
+            };
+            let mut bytes = vec![0u8; bitmap.size()];
+            let read = bitmap.data(Some(&mut bytes), 0) == bytes.len();
+            match accept(&url, width, height, bytes).filter(|_| read) {
                 Some(icon) => self.sink.lock().unwrap_or_else(|e| e.into_inner()).push(icon),
-                None => eprintln!("wubble-engine: favicon {url}: unusable size {width}x{height}"),
+                None => eprintln!("wubble-engine: favicon {url}: unreadable {width}x{height} bitmap"),
             }
         }
     }
@@ -98,13 +110,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_exact_sizes_only() {
+    fn accepts_every_size_and_shrinks_large_ones() {
         let ok = accept("u", 2, 3, vec![0; 24]).unwrap();
         assert_eq!((ok.width, ok.height, ok.rgba.len()), (2, 3, 24));
         assert!(accept("u", 64, 64, vec![0; 64 * 64 * 4]).is_some());
+        let big = accept("u", 128, 128, vec![0; 128 * 128 * 4]).unwrap();
+        assert_eq!(
+            (big.width, big.height, big.rgba.len()),
+            (64, 64, 64 * 64 * 4)
+        );
+        let wide = accept("u", 65, 1, vec![0; 65 * 4]).unwrap();
+        assert_eq!((wide.width, wide.height), (64, 1));
         assert!(accept("u", 0, 3, vec![]).is_none());
         assert!(accept("u", -1, 3, vec![0; 12]).is_none());
-        assert!(accept("u", 65, 1, vec![0; 65 * 4]).is_none());
         assert!(accept("u", 2, 3, vec![0; 23]).is_none());
         assert!(accept("u", 2, 3, vec![]).is_none());
     }
