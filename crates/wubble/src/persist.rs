@@ -26,8 +26,8 @@ use wubble_core::tab::TabId;
 use wubble_core::zoom::ZoomTable;
 use wubble_store::{
     BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, KeybindingOverrides,
-    LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, Store,
-    Transition,
+    LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
+    Store, Transition,
 };
 
 use crate::blocking::BlockerSettings;
