@@ -24,7 +24,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Daily-drive features | Vertical tabs, Spaces, command bar, compact mode. Everything else in M2 comes after |
 | Sync | Deferred, no design work yet |
 | Import | Zen and Arc first; Helium where useful |
-| UX source | Design canvas "Wubble", snapshot in `ux/pack/`. It is a **style guideline** (colour, glass, type, motion feel), not a layout spec: the designer did not know the full feature set, so layout and feature placement are ours to decide |
+| UX source | The owner's design repo `xuckless/the-wallpaper-project`, directory `src/wubble` (private; clone to `~/Dev/wubble-wt/ref/the-wallpaper-project`). It defines the UI feel, UX and interactions, and wubble's UX is built to match it. Its `slint/` directory is a ready Slint + Rust + WGSL port (tokens, springs, seam, split view, tabs, scroller, components, wgpu glass/fluid renderer) meant to be copied in. It does not cover the whole feature set: features it lacks follow its style. Where it differs from an earlier decision in this table, raise it. The older canvas snapshot in `ux/pack/` is superseded |
 | Glass | Wubble draws its own glass (blur + saturate + tint + specular + rim) so it looks the same on every OS; the window itself is also transparent where the OS allows |
 | Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption |
 | Layout | No top toolbar. Address pill at the top of the sidebar, then pinned, tabs, new-tab row, Space switcher |

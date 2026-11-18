@@ -18,8 +18,10 @@ its "Decided" table before proposing architecture.
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 
-`ux/pack/` is a read-only snapshot of the design canvas. It is a style guideline
-(colour, glass, type, motion), not a layout spec.
+UX source of truth: the owner's design repo, cloned at
+`~/Dev/wubble-wt/ref/the-wallpaper-project/src/wubble` (see `ux/README.md`). Match it, and
+copy from its `slint/` port (tokens, physics, components, wgpu renderer) before writing UI
+code. `ux/pack/` is an older, superseded snapshot.
 
 ## Commands
 
