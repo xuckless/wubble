@@ -19,7 +19,7 @@ mod panes;
 mod surfaces;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -174,6 +174,8 @@ struct Bar {
     /// The store's latest history hits; ranked against each new query until
     /// that query's own hits arrive.
     history: Vec<HistoryEntry>,
+    /// The icons of those hits' origins, by hit URL. Data for the rows; the shell draws none yet.
+    icons: HashMap<String, wubble_store::Favicon>,
     /// Bumped per query; a history reply for an older one is dropped.
     generation: u64,
 }
@@ -255,6 +257,8 @@ pub struct Host {
     pub nav_title: Option<String>,
     pub tabs_passed: bool,
     pub session_passed: bool,
+    /// `--smoke session`: whether the store returned the icon the first run filed.
+    session_icon: Option<bool>,
     pub split_passed: bool,
     pub(crate) input: InputState,
     keymap: Keymap,
@@ -283,8 +287,8 @@ pub struct Host {
     ime: Ime,
     /// Sound per live tab, as its view reported it.
     audio: AudioMap,
-    /// Each tab's page icon, as its view last downloaded it; shown on its row. Kept in memory
-    /// only (the store's favicon cache is not wired yet).
+    /// Each tab's page icon: the store's at start, then as its view last downloaded it (and
+    /// filed in the store); shown on its row.
     favicons: BTreeMap<TabId, slint::Image>,
     /// Per-site zoom; stored through the store, applied on each commit.
     site_zoom: ZoomTable,
@@ -324,7 +328,19 @@ impl Host {
             settings,
             site_permissions,
             downloads,
+            favicons,
         } = loaded;
+        let favicons = model
+            .tabs
+            .values()
+            .filter_map(|t| {
+                let icon = favicons.get(&t.url)?;
+                Some((
+                    t.id,
+                    crate::bind::favicon_image(icon.width, icon.height, &icon.rgba),
+                ))
+            })
+            .collect();
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
         let [a, b, c, popup_presenter] = presenters;
@@ -351,6 +367,7 @@ impl Host {
                 query: String::new(),
                 rows: vec![],
                 history: vec![],
+                icons: HashMap::new(),
                 generation: 0,
             },
             focus_view: None,
@@ -366,6 +383,7 @@ impl Host {
             nav_title: None,
             tabs_passed: false,
             session_passed: false,
+            session_icon: None,
             split_passed: false,
             input: InputState::default(),
             keymap: input::keymap(Platform::current(), &settings.keybinding_overrides),
@@ -382,7 +400,7 @@ impl Host {
             screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
-            favicons: BTreeMap::new(),
+            favicons,
             site_zoom,
             toast_serial: 0,
             find_focus: 0,
@@ -396,6 +414,7 @@ impl Host {
             }),
         };
         host.render_downloads(window);
+        host.session_icon_setup();
         match open {
             Some(url) => host.dispatch(new_tab(url, None)),
             None => host.after_change(),
@@ -544,12 +563,13 @@ impl Host {
         {
             return;
         }
-        let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-            &icon.rgba,
-            icon.width,
-            icon.height,
+        if let Some(url) = self.tab_view(tab).map(|view| view.nav().page.url.clone()) {
+            self.store.put_favicon(&url, &icon, now_ms());
+        }
+        self.favicons.insert(
+            tab,
+            crate::bind::favicon_image(icon.width, icon.height, &icon.rgba),
         );
-        self.favicons.insert(tab, slint::Image::from_rgba8(pixels));
         self.after_change();
     }
 
@@ -866,11 +886,12 @@ impl Host {
             });
     }
 
-    fn history_arrived(&mut self, generation: u64, hits: Vec<HistoryEntry>) {
+    fn history_arrived(&mut self, generation: u64, hits: persist::Hits) {
         if generation != self.bar.generation {
             return;
         }
-        self.bar.history = hits;
+        self.bar.history = hits.entries;
+        self.bar.icons = hits.icons;
         if let Some(window) = self.window.upgrade() {
             self.render_bar(&window);
         }
@@ -1259,6 +1280,36 @@ impl Host {
         }
     }
 
+    /// `--smoke session`: the first run files an icon and a visit for a page; the second asks
+    /// the store for them through the history path.
+    fn session_icon_setup(&mut self) {
+        let Some(smoke) = self.checks.session_smoke else {
+            return;
+        };
+        match smoke.phase {
+            crate::cli::Phase::Write => {
+                let at = now_ms();
+                self.store.record_visit(
+                    session_smoke::ICON_PAGE,
+                    "icon smoke",
+                    at,
+                    Transition::Typed,
+                );
+                self.store
+                    .put_favicon(session_smoke::ICON_PAGE, &session_smoke::smoke_icon(), at);
+            }
+            crate::cli::Phase::Read => {
+                self.store
+                    .query_history("favicon.wubble.test", now_ms(), 5, |hits| {
+                        let found = session_smoke::icon_restored(&hits);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            with_host(|host| host.session_icon = Some(found));
+                        });
+                    });
+            }
+        }
+    }
+
     fn session_smoke_step(&mut self) {
         let Some(state) = self.checks.session_smoke.take() else {
             return;
@@ -1280,6 +1331,7 @@ impl Host {
             visible: order
                 .iter()
                 .position(|&t| Some(t) == self.model.visible_tab()),
+            icon: self.session_icon,
         };
         let (state, action) = session_smoke::next(state, &seen, &want);
         self.checks.session_smoke = Some(state);
