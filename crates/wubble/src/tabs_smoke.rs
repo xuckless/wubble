@@ -18,12 +18,15 @@ pub struct Seen {
     pub visible_views: usize,
     /// The model's visible tab has an open, visible view.
     pub shown_is_visible: bool,
+    /// The shell shows a frame of a tab that is not the visible one.
+    pub stale_frame: bool,
 }
 
 impl Seen {
-    /// Exactly one view is visible and it is the model's visible tab's.
+    /// Exactly one view is visible, it is the model's visible tab's, and no
+    /// other tab's frame is on screen.
     fn one_visible(&self) -> bool {
-        self.visible_views == 1 && self.shown_is_visible
+        self.visible_views == 1 && self.shown_is_visible && !self.stale_frame
     }
 
     /// The engine holds exactly the model's live tabs, `n` of them.
@@ -124,6 +127,7 @@ mod tests {
             live_tabs: live,
             visible_views: 1,
             shown_is_visible: true,
+            stale_frame: false,
         }
     }
 
@@ -178,7 +182,11 @@ mod tests {
             shown_is_visible: false,
             ..seen(&WANT, 3, 3)
         };
-        let (s, actions) = run(&[seen(&[], 0, 0), seen(&WANT, 3, 3), both, wrong]);
+        let stale = Seen {
+            stale_frame: true,
+            ..seen(&WANT, 3, 3)
+        };
+        let (s, actions) = run(&[seen(&[], 0, 0), seen(&WANT, 3, 3), both, wrong, stale]);
         assert_eq!(s.stage, Stage::Switched(0));
         assert_eq!(actions, [Action::OpenPages, Action::Activate(0)]);
     }

@@ -148,8 +148,8 @@ fn new_tab_container_override_and_unknown() {
 
 #[test]
 fn close_prefers_opener_child_then_opener_then_next_then_previous() {
-    // opener child (set up directly: NewTab always activates, so a live opener
-    // relation to a background tab arises only transiently)
+    // opener child (set up directly: a shown NewTab becomes the active tab, so
+    // a live opener relation to a background tab arises only transiently)
     let (mut m, ids) = with_tabs(3);
     m.tabs.get_mut(&ids[2]).unwrap().opener = Some(ids[0]);
     let (m, _) = run(m, Command::ActivateTab(ids[0]));
@@ -165,6 +165,7 @@ fn close_prefers_opener_child_then_opener_then_next_then_previous() {
 
     // opener: closing the opened tab returns to the opener, not the next tab
     let (m, ids) = with_tabs(3);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
     let (m, t) = open(m, Some(ids[0]));
     let (m, fx) = run(m, Command::CloseTab(t));
     assert_eq!(active(&m), Some(ids[0]));
@@ -1009,4 +1010,80 @@ fn hides_after_a_tick_use_the_ticked_clock() {
     );
     let (m, _) = open(m, None);
     assert_eq!(m.tabs[&ids[0]].lifecycle.hidden_since, Some(later));
+}
+
+#[test]
+fn a_popup_from_a_hidden_tab_goes_next_to_it_and_stays_hidden() {
+    let (m, ids) = with_tabs(2);
+    // Same Space, opener hidden: placed after it, the visible tab stays.
+    let (m, p) = open(m, Some(ids[0]));
+    assert_eq!(m.order(s0()), vec![ids[0], p, ids[1]]);
+    assert_eq!(m.visible_tab(), Some(ids[1]));
+    assert_eq!(liveness(&m, p), Liveness::Background);
+    // Opener in another Space: into that Space, the active Space unchanged.
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run(m, Command::SwitchSpace(s2));
+    let (m, w) = open(m, None);
+    let (m, fx) = run_all(
+        m,
+        Command::NewTab {
+            url: "https://pop.test".into(),
+            container: None,
+            opener: Some(ids[1]),
+        },
+    );
+    let q = TabId(m.next_tab - 1);
+    assert!(matches!(core_effects(fx.clone())[..], [Effect::CreateTab { tab, .. }] if tab == q));
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![life(q, Life::CaptureSnapshot), life(q, Life::Hide)]
+    );
+    assert_eq!(m.order(s0()), vec![ids[0], p, ids[1], q]);
+    assert_eq!(m.order(s2), vec![w]);
+    assert_eq!((m.active_space, m.visible_tab()), (s2, Some(w)));
+    assert_eq!(active(&m), Some(w));
+    assert_eq!(m.spaces[0].active, Some(ids[1]));
+}
+
+#[test]
+fn a_loading_tab_is_not_put_to_sleep_until_the_load_ends() {
+    let (m, ids) = with_tabs(2);
+    let loading = |loading| Command::LoadingChanged {
+        tab: ids[0],
+        loading,
+    };
+    let (m, fx) = run_all(m, loading(true));
+    assert_eq!(fx, vec![]);
+    let (m, fx) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(fx, vec![]);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    let (m, _) = run_all(m, loading(false));
+    let (m, fx) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(
+        fx,
+        vec![
+            life(ids[0], Life::Discard),
+            life(ids[0], Life::ReleaseTexture)
+        ]
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+}
+
+#[test]
+fn reopening_a_pinned_tab_keeps_its_lifecycle_pinned() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::PinTab(ids[0]));
+    let (m, _) = run(m, Command::NewContainer { name: "W".into() });
+    let work = m.containers[1].id;
+    let (m, _) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: ids[0],
+            container: work,
+        },
+    );
+    let new = m.spaces[0].pinned[0];
+    assert_eq!(m.tabs[&new].lifecycle.pin, crate::lifecycle::Pin::Pinned);
+    let (m, _) = run(m, Command::UnpinTab(new));
+    assert_eq!(m.tabs[&new].lifecycle.pin, crate::lifecycle::Pin::Unpinned);
 }

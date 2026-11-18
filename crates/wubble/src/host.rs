@@ -20,7 +20,7 @@ use wubble_core::sleep::Pressure;
 use wubble_core::tab::TabId;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, ViewId};
 use wubble_engine::input::Point;
-use wubble_engine::nav::WebEvent;
+use wubble_engine::nav::{Cursor, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
@@ -135,7 +135,7 @@ pub struct Host {
     bar: Bar,
     /// The view last told about keyboard focus.
     focus_view: Option<ViewId>,
-    /// The tab whose frames `web-frame` shows.
+    /// The tab whose last frame `web-frame` shows, if any.
     presented: Option<TabId>,
     pub stats: FrameStats,
     last_present: Option<Instant>,
@@ -265,12 +265,14 @@ impl Host {
         let Some(window) = self.window.upgrade() else {
             return;
         };
-        let visible = self.model.visible_tab();
-        if visible != self.presented {
-            self.presented = visible;
-            if visible.is_none() {
-                window.set_web_frame(slint::Image::default());
-            }
+        // Another tab's frame (and cursor) must not stay on screen while
+        // input already goes to the visible tab: blank until it paints.
+        if self.presented.is_some() && self.presented != self.model.visible_tab() {
+            self.presented = None;
+            window.set_web_frame(slint::Image::default());
+            window.set_web_frame_clip_width(0);
+            window.set_web_frame_clip_height(0);
+            window.set_web_cursor(Cursor::Default as i32);
         }
         self.sync_focus(&window);
         crate::bind::render(&window, &crate::shell::view_model(&self.model));
@@ -384,6 +386,7 @@ impl Host {
         let clip = frame.size().cropped_to(layout.size);
         let image = self.presenter.present(frame).map_err(|e| e.to_string())?;
         window.set_web_frame(image);
+        self.presented = self.model.visible_tab();
         window.set_web_frame_clip_width(slint_int(clip.width));
         window.set_web_frame_clip_height(slint_int(clip.height));
         let now = Instant::now();
@@ -430,9 +433,12 @@ impl Host {
             WebEvent::UrlChanged(url) => self.dispatch(Command::UrlChanged { tab, url }),
             WebEvent::TitleChanged(title) => self.dispatch(Command::TitleChanged { tab, title }),
             WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
+            WebEvent::LoadingChanged { loading, .. } => {
+                self.dispatch(Command::LoadingChanged { tab, loading });
+            }
             WebEvent::RendererGone => self.dispatch(Command::RendererGone(tab)),
-            // No loading indicator or favicons in the shell yet.
-            WebEvent::LoadingChanged { .. } | WebEvent::FaviconChanged(_) => {}
+            // No favicons in the shell yet.
+            WebEvent::FaviconChanged(_) => {}
         }
     }
 
@@ -535,6 +541,9 @@ impl Host {
             live_tabs: self.model.live_tabs(),
             visible_views: self.engine.visible_views(),
             shown_is_visible: shown,
+            stale_frame: self
+                .presented
+                .is_some_and(|p| Some(p) != self.model.visible_tab()),
         }
     }
 

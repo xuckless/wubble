@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use crate::lifecycle::{self, Lifecycle, Pin};
+use crate::lifecycle::{self, Activity, Lifecycle, Pin};
 use crate::sleep::{Pressure, SleepPolicy};
 use crate::space::{Container, ContainerId, Folder, FolderId, Item, Rgb, Space, SpaceId};
 use crate::tab::{Liveness, Tab, TabId};
@@ -46,7 +46,9 @@ pub enum Dest {
 pub enum Command {
     /// Ctrl+T: only shows the command bar; a tab exists once something is chosen.
     OpenCommandBar,
-    /// Into the active Space. `container: None` uses the Space default.
+    /// Into the active Space and shown. With a live `opener` (a popup), into the
+    /// opener's Space right after it, shown only if the opener is the visible tab.
+    /// `container: None` uses the Space default.
     NewTab {
         url: String,
         container: Option<ContainerId>,
@@ -105,6 +107,12 @@ pub enum Command {
     TitleChanged {
         tab: TabId,
         title: String,
+    },
+    /// The engine reports whether the tab's page is loading. A loading tab is
+    /// busy: it is not frozen or discarded until the load ends.
+    LoadingChanged {
+        tab: TabId,
+        loading: bool,
     },
     /// The tab's renderer process died.
     RendererGone(TabId),
@@ -251,7 +259,7 @@ impl Model {
     }
 
     /// Pinned state is owned by placement; `Lifecycle::pin` mirrors it, synced
-    /// at the end of every `apply`.
+    /// by `move_tab`, the only way a tab enters or leaves the pinned section.
     pub fn is_pinned(&self, tab: TabId) -> bool {
         matches!(self.place_of(tab), Some((_, Place::Pinned(_))))
     }
@@ -450,9 +458,13 @@ impl Model {
         if container.is_some_and(|c| !self.has_container(c)) {
             return vec![];
         }
-        let si = self.space_idx(self.active_space).expect("active space");
+        let opener_space = opener.and_then(|o| self.place_of(o)).map(|(s, _)| s);
+        let opener = opener.filter(|_| opener_space.is_some());
+        let si = opener_space
+            .unwrap_or_else(|| self.space_idx(self.active_space).expect("active space"));
+        // A popup from a hidden tab must not take over the screen.
+        let show = opener.is_none() || opener == self.visible_tab();
         let default = self.spaces[si].container;
-        let opener = opener.filter(|o| self.place_of(*o).is_some_and(|(s, _)| s == si));
         let id = self.fresh_tab();
         let eff = container.unwrap_or(default);
         let tab = Tab {
@@ -480,15 +492,16 @@ impl Model {
             },
         };
         self.attach(id, dest, si);
-        self.spaces[si].active = Some(id);
-        vec![
-            Effect::CreateTab {
-                tab: id,
-                url,
-                container: eff,
-            },
-            Effect::ActivateTab(id),
-        ]
+        let mut fx = vec![Effect::CreateTab {
+            tab: id,
+            url,
+            container: eff,
+        }];
+        if show {
+            self.spaces[si].active = Some(id);
+            fx.push(Effect::ActivateTab(id));
+        }
+        fx
     }
 
     fn close_tab(&mut self, tab: TabId) -> Vec<Effect> {
@@ -542,8 +555,12 @@ impl Model {
             .flatten();
         self.detach(tab);
         self.attach(tab, to, dst);
-
-        let mut fx = vec![];
+        let pin = if matches!(to, Dest::Pinned { .. }) {
+            Pin::Pinned
+        } else {
+            Pin::Unpinned
+        };
+        let mut fx = self.lifecycle(tab, lifecycle::Event::PinnedChanged(pin));
         if src != dst {
             if src_was_active {
                 self.spaces[src].active = src_next;
@@ -684,7 +701,10 @@ impl Model {
                 id: new,
                 container,
                 opener: None,
-                lifecycle: Lifecycle::new(),
+                lifecycle: Lifecycle {
+                    pin: old.lifecycle.pin,
+                    ..Lifecycle::new()
+                },
                 ..old.clone()
             },
         );
@@ -725,39 +745,23 @@ impl Model {
         let Some(t) = self.tabs.get_mut(&tab) else {
             return vec![];
         };
-        let (next, fx) = lifecycle::transition(&SleepPolicy::default(), t.lifecycle, event);
+        let (next, fx) = step(tab, t.lifecycle, event);
         t.lifecycle = next;
-        fx.into_iter()
-            .map(|effect| Effect::Lifecycle { tab, effect })
-            .collect()
+        fx
     }
 
     /// Brings every lifecycle in line with the model after a command:
-    /// tabs `gone` since `before` are closed, pin state follows placement,
-    /// every tab but the visible one is hidden and the visible one shown.
-    /// Each transition is a no-op for a tab already in that state.
+    /// tabs `gone` since `before` are closed, every tab but the visible one
+    /// is hidden and the visible one shown. Each transition is a no-op for a
+    /// tab already in that state.
     fn settle(&mut self, before: &BTreeMap<TabId, Lifecycle>) -> Vec<Effect> {
-        let policy = SleepPolicy::default();
         let mut fx = vec![];
         for (&tab, &state) in before {
             if !self.tabs.contains_key(&tab) {
-                let (_, closed) = lifecycle::transition(&policy, state, lifecycle::Event::Closed);
-                fx.extend(
-                    closed
-                        .into_iter()
-                        .map(|effect| Effect::Lifecycle { tab, effect }),
-                );
+                fx.extend(step(tab, state, lifecycle::Event::Closed).1);
             }
         }
         let ids: Vec<TabId> = self.tabs.keys().copied().collect();
-        for &tab in &ids {
-            let pin = if self.is_pinned(tab) {
-                Pin::Pinned
-            } else {
-                Pin::Unpinned
-            };
-            fx.extend(self.lifecycle(tab, lifecycle::Event::PinnedChanged(pin)));
-        }
         let visible = self.visible_tab();
         let now = self.clock;
         for &tab in ids.iter().filter(|&&t| Some(t) != visible) {
@@ -778,6 +782,16 @@ impl Model {
             None => false,
         }
     }
+}
+
+/// The one call into `lifecycle::transition`, under the one sleep policy.
+fn step(tab: TabId, state: Lifecycle, event: lifecycle::Event) -> (Lifecycle, Vec<Effect>) {
+    let (next, fx) = lifecycle::transition(&SleepPolicy::default(), state, event);
+    let fx = fx
+        .into_iter()
+        .map(|effect| Effect::Lifecycle { tab, effect })
+        .collect();
+    (next, fx)
 }
 
 /// The only way to change a [`Model`].
@@ -867,6 +881,14 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
                 t.title = title;
             }
             vec![]
+        }
+        Command::LoadingChanged { tab, loading } => {
+            let activity = if loading {
+                Activity::Busy
+            } else {
+                Activity::Idle
+            };
+            m.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
         }
         Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),
         Command::Tick { now, pressure } => {

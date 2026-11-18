@@ -12,8 +12,9 @@ use wubble_ui::CommandKind;
 
 use crate::shell::tab_title;
 
-/// Search engine for text that is not an address. A fixed string until the
-/// first-run choice exists (TODO.md "Search").
+/// Search engine for text that is not an address: its name and query URL.
+/// Fixed until the first-run choice exists (TODO.md "Search").
+const SEARCH_NAME: &str = "DuckDuckGo";
 const SEARCH_URL: &str = "https://duckduckgo.com/?q=";
 
 /// What Enter on the query does.
@@ -62,10 +63,11 @@ pub fn resolve(input: &str) -> Resolved {
     let text = input.trim();
     let as_url = url::from_cli_arg(text);
     let has_scheme = as_url == text;
+    let lower = text.to_ascii_lowercase();
     let host_like = text.contains('.')
-        || text.eq_ignore_ascii_case("localhost")
-        || text.to_ascii_lowercase().starts_with("localhost:")
-        || text.to_ascii_lowercase().starts_with("localhost/");
+        || lower == "localhost"
+        || lower.starts_with("localhost:")
+        || lower.starts_with("localhost/");
     if !text.is_empty() && !text.contains(char::is_whitespace) && (has_scheme || host_like) {
         Resolved::Address(as_url)
     } else {
@@ -100,7 +102,7 @@ pub fn bar_rows(model: &Model, query: &str, mode: BarMode) -> Vec<BarRow> {
         Resolved::Search(_) => BarRow {
             kind: CommandKind::Search,
             title: text.into(),
-            subtitle: "Search DuckDuckGo".into(),
+            subtitle: format!("Search {SEARCH_NAME}"),
             action,
         },
     };
