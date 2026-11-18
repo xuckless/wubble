@@ -23,6 +23,7 @@ use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
 use crate::nav::WebEvent;
+use crate::page::{PageEvent, PageQueue};
 use crate::view::{View, ViewConfig};
 
 /// Sandbox off on every platform for now (TODO.md, M1 "Sandbox enabled").
@@ -182,7 +183,7 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
 }
 
 /// Identifies one view owned by the [`Engine`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId(usize);
 
 /// What the host must do with its single-shot pump timer after a pump call.
@@ -204,6 +205,20 @@ pub struct PumpOutcome {
     pub events: Vec<(ViewId, WebEvent)>,
 }
 
+/// What the engine does with a page's requests (dialogs, menus,
+/// permissions, file choosers, auth, certificate errors, download paths).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RequestMode {
+    /// Answer each with its default at once (cancel, deny, decline) and do
+    /// not report it: for a host that draws no prompts yet, so no page waits
+    /// on one.
+    #[default]
+    DefaultNow,
+    /// Report each as a [`PageEvent`] and wait for the host's answer (or the
+    /// view closing, which answers the default).
+    AskHost,
+}
+
 /// The running CEF process. Drive it only from the thread that started it.
 pub struct Engine {
     /// Open views, each counted in `state` until it reports itself closed.
@@ -217,6 +232,9 @@ pub struct Engine {
     runtime: Option<CefRuntime>,
     state: State,
     pump: PumpState,
+    requests: RequestMode,
+    /// What the views reported beyond navigation, until the host takes it.
+    page_events: PageQueue<ViewId>,
 }
 
 impl Engine {
@@ -240,6 +258,8 @@ impl Engine {
             runtime: Some(runtime),
             state: State::Uninitialised,
             pump: PumpState::default(),
+            requests: RequestMode::default(),
+            page_events: PageQueue::default(),
         };
         engine.apply(Event::Initialised);
         Ok(engine)
@@ -284,6 +304,24 @@ impl Engine {
         self.views.push((id, view));
         self.apply(Event::BrowserOpened);
         Ok(id)
+    }
+
+    /// How page requests are answered from now on. Requests already
+    /// reported keep waiting for the host.
+    pub fn set_request_mode(&mut self, mode: RequestMode) {
+        self.requests = mode;
+    }
+
+    /// The page events every view reported since the last call, in order.
+    /// Bounded: the oldest console messages, then other notices, are
+    /// dropped when the host falls behind ([`Self::page_events_dropped`]);
+    /// requests never are.
+    pub fn take_page_events(&mut self) -> Vec<(ViewId, PageEvent)> {
+        self.page_events.take()
+    }
+
+    pub fn page_events_dropped(&self) -> u64 {
+        self.page_events.dropped()
     }
 
     /// The view, until it has closed.
@@ -406,9 +444,13 @@ impl Engine {
         let mut events = Vec::new();
         let before = self.views.len();
         let mut gone_cpu = 0;
+        let (mode, page_events) = (self.requests, &mut self.page_events);
         self.views.retain_mut(|(id, view)| {
-            let (new, closed) = view.drain_events();
+            let (new, page, closed) = view.drain_events(mode);
             events.extend(new.into_iter().map(|event| (*id, event)));
+            for event in page {
+                page_events.push(*id, event);
+            }
             if closed {
                 gone_cpu += view.cpu_fallback_frames().unwrap_or(0);
             }
