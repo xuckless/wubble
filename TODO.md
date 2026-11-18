@@ -6,6 +6,25 @@ popups, split views) is one scene we control.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an open decision.
 
+## Status (2026-11-18)
+
+Ticks on `main`, counting sub-items. An item is ticked only when it is merged and its checks pass.
+
+| Milestone | Done | Open | In flight (not merged) |
+|---|---|---|---|
+| M0 Frame path | 10 | 3 | Windows CI green |
+| M1 Engine layer | 2 | 5 | popups and multi-window; page parity (clipboard bridge, context menu, drags, background tabs, autoscroll pointer) |
+| M2 Shell | 23 | 11 | shell polish lane; look pass against the Settings reference; motion and effects audit |
+| M3 Memory and sleeping | 2 | 7 | memory and sleep lane |
+| M4 DevTools and built-ins | 10 | 5 | docked DevTools; blocker at uBlock Origin level |
+| M5 Arc-style features | 0 | 7 | Arc features lane (sync stays deferred) |
+| Built in instead of extensions | 0 | 8 | media downloader; dark mode, reader, screenshots, link hints; video controls, picture-in-picture, SponsorBlock |
+| Performance pass | 0 | 6 | starts after M5 |
+
+Platforms: Linux passes every smoke. macOS runs windowed at the display rate on the M2 Pro
+(see Measured); its nav, session, block, settings, pages and autofill smokes are not rerun
+since the pacing fix. Windows does not build in CI yet.
+
 ## Decided
 
 | Topic | Decision |
