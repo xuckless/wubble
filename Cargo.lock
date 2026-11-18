@@ -8532,6 +8532,7 @@ dependencies = [
  "wubble-sysmem",
  "wubble-ui",
  "wubble-vault",
+ "zbus",
  "zeroize",
 ]
 

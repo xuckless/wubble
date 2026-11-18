@@ -147,6 +147,12 @@ export global Type {
 /// Durations and easings for Slint `animate`. Springs are not here as easings: Slint's
 /// `animate` has no spring or velocity, so the spring presets (k, c) are listed for reference
 /// and integrated in Rust (motion.rs `K`, driven by driver.rs).
+// wubble change: reduced motion (the design's `RM.on`, `touch-kit.tsx`), written by the host from
+// the setting and the OS preference. Entrances fade only: the shift and the scale-from go to rest.
+export global Calm {
+    in property <bool> reduced: false;
+}
+
 export global Motion {
     // ease: out .22,1,.36,1 · inOut .65,0,.35,1 · spring .3,1.55,.5,1
     out property <easing> easeOut: cubic-bezier(0.22, 1, 0.36, 1);
@@ -159,18 +165,18 @@ export global Motion {
     out property <duration> overlapIn: 240ms;
     out property <duration> overlapOut: 190ms;
     out property <length> overlapBlur: 4px;    // Slint can't blur arbitrary items; kept for the wgpu path
-    out property <length> overlapShift: 7px;
+    out property <length> overlapShift: Calm.reduced ? 0px : 7px; // wubble change: Calm
     out property <duration> overlapStagger: 30ms;
 
     // press: 0.97 over 120 ms (release springs back over 200 ms ease-out in wubble.css)
-    out property <float> pressScale: 0.97;
+    out property <float> pressScale: Calm.reduced ? 1 : 0.97; // wubble change: Calm
     out property <duration> pressMs: 120ms;
     out property <duration> pressRelease: 200ms;
 
     // dropdown: in 220 · out 176 · from 0.95
     out property <duration> dropdownIn: 220ms;
     out property <duration> dropdownOut: 176ms;
-    out property <float> dropdownFrom: 0.95;
+    out property <float> dropdownFrom: Calm.reduced ? 1 : 0.95; // wubble change: Calm
 
     // Spring presets [k, c] (README motion tokens), mirrored from physics.ts K for reference.
     out property <float> followK: 300;      out property <float> followC: 15;

@@ -3,7 +3,13 @@
 // `icons.tsx` (xuckless/the-wallpaper-project @ 6c840da), named by its CSS rule. Nothing here
 // repeats a value tokens.slint already has.
 
+import { Chrome } from "tokens.slint";
+
 export global Shell {
+    // Touch sizing: the host sets it from the input kind (a touch flips it on, a mouse move off)
+    // or the setting; every row height reads `row`, so one flag resizes the chrome.
+    in property <bool> touch: false;
+    out property <length> row: touch ? Chrome.rowTouch : Chrome.row;
     // Selected text in every text field: the Space sky as a translucent fill with ink on top.
     // Slint's default selection foreground is dark, which vanished on the old dark fill.
     out property <color> selection-fill: rgba(124, 200, 255, 0.35);

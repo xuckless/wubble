@@ -193,7 +193,7 @@ export component Sidebar inherits Rectangle {
     callback scroll-thumb-move(length);
     callback scroll-thumb-up();
     // row geometry for Rust: slot i sits at i × pitch
-    out property <length> pitch: Chrome.row + Chrome.rowGap;
+    out property <length> pitch: Shell.row + Chrome.rowGap;
     property <length> list-height: max(0px, root.tabs.length * root.pitch - Chrome.rowGap);
 
     background: transparent;   // the glass under it is the scene's (app.slint), or none without it
@@ -393,12 +393,12 @@ export component Sidebar inherits Rectangle {
                         property <length> row-x: (self.width - self.row-w) / 2;
 
                         // the indicator: under the rows, stretched along y about `origin`, squashed along x
-                        property <length> h: Chrome.row * root.indicator-stretch;
+                        property <length> h: Shell.row * root.indicator-stretch;
                         property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
                         // .wb-tab-ind: raised, with its top highlight, rim and drop shadow
                         indicator := Raised {
                             x: (parent.width - parent.w) / 2;
-                            y: root.indicator-y + (Chrome.row - parent.h) * root.indicator-origin;
+                            y: root.indicator-y + (Shell.row - parent.h) * root.indicator-origin;
                             width: parent.w;
                             height: parent.h;
                             radius: Radius.sm;
@@ -415,7 +415,7 @@ export component Sidebar inherits Rectangle {
                             x: parent.row-x;
                             y: gone.y;
                             width: parent.row-w;
-                            height: Chrome.row;
+                            height: Shell.row;
                             opacity: 1 - gone.e;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale: 1 - Shell.tab-exit-shrink * gone.e;
@@ -431,7 +431,7 @@ export component Sidebar inherits Rectangle {
                             x: parent.row-x;
                             y: i < root.row-y.length ? root.row-y[i] : i * root.pitch;
                             width: parent.row-w;
-                            height: Chrome.row;
+                            height: Shell.row;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale: i < root.row-scale.length ? root.row-scale[i] : 1;
                             Entering {

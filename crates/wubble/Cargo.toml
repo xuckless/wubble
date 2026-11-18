@@ -71,6 +71,9 @@ dispatch2 = "0.3"
 # pages' clipboard (`clipboard.rs`); the crate Slint's winit backend uses, already in
 # Cargo.lock (MIT).
 smithay-clipboard = "0.7"
+# The OS reduced-motion preference through the XDG Settings portal (`os_motion.rs`); already in
+# Cargo.lock through souvlaki (MIT).
+zbus = "5"
 
 [dev-dependencies]
 tempfile = "3"

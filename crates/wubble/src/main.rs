@@ -17,6 +17,7 @@ mod media_keys;
 mod media_smoke;
 mod menu;
 mod nav_smoke;
+mod os_motion;
 mod page_drag;
 mod page_error;
 mod page_smoke;

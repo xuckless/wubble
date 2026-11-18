@@ -2,7 +2,7 @@
 // xuckless/the-wallpaper-project @ 6c840da): the sidebar at the inset, the web view beside it
 // once the sidebar has width, the seam over both. Peek is from chrome.tsx (the port has none).
 
-import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
+import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing, Calm } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
 import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
@@ -35,7 +35,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { AutofillAnswer, AutofillView, PageScroll }
+export { AutofillAnswer, AutofillView, PageScroll, Calm, Shell }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
 
@@ -1190,7 +1190,7 @@ export component AppWindow inherits Window {
         x: root.drag-x + Spacing.s3;
         y: root.drag-y + Spacing.s3;
         width: min(ghost-text.preferred-width + 2 * Spacing.s3, Shell.drag-ghost-max);
-        height: Chrome.row;
+        height: Shell.row;
         border-radius: Radius.sm;
         background: Palette.shell;
         drop-shadow-blur: Shell.drag-ghost-blur;

@@ -36,8 +36,8 @@ use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
 use crate::{
-    AppWindow, BeamShape, GlassItem, GlassLayer, LeavingRow, PageScroll, Radius, SidebarMode,
-    TabItem, sync,
+    AppWindow, BeamShape, Chrome, GlassItem, GlassLayer, LeavingRow, PageScroll, Radius, Shell,
+    SidebarMode, TabItem, sync,
 };
 
 impl From<seam::SidebarMode> for SidebarMode {
@@ -122,15 +122,19 @@ fn active_space(window: &AppWindow) -> Option<usize> {
     window.get_spaces().iter().position(|s| s.id == active)
 }
 
+/// A Slint row id as a core row id. Injective over `i32`: header rows (folders, day labels) have
+/// negative ids, which must not collide.
+fn row_id(id: i32) -> u64 {
+    u64::from(id as u32)
+}
+
 fn row_ids(ids: &[i32]) -> Vec<u64> {
-    ids.iter()
-        .map(|&id| u64::try_from(id).unwrap_or(u64::MAX))
-        .collect()
+    ids.iter().map(|&id| row_id(id)).collect()
 }
 
 /// Whether the Slint row `t` is core row `id` (`row_ids`).
 fn same(t: &TabItem, id: u64) -> bool {
-    u64::try_from(t.id).is_ok_and(|i| i == id)
+    row_id(t.id) == id
 }
 
 fn index(i: i32) -> usize {
@@ -248,7 +252,13 @@ impl Driver {
         let (w_win, h_win) = (f64::from(size.width), f64::from(size.height));
         let mut moving = false;
 
-        // tab rows and the indicator (tabs.rs)
+        // tab rows and the indicator (tabs.rs), at the pitch the chrome's row size gives
+        // (touch sizing: `Shell.row`)
+        let shell = window.global::<Shell>();
+        let pitch = f64::from(shell.get_row() + window.global::<Chrome>().get_rowGap());
+        if pitch != self.tabs.pitch {
+            self.tabs.set_pitch(pitch);
+        }
         moving |= self.tabs.step(dt);
         sync(
             &self.row_y,
@@ -379,7 +389,16 @@ impl Driver {
     fn step_beam(&mut self, window: &AppWindow, dt: f64) -> bool {
         let tab = Some(i64::from(window.get_active_tab_id())).filter(|&id| id >= 0);
         let hue = beam::hue(self.laps);
-        if let Some(event) = self.watch.observe(tab, window.get_address_loading(), hue) {
+        if let Some(mut event) = self.watch.observe(tab, window.get_address_loading(), hue) {
+            // under reduced motion the beam never starts (the design's `chrome.tsx` `RM.on`)
+            if wubble_core::motion::reduced()
+                && matches!(
+                    event,
+                    beam::Event::Shown { .. } | beam::Event::LoadStarted { .. }
+                )
+            {
+                event = beam::Event::Reduce;
+            }
             if matches!(
                 event,
                 beam::Event::Shown { .. } | beam::Event::LoadStarted { .. }

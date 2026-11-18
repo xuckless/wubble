@@ -224,6 +224,23 @@ struct Calls {
 
 type Log = Rc<RefCell<Calls>>;
 
+/// Touch sizing: one flag (`Shell.touch`) makes rows 44 px and the springs carry the rows to the
+/// new pitch; turning it off brings them back.
+fn touch_sizing_resizes_rows(app: &AppWindow, driver: &Shared) {
+    app.set_tabs(tabs([1, 2, 3]));
+    app.invoke_shell_model_changed();
+    settle(app, driver);
+    let shell = app.global::<wubble_ui::Shell>();
+    assert_eq!(shell.get_row(), 36.0);
+    shell.set_touch(true);
+    assert_eq!(shell.get_row(), 44.0);
+    settle(app, driver);
+    assert_eq!(rows(app), vec![0.0, 48.0, 96.0]);
+    shell.set_touch(false);
+    settle(app, driver);
+    assert_eq!(rows(app), vec![0.0, 40.0, 80.0]);
+}
+
 #[test]
 fn tab_list_scenarios() {
     init_integration_test_with_mock_time();
@@ -244,4 +261,5 @@ fn tab_list_scenarios() {
     tab_drag_emits_tab_moved(&app, &driver, &log);
     drag_survives_an_in_place_rerender(&app, &driver);
     tab_scroll_reaches_scroller(&app, &driver);
+    touch_sizing_resizes_rows(&app, &driver);
 }

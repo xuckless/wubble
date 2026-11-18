@@ -118,6 +118,33 @@ pub const SIDEBAR_MODE: SettingDef = SettingDef {
     section: Section::Appearance,
     restart: false,
 };
+/// Calmer motion (`motion::reduced`): on, off, or follow the OS preference.
+pub const REDUCE_MOTION: SettingDef = SettingDef {
+    key: "ui.reduce_motion",
+    kind: SettingKind::Choice(&["auto", "on", "off"]),
+    default: "auto",
+    label: "Calmer motion",
+    section: Section::Appearance,
+    restart: false,
+};
+/// Touch sizing (`touch::Sizing`): 44 px rows under a finger, or always, or never.
+pub const TOUCH_SIZING: SettingDef = SettingDef {
+    key: "ui.touch_sizing",
+    kind: SettingKind::Choice(&["auto", "touch", "mouse"]),
+    default: "auto",
+    label: "Touch-sized rows",
+    section: Section::Appearance,
+    restart: false,
+};
+/// Shift+click on a link opens it in a peek over the page (`model::Glance`), not a new tab.
+pub const GLANCE_ENABLED: SettingDef = SettingDef {
+    key: "glance.enabled",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Open links in a peek (Shift+click)",
+    section: Section::General,
+    restart: false,
+};
 /// Opaque entries; the keybinding editor owns their format.
 pub const KEYBINDING_OVERRIDES: SettingDef = SettingDef {
     key: "keys.overrides",
@@ -687,6 +714,9 @@ pub const ALL: &[&SettingDef] = &[
     &LIVE_SUGGESTIONS,
     &SIDEBAR_WIDTH,
     &SIDEBAR_MODE,
+    &REDUCE_MOTION,
+    &TOUCH_SIZING,
+    &GLANCE_ENABLED,
     &KEYBINDING_OVERRIDES,
     &BLOCKER_ENABLED,
     &BLOCKER_EXCEPTIONS,

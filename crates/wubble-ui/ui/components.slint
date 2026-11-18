@@ -279,7 +279,7 @@ export component TabRow inherits Rectangle {
     // tab hover preview).
     callback hovered(bool, length);
 
-    height: Chrome.row;
+    height: Shell.row; // wubble change: touch sizing (Shell.row)
     border-radius: Radius.sm;
     // the selected row's background is the indicator (drawn by Sidebar), so rows only hover
     // wubble change: .wb-tab:hover white 4.5 % (the port's opaque shell read as a slab)

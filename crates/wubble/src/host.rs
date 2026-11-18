@@ -22,6 +22,7 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+mod look;
 mod media;
 mod pages;
 mod panes;
@@ -64,6 +65,7 @@ use wubble_core::pages::InternalPage;
 use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
+use wubble_core::touch::InputEvent;
 use wubble_core::window::WindowId;
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
@@ -448,6 +450,10 @@ pub struct Host {
     boosts: boost::Boosts,
     /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/videos.rs`).
     videos: videos::Videos,
+    /// Reduced motion and touch sizing (`look.rs`).
+    look: look::Look,
+    /// Shift+click opens a peek (`glance.enabled`).
+    glance_enabled: bool,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
 }
@@ -602,6 +608,8 @@ impl Host {
             boosts: boost::Boosts::new(boosts),
             videos,
             video_passed: None,
+            look: look::Look::new(),
+            glance_enabled: true,
         };
         host.replay_settings();
         if host.checks.check_pixels {
@@ -665,6 +673,7 @@ impl Host {
                 return;
             }
         };
+        look::paint(&opened.handle, self.look());
         if let Err(e) = opened.handle.show() {
             eprintln!("wubble: window {}: {e}", id.0);
             return;
@@ -1936,6 +1945,7 @@ impl Host {
         }
         self.save_download_progress();
         self.passwords_tick(now);
+        self.look_tick();
     }
 
     // ----- smokes
@@ -2602,8 +2612,18 @@ impl Host {
         }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
+            WindowEvent::Touch(t) => {
+                let at = t
+                    .location
+                    .to_logical::<f64>(window.window().scale_factor().into());
+                self.input_kind(InputEvent::Touch { x: at.x, y: at.y });
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let position = position.to_logical(window.window().scale_factor().into());
+                self.input_kind(InputEvent::MouseMove {
+                    x: f64::from(position.x),
+                    y: f64::from(position.y),
+                });
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
                 self.w
                     .glass

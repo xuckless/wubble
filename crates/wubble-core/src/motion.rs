@@ -86,10 +86,65 @@ pub const REST: f64 = 0.02;
 /// driver (`wubble_ui::driver`), not by `step`.
 pub const DT_CAP: f64 = 0.032;
 
+// wubble change: reduced motion, ported from `pages/touch-kit.tsx` `RM` / `spr` / `stretchOf` /
+// `squashAt` (@source touch-loop): one flag read inside the three chokepoints, so every spring,
+// stretch and squash built on them snaps with no per-caller change. Per thread: the UI is single
+// threaded, and `cargo test`'s parallel tests stay independent.
+thread_local! {
+    static REDUCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// wubble change: true while motion is reduced (the setting, or the OS preference): springs land
+/// at once, stretch stays 1, squash is cut.
+#[inline]
+pub fn reduced() -> bool {
+    REDUCED.with(std::cell::Cell::get)
+}
+
+/// wubble change: set the reduced-motion flag for this thread (the host's one writer).
+pub fn set_reduced(on: bool) {
+    REDUCED.with(|r| r.set(on));
+}
+
+/// wubble change: the `ui.reduce_motion` setting ("Calmer motion"): on, off, or follow the OS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Calm {
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl Calm {
+    /// From the setting's stored choice; unknown values are `Auto`.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "on" => Calm::On,
+            "off" => Calm::Off,
+            _ => Calm::Auto,
+        }
+    }
+
+    /// Whether motion is reduced, given the OS preference.
+    pub fn reduced(self, os: bool) -> bool {
+        match self {
+            Calm::On => true,
+            Calm::Off => false,
+            Calm::Auto => os,
+        }
+    }
+}
+
 /// One semi-implicit Euler step of a damped spring. Returns true while still moving.
 /// Velocity first, then position from the new velocity (same order as physics.ts).
+/// wubble change: under [`reduced`] it lands at once (the design's `spr`).
 #[inline]
 pub fn step(s: &mut Spring, target: f64, k: f64, c: f64, dt: f64) -> bool {
+    if reduced() {
+        s.x = target;
+        s.v = 0.0;
+        return false;
+    }
     let a = -k * (s.x - target) - c * s.v;
     s.v += a * dt;
     s.x += s.v * dt;
@@ -155,6 +210,13 @@ impl Stretch {
     }
 
     pub fn update_with(&mut self, value: f64, dt: f64, max: f64, full: f64) -> bool {
+        // wubble change: under reduced motion the stretch stays 1 (the design's `stretchOf`).
+        if reduced() {
+            self.last = value;
+            self.vel = 0.0;
+            self.s = spring(1.0);
+            return false;
+        }
         let inst = if self.last.is_nan() {
             0.0
         } else {
@@ -221,7 +283,8 @@ pub const SQUASH_MS: f64 = 500.0;
 /// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token).
 /// Ease-out between keys; outside 0..1 it is at rest, `(1, 1)`.
 pub fn squash_at(t: f64, amp: f64) -> (f64, f64) {
-    if !(0.0..1.0).contains(&t) {
+    // wubble change: cut under reduced motion (the design's `squashAt`).
+    if reduced() || !(0.0..1.0).contains(&t) {
         return (1.0, 1.0);
     }
     let k = &SQUASH_KEYS;
@@ -321,6 +384,27 @@ pub const OVERLAP_IN: f64 = 0.24;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_motion_snaps_springs_stretch_and_squash() {
+        set_reduced(true);
+        let mut s = spring(0.0);
+        assert!(!step(&mut s, 100.0, 300.0, 15.0, 0.016));
+        assert_eq!(s, spring(100.0));
+        let mut st = Stretch::new();
+        assert!(!st.update(0.0, 0.016));
+        assert!(!st.update(500.0, 0.016));
+        assert_eq!(st.x(), 1.0);
+        assert_eq!(squash_at(0.3, 1.0), (1.0, 1.0));
+        set_reduced(false);
+        assert!(Calm::parse("on").reduced(false));
+        assert!(!Calm::parse("off").reduced(true));
+        assert!(Calm::parse("auto").reduced(true) && !Calm::Auto.reduced(false));
+        let mut s = spring(0.0);
+        assert!(step(&mut s, 100.0, 300.0, 15.0, 0.016));
+        assert!(s.x < 100.0);
+        assert_ne!(squash_at(0.3, 1.0), (1.0, 1.0));
+    }
 
     #[test]
     fn bezier_matches_the_css_curves() {
