@@ -17,6 +17,7 @@
 //! page waiting.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Identifies one held request until it is answered. Never 0: 0 reads like
 /// "no request" in host code, and an id the host sees for a request welding
@@ -34,15 +35,29 @@ pub(crate) trait Answer {
     fn answer_default(self);
 }
 
+/// wubble change: one counter for every table, so an id names one request
+/// across all kinds (a host may key its open prompts on the id alone).
+/// Process-wide, so ids are also unique across browsers.
+static LAST_ID: AtomicU32 = AtomicU32::new(0);
+
+/// The next id, never 0. After 2^32 requests it wraps; a table still holding
+/// that id skips it.
+fn next_id() -> RequestId {
+    loop {
+        let id = LAST_ID.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        if id != 0 {
+            return id;
+        }
+    }
+}
+
 pub(crate) struct Held<C: Answer> {
-    last: RequestId,
     pending: HashMap<RequestId, C>,
 }
 
 impl<C: Answer> Default for Held<C> {
     fn default() -> Self {
         Self {
-            last: 0,
             pending: HashMap::new(),
         }
     }
@@ -55,15 +70,14 @@ impl<C: Answer> Held<C> {
         if self.pending.len() >= MAX_HELD {
             return Err(callback);
         }
-        // Skip 0 and any id still waiting after the counter wrapped.
-        loop {
-            self.last = self.last.wrapping_add(1);
-            if self.last != 0 && !self.pending.contains_key(&self.last) {
-                break;
+        let id = loop {
+            let id = next_id();
+            if !self.pending.contains_key(&id) {
+                break id;
             }
-        }
-        self.pending.insert(self.last, callback);
-        Ok(self.last)
+        };
+        self.pending.insert(id, callback);
+        Ok(id)
     }
 
     /// The callback waiting on `id`, once. `None` for an id that was already
@@ -72,16 +86,23 @@ impl<C: Answer> Held<C> {
         self.pending.remove(&id)
     }
 
-    /// Everything still waiting, removed. Ids are not reused afterwards.
-    /// Answer them after releasing any lock around the table: a CEF callback
-    /// may call straight back into a handler that takes it.
-    pub(crate) fn drain(&mut self) -> Vec<C> {
-        self.pending.drain().map(|(_, callback)| callback).collect()
+    /// wubble change: the first waiting request `matches` accepts, removed,
+    /// with its id. For CEF dismissing a request itself.
+    pub(crate) fn take_where(&mut self, matches: impl Fn(&C) -> bool) -> Option<(RequestId, C)> {
+        let id = *self.pending.iter().find(|(_, c)| matches(c))?.0;
+        self.pending.remove(&id).map(|c| (id, c))
+    }
+
+    /// Everything still waiting, removed, with its id. Ids are not reused
+    /// afterwards. Answer them after releasing any lock around the table: a
+    /// CEF callback may call straight back into a handler that takes it.
+    pub(crate) fn drain(&mut self) -> Vec<(RequestId, C)> {
+        self.pending.drain().collect()
     }
 
     /// Answer everything still waiting with its default.
     pub(crate) fn drain_default(&mut self) {
-        for callback in self.drain() {
+        for (_, callback) in self.drain() {
             callback.answer_default();
         }
     }
@@ -295,6 +316,34 @@ pub(crate) mod tests {
         held.hold(Fake(2, log.clone())).ok().unwrap();
         drop(held);
         assert_eq!(log.answered(), vec![1, 2]);
+    }
+
+    #[test]
+    fn ids_are_unique_across_tables() {
+        // A host keys open prompts on the id: a dialog and a permission
+        // request in one view must never share one.
+        let log = Log::default();
+        let mut dialogs = Held::default();
+        let mut permissions = Held::default();
+        let a = dialogs.hold(Fake(1, log.clone())).ok().unwrap();
+        let b = permissions.hold(Fake(2, log.clone())).ok().unwrap();
+        let c = dialogs.hold(Fake(3, log.clone())).ok().unwrap();
+        assert!(a != b && b != c && a != c, "{a} {b} {c}");
+    }
+
+    #[test]
+    fn take_where_removes_one_match_without_answering_it() {
+        let log = Log::default();
+        let mut held = Held::default();
+        held.hold(Fake(1, log.clone())).ok().unwrap();
+        let two = held.hold(Fake(2, log.clone())).ok().unwrap();
+        let (id, fake) = held.take_where(|f| f.0 == 2).unwrap();
+        assert_eq!((id, fake.0), (two, 2));
+        assert!(held.take_where(|f| f.0 == 2).is_none());
+        drop(fake);
+        assert_eq!(held.outstanding(), 1);
+        drop(held);
+        assert_eq!(log.answered(), vec![1], "the dismissed one was answered too");
     }
 
     #[test]

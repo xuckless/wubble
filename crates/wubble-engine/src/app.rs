@@ -313,9 +313,10 @@ impl Engine {
     }
 
     /// The page events every view reported since the last call, in order.
-    /// Bounded: the oldest console messages, then other notices, are
-    /// dropped when the host falls behind ([`Self::page_events_dropped`]);
-    /// requests never are.
+    /// Bounded: the oldest droppable notices (console output, intermediate
+    /// progress, find, IME, popup moves) are dropped when the host falls
+    /// behind ([`Self::page_events_dropped`]); requests and events that
+    /// start or end something never are.
     pub fn take_page_events(&mut self) -> Vec<(ViewId, PageEvent)> {
         self.page_events.take()
     }

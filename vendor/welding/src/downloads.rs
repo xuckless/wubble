@@ -71,6 +71,9 @@ struct Inner {
     ask: bool,
     /// wubble change: the latest control per running download.
     controls: HashMap<DownloadId, Box<dyn DownloadControl>>,
+    /// wubble change: ops for a started download CEF has not handed a
+    /// control for yet, applied in order when the first one arrives.
+    queued: HashMap<DownloadId, Vec<DownloadOp>>,
     last_progress: HashMap<DownloadId, Instant>,
     started: HashSet<DownloadId>,
 }
@@ -107,17 +110,29 @@ impl Downloads {
         inner.dir.is_some() || inner.ask
     }
 
-    /// wubble change: keep the newest control CEF handed over for `id`.
+    /// wubble change: keep the newest control CEF handed over for `id`, and
+    /// apply any ops the host sent before the first one arrived.
     pub(crate) fn set_control(&self, id: DownloadId, control: Box<dyn DownloadControl>) {
-        self.inner.lock().unwrap().controls.insert(id, control);
+        let mut inner = self.inner.lock().unwrap();
+        for op in inner.queued.remove(&id).unwrap_or_default() {
+            control.apply(op);
+        }
+        inner.controls.insert(id, control);
     }
 
-    /// wubble change: steer a running download now. False when welding holds
-    /// no control for it (not started, finished or cancelled).
+    /// wubble change: steer a running download now, or as soon as CEF hands
+    /// over its control (a host may pause in the same tick it answered the
+    /// path). False when the download is not running (not started, finished
+    /// or cancelled).
     pub(crate) fn steer(&self, id: DownloadId, op: DownloadOp) -> bool {
-        let inner = self.inner.lock().unwrap();
-        let Some(control) = inner.controls.get(&id) else { return false };
-        control.apply(op);
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(control) = inner.controls.get(&id) {
+            control.apply(op);
+        } else if inner.started.contains(&id) {
+            inner.queued.entry(id).or_default().push(op);
+        } else {
+            return false;
+        }
         true
     }
 
@@ -152,6 +167,7 @@ impl Downloads {
     pub(crate) fn forget(&self, id: DownloadId) {
         let mut inner = self.inner.lock().unwrap();
         inner.controls.remove(&id);
+        inner.queued.remove(&id);
         inner.last_progress.remove(&id);
         inner.started.remove(&id);
     }
@@ -288,6 +304,25 @@ mod tests {
             *seen.0.borrow(),
             vec![(2, DownloadOp::Pause), (2, DownloadOp::Resume)],
             "an older control was used, or an op waited for an update"
+        );
+    }
+
+    #[test]
+    fn an_op_before_the_first_control_waits_for_it() {
+        let d = Downloads::default();
+        let seen = Recorder::default();
+        d.mark_started(7);
+        // Answered the path and paused in the same tick: CEF has not sent
+        // an update with a control yet.
+        assert!(d.steer(7, DownloadOp::Pause), "a started download refused an op");
+        assert!(d.steer(7, DownloadOp::Resume));
+        assert!(seen.0.borrow().is_empty());
+        d.set_control(7, Box::new(Control(1, seen.clone())));
+        d.set_control(7, Box::new(Control(2, seen.clone())));
+        assert_eq!(
+            *seen.0.borrow(),
+            vec![(1, DownloadOp::Pause), (1, DownloadOp::Resume)],
+            "queued ops were lost, reordered or applied twice"
         );
     }
 

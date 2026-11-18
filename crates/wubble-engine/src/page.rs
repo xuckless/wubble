@@ -23,8 +23,13 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-/// The token the host quotes back to answer one request. Unique per view
-/// for the view's life; never 0.
+/// welding's plain-data types, used as they are (no CEF types in them).
+/// `JsDialogKind::default_accept` is the one table of dialog defaults.
+pub use welding::{AcceptFilter, FileChooserMode, JsDialogKind, PermissionKind};
+
+/// The token the host quotes back to answer one request. Unique across
+/// every kind of request and every view for the engine's life (welding
+/// counts them once per process); never 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId(pub u32);
 
@@ -49,220 +54,6 @@ impl From<welding::PopupRect> for Rect {
             y: r.y,
             width: r.width,
             height: r.height,
-        }
-    }
-}
-
-/// Which JS dialog a page opened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DialogKind {
-    Alert,
-    Confirm,
-    Prompt,
-    /// "Leave site?" before a navigation (or a reload). Never shown when the
-    /// shell closes a tab: the view closes without asking the page.
-    BeforeUnload {
-        is_reload: bool,
-    },
-}
-
-impl From<welding::JsDialogKind> for DialogKind {
-    fn from(kind: welding::JsDialogKind) -> Self {
-        match kind {
-            welding::JsDialogKind::Alert => Self::Alert,
-            welding::JsDialogKind::Confirm => Self::Confirm,
-            welding::JsDialogKind::Prompt => Self::Prompt,
-            welding::JsDialogKind::BeforeUnload { is_reload } => Self::BeforeUnload { is_reload },
-        }
-    }
-}
-
-impl From<DialogKind> for welding::JsDialogKind {
-    fn from(kind: DialogKind) -> Self {
-        match kind {
-            DialogKind::Alert => Self::Alert,
-            DialogKind::Confirm => Self::Confirm,
-            DialogKind::Prompt => Self::Prompt,
-            DialogKind::BeforeUnload { is_reload } => Self::BeforeUnload { is_reload },
-        }
-    }
-}
-
-impl DialogKind {
-    /// The answer a dismissed dialog gets (welding's one table): cancel,
-    /// except `beforeunload`, which leaves the page.
-    pub fn default_accept(self) -> bool {
-        welding::JsDialogKind::from(self).default_accept()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FileChooserMode {
-    Open,
-    OpenMultiple,
-    OpenFolder,
-    Save,
-}
-
-impl From<welding::FileChooserMode> for FileChooserMode {
-    fn from(mode: welding::FileChooserMode) -> Self {
-        match mode {
-            welding::FileChooserMode::Open => Self::Open,
-            welding::FileChooserMode::OpenMultiple => Self::OpenMultiple,
-            welding::FileChooserMode::OpenFolder => Self::OpenFolder,
-            welding::FileChooserMode::Save => Self::Save,
-        }
-    }
-}
-
-/// One `accept` entry: a MIME type (`image/*`) or extension (`.png`), the
-/// extensions it stands for, and a description; the last two may be empty.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AcceptFilter {
-    pub filter: String,
-    pub extensions: Vec<String>,
-    pub description: String,
-}
-
-impl From<welding::AcceptFilter> for AcceptFilter {
-    fn from(f: welding::AcceptFilter) -> Self {
-        Self {
-            filter: f.filter,
-            extensions: f.extensions,
-            description: f.description,
-        }
-    }
-}
-
-/// What a page asked for. Anything welding does not name is `Other` with
-/// CEF's raw bit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Permission {
-    Camera,
-    Microphone,
-    Geolocation,
-    Notifications,
-    Clipboard,
-    MidiSysex,
-    PointerLock,
-    KeyboardLock,
-    IdleDetection,
-    LocalFonts,
-    StorageAccess,
-    ProtectedMediaIdentifier,
-    DesktopAudioCapture,
-    DesktopVideoCapture,
-    Other(u32),
-}
-
-/// The engine's names and welding's, one row each.
-const PERMISSIONS: [(Permission, welding::PermissionKind); 14] = {
-    use welding::PermissionKind as K;
-    [
-        (Permission::Camera, K::CameraStream),
-        (Permission::Microphone, K::MicStream),
-        (Permission::Geolocation, K::Geolocation),
-        (Permission::Notifications, K::Notifications),
-        (Permission::Clipboard, K::Clipboard),
-        (Permission::MidiSysex, K::MidiSysex),
-        (Permission::PointerLock, K::PointerLock),
-        (Permission::KeyboardLock, K::KeyboardLock),
-        (Permission::IdleDetection, K::IdleDetection),
-        (Permission::LocalFonts, K::LocalFonts),
-        (Permission::StorageAccess, K::StorageAccess),
-        (
-            Permission::ProtectedMediaIdentifier,
-            K::ProtectedMediaIdentifier,
-        ),
-        (Permission::DesktopAudioCapture, K::DesktopAudioCapture),
-        (Permission::DesktopVideoCapture, K::DesktopVideoCapture),
-    ]
-};
-
-impl From<welding::PermissionKind> for Permission {
-    fn from(kind: welding::PermissionKind) -> Self {
-        match kind {
-            welding::PermissionKind::Other(bit) => Self::Other(bit),
-            kind => PERMISSIONS
-                .iter()
-                .find(|(_, k)| *k == kind)
-                .map_or(Self::Other(0), |(p, _)| *p),
-        }
-    }
-}
-
-impl From<Permission> for welding::PermissionKind {
-    fn from(p: Permission) -> Self {
-        match p {
-            Permission::Other(bit) => Self::Other(bit),
-            p => PERMISSIONS
-                .iter()
-                .find(|(e, _)| *e == p)
-                .map_or(Self::Other(0), |(_, k)| *k),
-        }
-    }
-}
-
-/// A certificate error, by Chromium net error code (`net/base/net_error_list.h`,
-/// as `cef_errorcode_t` in CEF 156). Codes the table does not name are kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CertError {
-    CommonNameInvalid,
-    DateInvalid,
-    AuthorityInvalid,
-    ContainsErrors,
-    NoRevocationMechanism,
-    UnableToCheckRevocation,
-    Revoked,
-    Invalid,
-    WeakSignatureAlgorithm,
-    NonUniqueName,
-    WeakKey,
-    NameConstraintViolation,
-    ValidityTooLong,
-    CertificateTransparencyRequired,
-    KnownInterceptionBlocked,
-    SelfSignedLocalNetwork,
-    Other(i32),
-}
-
-/// Read off CEF 156's `cef_errorcode_t` (cef-dll-sys 156.6 bindings).
-const CERT_ERRORS: [(i32, CertError); 16] = [
-    (-200, CertError::CommonNameInvalid),
-    (-201, CertError::DateInvalid),
-    (-202, CertError::AuthorityInvalid),
-    (-203, CertError::ContainsErrors),
-    (-204, CertError::NoRevocationMechanism),
-    (-205, CertError::UnableToCheckRevocation),
-    (-206, CertError::Revoked),
-    (-207, CertError::Invalid),
-    (-208, CertError::WeakSignatureAlgorithm),
-    (-210, CertError::NonUniqueName),
-    (-211, CertError::WeakKey),
-    (-212, CertError::NameConstraintViolation),
-    (-213, CertError::ValidityTooLong),
-    (-214, CertError::CertificateTransparencyRequired),
-    (-217, CertError::KnownInterceptionBlocked),
-    (-219, CertError::SelfSignedLocalNetwork),
-];
-
-impl From<i32> for CertError {
-    fn from(code: i32) -> Self {
-        CERT_ERRORS
-            .iter()
-            .find(|(c, _)| *c == code)
-            .map_or(Self::Other(code), |(_, e)| *e)
-    }
-}
-
-impl CertError {
-    pub fn code(self) -> i32 {
-        match self {
-            Self::Other(code) => code,
-            e => CERT_ERRORS
-                .iter()
-                .find(|(_, x)| *x == e)
-                .map_or(0, |(c, _)| *c),
         }
     }
 }
@@ -480,7 +271,7 @@ pub enum PageEvent {
     /// Answer with `View::answer_dialog`.
     DialogRequested {
         id: RequestId,
-        kind: DialogKind,
+        kind: JsDialogKind,
         origin: String,
         message: String,
         /// A prompt's default input.
@@ -499,7 +290,7 @@ pub enum PageEvent {
     PermissionRequested {
         id: RequestId,
         origin: String,
-        permissions: Vec<Permission>,
+        permissions: Vec<PermissionKind>,
     },
     /// Answer with `View::answer_file_chooser`.
     FileChooserRequested {
@@ -520,11 +311,16 @@ pub enum PageEvent {
         proxy: bool,
     },
     /// Answer with `View::answer_certificate`; the default is cancel.
+    /// `code` is Chromium's net error (`ERR_CERT_*`, -200 to -219,
+    /// `net/base/net_error_list.h`).
     CertificateError {
         id: RequestId,
         url: String,
-        error: CertError,
+        code: i32,
     },
+    /// CEF gave up on these requests without an answer (their page was left,
+    /// or a permission prompt was dismissed): close what shows them.
+    RequestsDismissed(Vec<RequestId>),
     /// Answer with `View::answer_download_path`; no file dialog is shown.
     DownloadRequested {
         id: RequestId,
@@ -551,6 +347,9 @@ pub enum PageEvent {
         download: DownloadId,
         path: PathBuf,
     },
+    /// The download was interrupted (network, disk or server error). Not
+    /// an end: `View::resume_download` retries it, CEF may resume it itself
+    /// (`DownloadResumed` follows), `View::cancel_download` ends it.
     DownloadFailed {
         download: DownloadId,
         error: String,
@@ -569,7 +368,6 @@ pub enum PageEvent {
     /// The page entered or left fullscreen. The host grows the view to the
     /// window (or screen) and maps Esc to `View::exit_fullscreen`.
     FullscreenChanged(bool),
-    AudibleChanged(bool),
     MutedChanged(bool),
     Console {
         level: LogLevel,
@@ -617,6 +415,21 @@ impl PageEvent {
         }
     }
 
+    /// A notice a full queue may lose: console output and the intermediate
+    /// updates a later one supersedes. Requests and every event that starts
+    /// or ends something (a download, a dialog, a drag, fullscreen) are
+    /// never dropped.
+    fn droppable(&self) -> bool {
+        matches!(
+            self,
+            Self::Console { .. }
+                | Self::DownloadProgress { .. }
+                | Self::FindResult { done: false, .. }
+                | Self::ImeBounds { .. }
+                | Self::PopupMoved(_)
+        )
+    }
+
     /// Whether `next` may replace `self` at the end of the queue: only the
     /// latest of a burst matters.
     fn superseded_by(&self, next: &PageEvent) -> bool {
@@ -633,9 +446,10 @@ impl PageEvent {
     }
 }
 
-/// At most this many events wait for the host before console messages, and
-/// then other notices, are dropped. Requests are never dropped (welding caps
-/// each kind per view).
+/// At most this many events wait for the host before droppable notices
+/// (console output, intermediate progress, find, IME and popup moves) are
+/// dropped, oldest first. Other events are always kept: requests are capped
+/// by welding per kind and view, and the rest follow real lifecycles.
 pub const MAX_PAGE_EVENTS: usize = 1024;
 
 /// The events waiting for the host, per view key `K`.
@@ -663,21 +477,20 @@ impl<K: PartialEq> PageQueue<K> {
             *last = event;
             return;
         }
-        if self.events.len() >= MAX_PAGE_EVENTS && event.request().is_none() {
-            let console = self
-                .events
-                .iter()
-                .position(|(_, e)| matches!(e, PageEvent::Console { .. }));
-            match console {
-                Some(i) if !matches!(event, PageEvent::Console { .. }) => {
+        if self.events.len() >= MAX_PAGE_EVENTS {
+            match self.events.iter().position(|(_, e)| e.droppable()) {
+                Some(i) => {
                     self.events.remove(i);
                 }
-                _ => {
+                None if event.droppable() => {
                     self.dropped += 1;
                     return;
                 }
+                None => {}
             }
-            self.dropped += 1;
+            if self.events.len() < MAX_PAGE_EVENTS {
+                self.dropped += 1;
+            }
         }
         self.events.push_back((key, event));
     }
@@ -722,43 +535,10 @@ mod tests {
     }
 
     #[test]
-    fn permission_names_round_trip_through_welding() {
-        for (p, k) in PERMISSIONS {
-            assert_eq!(Permission::from(k), p);
-            assert_eq!(welding::PermissionKind::from(p), k);
-        }
-        let odd = welding::PermissionKind::Other(1 << 30);
-        assert_eq!(Permission::from(odd), Permission::Other(1 << 30));
-        assert_eq!(
-            welding::PermissionKind::from(Permission::Other(1 << 30)),
-            odd
-        );
-    }
-
-    #[test]
-    fn cert_errors_decode_and_keep_unknown_codes() {
-        assert_eq!(CertError::from(-202), CertError::AuthorityInvalid);
-        assert_eq!(CertError::from(-201), CertError::DateInvalid);
-        assert_eq!(CertError::from(-219), CertError::SelfSignedLocalNetwork);
-        assert_eq!(CertError::from(-209), CertError::Other(-209));
-        for (code, e) in CERT_ERRORS {
-            assert_eq!(e.code(), code);
-        }
-        assert_eq!(CertError::Other(-216).code(), -216);
-    }
-
-    #[test]
     fn log_levels_follow_cef_severity() {
         let got: Vec<_> = (0..7).map(LogLevel::from_severity).collect();
         use LogLevel::*;
         assert_eq!(got, vec![Info, Verbose, Info, Warning, Error, Fatal, Info]);
-    }
-
-    #[test]
-    fn dialog_defaults_come_from_welding() {
-        assert!(!DialogKind::Confirm.default_accept());
-        assert!(!DialogKind::Prompt.default_accept());
-        assert!(DialogKind::BeforeUnload { is_reload: true }.default_accept());
     }
 
     #[test]
@@ -822,48 +602,73 @@ mod tests {
     }
 
     #[test]
-    fn a_full_queue_drops_console_first_and_never_a_request() {
+    fn a_full_queue_drops_the_oldest_droppable_and_never_a_request() {
         let mut q = PageQueue::default();
         for n in 0..MAX_PAGE_EVENTS as i32 {
             q.push(0, console(n));
         }
+        // A droppable notice replaces the oldest droppable one.
         q.push(0, console(-1));
         assert_eq!((q.len(), q.dropped()), (MAX_PAGE_EVENTS, 1));
-        // A notice evicts the oldest console message.
-        q.push(0, PageEvent::AudibleChanged(true));
+        q.push(0, PageEvent::MutedChanged(true));
         assert_eq!((q.len(), q.dropped()), (MAX_PAGE_EVENTS, 2));
-        // A request always gets in.
         q.push(
             0,
             PageEvent::CertificateError {
                 id: RequestId(1),
                 url: String::new(),
-                error: CertError::Invalid,
+                code: -207,
             },
         );
-        assert_eq!(q.len(), MAX_PAGE_EVENTS + 1);
+        assert_eq!((q.len(), q.dropped()), (MAX_PAGE_EVENTS, 3));
         let events = q.take();
         assert_eq!(
             events[0].1,
-            console(1),
+            console(3),
             "the oldest was not the one evicted"
         );
         assert!(
             events
                 .iter()
-                .any(|(_, e)| *e == PageEvent::AudibleChanged(true))
+                .any(|(_, e)| *e == PageEvent::MutedChanged(true))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|(_, e)| e.request() == Some(RequestId(1)))
         );
         assert!(q.is_empty());
     }
 
+    /// A host that fell behind must still hear that a download, dialog or
+    /// drag ended, or it shows them forever (or CEF waits on the drag).
     #[test]
-    fn a_full_queue_of_notices_drops_the_newest_notice() {
+    fn a_full_queue_keeps_events_that_end_something() {
         let mut q = PageQueue::default();
         for _ in 0..MAX_PAGE_EVENTS {
             q.push(0, PageEvent::PopupHidden);
         }
-        q.push(0, PageEvent::MutedChanged(true));
-        assert_eq!((q.len(), q.dropped()), (MAX_PAGE_EVENTS, 1));
+        for event in [
+            PageEvent::DownloadCancelled(DownloadId(1)),
+            PageEvent::DialogsReset,
+            PageEvent::ContextMenuDismissed,
+            PageEvent::FullscreenChanged(false),
+            PageEvent::RequestsDismissed(vec![RequestId(4)]),
+        ] {
+            q.push(0, event.clone());
+            assert_eq!(
+                q.take().last().map(|(_, e)| e),
+                Some(&event),
+                "{event:?} dropped"
+            );
+            for _ in 0..MAX_PAGE_EVENTS {
+                q.push(0, PageEvent::PopupHidden);
+            }
+        }
+        assert_eq!(q.dropped(), 0);
+        // With nothing droppable queued, a droppable notice is the one lost.
+        q.push(0, console(0));
+        assert_eq!(q.dropped(), 1);
     }
 
     #[test]

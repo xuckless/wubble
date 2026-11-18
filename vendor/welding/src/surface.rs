@@ -165,7 +165,7 @@ mod web_event_tests {
         events.push(CefSurfaceEvent::Navigation(NavigationEvent::FullscreenChanged {
             fullscreen: true,
         }));
-        events.push(CefSurfaceEvent::Navigation(NavigationEvent::AudioStreamStarted));
+        events.push(CefSurfaceEvent::Navigation(NavigationEvent::RequestsDismissed { ids: vec![2] }));
         events.push(CefSurfaceEvent::BrowserClosed);
 
         assert!(matches!(
@@ -211,7 +211,8 @@ mod web_event_tests {
         ));
         assert!(matches!(
             events.poll(),
-            Some(CefSurfaceEvent::Navigation(NavigationEvent::AudioStreamStarted))
+            Some(CefSurfaceEvent::Navigation(NavigationEvent::RequestsDismissed { ids }))
+                if ids == [2]
         ));
         assert!(matches!(events.poll(), Some(CefSurfaceEvent::BrowserClosed)));
         assert!(events.poll().is_none());
@@ -1882,11 +1883,16 @@ pub enum NavigationEvent {
     /// The page entered or left fullscreen (`requestFullscreen`). Under
     /// windowless rendering the host grows the view itself. wubble change.
     FullscreenChanged { fullscreen: bool },
-    /// CEF started or stopped capturing the page's audio output: the page
-    /// became audible, or has been silent for a while (CEF debounces it).
-    /// wubble change.
-    AudioStreamStarted,
-    AudioStreamStopped,
+    /// A download was interrupted (network, disk or server error;
+    /// Chromium's `interrupt_reason`, `cef_download_interrupt_reason_t`).
+    /// Not an end: [`CefSurfaceProducer::resume_download`] may retry it,
+    /// CEF may resume it itself (progress follows), and
+    /// [`CefSurfaceProducer::cancel_download`] ends it. wubble change.
+    DownloadInterrupted { id: DownloadId, reason: i32 },
+    /// CEF gave up on these held requests without an answer (the page they
+    /// came from was left, or a permission prompt was dismissed): close
+    /// whatever shows them; answering them now fails. wubble change.
+    RequestsDismissed { ids: Vec<RequestId> },
 }
 
 /// Which JS dialog a page opened. wubble change.

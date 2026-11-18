@@ -111,7 +111,12 @@ Every change is marked `wubble change` in the source.
    `download_dir` behaviour): `OnBeforeDownload`'s callback is held,
    `NavigationEvent::DownloadRequested` reports it and
    `CefSurfaceProducer::answer_download_path` answers (a path, or `None`,
-   which drops the callback: CEF's cancel).
+   which drops the callback: CEF's cancel). An op sent for a started
+   download before CEF handed over its first control is queued and applied
+   when it arrives. Chromium's INTERRUPTED state (neither complete nor
+   cancelled; upstream never reported it) is reported as
+   `NavigationEvent::DownloadInterrupted { id, reason }`, keeping the control
+   so `resume_download` can retry it.
 12. **Context menu kept and held.** `OnBeforeContextMenu` no longer empties
    CEF's model (which stopped CEF from ever calling `RunContextMenu`,
    `menu_manager.cc`); `run_context_menu` reads params and model, holds the
@@ -131,13 +136,13 @@ Every change is marked `wubble change` in the source.
    `default_accept` is the one default table: cancel, except beforeunload,
    which leaves) and `FileChooserRequested` (`FileChooserMode`,
    `AcceptFilter`); answers `answer_dialog`, `answer_file_chooser`.
-14. **Certificate errors, fullscreen, audio.** `WeldRequestHandler::
+14. **Certificate errors, fullscreen.** `WeldRequestHandler::
    on_certificate_error` holds the callback (`CertificateError` event,
    `answer_certificate`; default cancel). `WeldDisplayHandler::
    on_fullscreen_mode_change` on Linux, macOS and Windows reports
-   `FullscreenChanged`. New `WeldAudioHandler` returns true from
-   `GetAudioParameters` (which makes Alloy start its loopback capture while
-   the page is audible) and reports `AudioStreamStarted` / `Stopped`.
+   `FullscreenChanged`. No audio handler: with one, CEF's capture silences
+   the page's own playback (checked on Linux: the page's PulseAudio stream is
+   corked while the capture runs, and plays without the handler).
 15. **Drag source off by default.** `start_dragging` returns 0 and reports
    nothing unless the host called `CefSurfaceProducer::set_drag_source(true)`:
    CEF waits for `DragSourceEndedAt` after a true, and a host without a
@@ -146,14 +151,25 @@ Every change is marked `wubble change` in the source.
    (Linux, macOS): the popup slot's frame and its physical rect without an
    import, for hosts that present `NativeFrame`s. Windows keeps the trait
    default (`None`): it imports popups inside the paint callback.
-17. **Nothing waits past the close.** `OnBeforeClose` on all three
+17. **Stale requests dismissed.** `Held` ids come from one process-wide
+   counter, so an id names one request across every kind and browser.
+   Permission prompts keep CEF's `prompt_id`; `OnDismissPermissionPrompt`
+   drops a still-held one. On a main-frame `OnLoadStart` (all three
+   platforms) `Requests::page_left` answers held auth, certificate, file
+   chooser and permission requests with their default (CEF abandons them on
+   navigation without a callback). Both report
+   `NavigationEvent::RequestsDismissed { ids }`. Permission answers are all
+   or nothing for both callbacks (`permissions::all_granted`): CEF requires
+   a getUserMedia answer to hand back exactly the requested media bits.
+18. **Nothing waits past the close.** `OnBeforeClose` on all three
    platforms calls `Requests::drain_default`, answering every held request
    with its default; answers are given outside the table locks, because a
    CEF callback can call straight back into a handler.
-18. Tests: `held.rs` (ids, take once, cap, drain, drop, fresh ids after a
-   drain), `downloads.rs` (newest control used at once, none after the end,
-   asking keeps the directory policy), `permissions.rs` (prompt all or
-   nothing, media subset), `surface.rs` (`request_vocabulary_tests`; new
+19. Tests: `held.rs` (ids, unique across tables, take once, take by
+   predicate, cap, drain, drop, fresh ids after a drain), `downloads.rs`
+   (newest control used at once, ops queued before the first control, none
+   after the end, asking keeps the directory policy), `permissions.rs`
+   (prompt and media all or nothing), `surface.rs` (`request_vocabulary_tests`; new
    events in `mixed_callbacks_keep_observation_order`). Linux built and run
    (wubble-engine's `engine_smoke` example); Windows compile-checked with
    `cargo check -p welding --target x86_64-pc-windows-msvc` (build script

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use winit::keyboard::ModifiersState;
 use wubble_engine::app::{Engine, EngineConfig, RequestMode, ViewId};
 use wubble_engine::input::{Buttons, Modifiers, MouseButton, Point};
-use wubble_engine::page::{DialogKind, PageEvent, Permission};
+use wubble_engine::page::{JsDialogKind, PageEvent, PermissionKind};
 use wubble_engine::view::{Layout, ViewConfig};
 use wubble_gfx::{FrameSize, GpuContext};
 
@@ -185,7 +185,7 @@ fn handle(
             Step::Alert,
             PageEvent::DialogRequested {
                 id,
-                kind: DialogKind::Alert,
+                kind: JsDialogKind::Alert,
                 ..
             },
         ) => answer(view.answer_dialog(id, true, ""), Step::Confirm)?,
@@ -193,7 +193,7 @@ fn handle(
             Step::Confirm,
             PageEvent::DialogRequested {
                 id,
-                kind: DialogKind::Confirm,
+                kind: JsDialogKind::Confirm,
                 ..
             },
         ) => answer(view.answer_dialog(id, true, ""), Step::Prompt)?,
@@ -201,7 +201,7 @@ fn handle(
             Step::Prompt,
             PageEvent::DialogRequested {
                 id,
-                kind: DialogKind::Prompt,
+                kind: JsDialogKind::Prompt,
                 default_text,
                 ..
             },
@@ -234,7 +234,7 @@ fn handle(
                 id, permissions, ..
             },
         ) => {
-            if !permissions.contains(&Permission::Geolocation) {
+            if !permissions.contains(&PermissionKind::Geolocation) {
                 return Err(format!("asked for {permissions:?}"));
             }
             answer(view.answer_permission(id, &[]), Step::GeoDenied)?

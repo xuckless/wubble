@@ -261,7 +261,7 @@ cef::wrap_client! {
         display_handler: cef::DisplayHandler,
         life_span_handler: cef::LifeSpanHandler,
         // wubble change: the request, download, permission, context-menu,
-        // JS dialog, file dialog and audio handlers (`crate::handlers`).
+        // JS dialog and file dialog handlers (`crate::handlers`).
         shared: crate::handlers::SharedHandlers,
         find_handler: cef::FindHandler,
         scripts: Arc<crate::app::PendingScripts>,
@@ -303,10 +303,6 @@ cef::wrap_client! {
 
         fn dialog_handler(&self) -> Option<cef::DialogHandler> {
             Some(self.shared.dialog.clone())
-        }
-
-        fn audio_handler(&self) -> Option<cef::AudioHandler> {
-            Some(self.shared.audio.clone())
         }
 
         fn find_handler(&self) -> Option<cef::FindHandler> {
@@ -473,6 +469,8 @@ cef::wrap_load_handler! {
         ) {
             let is_main = frame.as_ref().map(|f| f.is_main() != 0).unwrap_or(false);
             if !is_main { return; }
+            // wubble change: requests of the page being left are stale.
+            self.inner.requests.page_left();
             let url = frame.map(|f| cef::CefString::from(&f.url()).to_string()).unwrap_or_default();
             push_navigation(&self.inner.events,
                 crate::surface::NavigationEvent::LoadStart { url }

@@ -9,7 +9,7 @@
 //! them on shutdown and reports each one closed to its lifecycle.
 //!
 //! Everything else a page asks or tells (dialogs, menus, downloads,
-//! permissions, find, zoom, fullscreen, audio, IME, drags) is translated by
+//! permissions, find, zoom, fullscreen, mute, IME, drags) is translated by
 //! the pure [`route`] into [`PageEvent`]s, through the state machines in
 //! `popup`, `download`, `find`, `media`, `zoom` and `drag`; the host answers
 //! requests with the `answer_*` methods. The handler wiring follows CEF's
@@ -35,11 +35,11 @@ use crate::find::{self, Find, FindEffect, FindInput};
 use crate::input::{
     self, CefKey, ClickTracker, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
 };
-use crate::media::{self, Audio, AudioInput, Fullscreen, FullscreenInput, MediaEffect};
+use crate::media::{self, Fullscreen, FullscreenInput, MediaEffect};
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 use crate::page::{
     ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags, LogLevel, PageEvent,
-    Permission, Rect, RequestId,
+    PermissionKind, Rect, RequestId,
 };
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
@@ -190,7 +190,7 @@ pub struct View {
     downloads: HashMap<DownloadId, Download>,
     find: Find,
     fullscreen: Fullscreen,
-    audio: Audio,
+    muted: bool,
     zoom: Zoom,
     drag: DragSource,
 }
@@ -233,7 +233,7 @@ impl View {
             downloads: HashMap::new(),
             find: Find::default(),
             fullscreen: Fullscreen::default(),
-            audio: Audio::default(),
+            muted: false,
             zoom: Zoom::default(),
             drag: DragSource::default(),
         })
@@ -490,7 +490,6 @@ impl View {
                 self.fullscreen = next;
                 self.execute_media(effects);
             }
-            Route::Audio(input) => self.apply_audio(input),
             Route::DragStarted(event) => {
                 let (next, report) = drag::transition(self.drag, DragSourceInput::Started);
                 self.drag = next;
@@ -556,13 +555,12 @@ impl View {
         self.answered("context menu", id, result)
     }
 
-    /// Grants exactly `granted`; everything else asked for is denied. A
-    /// prompt-style request (geolocation, notifications, ...) takes one
-    /// answer for all it asked, so it is accepted only when all are granted;
-    /// camera and microphone are granted separately.
-    pub fn answer_permission(&mut self, id: RequestId, granted: &[Permission]) -> bool {
-        let kinds: Vec<welding::PermissionKind> = granted.iter().map(|&p| p.into()).collect();
-        let result = self.producer.answer_permission(id.0, &kinds);
+    /// Grants the request only when `granted` covers everything it asked
+    /// for, otherwise denies all of it: CEF takes one answer per request
+    /// (a getUserMedia for camera and microphone cannot be granted the
+    /// camera alone).
+    pub fn answer_permission(&mut self, id: RequestId, granted: &[PermissionKind]) -> bool {
+        let result = self.producer.answer_permission(id.0, granted);
         self.answered("permission request", id, result)
     }
 
@@ -755,7 +753,7 @@ impl View {
         }
     }
 
-    // ── Fullscreen and audio.
+    // ── Fullscreen and mute.
 
     /// Leaves page fullscreen (map Esc to this). Ignored unless fullscreen;
     /// [`PageEvent::FullscreenChanged`] follows.
@@ -770,21 +768,13 @@ impl View {
     }
 
     pub fn set_muted(&mut self, muted: bool) {
-        self.apply_audio(AudioInput::SetMuted(muted));
+        let (next, effects) = media::mute(self.muted, muted);
+        self.muted = next;
+        self.execute_media(effects);
     }
 
     pub fn is_muted(&self) -> bool {
-        self.audio.muted
-    }
-
-    pub fn is_audible(&self) -> bool {
-        self.audio.audible()
-    }
-
-    fn apply_audio(&mut self, input: AudioInput) {
-        let (next, effects) = media::audio(self.audio, input);
-        self.audio = next;
-        self.execute_media(effects);
+        self.muted
     }
 
     fn execute_media(&mut self, effects: Vec<MediaEffect>) {
@@ -1002,7 +992,6 @@ enum Route {
     Download(DownloadId, DownloadInput),
     Find(FindInput),
     Fullscreen(FullscreenInput),
-    Audio(AudioInput),
     DragStarted(PageEvent),
     /// Zoom is per host and may change on navigation without a callback.
     ObserveZoom,
@@ -1064,7 +1053,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             default_text,
         } => one(Route::Page(PageEvent::DialogRequested {
             id: RequestId(id),
-            kind: kind.into(),
+            kind,
             origin: origin_url,
             message,
             default_text,
@@ -1116,7 +1105,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         } => one(Route::Page(PageEvent::PermissionRequested {
             id: RequestId(id),
             origin,
-            permissions: permissions.into_iter().map(Into::into).collect(),
+            permissions,
         })),
         E::AuthChallenged {
             id,
@@ -1142,8 +1131,11 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         } => one(Route::Page(PageEvent::CertificateError {
             id: RequestId(id),
             url,
-            error: error_code.into(),
+            code: error_code,
         })),
+        E::RequestsDismissed { ids } => one(Route::Page(PageEvent::RequestsDismissed(
+            ids.into_iter().map(RequestId).collect(),
+        ))),
         E::FileChooserRequested {
             id,
             mode,
@@ -1152,10 +1144,10 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             accept,
         } => one(Route::Page(PageEvent::FileChooserRequested {
             id: RequestId(id),
-            mode: mode.into(),
+            mode,
             title,
             default_path,
-            accept: accept.into_iter().map(Into::into).collect(),
+            accept,
         })),
         E::DownloadRequested {
             id,
@@ -1204,9 +1196,18 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             error,
         } => one(Route::Download(
             DownloadId(id),
-            DownloadInput::Done {
-                path: destination_path,
-                error,
+            match error {
+                None => DownloadInput::Done {
+                    path: destination_path,
+                },
+                Some(error) => DownloadInput::Interrupted { error },
+            },
+        )),
+        E::DownloadInterrupted { id, reason } => one(Route::Download(
+            DownloadId(id),
+            DownloadInput::Interrupted {
+                // cef_download_interrupt_reason_t.
+                error: format!("interrupted ({reason})"),
             },
         )),
         E::DownloadCancelled { id, .. } => {
@@ -1224,8 +1225,6 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         E::FullscreenChanged { fullscreen } => {
             one(Route::Fullscreen(FullscreenInput::Changed(fullscreen)))
         }
-        E::AudioStreamStarted => one(Route::Audio(AudioInput::StreamStarted)),
-        E::AudioStreamStopped => one(Route::Audio(AudioInput::StreamStopped)),
         E::DragStarted {
             payload,
             allowed_operations,
@@ -1538,7 +1537,7 @@ mod tests {
             }),
             Route::Page(PageEvent::DialogRequested {
                 id: RequestId(3),
-                kind: crate::page::DialogKind::Prompt,
+                kind: welding::JsDialogKind::Prompt,
                 origin: "https://a/".into(),
                 message: "name?".into(),
                 default_text: "x".into(),
@@ -1553,7 +1552,7 @@ mod tests {
             Route::Page(PageEvent::CertificateError {
                 id: RequestId(4),
                 url: "https://b/".into(),
-                error: crate::page::CertError::AuthorityInvalid,
+                code: -202,
             })
         );
         assert_eq!(
@@ -1566,7 +1565,7 @@ mod tests {
             Route::Page(PageEvent::PermissionRequested {
                 id: RequestId(5),
                 origin: "https://c/".into(),
-                permissions: vec![Permission::Geolocation],
+                permissions: vec![PermissionKind::Geolocation],
             })
         );
         assert_eq!(
@@ -1603,10 +1602,10 @@ mod tests {
             }),
             Route::Page(PageEvent::FileChooserRequested {
                 id: RequestId(7),
-                mode: crate::page::FileChooserMode::OpenMultiple,
+                mode: welding::FileChooserMode::OpenMultiple,
                 title: String::new(),
                 default_path: PathBuf::new(),
-                accept: vec![crate::page::AcceptFilter {
+                accept: vec![welding::AcceptFilter {
                     filter: "image/*".into(),
                     extensions: vec![".png".into()],
                     description: String::new(),
@@ -1716,8 +1715,20 @@ mod tests {
             Route::Fullscreen(FullscreenInput::Changed(true))
         );
         assert_eq!(
-            route_one(NavigationEvent::AudioStreamStopped),
-            Route::Audio(AudioInput::StreamStopped)
+            route_one(NavigationEvent::DownloadInterrupted { id: 11, reason: 20 }),
+            Route::Download(
+                DownloadId(11),
+                DownloadInput::Interrupted {
+                    error: "interrupted (20)".into()
+                }
+            )
+        );
+        assert_eq!(
+            route_one(NavigationEvent::RequestsDismissed { ids: vec![3, 4] }),
+            Route::Page(PageEvent::RequestsDismissed(vec![
+                RequestId(3),
+                RequestId(4)
+            ]))
         );
         assert_eq!(
             route_one(NavigationEvent::JsDialogsReset),

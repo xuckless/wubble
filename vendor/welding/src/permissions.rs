@@ -9,8 +9,8 @@
 //!
 //! CEF asks through two different callbacks — an ordinary prompt, and a
 //! separate one for camera and microphone capture — and each takes a different
-//! answer: the prompt wants an accept/deny result, media wants the *subset* of
-//! the requested capture bits being granted. Both are reference-counted and may
+//! answer: the prompt wants an accept/deny result, media wants the requested
+//! capture bits handed back (or 0). Both are reference-counted and may
 //! be answered later, so a host is given one id and one pair of verbs and this
 //! module remembers which kind it was.
 //!
@@ -136,37 +136,31 @@ pub(crate) fn decode_media(mask: u32) -> Vec<PermissionKind> {
 
 /// Which CEF callback a pending request came from; they answer differently.
 pub(crate) enum Pending {
+    /// wubble change: CEF's `prompt_id` is kept so `OnDismissPermissionPrompt`
+    /// can find the request.
     #[cfg(feature = "cef-runtime")]
-    Prompt(cef::PermissionPromptCallback, u32),
-    /// The mask is kept because granting media means handing back the subset
-    /// being allowed, not a boolean.
+    Prompt {
+        callback: cef::PermissionPromptCallback,
+        requested: u32,
+        prompt_id: u64,
+    },
+    /// The mask is kept because granting media means handing the requested
+    /// bits back, not a boolean.
     #[cfg(feature = "cef-runtime")]
     Media(cef::MediaAccessCallback, u32),
     #[cfg(not(feature = "cef-runtime"))]
     Unwired,
 }
 
-/// wubble change: whether a prompt request is accepted when the host grants
-/// `granted`. CEF's prompt callback takes one accept/deny for the whole set,
-/// so it is accepted only when every kind asked for was granted.
-pub(crate) fn prompt_accepted(requested: u32, granted: &[PermissionKind]) -> bool {
-    let asked = decode(requested);
+/// wubble change: whether a request for `asked` is granted when the host
+/// grants `granted`. Both CEF callbacks take one answer for the whole set:
+/// the prompt one accept/deny, and the media one the requested bits back
+/// exactly (`CefMediaAccessCallback::Continue`, cef_permission_handler.h:
+/// for getUserMedia "|allowed_permissions| must match
+/// |required_permissions|"). So a request is granted only when every kind it
+/// asked for was granted.
+pub(crate) fn all_granted(asked: &[PermissionKind], granted: &[PermissionKind]) -> bool {
     !asked.is_empty() && asked.iter().all(|kind| granted.contains(kind))
-}
-
-/// wubble change: the media-capture bits to hand back when the host grants
-/// `granted`: the subset of `requested` whose kinds were granted.
-pub(crate) fn media_granted(requested: u32, granted: &[PermissionKind]) -> u32 {
-    let mut mask = 0;
-    let mut rest = requested;
-    while rest != 0 {
-        let bit = rest & rest.wrapping_neg();
-        if decode_media(bit).iter().all(|kind| granted.contains(kind)) {
-            mask |= bit;
-        }
-        rest &= !bit;
-    }
-    mask
 }
 
 // wubble change: requests are held in a `crate::held::Held` (id, cap, default
@@ -285,26 +279,25 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_is_accepted_only_when_everything_asked_is_granted() {
-        let asked = GEOLOCATION | NOTIFICATIONS;
+    fn a_request_is_granted_only_when_everything_asked_is_granted() {
+        let asked = decode(GEOLOCATION | NOTIFICATIONS);
         let both = [PermissionKind::Geolocation, PermissionKind::Notifications];
-        assert!(prompt_accepted(asked, &both));
-        assert!(!prompt_accepted(asked, &both[..1]), "a partial grant accepted the whole prompt");
-        assert!(!prompt_accepted(asked, &[]));
-        assert!(!prompt_accepted(0, &both), "nothing asked is nothing to accept");
+        assert!(all_granted(&asked, &both));
+        assert!(!all_granted(&asked, &both[..1]), "a partial grant accepted the whole prompt");
+        assert!(!all_granted(&asked, &[]));
+        assert!(!all_granted(&[], &both), "nothing asked is nothing to accept");
     }
 
     #[test]
-    fn media_hands_back_the_granted_subset() {
-        let asked = MEDIA_DEVICE_AUDIO | MEDIA_DEVICE_VIDEO;
-        assert_eq!(media_granted(asked, &[PermissionKind::MicStream]), MEDIA_DEVICE_AUDIO);
-        assert_eq!(media_granted(asked, &[PermissionKind::CameraStream]), MEDIA_DEVICE_VIDEO);
-        assert_eq!(
-            media_granted(asked, &[PermissionKind::CameraStream, PermissionKind::MicStream]),
-            asked
-        );
-        assert_eq!(media_granted(asked, &[]), 0);
-        // A grant for something not asked for adds nothing.
-        assert_eq!(media_granted(MEDIA_DEVICE_AUDIO, &[PermissionKind::DesktopVideoCapture]), 0);
+    fn camera_and_microphone_are_granted_together_or_not_at_all() {
+        // CEF denies a getUserMedia answer that is a subset of the request.
+        let asked = decode_media(MEDIA_DEVICE_AUDIO | MEDIA_DEVICE_VIDEO);
+        assert!(!all_granted(&asked, &[PermissionKind::CameraStream]));
+        assert!(!all_granted(&asked, &[PermissionKind::MicStream]));
+        assert!(all_granted(
+            &asked,
+            &[PermissionKind::CameraStream, PermissionKind::MicStream]
+        ));
+        assert!(!all_granted(&decode_media(MEDIA_DEVICE_AUDIO), &[PermissionKind::DesktopVideoCapture]));
     }
 }

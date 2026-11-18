@@ -9,9 +9,15 @@
 //! and [`Requests`], every question CEF is waiting on the host to answer.
 //!
 //! Moved here from the three `*/cef_backed.rs`: the request, download,
-//! permission and context-menu handlers. New: the JS dialog, file dialog and
-//! audio handlers, the certificate-error hook, and a context menu that keeps
-//! CEF's model and waits for the host instead of being emptied.
+//! permission and context-menu handlers. New: the JS dialog and file dialog
+//! handlers, the certificate-error and permission-dismissed hooks, and a
+//! context menu that keeps CEF's model and waits for the host instead of
+//! being emptied.
+//!
+//! No audio handler: returning true from `GetAudioParameters` makes CEF
+//! capture the page's audio *instead of* playing it (checked on Linux: the
+//! page's PulseAudio stream is corked while the capture runs), so it cannot
+//! serve as an "audible" signal.
 //!
 //! The handler shapes follow CEF's own sample client (chromiumembedded/cef
 //! `tests/cefclient/browser/client_handler.cc`: `OnBeforeContextMenu`,
@@ -64,7 +70,7 @@ impl Answer for cef::AuthCallback {
 impl Answer for Pending {
     fn answer_default(self) {
         match self {
-            Pending::Prompt(callback, _) => callback.cont(cef::PermissionRequestResult::DENY),
+            Pending::Prompt { callback, .. } => callback.cont(cef::PermissionRequestResult::DENY),
             Pending::Media(callback, _) => callback.cont(0),
         }
     }
@@ -194,14 +200,16 @@ fn take<C: Answer>(table: &Mutex<Held<C>>, id: RequestId) -> Option<C> {
 }
 
 /// Answer everything in `table` with its default, outside the lock. Returns
-/// how many were waiting.
-fn drain<C: Answer>(table: &Mutex<Held<C>>) -> usize {
+/// the ids that were waiting.
+fn drain<C: Answer>(table: &Mutex<Held<C>>) -> Vec<RequestId> {
     let pending = table.lock().unwrap().drain();
-    let n = pending.len();
-    for callback in pending {
-        callback.answer_default();
-    }
-    n
+    pending
+        .into_iter()
+        .map(|(id, callback)| {
+            callback.answer_default();
+            id
+        })
+        .collect()
 }
 
 impl Requests {
@@ -235,6 +243,36 @@ impl Requests {
         drain(&self.menus);
     }
 
+    /// wubble change: the main frame committed a new page. Auth challenges,
+    /// certificate errors, file choosers and permission requests of the old
+    /// one are stale: CEF gives up on them without telling the handler (only
+    /// permission prompts get `OnDismissPermissionPrompt`), so they are
+    /// answered with their default here and the host told which ids to
+    /// close. Dialogs and menus have their own reset hooks; download paths
+    /// outlive the page.
+    pub(crate) fn page_left(&self) {
+        let mut ids = drain(&self.auth.pending);
+        ids.extend(drain(&self.permissions.pending));
+        ids.extend(drain(&self.files));
+        ids.extend(drain(&self.certificates));
+        if !ids.is_empty() {
+            push(&self.events, NavigationEvent::RequestsDismissed { ids });
+        }
+    }
+
+    /// wubble change: CEF dismissed permission prompt `prompt_id` itself
+    /// (navigation, or after an answer). Still held means the host never
+    /// answered: forget it and tell the host.
+    pub(crate) fn permission_prompt_dismissed(&self, prompt_id: u64) {
+        let dismissed = self.permissions.pending.lock().unwrap().take_where(
+            |p| matches!(p, Pending::Prompt { prompt_id: held, .. } if *held == prompt_id),
+        );
+        // CEF already closed the prompt; the callback is dropped unanswered.
+        if let Some((id, _)) = dismissed {
+            push(&self.events, NavigationEvent::RequestsDismissed { ids: vec![id] });
+        }
+    }
+
     pub(crate) fn set_drag_source(&self, enabled: bool) {
         self.drag_source.store(enabled, Ordering::Release);
     }
@@ -265,7 +303,7 @@ impl Requests {
         let pending =
             take(&self.permissions.pending, id).ok_or(stale("no permission request is waiting on that id"))?;
         match pending {
-            Pending::Prompt(callback, _) => callback.cont(if grant {
+            Pending::Prompt { callback, .. } => callback.cont(if grant {
                 cef::PermissionRequestResult::ACCEPT
             } else {
                 cef::PermissionRequestResult::DENY
@@ -282,16 +320,18 @@ impl Requests {
     ) -> Result<(), WeldError> {
         let pending =
             take(&self.permissions.pending, id).ok_or(stale("no permission request is waiting on that id"))?;
+        use crate::permissions::{all_granted, decode, decode_media};
         match pending {
-            Pending::Prompt(callback, requested) => {
-                callback.cont(if crate::permissions::prompt_accepted(requested, granted) {
+            Pending::Prompt { callback, requested, .. } => {
+                callback.cont(if all_granted(&decode(requested), granted) {
                     cef::PermissionRequestResult::ACCEPT
                 } else {
                     cef::PermissionRequestResult::DENY
                 })
             },
             Pending::Media(callback, requested) => {
-                callback.cont(crate::permissions::media_granted(requested, granted))
+                let all = all_granted(&decode_media(requested), granted);
+                callback.cont(if all { requested } else { 0 })
             },
         }
         Ok(())
@@ -385,7 +425,6 @@ pub(crate) struct SharedHandlers {
     pub(crate) context_menu: cef::ContextMenuHandler,
     pub(crate) jsdialog: cef::JsdialogHandler,
     pub(crate) dialog: cef::DialogHandler,
-    pub(crate) audio: cef::AudioHandler,
 }
 
 impl SharedHandlers {
@@ -401,8 +440,7 @@ impl SharedHandlers {
             permission: WeldPermissionHandler::new(events.clone(), requests.clone()),
             context_menu: WeldContextMenuHandler::new(events.clone(), requests.clone(), metrics),
             jsdialog: WeldJsDialogHandler::new(events.clone(), requests.clone()),
-            dialog: WeldDialogHandler::new(events.clone(), requests),
-            audio: WeldAudioHandler::new(events),
+            dialog: WeldDialogHandler::new(events, requests),
         }
     }
 }
@@ -595,6 +633,17 @@ cef::wrap_download_handler! {
             let total = item.total_bytes();
             let total_bytes_expected = (total > 0).then_some(total as u64);
             let received = item.received_bytes().max(0) as u64;
+            // wubble change: Chromium's INTERRUPTED (network, disk, server)
+            // is neither complete nor cancelled. The control is kept, since
+            // `resume_download` may retry it; CEF may also resume it itself,
+            // and progress follows.
+            if item.is_interrupted() != 0 {
+                push(&self.events, NavigationEvent::DownloadInterrupted {
+                    id,
+                    reason: *item.interrupt_reason().as_ref() as i32,
+                });
+                return;
+            }
             let complete = item.is_complete() != 0;
             let canceled = item.is_canceled() != 0;
 
@@ -611,13 +660,10 @@ cef::wrap_download_handler! {
                     destination_path: path,
                 });
             } else if complete {
-                let interrupted = item.is_interrupted() != 0;
                 push(&self.events, NavigationEvent::DownloadFinished {
                     id,
                     destination_path: path,
-                    error: interrupted.then(|| {
-                        format!("interrupted: {:?}", *item.interrupt_reason().as_ref() as i32)
-                    }),
+                    error: None,
                 });
             }
             if complete || canceled {
@@ -639,13 +685,17 @@ cef::wrap_permission_handler! {
         fn on_show_permission_prompt(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _prompt_id: u64,
+            prompt_id: u64,
             requesting_origin: Option<&cef::CefString>,
             requested_permissions: u32,
             callback: Option<&mut cef::PermissionPromptCallback>,
         ) -> ::std::os::raw::c_int {
             let Some(callback) = callback else { return 0 };
-            let pending = Pending::Prompt(callback.clone(), requested_permissions);
+            let pending = Pending::Prompt {
+                callback: callback.clone(),
+                requested: requested_permissions,
+                prompt_id,
+            };
             let Some(id) = self.hold(pending) else { return 1 };
             push(&self.events, NavigationEvent::PermissionRequested {
                 id,
@@ -677,6 +727,16 @@ cef::wrap_permission_handler! {
                 raw: requested_permissions,
             });
             1
+        }
+
+        // wubble change: navigation or browser close dismissed a prompt.
+        fn on_dismiss_permission_prompt(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            prompt_id: u64,
+            _result: cef::PermissionRequestResult,
+        ) {
+            self.requests.permission_prompt_dismissed(prompt_id);
         }
     }
 }
@@ -757,7 +817,7 @@ cef::wrap_context_menu_handler! {
             _browser: Option<&mut cef::Browser>,
             _frame: Option<&mut cef::Frame>,
         ) {
-            if drain(&self.requests.menus) > 0 {
+            if !drain(&self.requests.menus).is_empty() {
                 push(&self.events, NavigationEvent::ContextMenuDismissed);
             }
         }
@@ -801,7 +861,7 @@ cef::wrap_jsdialog_handler! {
         // Called on navigation and after every dialog closes. Whatever is
         // still held is answered with its default and the host told.
         fn on_reset_dialog_state(&self, _browser: Option<&mut cef::Browser>) {
-            if drain(&self.requests.dialogs) > 0 {
+            if !drain(&self.requests.dialogs).is_empty() {
                 push(&self.events, NavigationEvent::JsDialogsReset);
             }
         }
@@ -878,48 +938,6 @@ cef::wrap_dialog_handler! {
                 });
             }
             1
-        }
-    }
-}
-
-// ── Audio handler (new) ───────────────────────────────────────────────────
-
-cef::wrap_audio_handler! {
-    struct WeldAudioHandler {
-        events: Arc<WebEventQueue>,
-    }
-
-    impl AudioHandler {
-        // True starts CEF's loopback capture of the page's output, which is
-        // what reports the stream starting and stopping. Local playback is
-        // not affected; the packets are ignored.
-        fn audio_parameters(
-            &self,
-            _browser: Option<&mut cef::Browser>,
-            _params: Option<&mut cef::AudioParameters>,
-        ) -> ::std::os::raw::c_int {
-            1
-        }
-
-        fn on_audio_stream_started(
-            &self,
-            _browser: Option<&mut cef::Browser>,
-            _params: Option<&cef::AudioParameters>,
-            _channels: ::std::os::raw::c_int,
-        ) {
-            push(&self.events, NavigationEvent::AudioStreamStarted);
-        }
-
-        fn on_audio_stream_stopped(&self, _browser: Option<&mut cef::Browser>) {
-            push(&self.events, NavigationEvent::AudioStreamStopped);
-        }
-
-        fn on_audio_stream_error(
-            &self,
-            _browser: Option<&mut cef::Browser>,
-            message: Option<&cef::CefString>,
-        ) {
-            log::warn!("weld: audio capture failed: {}", opt_string(message));
         }
     }
 }
