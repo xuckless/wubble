@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::lifecycle::{Lifecycle, Pin};
+use crate::lifecycle::Lifecycle;
 use crate::space::{Container, ContainerId, Folder, FolderId, Item, Rgb, Space, SpaceId};
 use crate::tab::{Tab, TabId};
 
@@ -125,11 +125,6 @@ impl Default for Model {
     }
 }
 
-/// Container override to store so that `eff` is effective in a Space defaulting to `default`.
-fn override_for(eff: ContainerId, default: ContainerId) -> Option<ContainerId> {
-    (eff != default).then_some(eff)
-}
-
 impl Model {
     /// One empty Space and the Default container.
     pub fn new() -> Self {
@@ -216,15 +211,9 @@ impl Model {
         out
     }
 
-    /// The container a tab's page runs in.
-    pub fn effective_container(&self, tab: TabId) -> ContainerId {
-        let default = self
-            .place_of(tab)
-            .map_or(ContainerId::DEFAULT, |(si, _)| self.spaces[si].container);
-        self.tabs
-            .get(&tab)
-            .and_then(|t| t.container)
-            .unwrap_or(default)
+    /// Pinned state is owned by placement alone; `Lifecycle::pin` is not written by the model.
+    pub fn is_pinned(&self, tab: TabId) -> bool {
+        matches!(self.place_of(tab), Some((_, Place::Pinned(_))))
     }
 
     /// Verifies what the types cannot: the invariants every `apply` result must hold.
@@ -254,7 +243,7 @@ impl Model {
             if !self.has_container(s.container) {
                 return Err(format!("space {:?} has unknown container", s.id));
             }
-            let mut place = |t: TabId, pinned: bool| -> Result<(), String> {
+            let mut place = |t: TabId| -> Result<(), String> {
                 if placed.insert(t, si).is_some() {
                     return Err(format!("tab {t:?} placed twice"));
                 }
@@ -262,13 +251,8 @@ impl Model {
                 if tab.id != t {
                     return Err(format!("tab {t:?} has id {:?}", tab.id));
                 }
-                if (tab.lifecycle.pin == Pin::Pinned) != pinned {
-                    return Err(format!("tab {t:?} pin flag disagrees with placement"));
-                }
-                if let Some(c) = tab.container
-                    && (!self.has_container(c) || c == s.container)
-                {
-                    return Err(format!("tab {t:?} has bad container override {c:?}"));
+                if !self.has_container(tab.container) {
+                    return Err(format!("tab {t:?} has unknown container"));
                 }
                 if tab.opener.is_some_and(|o| !self.tabs.contains_key(&o)) {
                     return Err(format!("tab {t:?} opener is gone"));
@@ -276,18 +260,18 @@ impl Model {
                 Ok(())
             };
             for &t in &s.pinned {
-                place(t, true)?;
+                place(t)?;
             }
             for item in &s.items {
                 match item {
-                    Item::Tab(t) => place(*t, false)?,
+                    Item::Tab(t) => place(*t)?,
                     Item::Folder(f) => {
                         if folder_ids.contains(&f.id) {
                             return Err(format!("duplicate folder {:?}", f.id));
                         }
                         folder_ids.push(f.id);
                         for &t in &f.tabs {
-                            place(t, false)?;
+                            place(t)?;
                         }
                     }
                 }
@@ -359,9 +343,8 @@ impl Model {
         }
     }
 
-    /// Inserts a detached tab at `to` (clamped), setting its pin flag. `si` is the dest Space.
+    /// Inserts a detached tab at `to` (clamped). `si` is the dest Space.
     fn attach(&mut self, tab: TabId, to: Dest, si: usize) {
-        let pin = matches!(to, Dest::Pinned { .. });
         let s = &mut self.spaces[si];
         match to {
             Dest::Pinned { index, .. } => s.pinned.insert(index.min(s.pinned.len()), tab),
@@ -372,8 +355,6 @@ impl Model {
                 }
             }
         }
-        let t = self.tabs.get_mut(&tab).expect("attached tab exists");
-        t.lifecycle.pin = if pin { Pin::Pinned } else { Pin::Unpinned };
     }
 
     /// Drops a closed tab from the map and from every opener reference.
@@ -412,7 +393,7 @@ impl Model {
             url: url.clone(),
             title: String::new(),
             lifecycle: Lifecycle::new(),
-            container: override_for(eff, default),
+            container: eff,
             opener,
         };
         self.tabs.insert(id, tab);
@@ -488,15 +469,12 @@ impl Model {
         let (Some((src, _)), Some(dst)) = (self.place_of(tab), self.dest_space(to)) else {
             return vec![];
         };
-        let eff = self.effective_container(tab);
         let src_was_active = self.spaces[src].active == Some(tab);
         let src_next = (src_was_active && src != dst)
             .then(|| self.successor(src, tab, false))
             .flatten();
         self.detach(tab);
         self.attach(tab, to, dst);
-        let default = self.spaces[dst].container;
-        self.tabs.get_mut(&tab).expect("moved tab").container = override_for(eff, default);
 
         let mut fx = vec![];
         if src != dst {
@@ -560,11 +538,7 @@ impl Model {
         if !self.has_container(container) {
             return vec![];
         }
-        // Existing tabs keep their live context, as in `move_tab`.
-        for t in self.order_idx(si) {
-            let eff = self.effective_container(t);
-            self.tabs.get_mut(&t).expect("tab").container = override_for(eff, container);
-        }
+        // Existing tabs keep their live context: the default only seeds new tabs.
         self.spaces[si].container = container;
         vec![]
     }
@@ -586,7 +560,7 @@ impl Model {
             let ni = si.saturating_sub(1);
             self.active_space = self.spaces[ni].id;
             fx.push(Effect::SpaceChanged(self.active_space));
-            fx.extend(self.spaces[ni].active.map(Effect::ActivateTab));
+            fx.push(self.show(self.spaces[ni].active));
         }
         fx
     }
@@ -600,7 +574,7 @@ impl Model {
         }
         self.active_space = space;
         let mut fx = vec![Effect::SpaceChanged(space)];
-        fx.extend(self.spaces[si].active.map(Effect::ActivateTab));
+        fx.push(self.show(self.spaces[si].active));
         fx
     }
 
@@ -608,49 +582,42 @@ impl Model {
         if container == ContainerId::DEFAULT || !self.has_container(container) {
             return vec![];
         }
-        let moved = |c: ContainerId| {
-            if c == container {
-                ContainerId::DEFAULT
-            } else {
-                c
-            }
-        };
-        let effective: Vec<(usize, TabId, ContainerId)> = (0..self.spaces.len())
-            .flat_map(|si| self.order_idx(si).into_iter().map(move |t| (si, t)))
-            .map(|(si, t)| (si, t, moved(self.effective_container(t))))
+        // Live pages in the dead context are replaced by Default ones, as in a reopen.
+        let affected: Vec<TabId> = self
+            .tabs
+            .values()
+            .filter(|t| t.container == container)
+            .map(|t| t.id)
+            .collect();
+        let fx = affected
+            .into_iter()
+            .flat_map(|t| self.reopen_in_container(t, ContainerId::DEFAULT))
             .collect();
         self.containers.retain(|c| c.id != container);
         for s in &mut self.spaces {
-            s.container = moved(s.container);
+            if s.container == container {
+                s.container = ContainerId::DEFAULT;
+            }
         }
-        for (si, t, eff) in effective {
-            let default = self.spaces[si].container;
-            self.tabs.get_mut(&t).expect("tab").container = override_for(eff, default);
-        }
-        // Live pages in the dead context are the engine's concern (reload as Default).
-        vec![]
+        fx
     }
 
     fn reopen_in_container(&mut self, tab: TabId, container: ContainerId) -> Vec<Effect> {
         let Some((si, _)) = self.place_of(tab) else {
             return vec![];
         };
-        if !self.has_container(container) || self.effective_container(tab) == container {
+        if !self.has_container(container) || self.tabs[&tab].container == container {
             return vec![];
         }
         let new = self.fresh_tab();
         let old = self.tabs[&tab].clone();
-        let default = self.spaces[si].container;
         self.tabs.insert(
             new,
             Tab {
                 id: new,
-                container: override_for(container, default),
+                container,
                 opener: None,
-                lifecycle: Lifecycle {
-                    pin: old.lifecycle.pin,
-                    ..Lifecycle::new()
-                },
+                lifecycle: Lifecycle::new(),
                 ..old.clone()
             },
         );

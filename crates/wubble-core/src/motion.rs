@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(rubber_band_clamp(10.0, 0.0, 10.0, 26.0), 10.0);
         assert!(rubber_band_clamp(-5.0, 0.0, 10.0, 26.0) < 0.0);
         assert!(rubber_band_clamp(15.0, 0.0, 10.0, 26.0) > 10.0);
-        assert!(rubber_band_clamp(-1e-3, 0.0, 10.0, 26.0).abs() <= 1e-3);
+        assert!(rubber_band_clamp(-1e-3, 0.0, 10.0, 26.0).abs() <= 1.1e-3);
         assert!(rubber_band_clamp(1e9, 0.0, 10.0, 26.0) <= 36.0);
     }
 

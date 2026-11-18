@@ -25,8 +25,8 @@ pub struct Tab {
     pub url: String,
     pub title: String,
     pub lifecycle: Lifecycle,
-    /// Overrides the Space's default container. Never equal to it (see `Model::check`).
-    pub container: Option<ContainerId>,
+    /// The context the page runs in, fixed at creation from the override or the Space default.
+    pub container: ContainerId,
     /// The tab that opened this one; consulted when this tab closes, forgotten on a user tab switch.
     pub opener: Option<TabId>,
 }

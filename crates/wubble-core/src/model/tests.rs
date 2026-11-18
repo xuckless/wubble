@@ -121,7 +121,7 @@ fn new_tab_container_override_and_unknown() {
         },
     );
     assert!(matches!(fx[0], Effect::CreateTab { container, .. } if container == work));
-    assert_eq!(m.tabs[&TabId(1)].container, Some(work));
+    assert_eq!(m.tabs[&TabId(1)].container, work);
     let (m2, fx) = run(
         m.clone(),
         Command::NewTab {
@@ -225,18 +225,18 @@ fn pin_unpin_positions_and_flag() {
     let (m, _) = run(m, Command::PinTab(ids[1]));
     let (m, _) = run(m, Command::PinTab(ids[2]));
     assert_eq!(m.order(s0()), vec![ids[1], ids[2], ids[0]]);
-    assert_eq!(m.tabs[&ids[1]].lifecycle.pin, Pin::Pinned);
+    assert!(m.is_pinned(ids[1]));
     let (m, _) = run(m, Command::UnpinTab(ids[1]));
     assert_eq!(m.order(s0()), vec![ids[2], ids[1], ids[0]]);
     assert!(matches!(m.location(ids[1]), Some((_, Place::Normal(0)))));
-    assert_eq!(m.tabs[&ids[1]].lifecycle.pin, Pin::Unpinned);
+    assert!(!m.is_pinned(ids[1]));
     // Moving into the pinned section pins, into the normal section unpins.
     let to = Dest::Pinned {
         space: s0(),
         index: 0,
     };
     let (m, _) = run(m, Command::MoveTab { tab: ids[0], to });
-    assert_eq!(m.tabs[&ids[0]].lifecycle.pin, Pin::Pinned);
+    assert!(m.is_pinned(ids[0]));
     // Pinning twice is a no-op.
     let (m2, fx) = run(m.clone(), Command::PinTab(ids[0]));
     assert_eq!((m2, fx), (m, vec![]));
@@ -267,7 +267,7 @@ fn folders_hold_tabs_and_unpin_pinned_ones() {
         index: 0,
     };
     let (m, _) = run(m, Command::MoveTab { tab: ids[1], to });
-    assert_eq!(m.tabs[&ids[1]].lifecycle.pin, Pin::Unpinned);
+    assert!(!m.is_pinned(ids[1]));
     // Out of the folder.
     let to = Dest::Normal {
         space: s0(),
@@ -308,20 +308,19 @@ fn move_across_spaces_keeps_effective_container_and_reselects_source() {
     };
     let (m, fx) = run(m, Command::MoveTab { tab: ids[1], to });
     // Default-container tab stays Default inside the Work Space.
-    assert_eq!(m.effective_container(ids[1]), D);
-    assert_eq!(m.tabs[&ids[1]].container, Some(D));
+    assert_eq!(m.tabs[&ids[1]].container, D);
     // It was the active tab of the shown Space: source falls back to the other tab.
     assert_eq!(active(&m), Some(ids[0]));
     assert_eq!(fx, vec![Effect::ActivateTab(ids[0])]);
     // The destination had no active tab; it remembers the moved one.
     assert_eq!(m.spaces[1].active, Some(ids[1]));
-    // Moving back to the Default Space normalises the override away.
+    // Moving back keeps it too.
     let to = Dest::Normal {
         space: s0(),
         index: 0,
     };
     let (m, _) = run(m, Command::MoveTab { tab: ids[1], to });
-    assert_eq!(m.tabs[&ids[1]].container, None);
+    assert_eq!(m.tabs[&ids[1]].container, D);
 }
 
 #[test]
@@ -370,8 +369,8 @@ fn switch_space_restores_remembered_active() {
     let (m, fx) = run(m, Command::SwitchSpace(s2));
     assert_eq!(
         fx,
-        vec![Effect::SpaceChanged(s2)],
-        "empty Space pops no bar"
+        vec![Effect::SpaceChanged(s2), Effect::ShowCommandBar],
+        "empty Space hides the previous tab"
     );
     let (m, fx) = run(m, Command::SwitchSpace(s0()));
     assert_eq!(
@@ -389,7 +388,7 @@ fn delete_container_resets_spaces_and_overrides() {
     let (m, a) = open(m, None);
     let (m, _) = run(m, Command::SwitchSpace(s2));
     let (m, b) = open(m, None);
-    assert_eq!(m.effective_container(b), work);
+    assert_eq!(m.tabs[&b].container, work);
     let (m, _) = run(
         m,
         Command::ReopenInContainer {
@@ -397,10 +396,28 @@ fn delete_container_resets_spaces_and_overrides() {
             container: work,
         },
     );
-    let (m, _) = run(m, Command::DeleteContainer(work));
+    let old: Vec<TabId> = m.tabs.keys().copied().collect();
+    let (m, fx) = run(m, Command::DeleteContainer(work));
     assert_eq!(m.containers.len(), 1);
     assert_eq!(m.spaces[1].container, D);
-    assert!(m.tabs.values().all(|t| t.container.is_none()));
+    assert!(m.tabs.values().all(|t| t.container == D));
+    // Every live page in the dead context is replaced by a Default one.
+    let closed: Vec<TabId> = fx
+        .iter()
+        .filter_map(|e| match e {
+            Effect::CloseTab(t) => Some(*t),
+            _ => None,
+        })
+        .collect();
+    let created = fx
+        .iter()
+        .filter(|e| matches!(e, Effect::CreateTab { container, .. } if *container == D))
+        .count();
+    assert_eq!((closed.len(), created), (old.len(), old.len()));
+    assert!(
+        old.iter()
+            .all(|t| closed.contains(t) && !m.tabs.contains_key(t))
+    );
     // Default is not deletable.
     let (m2, fx) = run(m.clone(), Command::DeleteContainer(D));
     assert_eq!((m2, fx), (m, vec![]));
@@ -418,9 +435,9 @@ fn set_space_container_keeps_existing_tabs_context() {
             container: work,
         },
     );
-    assert_eq!(m.effective_container(ids[0]), D);
+    assert_eq!(m.tabs[&ids[0]].container, D);
     let (m, t) = open(m, None);
-    assert_eq!(m.effective_container(t), work);
+    assert_eq!(m.tabs[&t].container, work);
 }
 
 #[test]
@@ -441,7 +458,7 @@ fn reopen_replaces_in_place() {
     assert_ne!(new, ids[1]);
     assert_eq!([order[0], order[2]], [ids[0], ids[2]]);
     assert_eq!(active(&m), Some(new));
-    assert_eq!(m.effective_container(new), work);
+    assert_eq!(m.tabs[&new].container, work);
     assert_eq!(
         fx,
         vec![
@@ -662,4 +679,19 @@ fn random_sequences_keep_invariants() {
             m = after;
         }
     }
+}
+
+#[test]
+fn switching_to_an_empty_space_hides_the_previous_tab() {
+    let (m, _) = with_tabs(1);
+    let (m, s2) = add_space(m, D);
+    let (m, fx) = run(m, Command::SwitchSpace(s2));
+    assert_eq!(fx, vec![Effect::SpaceChanged(s2), Effect::ShowCommandBar]);
+    // Deleting the active Space onto an empty neighbour does the same.
+    let (m, _) = run(m, Command::SwitchSpace(s0()));
+    let (m, s3) = add_space(m, D);
+    let (m, _) = run(m, Command::SwitchSpace(s3));
+    let (m, fx) = run(m, Command::DeleteSpace(s3));
+    assert_eq!(m.active_space, s2);
+    assert_eq!(fx, vec![Effect::SpaceChanged(s2), Effect::ShowCommandBar]);
 }
