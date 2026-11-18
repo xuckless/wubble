@@ -677,9 +677,28 @@ pub enum CursorShape {
     Grabbing,
     ZoomIn,
     ZoomOut,
+    /// wubble change: middle-click autoscroll's cursors (CEF `CT_*PANNING`).
+    Panning(Panning),
     /// Anything the shared vocabulary has no name for. `"none"` means CEF
     /// asked for a hidden cursor, which the vocabulary cannot express.
     Custom(String),
+}
+
+/// wubble change: which autoscroll cursor Chromium asked for: still (both
+/// axes, or one), or scrolling toward a compass point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panning {
+    Middle,
+    MiddleVertical,
+    MiddleHorizontal,
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    NorthWest,
 }
 
 /// Where the text currently being composed sits, so a host can place its IME

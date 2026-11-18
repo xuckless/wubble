@@ -154,7 +154,8 @@ impl Host {
         self.lay_out_views(window);
         let stretching = self.step_stretch(window, dt);
         self.render_panes(window);
-        let moving = strings || stretching;
+        let autoscrolling = self.autoscroll_frame(window, now);
+        let moving = strings || stretching || autoscrolling;
         if !moving {
             self.panes_last = None;
         }

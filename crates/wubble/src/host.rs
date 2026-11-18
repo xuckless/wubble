@@ -14,6 +14,7 @@
 //! on the store's recently-closed list. Keys become actions through the
 //! keymap, and every action runs through [`Host::perform`].
 
+mod autoscroll;
 mod downloads;
 mod drag;
 mod panes;
@@ -277,6 +278,7 @@ pub struct Host {
     /// `None` until the first-run choice.
     /// A page's drag inside the window, and the pointer it last went to
     /// (relative to the drag's page).
+    autoscroll: autoscroll::AutoscrollPointer,
     page_drag: crate::page_drag::PageDrag,
     drag_point: Point,
     search_engine: Option<SearchEngine>,
@@ -408,6 +410,7 @@ impl Host {
             page_first: PendingKeys::default(),
             store,
             save: SaveState::default(),
+            autoscroll: Default::default(),
             page_drag: Default::default(),
             drag_point: Point { x: 0.0, y: 0.0 },
             search_engine: settings.engine,
@@ -848,6 +851,7 @@ impl Host {
                     return;
                 }
                 window.set_web_cursor(cursor as i32);
+                self.autoscroll_input(window, wubble_core::autoscroll::Input::Cursor(cursor.pan()));
                 // Slint applies a TouchArea's cursor only while it handles a
                 // mouse event (i-slint-core 1.19 `window.rs`, after
                 // `process_mouse_input`), and CEF reports the shape after
@@ -1644,6 +1648,10 @@ impl Host {
             if let Some(view) = self.view() {
                 view.key(key);
             }
+            // A key down the page sees ends its autoscroll.
+            if key.pressed {
+                self.autoscroll_input(window, wubble_core::autoscroll::Input::Pressed);
+            }
         }
         match route {
             KeyRoute::Perform(action) => {
@@ -1727,6 +1735,9 @@ impl Host {
         if self.drag_pointer(point, false) {
             return;
         }
+        if let (Some(window), Some(tab)) = (self.window.upgrade(), crate::shell::tab_id(pane)) {
+            self.autoscroll_pointer(&window, tab, point);
+        }
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
@@ -1756,6 +1767,9 @@ impl Host {
         };
         if !pressed && self.drag_pointer(point, true) {
             return;
+        }
+        if pressed && let Some(window) = self.window.upgrade() {
+            self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
         }
         if pressed
             && let Some(tab) = crate::shell::tab_id(pane)

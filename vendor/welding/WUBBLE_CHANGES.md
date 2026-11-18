@@ -281,6 +281,11 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `CEF_WOD_NEW_BACKGROUND_TAB`, `surface::background_disposition`), also set
    by `on_before_popup` on all three platforms.
 
+29. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
+   with the new `Panning` (middle, middle vertical/horizontal, eight compass
+   points; exported from `lib.rs`); `cursor.rs` `from_cef` maps CEF's
+   `CT_*PANNING` types to it (`CT_MIDDLEPANNING` was `Move`).
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

@@ -466,6 +466,27 @@ impl Host {
                 let got = window.get_web_cursor();
                 is(got == want, format!("cursor {got}"))
             }
+            HostCheck::Autoscroll(want) => {
+                use wubble_core::autoscroll::Autoscroll as A;
+                let got = match self.autoscroll_state() {
+                    A::Off => None,
+                    A::Still { .. } => Some(None),
+                    A::Moving { direction, .. } => Some(Some(direction)),
+                };
+                is(got == want, format!("autoscroll {got:?}"))
+            }
+            HostCheck::AutoscrollDown => {
+                use wubble_core::autoscroll::{Autoscroll as A, Direction as D};
+                let state = self.autoscroll_state();
+                let down = matches!(
+                    state,
+                    A::Moving {
+                        direction: D::S | D::SE | D::SW,
+                        ..
+                    }
+                );
+                is(down, format!("autoscroll {state:?}"))
+            }
             HostCheck::Tooltip(_) => Err("no tooltip support".into()),
             HostCheck::Status(_) => Err("no status bubble".into()),
             HostCheck::External(_) => Err("no external protocol handling".into()),

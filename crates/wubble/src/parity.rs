@@ -35,6 +35,10 @@ pub mod at {
     const fn p(x: f32, y: f32) -> Point {
         Point { x, y }
     }
+    /// `at` moved down by `dy`.
+    pub const fn y(at: Point, dy: f32) -> Point {
+        p(at.x, at.y + dy)
+    }
     /// `at` moved to `x`.
     pub const fn x(at: Point, x: f32) -> Point {
         Point { x, y: at.y }
@@ -150,11 +154,11 @@ pub enum Step {
 /// What the host can tell about itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostCheck {
-    /// The system clipboard holds this text (`wl-paste`).
+    /// The system clipboard holds this text (read as a paste reads it).
     Clipboard(&'static str),
     /// The system clipboard offers an image.
     ClipboardImage,
-    /// The primary selection holds this text (`wl-paste --primary`).
+    /// The primary selection holds this text.
     Primary(&'static str),
     BarOpen(bool),
     FindOpen(bool),
@@ -172,6 +176,10 @@ pub enum HostCheck {
     Cursor(i32),
     /// The last link handed to the OS starts with this.
     External(&'static str),
+    /// Middle-click autoscroll: off (`None`), still (`Some(None)`), or moving this way.
+    Autoscroll(Option<Option<wubble_core::autoscroll::Direction>>),
+    /// Middle-click autoscroll scrolls down (straight, or a little sideways).
+    AutoscrollDown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -716,6 +724,51 @@ pub const ITEMS: &[Item] = &[
         "E.ctrl-wheel-zoom",
         [Wheel(CTRL, at::BLANK, 0.0, 120.0), Settle(10)],
         [H(C::Zoomed(true))]
+    ),
+    // Middle-click autoscroll on the tall page: a click starts it still, a click ends it,
+    // moving below the anchor scrolls down, a key ends it.
+    item!(
+        "E.autoscroll-still",
+        [
+            MoveTo(at::INP),
+            MoveTo(at::BLANK),
+            Settle(30),
+            Click(Middle, NONE, at::BLANK),
+            Settle(10)
+        ],
+        [H(C::Autoscroll(Some(None)))]
+    ),
+    // Ends the autoscroll above.
+    item!(
+        "E.autoscroll-click-ends",
+        [Click(Left, NONE, at::BLANK), Settle(10)],
+        [H(C::Autoscroll(None))]
+    ),
+    item!(
+        "E.autoscroll-down",
+        [
+            // Away and back: the middle click is a new series, not a double click; the page
+            // sees the pointer over it before the press.
+            MoveTo(at::INP),
+            MoveTo(at::BLANK),
+            Settle(30),
+            Click(Middle, NONE, at::BLANK),
+            Settle(10),
+            MoveTo(at::y(at::BLANK, 150.0)),
+            Settle(10),
+            MoveTo(at::y(at::BLANK, 160.0)),
+            Settle(30)
+        ],
+        [
+            H(C::AutoscrollDown),
+            J("scrollY > 0 || 'scrollY ' + scrollY")
+        ]
+    ),
+    // Ends the autoscroll above.
+    item!(
+        "E.autoscroll-key-ends",
+        [Keys("a"), Settle(10)],
+        [H(C::Autoscroll(None))]
     ),
     item!(
         "E.hover-cursor",
