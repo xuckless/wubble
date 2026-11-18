@@ -235,6 +235,8 @@ pub struct View {
     filter: Option<Arc<dyn ContentFilter>>,
     /// Icon downloads CEF finished, moved to `page` by [`Self::drain_events`].
     favicons: crate::favicon::Sink,
+    /// The scripts every new document runs first ([`Self::set_document_scripts`]).
+    doc_scripts: cdp::DocScripts,
 }
 
 /// The second frame stream: the popup widget's newest frame and where to
@@ -300,6 +302,7 @@ impl View {
             zoom: Zoom::default(),
             drag: DragSource::default(),
             favicons: Default::default(),
+            doc_scripts: cdp::DocScripts::default(),
         })
     }
 
@@ -611,7 +614,18 @@ impl View {
         }
         while let Some(text) = self.producer.poll_devtools_message() {
             if let Some((id, result)) = cdp::reply(&text) {
-                self.page.push(PageEvent::CdpReply { id, result });
+                match self.doc_scripts.reply(id, &result) {
+                    Some(calls) => {
+                        if let Err(e) = &result {
+                            eprintln!(
+                                "wubble-engine: view {}: page script refused: {e}",
+                                self.browser_id
+                            );
+                        }
+                        self.send_doc_calls(calls)
+                    }
+                    None => self.page.push(PageEvent::CdpReply { id, result }),
+                }
             }
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
@@ -1048,6 +1062,37 @@ impl View {
                 eprintln!("wubble-engine: view {}: script: {e}", self.browser_id);
                 None
             }
+        }
+    }
+
+    /// Every new document of this view (each frame) runs `sources` first, before its own
+    /// scripts, replacing what an earlier call set (`cdp::DocScripts`). The page now on screen
+    /// is not touched: [`Self::run_script`] that.
+    pub fn set_document_scripts(&mut self, sources: &[String]) {
+        let calls = self.doc_scripts.set(sources);
+        self.send_doc_calls(calls);
+    }
+
+    fn send_doc_calls(&mut self, calls: Vec<cdp::DocCall>) {
+        for call in calls {
+            let (method, params) = call.method();
+            if let Some(id) = self.cdp(method, &params) {
+                self.doc_scripts.sent(id, &call);
+            }
+        }
+    }
+
+    /// Runs `script` (statements) in the page's main frame, with no answer.
+    pub fn run_script(&mut self, script: &str) {
+        if !self.is_open() {
+            return;
+        }
+        let url = self.nav.page.url.clone();
+        if let Err(e) = self.producer.execute_script(script, &url) {
+            eprintln!(
+                "wubble-engine: view {}: script not run: {e}",
+                self.browser_id
+            );
         }
     }
 

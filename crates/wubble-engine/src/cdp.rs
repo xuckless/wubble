@@ -10,6 +10,8 @@
 //! `{"id", "method", "params"}` out, `{"id", "result"}` or
 //! `{"id", "error": {"message"}}` back; events carry no `id`.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 /// The first id wubble gives a call or a script. welding numbers its own
@@ -58,9 +60,149 @@ pub fn reply(text: &str) -> Option<(CdpId, Result<Value, String>)> {
     Some((CdpId(id), result))
 }
 
+/// A call that keeps a view's document-start scripts as wanted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocCall {
+    /// `Page.enable`, once per view: without it the renderer keeps the scripts but never runs
+    /// them (seen with CEF 156: the add is answered with an identifier, no document runs it).
+    Enable,
+    /// `Page.addScriptToEvaluateOnNewDocument` with this source.
+    Add(String),
+    /// `Page.removeScriptToEvaluateOnNewDocument` of this identifier.
+    Remove(String),
+}
+
+impl DocCall {
+    /// The call's method and parameters.
+    pub fn method(&self) -> (&'static str, Value) {
+        match self {
+            DocCall::Enable => ("Page.enable", json!({})),
+            DocCall::Add(source) => (
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({ "source": source }),
+            ),
+            DocCall::Remove(identifier) => (
+                "Page.removeScriptToEvaluateOnNewDocument",
+                json!({ "identifier": identifier }),
+            ),
+        }
+    }
+}
+
+/// The scripts a view runs at the start of every document, before the page's own
+/// (`Page.addScriptToEvaluateOnNewDocument`: evaluated by the inspector, so no page
+/// Content-Security-Policy applies; the Page domain is enabled first). DevTools names each by
+/// an identifier that comes back later; a script replaced before its identifier came is
+/// removed once it does. The Page domain's events are drained with every other DevTools
+/// message and dropped (`reply` ignores events).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DocScripts {
+    /// `Page.enable` went out (its id, until answered).
+    enabled: bool,
+    enabling: Option<u64>,
+    /// The identifiers of the scripts in place.
+    registered: Vec<String>,
+    /// Add calls not answered yet, and whether their script is still wanted.
+    adding: BTreeMap<u64, bool>,
+}
+
+impl DocScripts {
+    /// The calls that replace every script with `sources`.
+    pub fn set(&mut self, sources: &[String]) -> Vec<DocCall> {
+        for wanted in self.adding.values_mut() {
+            *wanted = false;
+        }
+        let mut calls = vec![];
+        if !std::mem::replace(&mut self.enabled, true) {
+            calls.push(DocCall::Enable);
+        }
+        calls.extend(self.registered.drain(..).map(DocCall::Remove));
+        calls.extend(sources.iter().cloned().map(DocCall::Add));
+        calls
+    }
+
+    /// `call` went out as `id`.
+    pub fn sent(&mut self, id: CdpId, call: &DocCall) {
+        match call {
+            DocCall::Enable => self.enabling = Some(id.0),
+            DocCall::Add(_) => {
+                self.adding.insert(id.0, true);
+            }
+            DocCall::Remove(_) => {}
+        }
+    }
+
+    /// The answer to call `id`: `None` when it is no add call of ours; else the calls it
+    /// leads to (the removal of a script no longer wanted).
+    pub fn reply(&mut self, id: CdpId, result: &Result<Value, String>) -> Option<Vec<DocCall>> {
+        if self.enabling == Some(id.0) {
+            self.enabling = None;
+            return Some(vec![]);
+        }
+        let wanted = self.adding.remove(&id.0)?;
+        let identifier = result
+            .as_ref()
+            .ok()
+            .and_then(|v| v.get("identifier"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        Some(match (identifier, wanted) {
+            (Some(identifier), true) => {
+                self.registered.push(identifier);
+                vec![]
+            }
+            (Some(identifier), false) => vec![DocCall::Remove(identifier)],
+            (None, _) => vec![],
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_scripts_are_replaced_even_while_their_identifiers_are_on_the_way() {
+        let mut d = DocScripts::default();
+        let calls = d.set(&["a".into(), "b".into()]);
+        assert_eq!(
+            calls,
+            vec![
+                DocCall::Enable,
+                DocCall::Add("a".into()),
+                DocCall::Add("b".into())
+            ]
+        );
+        d.sent(CdpId(10), &calls[0]);
+        d.sent(CdpId(1), &calls[1]);
+        d.sent(CdpId(2), &calls[2]);
+        assert_eq!(
+            d.reply(CdpId(10), &Ok(json!({}))),
+            Some(vec![]),
+            "enable is ours"
+        );
+        assert_eq!(
+            d.reply(CdpId(1), &Ok(json!({"identifier": "1"}))),
+            Some(vec![])
+        );
+        // Replaced before the second answered: the first is removed now, the second when its
+        // identifier arrives.
+        assert_eq!(
+            d.set(&["c".into()]),
+            vec![DocCall::Remove("1".into()), DocCall::Add("c".into())]
+        );
+        d.sent(CdpId(3), &DocCall::Add("c".into()));
+        assert_eq!(
+            d.reply(CdpId(2), &Ok(json!({"identifier": "2"}))),
+            Some(vec![DocCall::Remove("2".into())])
+        );
+        assert_eq!(d.reply(CdpId(3), &Err("refused".into())), Some(vec![]));
+        assert_eq!(d.reply(CdpId(9), &Ok(json!({}))), None, "not ours");
+        assert_eq!(d.set(&[]), vec![]);
+        let (method, params) = DocCall::Add("x".into()).method();
+        assert_eq!(method, "Page.addScriptToEvaluateOnNewDocument");
+        assert_eq!(params, json!({"source": "x"}));
+    }
 
     #[test]
     fn a_call_is_one_json_message() {
