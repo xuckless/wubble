@@ -215,6 +215,14 @@ export global Shell {
     out property <length> seg-inner-radius: 10px;
     out property <length> seg-width: 104px;
     out property <length> seg-label: 14px;
+    // The springy controls (components/controls/, `wubble_core::controls`): the film rim fades
+    // in 200 ms and out 150 ms (.wb-film, as GlassPanel's rim); the toggle's travel in the
+    // design (track 92 − 2 × inset 5 − knob 42), the unit the Rust machine counts in; one px of
+    // those units as a length.
+    out property <duration> film-in: 200ms;
+    out property <duration> film-out: 150ms;
+    out property <length> toggle-design-travel: 40px;
+    out property <length> control-unit: 1px;
     out property <length> toggle-width: 46px;
     out property <length> toggle-height: 26px;
     out property <length> toggle-knob: 21px;

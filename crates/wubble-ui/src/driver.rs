@@ -293,6 +293,8 @@ type Shared = Rc<RefCell<Driver>>;
 pub struct Wired {
     pub driver: Shared,
     pub glass: Rc<RefCell<GlassRegistry>>,
+    /// The component sheet's springs (toggle, slider), one slot per control.
+    pub controls: Rc<RefCell<crate::controls::Controls>>,
 }
 
 impl Wired {
@@ -305,7 +307,12 @@ impl Wired {
     /// frame's glass, one frame behind Slint (the sidebar's glass trailing its width). The same
     /// handlers run here a moment earlier, so nothing runs that the draw would not run.
     pub fn frame(&self, window: &AppWindow, now: Instant) -> (bool, GlassFrame) {
-        let moving = self.driver.borrow_mut().frame(window, now);
+        let mut moving = self.driver.borrow_mut().frame(window, now);
+        let (controls, bump) = self.controls.borrow_mut().frame(now);
+        moving |= controls;
+        if bump {
+            crate::controls::bump(window);
+        }
         slint::private_unstable_api::re_exports::ChangeTracker::run_change_handlers();
         let frame = self.glass.borrow_mut().frame();
         if frame.bump {
@@ -498,7 +505,12 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
             None
         })
     });
-    Wired { driver, glass }
+    let controls = crate::controls::wire(window);
+    Wired {
+        driver,
+        glass,
+        controls,
+    }
 }
 
 /// Wire the shell driver, its seam starting as `seam`, and register the window's one

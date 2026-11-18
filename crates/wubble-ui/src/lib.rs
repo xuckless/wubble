@@ -2,6 +2,7 @@
 
 slint::include_modules!();
 
+pub mod controls;
 pub mod driver;
 pub mod glass;
 pub mod pages;

@@ -5,8 +5,8 @@
 // Controls: the design repo has the toggle, slider and segmented control only as its web touch
 // kit (`src/wubble/pages/touch.css` .tp-tg, .tp-sl, .tp-seg, and `touch-kit.tsx` Segmented,
 // xuckless/the-wallpaper-project @ 6c840da, owner's code); they are drawn here to those
-// metrics and colours. Their springs (the liquid indicator, the rubber-banded knob) are not
-// ported: Slint `animate` moves them, as the check box does. Written from scratch, because the
+// metrics and colours. The toggle and the slider are the springy ports in `controls/`
+// (`wubble_core::controls`); the segmented control still tweens. Written from scratch, because the
 // bucket has nothing for them: the stepper, the text field, the list editor, the section
 // header, the chord recorder row, the swatch row and the page itself. Reused: the port's
 // GlassPanel, PressableButton, SpaceIcon and WubbleScroller, wubble's IconButton and Icon.
@@ -17,52 +17,8 @@ import { GlassPanel, PressableButton, SpaceIcon, WubbleScroller } from "../compo
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, GlassTier } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
-
-// .tp-tg at half size: the accent fill when on, the track when off; the knob slides.
-export component Toggle inherits Rectangle {
-    in property <bool> on;
-    in property <color> accent: Palette.sky;
-    callback toggled();
-
-    width: Shell.toggle-width;
-    height: Shell.toggle-height;
-    border-radius: self.height / 2;
-    background: root.on ? root.accent : Shell.track;
-    animate background {
-        duration: Shell.control-ms;
-        easing: Motion.easeOut;
-    }
-    accessible-role: switch;
-    accessible-checked: root.on;
-    accessible-action-default => {
-        root.toggled();
-    }
-
-    Rectangle {
-        x: root.on ? root.width - self.width - Shell.toggle-inset : Shell.toggle-inset;
-        y: Shell.toggle-inset;
-        width: Shell.toggle-knob;
-        height: Shell.toggle-knob;
-        border-radius: self.width / 2;
-        background: root.on ? Palette.ink : Palette.mist;
-        drop-shadow-blur: Shell.toggle-shadow-blur;
-        drop-shadow-offset-y: Shell.toggle-shadow-y;
-        drop-shadow-color: Shell.toggle-shadow;
-        animate x {
-            duration: Shell.control-ms;
-            easing: Motion.easeSpring;
-        }
-        animate background {
-            duration: Shell.control-ms;
-            easing: Motion.easeOut;
-        }
-    }
-    TouchArea {
-        clicked => {
-            root.toggled();
-        }
-    }
-}
+import { Toggle } from "controls/toggle.slint";
+import { Slider } from "controls/slider.slint";
 
 // .tp-seg: a track with one segment per word; the ink indicator sits under the chosen one.
 export component Segmented inherits Rectangle {
@@ -229,56 +185,6 @@ export component Stepper inherits HorizontalLayout {
     }
     changed value => {
         number.text = root.value;
-    }
-}
-
-// .tp-sl: the rail, the accent fill and the knob; the value is set on release.
-export component Slider inherits Rectangle {
-    in property <float> value;
-    in property <float> min;
-    in property <float> max: 1;
-    in property <color> accent: Palette.sky;
-    callback set(float);
-
-    width: Shell.slider-width;
-    height: Shell.slider-height;
-    property <float> span: Math.max(0.0001, root.max - root.min);
-    property <float> held: (root.min + Math.clamp(ta.mouse-x / root.width, 0, 1) * root.span);
-    property <float> shown: ta.pressed ? root.held : root.value;
-    property <float> t: Math.clamp((root.shown - root.min) / root.span, 0, 1);
-
-    Rectangle {
-        y: (parent.height - self.height) / 2;
-        height: Shell.slider-rail;
-        border-radius: self.height / 2;
-        background: Shell.track;
-    }
-    Rectangle {
-        x: 0px;
-        y: (parent.height - self.height) / 2;
-        width: root.t * root.width;
-        height: Shell.slider-rail;
-        border-radius: self.height / 2;
-        background: root.accent;
-    }
-    Rectangle {
-        x: root.t * (root.width - self.width);
-        y: (parent.height - self.height) / 2;
-        width: Shell.slider-knob;
-        height: Shell.slider-knob;
-        border-radius: self.width / 2;
-        background: Palette.ink;
-        drop-shadow-blur: Shell.slider-shadow-blur;
-        drop-shadow-offset-y: Shell.slider-shadow-y;
-        drop-shadow-color: Shell.slider-shadow;
-    }
-    ta := TouchArea {
-        mouse-cursor: self.pressed ? grabbing : grab;
-        pointer-event(e) => {
-            if e.kind == PointerEventKind.up {
-                root.set(root.held);
-            }
-        }
     }
 }
 

@@ -1,0 +1,40 @@
+// The component sheet's physics lives in Rust (`wubble_core::controls`, stepped by
+// `wubble-ui/src/controls.rs`): Slint `animate` has no springs. Each control instance takes a
+// slot on `init` and draws `Controls.views[slot]`; its pointer events go back as intents. Slint
+// has no "destroyed" callback, so live instances answer every `generation` bump with `alive`
+// and the registry frees the slots nobody answered for (the GlassLayer sweep, glass.rs).
+
+export struct ControlView {
+    // Along the travel, px of the design's control (the Rust machine's units).
+    x: float,
+    scale-x: float,
+    scale-y: float,
+    // Transform origin across the knob, 0 (left) .. 1 (right).
+    origin: float,
+    // The toggle's accent bloom, 0..1.
+    fill: float,
+    // The slider's value shown, 0..100.
+    value: float,
+    held: bool,
+}
+
+export global Controls {
+    in property <[ControlView]> views;
+    in property <int> generation;
+    // kind: 0 toggle (value 0/1), 1 slider (value 0..100). Returns the slot.
+    callback acquire(int, float) -> int;
+    // The setting changed from outside: the control springs to it.
+    callback set-value(int, float);
+    // The slider's travel, px.
+    callback resize(int, length);
+    // Pointer along the travel, px; `t` the time base the toggle measures its fling with.
+    callback press(int, length);
+    callback drag(int, length);
+    // The value it lands on (toggle 0/1, slider 0..100), or -1 when it was not held.
+    callback release(int) -> float;
+    callback alive(int);
+
+    public pure function view(slot: int) -> ControlView {
+        return slot >= 0 && slot < root.views.length ? root.views[slot] : { scale-x: 1, scale-y: 1, origin: 0.5 };
+    }
+}

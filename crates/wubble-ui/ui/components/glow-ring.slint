@@ -34,3 +34,16 @@ export component GlowRing inherits Rectangle {
         }
     }
 }
+
+// The film rim of a control drawn on content (toggle, slider knob, stretch button): the same
+// ring, shown only while touched (hover, press, drag or focus; `wubble_core::controls::rim_on`),
+// never at rest, fading in over 200 ms and out over 150 ms as GlassPanel's rim does (the design's
+// `.wb-film`). Slint has no conic gradient: the ring is the linear sweep, as in GlassPanel.
+export component FilmRim inherits GlowRing {
+    in property <bool> touched;
+    sweep: false;
+    strength: root.touched ? 0.8 : 0;
+    animate strength {
+        duration: root.touched ? Shell.film-in : Shell.film-out;
+    }
+}
