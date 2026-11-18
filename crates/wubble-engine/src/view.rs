@@ -139,7 +139,7 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
             }
             (Resizing { wanted: new }, effects)
         }
-        // Frames at a stale size are still shown (stretched) rather than
+        // Frames at a stale size are still shown (at their own size, top left) rather than
         // dropped, so a resize never flashes an empty view.
         (Live { .. }, Frame(_), _) => (state, vec![Present]),
         (Resizing { wanted }, Frame(size), _) if size == wanted.frame_size() => {

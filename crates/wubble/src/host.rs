@@ -975,6 +975,11 @@ impl Host {
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
             }
             WindowEvent::CursorLeft { .. } => self.input.pointer = None,
+            // CEF hears the new size at the resize, not at its next pump;
+            // queued so the shell has laid out the new size first.
+            WindowEvent::Resized(_) => {
+                let _ = slint::invoke_from_event_loop(|| with_host(Host::follow_layout));
+            }
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
                 self.sync_focus(&window);
@@ -1029,6 +1034,16 @@ impl Host {
             _ => {}
         }
         EventResult::Propagate
+    }
+
+    /// Tells the visible view the content area's current layout.
+    fn follow_layout(&mut self) {
+        if let Some(window) = self.window.upgrade() {
+            let layout = content_layout(&window);
+            if let Some(view) = self.view() {
+                view.set_layout(layout);
+            }
+        }
     }
 
     pub fn pointer_moved(&mut self, point: Point) {
