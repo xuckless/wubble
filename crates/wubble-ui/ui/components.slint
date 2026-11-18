@@ -467,6 +467,8 @@ export component WubbleScroller inherits Rectangle {
     out property <length> viewport-height: self.height;
     out property <length> content-height: content.preferred-height;
     callback wheel(length);              // web-style deltaY in px
+    // wubble change: the horizontal part of a scroll (Slint's delta-x), for the Space swipe
+    callback wheel-x(length);
     callback touch-down(length);
     callback touch-move(length);
     callback touch-up();
@@ -478,6 +480,9 @@ export component WubbleScroller inherits Rectangle {
     TouchArea {
         scroll-event(e) => {
             root.wheel(-e.delta-y);
+            if e.delta-x != 0 {
+                root.wheel-x(e.delta-x);
+            }
             accept
         }
         pointer-event(e) => {

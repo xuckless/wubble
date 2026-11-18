@@ -20,6 +20,8 @@ mod pages;
 mod panes;
 mod settings;
 mod surfaces;
+mod swipe;
+pub use swipe::Swipe;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};

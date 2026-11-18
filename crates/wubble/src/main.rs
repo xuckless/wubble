@@ -800,6 +800,10 @@ fn connect_shell(window: &AppWindow) {
             with_host(|host| host.move_tab(tab, to));
         }
     });
+    let swipe = RefCell::new(host::Swipe::default());
+    window.on_space_swipe(move |dx| {
+        with_host(|host| host.space_swipe(&mut swipe.borrow_mut(), dx));
+    });
     window.on_space_switched(move |id| {
         if let Some(s) = shell::space_id(id) {
             command(Cmd::SwitchSpace(s));
