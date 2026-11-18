@@ -13,10 +13,12 @@
 mod bookmarks;
 mod check;
 mod closed;
+mod downloads;
 mod history;
 mod import;
 mod logins;
 mod migrate;
+mod permissions;
 mod session;
 mod settings;
 

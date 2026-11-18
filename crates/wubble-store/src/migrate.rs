@@ -8,6 +8,8 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (2, include_str!("../sql/002_core_model.sql")),
     (3, include_str!("../sql/003_logins_imports.sql")),
     (4, include_str!("../sql/004_sidebar_mode.sql")),
+    (5, include_str!("../sql/005_site_permissions.sql")),
+    (6, include_str!("../sql/006_downloads.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -80,6 +82,8 @@ mod tests {
                 "recently_closed",
                 "logins",
                 "import_marks",
+                "site_permissions",
+                "downloads",
             ] {
                 let mut rows = conn
                     .query(
@@ -111,6 +115,44 @@ mod tests {
                 .unwrap();
             let row = rows.next().await.unwrap().unwrap();
             assert_eq!(row.get::<String>(0).unwrap(), "b");
+        });
+    }
+
+    async fn count(conn: &turso::Connection, sql: &str) -> i64 {
+        let mut rows = conn.query(sql, ()).await.unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
+
+    /// A database of the previous schema, with data, reaches the latest
+    /// with its rows intact and the new tables empty.
+    #[test]
+    fn a_v4_database_with_data_migrates_to_v6() {
+        pollster::block_on(async {
+            let mut conn = mem().await;
+            migrate(&mut conn, &MIGRATIONS[..4]).await.unwrap();
+            assert_eq!(schema_version(&conn).await.unwrap(), 4);
+            conn.execute_batch(
+                "INSERT INTO settings(key, value) VALUES ('ui.sidebar_mode', 'rail');
+                 INSERT INTO containers(id, name, position) VALUES (0, 'Default', 0);
+                 INSERT INTO spaces(id, name, position, container_id) VALUES (0, 'Home', 0, 0);
+                 INSERT INTO tabs(id, space_id, container_id, position, url)
+                     VALUES (1, 0, 0, 0, 'https://a.test/');
+                 INSERT INTO bookmarks(id, kind, position, title, url, date_added, date_modified)
+                     VALUES (1, 0, 0, 'A', 'https://a.test/', 1, 1);",
+            )
+            .await
+            .unwrap();
+            migrate(&mut conn, MIGRATIONS).await.unwrap();
+            assert_eq!(schema_version(&conn).await.unwrap(), 6);
+            for (sql, want) in [
+                ("SELECT count(*) FROM settings WHERE value = 'rail'", 1),
+                ("SELECT count(*) FROM tabs WHERE url = 'https://a.test/'", 1),
+                ("SELECT count(*) FROM bookmarks WHERE title = 'A'", 1),
+                ("SELECT count(*) FROM site_permissions", 0),
+                ("SELECT count(*) FROM downloads", 0),
+            ] {
+                assert_eq!(count(&conn, sql).await, want, "{sql}");
+            }
         });
     }
 

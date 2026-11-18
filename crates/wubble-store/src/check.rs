@@ -315,7 +315,10 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 4);
+            assert_eq!(
+                migrate::schema_version(&s.conn).await.unwrap(),
+                migrate::latest(MIGRATIONS)
+            );
 
             // Old data intact and consistent.
             assert_eq!(s.check_consistency().await.unwrap(), Vec::<String>::new());
