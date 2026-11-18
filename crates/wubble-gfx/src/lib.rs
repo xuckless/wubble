@@ -10,9 +10,9 @@
 //! Invariant: no CPU readback on the hot path. `OnPaint` (shared-memory
 //! bitmaps) is a fallback only and must be counted/logged when hit.
 
-pub mod glass;
 pub mod import;
 pub mod pacing;
+pub mod scene;
 
 pub use import::{FramePresenter, GfxError, GpuContext, NativeFrame};
 

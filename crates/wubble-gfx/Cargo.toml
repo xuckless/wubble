@@ -11,3 +11,7 @@ license.workspace = true
 slint.workspace = true
 wgpu.workspace = true
 welding.workspace = true
+
+[dev-dependencies]
+# WGSL validation of the scene shaders in tests; same version wgpu 30 uses.
+naga = { version = "30", features = ["wgsl-in"] }

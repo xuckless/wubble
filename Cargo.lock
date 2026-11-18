@@ -7494,6 +7494,7 @@ dependencies = [
 name = "wubble-gfx"
 version = "0.0.0"
 dependencies = [
+ "naga",
  "slint",
  "welding",
  "wgpu",
