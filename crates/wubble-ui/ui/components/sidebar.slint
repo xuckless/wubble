@@ -24,6 +24,7 @@ import { WindowLights } from "window-lights.slint";
 import { NavButtons } from "nav-buttons.slint";
 import { MoveArea } from "window-frame.slint";
 import { Wobble } from "wobble.slint";
+import { SideEdges } from "model.slint";
 
 export component Sidebar inherits Rectangle {
     in property <string> address-host;
@@ -41,6 +42,8 @@ export component Sidebar inherits Rectangle {
     in property <float> indicator-stretch: 1;
     in property <float> indicator-origin: 0.3;
     in property <bool> compact: false;       // the 56px icon rail
+    // The floating peek panel: .wb-side-peek pads 10 8 10 10 where the sidebar pads 6.
+    in property <bool> floating: false;
     // The window can be moved by dragging the sidebar's glass (off in full screen).
     in property <bool> window-movable: true;
     // The address pill is loading a page (see AddressPill).
@@ -49,6 +52,15 @@ export component Sidebar inherits Rectangle {
     // Where the command bar grows from when opened from the pill / the new-tab row, in window
     // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
     out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
+    // Where the column's edges fall, in window coordinates (the alignment the tests pin).
+    out property <SideEdges> edges: {
+        lights: lights.absolute-position.x,
+        nav-end: nav.absolute-position.x + nav.width,
+        pill: pill.absolute-position.x,
+        pill-end: pill.absolute-position.x + pill.width,
+        rows: rows.absolute-position.x,
+        new-tab: new-tab.absolute-position.x,
+    };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     in property <bool> rows-shown: true;     // flip to replay the row entrance
     // the tab list's scroller
@@ -109,13 +121,16 @@ export component Sidebar inherits Rectangle {
     }
 
     VerticalLayout {
-        padding: Shell.side-pad;
+        padding-left: root.floating ? Shell.peek-pad-start : Shell.side-pad;
+        padding-right: root.floating ? Shell.peek-pad-end : Shell.side-pad;
+        padding-top: root.floating ? Shell.peek-pad-y : Shell.side-pad;
+        padding-bottom: root.floating ? Shell.peek-pad-y : Shell.side-pad;
         spacing: Spacing.s3;
 
         // .wb-side-top: 30 high, lights 10 in (centred on the rail)
         Rectangle {
             height: Shell.side-top;
-            WindowLights {
+            lights := WindowLights {
                 x: root.compact ? (parent.width - self.width) / 2 : Shell.side-grid;
                 y: (parent.height - self.height) / 2;
                 compact: root.compact;
@@ -130,8 +145,11 @@ export component Sidebar inherits Rectangle {
                 }
             }
             // .wb-nav: right-aligned, pulled 4 px past the padding (.wb-side-top margin-right -4)
-            if !root.compact: NavButtons {
-                x: parent.width - self.preferred-width + Shell.nav-pull;
+            nav := NavButtons {
+                visible: !root.compact;
+                // its own width: a bare layout would fill the header and spread the buttons
+                width: self.preferred-width;
+                x: parent.width - self.width + Shell.nav-pull;
                 y: 0px;
                 height: parent.height;
                 can-go-back: root.can-go-back;
