@@ -1405,7 +1405,7 @@ fn check_at(item: &Item, step: usize) -> Expect {
 fn ask(items: &[Item], item: usize, step: usize, polls: u32) -> (Parity, Vec<Action>) {
     let (state, actions) = ask_check(items, item, step, polls);
     match items[item].steps.get(step) {
-        Some(&Step::Retry(op, _)) if polls % RETRY_EVERY == 0 => (
+        Some(&Step::Retry(op, _)) if polls.is_multiple_of(RETRY_EVERY) => (
             state,
             [vec![Action::Step(Step::Host(op))], actions].concat(),
         ),
