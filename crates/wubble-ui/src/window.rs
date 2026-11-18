@@ -15,40 +15,6 @@ use slint::winit_030::winit::window::ResizeDirection;
 
 use crate::{AppWindow, WindowEdge};
 
-/// What differs per windowing system. One impl each; [`Kind`] picks one.
-pub trait Platform {
-    /// The client may set its own position and size (the window spring needs this). False on
-    /// Wayland, where the compositor owns geometry.
-    const CLIENT_GEOMETRY: bool;
-    /// A transparent window background shows through, so the window can have rounded corners.
-    const TRANSPARENT_CORNERS: bool;
-}
-
-pub struct Wayland;
-pub struct X11;
-pub struct MacOs;
-pub struct Windows;
-
-impl Platform for Wayland {
-    const CLIENT_GEOMETRY: bool = false;
-    // Mesa and NVIDIA expose a pre-multiplied alpha mode on Wayland; not checked on a display.
-    const TRANSPARENT_CORNERS: bool = true;
-}
-impl Platform for X11 {
-    const CLIENT_GEOMETRY: bool = true;
-    // No way to know whether a compositor runs, so square.
-    const TRANSPARENT_CORNERS: bool = false;
-}
-impl Platform for MacOs {
-    const CLIENT_GEOMETRY: bool = true;
-    const TRANSPARENT_CORNERS: bool = true;
-}
-impl Platform for Windows {
-    const CLIENT_GEOMETRY: bool = true;
-    // Until measured on hardware.
-    const TRANSPARENT_CORNERS: bool = false;
-}
-
 /// The windowing system the window runs on, from its raw handle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -70,24 +36,12 @@ impl Kind {
         }
     }
 
+    /// A transparent window background shows through, so the window can have rounded corners.
+    /// Belief, not measured on a display: Mesa and NVIDIA expose a pre-multiplied alpha mode on
+    /// Wayland, macOS always composites; X11 cannot tell whether a compositor runs and Windows is
+    /// unmeasured, so those stay square.
     pub fn transparent_corners(self) -> bool {
-        match self {
-            Kind::Wayland => Wayland::TRANSPARENT_CORNERS,
-            Kind::X11 => X11::TRANSPARENT_CORNERS,
-            Kind::MacOs => MacOs::TRANSPARENT_CORNERS,
-            Kind::Windows => Windows::TRANSPARENT_CORNERS,
-            Kind::Other => false,
-        }
-    }
-
-    /// Whether the client may set its own geometry; the window spring runs only then.
-    pub fn client_geometry(self) -> bool {
-        match self {
-            Kind::Wayland | Kind::Other => Wayland::CLIENT_GEOMETRY,
-            Kind::X11 => X11::CLIENT_GEOMETRY,
-            Kind::MacOs => MacOs::CLIENT_GEOMETRY,
-            Kind::Windows => Windows::CLIENT_GEOMETRY,
-        }
+        matches!(self, Kind::Wayland | Kind::MacOs)
     }
 }
 
@@ -218,6 +172,9 @@ pub fn wire(app: &AppWindow) {
                 .map(|h| Kind::of(h.as_raw()))
                 .unwrap_or(Kind::Other)
         });
+        if kind.is_none() {
+            eprintln!("wubble: rounded corners: no native window yet, staying square");
+        }
         let square = std::env::var_os("WUBBLE_SQUARE_CORNERS").is_some();
         app.set_rounded_corners(!square && kind.is_some_and(Kind::transparent_corners));
     });
@@ -303,16 +260,15 @@ mod tests {
     }
 
     #[test]
-    fn platform_flags() {
+    fn rounded_corners_where_the_compositor_blends() {
         let table = [
-            (Kind::Wayland, false, true),
-            (Kind::X11, true, false),
-            (Kind::MacOs, true, true),
-            (Kind::Windows, true, false),
-            (Kind::Other, false, false),
+            (Kind::Wayland, true),
+            (Kind::X11, false),
+            (Kind::MacOs, true),
+            (Kind::Windows, false),
+            (Kind::Other, false),
         ];
-        for (kind, geometry, corners) in table {
-            assert_eq!(kind.client_geometry(), geometry, "{kind:?}");
+        for (kind, corners) in table {
             assert_eq!(kind.transparent_corners(), corners, "{kind:?}");
         }
     }

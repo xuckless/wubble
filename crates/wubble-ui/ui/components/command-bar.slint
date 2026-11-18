@@ -17,7 +17,7 @@ export component CommandBar inherits Rectangle {
     in-out property <string> query <=> input.text;
     out property <CommandBarState> state: CommandBarState.closed;
     // Where the bar was invoked from, in window coordinates; the panel grows from there. The
-    // default (0, 0) means the top centre of the panel.
+    // host sets it before every open.
     in property <Origin> origin: { x: 0px, y: 0px };
 
     callback query-changed(string);
@@ -131,10 +131,9 @@ export component CommandBar inherits Rectangle {
         over-content: true;
         y: Shell.command-bar-top;
         // Scale and fade from the invoking point (command.tsx: transform-origin = cmd.from - rect).
-        property <bool> from-origin: root.origin.x != 0px || root.origin.y != 0px;
         transform-origin: {
-            x: self.from-origin ? max(0px, min(self.width, root.origin.x - root.absolute-position.x - self.x)) : self.width / 2,
-            y: self.from-origin ? max(0px, min(self.height, root.origin.y - root.absolute-position.y - self.y)) : 0px,
+            x: max(0px, min(self.width, root.origin.x - root.absolute-position.x - self.x)),
+            y: max(0px, min(self.height, root.origin.y - root.absolute-position.y - self.y)),
         };
         transform-scale: root.open ? 1 : Motion.dropdownFrom;
         opacity: root.open ? 1 : 0;

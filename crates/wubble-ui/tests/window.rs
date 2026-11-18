@@ -64,7 +64,7 @@ fn edges(app: &AppWindow) {
     let want: Vec<_> = table.iter().map(|t| t.2).collect();
     assert_eq!(*log.borrow(), want);
 
-    // Full screen: square, no resize zones.
+    // Square until the host says the compositor blends.
     assert_eq!(app.get_window_radius(), 0.0);
     app.set_rounded_corners(true);
     assert!(app.get_window_resizable());
@@ -81,6 +81,17 @@ fn edges(app: &AppWindow) {
     assert!(log.borrow().is_empty());
     app.window().set_fullscreen(false);
     mock_elapsed_time(Duration::from_millis(1));
+
+    // Maximised: square, no resize zones.
+    app.window().set_maximized(true);
+    mock_elapsed_time(Duration::from_millis(1));
+    assert!(!app.get_window_resizable());
+    assert_eq!(app.get_window_radius(), 0.0);
+    click(app, 3.0, h / 2.0);
+    assert!(log.borrow().is_empty());
+    app.window().set_maximized(false);
+    mock_elapsed_time(Duration::from_millis(1));
+    assert!(app.get_window_resizable());
 }
 
 fn loading(app: &AppWindow) {

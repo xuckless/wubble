@@ -24,12 +24,9 @@ export component AddressPill inherits Rectangle {
         duration: root.loading ? Shell.beam-in : Shell.beam-ms;
         easing: Motion.easeOut;
     }
-    property <float> phase: root.loading ? 1 : 0;
-    animate phase {
-        duration: Shell.beam-ms;
-        easing: Motion.easeOut;
-        iteration-count: -1;
-    }
+    // The sweep runs on the animation clock and only while the sheen is drawn (the element below
+    // exists only then), so an idle shell requests no frames; it keeps going through the fade.
+    property <float> phase: Math.mod(animation-tick() / Shell.beam-ms, 1);
     out property <float> sheen: root.strength * root.strength;
     callback activated();
 
@@ -57,7 +54,7 @@ export component AddressPill inherits Rectangle {
             }
         }
 
-        Rectangle {
+        if root.sheen > 0: Rectangle {
             border-radius: Shell.control-radius;
             clip: true;
             opacity: root.sheen;
