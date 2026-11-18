@@ -58,12 +58,22 @@ pub enum Action {
     OpenPasswords,
     /// Bookmark the visible page: opens the name and folder sheet.
     BookmarkPage,
+    /// The visible site's page theme: as the site shows it, dark, light (`pagetheme`).
+    CyclePageTheme,
+    /// Labels on the page's links; typing one clicks it (`hints`).
+    LinkHints,
+    /// Show the page's article alone, or leave it (`reader`).
+    ToggleReader,
+    /// Drag a region of the page to capture (`shot`).
+    ScreenshotRegion,
+    ScreenshotVisible,
+    ScreenshotFullPage,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 40] = [
+const FIXED: [(&str, Action); 46] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -103,6 +113,12 @@ const FIXED: [(&str, Action); 40] = [
     ("open-downloads", Action::OpenDownloads),
     ("open-passwords", Action::OpenPasswords),
     ("bookmark-page", Action::BookmarkPage),
+    ("cycle-page-theme", Action::CyclePageTheme),
+    ("link-hints", Action::LinkHints),
+    ("toggle-reader", Action::ToggleReader),
+    ("screenshot", Action::ScreenshotRegion),
+    ("screenshot-visible", Action::ScreenshotVisible),
+    ("screenshot-full-page", Action::ScreenshotFullPage),
     ("quit", Action::Quit),
 ];
 
@@ -167,7 +183,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 15] = [
+pub const PALETTE: [ActionInfo; 21] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -244,6 +260,36 @@ pub const PALETTE: [ActionInfo; 15] = [
         title: "Bookmark This Page",
         keywords: "star save favourite",
     },
+    ActionInfo {
+        action: Action::CyclePageTheme,
+        title: "Dark Mode for This Site",
+        keywords: "theme light night invert colours",
+    },
+    ActionInfo {
+        action: Action::LinkHints,
+        title: "Link Hints",
+        keywords: "keyboard click follow labels vimium",
+    },
+    ActionInfo {
+        action: Action::ToggleReader,
+        title: "Reader Mode",
+        keywords: "article read clean readability",
+    },
+    ActionInfo {
+        action: Action::ScreenshotRegion,
+        title: "Screenshot of a Region",
+        keywords: "capture image snip select",
+    },
+    ActionInfo {
+        action: Action::ScreenshotVisible,
+        title: "Screenshot of the Visible Page",
+        keywords: "capture image window",
+    },
+    ActionInfo {
+        action: Action::ScreenshotFullPage,
+        title: "Screenshot of the Full Page",
+        keywords: "capture image whole long scrolling",
+    },
 ];
 
 #[cfg(test)]
@@ -253,7 +299,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 58);
+        assert_eq!(all.len(), 64);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -264,7 +310,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 58);
+        assert_eq!(ids.len(), 64);
     }
 
     #[test]
@@ -291,6 +337,38 @@ mod tests {
         assert_eq!(Action::OpenSettings.label(), "Settings");
         assert_eq!(Action::SelectTab(3).label(), "Select tab 3");
         assert_eq!(Action::DevTools.label(), "Dev tools");
+    }
+
+    #[test]
+    fn builtin_actions_have_their_ids_and_titles() {
+        for (id, action, title) in [
+            (
+                "cycle-page-theme",
+                Action::CyclePageTheme,
+                "Dark Mode for This Site",
+            ),
+            ("link-hints", Action::LinkHints, "Link Hints"),
+            ("toggle-reader", Action::ToggleReader, "Reader Mode"),
+            (
+                "screenshot",
+                Action::ScreenshotRegion,
+                "Screenshot of a Region",
+            ),
+            (
+                "screenshot-visible",
+                Action::ScreenshotVisible,
+                "Screenshot of the Visible Page",
+            ),
+            (
+                "screenshot-full-page",
+                Action::ScreenshotFullPage,
+                "Screenshot of the Full Page",
+            ),
+        ] {
+            assert_eq!(Action::from_id(id), Some(action));
+            assert_eq!(action.id(), id);
+            assert_eq!(action.label(), title);
+        }
     }
 
     #[test]

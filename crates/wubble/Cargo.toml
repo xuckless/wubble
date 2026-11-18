@@ -35,6 +35,13 @@ dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Console messages at debug level; no logger is installed by default (MIT OR Apache-2.0).
 log = "0.4"
+# Screenshots (`shot_io.rs`): Chromium's PNG arrives base64; decoded to RGBA for the clipboard.
+# Both already in Cargo.lock (MIT OR Apache-2.0).
+base64 = "0.22"
+png = "0.18"
+# An image on the clipboard (Slint's own clipboard is text only). Already in Cargo.lock through
+# Slint's winit backend; `wayland-data-control` copies on Wayland (MIT OR Apache-2.0).
+arboard = { version = "3.7", features = ["image-data", "wayland-data-control"] }
 
 [dev-dependencies]
 tempfile = "3"

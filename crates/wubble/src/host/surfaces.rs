@@ -44,6 +44,18 @@ impl Host {
         let Some(tab) = self.tab_of(view) else {
             return;
         };
+        // The built-ins' answers (`host/builtins.rs`).
+        if matches!(
+            event,
+            PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. }
+        ) {
+            self.builtins_answer(tab, &event);
+            self.builtin_smoke_step(crate::builtin_smoke::Input::Page(&event));
+            return;
+        }
+        if matches!(event, PageEvent::DownloadFinished { .. }) {
+            self.builtin_smoke_step(crate::builtin_smoke::Input::Page(&event));
+        }
         let seen = self.checks.page_smoke.is_some().then(|| event.clone());
         let visible = self.model.visible_tab() == Some(tab);
         let routed = surface::route(event);
@@ -114,7 +126,7 @@ impl Host {
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
             Routed::Frame { frame, text } => self.autofill_message(tab, frame, &text),
             Routed::Pdf { path, text } => {
-                self.downloads.finish_pdf(&path);
+                self.downloads.release(&path);
                 self.toast(window, &text);
             }
             Routed::ImeBounds(_) | Routed::Ignore => {}
@@ -260,6 +272,10 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
+                MenuEffect::Run(MenuCommand::SetPageTheme(host, theme)) => {
+                    self.set_site_theme(&host, theme)
+                }
+                MenuEffect::Run(MenuCommand::ShotElement(at)) => self.shot_element(tab, at),
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
         }
@@ -315,6 +331,7 @@ impl Host {
     /// The tab's view closed: its surfaces close without answering (welding
     /// answered every held request), its fullscreen and sound end.
     pub(super) fn view_gone(&mut self, tab: TabId) {
+        self.builtins_view_gone(tab);
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }

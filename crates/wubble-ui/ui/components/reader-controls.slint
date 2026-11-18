@@ -1,0 +1,92 @@
+import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { GlassTier } from "model.slint";
+import { IconButton } from "nav-buttons.slint";
+import { IconPaths } from "icon.slint";
+import { Segmented } from "settings.slint";
+
+// Reader mode's typography: text size, column width, font and theme, live, and a way out.
+// Written from scratch: the design repo has no reader. Built from the house's parts: the find
+// bar's thick glass strip over content, the settings page's Segmented control and the icon
+// buttons. Each choice writes its setting (`reader.*`): a size, or the index of a choice's word
+// (the words are the settings table's); the values shown are the settings'. A size outside the
+// setting's range is refused by the store, so its bounds live only in the table.
+export component ReaderControls inherits Rectangle {
+    in property <bool> open;
+    in property <int> size;
+    // Indexes into the words of `wubble_core::reader` (width, font, theme).
+    in property <int> column;
+    in property <int> font;
+    in property <int> theme;
+    callback setting(string, int);
+    callback closed();
+
+    visible: root.open;
+    width: panel.width;
+    height: panel.height;
+
+    panel := GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        width: row.preferred-width;
+        height: row.preferred-height;
+        TouchArea { }
+        row := HorizontalLayout {
+            padding: Spacing.s1;
+            padding-left: Spacing.s2;
+            spacing: Spacing.s2;
+            alignment: center;
+            IconButton {
+                icon-path: IconPaths.minus;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    root.setting("reader.size", root.size - 1);
+                }
+            }
+            Text {
+                text: root.size;
+                vertical-alignment: center;
+                color: Palette.ink;
+                font-family: Fonts.mono;
+                font-size: Type.label.size;
+            }
+            IconButton {
+                icon-path: IconPaths.plus;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    root.setting("reader.size", root.size + 1);
+                }
+            }
+            Segmented {
+                labels: ["Narrow", "Medium", "Wide"];
+                selected: root.column;
+                chosen(i) => {
+                    root.setting("reader.width", i);
+                }
+            }
+            Segmented {
+                labels: ["Serif", "Sans"];
+                selected: root.font;
+                chosen(i) => {
+                    root.setting("reader.font", i);
+                }
+            }
+            Segmented {
+                labels: ["Dark", "Light", "Sepia"];
+                selected: root.theme;
+                chosen(i) => {
+                    root.setting("reader.theme", i);
+                }
+            }
+            IconButton {
+                icon-path: IconPaths.close;
+                y: (parent.height - self.height) / 2;
+                clicked => {
+                    root.closed();
+                }
+            }
+        }
+    }
+}

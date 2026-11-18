@@ -6,6 +6,7 @@
 //! without touching the shell.
 
 pub mod app;
+pub mod cdp;
 pub mod devtools;
 pub mod download;
 pub mod drag;

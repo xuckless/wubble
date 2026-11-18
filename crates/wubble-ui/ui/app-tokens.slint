@@ -180,6 +180,8 @@ export global Shell {
     // command bar's input metrics.
     out property <length> find-width: 360px;
     out property <length> find-height: 44px;
+    // The screenshot region picker: how much the page dims outside the region.
+    out property <float> shot-dim: 0.5;
     // The speaker glyph in a tab row (hand drawn on the 24 grid: the bucket has none).
     out property <length> speaker: 22px;
     // The permission prompt: an .ur-o-surface under the address pill (Chromium's bubble place),

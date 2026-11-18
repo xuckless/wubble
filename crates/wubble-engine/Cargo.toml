@@ -13,6 +13,8 @@ wubble-gfx.workspace = true
 welding.workspace = true
 cef.workspace = true
 dpi.workspace = true
+# DevTools protocol messages (`cdp.rs`) and page-script answers.
+serde_json.workspace = true
 # Key and modifier types of the host's keyboard events (the same winit Slint
 # uses). Default features: without a backend winit refuses to build alone.
 winit = "0.30"

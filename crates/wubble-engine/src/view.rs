@@ -30,6 +30,7 @@ use winit::keyboard::PhysicalKey;
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::{EngineError, RequestMode};
+use crate::cdp::{self, CdpId, EvalId};
 use crate::download::{self, Download, DownloadEffect, DownloadInput};
 use crate::drag::{self, DragSource, DragSourceInput};
 use crate::filter::ContentFilter;
@@ -45,14 +46,6 @@ use crate::page::{
 };
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
-
-/// Script ids are unique per process, so a view never mistakes another
-/// script's answer for its probe's.
-fn next_probe_id() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
 
 /// Where a view sits in the host window (both physical pixels). The window
 /// stands in for the screen, so Blink can place popups such as `<select>`
@@ -600,14 +593,25 @@ impl View {
                     is_main,
                     text,
                 } => self.emit_page(frame_message(frame_id, frame_url, is_main, text), mode),
+                // The audible probe's answer, or one of `eval`'s: one id counter for both.
                 CefSurfaceEvent::ScriptCompleted { id, result } => {
-                    let audible = result.ok().and_then(|json| json.trim().parse().ok());
-                    self.apply_probe(ProbeInput::Answered {
-                        id: id.get(),
-                        audible,
-                    });
+                    let id = id.get();
+                    if matches!(self.audio, AudioProbe::Waiting { id: w, .. } if w == id) {
+                        let audible = result.ok().and_then(|json| json.trim().parse().ok());
+                        self.apply_probe(ProbeInput::Answered { id, audible });
+                    } else {
+                        self.page.push(PageEvent::EvalResult {
+                            id: EvalId(id),
+                            result,
+                        });
+                    }
                 }
                 _ => {}
+            }
+        }
+        while let Some(text) = self.producer.poll_devtools_message() {
+            if let Some((id, result)) = cdp::reply(&text) {
+                self.page.push(PageEvent::CdpReply { id, result });
             }
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
@@ -991,7 +995,7 @@ impl View {
         if !self.is_open() || !self.audio.idle() {
             return;
         }
-        let id = next_probe_id();
+        let id = cdp::next_id();
         match self
             .producer
             .request_script_result(welding::WebRequestId::new(id), media::AUDIBLE_PROBE)
@@ -1002,6 +1006,48 @@ impl View {
                 "wubble-engine: view {}: audible probe: {e}",
                 self.browser_id
             ),
+        }
+    }
+
+    /// Sends one DevTools protocol call to this page (`cdp.rs`); its answer
+    /// arrives as [`PageEvent::CdpReply`] with the id returned. `None` when
+    /// the view cannot take it (closing, or CEF refused the message).
+    pub fn cdp(&mut self, method: &str, params: &serde_json::Value) -> Option<CdpId> {
+        if !self.is_open() {
+            return None;
+        }
+        let id = CdpId(cdp::next_id());
+        match self
+            .producer
+            .send_devtools_message(&cdp::message(id, method, params))
+        {
+            Ok(()) => Some(id),
+            Err(e) => {
+                eprintln!("wubble-engine: view {}: {method}: {e}", self.browser_id);
+                None
+            }
+        }
+    }
+
+    /// Runs `script`, a JavaScript expression, in the page's main frame; its
+    /// value comes back as JSON text in [`PageEvent::EvalResult`] with the id
+    /// returned. `None` when there is no main frame to run it in yet.
+    pub fn eval(&mut self, script: &str) -> Option<EvalId> {
+        if !self.is_open() {
+            return None;
+        }
+        let id = cdp::next_id();
+        // A newline, so a trailing line comment cannot swallow the wrapper's `)`.
+        let script = format!("{script}\n");
+        match self
+            .producer
+            .request_script_result(welding::WebRequestId::new(id), &script)
+        {
+            Ok(()) => Some(EvalId(id)),
+            Err(e) => {
+                eprintln!("wubble-engine: view {}: script: {e}", self.browser_id);
+                None
+            }
         }
     }
 
@@ -1542,6 +1588,8 @@ fn new_producer(
             handle_auth_challenges: true,
             ask_download_path: true,
             request_filter,
+            // `View::cdp`: page dark mode, screenshots.
+            devtools_protocol: true,
             ..welding::CefSurfaceConfig::default()
         },
     };

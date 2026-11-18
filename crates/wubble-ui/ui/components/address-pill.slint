@@ -48,6 +48,11 @@ export component AddressPill inherits Rectangle {
     in property <bool> blocker-allowed: false;
     in property <int> blocked: 0;
     callback blocker-requested(length, length);
+    // Reader mode: the book shows on an article (sky while the reader is on); its click toggles
+    // the reader.
+    in property <bool> reader-available: false;
+    in property <bool> reader-on: false;
+    callback reader-requested();
 
     height: Chrome.address;
 
@@ -141,6 +146,21 @@ export component AddressPill inherits Rectangle {
                 badge-area := TouchArea {
                     clicked => {
                         root.blocker-requested(badge.absolute-position.x, badge.absolute-position.y + badge.height);
+                    }
+                }
+            }
+            if root.reader-available: book := Rectangle {
+                width: Shell.address-icon;
+                Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: IconPaths.book;
+                    size: Shell.address-icon;
+                    weight: Shell.address-icon-stroke;
+                    tint: root.reader-on ? Palette.sky : book-area.has-hover ? Palette.ink : Palette.haze;
+                }
+                book-area := TouchArea {
+                    clicked => {
+                        root.reader-requested();
                     }
                 }
             }

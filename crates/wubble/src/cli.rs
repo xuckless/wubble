@@ -68,6 +68,7 @@ enum SmokeArg {
     Pages,
     Session,
     Autofill,
+    Builtins,
     SessionPhase(Phase),
 }
 
@@ -83,6 +84,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "pages" => Ok(SmokeArg::Pages),
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
+        None if value == "builtins" => Ok(SmokeArg::Builtins),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -91,7 +93,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
-             `pages`, `session`, `autofill` or `session-phase=1|2`"
+             `pages`, `session`, `autofill`, `builtins` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -125,6 +127,9 @@ pub enum Smoke {
     Session,
     /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
     Autofill,
+    /// Dark mode for pages, reader mode, link hints, screenshots and the PDF viewer on
+    /// bundled pages.
+    Builtins,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -210,6 +215,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
+            (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -324,6 +330,15 @@ mod tests {
         );
         assert!(parse(["wubble", "--smoke", "pages", "--url", "about:blank"]).is_err());
         assert!(parse(["wubble", "--smoke", "pages", "--profile", "/tmp/p"]).is_err());
+    }
+
+    #[test]
+    fn smoke_builtins() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "builtins"]).ok(),
+            Some(Command::Smoke(Smoke::Builtins))
+        );
+        assert!(parse(["wubble", "--smoke", "builtins", "--url", "about:blank"]).is_err());
     }
 
     #[test]

@@ -12,8 +12,11 @@ use std::collections::HashMap;
 
 use wubble_core::apply::GlassSetting;
 use wubble_core::omnibox::SearchEngine;
+use wubble_core::pagetheme::PageTheme;
+use wubble_core::reader::{ReaderFont, ReaderTheme, ReaderWidth};
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
+use wubble_core::shot::ShotOutput;
 use wubble_core::zoom::ZoomTable;
 
 use crate::{Result, Store};
@@ -77,21 +80,37 @@ impl Codec for Option<SearchEngine> {
     }
 }
 
-impl Codec for SidebarMode {
-    fn encode(&self) -> String {
-        self.id().into()
-    }
-    fn decode(s: &str) -> Option<Self> {
-        SidebarMode::from_id(s)
-    }
+/// A choice stored as its word (`id`, `from_id`).
+macro_rules! word_codec {
+    ($($ty:ty),* $(,)?) => {$(
+        impl Codec for $ty {
+            fn encode(&self) -> String {
+                self.id().into()
+            }
+            fn decode(s: &str) -> Option<Self> {
+                <$ty>::from_id(s)
+            }
+        }
+    )*};
 }
 
-impl Codec for GlassSetting {
+word_codec!(
+    SidebarMode,
+    GlassSetting,
+    PageTheme,
+    ReaderWidth,
+    ReaderFont,
+    ReaderTheme,
+    ShotOutput,
+);
+
+/// A word of a choice the store has no type for (the core table checks it).
+impl Codec for String {
     fn encode(&self) -> String {
-        self.id().into()
+        self.clone()
     }
     fn decode(s: &str) -> Option<Self> {
-        GlassSetting::from_id(s)
+        Some(s.to_owned())
     }
 }
 
@@ -170,6 +189,16 @@ settings! {
     GlassScene: bool = defs::GLASS_SCENE;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
+    PageThemeDefault: PageTheme = defs::PAGE_THEME;
+    /// Per-site page themes (`wubble_core::pagetheme`): hosts at the default are absent.
+    PageThemeSites: ZoomTable = defs::PAGE_THEME_SITES;
+    ReaderDetect: bool = defs::READER_DETECT;
+    ReaderSize: u32 = defs::READER_SIZE;
+    ReaderWidthSetting: ReaderWidth = defs::READER_WIDTH;
+    ReaderFontSetting: ReaderFont = defs::READER_FONT;
+    ReaderThemeSetting: ReaderTheme = defs::READER_THEME;
+    ScreenshotOutput: ShotOutput = defs::SCREENSHOT_OUTPUT;
+    HintsAlphabet: String = defs::HINTS_ALPHABET;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

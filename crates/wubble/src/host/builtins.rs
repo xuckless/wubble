@@ -1,0 +1,788 @@
+//! The host's half of the built-ins that replace extensions: dark mode for pages, reader mode,
+//! keyboard link hints and screenshots. Each has its pure machine in `wubble_core` (`pagetheme`,
+//! `reader`, `hints`, `shot`); here their effects reach the page (DevTools calls and page
+//! scripts through `View::cdp` and `View::eval`, `pagescripts.rs`), and the answers come back as
+//! events. The state here is the one owner of each built-in's state while the app runs.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use slint::ComponentHandle;
+use slint::platform::PointerEventButton;
+use slint::winit_030::winit::keyboard::{Key, NamedKey};
+use wubble_core::hints::{self, HintEffect, HintEvent, Hints};
+use wubble_core::pagetheme::{self, PageTheme, ThemeTable};
+use wubble_core::reader::{self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs};
+use wubble_core::settings as defs;
+use wubble_core::shot::{self, Shot, ShotEffect, ShotEvent, ShotOutput, ShotRequest};
+use wubble_core::tab::TabId;
+use wubble_engine::input::{KeyInput, Point};
+use wubble_engine::nav::WebEvent;
+use wubble_engine::page::PageEvent;
+use wubble_ui::{AppWindow, Palette};
+
+use super::{Host, new_tab};
+use crate::builtin_smoke as smoke;
+use crate::pagescripts::{self, HintColors, hex};
+use crate::shot_io::{self, Saved, Saver};
+
+/// What the built-ins hold.
+pub(super) struct Builtins {
+    /// `settings::PAGE_THEME` and `settings::PAGE_THEME_SITES`.
+    theme_default: PageTheme,
+    theme_sites: ThemeTable,
+    /// What each live view was last told (`pagetheme::sync`); absent: nothing yet.
+    applied: BTreeMap<TabId, PageTheme>,
+    /// The page-theme calls in flight, to report a refused one.
+    theme_calls: BTreeMap<u64, TabId>,
+    reader: BTreeMap<TabId, Reader>,
+    reader_prefs: ReaderPrefs,
+    /// Tabs showing a PDF in Chromium's viewer, and the content-type questions in flight.
+    pdf: BTreeSet<TabId>,
+    kind_probes: BTreeMap<u64, TabId>,
+    /// Hint mode, on the page of `hints_tab`.
+    hints: Hints,
+    hints_tab: Option<TabId>,
+    alphabet: &'static str,
+    /// The screenshot in flight, of `shot_tab`'s page.
+    shot: Shot,
+    shot_tab: Option<TabId>,
+    output: ShotOutput,
+    /// Started on the first screenshot.
+    saver: Option<Saver>,
+    /// Page-theme replies seen, and how many were refused, for `--smoke builtins`.
+    theme_replies: (u32, u32),
+}
+
+impl Default for Builtins {
+    fn default() -> Self {
+        Self {
+            theme_default: PageTheme::Auto,
+            theme_sites: ThemeTable::new(),
+            applied: BTreeMap::new(),
+            theme_calls: BTreeMap::new(),
+            reader: BTreeMap::new(),
+            reader_prefs: ReaderPrefs::default(),
+            pdf: BTreeSet::new(),
+            kind_probes: BTreeMap::new(),
+            hints: Hints::Off,
+            hints_tab: None,
+            alphabet: hints::alphabet(""),
+            shot: Shot::Idle,
+            shot_tab: None,
+            output: ShotOutput::Both,
+            saver: None,
+            theme_replies: (0, 0),
+        }
+    }
+}
+
+/// A built-in action on the visible page (`perform::Plan::Builtin`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Builtin {
+    CyclePageTheme,
+    LinkHints,
+    ToggleReader,
+    Shot(ShotRequest),
+}
+
+impl Host {
+    pub(super) fn builtin(&mut self, action: Builtin) {
+        let Some(tab) = self.model.visible_tab() else {
+            return;
+        };
+        match action {
+            Builtin::CyclePageTheme => self.cycle_page_theme(tab),
+            Builtin::LinkHints => self.hint_event(tab, HintEvent::Toggle),
+            Builtin::ToggleReader => self.reader_event(tab, ReaderEvent::Toggle),
+            Builtin::Shot(request) => self.shot_event(tab, ShotEvent::Request(request)),
+        }
+    }
+
+    // ----- settings
+
+    pub(super) fn set_page_themes(&mut self, default: PageTheme, sites: ThemeTable) {
+        self.builtins.theme_default = default;
+        self.builtins.theme_sites = sites;
+        let tabs: Vec<_> = self.views.keys().copied().collect();
+        for tab in tabs {
+            self.sync_page_theme(tab, None);
+        }
+        self.redraw_builtins();
+    }
+
+    pub(super) fn set_reader_prefs(&mut self, prefs: ReaderPrefs) {
+        self.builtins.reader_prefs = prefs;
+        let on: Vec<_> = self
+            .builtins
+            .reader
+            .iter()
+            .filter(|(_, r)| **r == Reader::On)
+            .map(|(t, _)| *t)
+            .collect();
+        let script = self
+            .window
+            .upgrade()
+            .map(|w| pagescripts::reader_set(&reader::css_vars(&prefs, &dark_colors(&w))));
+        for tab in on {
+            if let (Some(script), Some(view)) = (&script, self.tab_view(tab)) {
+                view.eval(script);
+            }
+        }
+        self.redraw_builtins();
+    }
+
+    pub(super) fn set_shot_output(&mut self, output: ShotOutput) {
+        self.builtins.output = output;
+    }
+
+    pub(super) fn set_hint_alphabet(&mut self, alphabet: &'static str) {
+        self.builtins.alphabet = alphabet;
+    }
+
+    // ----- engine events
+
+    /// A view opened for `tab` on `url`: it was told nothing yet.
+    pub(super) fn builtins_view_opened(&mut self, tab: TabId, url: &str) {
+        self.builtins.applied.remove(&tab);
+        self.sync_page_theme(tab, Some(url));
+    }
+
+    /// `tab` is about to load `url`: its theme goes first, so the page never shows in the
+    /// other one.
+    pub(super) fn builtins_loading(&mut self, tab: TabId, url: &str) {
+        self.sync_page_theme(tab, Some(url));
+    }
+
+    /// The tab's view is gone (closed, discarded): forget what it was told.
+    pub(super) fn builtins_view_gone(&mut self, tab: TabId) {
+        self.builtins.applied.remove(&tab);
+        self.builtins.pdf.remove(&tab);
+        self.builtins.reader.remove(&tab);
+        if self.builtins.hints_tab == Some(tab) {
+            self.builtins.hints = Hints::Off;
+            self.builtins.hints_tab = None;
+        }
+        if self.builtins.shot_tab == Some(tab) {
+            self.shot_event(tab, ShotEvent::Cancel);
+        }
+    }
+
+    /// What the built-ins take from navigation. Called before the host's own handling.
+    pub(super) fn builtins_web(&mut self, tab: TabId, event: &WebEvent) {
+        match event {
+            WebEvent::UrlChanged(url) => self.sync_page_theme(tab, Some(url)),
+            WebEvent::LoadStarted => {
+                self.builtins.pdf.remove(&tab);
+                self.reader_event(tab, ReaderEvent::PageStarted);
+                if self.builtins.hints_tab == Some(tab) {
+                    self.hint_event(tab, HintEvent::Cancel);
+                }
+                if self.builtins.shot_tab == Some(tab) {
+                    self.shot_event(tab, ShotEvent::Cancel);
+                }
+            }
+            WebEvent::LoadingChanged { loading: false, .. } => {
+                if let Some(id) = self
+                    .tab_view(tab)
+                    .and_then(|v| v.eval(pagescripts::CONTENT_TYPE))
+                {
+                    self.builtins.kind_probes.insert(id.0, tab);
+                }
+                let detect = self.builtins.reader_prefs.detect;
+                self.reader_event(tab, ReaderEvent::Loaded { detect });
+            }
+            // A new renderer was told nothing; nor is its page the reader any more.
+            WebEvent::RendererGone => {
+                self.builtins.applied.remove(&tab);
+                self.reader_event(tab, ReaderEvent::PageStarted);
+            }
+            _ => {}
+        }
+    }
+
+    /// The answers to the built-ins' calls and scripts.
+    pub(super) fn builtins_answer(&mut self, tab: TabId, event: &PageEvent) {
+        match event {
+            PageEvent::CdpReply { id, result } => {
+                if self.builtins.theme_calls.remove(&id.0).is_some() {
+                    self.builtins.theme_replies.0 += 1;
+                    if let Err(e) = result {
+                        self.builtins.theme_replies.1 += 1;
+                        eprintln!("wubble: page theme refused: {e}");
+                    }
+                    return;
+                }
+                if self.builtins.shot == Shot::Capturing(id.0) {
+                    let data = result.as_ref().map_err(Clone::clone).and_then(|v| {
+                        v.get("data")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .ok_or_else(|| "no image in the answer".to_string())
+                    });
+                    if let Err(e) = &data {
+                        eprintln!("wubble: screenshot: {e}");
+                    }
+                    self.shot_event(tab, ShotEvent::Captured(id.0, data));
+                }
+            }
+            PageEvent::EvalResult { id, result } => {
+                let id = id.0;
+                let text = result.as_deref().ok();
+                if self.builtins.kind_probes.remove(&id).is_some() {
+                    if text == Some(pagescripts::PDF_TYPE) {
+                        self.builtins.pdf.insert(tab);
+                    }
+                    return;
+                }
+                match self.builtins.reader.get(&tab).copied() {
+                    Some(Reader::Probing(want)) if want == id => {
+                        let readerable = text == Some("true");
+                        self.reader_event(tab, ReaderEvent::Probed(id, readerable));
+                        return;
+                    }
+                    Some(Reader::Extracting(want)) if want == id => {
+                        let built = text.is_some_and(|t| t.trim_start().starts_with('{'));
+                        if let Err(e) = result {
+                            eprintln!("wubble: reader: {e}");
+                        }
+                        self.reader_event(tab, ReaderEvent::Extracted(id, built));
+                        return;
+                    }
+                    _ => {}
+                }
+                if self.builtins.hints == Hints::Collecting(id) {
+                    let targets = text.map(hints::targets_from_json).unwrap_or_default();
+                    self.hint_event(tab, HintEvent::Targets(id, targets));
+                    return;
+                }
+                if matches!(self.builtins.shot, Shot::Measuring { id: want, .. } if want == id) {
+                    let metrics = text.and_then(shot::Metrics::from_json);
+                    self.shot_event(tab, ShotEvent::Measured(id, metrics));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The tab shows a PDF in Chromium's viewer (its document's content type).
+    pub(super) fn is_pdf(&self, tab: TabId) -> bool {
+        self.builtins.pdf.contains(&tab)
+    }
+
+    // ----- dark mode for pages
+
+    /// Tells `tab`'s view the theme its page (`url`, else the one it shows) wants, if it was
+    /// told another.
+    fn sync_page_theme(&mut self, tab: TabId, url: Option<&str>) {
+        let url = match url {
+            Some(u) => u.to_owned(),
+            None => match self.tab_view(tab) {
+                Some(view) => view.nav().page.url.clone(),
+                None => return,
+            },
+        };
+        let b = &self.builtins;
+        let wanted = pagetheme::wanted(&b.theme_sites, &url, b.theme_default);
+        let Some(theme) = pagetheme::sync(b.applied.get(&tab).copied(), wanted) else {
+            return;
+        };
+        let Some(view) = self.tab_view(tab) else {
+            return;
+        };
+        let mut sent = vec![];
+        for (method, params) in pagetheme::calls(theme) {
+            if let Some(id) = view.cdp(method, &params) {
+                sent.push(id.0);
+            }
+        }
+        if sent.len() == 2 {
+            self.builtins.applied.insert(tab, theme);
+        }
+        self.builtins
+            .theme_calls
+            .extend(sent.into_iter().map(|id| (id, tab)));
+    }
+
+    /// The visible site's theme, one step on (the action and the pill menu's rows).
+    fn cycle_page_theme(&mut self, tab: TabId) {
+        let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
+        let Some(url) = url else { return };
+        let current = pagetheme::wanted(
+            &self.builtins.theme_sites,
+            &url,
+            self.builtins.theme_default,
+        );
+        match wubble_core::zoom::host_of(&url) {
+            Some(host) => self.set_site_theme(&host, current.next()),
+            None => {
+                if let Some(window) = self.window.upgrade() {
+                    self.toast(&window, "This page has no site to set a theme for");
+                }
+            }
+        }
+    }
+
+    /// The pill menu's choice: `host`'s pages show as `theme`.
+    pub(super) fn set_site_theme(&mut self, host: &str, theme: PageTheme) {
+        let table = pagetheme::next_table(
+            self.builtins.theme_sites.clone(),
+            host,
+            theme,
+            self.builtins.theme_default,
+        );
+        // Applied as the setting: the table becomes `theme_sites` there.
+        self.write_setting(
+            defs::PAGE_THEME_SITES.key,
+            &wubble_store::text_of::<wubble_store::PageThemeSites>(&table),
+        );
+        if let Some(window) = self.window.upgrade() {
+            self.toast(&window, &format!("Page theme: {}", theme.label()));
+        }
+    }
+
+    /// The page theme the site menu marks for `url`.
+    pub(super) fn page_theme_of(&self, url: &str) -> PageTheme {
+        pagetheme::wanted(&self.builtins.theme_sites, url, self.builtins.theme_default)
+    }
+
+    // ----- reader mode
+
+    fn reader_event(&mut self, tab: TabId, event: ReaderEvent) {
+        let state = self.builtins.reader.get(&tab).copied().unwrap_or_default();
+        let (next, effects) = reader::transition(state, event);
+        self.builtins.reader.insert(tab, next);
+        for effect in effects {
+            match effect {
+                ReaderEffect::Probe => {
+                    let id = self
+                        .tab_view(tab)
+                        .and_then(|v| v.eval(&pagescripts::reader_probe()));
+                    if let Some(id) = id {
+                        self.reader_event(tab, ReaderEvent::ProbeSent(id.0));
+                    }
+                }
+                ReaderEffect::Extract => {
+                    let Some(window) = self.window.upgrade() else {
+                        continue;
+                    };
+                    let vars = reader::css_vars(&self.builtins.reader_prefs, &dark_colors(&window));
+                    let id = self
+                        .tab_view(tab)
+                        .and_then(|v| v.eval(&pagescripts::reader_open(&vars)));
+                    if let Some(id) = id {
+                        self.reader_event(tab, ReaderEvent::ExtractSent(id.0));
+                    }
+                }
+                ReaderEffect::Reload => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.reload();
+                    }
+                }
+                ReaderEffect::Toast(text) => {
+                    if let Some(window) = self.window.upgrade() {
+                        self.toast(&window, text);
+                    }
+                }
+            }
+        }
+        if next != state {
+            self.redraw_builtins();
+        }
+    }
+
+    /// The reader's controls: a `reader.*` setting to `value`, a number or a choice's index.
+    pub(crate) fn reader_setting(&mut self, key: &str, value: i32) {
+        let Some(def) = defs::find(key).filter(|d| d.key.starts_with("reader.")) else {
+            return;
+        };
+        let text = match def.kind {
+            defs::SettingKind::Choice(words) => usize::try_from(value)
+                .ok()
+                .and_then(|i| words.get(i))
+                .map(|w| (*w).to_owned()),
+            _ => Some(value.to_string()),
+        };
+        if let Some(text) = text {
+            self.write_setting(key, &text);
+        }
+    }
+
+    /// The pill's book glyph and the controls' close button.
+    pub(crate) fn reader_toggled(&mut self) {
+        self.perform(wubble_core::action::Action::ToggleReader);
+    }
+
+    // ----- link hints
+
+    fn hint_event(&mut self, tab: TabId, event: HintEvent) {
+        // Hints live on one page; anything for another first clears that one.
+        if let Some(other) = self.builtins.hints_tab.filter(|t| *t != tab) {
+            self.hint_event(other, HintEvent::Cancel);
+        }
+        let state = std::mem::take(&mut self.builtins.hints);
+        let (next, effects) = hints::transition(state, event, self.builtins.alphabet);
+        self.builtins.hints_tab = (next != Hints::Off).then_some(tab);
+        self.builtins.hints = next;
+        for effect in effects {
+            match effect {
+                HintEffect::Collect => {
+                    let id = self
+                        .tab_view(tab)
+                        .and_then(|v| v.eval(&pagescripts::hints_collect()));
+                    if let Some(id) = id {
+                        self.hint_event(tab, HintEvent::Sent(id.0));
+                    }
+                }
+                HintEffect::Draw { items, typed } => {
+                    let Some(window) = self.window.upgrade() else {
+                        continue;
+                    };
+                    let items: Vec<_> = items.into_iter().map(|(t, l)| ((t.x, t.y), l)).collect();
+                    let script = pagescripts::hints_draw(&items, &typed, &hint_colors(&window));
+                    if let Some(view) = self.tab_view(tab) {
+                        view.eval(&script);
+                    }
+                }
+                HintEffect::Clear => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.eval(&pagescripts::hints_clear());
+                    }
+                }
+                HintEffect::Click(target) => self.hint_click(tab, target.centre()),
+                HintEffect::OpenInNewTab(url) => self.dispatch(new_tab(url, Some(tab))),
+                HintEffect::Toast(text) => {
+                    if let Some(window) = self.window.upgrade() {
+                        self.toast(&window, text);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A real click (trusted: user activation, popups, `<select>` and file inputs behave) at a
+    /// point of the page's viewport, CSS px.
+    fn hint_click(&mut self, tab: TabId, (x, y): (f64, f64)) {
+        let zoom = self.tab_view(tab).map_or(100, |v| v.zoom_percent());
+        let f = f64::from(zoom) / 100.0;
+        let at = Point {
+            x: (x * f) as f32,
+            y: (y * f) as f32,
+        };
+        let pane = crate::shell::pane_id(tab);
+        self.pointer_moved(pane, at);
+        self.pointer_button(pane, PointerEventButton::Left, true, at);
+        self.pointer_button(pane, PointerEventButton::Left, false, at);
+    }
+
+    /// A key while hint mode is on takes the key from everything else: a letter types, Escape
+    /// leaves, Backspace takes one back. Returns whether it was taken.
+    pub(super) fn hint_key(&mut self, key: &KeyInput) -> bool {
+        let Some(tab) = self.builtins.hints_tab else {
+            return false;
+        };
+        if self.model.visible_tab() != Some(tab) {
+            self.hint_event(tab, HintEvent::Cancel);
+            return false;
+        }
+        if !key.pressed {
+            return true;
+        }
+        let event = match &key.unmodified {
+            Key::Named(NamedKey::Escape) => HintEvent::Cancel,
+            Key::Named(NamedKey::Backspace) => HintEvent::Backspace,
+            Key::Character(c) => match c.chars().next() {
+                Some(ch) => HintEvent::Key(ch.to_ascii_lowercase(), key.modifiers.keys.shift_key()),
+                None => return true,
+            },
+            // Modifiers and the rest: kept from the page while the labels show.
+            _ => return true,
+        };
+        self.hint_event(tab, event);
+        true
+    }
+
+    /// `--smoke builtins` types a label as the keys would.
+    pub(crate) fn hint_typed(&mut self, ch: char, shift: bool) {
+        if let Some(tab) = self.builtins.hints_tab {
+            self.hint_event(tab, HintEvent::Key(ch, shift));
+        }
+    }
+
+    /// The page scrolled under the labels: they no longer sit on their targets.
+    pub(super) fn hints_scrolled(&mut self) {
+        if let Some(tab) = self.builtins.hints_tab {
+            self.hint_event(tab, HintEvent::Cancel);
+        }
+    }
+
+    // ----- screenshots
+
+    fn shot_event(&mut self, tab: TabId, event: ShotEvent) {
+        // One screenshot at a time, of the page it started on.
+        let tab = self.builtins.shot_tab.unwrap_or(tab);
+        let (next, effects) = shot::transition(self.builtins.shot, event);
+        self.builtins.shot = next;
+        self.builtins.shot_tab = (next != Shot::Idle).then_some(tab);
+        for effect in effects {
+            match effect {
+                ShotEffect::ShowOverlay | ShotEffect::HideOverlay => self.redraw_builtins(),
+                ShotEffect::Measure { at, rect } => {
+                    let id = self
+                        .tab_view(tab)
+                        .and_then(|v| v.eval(&shot::measure_script(at)));
+                    let event = match id {
+                        Some(id) => ShotEvent::MeasureSent { id: id.0, rect },
+                        None => ShotEvent::SendFailed,
+                    };
+                    self.shot_event(tab, event);
+                }
+                ShotEffect::Capture(capture) => {
+                    let id = self
+                        .tab_view(tab)
+                        .and_then(|v| v.cdp("Page.captureScreenshot", &shot::params(capture)));
+                    let event = match id {
+                        Some(id) => ShotEvent::CaptureSent(id.0),
+                        None => ShotEvent::SendFailed,
+                    };
+                    self.shot_event(tab, event);
+                }
+                ShotEffect::Save(png) => self.save_shot(tab, png),
+                ShotEffect::Toast(text) => {
+                    if let Some(window) = self.window.upgrade() {
+                        self.toast(&window, text);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hands the PNG to the saver thread: the file in the downloads folder, the clipboard, as
+    /// the setting says. Its outcome comes back on the Slint thread as `Saved`.
+    fn save_shot(&mut self, tab: TabId, png: String) {
+        let output = self.builtins.output;
+        let title = self
+            .model
+            .tabs
+            .get(&tab)
+            .map(crate::shell::tab_title)
+            .unwrap_or_default();
+        let name = shot::file_name(&title, chrono::Local::now().naive_local());
+        let path = output.file().then(|| self.download_path(&name)).flatten();
+        let job = shot_io::Job {
+            png_base64: png,
+            path: path.clone(),
+            clipboard: output.clipboard(),
+        };
+        if let Some(path) = &path {
+            self.downloads.reserve(path);
+        }
+        let saver = self.builtins.saver.get_or_insert_with(Saver::spawn);
+        let file_wanted = output.file();
+        saver.save(job, move |mut saved| {
+            if file_wanted && saved.file.is_none() {
+                // No downloads folder to write to.
+                saved.file = Some(false);
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                crate::with_host(|host| host.shot_saved(tab, path, saved));
+            });
+        });
+    }
+
+    fn shot_saved(&mut self, tab: TabId, path: Option<std::path::PathBuf>, saved: Saved) {
+        if let Some(path) = &path {
+            self.downloads.release(path);
+        }
+        let text = shot::saved_text(saved.file, saved.clipboard);
+        self.shot_event(tab, ShotEvent::Saved(text));
+        if self.checks.builtin_smoke.is_some() {
+            let seen = self.builtin_smoke_seen();
+            self.builtin_smoke_step(smoke::Input::Saved(saved, &seen));
+        }
+    }
+
+    /// The overlay's drag, from corner `a` to corner `b` (logical px in the content area).
+    pub(crate) fn shot_picked(&mut self, a: (f32, f32), b: (f32, f32)) {
+        let (Some(window), Some(tab)) = (self.window.upgrade(), self.model.visible_tab()) else {
+            return;
+        };
+        let origin = self.focus_origin(&window);
+        let (x0, y0) = (
+            origin.0 - window.get_content_x(),
+            origin.1 - window.get_content_y(),
+        );
+        let scale = window.window().scale_factor();
+        let size = self.pane_layout(&window, tab).size;
+        let view = (
+            f64::from(size.width) / f64::from(scale),
+            f64::from(size.height) / f64::from(scale),
+        );
+        let at = |p: (f32, f32)| (f64::from(p.0 - x0), f64::from(p.1 - y0));
+        let zoom = self.tab_view(tab).map_or(100, |v| v.zoom_percent());
+        let event = match shot::RectF::from_drag(at(a), at(b), view) {
+            Some(region) => ShotEvent::Picked(shot::region_css(region, zoom)),
+            None => ShotEvent::Cancel,
+        };
+        self.shot_event(tab, event);
+    }
+
+    /// The overlay's toolbar: `full` the whole page, else what the view shows.
+    pub(crate) fn shot_overlay_capture(&mut self, full: bool) {
+        let request = if full {
+            ShotRequest::FullPage
+        } else {
+            ShotRequest::Visible
+        };
+        self.builtin(Builtin::Shot(request));
+    }
+
+    pub(crate) fn shot_cancelled(&mut self) {
+        if let Some(tab) = self.builtins.shot_tab.or(self.model.visible_tab()) {
+            self.shot_event(tab, ShotEvent::Cancel);
+        }
+    }
+
+    /// The context menu's "Take Screenshot of Element", at the menu's point (physical px).
+    pub(super) fn shot_element(&mut self, tab: TabId, at: (i32, i32)) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let scale = window.window().scale_factor();
+        let zoom = self.tab_view(tab).map_or(100, |v| v.zoom_percent());
+        let (x, y) = shot::point_css(at, scale, zoom);
+        self.shot_event(tab, ShotEvent::Request(ShotRequest::Element { x, y }));
+    }
+
+    // ----- `--smoke builtins`
+
+    fn builtin_smoke_seen(&mut self) -> smoke::Seen {
+        let tab = self.model.visible_tab();
+        let (scale, view) = match (self.window.upgrade(), tab) {
+            (Some(window), Some(t)) => {
+                let size = self.pane_layout(&window, t).size;
+                (window.window().scale_factor(), (size.width, size.height))
+            }
+            _ => (1.0, (0, 0)),
+        };
+        let loading = self
+            .view()
+            .is_some_and(|v| matches!(v.nav().phase, wubble_engine::nav::Phase::Loading { .. }));
+        smoke::Seen {
+            framed: tab.is_some_and(|t| self.frames.contains_key(&t)),
+            loading,
+            reader: tab
+                .and_then(|t| self.builtins.reader.get(&t).copied())
+                .unwrap_or_default(),
+            hints: self.builtins.hints.clone(),
+            theme_replies: self.builtins.theme_replies,
+            scale,
+            view,
+        }
+    }
+
+    pub(super) fn builtin_smoke_worked(&mut self) {
+        if self.checks.builtin_smoke.is_some() {
+            let seen = self.builtin_smoke_seen();
+            self.builtin_smoke_step(smoke::Input::Worked(&seen));
+        }
+    }
+
+    pub(super) fn builtin_smoke_step(&mut self, input: smoke::Input) {
+        let Some(state) = self.checks.builtin_smoke.take() else {
+            return;
+        };
+        let (state, actions) = smoke::next(state, input);
+        self.checks.builtin_smoke = Some(state);
+        for action in actions {
+            match action {
+                smoke::Action::Setting(key, value) => {
+                    self.write_setting(key, value);
+                }
+                smoke::Action::Perform(action) => self.perform(action),
+                smoke::Action::Eval(script) => {
+                    if let Some(view) = self.view() {
+                        view.eval(script);
+                    }
+                }
+                smoke::Action::Type(label) => {
+                    for ch in label.chars() {
+                        self.hint_typed(ch, false);
+                    }
+                }
+                smoke::Action::Load(url) => {
+                    if let Some(tab) = self.model.visible_tab() {
+                        self.dispatch(wubble_core::model::Command::Navigate { tab, url });
+                    }
+                }
+                smoke::Action::Pick(a, b) => {
+                    let Some(window) = self.window.upgrade() else {
+                        continue;
+                    };
+                    let origin = self.focus_origin(&window);
+                    let x = origin.0 - window.get_content_x();
+                    let y = origin.1 - window.get_content_y();
+                    self.shot_picked((a.0 + x, a.1 + y), (b.0 + x, b.1 + y));
+                }
+                smoke::Action::Pass(what) => {
+                    self.builtins_passed = Some(what);
+                    crate::quit();
+                }
+                smoke::Action::Fail(reason) => self.fail(reason),
+            }
+        }
+    }
+
+    // ----- the shell
+
+    fn redraw_builtins(&mut self) {
+        if let Some(window) = self.window.upgrade() {
+            self.render_builtins(&window);
+        }
+    }
+
+    /// The pill's reader glyph, the reader's controls and the screenshot overlay.
+    pub(super) fn render_builtins(&mut self, window: &AppWindow) {
+        let tab = self.model.visible_tab();
+        let reader = tab
+            .and_then(|t| self.builtins.reader.get(&t).copied())
+            .unwrap_or_default();
+        window.set_reader_available(reader.available());
+        window.set_reader_on(reader == Reader::On);
+        let p = self.builtins.reader_prefs;
+        window.set_reader_size(i32::try_from(p.size).unwrap_or(18));
+        window.set_reader_width(p.width as i32);
+        window.set_reader_font(p.font as i32);
+        window.set_reader_theme(p.theme as i32);
+        window.set_shot_picking(self.builtins.shot == Shot::Picking);
+        let origin = self.focus_origin(window);
+        let x = origin.0 - window.get_content_x();
+        let width = tab.map_or(0.0, |t| {
+            self.pane_layout(window, t).size.width as f32 / window.window().scale_factor()
+        });
+        window.set_shot_pane_x(x);
+        window.set_shot_pane_width(width);
+    }
+}
+
+/// The reader's dark theme: the shell's own tokens.
+fn dark_colors(window: &AppWindow) -> ReaderColors {
+    let p = window.global::<Palette>();
+    ReaderColors {
+        background: hex(p.get_web()),
+        ink: hex(p.get_ink()),
+        muted: hex(p.get_mist()),
+        rule: hex(p.get_rim()),
+        link: hex(p.get_sky()),
+    }
+}
+
+/// The hint labels: amber on the page's ink, in the shell's mono face.
+fn hint_colors(window: &AppWindow) -> HintColors {
+    let p = window.global::<Palette>();
+    let mono = window.global::<wubble_ui::Fonts>().get_mono();
+    HintColors {
+        label: hex(p.get_amber()),
+        ink: hex(p.get_web()),
+        font: format!("'{mono}', ui-monospace, monospace"),
+    }
+}

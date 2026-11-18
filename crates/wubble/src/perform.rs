@@ -8,6 +8,9 @@ use wubble_core::pages::InternalPage;
 use wubble_core::space::{MAX_PANES, SpaceId};
 use wubble_core::tab::TabId;
 
+use wubble_core::shot::ShotRequest;
+
+use crate::host::Builtin;
 use crate::surface::FindEvent;
 
 /// Actions with no implementation yet, each with the reason.
@@ -57,6 +60,8 @@ pub enum Plan {
     BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
     OpenBeside,
+    /// A built-in on the visible page (`host/builtins.rs`).
+    Builtin(Builtin),
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -76,6 +81,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
     };
     let view = |op| visible.map_or(Plan::Nothing, |_| Plan::View(op));
     let find = |event| visible.map_or(Plan::Nothing, |_| Plan::Find(event));
+    let builtin = |b| visible.map_or(Plan::Nothing, |_| Plan::Builtin(b));
     match action {
         Action::NewTab => Plan::Model(Command::OpenCommandBar),
         Action::CloseTab => on_visible(Command::CloseTab),
@@ -137,6 +143,12 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
+        Action::CyclePageTheme => builtin(Builtin::CyclePageTheme),
+        Action::LinkHints => builtin(Builtin::LinkHints),
+        Action::ToggleReader => builtin(Builtin::ToggleReader),
+        Action::ScreenshotRegion => builtin(Builtin::Shot(ShotRequest::Region)),
+        Action::ScreenshotVisible => builtin(Builtin::Shot(ShotRequest::Visible)),
+        Action::ScreenshotFullPage => builtin(Builtin::Shot(ShotRequest::FullPage)),
         Action::Quit => Plan::Quit,
         Action::NewWindow
         | Action::NewSpace
@@ -230,6 +242,22 @@ mod tests {
             plan(Action::CopyUrl, &m),
             Plan::Copy("https://2.test/".into())
         );
+        for (action, want) in [
+            (Action::CyclePageTheme, Builtin::CyclePageTheme),
+            (Action::LinkHints, Builtin::LinkHints),
+            (Action::ToggleReader, Builtin::ToggleReader),
+            (Action::ScreenshotRegion, Builtin::Shot(ShotRequest::Region)),
+            (
+                Action::ScreenshotVisible,
+                Builtin::Shot(ShotRequest::Visible),
+            ),
+            (
+                Action::ScreenshotFullPage,
+                Builtin::Shot(ShotRequest::FullPage),
+            ),
+        ] {
+            assert_eq!(plan(action, &m), Plan::Builtin(want), "{action:?}");
+        }
     }
 
     #[test]
@@ -248,6 +276,10 @@ mod tests {
             Action::ToggleMute,
             Action::Print,
             Action::CopyUrl,
+            Action::LinkHints,
+            Action::ToggleReader,
+            Action::ScreenshotRegion,
+            Action::CyclePageTheme,
         ] {
             assert_eq!(plan(action, &m), Plan::Nothing, "{action:?}");
         }

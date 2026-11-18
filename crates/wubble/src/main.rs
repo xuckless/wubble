@@ -4,6 +4,7 @@ mod bar;
 mod bind;
 mod block_smoke;
 mod blocking;
+mod builtin_smoke;
 mod chooser;
 mod cli;
 mod host;
@@ -15,6 +16,7 @@ mod nav_smoke;
 mod page_error;
 mod page_smoke;
 mod pages_smoke;
+mod pagescripts;
 mod panes;
 mod perform;
 mod persist;
@@ -25,6 +27,7 @@ mod screen;
 mod session_smoke;
 mod settings_smoke;
 mod shell;
+mod shot_io;
 mod split_smoke;
 mod surface;
 mod tabs_smoke;
@@ -74,6 +77,11 @@ pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
+/// `--smoke builtins`' pages: an article (reader, dark mode, link hints), a page 3000 CSS px
+/// tall (screenshots) and a one-page PDF with the word "needle" (Chromium's viewer).
+pub const ARTICLE_PAGE: &str = include_str!("../assets/article.html");
+pub const TALL_PAGE: &str = include_str!("../assets/tall.html");
+const DOC_PDF: &[u8] = include_bytes!("../assets/doc.pdf");
 
 /// `--smoke tabs`'s pages, in tab order.
 pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
@@ -297,6 +305,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: autofill FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Builtins) => {
+            match with_smoke_dir(|config, dir| run(Mode::Builtins, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    builtins_passed: Some(what),
+                    ..
+                }) => {
+                    println!("smoke: builtins ok ({what})");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: builtins FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: builtins FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -593,6 +624,8 @@ struct Outcome {
     pages_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
+    /// `--smoke builtins` passed, with what it saw last.
+    builtins_passed: Option<String>,
     /// `--measure`'s report and CSV.
     measured: Option<(String, String)>,
 }
@@ -622,6 +655,8 @@ enum Mode {
     Pages,
     /// `--smoke autofill`.
     Autofill,
+    /// `--smoke builtins`.
+    Builtins,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -927,6 +962,12 @@ fn connect_pages(window: &AppWindow) {
     });
     window.on_address_bookmark_requested(|| with_host(Host::bookmark_page));
     window.on_address_blocker_requested(|x, y| with_host(|host| host.blocker_menu_requested(x, y)));
+    // The built-ins' own UI: the reader's glyph and controls, the screenshot overlay.
+    window.on_reader_toggled(|| with_host(Host::reader_toggled));
+    window.on_reader_setting(|key, value| with_host(|host| host.reader_setting(&key, value)));
+    window.on_shot_picked(|ax, ay, bx, by| with_host(|host| host.shot_picked((ax, ay), (bx, by))));
+    window.on_shot_capture(|full| with_host(|host| host.shot_overlay_capture(full)));
+    window.on_shot_cancelled(|| with_host(Host::shot_cancelled));
     window.on_downloads_cleared(|| with_host(Host::downloads_cleared));
     window.on_passwords_query_changed(|q| with_host(|host| host.passwords_query(&q)));
     window.on_passwords_unlock(|| with_host(Host::passwords_unlock));
@@ -998,6 +1039,7 @@ fn run(
         settings_smoke: None,
         pages_smoke: None,
         autofill_smoke: None,
+        builtin_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -1080,6 +1122,21 @@ fn run(
                 ..none
             },
         ),
+        Mode::Builtins => {
+            // A file:// PDF: Chromium's viewer, as for a downloaded one.
+            let pdf = profile.join("doc.pdf");
+            std::fs::write(&pdf, DOC_PDF)?;
+            (
+                Some(page_url(ARTICLE_PAGE)),
+                Checks {
+                    builtin_smoke: Some(builtin_smoke::BuiltinSmoke::new(
+                        page_url(TALL_PAGE),
+                        format!("file://{}", pdf.display()),
+                    )),
+                    ..none
+                },
+            )
+        }
         Mode::Session(phase) => (
             None,
             Checks {
@@ -1203,6 +1260,7 @@ fn run(
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,
         autofill_passed: host.autofill_passed,
+        builtins_passed: host.builtins_passed.take(),
         measured,
     })
 }

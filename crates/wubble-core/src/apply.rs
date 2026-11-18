@@ -6,8 +6,11 @@
 use std::collections::HashMap;
 
 use crate::omnibox::SearchEngine;
+use crate::pagetheme::{PageTheme, ThemeTable};
+use crate::reader::ReaderPrefs;
 use crate::seam::SidebarMode;
 use crate::settings::{self, SettingDef};
+use crate::shot::ShotOutput;
 use crate::sleep::SleepPolicy;
 use crate::zoom::ZoomTable;
 
@@ -84,6 +87,15 @@ pub enum Applied {
     Sleep(SleepPolicy),
     Glass(GlassSetting),
     Passwords(PasswordSettings),
+    /// Dark mode for pages: the default and the per-site table, applied to every live page.
+    PageThemes {
+        default: PageTheme,
+        sites: ThemeTable,
+    },
+    Reader(ReaderPrefs),
+    ScreenshotOutput(ShotOutput),
+    /// The link hints' letters (`hints::alphabet`).
+    HintsAlphabet(&'static str),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -151,6 +163,23 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if [s::PASSWORDS_OFFER_TO_SAVE.key, s::PASSWORDS_AUTOFILL.key].contains(&k) => {
             Applied::Passwords(PasswordSettings::from_stored(stored))
         }
+        k if [s::PAGE_THEME.key, s::PAGE_THEME_SITES.key].contains(&k) => Applied::PageThemes {
+            default: PageTheme::from_id(value_of(&s::PAGE_THEME, stored))?,
+            sites: map(&s::PAGE_THEME_SITES, stored),
+        },
+        k if [
+            s::READER_DETECT.key,
+            s::READER_SIZE.key,
+            s::READER_WIDTH.key,
+            s::READER_FONT.key,
+            s::READER_THEME.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::Reader(ReaderPrefs::from_stored(stored))
+        }
+        k if k == s::SCREENSHOT_OUTPUT.key => Applied::ScreenshotOutput(ShotOutput::from_id(v)?),
+        k if k == s::HINTS_ALPHABET.key => Applied::HintsAlphabet(crate::hints::alphabet(v)),
         _ => return None,
     })
 }
@@ -334,6 +363,35 @@ mod tests {
         );
         assert_eq!(with_entry("zoom.sites", &s, "x"), None);
         assert_eq!(without_entry("blocker.enabled", &s, "x"), None);
+    }
+
+    #[test]
+    fn builtin_rows_apply_as_one_value_each() {
+        let s = stored(&[
+            ("pages.theme", "dark"),
+            ("pages.theme_sites", r#"{"a.test":2}"#),
+            ("reader.size", "24"),
+            ("screenshot.output", "file"),
+            ("hints.alphabet", "vimium"),
+        ]);
+        let themes = Applied::PageThemes {
+            default: PageTheme::Dark,
+            sites: ThemeTable::from([("a.test".into(), 2)]),
+        };
+        assert_eq!(effect_of("pages.theme", &s), Some(themes.clone()));
+        assert_eq!(effect_of("pages.theme_sites", &s), Some(themes));
+        let Some(Applied::Reader(p)) = effect_of("reader.theme", &s) else {
+            panic!("no reader prefs")
+        };
+        assert_eq!(p.size, 24);
+        assert_eq!(
+            effect_of("screenshot.output", &s),
+            Some(Applied::ScreenshotOutput(ShotOutput::File))
+        );
+        assert_eq!(
+            effect_of("hints.alphabet", &s),
+            Some(Applied::HintsAlphabet("sadfjklewcmpgh"))
+        );
     }
 
     #[test]

@@ -18,6 +18,8 @@ import { BookmarkSheet } from "components/bookmark-sheet.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
+import { ShotOverlay } from "components/shot-overlay.slint";
+import { ReaderControls } from "components/reader-controls.slint";
 import { PopupLayer } from "components/popup-layer.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { GlowRing } from "components/glow-ring.slint";
@@ -28,7 +30,7 @@ import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView }
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
+export { Palette, Fonts, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -118,6 +120,23 @@ export component AppWindow inherits Window {
     in property <int> address-blocked <=> sidebar.address-blocked;
     callback address-bookmark-requested <=> sidebar.address-bookmark-requested;
     callback address-blocker-requested <=> sidebar.address-blocker-requested;
+    // Reader mode: the pill's book (an article), the reader on, its typography (the settings'
+    // values; indexes of their words), and its controls' intents.
+    in property <bool> reader-available <=> sidebar.address-reader-available;
+    in property <bool> reader-on <=> sidebar.address-reader-on;
+    callback reader-toggled <=> sidebar.address-reader-requested;
+    in property <int> reader-size;
+    in property <int> reader-width;
+    in property <int> reader-font;
+    in property <int> reader-theme;
+    callback reader-setting(string, int);
+    // The screenshot region picker over the visible page's pane (content-area px).
+    in property <bool> shot-picking;
+    in property <length> shot-pane-x;
+    in property <length> shot-pane-width;
+    callback shot-picked(length, length, length, length);
+    callback shot-capture(bool);
+    callback shot-cancelled();
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
     in property <[TabItem]> tabs <=> sidebar.tabs;
     in property <[SpaceItem]> spaces <=> sidebar.spaces;
@@ -594,6 +613,35 @@ export component AppWindow inherits Window {
                 }
                 closed => {
                     root.find-closed();
+                }
+            }
+            ReaderControls {
+                x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
+                y: parent.height - self.height - Spacing.s4;
+                open: root.reader-on;
+                size: root.reader-size;
+                column: root.reader-width;
+                font: root.reader-font;
+                theme: root.reader-theme;
+                setting(key, value) => {
+                    root.reader-setting(key, value);
+                }
+                closed => {
+                    root.reader-toggled();
+                }
+            }
+            ShotOverlay {
+                active: root.shot-picking;
+                pane-x: root.shot-pane-x;
+                pane-width: root.shot-pane-width;
+                picked(ax, ay, bx, by) => {
+                    root.shot-picked(ax, ay, bx, by);
+                }
+                capture(full) => {
+                    root.shot-capture(full);
+                }
+                cancelled => {
+                    root.shot-cancelled();
                 }
             }
             Toast {

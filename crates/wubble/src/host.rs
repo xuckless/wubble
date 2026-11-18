@@ -15,11 +15,14 @@
 //! keymap, and every action runs through [`Host::perform`].
 
 mod autofill;
+mod builtins;
 mod downloads;
 mod pages;
 mod panes;
 mod settings;
 mod surfaces;
+
+pub use builtins::Builtin;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -214,6 +217,7 @@ pub struct Checks {
     pub settings_smoke: Option<SettingsSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
+    pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -343,6 +347,8 @@ pub struct Host {
     pub blocked_seen: Option<u32>,
     /// `--smoke autofill` reached its end.
     pub autofill_passed: bool,
+    /// `--smoke builtins`: what it checked, once it passed.
+    pub builtins_passed: Option<String>,
     /// Password autofill per tab (`host/autofill.rs`).
     autofill: autofill::Autofill,
     /// The content blocker, whose per-view counts the tab rows show.
@@ -353,6 +359,8 @@ pub struct Host {
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
     pace: Option<Pace>,
+    /// Dark mode for pages, reader mode, link hints, screenshots (`host/builtins.rs`).
+    builtins: builtins::Builtins,
 }
 
 impl Host {
@@ -463,6 +471,7 @@ impl Host {
             page_zoom: None,
             blocked_seen: None,
             autofill_passed: false,
+            builtins_passed: None,
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
@@ -472,6 +481,7 @@ impl Host {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
             }),
+            builtins: builtins::Builtins::default(),
         };
         host.replay_settings();
         host.render_downloads(window);
@@ -540,7 +550,7 @@ impl Host {
                     return None;
                 }
                 let config = ViewConfig {
-                    url,
+                    url: url.clone(),
                     layout: self.pane_layout(&window, tab),
                     frame_rate,
                     begin_frames: self.pace.is_some(),
@@ -549,6 +559,7 @@ impl Host {
                 match self.engine.open_view(config) {
                     Ok(id) => {
                         self.views.insert(tab, id);
+                        self.builtins_view_opened(tab, &url);
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -573,6 +584,9 @@ impl Host {
                     .tabs
                     .get(&tab)
                     .is_some_and(|t| t.lifecycle.liveness == Liveness::Active);
+                if self.views.contains_key(&tab) {
+                    self.builtins_loading(tab, &url);
+                }
                 match self.tab_view(tab) {
                     Some(view) => view.load(&url),
                     None if live => return self.execute(Call::OpenView { tab, url }, frame_rate),
@@ -620,6 +634,7 @@ impl Host {
             &self.favicons,
         );
         self.render_surfaces(&window);
+        self.render_builtins(&window);
         let page = self.view().map(|view| view.nav().page.clone());
         crate::bind::render_history(&window, page.as_ref());
         self.render_pages();
@@ -738,6 +753,7 @@ impl Host {
         }
         self.split_smoke_step(&window);
         self.autofill_smoke_worked();
+        self.builtin_smoke_worked();
         let framed = self
             .model
             .visible_tab()
@@ -891,6 +907,8 @@ impl Host {
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
+        self.builtins_web(tab, &event);
+        self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -1109,6 +1127,7 @@ impl Host {
             Plan::Copy(text) => self.copy(&text),
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::OpenBeside => self.open_beside(),
+            Plan::Builtin(builtin) => self.builtin(builtin),
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {
                 let _ = self
@@ -1756,6 +1775,10 @@ impl Host {
                 ..
             } => {
                 let key = self.input.key_input(event);
+                // Link hints take every key while their labels show.
+                if self.hint_key(&key) {
+                    return EventResult::PreventDefault;
+                }
                 // The keybinding editor's recorder takes keys before any shortcut does.
                 if key.pressed
                     && self.capture_key(input::chord_of(
@@ -1936,6 +1959,7 @@ impl Host {
     }
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
+        self.hints_scrolled();
         let modifiers = self.input.modifiers();
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {

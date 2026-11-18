@@ -21,6 +21,7 @@
 
 use wubble_core::action::Action;
 use wubble_core::model::Model;
+use wubble_core::pagetheme::PageTheme;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::TabId;
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
@@ -61,6 +62,10 @@ pub enum Command {
     Perform(Action),
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
+    /// Show this site's pages in this theme (dark mode for pages).
+    SetPageTheme(String, PageTheme),
+    /// Capture the element at this point (physical px, view-relative).
+    ShotElement((i32, i32)),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -224,6 +229,14 @@ const ROWS: &[Row] = &[
         enabled: always,
         command: |_| Command::Engine(cef_id::RELOAD),
     },
+    // wubble's screenshots: the element under the pointer (an image, a link, a block).
+    Row {
+        group: 6,
+        label: "Take Screenshot of Element",
+        show: |c| !c.editable(),
+        enabled: always,
+        command: |c| Command::ShotElement((c.menu.x, c.menu.y)),
+    },
 ];
 
 /// The entries for one right-click, dividers included.
@@ -325,6 +338,26 @@ pub fn blocker_entries(count: u32, host: &str, allowed: bool) -> Vec<Entry> {
             enabled: true,
         },
     ]
+}
+
+/// The site menu's page-theme rows (dark mode for pages): one per theme, the current one
+/// marked and not chosen again.
+pub fn page_theme_entries(host: &str, current: PageTheme) -> Vec<Entry> {
+    let mut out = vec![Entry {
+        label: format!("Page theme on {host}"),
+        command: Command::Separator,
+        enabled: false,
+    }];
+    out.extend(PageTheme::ALL.into_iter().map(|theme| Entry {
+        label: if theme == current {
+            format!("\u{2713} {}", theme.label())
+        } else {
+            format!("    {}", theme.label())
+        },
+        command: Command::SetPageTheme(host.to_owned(), theme),
+        enabled: theme != current,
+    }));
+    out
 }
 
 /// The menu of one tab, or one the shell opened.
@@ -467,6 +500,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_site_menu_offers_each_page_theme() {
+        let rows = page_theme_entries("a.test", PageTheme::Dark);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].label, "Page theme on a.test");
+        assert!(!rows[0].enabled);
+        assert_eq!(
+            rows[2].command,
+            Command::SetPageTheme("a.test".into(), PageTheme::Dark)
+        );
+        assert!(rows[2].label.starts_with('\u{2713}') && !rows[2].enabled);
+        assert!(rows[1].enabled && rows[3].enabled);
+    }
+
+    #[test]
+    fn any_page_but_a_field_offers_an_element_screenshot() {
+        let menu = ContextMenu {
+            x: 30,
+            y: 40,
+            ..Default::default()
+        };
+        let rows = entries(&menu, NavFlags::default());
+        let last = rows.last().unwrap();
+        assert_eq!(last.label, "Take Screenshot of Element");
+        assert_eq!(last.command, Command::ShotElement((30, 40)));
+        let field = ContextMenu {
+            editable: true,
+            ..menu
+        };
+        assert!(
+            !entries(&field, NavFlags::default())
+                .iter()
+                .any(|e| e.label == "Take Screenshot of Element")
+        );
+    }
+
     fn labels(entries: &[Entry]) -> Vec<&str> {
         entries
             .iter()
@@ -508,10 +577,19 @@ mod tests {
             forward: false,
         };
         let e = entries(&page(), nav);
-        assert_eq!(labels(&e), ["Back", "Forward", "Reload"]);
+        assert_eq!(
+            labels(&e),
+            [
+                "Back",
+                "Forward",
+                "Reload",
+                "-",
+                "Take Screenshot of Element"
+            ]
+        );
         assert_eq!(
             e.iter().map(|e| e.enabled).collect::<Vec<_>>(),
-            [true, false, true]
+            [true, false, true, false, true]
         );
         assert_eq!(e[0].command, Command::Engine(cef_id::BACK));
     }
@@ -519,7 +597,15 @@ mod tests {
     #[test]
     fn a_link_offers_new_tab_and_copy() {
         let e = entries(&link(), NavFlags::default());
-        assert_eq!(labels(&e), ["Open Link in New Tab", "Copy Link Address"]);
+        assert_eq!(
+            labels(&e),
+            [
+                "Open Link in New Tab",
+                "Copy Link Address",
+                "-",
+                "Take Screenshot of Element"
+            ]
+        );
         assert_eq!(
             e[0].command,
             Command::OpenInNewTab("https://a.test/next".into())
@@ -546,7 +632,9 @@ mod tests {
                 "Copy Link Address",
                 "-",
                 "Open Image in New Tab",
-                "Copy Image Address"
+                "Copy Image Address",
+                "-",
+                "Take Screenshot of Element"
             ]
         );
     }
@@ -558,7 +646,7 @@ mod tests {
             ..page()
         };
         let e = entries(&m, NavFlags::default());
-        assert_eq!(labels(&e), ["Copy"]);
+        assert_eq!(labels(&e), ["Copy", "-", "Take Screenshot of Element"]);
         assert!(e[0].enabled);
     }
 

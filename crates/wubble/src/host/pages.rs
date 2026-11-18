@@ -403,7 +403,11 @@ impl Host {
         let count = self.blocked_of(tab).unwrap_or(0);
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
-        let entries = crate::menu::blocker_entries(count, &host, allowed);
+        let mut entries = crate::menu::blocker_entries(count, &host, allowed);
+        entries.extend(crate::menu::page_theme_entries(
+            &host,
+            self.page_theme_of(&url),
+        ));
         self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

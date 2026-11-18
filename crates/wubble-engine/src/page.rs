@@ -443,6 +443,17 @@ pub enum PageEvent {
         frame: FrameInfo,
         text: wubble_core::secret::Secret,
     },
+    /// The answer to `View::cdp`: the call's result, or the protocol's error.
+    CdpReply {
+        id: crate::cdp::CdpId,
+        result: Result<serde_json::Value, String>,
+    },
+    /// The answer to `View::eval`: the script's value as JSON text, or why it
+    /// failed (it threw, or the page went away first).
+    EvalResult {
+        id: crate::cdp::EvalId,
+        result: Result<String, String>,
+    },
 }
 
 impl PageEvent {

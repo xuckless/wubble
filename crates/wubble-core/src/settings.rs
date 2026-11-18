@@ -267,6 +267,85 @@ pub const PASSWORDS_AUTOFILL: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
+/// Dark mode for pages (`pagetheme::PageTheme`): sites without their own choice.
+pub const PAGE_THEME: SettingDef = SettingDef {
+    key: "pages.theme",
+    kind: SettingKind::Choice(&crate::pagetheme::THEME_WORDS),
+    default: "auto",
+    label: "Dark mode for pages",
+    section: Section::Appearance,
+    restart: false,
+};
+/// Per-site dark mode (`pagetheme::ThemeTable`, host to 1 dark / 2 light): sites at the default
+/// are absent. Set from the address pill's menu.
+pub const PAGE_THEME_SITES: SettingDef = SettingDef {
+    key: "pages.theme_sites",
+    kind: SettingKind::Map,
+    default: "{}",
+    label: "Site page themes",
+    section: Section::Hidden,
+    restart: false,
+};
+/// Probe pages for an article: the address pill offers reader mode.
+pub const READER_DETECT: SettingDef = SettingDef {
+    key: "reader.detect",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Offer reader mode on articles",
+    section: Section::Appearance,
+    restart: false,
+};
+/// The reader's body text, CSS px (`reader::ReaderPrefs`).
+pub const READER_SIZE: SettingDef = SettingDef {
+    key: "reader.size",
+    kind: SettingKind::Count { min: 14, max: 28 },
+    default: "18",
+    label: "Reader text size",
+    section: Section::Appearance,
+    restart: false,
+};
+pub const READER_WIDTH: SettingDef = SettingDef {
+    key: "reader.width",
+    kind: SettingKind::Choice(&crate::reader::WIDTH_WORDS),
+    default: "medium",
+    label: "Reader column",
+    section: Section::Appearance,
+    restart: false,
+};
+pub const READER_FONT: SettingDef = SettingDef {
+    key: "reader.font",
+    kind: SettingKind::Choice(&crate::reader::FONT_WORDS),
+    default: "serif",
+    label: "Reader font",
+    section: Section::Appearance,
+    restart: false,
+};
+pub const READER_THEME: SettingDef = SettingDef {
+    key: "reader.theme",
+    kind: SettingKind::Choice(&crate::reader::THEME_WORDS),
+    default: "dark",
+    label: "Reader theme",
+    section: Section::Appearance,
+    restart: false,
+};
+/// Where screenshots go (`shot::ShotOutput`).
+pub const SCREENSHOT_OUTPUT: SettingDef = SettingDef {
+    key: "screenshot.output",
+    kind: SettingKind::Choice(&crate::shot::OUTPUT_WORDS),
+    default: "both",
+    label: "Screenshots go to (Downloads, clipboard)",
+    section: Section::General,
+    restart: false,
+};
+/// The letters link hints are made of (`hints::ALPHABETS`).
+pub const HINTS_ALPHABET: SettingDef = SettingDef {
+    key: "hints.alphabet",
+    kind: SettingKind::Choice(&crate::hints::ALPHABET_WORDS),
+    default: "home-row",
+    label: "Link hint letters",
+    section: Section::General,
+    restart: false,
+};
 
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
@@ -290,6 +369,15 @@ pub const ALL: &[&SettingDef] = &[
     &GLASS_SCENE,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
+    &PAGE_THEME,
+    &PAGE_THEME_SITES,
+    &READER_DETECT,
+    &READER_SIZE,
+    &READER_WIDTH,
+    &READER_FONT,
+    &READER_THEME,
+    &SCREENSHOT_OUTPUT,
+    &HINTS_ALPHABET,
 ];
 
 /// The definition of `key`, if it is a setting.
