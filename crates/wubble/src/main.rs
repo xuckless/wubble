@@ -340,27 +340,21 @@ fn main() -> ExitCode {
             let mode = Mode::Measure {
                 scenario: m.scenario,
                 begin_frames: m.begin_frames,
+                out: m.out,
             };
             match with_smoke_dir(|config, dir| run(mode, config, dir)) {
                 Ok(Outcome {
                     failure: None,
-                    measured: Some((report, csv)),
+                    measured: Some(Ok(())),
+                    ..
+                }) => ExitCode::SUCCESS,
+                Ok(Outcome {
+                    failure: None,
+                    measured: Some(Err(e)),
                     ..
                 }) => {
-                    println!("{report}");
-                    match m.out {
-                        Some(path) => match measure::write_csv(&path, &csv) {
-                            Ok(()) => {
-                                println!("measure: samples written to {}", path.display());
-                                ExitCode::SUCCESS
-                            }
-                            Err(e) => {
-                                eprintln!("measure: cannot write {}: {e}", path.display());
-                                ExitCode::FAILURE
-                            }
-                        },
-                        None => ExitCode::SUCCESS,
-                    }
+                    eprintln!("measure: {e}");
+                    ExitCode::FAILURE
                 }
                 Ok(Outcome {
                     failure: Some(e), ..
@@ -417,8 +411,11 @@ fn install_shell_driver(
         window,
         seam,
         move |window, now, items| {
+            measure::render_began(now);
             if let Ok(mut glass) = glass.try_borrow_mut() {
+                let at = Instant::now();
                 glass.frame(window, now, items);
+                measure::stage(measure::Metric::Scene, at);
             }
             // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
             // Inside rendering the host may be busy (a pump renders); then this frame skips
@@ -593,8 +590,9 @@ struct Outcome {
     pages_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
-    /// `--measure`'s report and CSV.
-    measured: Option<(String, String)>,
+    /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
+    /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
+    measured: Option<Result<(), String>>,
 }
 
 /// What the window is for.
@@ -625,10 +623,12 @@ enum Mode {
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
-    /// CEF paced by external begin frames if `begin_frames`.
+    /// CEF paced by external begin frames if `begin_frames`; the samples
+    /// also go to `out` as CSV.
     Measure {
         scenario: measure::Scenario,
         begin_frames: bool,
+        out: Option<PathBuf>,
     },
 }
 
@@ -1003,6 +1003,10 @@ fn run(
     let browsing = matches!(mode, Mode::Browse { .. });
     let smoke_block = matches!(mode, Mode::Block);
     let measuring = matches!(mode, Mode::Measure { .. });
+    let measure_out = match &mode {
+        Mode::Measure { out, .. } => out.clone(),
+        _ => None,
+    };
     // Smokes download into their throwaway profile.
     let downloads = match &mode {
         Mode::Browse { downloads, .. } => downloads.clone(),
@@ -1090,6 +1094,7 @@ fn run(
         Mode::Measure {
             scenario,
             begin_frames,
+            ..
         } => (
             Some(page_url(scenario.page())),
             Checks {
@@ -1182,7 +1187,16 @@ fn run(
     drop(measure_timer);
     let measured = measuring
         .then(|| measure::finish(&gpu.describe()))
-        .flatten();
+        .flatten()
+        .map(|(report, csv)| {
+            println!("{report}");
+            let Some(path) = measure_out else {
+                return Ok(());
+            };
+            measure::write_csv(&path, &csv)
+                .map(|()| println!("measure: samples written to {}", path.display()))
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        });
     drop(lifecycle);
     drop(audible);
     drop(window);
