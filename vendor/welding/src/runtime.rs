@@ -400,10 +400,48 @@ mod cef_backed {
         pub fn do_message_loop_work(&self) {
             #[cfg(not(target_os = "windows"))]
             cef::do_message_loop_work();
+            // wubble change (38).
+            #[cfg(target_os = "linux")]
+            glib_default_context_iteration();
         }
 
         pub fn config(&self) -> &CefRuntimeConfig {
             &self.config
+        }
+    }
+
+    /// wubble change (38): GLib's default main context, which CEF's external
+    /// pump never runs on Linux. Chromium watches its own native windows'
+    /// display connection there (Ozone's `WaylandEventWatcherGlib`, the X11
+    /// event source): left alone, a Chrome-style window such as DevTools never
+    /// gets its first Wayland `configure` and is never shown. cefclient's
+    /// Linux external pump (`main_message_loop_external_pump_linux.cc`,
+    /// BSD-3-Clause) runs this context as its loop; here each pump drains what
+    /// is ready without blocking. Resolved at run time from the GLib libcef
+    /// already loaded, so building needs no GLib development files.
+    #[cfg(target_os = "linux")]
+    fn glib_default_context_iteration() {
+        /// Dispatches per pump at most, so a source that is always ready
+        /// cannot hold the host's loop.
+        const MAX_DISPATCHES: usize = 64;
+        type Iteration = unsafe extern "C" fn(*mut std::ffi::c_void, i32) -> i32;
+        static ITERATION: std::sync::OnceLock<Option<Iteration>> = std::sync::OnceLock::new();
+        let iteration = ITERATION.get_or_init(|| {
+            // SAFETY: a lookup by a NUL-terminated name; null when absent.
+            let symbol =
+                unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"g_main_context_iteration".as_ptr()) };
+            // SAFETY: GLib's `gboolean g_main_context_iteration(GMainContext *, gboolean)`.
+            (!symbol.is_null())
+                .then(|| unsafe { std::mem::transmute::<*mut libc::c_void, Iteration>(symbol) })
+        });
+        if let Some(iteration) = iteration {
+            // SAFETY: null is the default context; FALSE never blocks. Called
+            // on the thread that pumps CEF, which owns that context.
+            for _ in 0..MAX_DISPATCHES {
+                if unsafe { iteration(std::ptr::null_mut(), 0) } == 0 {
+                    break;
+                }
+            }
         }
     }
 

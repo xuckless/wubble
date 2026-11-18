@@ -371,6 +371,15 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `get_raw() as u32` (clippy's `unnecessary_cast` allowed): CEF's enum raw
    type is `i32` on Windows and `u32` elsewhere, so the Windows CI build
    failed. No behaviour change.
+38. **GLib's default context runs with the external pump (Linux).**
+   `runtime.rs`: `CefRuntime::do_message_loop_work` also dispatches what is
+   ready on GLib's default main context (`g_main_context_iteration(NULL,
+   FALSE)`, at most 64 dispatches, resolved with `dlsym` from the GLib libcef
+   loads). CEF's external pump never runs that context, and Chromium watches
+   its own native windows' display connection there (Ozone's
+   `WaylandEventWatcherGlib`): a Chrome-style window such as DevTools was
+   created but never got its first `configure`, so it never appeared.
+   cefclient's Linux external pump runs the same context as its loop.
 
 ## Not changed, on purpose
 
