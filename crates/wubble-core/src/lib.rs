@@ -10,6 +10,7 @@ pub mod motion;
 pub mod pump;
 pub mod omnibox;
 pub mod session;
+pub mod shell;
 pub mod sleep;
 pub mod space;
 pub mod suggest;

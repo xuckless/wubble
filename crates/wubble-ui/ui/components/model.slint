@@ -39,3 +39,17 @@ export enum CommandBarEvent {
     close,
     settle,
 }
+
+// Mirrors wubble_core::shell::CompactMode; Rust owns the lifecycle.
+export enum CompactMode {
+    expanded,
+    hidden,
+    peeking,
+}
+
+// Mirrors wubble_gfx::glass::Tier.
+export enum GlassTier {
+    thin,
+    regular,
+    thick,
+}

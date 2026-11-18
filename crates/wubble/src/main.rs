@@ -145,6 +145,12 @@ fn main() -> ExitCode {
     }
 }
 
+/// Starts the spring-driven shell: sidebar seam, compact mode, Space indicator.
+fn install_shell_driver(window: &AppWindow) -> Result<(), Box<dyn std::error::Error>> {
+    wubble_ui::driver::install(window)?;
+    Ok(())
+}
+
 /// Pumps until every browser is closed and CEF has shut down. Bounded by the
 /// lifecycle state, not by time: the engine closes its views and reports each
 /// one closed once CEF has let go of it.
@@ -427,6 +433,7 @@ fn run(
     let window = AppWindow::new()?;
     connect_input(&window);
     connect_shell(&window);
+    install_shell_driver(&window)?;
     let host = Host::new(engine, &window, gpu.presenter(), url, checks);
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.

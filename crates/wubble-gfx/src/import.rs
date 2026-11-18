@@ -123,6 +123,14 @@ impl GpuContext {
         format!("{} ({}, {})", info.name, info.driver, info.driver_info)
     }
 
+    pub(crate) fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    pub(crate) fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
     pub fn presenter(&self) -> FramePresenter {
         FramePresenter {
             ctx: HostWgpuContext::new(self.device.clone(), self.queue.clone()),
@@ -174,7 +182,11 @@ fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> {
 }
 
 /// The blit target format: what Slint accepts, sRGB like CEF's output.
-const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+pub(crate) const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// `TARGET_FORMAT` without the sRGB decode: views in this format read and
+/// write the gamma-encoded values, as CSS filters compute (glass pass).
+pub(crate) const ENCODED_VIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Number of blit targets. Two, so consecutive frames are different images
 /// and setting one on the window always changes the property.
@@ -182,6 +194,7 @@ const RING_LEN: usize = 2;
 
 /// One Slint-compatible texture and its `Image`, wrapped once.
 struct Target {
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     image: slint::Image,
 }
@@ -208,12 +221,17 @@ impl Ring {
                 format: TARGET_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
+                // For the glass pass, which blurs the encoded values.
+                view_formats: &[ENCODED_VIEW_FORMAT],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let image =
-                slint::Image::try_from(texture).map_err(|e| GfxError::Image(e.to_string()))?;
-            Ok(Target { view, image })
+            let image = slint::Image::try_from(texture.clone())
+                .map_err(|e| GfxError::Image(e.to_string()))?;
+            Ok(Target {
+                texture,
+                view,
+                image,
+            })
         };
         Ok(Self {
             size,
@@ -227,6 +245,11 @@ impl Ring {
         let slot = self.next;
         self.next = (slot + 1) % RING_LEN;
         &self.targets[slot]
+    }
+
+    /// The target the last `advance` returned.
+    fn current(&self) -> &Target {
+        &self.targets[(self.next + RING_LEN - 1) % RING_LEN]
     }
 }
 
@@ -258,14 +281,19 @@ impl FramePresenter {
         );
         Ok(target.image.clone())
     }
+
+    /// The texture behind the image the last `present` returned, for
+    /// [`crate::glass::GlassBackdrop::render`]. `None` before the first frame.
+    pub fn current_texture(&self) -> Option<&wgpu::Texture> {
+        self.ring.as_ref().map(|ring| &ring.current().texture)
+    }
 }
 
-/// Fullscreen-triangle texture copy.
+/// Fullscreen-triangle vertex stage, shared by the blit and the glass pass.
 /// Ported from wgpu `examples/features/src/mipmap/blit.wgsl` and the blit
 /// pipeline in `examples/features/src/mipmap/mod.rs` (gfx-rs/wgpu,
-/// MIT OR Apache-2.0). Changed: nearest sampling (source and target are the
-/// same size) and the target format.
-const BLIT_WGSL: &str = r"
+/// MIT OR Apache-2.0).
+pub(crate) const FULLSCREEN_VS_WGSL: &str = r"
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) tex_coords: vec2<f32>,
@@ -281,7 +309,12 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     out.tex_coords = tc;
     return out;
 }
+";
 
+/// Fullscreen-triangle texture copy, fragment stage (same source as
+/// `FULLSCREEN_VS_WGSL`). Changed: nearest sampling (source and target are
+/// the same size) and the target format.
+const BLIT_FS_WGSL: &str = r"
 @group(0) @binding(0)
 var r_color: texture_2d<f32>;
 @group(0) @binding(1)
@@ -302,7 +335,7 @@ impl Blitter {
     fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wubble blit"),
-            source: wgpu::ShaderSource::Wgsl(BLIT_WGSL.into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{FULLSCREEN_VS_WGSL}{BLIT_FS_WGSL}").into()),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("wubble blit"),

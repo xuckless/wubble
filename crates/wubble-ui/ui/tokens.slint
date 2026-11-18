@@ -1,6 +1,8 @@
 // Design tokens. The only file with colour, px and ms literals.
 // Values from the design pack (ux/pack/project/Tokens.dc.html, Main.dc.html).
 
+import { GlassTier } from "components/model.slint";
+
 import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
@@ -27,7 +29,22 @@ export global Colors {
     // text on a film-coloured tile (same in both themes)
     out property <color> on-film: #0B0C12;
     // fills
+    // Glass tier fills (pack: white 8%, #161921 42%, #1C1F28 64%; light 55/68/80% white).
+    out property <color> glass-thin: light ? #FFFFFF8C : #FFFFFF14;
     out property <color> glass-regular: light ? #FFFFFFAD : #1619216B;
+    out property <color> glass-thick: light ? #FFFFFFCC : #1C1F28A3;
+    // Specular: white 10% fading to 0 (stop in GlassStyle).
+    out property <color> glass-specular: #FFFFFF1A;
+    out property <color> glass-specular-end: #FFFFFF00;
+    // Rim: 1 px ring (white 7%, Thick 8%) brightening to the top inset highlight (22%, Thick 24%).
+    out property <color> glass-rim: light ? #11131A14 : #FFFFFF12;
+    out property <color> glass-rim-thick: light ? #11131A1A : #FFFFFF14;
+    out property <color> glass-highlight: #FFFFFF38;
+    out property <color> glass-highlight-thick: #FFFFFF3D;
+    // Drop shadows (pack: black 35 / 45 / 55%).
+    out property <color> glass-shadow-thin: #00000059;
+    out property <color> glass-shadow-regular: #00000073;
+    out property <color> glass-shadow-thick: #0000008C;
     out property <color> hover-fill: light ? #11131A0D : #FFFFFF0D;
     out property <color> press-fill: light ? #11131A1A : #FFFFFF1A;
     out property <color> scrim: light ? #11131A52 : #08090D66;
@@ -53,7 +70,17 @@ export global Spacing {
 }
 
 export global Sizes {
+    // One logical pixel: divide a length by it to get a plain number.
+    out property <length> logical-px: 1px;
     out property <length> sidebar-width: 260px;
+    out property <length> sidebar-min: 200px;
+    out property <length> sidebar-max: 360px;
+    // Width of the draggable seam handle, and of the hover strip that reveals a hidden sidebar.
+    out property <length> seam-grab: 12px;
+    out property <length> edge-zone: 6px;
+    out property <length> peek-shadow: 24px;
+    // Distance between Space dots.
+    out property <length> space-pitch: space-dot + Spacing.s3;
     out property <length> row-height: 36px;
     out property <length> pinned-tile: 48px;
     out property <length> address-height: 40px;
@@ -98,4 +125,40 @@ export global Motion {
     out property <duration> overlap-in: 240ms;
     out property <duration> overlap-out: 190ms;
     out property <duration> stagger: 30ms;
+    // Press feedback on buttons and rows (pack Tokens.dc.html: 0.97 over 200 ms).
+    out property <duration> press: 200ms;
+    out property <float> press-scale: 0.97;
+}
+
+// The glass recipe per tier (pack Tokens.dc.html). Blur and saturate live in
+// wubble-gfx (`glass::Tier`); this is everything Slint layers on top.
+export global GlassStyle {
+    // Specular gradient ends this far down the panel.
+    out property <percent> specular-end: 42%;
+    // Space colour over Regular glass.
+    out property <float> space-tint-alpha: 0.1;
+    // Film rim: conic soap-film ring.
+    out property <length> film-width: 1.5px;
+    out property <float> film-opacity: 0.7;
+    out property <angle> film-from: 210deg;
+
+    public pure function fill(tier: GlassTier) -> color {
+        tier == GlassTier.thin ? Colors.glass-thin : tier == GlassTier.thick ? Colors.glass-thick : Colors.glass-regular
+    }
+    public pure function rim(tier: GlassTier) -> color {
+        tier == GlassTier.thick ? Colors.glass-rim-thick : Colors.glass-rim
+    }
+    public pure function highlight(tier: GlassTier) -> color {
+        tier == GlassTier.thick ? Colors.glass-highlight-thick : Colors.glass-highlight
+    }
+    public pure function shadow-color(tier: GlassTier) -> color {
+        tier == GlassTier.thin ? Colors.glass-shadow-thin : tier == GlassTier.thick ? Colors.glass-shadow-thick : Colors.glass-shadow-regular
+    }
+    // Shadow offset-y / blur (pack: 10 / 24, 18 / 40, 24 / 60).
+    public pure function shadow-y(tier: GlassTier) -> length {
+        tier == GlassTier.thin ? 10px : tier == GlassTier.thick ? 24px : 18px
+    }
+    public pure function shadow-blur(tier: GlassTier) -> length {
+        tier == GlassTier.thin ? 24px : tier == GlassTier.thick ? 60px : 40px
+    }
 }

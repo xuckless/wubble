@@ -1,9 +1,10 @@
 import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
-import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent } from "components/model.slint";
+import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent, CompactMode, GlassTier } from "components/model.slint";
+import { GlassBackdrops } from "components/glass.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
 
-export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }
+export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState, CompactMode, Sizes, GlassTier, GlassBackdrops }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -48,6 +49,28 @@ export component AppWindow inherits Window {
     in property <int> active-tab-id <=> sidebar.active-tab-id;
     in property <int> active-space-id <=> sidebar.active-space-id;
 
+    // Shell animation. The wubble-ui driver owns these: springs write the
+    // numbers, its pure transition writes compact-mode.
+    in-out property <length> sidebar-width: Sizes.sidebar-width;
+    in property <float> sidebar-slide: 1;
+    in property <float> content-inset: 1;
+    in property <float> space-indicator <=> sidebar.space-indicator;
+    in property <CompactMode> compact-mode: CompactMode.expanded;
+    // Pointer reports for the driver; x is in window coordinates.
+    callback seam-pressed(length);
+    callback seam-dragged(length);
+    callback seam-released();
+    callback zone-hover-changed(bool);
+    callback compact-toggle-requested();
+    callback space-changed(int);
+    changed active-space-id => {
+        root.space-changed(root.active-space-id);
+    }
+    // The index depends on the model too: it may be set or reordered later.
+    changed spaces => {
+        root.space-changed(root.active-space-id);
+    }
+
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;
     out property <CommandBarState> command-bar-state <=> bar.state;
@@ -66,6 +89,10 @@ export component AppWindow inherits Window {
     public function request-new-tab() {
         bar.dispatch(CommandBarEvent.open);
         root.new-tab-requested();
+    }
+
+    public function toggle-compact() {
+        root.compact-toggle-requested();
     }
 
     public function request-address-focus() {
@@ -114,12 +141,77 @@ export component AppWindow inherits Window {
             }
         }
 
-        HorizontalLayout {
-            padding: Spacing.s2;
-            spacing: Spacing.s2;
+        content := Rectangle {
+            x: Spacing.s2 + root.content-inset * (root.sidebar-width + Spacing.s2);
+            y: Spacing.s2;
+            width: parent.width - self.x - Spacing.s2;
+            height: parent.height - 2 * Spacing.s2;
+            border-radius: Radius.md;
+            clip: true;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.web-frame;
+                source-clip-width: root.web-frame-clip-width;
+                source-clip-height: root.web-frame-clip-height;
+                image-fit: fill;
+            }
+            // Over the frame and under the command bar, so the bar takes
+            // its own pointer events and the page only gets the rest.
+            web-focus := FocusScope {
+                width: 100%;
+                height: 100%;
+                changed has-focus => {
+                    root.web-focus-changed(self.has-focus);
+                }
+                TouchArea {
+                    mouse-cursor: root.cursors[root.web-cursor];
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            web-focus.focus();
+                            root.web-pointer-pressed(event.button, self.mouse-x, self.mouse-y);
+                        } else if event.kind == PointerEventKind.up {
+                            root.web-pointer-released(event.button, self.mouse-x, self.mouse-y);
+                        } else if event.kind == PointerEventKind.move {
+                            root.web-pointer-moved(self.mouse-x, self.mouse-y);
+                        } else {
+                            root.web-pointer-cancelled();
+                        }
+                    }
+                    scroll-event(event) => {
+                        root.web-scrolled(self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                        accept
+                    }
+                    changed has-hover => {
+                        if !self.has-hover {
+                            root.web-pointer-left(self.mouse-x, self.mouse-y);
+                        }
+                    }
+                }
+            }
+            bar := CommandBar {
+                closed => {
+                    web-focus.focus();
+                }
+            }
+        }
+
+        // The sidebar sits inside its hover zone, so the zone keeps has-hover
+        // while the pointer is over a child row.
+        zone := TouchArea {
+            x: 0px;
+            y: 0px;
+            height: parent.height;
+            width: Spacing.s2 + root.sidebar-width + Spacing.s2;
+            changed has-hover => {
+                root.zone-hover-changed(self.has-hover);
+            }
 
             sidebar := Sidebar {
-                width: Sizes.sidebar-width;
+                x: Spacing.s2 + (root.sidebar-slide - 1) * (root.sidebar-width + Spacing.s2);
+                y: Spacing.s2;
+                width: root.sidebar-width;
+                height: parent.height - 2 * Spacing.s2;
                 new-tab-requested => {
                     root.request-new-tab();
                 }
@@ -127,59 +219,44 @@ export component AppWindow inherits Window {
                     root.request-address-focus();
                 }
             }
+        }
 
-            content := Rectangle {
-                border-radius: Radius.md;
-                clip: true;
-                Image {
-                    width: 100%;
-                    height: 100%;
-                    source: root.web-frame;
-                    source-clip-width: root.web-frame-clip-width;
-                    source-clip-height: root.web-frame-clip-height;
-                    image-fit: fill;
+        seam := TouchArea {
+            enabled: false;
+            mouse-cursor: MouseCursor.col-resize;
+            x: Spacing.s2 + root.sidebar-width + Spacing.s1 - Sizes.seam-grab / 2;
+            y: Spacing.s2;
+            width: Sizes.seam-grab;
+            height: parent.height - 2 * Spacing.s2;
+            pointer-event(event) => {
+                if (event.button != PointerEventButton.left) {
+                    return;
                 }
-                // Over the frame and under the command bar, so the bar takes
-                // its own pointer events and the page only gets the rest.
-                web-focus := FocusScope {
-                    width: 100%;
-                    height: 100%;
-                    changed has-focus => {
-                        root.web-focus-changed(self.has-focus);
-                    }
-                    TouchArea {
-                        mouse-cursor: root.cursors[root.web-cursor];
-                        pointer-event(event) => {
-                            if event.kind == PointerEventKind.down {
-                                web-focus.focus();
-                                root.web-pointer-pressed(event.button, self.mouse-x, self.mouse-y);
-                            } else if event.kind == PointerEventKind.up {
-                                root.web-pointer-released(event.button, self.mouse-x, self.mouse-y);
-                            } else if event.kind == PointerEventKind.move {
-                                root.web-pointer-moved(self.mouse-x, self.mouse-y);
-                            } else {
-                                root.web-pointer-cancelled();
-                            }
-                        }
-                        scroll-event(event) => {
-                            root.web-scrolled(self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
-                            accept
-                        }
-                        changed has-hover => {
-                            if !self.has-hover {
-                                root.web-pointer-left(self.mouse-x, self.mouse-y);
-                            }
-                        }
-                    }
+                if (event.kind == PointerEventKind.down) {
+                    root.seam-pressed(self.absolute-position.x + self.mouse-x);
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    root.seam-released();
                 }
-                bar := CommandBar {
-                    closed => {
-                        web-focus.focus();
-                    }
-                }
+            }
+            moved => {
+                root.seam-dragged(self.absolute-position.x + self.mouse-x);
             }
         }
     }
+
+    // Mode-dependent presentation only; the spring-driven numbers come from Rust.
+    states [
+        expanded when root.compact-mode == CompactMode.expanded: {
+            seam.enabled: true;
+        }
+        hidden when root.compact-mode == CompactMode.hidden: {
+            zone.width: Sizes.edge-zone;
+        }
+        peeking when root.compact-mode == CompactMode.peeking: {
+            sidebar.drop-shadow-blur: Sizes.peek-shadow;
+            sidebar.drop-shadow-color: Colors.scrim;
+        }
+    ]
 
     init => {
         web-focus.focus();
