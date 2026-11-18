@@ -13,6 +13,7 @@
 //! fullscreen-triangle blit does it. Nothing is read back to the CPU.
 
 use std::fmt;
+use std::time::{Duration, Instant};
 
 use slint::wgpu_30::WGPUConfiguration;
 use welding::wgpu;
@@ -50,10 +51,39 @@ impl std::error::Error for GfxError {}
 /// crate opens it; `wubble-engine` hands it over unopened.
 pub struct NativeFrame(welding::NativeFrame);
 
+/// When CEF painted a frame and what copying it cost the paint callback.
+/// Only frames copied inside the callback (Linux) carry it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameTiming {
+    /// Entry to `OnAcceleratedPaint`.
+    pub arrived: Instant,
+    /// Import, copy and wait, on the thread that ran the callback.
+    pub copy: Duration,
+    /// The wait for the copy's submission, part of `copy`.
+    pub copy_wait: Duration,
+}
+
 impl NativeFrame {
     pub fn size(&self) -> FrameSize {
         let size = self.0.size();
         FrameSize::new(size.width, size.height)
+    }
+
+    /// CEF's paint count for this view when it painted the frame; a gap
+    /// between two taken frames is frames replaced before they were taken.
+    pub fn generation(&self) -> u64 {
+        self.0.generation()
+    }
+
+    pub fn timing(&self) -> Option<FrameTiming> {
+        match &self.0 {
+            welding::NativeFrame::Copied(c) => Some(FrameTiming {
+                arrived: c.arrived,
+                copy: c.copy,
+                copy_wait: c.copy_wait,
+            }),
+            _ => None,
+        }
     }
 }
 
@@ -190,6 +220,7 @@ const RING_LEN: usize = 2;
 
 /// One Slint-compatible texture and its `Image`, wrapped once.
 struct Target {
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     image: slint::Image,
 }
@@ -214,14 +245,20 @@ impl Ring {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: TARGET_FORMAT,
+                // COPY_SRC only for `FramePresenter::probe`.
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let image = slint::Image::try_from(texture.clone())
                 .map_err(|e| GfxError::Image(e.to_string()))?;
-            Ok(Target { view, image })
+            Ok(Target {
+                texture,
+                view,
+                image,
+            })
         };
         Ok(Self {
             size,
@@ -265,6 +302,61 @@ impl FramePresenter {
             &target.view,
         );
         Ok(target.image.clone())
+    }
+
+    /// The RGBA pixel at (`x`, `y`) (physical, clamped to the frame) of the
+    /// frame `present` returned last, `None` before the first. A CPU
+    /// readback that waits for the GPU: for the hand-run `--measure` input
+    /// latency probe only, never on the normal frame path.
+    pub fn probe(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        let ring = self.ring.as_ref()?;
+        let target = &ring.targets[(ring.next + RING_LEN - 1) % RING_LEN];
+        let (device, queue) = (&self.ctx.device, &self.ctx.queue);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wubble probe"),
+            size: u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("wubble probe"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: x.min(ring.size.width.saturating_sub(1)),
+                    y: y.min(ring.size.height.saturating_sub(1)),
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submission = queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..8);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .ok()?;
+        let data = slice.get_mapped_range().ok()?;
+        Some([data[0], data[1], data[2], data[3]])
     }
 
     /// The device frames are presented on, for welding's in-callback copy.

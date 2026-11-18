@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- `wubble --measure typing`: the probe square at 0,0 (64x64 DIP) flips
+     between white and black on every keydown and pointerdown; a canvas
+     clock keeps the page painting. The host probes a pixel inside the
+     square. Bundled; loads nothing. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble measure typing</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #808080; }
+  #probe { position: absolute; left: 0; top: 0; width: 64px; height: 64px; background: #ffffff; }
+  canvas { position: absolute; left: 96px; top: 0; }
+</style>
+</head>
+<body>
+<div id="probe"></div>
+<canvas id="clock" width="320" height="64"></canvas>
+<script>
+  const probe = document.getElementById("probe");
+  let dark = false;
+  function flip() {
+    dark = !dark;
+    probe.style.background = dark ? "#000000" : "#ffffff";
+  }
+  addEventListener("keydown", flip);
+  addEventListener("pointerdown", flip);
+  const ctx = document.getElementById("clock").getContext("2d");
+  function draw(t) {
+    ctx.fillStyle = "#808080";
+    ctx.fillRect(0, 0, 320, 64);
+    ctx.fillStyle = "#111114";
+    ctx.font = "600 28px system-ui, sans-serif";
+    ctx.fillText((t / 1000).toFixed(3) + " s", 8, 42);
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>
+</body>
+</html>

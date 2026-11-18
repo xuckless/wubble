@@ -7,6 +7,7 @@ mod cli;
 mod host;
 mod ime;
 mod input;
+mod measure;
 mod menu;
 mod nav_smoke;
 mod page_error;
@@ -236,6 +237,46 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Measure(m) => {
+            measure::begin(m.scenario, m.seconds.get());
+            let mode = Mode::Measure {
+                scenario: m.scenario,
+                begin_frames: m.begin_frames,
+            };
+            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    measured: Some((report, csv)),
+                    ..
+                }) => {
+                    println!("{report}");
+                    match m.out {
+                        Some(path) => match measure::write_csv(&path, &csv) {
+                            Ok(()) => {
+                                println!("measure: samples written to {}", path.display());
+                                ExitCode::SUCCESS
+                            }
+                            Err(e) => {
+                                eprintln!("measure: cannot write {}: {e}", path.display());
+                                ExitCode::FAILURE
+                            }
+                        },
+                        None => ExitCode::SUCCESS,
+                    }
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("measure: FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("measure: FAILED: nothing was recorded");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Frames { frames, url }) => {
             let mode = Mode::Frames {
                 frames: frames.get().into(),
@@ -274,16 +315,27 @@ fn install_shell_driver(
 ) -> Result<Rc<RefCell<GlassRegistry>>, Box<dyn std::error::Error>> {
     let seam = Seam::restored(ui.sidebar_width.into(), ui.mode);
     let glass = Rc::clone(glass);
-    let panels = wubble_ui::driver::install(window, seam, move |window, now, items| {
-        if let Ok(mut glass) = glass.try_borrow_mut() {
-            glass.frame(window, now, items);
-        }
-        // The split's strings, stepped with the rest of the shell. Inside rendering the host
-        // may be busy (a pump renders); then this frame skips them and asks for the next.
-        if split_frame(window, now) {
-            window.window().request_redraw();
-        }
-    })?;
+    let panels = wubble_ui::driver::install(
+        window,
+        seam,
+        move |window, now, items| {
+            if let Ok(mut glass) = glass.try_borrow_mut() {
+                glass.frame(window, now, items);
+            }
+            // The split's strings, stepped with the rest of the shell. Inside rendering the host
+            // may be busy (a pump renders); then this frame skips them and asks for the next.
+            if split_frame(window, now) {
+                window.window().request_redraw();
+            }
+        },
+        || {
+            measure::rendered();
+            // Queued: the render may run while the host is busy (snapshots).
+            let _ = slint::invoke_from_event_loop(|| {
+                with_host(|host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
+            });
+        },
+    )?;
     Ok(panels)
 }
 
@@ -385,6 +437,8 @@ struct Outcome {
     page_zoom: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
+    /// `--measure`'s report and CSV.
+    measured: Option<(String, String)>,
 }
 
 /// What the window is for.
@@ -406,6 +460,12 @@ enum Mode {
     Page,
     /// One phase of `--smoke session`.
     Session(Phase),
+    /// `--measure`: the scenario's bundled page, measured until it ends;
+    /// CEF paced by external begin frames if `begin_frames`.
+    Measure {
+        scenario: measure::Scenario,
+        begin_frames: bool,
+    },
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
@@ -679,8 +739,10 @@ fn run(
         session_smoke: None,
         page_smoke: None,
         split_smoke: None,
+        begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    let measuring = matches!(mode, Mode::Measure { .. });
     // Smokes download into their throwaway profile.
     let downloads = match &mode {
         Mode::Browse { downloads, .. } => downloads.clone(),
@@ -734,6 +796,16 @@ fn run(
             None,
             Checks {
                 session_smoke: Some(SessionSmoke::new(phase)),
+                ..none
+            },
+        ),
+        Mode::Measure {
+            scenario,
+            begin_frames,
+        } => (
+            Some(page_url(scenario.page())),
+            Checks {
+                begin_frames,
                 ..none
             },
         ),
@@ -794,10 +866,23 @@ fn run(
             with_host(Host::probe_audible)
         });
     }
+    let measure_timer = slint::Timer::default();
+    if measuring {
+        let weak = window.as_weak();
+        measure_timer.start(slint::TimerMode::Repeated, measure::TICK, move || {
+            if let Some(window) = weak.upgrade() {
+                with_host(|host| measure::tick(host, &window));
+            }
+        });
+    }
 
     let result = window.run();
     // Read while the window still exists.
     let ui = host::ui_state(&window);
+    drop(measure_timer);
+    let measured = measuring
+        .then(|| measure::finish(&gpu.describe()))
+        .flatten();
     drop(lifecycle);
     drop(audible);
     drop(window);
@@ -814,5 +899,6 @@ fn run(
         split_passed: host.split_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
+        measured,
     })
 }

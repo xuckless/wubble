@@ -195,10 +195,15 @@ pub(super) fn import_vulkan(
 /// whose foreign-queue acquire grafting has already submitted and waited for,
 /// so no release barrier is recorded; the copy is only sampled, never copied
 /// from again.
+///
+/// wubble change: returns a [`CopiedFrame`] timed from `arrived` (the
+/// callback's entry), with the wait measured on its own.
 pub(crate) fn copy_dmabuf_to_owned(
     frame: DmaBufImage,
     ctx: &HostWgpuContext,
-) -> Result<ImportedTexture, ImportError> {
+    arrived: std::time::Instant,
+) -> Result<CopiedFrame, ImportError> {
+    let started = std::time::Instant::now();
     let source = import_vulkan(frame, ctx)?;
     let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("weld-cef-dmabuf-copy"),
@@ -221,6 +226,7 @@ pub(crate) fn copy_dmabuf_to_owned(
         source.size,
     );
     let submission = ctx.queue.submit([encoder.finish()]);
+    let waiting = std::time::Instant::now();
     loop {
         match ctx.device.poll(wgpu::PollType::Wait {
             submission_index: Some(submission.clone()),
@@ -236,13 +242,19 @@ pub(crate) fn copy_dmabuf_to_owned(
             }
         }
     }
+    let done = std::time::Instant::now();
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    Ok(ImportedTexture {
-        texture,
-        view,
-        size: source.size,
-        format: source.format,
-        generation: source.generation,
+    Ok(CopiedFrame {
+        texture: ImportedTexture {
+            texture,
+            view,
+            size: source.size,
+            format: source.format,
+            generation: source.generation,
+        },
+        arrived,
+        copy: done - started,
+        copy_wait: done - waiting,
     })
 }
 

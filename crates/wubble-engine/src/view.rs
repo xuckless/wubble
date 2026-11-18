@@ -149,7 +149,7 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
             }
             (Resizing { wanted: new }, effects)
         }
-        // Frames at a stale size are still shown (stretched) rather than
+        // Frames at a stale size are still shown (at their own size, top left) rather than
         // dropped, so a resize never flashes an empty view.
         (Live { .. }, Frame(_), _) => (state, vec![Present]),
         (Resizing { wanted }, Frame(size), _) if size == wanted.frame_size() => {
@@ -170,6 +170,9 @@ pub struct ViewConfig {
     pub layout: Layout,
     /// CEF `windowless_frame_rate`; see `wubble_gfx::pacing::frame_rate_for`.
     pub frame_rate: u32,
+    /// CEF paints only on [`View::send_begin_frame`] (external begin
+    /// frames) instead of on its own timer at `frame_rate`.
+    pub begin_frames: bool,
     /// The device frames are shown on. On Linux welding copies each frame
     /// onto it inside CEF's paint callback, before CEF reuses the buffer.
     pub gpu: HostWgpuContext,
@@ -239,7 +242,7 @@ impl View {
             runtime,
             config.url,
             layout,
-            config.frame_rate,
+            (config.frame_rate, config.begin_frames),
             &config.gpu,
             request_filter,
         )?;
@@ -472,6 +475,18 @@ impl View {
             self.state,
             ViewState::Live { .. } | ViewState::Resizing { .. }
         )
+    }
+
+    /// Asks CEF for one frame (`SendExternalBeginFrame`); only for a view
+    /// opened with `begin_frames`.
+    pub fn send_begin_frame(&mut self) {
+        self.send(|host| host.send_external_begin_frame());
+    }
+
+    /// CEF's frame-rate ceiling (`SetWindowlessFrameRate`), for a window
+    /// that moved to a display with another refresh rate.
+    pub fn set_frame_rate(&mut self, frame_rate: u32) {
+        self.send(|host| host.set_windowless_frame_rate(frame_rate as i32));
     }
 
     /// Follows the host's content rectangle; unchanged layouts cost nothing.
@@ -1433,7 +1448,7 @@ fn new_producer(
     runtime: &CefRuntime,
     url: String,
     layout: Layout,
-    frame_rate: u32,
+    (frame_rate, begin_frames): (u32, bool),
     gpu: &HostWgpuContext,
     request_filter: Option<welding::RequestFilter>,
 ) -> Result<PlatformCefProducer, EngineError> {
@@ -1443,6 +1458,7 @@ fn new_producer(
             initial_size: dpi_size(layout.size),
             scale_factor: layout.scale,
             windowless_frame_rate: frame_rate,
+            external_begin_frame: begin_frames,
             // Every request is held for the engine, which answers it with
             // the host's answer or (RequestMode::DefaultNow) its default.
             handle_permission_requests: true,
@@ -1470,7 +1486,7 @@ fn new_producer(
     _runtime: &CefRuntime,
     _url: String,
     _layout: Layout,
-    _frame_rate: u32,
+    _pacing: (u32, bool),
     _gpu: &HostWgpuContext,
     _request_filter: Option<welding::RequestFilter>,
 ) -> Result<PlatformCefProducer, EngineError> {
@@ -1645,11 +1661,26 @@ mod tests {
             ((1000, 750), 1.25, (1000, 750)),
             ((1000, 777), 1.5, (1001, 777)),
             ((1, 1), 2.0, (2, 2)),
+            // Above scale 2 CEF can paint a pixel short of the rectangle
+            // (333 DIP at 3.0 is 999 px), so the shell fills it with a
+            // current frame instead of showing it at its own size.
+            ((1000, 600), 3.0, (999, 600)),
+            ((1001, 600), 2.5, (1000, 600)),
         ];
         for ((w, h), scale, (fw, fh)) in cases {
             let layout = layout(FrameSize::new(w, h), scale);
             assert_eq!(layout.frame_size(), FrameSize::new(fw, fh), "{layout:?}");
         }
+    }
+
+    #[test]
+    fn a_frame_a_pixel_short_of_the_rectangle_is_current() {
+        let wanted = layout(FrameSize::new(1000, 600), 3.0);
+        let (state, _) = run(live(), &[Layout(wanted)]);
+        assert_eq!(
+            transition(state, Frame(FrameSize::new(999, 600))),
+            (Live { layout: wanted }, vec![Present])
+        );
     }
 
     #[test]

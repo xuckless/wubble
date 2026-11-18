@@ -504,6 +504,9 @@ export struct SplitPane {
     frame: image,
     clip-width: int,
     clip-height: int,
+    // wubble change: the frame was painted for the pane's current size. A stale one (during a
+    // resize) shows at its own size, one image pixel per physical pixel, not stretched.
+    current: bool,
     focused: bool,
 }
 
@@ -540,9 +543,14 @@ export component SplitView inherits Rectangle {
         border-radius: root.radius;
         clip: true;
         background: Palette.web;
+        // wubble change: anchored top left; a current frame fills the pane (stretched by at most
+        // the pixel CEF painted short), a stale one keeps its size over Palette.web
+        // (wubble-gfx `FrameSize::cropped_to`).
         Image {
-            width: 100%;
-            height: 100%;
+            x: 0;
+            y: 0;
+            width: p.current ? parent.width : p.clip-width * 1phx;
+            height: p.current ? parent.height : p.clip-height * 1phx;
             source: p.frame;
             source-clip-width: p.clip-width;
             source-clip-height: p.clip-height;

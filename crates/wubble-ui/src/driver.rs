@@ -450,36 +450,41 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
 
 /// Wire the shell driver, its seam starting as `seam`, and register the window's one
 /// rendering notifier. On every frame, after the driver's step, `hook` gets the window, the
-/// frame time and the glass list when it changed (back to front). Returns the registry, the
-/// list's one owner, for readers outside the frame (the pixel smoke).
+/// frame time and the glass list when it changed (back to front); `after_rendering` runs after
+/// each render (the host's frame measurement and begin-frame pacing). Returns the registry,
+/// the list's one owner, for readers outside the frame (the pixel smoke).
 pub fn install(
     window: &AppWindow,
     seam: Seam,
     mut hook: impl FnMut(&AppWindow, Instant, Option<&[GlassItem]>) + 'static,
+    mut after_rendering: impl FnMut() + 'static,
 ) -> Result<Rc<RefCell<GlassRegistry>>, SetRenderingNotifierError> {
     let Wired { driver, glass } = wire(window, seam);
     let registry = Rc::clone(&glass);
     driver.borrow_mut().origin = Some(Instant::now());
     let weak = window.as_weak();
-    window.window().set_rendering_notifier(move |state, _api| {
-        let slint::RenderingState::BeforeRendering = state else {
-            return;
-        };
-        let Some(window) = weak.upgrade() else {
-            return;
-        };
-        let now = Instant::now();
-        let moving = driver.borrow_mut().frame(&window, now);
-        let frame = glass.borrow_mut().frame();
-        if frame.bump {
-            let layer = window.global::<GlassLayer>();
-            layer.set_generation(layer.get_generation().wrapping_add(1));
-        }
-        if moving || frame.bump {
-            window.window().request_redraw();
-        }
-        hook(&window, now, frame.glass.as_deref());
-    })?;
+    window
+        .window()
+        .set_rendering_notifier(move |state, _api| match state {
+            slint::RenderingState::BeforeRendering => {
+                let Some(window) = weak.upgrade() else {
+                    return;
+                };
+                let now = Instant::now();
+                let moving = driver.borrow_mut().frame(&window, now);
+                let frame = glass.borrow_mut().frame();
+                if frame.bump {
+                    let layer = window.global::<GlassLayer>();
+                    layer.set_generation(layer.get_generation().wrapping_add(1));
+                }
+                if moving || frame.bump {
+                    window.window().request_redraw();
+                }
+                hook(&window, now, frame.glass.as_deref());
+            }
+            slint::RenderingState::AfterRendering => after_rendering(),
+            _ => {}
+        })?;
     Ok(registry)
 }
 

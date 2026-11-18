@@ -14,7 +14,7 @@ pub mod import;
 pub mod pacing;
 pub mod scene;
 
-pub use import::{FramePresenter, GfxError, GpuContext, NativeFrame};
+pub use import::{FramePresenter, FrameTiming, GfxError, GpuContext, NativeFrame};
 
 /// A size in physical pixels: frames, views and the content rectangle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,8 +33,11 @@ impl FrameSize {
         Self::new(self.width.max(1), self.height.max(1))
     }
 
-    /// The part of a frame of this size that fits in `area`, anchored top
-    /// left. A frame smaller than `area` is kept whole (and stretched).
+    /// Where a frame of this size is shown in `area`: anchored top left, at
+    /// one image pixel per physical pixel, never scaled. A larger frame is
+    /// cropped to `area`; a smaller one (stale during a resize) is shown
+    /// whole at its own size and the rest of `area` shows the background.
+    /// The shell sizes the image to this, in physical pixels (`app.slint`).
     pub fn cropped_to(self, area: FrameSize) -> Self {
         Self::new(self.width.min(area.width), self.height.min(area.height))
     }
@@ -53,5 +56,20 @@ mod tests {
             FrameSize::new(800, 600)
         );
         assert_eq!(area.cropped_to(area), area);
+    }
+
+    #[test]
+    fn a_smaller_frame_keeps_its_own_size() {
+        let area = FrameSize::new(1001, 600);
+        let small = FrameSize::new(900, 500);
+        assert_eq!(small.cropped_to(area), small);
+        assert_eq!(
+            FrameSize::new(1200, 500).cropped_to(area),
+            FrameSize::new(1001, 500)
+        );
+        assert_eq!(
+            FrameSize::new(1, 1).cropped_to(FrameSize::new(0, 0)),
+            FrameSize::new(0, 0)
+        );
     }
 }

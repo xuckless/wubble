@@ -203,6 +203,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    Lets the host block or rewrite requests (wubble's content blocker).
    Tests: default `None`, `Debug`, panic allows (unwinding builds), the top-page rule
    including a stale main-frame URL.
+22. **Frame timing on the copied frame.** `native_frame/mod.rs`: new
+   `CopiedFrame { texture, arrived, copy, copy_wait }` (re-exported from
+   `lib.rs`); `NativeFrame::Copied` holds it instead of a bare
+   `ImportedTexture`. `linux_cef/cef_backed.rs` stamps `arrived` on entry to
+   `on_accelerated_paint`; `vulkan_dmabuf.rs` `copy_dmabuf_to_owned` takes it
+   and measures the whole copy and the `device.poll(Wait)` part. For
+   wubble's hand-run `--measure`; costs three `Instant::now()` per frame.
 
 ## Not changed, on purpose
 

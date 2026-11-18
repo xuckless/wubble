@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- `wubble --measure video`: a CSS animation and a full-page canvas redrawn
+     every animation frame, like video playback. Bundled; loads nothing. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble measure video</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: linear-gradient(120deg, #7aa2ff, #c39bff, #ff9bc8, #8ef0c4);
+         background-size: 400% 400%; animation: drift 4s linear infinite; }
+  @keyframes drift { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+  canvas { position: absolute; inset: 0; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  function draw(t) {
+    if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
+      canvas.width = innerWidth;
+      canvas.height = innerHeight;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < 24; i++) {
+      const a = t / 700 + i * 0.26;
+      ctx.fillStyle = "hsl(" + ((t / 10 + i * 15) % 360) + " 80% 45%)";
+      ctx.fillRect(canvas.width / 2 + Math.cos(a) * canvas.width / 3 - 20,
+                   canvas.height / 2 + Math.sin(a) * canvas.height / 3 - 20, 40, 40);
+    }
+    ctx.fillStyle = "#111114";
+    ctx.font = "600 28px system-ui, sans-serif";
+    ctx.fillText((t / 1000).toFixed(3) + " s", 24, 48);
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>
+</body>
+</html>

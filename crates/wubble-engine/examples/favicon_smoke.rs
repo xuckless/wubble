@@ -69,6 +69,7 @@ fn run(dir: &Path, devtools: bool) -> Result<(), String> {
                 scale: 1.0,
             },
             frame_rate: 30,
+            begin_frames: false,
             gpu: presenter.context().clone(),
         })
         .map_err(|e| e.to_string())?;

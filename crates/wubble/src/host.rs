@@ -45,7 +45,7 @@ use wubble_engine::input::{KeyId, Point};
 use wubble_engine::nav::{Cursor, Phase, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
-use wubble_gfx::pacing::{self, FrameStats};
+use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
 use wubble_store::{ClosedTab, Transition};
 use wubble_ui::glass::GlassRegistry;
 use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
@@ -190,6 +190,8 @@ pub struct Checks {
     pub session_smoke: Option<SessionSmoke>,
     pub page_smoke: Option<PageSmoke>,
     pub split_smoke: Option<SplitSmoke>,
+    /// Views paint on external begin frames from [`Host::pace`].
+    pub begin_frames: bool,
 }
 
 /// The last frame shown in a pane: the image, the part of it to show, and the size CEF painted.
@@ -197,6 +199,15 @@ struct PaneFrame {
     image: slint::Image,
     clip: wubble_gfx::FrameSize,
     size: wubble_gfx::FrameSize,
+    /// Painted for the pane's current size: it fills the pane. A stale one (mid-resize) shows
+    /// at its own size instead of stretched.
+    current: bool,
+}
+
+/// The external begin-frame driver's state and its timer.
+struct Pace {
+    state: BeginFrames,
+    timer: slint::Timer,
 }
 
 /// Everything the pump drives. Owned by `HOST` in `main.rs`.
@@ -245,7 +256,7 @@ pub struct Host {
     pub tabs_passed: bool,
     pub session_passed: bool,
     pub split_passed: bool,
-    input: InputState,
+    pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
     page_first: PendingKeys,
@@ -284,6 +295,7 @@ pub struct Host {
     /// Certificate errors the user proceeded past, for this run only.
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
+    pace: Option<Pace>,
 }
 
 impl Host {
@@ -317,6 +329,7 @@ impl Host {
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
         let site_zoom = settings.site_zoom.clone();
+        let begin_frames = checks.begin_frames;
         let mut host = Self {
             engine,
             window: window.as_weak(),
@@ -373,6 +386,10 @@ impl Host {
             site_permissions,
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
+            pace: begin_frames.then(|| Pace {
+                state: BeginFrames::Off,
+                timer: slint::Timer::default(),
+            }),
         };
         host.render_downloads(window);
         match open {
@@ -442,11 +459,13 @@ impl Host {
                     url,
                     layout: self.pane_layout(&window, tab),
                     frame_rate,
+                    begin_frames: self.pace.is_some(),
                     gpu: self.presenters[0].context().clone(),
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {
                         self.views.insert(tab, id);
+                        self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
                         eprintln!("wubble: tab {}: {e}; closing it", tab.0);
@@ -472,6 +491,7 @@ impl Host {
                 if let Some(view) = self.tab_view(tab) {
                     view.set_visible(visible);
                 }
+                self.pace(PaceEvent::Wake);
             }
             // Later, outside the host: opening the bar calls back into it.
             Call::ShowCommandBar => {
@@ -519,7 +539,7 @@ impl Host {
     }
 
     /// The visible tab's view: the focused page, the one that gets keys.
-    fn view(&mut self) -> Option<&mut View> {
+    pub(crate) fn view(&mut self) -> Option<&mut View> {
         self.tab_view(self.model.visible_tab()?)
     }
 
@@ -1004,6 +1024,7 @@ impl Host {
 
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
+        self.follow_frame_rate();
         self.dispatch(Command::Tick {
             now,
             pressure: Pressure::None,
@@ -1345,9 +1366,11 @@ impl Host {
                 if matches!(
                     route,
                     KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
-                ) && let Some(view) = self.view()
-                {
-                    view.key(&key);
+                ) {
+                    self.pace(PaceEvent::Wake);
+                    if let Some(view) = self.view() {
+                        view.key(&key);
+                    }
                 }
                 match route {
                     KeyRoute::Perform(action) => {
@@ -1370,6 +1393,61 @@ impl Host {
         EventResult::Propagate
     }
 
+    /// Tells every view the frame rate if the window is now on a display
+    /// with another refresh rate. Polled from the lifecycle tick: winit has
+    /// no event for a move to another monitor at the same scale, and on
+    /// Wayland the first rate comes from the fastest monitor because the
+    /// surface has not entered an output yet.
+    fn follow_frame_rate(&mut self) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let rate = window
+            .window()
+            .with_winit_window(display_refresh_mhz)
+            .map(pacing::frame_rate_for);
+        if let (Some(current), Some(rate)) = (self.frame_rate, rate)
+            && rate != current
+        {
+            self.frame_rate = Some(rate);
+            for id in self.views.values().copied().collect::<Vec<_>>() {
+                if let Some(view) = self.engine.view(id) {
+                    view.set_frame_rate(rate);
+                }
+            }
+        }
+    }
+
+    /// Steps the begin-frame driver, if this run uses external begin frames
+    /// (views open only once the frame rate is known).
+    pub fn pace(&mut self, event: PaceEvent) {
+        let (Some(pace), Some(rate)) = (self.pace.as_mut(), self.frame_rate) else {
+            return;
+        };
+        let period = Duration::from_secs_f64(1.0 / f64::from(rate));
+        let (state, effects) = pacing::transition(pace.state, event, period);
+        pace.state = state;
+        for effect in effects {
+            match effect {
+                // Every page on screen (the panes of a split) paints.
+                PaceEffect::Send => {
+                    for tab in self.shown_tabs() {
+                        if let Some(view) = self.tab_view(tab) {
+                            view.send_begin_frame();
+                        }
+                    }
+                }
+                PaceEffect::ArmTimer(delay) => {
+                    if let Some(pace) = &self.pace {
+                        pace.timer.start(slint::TimerMode::SingleShot, delay, || {
+                            with_host(|host| host.pace(PaceEvent::Timer))
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     /// The view of the page on screen in pane `pane` (a tab id from the shell).
     fn pane_view(&mut self, pane: i32) -> Option<&mut View> {
         let tab = crate::shell::tab_id(pane).filter(|t| self.shown_tabs().contains(t))?;
@@ -1378,6 +1456,7 @@ impl Host {
 
     pub fn pointer_moved(&mut self, pane: i32, point: Point) {
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
+        self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
             view.mouse_move(point, &modifiers, now);
         }
@@ -1385,6 +1464,7 @@ impl Host {
 
     pub fn pointer_left(&mut self, pane: i32, point: Point) {
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
+        self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
             view.mouse_leave(point, &modifiers, now);
         }
@@ -1417,6 +1497,7 @@ impl Host {
         for button in sent {
             self.input.buttons = self.input.buttons.with(button, pressed);
             let (modifiers, now) = (self.input.modifiers(), self.input.now());
+            self.pace(PaceEvent::Wake);
             if let Some(view) = self.pane_view(pane) {
                 view.mouse_button(button, pressed, point, &modifiers, now);
             }
@@ -1432,6 +1513,7 @@ impl Host {
 
     pub fn scrolled(&mut self, pane: i32, point: Point, dx: f32, dy: f32) {
         let modifiers = self.input.modifiers();
+        self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
             view.wheel(point, dx, dy, &modifiers);
         }

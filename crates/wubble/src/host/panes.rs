@@ -10,9 +10,11 @@ use wubble_core::motion::DT_CAP;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::TabId;
 use wubble_engine::view::Layout;
+use wubble_gfx::pacing::PaceEvent;
 use wubble_ui::{AppWindow, SplitPane, SplitSeam};
 
 use super::{Host, PaneFrame, Snapshot};
+use crate::measure;
 use crate::menu::{self, MenuEvent};
 use crate::panes::PageRect;
 use crate::screen::Screen;
@@ -164,6 +166,7 @@ impl Host {
                     frame: frame.map(|f| f.image.clone()).unwrap_or_default(),
                     clip_width: frame.map_or(0, |f| slint_int(f.clip.width)),
                     clip_height: frame.map_or(0, |f| slint_int(f.clip.height)),
+                    current: frame.is_some_and(|f| f.current),
                     focused: Some(r.tab) == focused,
                 }
             })
@@ -238,14 +241,32 @@ impl Host {
             let Some(frame) = frame else {
                 continue;
             };
+            self.pace(PaceEvent::FrameArrived);
             let size = frame.size();
             let clip = size.cropped_to(layout.size);
+            let current = size == layout.frame_size();
+            // `--measure` follows the focused page.
+            let measured = (Some(rect.tab) == focused)
+                .then(|| measure::Frame::of(&frame, layout.frame_size()));
             let slot = self.slot_for(rect.tab);
             let image = self.presenters[slot]
                 .present(frame)
                 .map_err(|e| e.to_string())?;
-            self.frames
-                .insert(rect.tab, PaneFrame { image, clip, size });
+            if let Some(measured) = measured {
+                let presenter = &self.presenters[slot];
+                measure::taken(measured, || {
+                    presenter.probe(measure::PROBE.0, measure::PROBE.1)
+                });
+            }
+            self.frames.insert(
+                rect.tab,
+                PaneFrame {
+                    image,
+                    clip,
+                    size,
+                    current,
+                },
+            );
             presented = true;
         }
         if presented {

@@ -71,7 +71,7 @@ pub enum NativeFrame {
     /// Linux (wubble change): a weld-owned copy of a DMABUF frame, made and
     /// waited for inside `OnAcceleratedPaint`, so CEF may reuse its pooled
     /// buffer as soon as the callback returns. Importing it is a no-op.
-    Copied(ImportedTexture),
+    Copied(CopiedFrame),
     /// CPU bitmap from `OnPaint` (requires `feature = "cpu-paint-fallback"`).
     #[cfg(feature = "cpu-paint-fallback")]
     CpuBitmap(CpuBitmap),
@@ -105,7 +105,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(frame) => frame.size(),
             NativeFrame::MetalTextureRef(frame) => frame.size(),
             NativeFrame::DmaBufImage(frame) => frame.size(),
-            NativeFrame::Copied(frame) => PhysicalSize::new(frame.size.width, frame.size.height),
+            NativeFrame::Copied(frame) => PhysicalSize::new(frame.texture.size.width, frame.texture.size.height),
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(frame) => frame.size,
         }
@@ -116,7 +116,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(frame) => frame.format(),
             NativeFrame::MetalTextureRef(frame) => frame.format(),
             NativeFrame::DmaBufImage(frame) => frame.format(),
-            NativeFrame::Copied(frame) => frame.format,
+            NativeFrame::Copied(frame) => frame.texture.format,
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(frame) => frame.format,
         }
@@ -133,7 +133,7 @@ impl NativeFrame {
             NativeFrame::Dx12SharedTexture(frame) => frame.generation(),
             NativeFrame::MetalTextureRef(frame) => frame.generation(),
             NativeFrame::DmaBufImage(frame) => frame.generation(),
-            NativeFrame::Copied(frame) => frame.generation,
+            NativeFrame::Copied(frame) => frame.texture.generation,
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(frame) => frame.generation,
         }
@@ -541,6 +541,20 @@ pub struct ImportedTexture {
     pub generation: u64,
 }
 
+/// wubble change: the copy `OnAcceleratedPaint` made, with when the callback
+/// ran and what the copy cost the calling thread, for frame-path measurement
+/// (wubble `--measure`). Reading the clock twice per frame is the only cost.
+#[derive(Debug)]
+pub struct CopiedFrame {
+    pub texture: ImportedTexture,
+    /// When `OnAcceleratedPaint` was entered.
+    pub arrived: std::time::Instant,
+    /// The whole in-callback copy: import, copy submission and wait.
+    pub copy: std::time::Duration,
+    /// The part of `copy` spent blocked in `device.poll(Wait)`.
+    pub copy_wait: std::time::Duration,
+}
+
 // ── Importer ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, thiserror::Error)]
@@ -605,7 +619,7 @@ impl WgpuTextureImporter {
             NativeFrame::Dx12SharedTexture(f) => Self::import_dx12(f, ctx),
             NativeFrame::MetalTextureRef(f) => Self::import_metal(f, ctx),
             NativeFrame::DmaBufImage(f) => Self::import_vulkan(f, ctx),
-            NativeFrame::Copied(f) => Ok(f),
+            NativeFrame::Copied(f) => Ok(f.texture),
             #[cfg(feature = "cpu-paint-fallback")]
             NativeFrame::CpuBitmap(f) => Self::upload_cpu(f, ctx),
         }
