@@ -18,6 +18,10 @@ its "Decided" table before proposing architecture.
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 
+`vendor/welding/` is our fork of the `welding` crate (MPL-2.0), outside the
+workspace members: keep its upstream style, mark each change `wubble change`
+and list it in `vendor/welding/WUBBLE_CHANGES.md`; test with `cargo test -p welding`.
+
 UX source of truth: the owner's design repo, cloned at
 `~/Dev/wubble-wt/ref/the-wallpaper-project/src/wubble` (see `ux/README.md`). Match it, and
 copy from its `slint/` port (tokens, physics, components, wgpu renderer) before writing UI
@@ -34,6 +38,9 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble
     cargo run -p wubble -- --smoke boot   # CEF boots and shuts down, no window
     cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
+    cargo run -p wubble -- --smoke nav   # window navigates between two bundled pages, exits; run by hand only
+    cargo run -p wubble -- --smoke tabs   # window opens, switches, sleeps, restores and closes tabs, exits; run by hand only
+    cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
 
 ## Code principles
 

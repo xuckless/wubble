@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 slint.workspace = true
+wubble-core.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

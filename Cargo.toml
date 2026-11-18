@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Vendored third-party code is not linted by `clippy --workspace`; its own
+# rustfmt.toml keeps `cargo fmt --all` off it. Built as a path dependency,
+# tested with `cargo test -p welding`.
+exclude = ["vendor/welding"]
 
 [workspace.package]
 version = "0.0.0"
@@ -14,6 +18,7 @@ wubble-blocker = { path = "crates/wubble-blocker" }
 wubble-core = { path = "crates/wubble-core" }
 wubble-engine = { path = "crates/wubble-engine" }
 wubble-gfx = { path = "crates/wubble-gfx" }
+wubble-import = { path = "crates/wubble-import" }
 wubble-store = { path = "crates/wubble-store" }
 wubble-ui = { path = "crates/wubble-ui" }
 
@@ -30,12 +35,15 @@ slint = { version = "1.19", default-features = false, features = [
 ] }
 slint-build = "1.19"
 wgpu = "30"
-welding = { version = "0.15", features = ["cef-runtime"] }
+# Forked: welding 0.15.0 (MPL-2.0) vendored with wubble's changes, see
+# vendor/welding/WUBBLE_CHANGES.md. Its slint/wgpu/cef pins still apply.
+welding = { path = "vendor/welding", features = ["cef-runtime"] }
 # Pinned by welding 0.15 (cef ^154.5); only one cef-dll-sys may be linked. Bump together.
 cef = "154.5"
 # welding's size type (`PhysicalSize`); not re-exported by welding. Same version welding and winit use.
 dpi = "0.1.2"
 serde_json = "1"
+url = "2"
 clap = { version = "4.6", features = ["derive"] }
 
 [profile.dev]

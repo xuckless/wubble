@@ -1,0 +1,53 @@
+{
+  "sidebar": {
+    "containers": [
+      {"global": {}},
+      {
+        "topAppsContainerIDs": [
+          {"default": true}, "fav-container",
+          {"custom": {"_0": {"directoryBasename": "Profile 1"}}}, "fav-container-2"
+        ],
+        "spaces": [
+          "space-1", {
+            "id": "space-1", "title": "Personal", "profile": {"default": true},
+            "customInfo": {
+              "iconType": {"emoji_v2": "🎨"},
+              "windowTheme": {"background": {"single": {"_0": {"style": {"color": {"_0": {
+                "blendedSingleColor": {"_0": {"color": {"red": 1.0, "green": 0.5, "blue": 0.0, "alpha": 1.0}}}
+              }}}}}}}
+            },
+            "containerIDs": ["pinned", "pinned-1", "unpinned", "unpinned-1"]
+          },
+          "space-2", {
+            "id": "space-2", "title": "",
+            "profile": {"custom": {"_0": {"directoryBasename": "Profile 1"}}},
+            "containerIDs": [{"pinned": {}}, "pinned-2", {"unpinned": {}}, "unpinned-2"]
+          },
+          "space-3", {"id": "space-3", "title": "Emoji", "customInfo": {"iconType": {"emoji": 65}}, "containerIDs": []}
+        ],
+        "items": [
+          "pinned-1", {"id": "pinned-1", "title": null, "childrenIds": ["folder-1", "split-1"]},
+          "folder-1", {"id": "folder-1", "title": "Docs", "parentID": "pinned-1", "childrenIds": ["tab-a", "folder-2"], "data": {"list": {}}},
+          "tab-a", {"id": "tab-a", "title": "Docs A (renamed)", "parentID": "folder-1", "data": {"tab": {"savedURL": "https://docs.example/a", "savedTitle": "Docs A"}}},
+          "folder-2", {"id": "folder-2", "title": "Inner", "parentID": "folder-1", "childrenIds": ["tab-b"], "data": {"list": {}}},
+          "tab-b", {"id": "tab-b", "parentID": "folder-2", "data": {"tab": {"savedURL": "https://docs.example/inner", "savedTitle": "Inner page"}}},
+          "split-1", {"id": "split-1", "parentID": "pinned-1", "childrenIds": ["s1", "s2"], "data": {"splitView": {}}},
+          "s1", {"id": "s1", "data": {"tab": {"savedURL": "https://split.example/1", "savedTitle": "One"}}},
+          "s2", {"id": "s2", "data": {"tab": {"savedURL": "https://split.example/2", "savedTitle": "Two"}}},
+          "unpinned-1", {"id": "unpinned-1", "childrenIds": ["today", "junk"]},
+          "today", {"id": "today", "data": {"tab": {"savedURL": "https://today.example/"}}},
+          "junk", {"id": "junk", "data": {"tab": {"savedURL": "arc://settings"}}},
+          "pinned-2", {"id": "pinned-2", "childrenIds": []},
+          "unpinned-2", {"id": "unpinned-2", "childrenIds": ["other"]},
+          "other", {"id": "other", "data": {"tab": {"savedURL": "https://other.example/", "savedTitle": "Other"}}},
+          "fav-container", {"id": "fav-container", "childrenIds": ["fav"]},
+          "fav", {"id": "fav", "data": {"tab": {"savedURL": "https://fav.example/", "savedTitle": "Fav"}}},
+          "fav-container-2", {"id": "fav-container-2", "childrenIds": ["fav2"]},
+          "fav2", {"id": "fav2", "data": {"tab": {"savedURL": "https://fav2.example/", "savedTitle": "Fav2"}}}
+        ]
+      },
+      {"littleBrowser": {}},
+      {"items": ["lb", {"id": "lb", "data": {"tab": {"savedURL": "https://little.example/"}}}], "spaces": []}
+    ]
+  }
+}

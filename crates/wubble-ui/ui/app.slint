@@ -1,9 +1,10 @@
 import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
-import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent } from "components/model.slint";
+import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent, CompactMode, GlassTier } from "components/model.slint";
+import { GlassBackdrops } from "components/glass.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
 
-export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }
+export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState, CompactMode, Sizes, GlassTier, GlassBackdrops }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -29,6 +30,21 @@ export component AppWindow inherits Window {
     out property <length> content-x: content.x;
     out property <length> content-y: content.y;
 
+    // Input over the web content, in view-relative logical pixels. The host
+    // forwards it to the page; nothing here interprets it.
+    // The page's pointer shape: an index into `cursors`.
+    in property <int> web-cursor;
+    // The web content has keyboard focus (the host sends it keys only then).
+    out property <bool> web-focused: web-focus.has-focus;
+    callback web-pointer-moved(x: length, y: length);
+    callback web-pointer-left(x: length, y: length);
+    callback web-pointer-pressed(button: PointerEventButton, x: length, y: length);
+    callback web-pointer-released(button: PointerEventButton, x: length, y: length);
+    // The pointer grab ended without a release.
+    callback web-pointer-cancelled();
+    callback web-scrolled(x: length, y: length, delta-x: length, delta-y: length);
+    callback web-focus-changed(focused: bool);
+
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
@@ -36,6 +52,28 @@ export component AppWindow inherits Window {
     in property <[SpaceItem]> spaces <=> sidebar.spaces;
     in property <int> active-tab-id <=> sidebar.active-tab-id;
     in property <int> active-space-id <=> sidebar.active-space-id;
+
+    // Shell animation. The wubble-ui driver owns these: springs write the
+    // numbers, its pure transition writes compact-mode.
+    in-out property <length> sidebar-width: Sizes.sidebar-width;
+    in property <float> sidebar-slide: 1;
+    in property <float> content-inset: 1;
+    in property <float> space-indicator <=> sidebar.space-indicator;
+    in property <CompactMode> compact-mode: CompactMode.expanded;
+    // Pointer reports for the driver; x is in window coordinates.
+    callback seam-pressed(length);
+    callback seam-dragged(length);
+    callback seam-released();
+    callback zone-hover-changed(bool);
+    callback compact-toggle-requested();
+    callback space-changed(int);
+    changed active-space-id => {
+        root.space-changed(root.active-space-id);
+    }
+    // The index depends on the model too: it may be set or reordered later.
+    changed spaces => {
+        root.space-changed(root.active-space-id);
+    }
 
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;
@@ -49,16 +87,43 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
+    // Ctrl+W: close the visible tab.
+    callback close-tab-requested();
 
     public function request-new-tab() {
         bar.dispatch(CommandBarEvent.open);
         root.new-tab-requested();
     }
 
+    public function toggle-compact() {
+        root.compact-toggle-requested();
+    }
+
     public function request-address-focus() {
         bar.dispatch(CommandBarEvent.open);
         root.address-focus-requested();
     }
+
+    // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
+    // out of range shows the default.
+    property <[MouseCursor]> cursors: [
+        MouseCursor.default,
+        MouseCursor.none,
+        MouseCursor.pointer,
+        MouseCursor.text,
+        MouseCursor.wait,
+        MouseCursor.progress,
+        MouseCursor.crosshair,
+        MouseCursor.move,
+        MouseCursor.not-allowed,
+        MouseCursor.help,
+        MouseCursor.grab,
+        MouseCursor.grabbing,
+        MouseCursor.ns-resize,
+        MouseCursor.ew-resize,
+        MouseCursor.nesw-resize,
+        MouseCursor.nwse-resize,
+    ];
 
     root-keys := FocusScope {
         KeyBinding {
@@ -73,13 +138,84 @@ export component AppWindow inherits Window {
                 root.request-address-focus();
             }
         }
+        KeyBinding {
+            keys: @keys(Control + W);
+            activated => {
+                root.close-tab-requested();
+            }
+        }
 
-        HorizontalLayout {
-            padding: Spacing.s2;
-            spacing: Spacing.s2;
+        content := Rectangle {
+            x: Spacing.s2 + root.content-inset * (root.sidebar-width + Spacing.s2);
+            y: Spacing.s2;
+            width: parent.width - self.x - Spacing.s2;
+            height: parent.height - 2 * Spacing.s2;
+            border-radius: Radius.md;
+            clip: true;
+            Image {
+                width: 100%;
+                height: 100%;
+                source: root.web-frame;
+                source-clip-width: root.web-frame-clip-width;
+                source-clip-height: root.web-frame-clip-height;
+                image-fit: fill;
+            }
+            // Over the frame and under the command bar, so the bar takes
+            // its own pointer events and the page only gets the rest.
+            web-focus := FocusScope {
+                width: 100%;
+                height: 100%;
+                changed has-focus => {
+                    root.web-focus-changed(self.has-focus);
+                }
+                TouchArea {
+                    mouse-cursor: root.cursors[root.web-cursor];
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            web-focus.focus();
+                            root.web-pointer-pressed(event.button, self.mouse-x, self.mouse-y);
+                        } else if event.kind == PointerEventKind.up {
+                            root.web-pointer-released(event.button, self.mouse-x, self.mouse-y);
+                        } else if event.kind == PointerEventKind.move {
+                            root.web-pointer-moved(self.mouse-x, self.mouse-y);
+                        } else {
+                            root.web-pointer-cancelled();
+                        }
+                    }
+                    scroll-event(event) => {
+                        root.web-scrolled(self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                        accept
+                    }
+                    changed has-hover => {
+                        if !self.has-hover {
+                            root.web-pointer-left(self.mouse-x, self.mouse-y);
+                        }
+                    }
+                }
+            }
+            bar := CommandBar {
+                closed => {
+                    web-focus.focus();
+                }
+            }
+        }
+
+        // The sidebar sits inside its hover zone, so the zone keeps has-hover
+        // while the pointer is over a child row.
+        zone := TouchArea {
+            x: 0px;
+            y: 0px;
+            height: parent.height;
+            width: Spacing.s2 + root.sidebar-width + Spacing.s2;
+            changed has-hover => {
+                root.zone-hover-changed(self.has-hover);
+            }
 
             sidebar := Sidebar {
-                width: Sizes.sidebar-width;
+                x: Spacing.s2 + (root.sidebar-slide - 1) * (root.sidebar-width + Spacing.s2);
+                y: Spacing.s2;
+                width: root.sidebar-width;
+                height: parent.height - 2 * Spacing.s2;
                 new-tab-requested => {
                     root.request-new-tab();
                 }
@@ -87,28 +223,46 @@ export component AppWindow inherits Window {
                     root.request-address-focus();
                 }
             }
+        }
 
-            content := Rectangle {
-                border-radius: Radius.md;
-                clip: true;
-                Image {
-                    width: 100%;
-                    height: 100%;
-                    source: root.web-frame;
-                    source-clip-width: root.web-frame-clip-width;
-                    source-clip-height: root.web-frame-clip-height;
-                    image-fit: fill;
+        seam := TouchArea {
+            enabled: false;
+            mouse-cursor: MouseCursor.col-resize;
+            x: Spacing.s2 + root.sidebar-width + Spacing.s1 - Sizes.seam-grab / 2;
+            y: Spacing.s2;
+            width: Sizes.seam-grab;
+            height: parent.height - 2 * Spacing.s2;
+            pointer-event(event) => {
+                if (event.button != PointerEventButton.left) {
+                    return;
                 }
-                bar := CommandBar {
-                    closed => {
-                        root-keys.focus();
-                    }
+                if (event.kind == PointerEventKind.down) {
+                    root.seam-pressed(self.absolute-position.x + self.mouse-x);
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    root.seam-released();
                 }
+            }
+            moved => {
+                root.seam-dragged(self.absolute-position.x + self.mouse-x);
             }
         }
     }
 
+    // Mode-dependent presentation only; the spring-driven numbers come from Rust.
+    states [
+        expanded when root.compact-mode == CompactMode.expanded: {
+            seam.enabled: true;
+        }
+        hidden when root.compact-mode == CompactMode.hidden: {
+            zone.width: Sizes.edge-zone;
+        }
+        peeking when root.compact-mode == CompactMode.peeking: {
+            sidebar.drop-shadow-blur: Sizes.peek-shadow;
+            sidebar.drop-shadow-color: Colors.scrim;
+        }
+    ]
+
     init => {
-        root-keys.focus();
+        web-focus.focus();
     }
 }

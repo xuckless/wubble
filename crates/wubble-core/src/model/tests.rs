@@ -2,10 +2,23 @@ use super::*;
 
 const D: ContainerId = ContainerId::DEFAULT;
 
-fn run(m: Model, c: Command) -> (Model, Vec<Effect>) {
+/// `apply` with the invariants checked, returning every effect.
+fn run_all(m: Model, c: Command) -> (Model, Vec<Effect>) {
     let (m, fx) = apply(m, c);
     m.check().expect("invariants");
     (m, fx)
+}
+
+/// `run_all` without the lifecycle effects, which the lifecycle tests cover.
+fn run(m: Model, c: Command) -> (Model, Vec<Effect>) {
+    let (m, fx) = run_all(m, c);
+    (m, core_effects(fx))
+}
+
+fn core_effects(fx: Vec<Effect>) -> Vec<Effect> {
+    fx.into_iter()
+        .filter(|e| !matches!(e, Effect::Lifecycle { .. }))
+        .collect()
 }
 
 fn open(m: Model, opener: Option<TabId>) -> (Model, TabId) {
@@ -135,8 +148,8 @@ fn new_tab_container_override_and_unknown() {
 
 #[test]
 fn close_prefers_opener_child_then_opener_then_next_then_previous() {
-    // opener child (set up directly: NewTab always activates, so a live opener
-    // relation to a background tab arises only transiently)
+    // opener child (set up directly: a shown NewTab becomes the active tab, so
+    // a live opener relation to a background tab arises only transiently)
     let (mut m, ids) = with_tabs(3);
     m.tabs.get_mut(&ids[2]).unwrap().opener = Some(ids[0]);
     let (m, _) = run(m, Command::ActivateTab(ids[0]));
@@ -152,6 +165,7 @@ fn close_prefers_opener_child_then_opener_then_next_then_previous() {
 
     // opener: closing the opened tab returns to the opener, not the next tab
     let (m, ids) = with_tabs(3);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
     let (m, t) = open(m, Some(ids[0]));
     let (m, fx) = run(m, Command::CloseTab(t));
     assert_eq!(active(&m), Some(ids[0]));
@@ -555,7 +569,7 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
         }
     };
     let index = r.below(8);
-    let cmd = match r.below(18) {
+    let cmd = match r.below(21) {
         0 => return (Command::OpenCommandBar, false),
         1 | 2 => {
             let c = if r.below(3) == 0 { container(r) } else { None };
@@ -619,6 +633,26 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
         },
         14 => return (Command::NewContainer { name: "c".into() }, false),
         15 => container(r).map(Command::DeleteContainer),
+        18 => tab(r).map(Command::RendererGone),
+        19 => tab(r).map(|tab| match r.below(3) {
+            0 => Command::Navigate {
+                tab,
+                url: "n".into(),
+            },
+            1 => Command::UrlChanged {
+                tab,
+                url: "c".into(),
+            },
+            _ => Command::TitleChanged {
+                tab,
+                title: "t".into(),
+            },
+        }),
+        20 => {
+            let pressure = [Pressure::None, Pressure::Moderate, Pressure::Critical][r.below(3)];
+            let now = m.clock + Duration::from_secs(r.below(2000) as u64);
+            return (Command::Tick { now, pressure }, false);
+        }
         _ => tab(r)
             .zip(container(r))
             .map(|(tab, container)| Command::ReopenInContainer { tab, container }),
@@ -694,4 +728,431 @@ fn switching_to_an_empty_space_hides_the_previous_tab() {
     let (m, fx) = run(m, Command::DeleteSpace(s3));
     assert_eq!(m.active_space, s2);
     assert_eq!(fx, vec![Effect::SpaceChanged(s2), Effect::ShowCommandBar]);
+}
+
+// ----- tab fields from the engine, navigation and lifecycle
+
+use crate::lifecycle::Effect as Life;
+use crate::sleep::Pressure;
+use crate::tab::Liveness;
+use std::time::Duration;
+
+fn life(tab: TabId, effect: Life) -> Effect {
+    Effect::Lifecycle { tab, effect }
+}
+
+/// Only the lifecycle effects, in order.
+fn lifecycle_effects(fx: &[Effect]) -> Vec<Effect> {
+    fx.iter()
+        .filter(|e| matches!(e, Effect::Lifecycle { .. }))
+        .cloned()
+        .collect()
+}
+
+fn liveness(m: &Model, t: TabId) -> Liveness {
+    m.tabs[&t].lifecycle.liveness
+}
+
+/// A tick `after` the model's clock.
+fn tick(m: Model, after: Duration) -> (Model, Vec<Effect>) {
+    let now = m.clock + after;
+    run_all(
+        m,
+        Command::Tick {
+            now,
+            pressure: Pressure::None,
+        },
+    )
+}
+
+#[test]
+fn engine_reports_set_url_and_title_without_effects() {
+    let (m, ids) = with_tabs(2);
+    let (m, fx) = run_all(
+        m,
+        Command::UrlChanged {
+            tab: ids[0],
+            url: "https://b.test/x".into(),
+        },
+    );
+    assert_eq!(fx, vec![]);
+    let (m, fx) = run_all(
+        m,
+        Command::TitleChanged {
+            tab: ids[0],
+            title: "B".into(),
+        },
+    );
+    assert_eq!(fx, vec![]);
+    assert_eq!(m.tabs[&ids[0]].url, "https://b.test/x");
+    assert_eq!(m.tabs[&ids[0]].title, "B");
+    assert_eq!(m.tabs[&ids[1]].url, "https://a.test");
+}
+
+#[test]
+fn navigate_sets_the_url_and_asks_the_engine() {
+    let (m, ids) = with_tabs(1);
+    let url = "https://c.test/".to_string();
+    let (m, fx) = run_all(
+        m,
+        Command::Navigate {
+            tab: ids[0],
+            url: url.clone(),
+        },
+    );
+    assert_eq!(fx, vec![Effect::Navigate { tab: ids[0], url }]);
+    assert_eq!(m.tabs[&ids[0]].url, "https://c.test/");
+}
+
+#[test]
+fn tab_commands_for_unknown_tabs_do_nothing() {
+    let (m, _) = with_tabs(1);
+    let ghost = TabId(99);
+    for cmd in [
+        Command::Navigate {
+            tab: ghost,
+            url: "x".into(),
+        },
+        Command::UrlChanged {
+            tab: ghost,
+            url: "x".into(),
+        },
+        Command::TitleChanged {
+            tab: ghost,
+            title: "x".into(),
+        },
+        Command::RendererGone(ghost),
+    ] {
+        let (m2, fx) = run_all(m.clone(), cmd.clone());
+        assert_eq!((m2, fx), (m.clone(), vec![]), "{cmd:?}");
+    }
+}
+
+#[test]
+fn visible_tab_and_live_tabs() {
+    let m = Model::new();
+    assert_eq!((m.visible_tab(), m.live_tabs()), (None, 0));
+    let (m, ids) = with_tabs(3);
+    assert_eq!((m.visible_tab(), m.live_tabs()), (Some(ids[2]), 3));
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run_all(m, Command::SwitchSpace(s2));
+    assert_eq!(m.visible_tab(), None);
+}
+
+#[test]
+fn a_new_tab_hides_the_previous_one() {
+    let (m, ids) = with_tabs(1);
+    let (m, fx) = run_all(
+        m,
+        Command::NewTab {
+            url: "u".into(),
+            container: None,
+            opener: None,
+        },
+    );
+    let new = TabId(2);
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![
+            life(ids[0], Life::CaptureSnapshot),
+            life(ids[0], Life::Hide)
+        ]
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    assert_eq!(liveness(&m, new), Liveness::Active);
+    // The first tab shows nothing: it was never hidden.
+    let (_, fx) = run_all(
+        Model::new(),
+        Command::NewTab {
+            url: "u".into(),
+            container: None,
+            opener: None,
+        },
+    );
+    assert_eq!(lifecycle_effects(&fx), vec![]);
+}
+
+#[test]
+fn activating_hides_the_old_tab_then_shows_the_new() {
+    let (m, ids) = with_tabs(2);
+    let (m, fx) = run_all(m, Command::ActivateTab(ids[0]));
+    assert_eq!(
+        fx,
+        vec![
+            Effect::ActivateTab(ids[0]),
+            life(ids[1], Life::CaptureSnapshot),
+            life(ids[1], Life::Hide),
+            life(ids[0], Life::Show),
+        ]
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Active);
+    assert_eq!(liveness(&m, ids[1]), Liveness::Background);
+}
+
+#[test]
+fn closing_the_active_tab_releases_it_then_shows_the_successor() {
+    let (m, ids) = with_tabs(2);
+    let (m, fx) = run_all(m, Command::CloseTab(ids[1]));
+    assert_eq!(
+        fx,
+        vec![
+            Effect::CloseTab(ids[1]),
+            Effect::ActivateTab(ids[0]),
+            life(ids[1], Life::ReleaseTexture),
+            life(ids[0], Life::Show),
+        ]
+    );
+    assert_eq!(m.live_tabs(), 1);
+    // A hidden tab also drops its snapshot.
+    let (m, ids) = with_tabs(2);
+    let (_, fx) = run_all(m, Command::CloseTab(ids[0]));
+    assert_eq!(
+        fx,
+        vec![
+            Effect::CloseTab(ids[0]),
+            life(ids[0], Life::ReleaseTexture),
+            life(ids[0], Life::ReleaseSnapshot),
+        ]
+    );
+}
+
+#[test]
+fn switching_space_hides_and_shows_across_spaces() {
+    let (m, ids) = with_tabs(1);
+    let (m, s2) = add_space(m, D);
+    // Into an empty Space: only the hide.
+    let (m, fx) = run_all(m, Command::SwitchSpace(s2));
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![
+            life(ids[0], Life::CaptureSnapshot),
+            life(ids[0], Life::Hide)
+        ]
+    );
+    let (m, b) = open(m, None);
+    // Back into a Space with a tab: hide the other Space's tab, show ours.
+    let (m, fx) = run_all(m, Command::SwitchSpace(s0()));
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![
+            life(b, Life::CaptureSnapshot),
+            life(b, Life::Hide),
+            life(ids[0], Life::Show),
+        ]
+    );
+    assert_eq!(m.visible_tab(), Some(ids[0]));
+}
+
+#[test]
+fn ticks_freeze_then_discard_hidden_tabs_but_keep_pinned_ones() {
+    let (m, ids) = with_tabs(3);
+    let (m, _) = run_all(m, Command::PinTab(ids[0]));
+    assert_eq!(m.tabs[&ids[0]].lifecycle.pin, crate::lifecycle::Pin::Pinned);
+    let (m, fx) = tick(m, Duration::from_secs(61));
+    assert_eq!(
+        fx,
+        vec![life(ids[0], Life::Freeze), life(ids[1], Life::Freeze)]
+    );
+    let (m, fx) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(
+        fx,
+        vec![
+            life(ids[1], Life::Discard),
+            life(ids[1], Life::ReleaseTexture)
+        ]
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Frozen);
+    assert_eq!(liveness(&m, ids[1]), Liveness::Discarded);
+    assert_eq!(liveness(&m, ids[2]), Liveness::Active);
+    assert_eq!(m.live_tabs(), 2);
+}
+
+#[test]
+fn activating_a_discarded_tab_restores_it() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+    let (m, fx) = run_all(m, Command::ActivateTab(ids[0]));
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![
+            life(ids[1], Life::CaptureSnapshot),
+            life(ids[1], Life::Hide),
+            life(ids[0], Life::Restore),
+            life(ids[0], Life::Show),
+        ]
+    );
+    assert_eq!(m.live_tabs(), 2);
+}
+
+#[test]
+fn a_hidden_tab_whose_renderer_died_is_discarded() {
+    let (m, ids) = with_tabs(2);
+    let (m, fx) = run_all(m, Command::RendererGone(ids[0]));
+    assert_eq!(fx, vec![life(ids[0], Life::ReleaseTexture)]);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+    // The visible one reloads in place.
+    let (m, fx) = run_all(m, Command::RendererGone(ids[1]));
+    assert_eq!(fx, vec![life(ids[1], Life::Restore)]);
+    assert_eq!(liveness(&m, ids[1]), Liveness::Active);
+}
+
+#[test]
+fn hides_after_a_tick_use_the_ticked_clock() {
+    let (m, ids) = with_tabs(1);
+    let later = m.clock + Duration::from_secs(3600);
+    let (m, _) = run_all(
+        m,
+        Command::Tick {
+            now: later,
+            pressure: Pressure::None,
+        },
+    );
+    let (m, _) = open(m, None);
+    assert_eq!(m.tabs[&ids[0]].lifecycle.hidden_since, Some(later));
+}
+
+#[test]
+fn a_popup_from_a_hidden_tab_goes_next_to_it_and_stays_hidden() {
+    let (m, ids) = with_tabs(2);
+    // Same Space, opener hidden: placed after it, the visible tab stays.
+    let (m, p) = open(m, Some(ids[0]));
+    assert_eq!(m.order(s0()), vec![ids[0], p, ids[1]]);
+    assert_eq!(m.visible_tab(), Some(ids[1]));
+    assert_eq!(liveness(&m, p), Liveness::Background);
+    // Opener in another Space: into that Space, the active Space unchanged.
+    let (m, s2) = add_space(m, D);
+    let (m, _) = run(m, Command::SwitchSpace(s2));
+    let (m, w) = open(m, None);
+    let (m, fx) = run_all(
+        m,
+        Command::NewTab {
+            url: "https://pop.test".into(),
+            container: None,
+            opener: Some(ids[1]),
+        },
+    );
+    let q = TabId(m.next_tab - 1);
+    assert!(matches!(core_effects(fx.clone())[..], [Effect::CreateTab { tab, .. }] if tab == q));
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![life(q, Life::CaptureSnapshot), life(q, Life::Hide)]
+    );
+    assert_eq!(m.order(s0()), vec![ids[0], p, ids[1], q]);
+    assert_eq!(m.order(s2), vec![w]);
+    assert_eq!((m.active_space, m.visible_tab()), (s2, Some(w)));
+    assert_eq!(active(&m), Some(w));
+    assert_eq!(m.spaces[0].active, Some(ids[1]));
+}
+
+#[test]
+fn a_loading_tab_is_not_put_to_sleep_until_the_load_ends() {
+    let (m, ids) = with_tabs(2);
+    let loading = |loading| Command::LoadingChanged {
+        tab: ids[0],
+        loading,
+    };
+    let (m, fx) = run_all(m, loading(true));
+    assert_eq!(fx, vec![]);
+    let (m, fx) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(fx, vec![]);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    let (m, _) = run_all(m, loading(false));
+    let (m, fx) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(
+        fx,
+        vec![
+            life(ids[0], Life::Discard),
+            life(ids[0], Life::ReleaseTexture)
+        ]
+    );
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+}
+
+#[test]
+fn reopening_a_pinned_tab_keeps_its_lifecycle_pinned() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::PinTab(ids[0]));
+    let (m, _) = run(m, Command::NewContainer { name: "W".into() });
+    let work = m.containers[1].id;
+    let (m, _) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: ids[0],
+            container: work,
+        },
+    );
+    let new = m.spaces[0].pinned[0];
+    assert_eq!(m.tabs[&new].lifecycle.pin, crate::lifecycle::Pin::Pinned);
+    let (m, _) = run(m, Command::UnpinTab(new));
+    assert_eq!(m.tabs[&new].lifecycle.pin, crate::lifecycle::Pin::Unpinned);
+}
+
+/// The clock is not stored, so a rebuilt model takes the original's.
+fn rebuild(m: &Model) -> Result<Model, String> {
+    let mut rebuilt = Model::from_parts(
+        m.spaces.clone(),
+        m.containers.clone(),
+        m.tabs.values().cloned().collect(),
+        m.active_space,
+    )?;
+    rebuilt.clock = m.clock;
+    Ok(rebuilt)
+}
+
+#[test]
+fn from_parts_of_new_is_new() {
+    let m = Model::new();
+    assert_eq!(rebuild(&m), Ok(m));
+}
+
+#[test]
+fn from_parts_counters_continue_after_max_id() {
+    let (m, _) = with_tabs(3);
+    let (m, _) = run(
+        m,
+        Command::NewFolder {
+            space: s0(),
+            name: "F".into(),
+        },
+    );
+    let (m, _) = run(m, Command::NewContainer { name: "C".into() });
+    let (m, _) = add_space(m, D);
+    let rebuilt = rebuild(&m).unwrap();
+    assert_eq!(rebuilt, m);
+    // The same command on both yields the same ids.
+    let cmds = [
+        Command::NewFolder {
+            space: s0(),
+            name: "G".into(),
+        },
+        Command::NewContainer { name: "D".into() },
+        Command::NewTab {
+            url: "https://b.test".into(),
+            container: None,
+            opener: None,
+        },
+        Command::NewSpace {
+            name: "T".into(),
+            tint: Rgb(0, 0, 0),
+            container: D,
+        },
+    ];
+    let (mut a, mut b) = (m, rebuilt);
+    for c in cmds {
+        a = apply(a, c.clone()).0;
+        b = apply(b, c).0;
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn from_parts_rejects_invalid_parts() {
+    let (m, _) = with_tabs(1);
+    let mut tabs: Vec<Tab> = m.tabs.values().cloned().collect();
+    tabs.clear();
+    let r = Model::from_parts(m.spaces.clone(), m.containers.clone(), tabs, m.active_space);
+    assert!(r.is_err(), "placed tab missing from tabs");
+    let r = Model::from_parts(m.spaces.clone(), m.containers.clone(), vec![], SpaceId(99));
+    assert!(r.is_err(), "unknown active space");
 }

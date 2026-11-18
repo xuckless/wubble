@@ -2,6 +2,8 @@
 
 slint::include_modules!();
 
+pub mod driver;
+
 #[cfg(test)]
 mod tests {
     use super::*;

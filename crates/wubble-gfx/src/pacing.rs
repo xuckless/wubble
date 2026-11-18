@@ -2,7 +2,8 @@
 //!
 //! Interim pacing (M0 first frame): CEF paints on its own timer at
 //! `windowless_frame_rate`, which wubble sets to the display refresh rate.
-//! Compositor-driven begin-frames need a welding fork (TODO.md, "Frame pacing").
+//! Compositor-driven begin-frames are plumbed through the welding fork but
+//! still off (TODO.md, "Frame pacing").
 
 use std::time::Duration;
 
@@ -22,18 +23,14 @@ pub fn frame_rate_for(refresh_mhz: Option<u32>) -> u32 {
     }
 }
 
-/// Software `OnPaint` frames cannot be counted yet: welding's Linux producer
-/// has no `on_paint`, so CEF's software frames are dropped unseen and a broken
-/// GPU path shows up as `accelerated=0` instead. Counting them needs the
-/// welding fork (TODO.md, "CPU fallback count"). Printed with every summary.
-pub const CPU_FALLBACK_UNOBSERVED: &str =
-    "cpu_fallback not observable: welding has no OnPaint, so 0 is not a measurement";
-
-/// Counts of zero-copy frames handed to the window, fed by the host loop.
+/// Counts of frames, fed by the host loop.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameStats {
     /// Zero-copy frames (GPU texture import) set on the window.
     pub accelerated: u64,
+    /// CPU `OnPaint` frames CEF sent instead of a shared texture (never
+    /// shown). `None` while the producer does not count them (not Linux).
+    pub cpu_fallback: Option<u64>,
     interval_sum: Duration,
     intervals: u64,
 }
@@ -49,6 +46,17 @@ impl FrameStats {
         }
     }
 
+    /// The producer's running CPU fallback total. Returns how many fallback
+    /// frames are new since the last call, for the host to log.
+    pub fn record_cpu_fallback(&mut self, total: Option<u64>) -> u64 {
+        let new = match (total, self.cpu_fallback) {
+            (Some(total), seen) => total.saturating_sub(seen.unwrap_or(0)),
+            (None, _) => 0,
+        };
+        self.cpu_fallback = total;
+        new
+    }
+
     /// Mean time between presented frames, 0 when fewer than two frames.
     pub fn avg_interval_ms(&self) -> f64 {
         if self.intervals == 0 {
@@ -57,12 +65,15 @@ impl FrameStats {
         self.interval_sum.as_secs_f64() * 1000.0 / self.intervals as f64
     }
 
-    /// The `--smoke frames` result line. Every presented frame is accelerated
-    /// and `cpu_fallback` is fixed at 0 (see [`CPU_FALLBACK_UNOBSERVED`]).
-    /// The interval is informational only.
+    /// The `--smoke frames` result line. Every presented frame is
+    /// accelerated; `cpu_fallback` is the measured count, `n/a` where it is
+    /// not counted. The interval is informational only.
     pub fn summary_line(&self) -> String {
+        let cpu = self
+            .cpu_fallback
+            .map_or_else(|| "n/a".to_owned(), |n| n.to_string());
         format!(
-            "smoke: frames={0} accelerated={0} cpu_fallback=0 avg_interval_ms={1:.1}",
+            "smoke: frames={0} accelerated={0} cpu_fallback={cpu} avg_interval_ms={1:.1}",
             self.accelerated,
             self.avg_interval_ms()
         )
@@ -105,7 +116,37 @@ mod tests {
         assert!(stats.is_success());
         assert_eq!(
             stats.summary_line(),
-            "smoke: frames=3 accelerated=3 cpu_fallback=0 avg_interval_ms=9.0"
+            "smoke: frames=3 accelerated=3 cpu_fallback=n/a avg_interval_ms=9.0"
         );
+    }
+
+    #[test]
+    fn cpu_fallback_is_the_measured_total() {
+        let mut stats = FrameStats::default();
+        assert_eq!(stats.record_cpu_fallback(Some(0)), 0);
+        assert_eq!(stats.record_cpu_fallback(Some(2)), 2);
+        assert_eq!(stats.record_cpu_fallback(Some(2)), 0);
+        stats.record_accelerated(None);
+        assert_eq!(
+            stats.summary_line(),
+            "smoke: frames=1 accelerated=1 cpu_fallback=2 avg_interval_ms=0.0"
+        );
+        // Fallback frames never count as success.
+        assert!(stats.is_success());
+        assert!(
+            !FrameStats {
+                cpu_fallback: Some(5),
+                ..FrameStats::default()
+            }
+            .is_success()
+        );
+    }
+
+    #[test]
+    fn uncounted_cpu_fallback_reads_not_available() {
+        let mut stats = FrameStats::default();
+        assert_eq!(stats.record_cpu_fallback(None), 0);
+        assert_eq!(stats.cpu_fallback, None);
+        assert!(stats.summary_line().contains("cpu_fallback=n/a "));
     }
 }

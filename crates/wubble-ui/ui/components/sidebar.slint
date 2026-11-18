@@ -1,4 +1,4 @@
-import { Colors, Sizes, Spacing } from "../tokens.slint";
+import { Colors, Radius, Sizes, Spacing } from "../tokens.slint";
 import { Glass } from "glass.slint";
 import { TabItem, SpaceItem } from "model.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -27,6 +27,8 @@ export component Sidebar inherits Glass {
     ];
     in property <int> active-tab-id: 3;
     in property <int> active-space-id: 1;
+    // Position of the active-Space ring, in dot pitches. Driven by a spring.
+    in property <float> space-indicator: 0;
 
     callback tab-activated(int);
     callback tab-closed(int);
@@ -84,14 +86,26 @@ export component Sidebar inherits Glass {
             }
         }
 
-        HorizontalLayout {
-            spacing: Spacing.s3;
-            alignment: center;
-            for space in root.spaces: SpaceDot {
-                item: space;
-                active: space.id == root.active-space-id;
-                activated => {
-                    root.space-switched(space.id);
+        // Dots sit on a fixed pitch so the ring can slide between them.
+        Rectangle {
+            height: Sizes.space-dot;
+            Rectangle {
+                width: max(0px, root.spaces.length * Sizes.space-pitch - Spacing.s3);
+                x: (parent.width - self.width) / 2;
+                for space[index] in root.spaces: SpaceDot {
+                    x: index * Sizes.space-pitch;
+                    item: space;
+                    activated => {
+                        root.space-switched(space.id);
+                    }
+                }
+                Rectangle {
+                    x: root.space-indicator * Sizes.space-pitch;
+                    width: Sizes.space-dot;
+                    height: Sizes.space-dot;
+                    border-radius: Radius.pill;
+                    border-width: Sizes.ring-width;
+                    border-color: Colors.ink;
                 }
             }
         }
