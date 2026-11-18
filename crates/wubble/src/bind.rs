@@ -1,9 +1,11 @@
-//! The only code that writes the shell's models: each call replaces them
-//! wholesale from a derived value (tab counts are small).
+//! The only code that writes the shell's models: each call makes them equal
+//! to a derived value. They are synced in place rather than replaced, so a
+//! re-render (a title, the loading flag, the lifecycle tick every few
+//! seconds) does not rebuild every row and drop its hover, press or drag.
 
 use std::rc::Rc;
 
-use slint::{Color, ModelRc, VecModel};
+use slint::{Color, Model, ModelRc, VecModel};
 use wubble_core::space::Rgb;
 use wubble_engine::nav::Page;
 use wubble_ui::{AppWindow, CommandResult, SpaceItem, TabItem};
@@ -15,41 +17,55 @@ fn color(Rgb(r, g, b): Rgb) -> Color {
     Color::from_rgb_u8(r, g, b)
 }
 
-fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
-    ModelRc::from(Rc::new(VecModel::from(items)))
+/// `rows` into the model `current` already is, when it is one of ours;
+/// otherwise (the first render) a new one through `set`.
+fn sync<T: Clone + PartialEq + 'static>(
+    current: ModelRc<T>,
+    rows: Vec<T>,
+    set: impl FnOnce(ModelRc<T>),
+) {
+    match current.as_any().downcast_ref::<VecModel<T>>() {
+        Some(model) => wubble_ui::sync(model, rows),
+        None => set(ModelRc::from(Rc::new(VecModel::from(rows)))),
+    }
 }
 
-fn tab_items(rows: &[TabRow]) -> ModelRc<TabItem> {
-    model(
-        rows.iter()
-            .map(|r| TabItem {
-                id: r.id,
-                title: r.title.as_str().into(),
-                url: r.url.as_str().into(),
-                // No favicon is fetched yet: the row shows the neutral glyph.
-                favicon: Default::default(),
-            })
-            .collect(),
-    )
+fn tab_items(rows: &[TabRow]) -> Vec<TabItem> {
+    rows.iter()
+        .map(|r| TabItem {
+            id: r.id,
+            title: r.title.as_str().into(),
+            url: r.url.as_str().into(),
+            // No favicon is fetched yet: the row shows the neutral glyph.
+            favicon: Default::default(),
+        })
+        .collect()
 }
 
 pub fn render(window: &AppWindow, v: &ShellView) {
-    window.set_pinned_tabs(tab_items(&v.pinned));
-    window.set_tabs(tab_items(&v.tabs));
-    window.set_spaces(model(
-        v.spaces
-            .iter()
-            .map(|s| SpaceItem {
-                id: s.id,
-                name: s.name.as_str().into(),
-                tint: color(s.tint),
-            })
-            .collect(),
-    ));
+    sync(window.get_pinned_tabs(), tab_items(&v.pinned), |m| {
+        window.set_pinned_tabs(m)
+    });
+    sync(window.get_tabs(), tab_items(&v.tabs), |m| {
+        window.set_tabs(m)
+    });
+    let spaces = v
+        .spaces
+        .iter()
+        .map(|s| SpaceItem {
+            id: s.id,
+            name: s.name.as_str().into(),
+            tint: color(s.tint),
+        })
+        .collect();
+    sync(window.get_spaces(), spaces, |m| window.set_spaces(m));
     window.set_active_tab_id(v.active_tab);
     window.set_active_space_id(v.active_space);
     window.set_address_host(v.host.as_str().into());
     window.set_address_path(v.path.as_str().into());
+    // Rows synced in place change no property, so no `changed` handler tells
+    // the driver: tell it here.
+    window.invoke_shell_model_changed();
 }
 
 /// Back and forward follow the visible view's history (none without a view).
@@ -59,14 +75,16 @@ pub fn render_history(window: &AppWindow, page: Option<&Page>) {
 }
 
 pub fn render_bar(window: &AppWindow, rows: &[BarRow]) {
-    window.set_command_results(model(
-        rows.iter()
-            .map(|r| CommandResult {
-                kind: r.kind,
-                title: r.title.as_str().into(),
-                subtitle: r.subtitle.as_str().into(),
-                shortcut: r.shortcut.as_str().into(),
-            })
-            .collect(),
-    ));
+    let rows = rows
+        .iter()
+        .map(|r| CommandResult {
+            kind: r.kind,
+            title: r.title.as_str().into(),
+            subtitle: r.subtitle.as_str().into(),
+            shortcut: r.shortcut.as_str().into(),
+        })
+        .collect();
+    sync(window.get_command_results(), rows, |m| {
+        window.set_command_results(m)
+    });
 }
