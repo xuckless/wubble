@@ -1,0 +1,24 @@
+import { Colors, Radius, Sizes, Type } from "../tokens.slint";
+import { TabItem } from "model.slint";
+import { RowBase } from "row-base.slint";
+
+export component PinnedTile inherits RowBase {
+    in property <TabItem> item;
+
+    width: Sizes.pinned-tile;
+    height: Sizes.pinned-tile;
+    border-radius: Radius.md;
+
+    Rectangle {
+        width: Sizes.glyph + Sizes.glyph;
+        height: Sizes.glyph + Sizes.glyph;
+        border-radius: Radius.sm;
+        background: root.item.tint;
+        Text {
+            text: root.item.glyph;
+            color: Colors.on-film;
+            font-size: Type.body-lg;
+            font-weight: Type.semibold;
+        }
+    }
+}

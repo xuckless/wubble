@@ -1,0 +1,64 @@
+import { Colors, Motion, Radius, Sizes, Spacing, Type } from "../tokens.slint";
+import { TabItem } from "model.slint";
+import { RowBase } from "row-base.slint";
+
+export component TabRow inherits RowBase {
+    in property <TabItem> item;
+    callback closed();
+
+    HorizontalLayout {
+        padding-left: Spacing.s3;
+        padding-right: Spacing.s2;
+        spacing: Spacing.s3;
+        alignment: stretch;
+
+        Rectangle {
+            width: Sizes.glyph;
+            height: Sizes.glyph;
+            border-radius: Radius.xs;
+            background: root.item.tint;
+            Text {
+                text: root.item.glyph;
+                color: Colors.on-film;
+                font-size: Type.caption;
+                font-weight: Type.semibold;
+            }
+        }
+
+        Text {
+            text: root.item.title;
+            color: root.active ? Colors.ink : Colors.mist;
+            font-size: Type.body;
+            font-weight: root.active ? Type.medium : Type.regular;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        close := Rectangle {
+            visible: root.hovered || root.active;
+            width: Sizes.icon-button;
+            height: Sizes.icon-button;
+            border-radius: Radius.xs;
+            background: transparent;
+            animate background { duration: Motion.fast; }
+            states [
+                pressed when close-ta.pressed: {
+                    background: Colors.press-fill;
+                }
+                hover when close-ta.has-hover: {
+                    background: Colors.hover-fill;
+                }
+            ]
+            Text {
+                text: "×";
+                color: Colors.haze;
+                font-size: Type.body-lg;
+            }
+            close-ta := TouchArea {
+                clicked => {
+                    root.closed();
+                }
+            }
+        }
+    }
+}

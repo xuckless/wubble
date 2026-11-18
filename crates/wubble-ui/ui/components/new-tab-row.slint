@@ -1,0 +1,25 @@
+import { Colors, Radius, Sizes, Spacing, Type } from "../tokens.slint";
+import { RowBase } from "row-base.slint";
+
+export component NewTabRow inherits RowBase {
+    HorizontalLayout {
+        padding-left: Spacing.s3;
+        spacing: Spacing.s3;
+
+        Text {
+            text: "+";
+            color: Colors.haze;
+            font-size: Type.title;
+            width: Sizes.glyph;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: "New tab";
+            color: Colors.mist;
+            font-size: Type.body;
+            vertical-alignment: center;
+        }
+    }
+}

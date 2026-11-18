@@ -1,0 +1,86 @@
+import { Spacing } from "../tokens.slint";
+import { Glass } from "glass.slint";
+import { TabItem, SpaceItem } from "model.slint";
+import { AddressPill } from "address-pill.slint";
+import { PinnedTile } from "pinned-tile.slint";
+import { TabRow } from "tab-row.slint";
+import { NewTabRow } from "new-tab-row.slint";
+import { SpaceDot } from "space-dot.slint";
+
+export component Sidebar inherits Glass {
+    in property <string> address-host;
+    in property <string> address-path;
+    in property <[TabItem]> pinned-tabs;
+    in property <[TabItem]> tabs;
+    in property <[SpaceItem]> spaces;
+    in property <int> active-tab-id;
+    in property <int> active-space-id;
+
+    callback tab-activated(int);
+    callback tab-closed(int);
+    callback new-tab-requested();
+    callback space-switched(int);
+    callback address-activated();
+
+    VerticalLayout {
+        padding: Spacing.s3;
+        spacing: Spacing.s3;
+
+        AddressPill {
+            host: root.address-host;
+            path: root.address-path;
+            activated => {
+                root.address-activated();
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.s2;
+            alignment: start;
+            for tab in root.pinned-tabs: PinnedTile {
+                item: tab;
+                active: tab.id == root.active-tab-id;
+                activated => {
+                    root.tab-activated(tab.id);
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            VerticalLayout {
+                spacing: Spacing.s1;
+                alignment: start;
+                for tab in root.tabs: TabRow {
+                    item: tab;
+                    active: tab.id == root.active-tab-id;
+                    activated => {
+                        root.tab-activated(tab.id);
+                    }
+                    closed => {
+                        root.tab-closed(tab.id);
+                    }
+                }
+            }
+        }
+
+        NewTabRow {
+            activated => {
+                root.new-tab-requested();
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.s3;
+            alignment: center;
+            for space in root.spaces: SpaceDot {
+                item: space;
+                active: space.id == root.active-space-id;
+                activated => {
+                    root.space-switched(space.id);
+                }
+            }
+        }
+    }
+}

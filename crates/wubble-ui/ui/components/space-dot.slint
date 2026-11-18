@@ -1,0 +1,39 @@
+import { Colors, Motion, Sizes, Spacing, Radius } from "../tokens.slint";
+import { SpaceItem } from "model.slint";
+
+export component SpaceDot inherits Rectangle {
+    in property <SpaceItem> item;
+    in property <bool> active: false;
+    callback activated();
+
+    width: Sizes.space-dot;
+    height: Sizes.space-dot;
+    border-radius: Radius.pill;
+    border-width: Sizes.hairline + Sizes.hairline;
+    border-color: transparent;
+    animate border-color { duration: Motion.fast; }
+
+    states [
+        active when root.active: {
+            border-color: Colors.ink;
+        }
+        hover when ta.has-hover: {
+            border-color: Colors.mist;
+        }
+    ]
+
+    Rectangle {
+        x: Spacing.s1 / 2;
+        y: Spacing.s1 / 2;
+        width: parent.width - Spacing.s1;
+        height: parent.height - Spacing.s1;
+        border-radius: Radius.pill;
+        background: root.item.tint;
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.activated();
+        }
+    }
+}

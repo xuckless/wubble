@@ -1,20 +1,78 @@
-// Placeholder shell. Real layout comes from the UX pack (see /ux).
+import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
+import { TabItem, SpaceItem } from "components/model.slint";
+import { Sidebar } from "components/sidebar.slint";
+
+export { TabItem, SpaceItem }
 
 export component AppWindow inherits Window {
     title: "wubble";
-    preferred-width: 1280px;
-    preferred-height: 800px;
-    background: #111114;
+    preferred-width: Sizes.window-width;
+    preferred-height: Sizes.window-height;
+    background: Colors.abyss;
+    default-font-family: Type.ui;
+    default-font-size: Type.body;
 
     // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
     in property <image> web-frame;
 
+    in property <string> address-host: "wubble.dev";
+    in property <string> address-path: "/start";
+    in property <[TabItem]> pinned-tabs: [
+        { id: 1, title: "Mail", glyph: "M", tint: Colors.sky },
+        { id: 2, title: "Docs", glyph: "D", tint: Colors.mint },
+    ];
+    in property <[TabItem]> tabs: [
+        { id: 3, title: "Welcome", glyph: "W", tint: Colors.lilac },
+        { id: 4, title: "A tab with a very long title that must elide", glyph: "A", tint: Colors.blush },
+        { id: 5, title: "Search", glyph: "S", tint: Colors.coral },
+    ];
+    in property <[SpaceItem]> spaces: [
+        { id: 1, name: "Home", tint: Colors.sky },
+        { id: 2, name: "Work", tint: Colors.lilac },
+        { id: 3, name: "Play", tint: Colors.mint },
+    ];
+    in property <int> active-tab-id: 3;
+    in property <int> active-space-id: 1;
+
+    callback tab-activated(int);
+    callback tab-closed(int);
+    callback new-tab-requested();
+    callback space-switched(int);
+    callback address-activated();
+
     HorizontalLayout {
-        sidebar := Rectangle {
-            width: 240px;
-            background: #18181c;
+        padding: Spacing.s2;
+        spacing: Spacing.s2;
+
+        Sidebar {
+            width: Sizes.sidebar-width;
+            address-host: root.address-host;
+            address-path: root.address-path;
+            pinned-tabs: root.pinned-tabs;
+            tabs: root.tabs;
+            spaces: root.spaces;
+            active-tab-id: root.active-tab-id;
+            active-space-id: root.active-space-id;
+            tab-activated(id) => {
+                root.tab-activated(id);
+            }
+            tab-closed(id) => {
+                root.tab-closed(id);
+            }
+            new-tab-requested => {
+                root.new-tab-requested();
+            }
+            space-switched(id) => {
+                root.space-switched(id);
+            }
+            address-activated => {
+                root.address-activated();
+            }
         }
-        content := Rectangle {
+
+        Rectangle {
+            border-radius: Radius.md;
+            clip: true;
             Image {
                 width: 100%;
                 height: 100%;

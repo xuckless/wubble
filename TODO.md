@@ -10,6 +10,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 
 | Topic | Decision |
 |---|---|
+| Light theme | Only Ink, Sky and a few ground/Mist values come from the pack; the other light colours (Deep, Haze, Lilac, Blush, Mint, Coral, fills) are our own picks in `tokens.slint`, to be checked by eye. Theme is `Colors.light`, a bool inside each colour token, not a second token set |
+| Slint ids | Slint has only `int` (i32), so `TabItem.id` / `SpaceItem.id` are `int`; the wiring item converts from core `u64`/`u32` with `try_from`, never truncating silently |
 | Licence | GPL-3.0-only (matches Slint's GPL option; Chromium/CEF are BSD and compatible) |
 | Platforms | Daily-drive targets: Linux (lead, Wayland) and macOS, both built locally. Windows is built and tested on CI runners only and may trail by a milestone |
 | Engine, phase 1 | Prebuilt CEF 154 via the `cef` crate (stock Chromium, **not** ungoogled) |
@@ -102,8 +104,8 @@ Each item is done when it works on Linux and macOS; Windows is verified on CI.
 The pack sets colour, glass, type and motion feel. Layouts on its Browser board are illustrative; exact sizes quoted below are starting points.
 
 Foundations
-- [ ] Tokens as Slint globals: ground (Abyss/Deep/Shell/Rim), ink (Ink/Mist/Haze), film (Sky/Lilac/Blush/Mint), Coral; radius 6/10/14/20/28/pill; 4 pt spacing; light theme fills
-- [ ] Fonts embedded: Fredoka (display, 32 px+), Geist (interface), Geist Mono (addresses)
+- [x] Tokens as Slint globals: ground (Abyss/Deep/Shell/Rim), ink (Ink/Mist/Haze), film (Sky/Lilac/Blush/Mint), Coral; radius 6/10/14/20/28/pill; 4 pt spacing; light theme fills
+- [x] Fonts embedded: Fredoka (display, 32 px+), Geist (interface), Geist Mono (addresses)
 - [ ] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim)
 - [ ] Glass quality governor: measures frame time and steps blur quality down/up; exposed as explicit levels, not ad-hoc flags
 - [ ] Film rim (conic soap-film ring) on hover, press, drag and focus only
