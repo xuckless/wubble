@@ -1,0 +1,5 @@
+# cef-dll-sys copies libcef.so and its resources into target/<profile>/ but sets
+# no rpath. `$ORIGIN` covers wubble and wubble-helper; `$ORIGIN/..` covers test
+# binaries in target/<profile>/deps/.
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/.."]

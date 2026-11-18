@@ -36,12 +36,22 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Search | First-run choice between Google and DuckDuckGo. Suggestions are local (tabs/history/bookmarks); live engine suggestions exist behind a flag, off by default, and never send typed addresses |
 | Network on its own | No telemetry. Crash reports are opt-in and open a GitHub issue; designed at ship time (M7) |
 | Tab sleeping | Freeze after 1 min hidden, discard after 15 min, discard immediately under critical memory pressure. Pinned tabs freeze but never discard. Busy tabs (audio, capture) are left alone |
+| CEF sandbox | Off on Linux for now: welding `CefSandboxMode::UnsandboxedTrustedContent` (`no_sandbox=1`) in both `wubble-engine` (`SANDBOX`) and `wubble-helper`. The constant is duplicated on purpose (the helper must stay tiny and cannot depend on `wubble-engine`, which pulls in wgpu); the sandbox item must change both. Turned on by the M1 item "Sandbox enabled on all platforms" |
+| CEF cache directory | Always wubble's own `root_cache_path`, never CEF's shared default `~/.config/cef_user_data` (its process-singleton lock made concurrent runs fail or crash). Browser: `$XDG_DATA_HOME/wubble/cef`, else `~/.local/share/wubble/cef` (Linux, via the `Platform` trait; macOS/Windows not yet). `--smoke boot`: a fresh per-process temp directory, removed on exit, so concurrent smokes never share the lock. Second-instance handling (handing a relaunch to the running browser) is not built yet |
+| CEF message pump (interim) | A repeating 8 ms `slint::Timer` calls `Engine::tick` (`do_message_loop_work`), with CEF's `external_message_pump` on. Not schedule-driven (`OnScheduleMessagePumpWork`) because welding's `CefRuntime` owns the CEF `App` and exposes no browser-process handler, and the welding producers need that runtime. The same polled pump is what welding's README and the cef-rs `osr` example use. Replaced by compositor-driven ticks in "Frame pacing" |
+| Shared GPU device | `wubble-gfx::GpuContext` creates the one wgpu device (Vulkan, high-performance non-CPU adapter, `welding::build_dmabuf_capable_device` with Slint's own device descriptor) and hands it to Slint with `BackendSelector::require_wgpu_30(WGPUConfiguration::Manual)`, renderer `femtovg-wgpu`. Not the rendering notifier: Slint's own device lacks the dmabuf extensions. One handle is leaked at exit because Slint drops its copy during thread-local teardown, after wgpu-core's thread-locals (debug builds abort otherwise) |
+| Frame copy | welding imports CEF's dmabuf as `Bgra8UnormSrgb` with `TEXTURE_BINDING \| COPY_SRC`; Slint accepts only `Rgba8Unorm(Srgb)` with `TEXTURE_BINDING \| RENDER_ATTACHMENT`. So each frame gets one GPU blit (ported wgpu fullscreen-triangle shader) into a ring of 2 `Rgba8UnormSrgb` targets, each wrapped once as a `slint::Image`; alternating keeps `web-frame` changing. GPU to GPU, no CPU readback; one extra full-frame copy to account for in the M0 measurement |
+| Chromium GPU on Linux | `enable-features=Vulkan` for every wubble process (`Platform::CHROMIUM_SWITCHES`). Without it NVIDIA 615 (Wayland and X11) produces no accelerated paint: Chromium's GL path cannot draw into the dmabuf shared images ("Unable to initialize SkSurface"). Not yet run on Mesa (Intel/AMD), where welding works without it |
+| CEF frame rate (interim) | welding creates browsers at a fixed `windowless_frame_rate` 60 with `external_begin_frame_enabled` 0 and keeps the `Browser` private. wubble sets `set_windowless_frame_rate` right after creation to the display refresh (current monitor, else the fastest connected one, since Wayland reports the monitor late), capped at 240. **External begin-frames are not available through welding**; they need a fork (ADR item). The 8 ms pump takes at most one frame per tick, so presentation is capped near 125 fps until "Frame pacing" lands |
+| CPU fallback count | welding's Linux producer implements only `on_accelerated_paint`, no `on_paint`, so `cpu_fallback` is printed as a fixed 0 (the smoke says on stderr that it is not observable) and a broken GPU path shows as `accelerated=0`. Counting real `OnPaint` frames needs a welding fork |
+| View close | welding reports no browser-closed event. A closing view polls `cef::browser_host_get_browser_by_identifier(id)` each pump and reports `BrowserClosed` to the engine lifecycle once it is `None` (verified on Linux) |
+| Helper binary | `wubble-helper` is a separate package, so `cargo build --workspace` must run before `cargo run -p wubble`; the engine refuses to start with a message saying so if the helper is missing |
 
 ## Layout
 
 ```
 crates/wubble          main binary: wires engine + gfx + ui
-crates/wubble-helper   CEF subprocess entry point (renderer/GPU/utility), no Slint or wgpu
+crates/wubble-helper   CEF subprocess entry point (renderer/GPU/utility), no Slint
 crates/wubble-core     tabs, spaces, sleep policy, session — pure logic, unit-tested
 crates/wubble-engine   the only crate that names CEF types
 crates/wubble-gfx      the only crate that touches native texture handles
@@ -60,17 +70,17 @@ Exit: one live page inside the Slint window at display refresh rate, with zero C
 copies, on Linux/Wayland/NVIDIA. Nothing else starts until this passes.
 
 - [x] Workspace skeleton; `cargo check --workspace` passes against prebuilt CEF
-- [ ] CEF init + external message pump integrated with Slint's winit event loop
-- [ ] `wubble-helper` runs `execute_process`; subprocesses start from it
-- [ ] Linux: `OnAcceleratedPaint` dmabuf → Vulkan external memory → `wgpu::Texture` on Slint's device
-- [ ] Texture → `slint::Image` → `AppWindow.web-frame`
-- [ ] Confirm which Slint renderer accepts wgpu textures at full speed (femtovg-wgpu vs vello vs skia-vulkan)
+- [x] CEF init + external message pump integrated with Slint's winit event loop (`wubble --smoke boot` checks it)
+- [x] `wubble-helper` runs `execute_process`; subprocesses start from it
+- [x] Linux: `OnAcceleratedPaint` dmabuf → Vulkan external memory → `wgpu::Texture` on Slint's device (`wubble --smoke frames=300` checks it)
+- [x] Texture → `slint::Image` → `AppWindow.web-frame` (through one GPU blit, see "Frame copy")
+- [~] Confirm which Slint renderer accepts wgpu textures at full speed (femtovg-wgpu vs vello vs skia-vulkan): femtovg-wgpu works with a shared Manual device; speed not yet measured
 - [ ] **Glass spike**: backdrop blur + saturation of live web content behind a Slint panel at 120 Hz. If Slint can't do it natively, `wubble-gfx` renders the blurred backdrop as its own wgpu pass and hands Slint a second texture
 - [ ] **Spring spike**: one per-frame physics-driven property (follow spring k 300 / c 15) with no missed frames while a page scrolls
 - [ ] Transparent window + compositor blur per platform (macOS vibrancy, KDE blur; GNOME has no blur protocol, so fall back to opaque Abyss ground)
-- [ ] Frame pacing: Chromium begin-frames driven by the compositor frame callback, not a timer
-- [ ] Measure: frame time, latency input→photon, count of fallback `OnPaint` (CPU) frames — must be 0
-- [ ] NVIDIA specifics: dmabuf modifiers, explicit sync
+- [ ] Frame pacing: Chromium begin-frames driven by the compositor frame callback, not a timer. Not possible through welding 0.15 (begin-frames off, browser private): needs the fork. Interim: CEF frame rate = display refresh
+- [ ] Measure: frame time, latency input→photon, count of fallback `OnPaint` (CPU) frames — must be 0 (welding has no Linux `OnPaint`, so the count needs the fork)
+- [~] NVIDIA specifics: dmabuf modifiers, explicit sync. RTX 5060 / 615.71.09 / Wayland imports frames with `enable-features=Vulkan`; tearing and colour still to be checked by eye, explicit sync unverified
 - [ ] macOS port of the spike: IOSurface → Metal wgpu texture; helper `.app` bundle layout
 - [ ] Windows CI runner builds the workspace; D3D11 shared-handle port follows once Linux + macOS pass
 - [ ] ADR: keep `welding` as a dependency, or vendor/fork the import code

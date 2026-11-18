@@ -10,4 +10,6 @@ license.workspace = true
 [dependencies]
 wubble-core.workspace = true
 wubble-gfx.workspace = true
+welding.workspace = true
 cef.workspace = true
+dpi.workspace = true

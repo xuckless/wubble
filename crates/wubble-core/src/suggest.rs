@@ -52,7 +52,7 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
     let mut out = vec![Source::Local];
     if settings.live == LiveSuggestions::On && !looks_like_address(query) {
         let mut url = String::from(settings.engine.suggest_endpoint());
-        percent_encode_into(query, &mut url);
+        crate::url::percent_encode_into(query, &mut url);
         out.push(Source::Remote { url });
     }
     out
@@ -62,17 +62,6 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
 fn looks_like_address(query: &str) -> bool {
     !query.contains(char::is_whitespace)
         && (query.contains("://") || query.contains('.') || query.starts_with("localhost"))
-}
-
-fn percent_encode_into(input: &str, out: &mut String) {
-    for b in input.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

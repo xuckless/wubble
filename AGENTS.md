@@ -16,7 +16,7 @@ its "Decided" table before proposing architecture.
 | `wubble-engine` | The only crate that names CEF types | core, gfx, cef |
 | `wubble-ui` | Slint shell (`ui/*.slint`) | slint |
 | `wubble` | Binary: wires the above | all |
-| `wubble-helper` | CEF subprocess entry point; stays tiny | cef |
+| `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 
 `ux/pack/` is a read-only snapshot of the design canvas. It is a style guideline
 (colour, glass, type, motion), not a layout spec.
@@ -24,8 +24,11 @@ its "Decided" table before proposing architecture.
 ## Commands
 
     cargo check --workspace        # first run downloads prebuilt CEF
+    cargo build --workspace        # builds wubble-helper too; needed before cargo run
     cargo test -p wubble-core
     cargo run -p wubble
+    cargo run -p wubble -- --smoke boot   # CEF boots and shuts down, no window
+    cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
 
 ## Code principles
 
