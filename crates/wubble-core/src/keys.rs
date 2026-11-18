@@ -5,7 +5,6 @@
 //! [`Keymap::action_for`]. Executing the action and forwarding the key to the
 //! page is the router's job, driven by [`Route`].
 
-use std::collections::HashMap;
 use std::fmt;
 
 use serde_json::{Value, json};
@@ -89,42 +88,37 @@ impl fmt::Display for ChordError {
 
 impl std::error::Error for ChordError {}
 
-const NAMED_KEYS: [(&str, Key); 23] = [
-    ("tab", Key::Tab),
-    ("enter", Key::Enter),
-    ("return", Key::Enter),
-    ("escape", Key::Escape),
-    ("esc", Key::Escape),
-    ("space", Key::Space),
-    ("backspace", Key::Backspace),
-    ("delete", Key::Delete),
-    ("del", Key::Delete),
-    ("left", Key::Left),
-    ("right", Key::Right),
-    ("up", Key::Up),
-    ("down", Key::Down),
-    ("home", Key::Home),
-    ("end", Key::End),
-    ("pageup", Key::PageUp),
-    ("pgup", Key::PageUp),
-    ("pagedown", Key::PageDown),
-    ("pgdn", Key::PageDown),
-    ("plus", Key::Char('+')),
-    ("minus", Key::Char('-')),
-    ("equal", Key::Char('=')),
-    ("equals", Key::Char('=')),
+/// Canonical names, as printed by `Display`; parsing is case-insensitive.
+/// `+` is spelled `Plus` because `+` separates parts.
+const NAMED_KEYS: [(&str, Key); 15] = [
+    ("Tab", Key::Tab),
+    ("Enter", Key::Enter),
+    ("Escape", Key::Escape),
+    ("Space", Key::Space),
+    ("Backspace", Key::Backspace),
+    ("Delete", Key::Delete),
+    ("Left", Key::Left),
+    ("Right", Key::Right),
+    ("Up", Key::Up),
+    ("Down", Key::Down),
+    ("Home", Key::Home),
+    ("End", Key::End),
+    ("PageUp", Key::PageUp),
+    ("PageDown", Key::PageDown),
+    ("Plus", Key::Char('+')),
 ];
 
 fn parse_key(tok: &str) -> Result<Key, ChordError> {
-    let lower = tok.to_lowercase();
-    if let Some((_, k)) = NAMED_KEYS.iter().find(|(n, _)| *n == lower) {
+    if let Some((_, k)) = NAMED_KEYS.iter().find(|(n, _)| n.eq_ignore_ascii_case(tok)) {
         return Ok(*k);
     }
-    let fn_key = lower.strip_prefix('f').and_then(|d| d.parse::<u8>().ok());
+    let fn_key = tok
+        .strip_prefix(['f', 'F'])
+        .and_then(|d| d.parse::<u8>().ok());
     if let Some(n) = fn_key.filter(|n| (1..=24).contains(n)) {
         return Ok(Key::F(n));
     }
-    let mut chars = lower.chars();
+    let mut chars = tok.chars();
     match (chars.next(), chars.next()) {
         (Some(c), None) => Ok(Key::Char(c)),
         _ => Err(ChordError::UnknownKey(tok.to_owned())),
@@ -132,8 +126,8 @@ fn parse_key(tok: &str) -> Result<Key, ChordError> {
 }
 
 impl Chord {
-    /// Case-insensitive, `+`-joined (`ctrl+shift+t`). Accepts aliases such as
-    /// Control, Command, Meta, Super, Option, Esc, PgUp. The result is normalised.
+    /// Case-insensitive, `+`-joined (`ctrl+shift+t`); names are those `Display`
+    /// prints. The result is normalised.
     pub fn parse(s: &str) -> Result<Chord, ChordError> {
         if s.trim().is_empty() {
             return Err(ChordError::Empty);
@@ -152,10 +146,10 @@ impl Chord {
                 return Err(ChordError::EmptyPart);
             }
             let flag = match tok.to_lowercase().as_str() {
-                "ctrl" | "control" => Some(&mut c.ctrl),
-                "alt" | "option" | "opt" => Some(&mut c.alt),
+                "ctrl" => Some(&mut c.ctrl),
+                "alt" => Some(&mut c.alt),
                 "shift" => Some(&mut c.shift),
-                "cmd" | "command" | "meta" | "super" => Some(&mut c.cmd),
+                "cmd" => Some(&mut c.cmd),
                 _ => None,
             };
             match flag {
@@ -196,23 +190,16 @@ impl fmt::Display for Chord {
             }
         }
         match self.key {
-            Key::Char('+') => write!(f, "Plus"),
-            Key::Char(c) => write!(f, "{}", c.to_uppercase()),
             Key::F(n) => write!(f, "F{n}"),
-            Key::Tab => write!(f, "Tab"),
-            Key::Enter => write!(f, "Enter"),
-            Key::Escape => write!(f, "Escape"),
-            Key::Space => write!(f, "Space"),
-            Key::Backspace => write!(f, "Backspace"),
-            Key::Delete => write!(f, "Delete"),
-            Key::Left => write!(f, "Left"),
-            Key::Right => write!(f, "Right"),
-            Key::Up => write!(f, "Up"),
-            Key::Down => write!(f, "Down"),
-            Key::Home => write!(f, "Home"),
-            Key::End => write!(f, "End"),
-            Key::PageUp => write!(f, "PageUp"),
-            Key::PageDown => write!(f, "PageDown"),
+            // Upper-case only when it stays one character (not `ß` -> `SS`).
+            Key::Char(c) if c != '+' && c.to_uppercase().count() == 1 => {
+                write!(f, "{}", c.to_uppercase())
+            }
+            Key::Char(c) if c != '+' => write!(f, "{c}"),
+            key => {
+                let (name, _) = NAMED_KEYS.iter().find(|(_, k)| *k == key).unwrap();
+                write!(f, "{name}")
+            }
         }
     }
 }
@@ -263,7 +250,7 @@ macro_rules! rows {
 }
 
 /// Default shortcut set. Zen is preferred where it differs from Firefox and
-/// Chromium (spaces on Alt+N / Ctrl+N, compact mode Mod+S, Mod+Alt+Left/Right).
+/// Chromium (spaces on Alt+N / Ctrl+N, compact mode Mod+Alt+S, Mod+Alt+Left/Right).
 /// Only the chord-to-command data is taken; no code is copied.
 ///
 /// Sources (see THIRD_PARTY_NOTICES.md):
@@ -331,7 +318,7 @@ pub const DEFAULTS: &[Binding] = rows![
     "Ctrl+0", MAC, Action::SelectSpace(10), Shell;
     "Mod+Alt+Right", ALL, Action::NextSpace, Shell;
     "Mod+Alt+Left", ALL, Action::PrevSpace, Shell;
-    "Mod+S", ALL, Action::ToggleCompactMode, PageFirst;
+    "Mod+Alt+S", ALL, Action::ToggleCompactMode, PageFirst;
     "Ctrl+Alt+Z", LW, Action::ToggleSidebar, Shell;
     "Ctrl+Z", MAC, Action::ToggleSidebar, Shell;
     "Mod+F", ALL, Action::Find, PageFirst;
@@ -388,38 +375,47 @@ pub struct Override {
     pub action: Option<Action>,
 }
 
+/// Bound chords in binding order; the first chord of an action is its
+/// displayed shortcut, and the first row for a chord wins.
 #[derive(Debug, Clone)]
 pub struct Keymap {
-    by_chord: HashMap<Chord, (Action, Route)>,
-    /// Binding order; the first chord of an action is its displayed shortcut.
-    order: Vec<Chord>,
-    conflicts: Vec<Conflict>,
+    rows: Vec<(Chord, Action, Route)>,
+}
+
+fn default_rows(platform: Platform) -> impl Iterator<Item = (Chord, Action, Route)> {
+    DEFAULTS
+        .iter()
+        .filter(move |b| b.platforms.contains(&platform))
+        .map(move |b| {
+            let text = expand(b.chord, platform);
+            let chord =
+                Chord::parse(&text).unwrap_or_else(|e| panic!("bad default chord {text:?}: {e}"));
+            (chord, b.action, b.route)
+        })
+}
+
+/// Chords bound twice in the default rows of a platform (empty when valid).
+pub fn default_conflicts(platform: Platform) -> Vec<Conflict> {
+    let mut seen: Vec<(Chord, Action)> = Vec::new();
+    let mut out = Vec::new();
+    for (chord, action, _) in default_rows(platform) {
+        match seen.iter().find(|(c, _)| *c == chord) {
+            Some(&(_, existing)) => out.push(Conflict {
+                chord,
+                existing,
+                other: action,
+            }),
+            None => seen.push((chord, action)),
+        }
+    }
+    out
 }
 
 impl Keymap {
     pub fn defaults(platform: Platform) -> Keymap {
-        let mut km = Keymap {
-            by_chord: HashMap::new(),
-            order: Vec::new(),
-            conflicts: Vec::new(),
-        };
-        for b in DEFAULTS.iter().filter(|b| b.platforms.contains(&platform)) {
-            let text = expand(b.chord, platform);
-            let chord =
-                Chord::parse(&text).unwrap_or_else(|e| panic!("bad default chord {text:?}: {e}"));
-            match km.by_chord.get(&chord) {
-                Some(&(existing, _)) => km.conflicts.push(Conflict {
-                    chord,
-                    existing,
-                    other: b.action,
-                }),
-                None => {
-                    km.by_chord.insert(chord, (b.action, b.route));
-                    km.order.push(chord);
-                }
-            }
+        Keymap {
+            rows: default_rows(platform).collect(),
         }
-        km
     }
 
     /// Apply overrides in order; a later one beats an earlier one.
@@ -437,8 +433,8 @@ impl Keymap {
         let mut report = Vec::new();
         for o in overrides {
             let chord = o.chord.normalize();
-            let old = self.by_chord.remove(&chord);
-            self.order.retain(|c| *c != chord);
+            let old = self.action_for(chord);
+            self.rows.retain(|(c, _, _)| *c != chord);
             if let Some(action) = o.action {
                 if let Some((existing, _)) = old.filter(|(a, _)| *a != action) {
                     report.push(Conflict {
@@ -447,28 +443,26 @@ impl Keymap {
                         other: action,
                     });
                 }
-                self.by_chord.insert(chord, (action, default_route(action)));
-                self.order.insert(0, chord);
+                self.rows.insert(0, (chord, action, default_route(action)));
             }
         }
         (self, report)
     }
 
     pub fn action_for(&self, chord: Chord) -> Option<(Action, Route)> {
-        self.by_chord.get(&chord.normalize()).copied()
+        let chord = chord.normalize();
+        self.rows
+            .iter()
+            .find(|(c, _, _)| *c == chord)
+            .map(|&(_, a, r)| (a, r))
     }
 
     /// First binding of the action, for the command bar and menus.
     pub fn shortcut_for(&self, action: Action) -> Option<Chord> {
-        self.order
+        self.rows
             .iter()
-            .find(|c| self.by_chord[*c].0 == action)
-            .copied()
-    }
-
-    /// Chords bound twice in the default rows (empty for a valid table).
-    pub fn conflicts(&self) -> &[Conflict] {
-        &self.conflicts
+            .find(|(_, a, _)| *a == action)
+            .map(|&(c, _, _)| c)
     }
 }
 
@@ -527,14 +521,59 @@ mod tests {
     fn parse_and_format_hand_cases() {
         for (input, canon) in [
             ("ctrl+shift+t", "Ctrl+Shift+T"),
-            ("Command+Option+Right", "Alt+Cmd+Right"),
+            ("Cmd+Alt+Right", "Alt+Cmd+Right"),
             ("Ctrl+Plus", "Ctrl+Plus"),
             ("f12", "F12"),
-            ("Ctrl+PgDn", "Ctrl+PageDown"),
-            ("Shift+Ctrl+Alt+Meta+Esc", "Ctrl+Alt+Shift+Cmd+Escape"),
+            ("ctrl+pagedown", "Ctrl+PageDown"),
+            ("Shift+Ctrl+Alt+Cmd+Escape", "Ctrl+Alt+Shift+Cmd+Escape"),
             ("Ctrl+-", "Ctrl+-"),
         ] {
             assert_eq!(ch(input).to_string(), canon, "{input}");
+        }
+    }
+
+    #[test]
+    fn every_named_key_round_trips() {
+        for (name, key) in NAMED_KEYS {
+            let c = ch(&format!("Ctrl+{name}"));
+            assert_eq!(c.key, key);
+            assert_eq!(c.to_string(), format!("Ctrl+{name}"));
+        }
+    }
+
+    #[test]
+    fn multi_char_uppercase_keys_round_trip() {
+        // 'ß' upper-cases to "SS"; it must print as itself and parse back.
+        let c = Chord {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            cmd: false,
+            key: Key::Char('ß'),
+        };
+        assert_eq!(c.to_string(), "Ctrl+ß");
+        assert_eq!(ch(&c.to_string()), c);
+        let ov = [Override {
+            chord: c,
+            action: Some(Action::Find),
+        }];
+        assert_eq!(overrides_from_json(&overrides_to_json(&ov)).unwrap(), ov);
+    }
+
+    #[test]
+    fn compact_mode_does_not_shadow_save_page() {
+        for p in PLATFORMS {
+            let km = Keymap::defaults(p);
+            let save = if p == Platform::Mac {
+                "Cmd+S"
+            } else {
+                "Ctrl+S"
+            };
+            assert_eq!(km.action_for(ch(save)), None, "{p:?}");
+            assert_eq!(
+                km.action_for(ch(&expand("Mod+Alt+S", p))).map(|r| r.0),
+                Some(Action::ToggleCompactMode)
+            );
         }
     }
 
@@ -546,6 +585,8 @@ mod tests {
             "Ctrl+Ctrl+T",
             "Foo+T",
             "Ctrl+A+B",
+            "Control+T",
+            "Esc",
             "F0",
             "F25",
             "Ctrl",
@@ -568,7 +609,7 @@ mod tests {
     #[test]
     fn default_tables_have_no_conflicts() {
         for p in PLATFORMS {
-            assert_eq!(Keymap::defaults(p).conflicts(), &[], "{p:?}");
+            assert_eq!(default_conflicts(p), [], "{p:?}");
         }
     }
 

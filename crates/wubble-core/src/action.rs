@@ -41,85 +41,73 @@ pub enum Action {
     Quit,
 }
 
+/// Name and value of every parameterless action: the one list `id`,
+/// `from_id` and `all` share.
+const FIXED: [(&str, Action); 30] = [
+    ("new-tab", Action::NewTab),
+    ("close-tab", Action::CloseTab),
+    ("reopen-closed-tab", Action::ReopenClosedTab),
+    ("new-window", Action::NewWindow),
+    ("focus-address", Action::FocusAddress),
+    ("reload", Action::Reload),
+    ("hard-reload", Action::HardReload),
+    ("stop", Action::Stop),
+    ("back", Action::Back),
+    ("forward", Action::Forward),
+    ("next-tab", Action::NextTab),
+    ("prev-tab", Action::PrevTab),
+    ("select-last-tab", Action::SelectLastTab),
+    ("new-space", Action::NewSpace),
+    ("next-space", Action::NextSpace),
+    ("prev-space", Action::PrevSpace),
+    ("toggle-sidebar", Action::ToggleSidebar),
+    ("toggle-compact-mode", Action::ToggleCompactMode),
+    ("find", Action::Find),
+    ("find-next", Action::FindNext),
+    ("find-prev", Action::FindPrev),
+    ("zoom-in", Action::ZoomIn),
+    ("zoom-out", Action::ZoomOut),
+    ("zoom-reset", Action::ZoomReset),
+    ("dev-tools", Action::DevTools),
+    ("view-source", Action::ViewSource),
+    ("fullscreen", Action::Fullscreen),
+    ("toggle-pin-tab", Action::TogglePinTab),
+    ("copy-url", Action::CopyUrl),
+    ("quit", Action::Quit),
+];
+
 impl Action {
     /// Stable kebab-case name, persisted in keybinding overrides.
     pub fn id(self) -> String {
-        let s = match self {
-            Action::NewTab => "new-tab",
-            Action::CloseTab => "close-tab",
-            Action::ReopenClosedTab => "reopen-closed-tab",
-            Action::NewWindow => "new-window",
-            Action::FocusAddress => "focus-address",
-            Action::Reload => "reload",
-            Action::HardReload => "hard-reload",
-            Action::Stop => "stop",
-            Action::Back => "back",
-            Action::Forward => "forward",
-            Action::NextTab => "next-tab",
-            Action::PrevTab => "prev-tab",
-            Action::SelectTab(n) => return format!("select-tab-{n}"),
-            Action::SelectLastTab => "select-last-tab",
-            Action::SelectSpace(n) => return format!("select-space-{n}"),
-            Action::NewSpace => "new-space",
-            Action::NextSpace => "next-space",
-            Action::PrevSpace => "prev-space",
-            Action::ToggleSidebar => "toggle-sidebar",
-            Action::ToggleCompactMode => "toggle-compact-mode",
-            Action::Find => "find",
-            Action::FindNext => "find-next",
-            Action::FindPrev => "find-prev",
-            Action::ZoomIn => "zoom-in",
-            Action::ZoomOut => "zoom-out",
-            Action::ZoomReset => "zoom-reset",
-            Action::DevTools => "dev-tools",
-            Action::ViewSource => "view-source",
-            Action::Fullscreen => "fullscreen",
-            Action::TogglePinTab => "toggle-pin-tab",
-            Action::CopyUrl => "copy-url",
-            Action::Quit => "quit",
-        };
-        s.to_owned()
+        match self {
+            Action::SelectTab(n) => format!("select-tab-{n}"),
+            Action::SelectSpace(n) => format!("select-space-{n}"),
+            _ => FIXED
+                .iter()
+                .find(|(_, a)| *a == self)
+                .map(|(name, _)| (*name).to_owned())
+                .expect("parameterless action missing from FIXED"),
+        }
     }
 
     /// Inverse of [`Action::id`]; unknown names and out-of-range numbers are `None`.
     pub fn from_id(id: &str) -> Option<Action> {
-        Action::all().into_iter().find(|a| a.id() == id)
+        let numbered = |prefix: &str, max: u8| {
+            let n: u8 = id.strip_prefix(prefix)?.parse().ok()?;
+            (1..=max).contains(&n).then_some(n)
+        };
+        if let Some(n) = numbered("select-tab-", 8) {
+            return Some(Action::SelectTab(n));
+        }
+        if let Some(n) = numbered("select-space-", 10) {
+            return Some(Action::SelectSpace(n));
+        }
+        FIXED.iter().find(|(name, _)| *name == id).map(|&(_, a)| a)
     }
 
     /// Every action, parameterised ones expanded over their range.
     pub fn all() -> Vec<Action> {
-        let mut v = vec![
-            Action::NewTab,
-            Action::CloseTab,
-            Action::ReopenClosedTab,
-            Action::NewWindow,
-            Action::FocusAddress,
-            Action::Reload,
-            Action::HardReload,
-            Action::Stop,
-            Action::Back,
-            Action::Forward,
-            Action::NextTab,
-            Action::PrevTab,
-            Action::SelectLastTab,
-            Action::NewSpace,
-            Action::NextSpace,
-            Action::PrevSpace,
-            Action::ToggleSidebar,
-            Action::ToggleCompactMode,
-            Action::Find,
-            Action::FindNext,
-            Action::FindPrev,
-            Action::ZoomIn,
-            Action::ZoomOut,
-            Action::ZoomReset,
-            Action::DevTools,
-            Action::ViewSource,
-            Action::Fullscreen,
-            Action::TogglePinTab,
-            Action::CopyUrl,
-            Action::Quit,
-        ];
+        let mut v: Vec<Action> = FIXED.iter().map(|&(_, a)| a).collect();
         v.extend((1..=8).map(Action::SelectTab));
         v.extend((1..=10).map(Action::SelectSpace));
         v
