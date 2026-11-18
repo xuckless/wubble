@@ -379,8 +379,8 @@ pub struct Scene {
     ops: Vec<FluidOp>,
     rng: Rng,
     /// wubble: the bowed seam the flagged glass's right edge follows, packed for the shader
-    /// (`crate::pack_edge`), and its largest displacement.
-    pub(super) bow: ([f32; 3], [[f32; 4]; 64]),
+    /// (`crate::EdgeU`), and its largest displacement.
+    pub(super) bow: crate::EdgeU,
     pub(super) bow_reach: f32,
 }
 
@@ -419,7 +419,7 @@ impl Scene {
             opts: o,
             ops: vec![],
             rng: Rng::new(seed),
-            bow: crate::pack_edge(None),
+            bow: crate::EdgeU::pack(None),
             bow_reach: 0.0,
         }
     }
@@ -429,7 +429,7 @@ impl Scene {
     /// bulges and pinches with the string instead of staying a rigid box under it.
     pub fn set_bow(&mut self, edge: Option<crate::Edge>) {
         self.bow_reach = edge.map_or(0.0, |e| e.offset.iter().fold(0.0f32, |m, o| m.max(o.abs())));
-        self.bow = crate::pack_edge(edge);
+        self.bow = crate::EdgeU::pack(edge);
     }
 
     /// The Space's dye colours; the liquid crossfades to them in about 600 ms.

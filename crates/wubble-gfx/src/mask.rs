@@ -19,9 +19,9 @@ use welding::wgpu;
 
 use crate::import::Ring;
 use crate::scene::with_prelude;
-use crate::{Edge, FrameSize, GfxError, pack_edge};
+use crate::{Edge, EdgeU, FrameSize, GfxError, bytes};
 
-const MASK_WGSL: &str = include_str!("mask.wgsl");
+const MASK_WGSL: &str = concat!(include_str!("edge.wgsl"), include_str!("mask.wgsl"));
 
 /// What one pane's mask draws.
 #[derive(Clone, Copy, Debug)]
@@ -42,6 +42,18 @@ pub struct MaskJob<'a> {
     pub right: Option<Edge<'a>>,
     /// Where an edge bulges past the frame, display-encoded RGB 0..1.
     pub fill: [f32; 3],
+    /// The stale frame still fading out over this one (`SplitPane.prev`), drawn over it here
+    /// as the shell does unmasked, so an arrival during a bend cross-fades too.
+    pub prev: Option<Prev<'a>>,
+}
+
+/// A stale frame fading out: its image (a texture this crate made), the part of it shown, and
+/// its opacity.
+#[derive(Clone, Copy, Debug)]
+pub struct Prev<'a> {
+    pub image: &'a slint::Image,
+    pub clip: FrameSize,
+    pub opacity: f32,
 }
 
 impl MaskJob<'_> {
@@ -75,24 +87,11 @@ struct MaskU {
     clip_uv: [f32; 2],
     fill: [f32; 4],
     radius: f32,
-    _p: [f32; 3],
-    l_tab: [f32; 4],
-    r_tab: [f32; 4],
-    left: [[f32; 4]; 64],
-    right: [[f32; 4]; 64],
-} // 2144 bytes
+    prev_opacity: f32,
+    prev_clip_uv: [f32; 2],
+} // 64 bytes
 
-const _: () = assert!(std::mem::size_of::<MaskU>() == 2144);
-
-fn bytes(u: &MaskU) -> &[u8] {
-    // SAFETY: MaskU is #[repr(C)], Copy and made only of f32 with every gap an explicit field.
-    unsafe {
-        std::slice::from_raw_parts(
-            (u as *const MaskU).cast::<u8>(),
-            std::mem::size_of::<MaskU>(),
-        )
-    }
-}
+const _: () = assert!(std::mem::size_of::<MaskU>() == 64);
 
 /// The mask pass and its own ring of two output textures (as the frame ring: consecutive
 /// frames are different images, so setting one always changes the property).
@@ -100,6 +99,8 @@ pub struct EdgeMask {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
+    /// The left and right edges (edge.wgsl `EDGES`).
+    edges: wgpu::Buffer,
     ring: Option<Ring>,
 }
 
@@ -146,10 +147,17 @@ impl EdgeMask {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let edges = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("wubble edge mask edges"),
+            size: std::mem::size_of::<[EdgeU; 2]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
             pipeline,
             sampler,
             uniform,
+            edges,
             ring: None,
         }
     }
@@ -168,28 +176,37 @@ impl EdgeMask {
             _ => Ring::new(device, size)?,
         };
         let target = self.ring.insert(ring).advance();
-        let (l_tab, left) = pack_edge(job.left);
-        let (r_tab, right) = pack_edge(job.right);
         let margin = job.margin_px();
+        let uv = |clip: FrameSize, t: &wgpu::Texture| {
+            [
+                clip.width as f32 / t.width().max(1) as f32,
+                clip.height as f32 / t.height().max(1) as f32,
+            ]
+        };
+        // no stale frame: the source again, at opacity 0
+        let prev = job
+            .prev
+            .and_then(|p| p.image.to_wgpu_30_texture().map(|t| (t, p)));
+        let (prev_tex, prev_clip_uv, prev_opacity) = match &prev {
+            Some((t, p)) => (t, uv(p.clip, t), p.opacity),
+            None => (source, [1.0; 2], 0.0),
+        };
         let u = MaskU {
             pane: [(size.width - 2 * margin) as f32, size.height as f32],
             margin: margin as f32,
             scale: job.scale,
             stretch: [job.stretch.0, job.stretch.1],
-            clip_uv: [
-                job.clip.width as f32 / source.width().max(1) as f32,
-                job.clip.height as f32 / source.height().max(1) as f32,
-            ],
+            clip_uv: uv(job.clip, source),
             fill: [job.fill[0], job.fill[1], job.fill[2], 1.0],
             radius: job.radius * job.scale,
-            _p: [0.0; 3],
-            l_tab: [l_tab[0], l_tab[1], l_tab[2], 0.0],
-            r_tab: [r_tab[0], r_tab[1], r_tab[2], 0.0],
-            left,
-            right,
+            prev_opacity,
+            prev_clip_uv,
         };
         queue.write_buffer(&self.uniform, 0, bytes(&u));
+        let edges = [EdgeU::pack(job.left), EdgeU::pack(job.right)];
+        queue.write_buffer(&self.edges, 0, bytes(&edges));
         let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let prev_view = prev_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("wubble edge mask"),
             layout: &self.pipeline.get_bind_group_layout(0),
@@ -209,6 +226,14 @@ impl EdgeMask {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&prev_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.edges.as_entire_binding(),
                 },
             ],
         });
@@ -270,6 +295,12 @@ mod tests {
             .find(|(_, t)| t.name.as_deref() == Some("MaskU"))
             .expect("MaskU");
         assert_eq!(layouter[h].size as usize, std::mem::size_of::<MaskU>());
+        let (e, _) = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("EdgeU"))
+            .expect("EdgeU");
+        assert_eq!(layouter[e].size as usize, std::mem::size_of::<EdgeU>());
     }
 
     #[test]
@@ -284,6 +315,7 @@ mod tests {
             left: None,
             right: None,
             fill: [1.0; 3],
+            prev: None,
         };
         // 800.8 · 1.25 = 1001; 72 · 1.25 = 90
         assert_eq!(job.output_size(), FrameSize::new(1001 + 180, 750));

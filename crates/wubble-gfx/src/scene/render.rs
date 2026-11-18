@@ -42,7 +42,7 @@ use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 use super::quality::{BackdropClock, MAX_DT, Quality};
 use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
 use crate::import::poll_once;
-use crate::{GfxError, GpuContext};
+use crate::{EdgeU, GfxError, GpuContext, bytes};
 
 // @source slint-render-shaders
 pub(super) const PRELUDE: &str = concat!(
@@ -55,7 +55,11 @@ pub(super) const FLUID_WGSL: &str = include_str!("shaders/fluid.wgsl");
 pub(super) const COMPOSITE_WGSL: &str = include_str!("shaders/composite.wgsl");
 pub(super) const BLUR_WGSL: &str = include_str!("shaders/blur.wgsl");
 pub(super) const BLIT_WGSL: &str = include_str!("shaders/blit.wgsl");
-pub(super) const GLASS_WGSL: &str = include_str!("shaders/glass.wgsl");
+// wubble: the glass's bowed edge reads the shared edge table (edge.wgsl)
+pub(super) const GLASS_WGSL: &str = concat!(
+    include_str!("../edge.wgsl"),
+    include_str!("shaders/glass.wgsl")
+);
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -117,7 +121,7 @@ pub(super) struct GlassU {
     u_wave_n: i32,
     u_voice_amt: f32,
     u_material: f32,
-    /// wubble: 1 when the right edge follows `BowU` (glass.wgsl `uBow`)
+    /// wubble: 1 when the right edge follows edge 0 of `EDGES` (glass.wgsl `uBow`)
     u_bow: f32,
     _p: [f32; 2],
     u_beam: [f32; 4],
@@ -125,28 +129,12 @@ pub(super) struct GlassU {
     u_wave: [[f32; 4]; 4],
 } // 208 bytes
 
-/// wubble: the seam's bowed string the flagged glass's right edge follows (glass.wgsl `BowU`).
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(super) struct BowU {
-    /// step, y0 (window logical px), samples, unused
-    tab: [f32; 4],
-    off: [[f32; 4]; 64],
-} // 1040 bytes
-
 const _: () = {
-    assert!(std::mem::size_of::<BowU>() == 1040);
     assert!(std::mem::size_of::<FluidU>() == 64);
     assert!(std::mem::size_of::<CompositeU>() == 160);
     assert!(std::mem::size_of::<BlurU>() == 16);
     assert!(std::mem::size_of::<GlassU>() == 208);
 };
-
-fn bytes<T: Copy>(v: &T) -> &[u8] {
-    // SAFETY: the uniform structs are #[repr(C)], Copy, and made only of f32/i32 (no padding
-    // bytes the compiler could leave uninitialised: every gap is an explicit field).
-    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
-}
 
 // @source slint-render-targets
 struct Target {
@@ -410,7 +398,7 @@ impl Pipelines {
 enum Res<'a> {
     U(u64, u64),
     Tex(u32, &'a wgpu::TextureView),
-    /// wubble: an arena slice at another binding (the glass's `BowU`, binding 5)
+    /// wubble: an arena slice at another binding (the glass's `EDGES`, binding 5)
     Buf(u32, u64, u64),
 }
 
@@ -737,11 +725,8 @@ impl Renderer {
             .filter(|s| s.alpha > 0.001 && s.w >= 1.0 && s.h >= 1.0)
             .collect();
         let mut glass = Vec::with_capacity(surfaces.len());
-        let (tab, off) = self.scene.bow;
-        let bow = self.arena.push(&BowU {
-            tab: [tab[0], tab[1], tab[2], 0.0],
-            off,
-        });
+        // edge 0: the seam's string; edge 1 unused
+        let bow = self.arena.push(&[self.scene.bow, EdgeU::pack(None)]);
         for s in &surfaces {
             let gu = self.glass_u(s);
             let u = self.arena.push(&gu);
@@ -1186,6 +1171,6 @@ mod tests {
         assert_eq!(size(COMPOSITE_WGSL, "CompositeU"), size_of::<CompositeU>());
         assert_eq!(size(BLUR_WGSL, "BlurU"), size_of::<BlurU>());
         assert_eq!(size(GLASS_WGSL, "GlassU"), size_of::<GlassU>());
-        assert_eq!(size(GLASS_WGSL, "BowU"), size_of::<BowU>());
+        assert_eq!(size(GLASS_WGSL, "EdgeU"), size_of::<EdgeU>());
     }
 }

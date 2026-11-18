@@ -13,7 +13,7 @@ use wubble_core::split::SPLIT;
 use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
 use wubble_engine::view::{Layout, ScreenArea};
-use wubble_gfx::mask::MaskJob;
+use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
 use wubble_gfx::{Edge, FrameSize};
 use wubble_ui::{AppWindow, Palette, SplitPane, SplitSeam};
@@ -46,6 +46,9 @@ fn seam_edge(window: &AppWindow) -> EdgeTable {
         offset: window.get_seam_edge().iter().collect(),
     }
 }
+
+// a table the core samples fits the shaders' edge uniform whole
+const _: () = assert!(wubble_core::bow::MAX_SAMPLES <= wubble_gfx::EDGE_SAMPLES);
 
 fn edge(table: &EdgeTable) -> Edge<'_> {
     Edge {
@@ -306,6 +309,11 @@ impl Host {
                 left: left.as_ref().map(edge),
                 right: right.as_ref().map(edge),
                 fill,
+                prev: frame.fading().map(|(image, clip, opacity)| Prev {
+                    image,
+                    clip,
+                    opacity,
+                }),
             };
             match self.presenters[slot].mask(&job) {
                 Ok(masked) => frame.masked = masked,
@@ -332,9 +340,13 @@ impl Host {
         let pane_off = rects
             .last()
             .is_some_and(|r| (r.x + r.width - width).abs() > 0.5);
-        let stretched = rects
-            .iter()
-            .any(|r| self.frames.get(&r.tab).is_some_and(|f| !f.view.is_live()));
+        // stretched past filling the pane, not only stale
+        let stretched = rects.iter().any(|r| {
+            self.frames.get(&r.tab).is_some_and(|f| {
+                let (sx, sy) = f.springs.scale(f.view);
+                sx > 1.0 || sy > 1.0
+            })
+        });
         measure::shell(measure::Shell {
             scene_off,
             pane_off,
@@ -355,7 +367,7 @@ impl Host {
             .map(|r| {
                 let frame = self.frames.get(&r.tab);
                 let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));
-                let prev = frame.and_then(|f| f.prev.clone().filter(|_| f.view.is_fading()));
+                let prev = frame.and_then(PaneFrame::fading);
                 let masked = frame.and_then(|f| f.masked.clone());
                 SplitPane {
                     id: crate::shell::pane_id(r.tab),
@@ -370,13 +382,10 @@ impl Host {
                     focused: Some(r.tab) == focused,
                     edge: masked.as_ref().map(|m| m.image.clone()).unwrap_or_default(),
                     margin: masked.as_ref().map_or(0.0, |m| m.margin),
-                    prev_opacity: match (&prev, frame) {
-                        (Some(_), Some(f)) => (1.0 - f.springs.fade()) as f32,
-                        _ => 0.0,
-                    },
-                    prev_clip_width: prev.as_ref().map_or(0, |p| slint_int(p.1.width)),
-                    prev_clip_height: prev.as_ref().map_or(0, |p| slint_int(p.1.height)),
-                    prev: prev.map(|p| p.0).unwrap_or_default(),
+                    prev_opacity: prev.map_or(0.0, |p| p.2),
+                    prev_clip_width: prev.map_or(0, |p| slint_int(p.1.width)),
+                    prev_clip_height: prev.map_or(0, |p| slint_int(p.1.height)),
+                    prev: prev.map(|p| p.0.clone()).unwrap_or_default(),
                 }
             })
             .collect();

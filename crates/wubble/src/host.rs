@@ -214,6 +214,14 @@ struct PaneFrame {
     masked: Option<wubble_gfx::mask::Masked>,
 }
 
+impl PaneFrame {
+    /// The stale frame still fading out over this one: its image, clip and opacity.
+    fn fading(&self) -> Option<(&slint::Image, wubble_gfx::FrameSize, f32)> {
+        let (image, clip) = self.prev.as_ref().filter(|_| self.view.is_fading())?;
+        Some((image, *clip, (1.0 - self.springs.fade()) as f32))
+    }
+}
+
 /// The external begin-frame driver's state and its timer.
 struct Pace {
     state: BeginFrames,

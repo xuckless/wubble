@@ -5,7 +5,7 @@
 // `uMaterial` 0 draws the effects only (beam, glow) for surfaces over live content;
 // 2 (wubble's, not the design's) is the flat fill of `Quality::Flat`.
 // This pass is what Slint itself cannot do (no backdrop blur): Slint draws the content on top.
-// Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl. Blend: premultiplied.
+// Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl, edge.wgsl. Blend: premultiplied.
 
 // @source slint-glass-wgsl
 struct GlassU {
@@ -37,22 +37,8 @@ struct GlassU {
 @group(0) @binding(3) var uB1: texture_2d<f32>;
 @group(0) @binding(4) var uB2: texture_2d<f32>;
 
-// wubble: the seam's bowed string (wubble_core::bow::EdgeTable, window logical px): the right
-// edge of a glass flagged uBow follows it, so the sidebar bulges and pinches with the string.
-struct BowU {
-  tab: vec4<f32>,                 // step, y0, samples, unused
-  off: array<vec4<f32>, 64>,
-};
-@group(0) @binding(5) var<uniform> B: BowU;
-
-fn bowAt(y: f32) -> f32 {
-  if (B.tab.z < 2.0 || B.tab.x <= 0.0) { return 0.0; }
-  let u = (y - B.tab.y) / B.tab.x;
-  if (u < 0.0 || u > B.tab.z - 1.0) { return 0.0; }
-  let i = min(u32(floor(u)), u32(B.tab.z) - 2u);
-  let t = u - f32(i);
-  return mix(B.off[i / 4u][i % 4u], B.off[(i + 1u) / 4u][(i + 1u) % 4u], t);
-}
+// wubble: a glass flagged uBow follows the seam's bowed string, edge 0 of EDGES (edge.wgsl,
+// prepended), so the sidebar bulges and pinches with the string.
 
 @vertex
 fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQuad, U.uView); }
@@ -71,7 +57,7 @@ fn sat(c: vec3<f32>, s: f32) -> vec3<f32> { let l = dot(c, vec3<f32>(0.2126, 0.7
 fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   let vPx = fin.vPx;
   // wubble: a bowed right edge moves by the string's offset at this height (the left stays)
-  let bw = select(0.0, bowAt(vPx.y), U.uBow > 0.5);
+  let bw = select(0.0, edgeAt(0u, vPx.y), U.uBow > 0.5);
   let half_ = vec2<f32>(max(0.5, (U.uRect.z + bw) * 0.5), U.uRect.w * 0.5); let c = U.uRect.xy + half_; let p = vPx - c;
   let r = min(U.uR, min(half_.x, half_.y));
   let d = sdRound(p, half_, r);

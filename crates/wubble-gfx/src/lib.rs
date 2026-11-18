@@ -55,21 +55,43 @@ pub struct Edge<'a> {
     pub offset: &'a [f32],
 }
 
-/// The samples one edge uniform holds (64 × vec4 in WGSL).
+/// The samples one edge uniform holds (`EDGE_VEC4S` × vec4 in edge.wgsl).
 pub const EDGE_SAMPLES: usize = 256;
 
-/// An edge as a shader reads it: (step, y0, samples) and the samples, 4 to a vec4. `None` and
-/// fewer than two samples read as straight.
-pub(crate) fn pack_edge(edge: Option<Edge>) -> ([f32; 3], [[f32; 4]; 64]) {
-    let mut out = [[0.0; 4]; 64];
-    let Some(e) = edge else {
-        return ([0.0; 3], out);
-    };
-    let n = e.offset.len().min(EDGE_SAMPLES);
-    for (i, &o) in e.offset[..n].iter().enumerate() {
-        out[i / 4][i % 4] = o;
+/// One edge as edge.wgsl's `EdgeU` reads it: (step, y0, samples, unused) and the samples, 4 to
+/// a vec4. Shaders bind two (`EDGES`, binding 5).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct EdgeU {
+    tab: [f32; 4],
+    off: [[f32; 4]; EDGE_SAMPLES / 4],
+}
+
+const _: () = assert!(std::mem::size_of::<EdgeU>() == 16 + EDGE_SAMPLES * 4);
+
+impl EdgeU {
+    /// `None` and fewer than two samples read as straight.
+    pub(crate) fn pack(edge: Option<Edge>) -> Self {
+        let mut u = Self {
+            tab: [0.0; 4],
+            off: [[0.0; 4]; EDGE_SAMPLES / 4],
+        };
+        if let Some(e) = edge {
+            let n = e.offset.len().min(EDGE_SAMPLES);
+            for (i, &o) in e.offset[..n].iter().enumerate() {
+                u.off[i / 4][i % 4] = o;
+            }
+            u.tab = [e.step, e.y0, n as f32, 0.0];
+        }
+        u
     }
-    ([e.step, e.y0, n as f32], out)
+}
+
+/// A uniform mirror's bytes, for `queue.write_buffer` and the scene's arena.
+pub(crate) fn bytes<T: Copy>(v: &T) -> &[u8] {
+    // SAFETY: the uniform mirrors are #[repr(C)], Copy, and made only of f32/i32 (no padding
+    // bytes the compiler could leave uninitialised: every gap is an explicit field).
+    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
 }
 
 #[cfg(test)]
@@ -79,15 +101,15 @@ mod tests {
     #[test]
     fn an_edge_packs_four_to_a_vec4() {
         let offset: Vec<f32> = (0..300).map(|i| i as f32).collect();
-        let (tab, out) = pack_edge(Some(Edge {
+        let u = EdgeU::pack(Some(Edge {
             y0: 8.0,
             step: 4.0,
             offset: &offset,
         }));
-        assert_eq!(tab, [4.0, 8.0, EDGE_SAMPLES as f32]);
-        assert_eq!(out[0], [0.0, 1.0, 2.0, 3.0]);
-        assert_eq!(out[63][3], 255.0);
-        assert_eq!(pack_edge(None).0, [0.0; 3]);
+        assert_eq!(u.tab, [4.0, 8.0, EDGE_SAMPLES as f32, 0.0]);
+        assert_eq!(u.off[0], [0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(u.off[EDGE_SAMPLES / 4 - 1][3], 255.0);
+        assert_eq!(EdgeU::pack(None).tab, [0.0; 4]);
     }
 
     #[test]

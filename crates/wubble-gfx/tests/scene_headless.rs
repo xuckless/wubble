@@ -7,7 +7,7 @@ mod headless;
 
 use headless::{Run, THICK, VIEW, device, render};
 use wubble_gfx::FrameSize;
-use wubble_gfx::mask::{EdgeMask, MaskJob};
+use wubble_gfx::mask::{EdgeMask, MaskJob, Prev};
 use wubble_gfx::scene::Quality;
 
 const FRAMES: u32 = 30;
@@ -226,7 +226,10 @@ fn solid(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        // RENDER_ATTACHMENT: Slint takes it as an image (a stale frame)
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
     let data: Vec<u8> = (0..w * h).flat_map(|_| rgba).collect();
@@ -289,6 +292,7 @@ fn the_mask_cuts_and_bulges_along_the_tables() {
         left: edge(&cut),
         right: edge(&bulge),
         fill,
+        prev: None,
     };
     mask.run(&device, &queue, &source, &job).expect("mask");
     let tex = mask.latest().expect("drawn");
@@ -330,5 +334,48 @@ fn the_mask_cuts_and_bulges_along_the_tables() {
         }
         assert_eq!(px(m - 1, y)[3], 0);
         assert_eq!(px(m + pw, y)[3], 0);
+    }
+
+    // review finding: a stale frame fading out while the edge is bent (a frame at the new size
+    // arrived mid-bend) is drawn over the new one at its opacity, inside the same cut
+    let blue = [30, 40, 200, 255];
+    let stale = slint::Image::try_from(solid(&device, &queue, pw, ph, blue)).expect("image");
+    for (opacity, want) in [(1.0, blue), (0.0, red)] {
+        let fading = MaskJob {
+            prev: Some(Prev {
+                image: &stale,
+                clip: FrameSize::new(pw, ph),
+                opacity,
+            }),
+            ..job
+        };
+        mask.run(&device, &queue, &source, &fading).expect("mask");
+        let img = wubble_gfx::scene::readback_rgba8(&device, &queue, mask.latest().unwrap());
+        let px = |x: u32, y: u32| {
+            let o = ((y * w + x) * 4) as usize;
+            [img[o], img[o + 1], img[o + 2], img[o + 3]]
+        };
+        assert_eq!(px(m + 100, 80), want, "opacity {opacity}");
+        assert_eq!(px(m + 5, 80)[3], 0, "still cut");
+    }
+    let half = MaskJob {
+        prev: Some(Prev {
+            image: &stale,
+            clip: FrameSize::new(pw, ph),
+            opacity: 0.5,
+        }),
+        ..job
+    };
+    mask.run(&device, &queue, &source, &half).expect("mask");
+    let img = wubble_gfx::scene::readback_rgba8(&device, &queue, mask.latest().unwrap());
+    let o = ((80 * w + m + 100) * 4) as usize;
+    // halfway between red and blue in each channel
+    for (c, (a, b)) in red.iter().zip(blue).enumerate().take(3) {
+        let mid = (i32::from(*a) + i32::from(b)) / 2;
+        assert!(
+            (i32::from(img[o + c]) - mid).abs() <= 2,
+            "channel {c}: {}",
+            img[o + c]
+        );
     }
 }
