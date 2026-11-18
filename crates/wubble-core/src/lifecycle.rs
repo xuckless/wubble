@@ -72,9 +72,11 @@ pub enum Event {
     },
     BusyChanged(Activity),
     PinnedChanged(Pin),
-    /// The renderer process crashed or was killed.
+    /// The renderer process crashed or was killed. A visible tab is reloaded at
+    /// once; a hidden one becomes Discarded and is restored when shown.
     RendererGone,
-    /// The tab is being closed. Terminal: the owner drops the tab afterwards.
+    /// The tab is being closed. Terminal: the owner drops the tab and sends no
+    /// further events (`Shown` afterwards would restore it).
     Closed,
 }
 
@@ -88,9 +90,13 @@ pub enum Effect {
     /// Grab a texture of the page so the UI can show it while discarded.
     CaptureSnapshot,
     /// Destroy the renderer. May follow `Freeze` or come straight from Background.
+    /// The snapshot taken at `Hidden` is kept for the UI.
     Discard,
     /// Reload from the URL and restore scroll.
     Restore,
+    /// Drop the snapshot taken at `Hidden`. Sent when a hidden tab is closed. It is
+    /// not sent on restore: the engine drops it on the first new frame.
+    ReleaseSnapshot,
     ReleaseTexture,
 }
 
@@ -121,7 +127,11 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
         (_, Event::Hidden { .. }) => (s, vec![]),
 
         (Background | Frozen, Event::Tick { now, pressure }) => {
-            let hidden = now.saturating_duration_since(s.hidden_since.unwrap_or(now));
+            let Some(since) = s.hidden_since else {
+                debug_assert!(false, "hidden tab without hidden_since");
+                return (s, vec![]);
+            };
+            let hidden = now.saturating_duration_since(since);
             match (
                 s.liveness,
                 policy.target(hidden, s.pin, s.activity, pressure),
@@ -133,14 +143,7 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
                     },
                     vec![Freeze],
                 ),
-                (Frozen, Background) => (
-                    Lifecycle {
-                        liveness: Background,
-                        ..s
-                    },
-                    vec![Unfreeze],
-                ),
-                (_, Discarded) => (discarded, vec![CaptureSnapshot, Discard, ReleaseTexture]),
+                (_, Discarded) => (discarded, vec![Discard, ReleaseTexture]),
                 _ => (s, vec![]),
             }
         }
@@ -157,8 +160,13 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
         (_, Event::BusyChanged(activity)) => (Lifecycle { activity, ..s }, vec![]),
         (_, Event::PinnedChanged(pin)) => (Lifecycle { pin, ..s }, vec![]),
 
-        (Discarded, Event::RendererGone | Event::Closed) => (s, vec![]),
-        (_, Event::RendererGone | Event::Closed) => (discarded, vec![ReleaseTexture]),
+        (Active, Event::RendererGone) => (s, vec![Restore]),
+        (Discarded, Event::RendererGone) => (s, vec![]),
+        (_, Event::RendererGone) => (discarded, vec![ReleaseTexture]),
+
+        (Active, Event::Closed) => (discarded, vec![ReleaseTexture]),
+        (Background | Frozen, Event::Closed) => (discarded, vec![ReleaseTexture, ReleaseSnapshot]),
+        (Discarded, Event::Closed) => (s, vec![ReleaseSnapshot]),
     }
 }
 
@@ -211,7 +219,7 @@ mod tests {
         transition(&SleepPolicy::default(), s, e)
     }
 
-    const DISCARD: [Effect; 3] = [CaptureSnapshot, Discard, ReleaseTexture];
+    const DISCARD: [Effect; 2] = [Discard, ReleaseTexture];
 
     #[test]
     fn every_state_and_event_pair() {
@@ -325,8 +333,8 @@ mod tests {
                 "active gone",
                 idle(Active),
                 Event::RendererGone,
-                Discarded,
-                vec![ReleaseTexture],
+                Active,
+                vec![Restore],
             ),
             (
                 "bg gone",
@@ -361,21 +369,21 @@ mod tests {
                 idle(Background),
                 Event::Closed,
                 Discarded,
-                vec![ReleaseTexture],
+                vec![ReleaseTexture, ReleaseSnapshot],
             ),
             (
                 "frozen closed",
                 idle(Frozen),
                 Event::Closed,
                 Discarded,
-                vec![ReleaseTexture],
+                vec![ReleaseTexture, ReleaseSnapshot],
             ),
             (
                 "disc closed",
                 idle(Discarded),
                 Event::Closed,
                 Discarded,
-                vec![],
+                vec![ReleaseSnapshot],
             ),
         ];
 
@@ -430,9 +438,9 @@ mod tests {
     fn busy_tabs_are_left_alone() {
         let busy = tab(Background, Pin::Unpinned, Activity::Busy);
         assert_eq!(run(busy, tick(3600, Pressure::Critical)), (busy, vec![]));
-        let frozen_busy = tab(Frozen, Pin::Unpinned, Activity::Busy);
-        let (s, fx) = run(frozen_busy, tick(3600, Pressure::Critical));
+        let (s, fx) = run(idle(Frozen), Event::BusyChanged(Activity::Busy));
         assert_eq!((s.liveness, fx), (Background, vec![Unfreeze]));
+        assert_eq!(run(s, tick(3600, Pressure::Critical)), (s, vec![]));
     }
 
     #[test]
@@ -450,10 +458,29 @@ mod tests {
     }
 
     #[test]
-    fn closing_releases_texture_once() {
-        let (closed, fx) = run(idle(Frozen), Event::Closed);
-        assert_eq!(fx, vec![ReleaseTexture]);
-        assert_eq!(run(closed, Event::Closed).1, vec![]);
+    fn frozen_tab_stays_frozen_when_pressure_eases() {
+        let (s, _) = run(idle(Background), tick(30, Pressure::Moderate));
+        assert_eq!(s.liveness, Frozen);
+        assert_eq!(run(s, tick(31, Pressure::None)), (s, vec![]));
+    }
+
+    #[test]
+    fn crashed_visible_tab_reloads_in_place() {
+        let (s, fx) = run(Lifecycle::new(), Event::RendererGone);
+        assert_eq!((s.liveness, fx), (Liveness::Active, vec![Restore]));
+    }
+
+    #[test]
+    fn discard_does_not_recapture_the_snapshot() {
+        let (_, fx) = run(idle(Frozen), tick(900, Pressure::None));
+        assert!(!fx.contains(&CaptureSnapshot));
+    }
+
+    #[test]
+    fn closing_releases_the_snapshot_of_a_discarded_tab() {
+        let (s, _) = run(idle(Background), tick(900, Pressure::None));
+        assert_eq!(run(s, Event::Closed).1, vec![ReleaseSnapshot]);
+        assert_eq!(run(idle(Active), Event::Closed).1, vec![ReleaseTexture]);
     }
 
     #[test]
