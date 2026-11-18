@@ -7879,6 +7879,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "dispatch2",
  "log",
  "opener",
  "pollster 0.4.0",

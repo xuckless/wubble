@@ -28,6 +28,7 @@ mod shell;
 mod split_smoke;
 mod surface;
 mod tabs_smoke;
+mod ui_loop;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -673,14 +674,17 @@ fn panes_frame(window: &AppWindow, now: Instant) -> bool {
 
 /// Hands a pump request to the host.
 pub fn deliver(wake: Wake) {
+    let at = Instant::now();
     with_host(|host| host.pump(wake));
+    measure::pumped(at);
 }
 
-/// CEF's pump requests, from any thread, onto the Slint loop. After the loop
-/// has ended they are dropped: the shutdown drain pumps by itself.
+/// CEF's pump requests, from any thread, onto the UI thread ([`ui_loop`]). After the loop
+/// has ended they find no host and are dropped: the shutdown drain pumps by itself.
 fn pump_scheduler() -> PumpScheduler {
+    use ui_loop::Post as _;
     PumpScheduler::new(|delay_ms| {
-        let _ = slint::invoke_from_event_loop(move || deliver(Wake::Schedule(delay_ms)));
+        ui_loop::Current::post(move || deliver(Wake::Schedule(delay_ms)));
     })
 }
 
