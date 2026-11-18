@@ -147,6 +147,8 @@ pub struct View {
     /// Saved at creation because welding zeroes its own copy on close.
     browser_id: i32,
     state: ViewState,
+    /// What CEF was last told (`was_hidden`). Hidden views hand out no frames.
+    visible: bool,
     nav: NavState,
     /// Emitted by navigation effects, handed out by [`Self::drain_events`].
     events: Vec<WebEvent>,
@@ -168,6 +170,7 @@ impl View {
             producer,
             browser_id,
             state: ViewState::Live { layout },
+            visible: true,
             nav: NavState::default(),
             events: Vec::new(),
             host: None,
@@ -286,10 +289,7 @@ impl View {
 
     /// Runs `f` on the browser host while the view is open.
     fn send(&mut self, f: impl FnOnce(&cef::BrowserHost)) {
-        if !matches!(
-            self.state,
-            ViewState::Live { .. } | ViewState::Resizing { .. }
-        ) {
+        if !self.is_open() {
             return;
         }
         if self.host.is_none() {
@@ -301,13 +301,51 @@ impl View {
         }
     }
 
+    /// Shows or hides the page (CEF `WasHidden`, as cefclient's OSR windows
+    /// do). A hidden browser stops painting and Chromium throttles its timers;
+    /// on show it is asked to repaint so a frame arrives without waiting for
+    /// the page to change.
+    pub fn set_visible(&mut self, visible: bool) {
+        if visible == self.visible || !self.is_open() {
+            return;
+        }
+        self.visible = visible;
+        // Trait call, as in `take_frame`.
+        let mut result = CefSurfaceProducer::set_visible(&mut self.producer, visible);
+        if visible && result.is_ok() {
+            result = self.producer.request_repaint();
+        }
+        if let Err(e) = result {
+            eprintln!(
+                "wubble-engine: view {}: set_visible({visible}) failed: {e}",
+                self.browser_id
+            );
+        }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Not yet asked to close and not gone from CEF.
+    pub fn is_open(&self) -> bool {
+        matches!(
+            self.state,
+            ViewState::Live { .. } | ViewState::Resizing { .. }
+        )
+    }
+
     /// Follows the host's content rectangle; unchanged layouts cost nothing.
     pub fn set_layout(&mut self, layout: Layout) {
         self.apply(ViewEvent::Layout(layout));
     }
 
-    /// The newest frame CEF painted since the last call, if it is to be shown.
+    /// The newest frame CEF painted since the last call, if it is to be
+    /// shown. Always `None` while hidden.
     pub fn take_frame(&mut self) -> Option<NativeFrame> {
+        if !self.visible {
+            return None;
+        }
         // Trait call: Windows' producer has an inherent method of the same
         // name that returns its own frame type.
         let frame = NativeFrame::from(CefSurfaceProducer::acquire_native_frame(

@@ -60,6 +60,8 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
+    // Ctrl+W: close the visible tab.
+    callback close-tab-requested();
 
     public function request-new-tab() {
         bar.dispatch(CommandBarEvent.open);
@@ -103,6 +105,12 @@ export component AppWindow inherits Window {
             keys: @keys(Control + L);
             activated => {
                 root.request-address-focus();
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + W);
+            activated => {
+                root.close-tab-requested();
             }
         }
 

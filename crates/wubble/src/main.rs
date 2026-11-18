@@ -1,27 +1,28 @@
+mod bar;
+mod bind;
 mod cli;
+mod host;
 mod input;
 mod nav_smoke;
+mod shell;
+mod tabs_smoke;
 
 use std::cell::RefCell;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cli::{Command, Smoke};
-use input::{InputState, KeyRoute};
-use nav_smoke::{NavSmoke, SmokeAction, SmokeInput};
+use host::{Checks, Host};
+use nav_smoke::NavSmoke;
 use slint::ComponentHandle;
-use slint::platform::PointerEventButton;
-use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
-use wubble_engine::app::{
-    self, Engine, EngineConfig, EngineError, PumpOutcome, PumpScheduler, PumpTimer, ViewId,
-};
+use tabs_smoke::TabsSmoke;
+use wubble_engine::app::{self, Engine, EngineConfig, EngineError, PumpScheduler};
 use wubble_engine::input::Point;
-use wubble_engine::nav::WebEvent;
-use wubble_engine::view::{Layout, View, ViewConfig};
-use wubble_gfx::pacing::{self, FrameStats};
-use wubble_gfx::{FramePresenter, FrameSize, GpuContext};
+use wubble_engine::view::Layout;
+use wubble_gfx::pacing::FrameStats;
+use wubble_gfx::{FrameSize, GpuContext};
 use wubble_ui::AppWindow;
 
 /// Pumps `--smoke boot` gives CEF before shutting down. A count, not a clock.
@@ -29,13 +30,23 @@ const SMOKE_TICKS: usize = 10;
 
 /// Runs of CEF work `--smoke frames` waits for the next frame before it gives
 /// up. A count, not a clock: it only stops a smoke that would otherwise hang.
-const SMOKE_MAX_IDLE_RUNS: u32 = 2_000;
+pub const SMOKE_MAX_IDLE_RUNS: u32 = 2_000;
 
 /// The bundled animated test page.
 const SMOKE_PAGE: &str = include_str!("../assets/smoke.html");
 
 /// The page `--smoke nav` navigates to.
-const NAV_PAGE: &str = include_str!("../assets/nav.html");
+pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
+
+/// The third page of `--smoke tabs`.
+pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
+
+/// `--smoke tabs`'s pages, in tab order.
+pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
+
+/// How often hidden tabs are checked against the sleep policy. Coarse: the
+/// policy's delays are a minute and more.
+const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
 
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os()) {
@@ -81,6 +92,27 @@ fn main() -> ExitCode {
             }
             Ok(Outcome { .. }) => {
                 eprintln!("smoke: nav FAILED: the window closed first");
+                ExitCode::FAILURE
+            }
+        },
+        Command::Smoke(Smoke::Tabs) => match with_smoke_cache(|config| run(Mode::Tabs, config)) {
+            Ok(Outcome {
+                failure: None,
+                tabs_passed: true,
+                ..
+            }) => {
+                println!("smoke: tabs ok");
+                ExitCode::SUCCESS
+            }
+            Ok(Outcome {
+                failure: Some(e), ..
+            })
+            | Err(e) => {
+                eprintln!("smoke: tabs FAILED: {e}");
+                ExitCode::FAILURE
+            }
+            Ok(Outcome { .. }) => {
+                eprintln!("smoke: tabs FAILED: the window closed first");
                 ExitCode::FAILURE
             }
         },
@@ -164,6 +196,8 @@ struct Outcome {
     failure: Option<Box<dyn std::error::Error>>,
     /// The title `--smoke nav` passed on.
     nav_title: Option<String>,
+    /// `--smoke tabs` reached its end.
+    tabs_passed: bool,
 }
 
 /// What the window is for.
@@ -174,20 +208,13 @@ enum Mode {
     Frames { frames: u64, url: Option<String> },
     /// `--smoke nav`.
     Nav,
-}
-
-/// Where the one web view is.
-enum Content {
-    /// Opened on the first pump after winit has created the window.
-    Waiting {
-        url: String,
-    },
-    Open(ViewId),
+    /// `--smoke tabs`.
+    Tabs,
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
 #[derive(Clone, Copy, Debug)]
-enum Wake {
+pub enum Wake {
     /// CEF's `OnScheduleMessagePumpWork(delay_ms)`.
     Schedule(i64),
     TimerFired,
@@ -214,7 +241,7 @@ fn with_host(f: impl FnOnce(&mut Host)) {
 }
 
 /// Hands a pump request to the host.
-fn deliver(wake: Wake) {
+pub fn deliver(wake: Wake) {
     with_host(|host| host.pump(wake));
 }
 
@@ -226,296 +253,7 @@ fn pump_scheduler() -> PumpScheduler {
     })
 }
 
-/// Everything the pump drives. Owned by [`HOST`].
-struct Host {
-    engine: Engine,
-    window: slint::Weak<AppWindow>,
-    /// The engine's single-shot pump timer.
-    timer: slint::Timer,
-    presenter: FramePresenter,
-    content: Content,
-    stats: FrameStats,
-    last_present: Option<Instant>,
-    idle_runs: u32,
-    /// Accelerated frames after which the loop quits (`--smoke frames`).
-    quit_after: Option<u64>,
-    /// `--smoke nav`'s progress.
-    nav_smoke: Option<NavSmoke>,
-    nav_title: Option<String>,
-    input: InputState,
-    /// Why the loop was quit early, if it was.
-    failure: Option<String>,
-}
-
-impl Host {
-    fn pump(&mut self, wake: Wake) {
-        let outcome = match wake {
-            Wake::Schedule(delay_ms) => self.engine.schedule_pump(delay_ms),
-            Wake::TimerFired => self.engine.pump_timer_fired(),
-        };
-        let PumpOutcome {
-            timer,
-            worked,
-            events,
-        } = outcome;
-        match timer {
-            Some(PumpTimer::Start(delay)) => {
-                self.timer.start(slint::TimerMode::SingleShot, delay, || {
-                    deliver(Wake::TimerFired)
-                });
-            }
-            Some(PumpTimer::Cancel) => self.timer.stop(),
-            None => {}
-        }
-        if !worked {
-            return;
-        }
-        let Some(window) = self.window.upgrade() else {
-            return;
-        };
-        for (_, event) in events {
-            self.on_web_event(&window, event);
-        }
-        self.smoke_step(SmokeInput::Worked);
-        if let Err(e) = self.show_frame(&window) {
-            self.fail(e);
-        }
-        if self.quit_after.is_some() {
-            self.idle_runs += 1;
-            if self.idle_runs > SMOKE_MAX_IDLE_RUNS {
-                self.fail(format!(
-                    "no new frame after {SMOKE_MAX_IDLE_RUNS} runs of CEF work ({} accelerated so far)",
-                    self.stats.accelerated
-                ));
-            }
-        }
-    }
-
-    fn show_frame(&mut self, window: &AppWindow) -> Result<(), String> {
-        let layout = content_layout(window);
-        let id = match &self.content {
-            Content::Waiting { url } => {
-                // Before winit has created the window there is no monitor to
-                // ask; CEF's next pump (at most `MAX_TIMER_DELAY` away) retries.
-                let Some(refresh) = window.window().with_winit_window(display_refresh_mhz) else {
-                    return Ok(());
-                };
-                let frame_rate = pacing::frame_rate_for(refresh);
-                eprintln!("wubble: CEF frame rate {frame_rate} (display {refresh:?} mHz)");
-                let config = ViewConfig {
-                    url: url.clone(),
-                    layout,
-                    frame_rate,
-                };
-                let id = self.engine.open_view(config).map_err(|e| e.to_string())?;
-                self.content = Content::Open(id);
-                self.sync_focus(window);
-                id
-            }
-            Content::Open(id) => *id,
-        };
-        let Some(view) = self.engine.view(id) else {
-            return Err("the web view closed unexpectedly".into());
-        };
-        let new_cpu = self.stats.record_cpu_fallback(view.cpu_fallback_frames());
-        if new_cpu > 0 {
-            eprintln!("wubble: {new_cpu} CPU fallback frame(s) (OnPaint), not shown");
-        }
-        view.set_layout(layout);
-        let Some(frame) = view.take_frame() else {
-            return Ok(());
-        };
-        let clip = frame.size().cropped_to(layout.size);
-        let image = self.presenter.present(frame).map_err(|e| e.to_string())?;
-        window.set_web_frame(image);
-        window.set_web_frame_clip_width(slint_int(clip.width));
-        window.set_web_frame_clip_height(slint_int(clip.height));
-        let now = Instant::now();
-        self.stats
-            .record_accelerated(self.last_present.map(|last| now - last));
-        self.last_present = Some(now);
-        self.idle_runs = 0;
-        if self.quit_after.is_some_and(|n| self.stats.accelerated >= n) {
-            quit();
-        }
-        Ok(())
-    }
-
-    /// The one web view, while it is open.
-    fn view(&mut self) -> Option<&mut View> {
-        match self.content {
-            Content::Open(id) => self.engine.view(id),
-            Content::Waiting { .. } => None,
-        }
-    }
-
-    fn on_web_event(&mut self, window: &AppWindow, event: WebEvent) {
-        self.smoke_step(SmokeInput::Event(&event));
-        match event {
-            WebEvent::CursorChanged(cursor) => {
-                window.set_web_cursor(cursor as i32);
-                // Slint applies a TouchArea's cursor only while it handles a
-                // mouse event (i-slint-core 1.19 `window.rs`, after
-                // `process_mouse_input`), and CEF reports the shape after
-                // the move that caused it. Replay the pointer where it is,
-                // once the host is free again, so the shape shows without
-                // waiting for the mouse to move.
-                if let Some(position) = self.input.pointer {
-                    let _ = self.window.upgrade_in_event_loop(move |window| {
-                        window
-                            .window()
-                            .dispatch_event(slint::platform::WindowEvent::PointerMoved { position })
-                    });
-                }
-            }
-            WebEvent::UrlChanged(url) => {
-                let (host, path) = wubble_core::url::address_parts(&url);
-                window.set_address_host(host.into());
-                window.set_address_path(path.into());
-            }
-            // No tabs yet: a later item decides where popups go.
-            WebEvent::PopupRequested { url } => eprintln!("wubble: popup not opened: {url}"),
-            // The view reloads once by itself (`nav::transition`).
-            WebEvent::RendererGone
-            | WebEvent::TitleChanged(_)
-            | WebEvent::LoadingChanged { .. }
-            | WebEvent::FaviconChanged(_) => {}
-        }
-    }
-
-    fn smoke_step(&mut self, input: SmokeInput) {
-        let Some(state) = self.nav_smoke.take() else {
-            return;
-        };
-        let want = nav_smoke::title_of(NAV_PAGE).unwrap_or_default();
-        let (state, action) = nav_smoke::next(state, input, want);
-        self.nav_smoke = Some(state);
-        match action {
-            Some(SmokeAction::LoadSecondPage) => {
-                if let Some(view) = self.view() {
-                    view.load(&page_url(NAV_PAGE));
-                }
-            }
-            Some(SmokeAction::Pass(title)) => {
-                self.nav_title = Some(title);
-                quit();
-            }
-            Some(SmokeAction::Fail(reason)) => self.fail(reason),
-            None => {}
-        }
-    }
-
-    /// Tells the view about keyboard focus: it has it while the window has
-    /// focus and the web content is the shell's focused item.
-    fn sync_focus(&mut self, window: &AppWindow) {
-        let focused = self.input.window_focused && window.get_web_focused();
-        let view_open = self.view().is_some();
-        if let Some(focused) = self.input.focus_change(focused, view_open)
-            && let Some(view) = self.view()
-        {
-            view.focus(focused);
-        }
-    }
-
-    /// Raw winit events, before Slint sees them: keys for the page,
-    /// modifiers and window focus.
-    fn window_event(&mut self, event: &WindowEvent) -> EventResult {
-        let Some(window) = self.window.upgrade() else {
-            return EventResult::Propagate;
-        };
-        match event {
-            WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
-            WindowEvent::CursorMoved { position, .. } => {
-                let position = position.to_logical(window.window().scale_factor().into());
-                self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
-            }
-            WindowEvent::CursorLeft { .. } => self.input.pointer = None,
-            WindowEvent::Focused(focused) => {
-                self.input.window_focused = *focused;
-                self.sync_focus(&window);
-            }
-            // Synthetic presses (keys already held when the window gained
-            // focus, X11) never reach the page.
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } => {
-                let key = self.input.key_input(event);
-                let route = input::route(
-                    window.get_web_focused(),
-                    &key.unmodified,
-                    key.modifiers.keys,
-                );
-                if route != KeyRoute::Shell
-                    && let Some(view) = self.view()
-                {
-                    view.key(&key);
-                }
-                if route == KeyRoute::Page {
-                    return EventResult::PreventDefault;
-                }
-            }
-            _ => {}
-        }
-        EventResult::Propagate
-    }
-
-    fn pointer_moved(&mut self, point: Point) {
-        let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.view() {
-            view.mouse_move(point, &modifiers, now);
-        }
-    }
-
-    fn pointer_left(&mut self, point: Point) {
-        let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.view() {
-            view.mouse_leave(point, &modifiers, now);
-        }
-    }
-
-    fn pointer_button(&mut self, button: PointerEventButton, pressed: bool, point: Point) {
-        let Some(button) = input::mouse_button(button) else {
-            return;
-        };
-        let sent = if pressed {
-            vec![button]
-        } else {
-            input::releases(self.input.buttons, button)
-        };
-        for button in sent {
-            self.input.buttons = self.input.buttons.with(button, pressed);
-            let (modifiers, now) = (self.input.modifiers(), self.input.now());
-            if let Some(view) = self.view() {
-                view.mouse_button(button, pressed, point, &modifiers, now);
-            }
-        }
-    }
-
-    fn pointer_cancelled(&mut self) {
-        self.input.buttons = Default::default();
-        if let Some(view) = self.view() {
-            view.capture_lost();
-        }
-    }
-
-    fn scrolled(&mut self, point: Point, dx: f32, dy: f32) {
-        let modifiers = self.input.modifiers();
-        if let Some(view) = self.view() {
-            view.wheel(point, dx, dy, &modifiers);
-        }
-    }
-
-    fn fail(&mut self, reason: String) {
-        if self.failure.is_none() {
-            self.failure = Some(reason);
-        }
-        quit();
-    }
-}
-
-fn quit() {
+pub fn quit() {
     // Fails only when no event loop runs, and the pump runs inside it.
     let _ = slint::quit_event_loop();
 }
@@ -524,7 +262,7 @@ fn quit() {
 /// once the surface has entered an output, so fall back to the fastest
 /// connected display: the CEF frame rate is a ceiling, so too high only costs
 /// idle callbacks, while too low would cap the frame rate.
-fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Option<u32> {
+pub fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Option<u32> {
     window
         .current_monitor()
         .and_then(|m| m.refresh_rate_millihertz())
@@ -536,12 +274,12 @@ fn display_refresh_mhz(window: &slint::winit_030::winit::window::Window) -> Opti
         })
 }
 
-fn slint_int(pixels: u32) -> i32 {
+pub fn slint_int(pixels: u32) -> i32 {
     i32::try_from(pixels).unwrap_or(i32::MAX)
 }
 
 /// The content rectangle in physical pixels and the window's scale factor.
-fn content_layout(window: &AppWindow) -> Layout {
+pub fn content_layout(window: &AppWindow) -> Layout {
     let scale = window.window().scale_factor();
     let physical = |logical: f32| (logical * scale).round().max(0.0) as u32;
     Layout {
@@ -554,7 +292,7 @@ fn content_layout(window: &AppWindow) -> Layout {
 }
 
 /// A bundled page as a `data:` URL, so nothing is fetched.
-fn page_url(html: &str) -> String {
+pub fn page_url(html: &str) -> String {
     let mut url = String::from("data:text/html;charset=utf-8,");
     wubble_core::url::percent_encode_into(html, &mut url);
     url
@@ -587,6 +325,48 @@ fn connect_input(window: &AppWindow) {
     });
 }
 
+/// Hands the shell's tab, Space and command-bar callbacks to the host,
+/// each one a model command or a bar update.
+fn connect_shell(window: &AppWindow) {
+    use wubble_core::model::Command as Cmd;
+    let command = |c: Cmd| with_host(|host| host.dispatch(c));
+    window.on_tab_activated(move |id| {
+        if let Some(t) = shell::tab_id(id) {
+            command(Cmd::ActivateTab(t));
+        }
+    });
+    window.on_tab_closed(move |id| {
+        if let Some(t) = shell::tab_id(id) {
+            command(Cmd::CloseTab(t));
+        }
+    });
+    window.on_space_switched(move |id| {
+        if let Some(s) = shell::space_id(id) {
+            command(Cmd::SwitchSpace(s));
+        }
+    });
+    window.on_close_tab_requested(|| with_host(Host::close_visible_tab));
+    let weak = window.as_weak();
+    window.on_new_tab_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            with_host(|host| host.bar_for_new_tab(&window));
+        }
+    });
+    let weak = window.as_weak();
+    window.on_address_focus_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            with_host(|host| host.bar_for_address(&window));
+        }
+    });
+    let weak = window.as_weak();
+    window.on_command_query_changed(move |query| {
+        if let Some(window) = weak.upgrade() {
+            with_host(|host| host.bar_query(&window, &query));
+        }
+    });
+    window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
+}
+
 /// Opens the window with one web view on the shared GPU device and runs the
 /// Slint loop until the window closes or the smoke ends.
 fn run(
@@ -607,10 +387,35 @@ fn run(
     std::mem::forget(gpu.clone());
 
     let bundled = || page_url(SMOKE_PAGE);
-    let (url, quit_after, nav_smoke) = match mode {
-        Mode::Browse { url } => (url.unwrap_or_else(bundled), None, None),
-        Mode::Frames { frames, url } => (url.unwrap_or_else(bundled), Some(frames), None),
-        Mode::Nav => (bundled(), None, Some(NavSmoke::default())),
+    let none = Checks {
+        quit_after: None,
+        nav_smoke: None,
+        tabs_smoke: None,
+    };
+    let browsing = matches!(mode, Mode::Browse { .. });
+    let (url, checks) = match mode {
+        Mode::Browse { url } => (url.unwrap_or_else(bundled), none),
+        Mode::Frames { frames, url } => (
+            url.unwrap_or_else(bundled),
+            Checks {
+                quit_after: Some(frames),
+                ..none
+            },
+        ),
+        Mode::Nav => (
+            bundled(),
+            Checks {
+                nav_smoke: Some(NavSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Tabs => (
+            bundled(),
+            Checks {
+                tabs_smoke: Some(TabsSmoke::default()),
+                ..none
+            },
+        ),
     };
     // The first pump runs once the loop does; from there CEF schedules every
     // pump itself.
@@ -621,23 +426,19 @@ fn run(
     })?;
     let window = AppWindow::new()?;
     connect_input(&window);
-    HOST.set(Some(Host {
-        engine,
-        window: window.as_weak(),
-        timer: slint::Timer::default(),
-        presenter: gpu.presenter(),
-        content: Content::Waiting { url },
-        stats: FrameStats::default(),
-        last_present: None,
-        idle_runs: 0,
-        quit_after,
-        nav_smoke,
-        nav_title: None,
-        input: InputState::default(),
-        failure: None,
-    }));
+    connect_shell(&window);
+    let host = Host::new(engine, &window, gpu.presenter(), url, checks);
+    HOST.set(Some(host));
+    // Smokes drive the lifecycle themselves, never by wall-clock time.
+    let lifecycle = slint::Timer::default();
+    if browsing {
+        lifecycle.start(slint::TimerMode::Repeated, LIFECYCLE_TICK, || {
+            with_host(|host| host.tick(Instant::now()))
+        });
+    }
 
     let result = window.run();
+    drop(lifecycle);
     drop(window);
     let mut host = HOST.take().ok_or("the host went missing")?;
     drop(host.timer);
@@ -647,5 +448,6 @@ fn run(
         stats: host.stats.clone(),
         failure: host.failure.take().map(Into::into),
         nav_title: host.nav_title.take(),
+        tabs_passed: host.tabs_passed,
     })
 }

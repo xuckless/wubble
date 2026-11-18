@@ -12,8 +12,9 @@ struct Cli {
     #[arg(value_name = "URL", conflicts_with = "smoke")]
     page: Option<String>,
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
-    /// stops, no window), `frames=N` (show N zero-copy frames, then exit) or
-    /// `nav` (navigate between two bundled pages, then exit).
+    /// stops, no window), `frames=N` (show N zero-copy frames, then exit),
+    /// `nav` (navigate between two bundled pages, then exit) or `tabs` (open,
+    /// switch, sleep, restore and close tabs on bundled pages, then exit).
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke)]
     smoke: Option<SmokeArg>,
     /// Page for `--smoke frames=N` instead of the bundled test page.
@@ -27,17 +28,19 @@ enum SmokeArg {
     Boot,
     Frames(NonZeroU32),
     Nav,
+    Tabs,
 }
 
 fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
     match value.split_once('=') {
         None if value == "boot" => Ok(SmokeArg::Boot),
         None if value == "nav" => Ok(SmokeArg::Nav),
+        None if value == "tabs" => Ok(SmokeArg::Tabs),
         Some(("frames", n)) => n
             .parse::<NonZeroU32>()
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
-        _ => Err("expected `boot`, `frames=N` or `nav`".into()),
+        _ => Err("expected `boot`, `frames=N`, `nav` or `tabs`".into()),
     }
 }
 
@@ -52,6 +55,8 @@ pub enum Smoke {
     },
     /// Load the bundled page, navigate to a second one, wait for its title.
     Nav,
+    /// Three tabs on bundled pages: switch, sleep, restore, close.
+    Tabs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,10 +78,12 @@ impl TryFrom<Cli> for Command {
             }),
             (Some(SmokeArg::Boot), None) => Ok(Command::Smoke(Smoke::Boot)),
             (Some(SmokeArg::Nav), None) => Ok(Command::Smoke(Smoke::Nav)),
-            (Some(SmokeArg::Boot | SmokeArg::Nav), Some(_)) => Err(Cli::command().error(
-                ErrorKind::ArgumentConflict,
-                "--url only applies to --smoke frames=N",
-            )),
+            (Some(SmokeArg::Tabs), None) => Ok(Command::Smoke(Smoke::Tabs)),
+            (Some(SmokeArg::Boot | SmokeArg::Nav | SmokeArg::Tabs), Some(_)) => Err(Cli::command()
+                .error(
+                    ErrorKind::ArgumentConflict,
+                    "--url only applies to --smoke frames=N",
+                )),
             (Some(SmokeArg::Frames(frames)), url) => {
                 Ok(Command::Smoke(Smoke::Frames { frames, url }))
             }
@@ -137,8 +144,18 @@ mod tests {
     }
 
     #[test]
+    fn smoke_tabs() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "tabs"]).ok(),
+            Some(Command::Smoke(Smoke::Tabs))
+        );
+        assert!(parse(["wubble", "--smoke", "tabs", "--url", "about:blank"]).is_err());
+        assert!(parse(["wubble", "--smoke", "tabs=2"]).is_err());
+    }
+
+    #[test]
     fn a_url_does_not_combine_with_a_smoke() {
-        for smoke in ["boot", "nav", "frames=3"] {
+        for smoke in ["boot", "nav", "tabs", "frames=3"] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),
                 "{smoke}"

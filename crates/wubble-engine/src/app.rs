@@ -211,6 +211,8 @@ pub struct Engine {
     /// Declared before `runtime` so views drop before CEF shuts down.
     views: Vec<(ViewId, View)>,
     next_view: usize,
+    /// CPU fallback frames of views already dropped, so the total never shrinks.
+    closed_cpu_fallback: u64,
     /// `Some` exactly while `state` is Running or ShuttingDown: an Engine only
     /// exists after CEF initialised, and `Effect::ShutdownCef` takes it.
     runtime: Option<CefRuntime>,
@@ -235,6 +237,7 @@ impl Engine {
         let mut engine = Self {
             views: Vec::new(),
             next_view: 0,
+            closed_cpu_fallback: 0,
             runtime: Some(runtime),
             state: State::Uninitialised,
             pump: PumpState::default(),
@@ -289,6 +292,50 @@ impl Engine {
         self.views
             .iter_mut()
             .find_map(|(view_id, view)| (*view_id == id).then_some(view))
+    }
+
+    /// Asks CEF to close one view. It stays counted (and reachable through
+    /// [`Self::view`]) until CEF reports it gone on a later pump. Unknown or
+    /// already closing views are ignored.
+    pub fn close_view(&mut self, id: ViewId) {
+        if let Some(view) = self.view(id) {
+            view.close();
+        }
+    }
+
+    /// The engine still holds the view (CEF has not reported it closed).
+    pub fn has_view(&self, id: ViewId) -> bool {
+        self.views.iter().any(|(view_id, _)| *view_id == id)
+    }
+
+    /// The view is open and CEF believes it visible.
+    pub fn is_visible(&self, id: ViewId) -> bool {
+        self.views
+            .iter()
+            .any(|(view_id, view)| *view_id == id && view.is_open() && view.is_visible())
+    }
+
+    /// Views CEF has not yet reported closed, closing ones included.
+    pub fn view_count(&self) -> usize {
+        self.views.len()
+    }
+
+    /// Open views CEF believes visible.
+    pub fn visible_views(&self) -> usize {
+        self.views
+            .iter()
+            .filter(|(_, view)| view.is_open() && view.is_visible())
+            .count()
+    }
+
+    /// CPU `OnPaint` frames across every view so far, closed ones included;
+    /// `None` where welding does not count them.
+    pub fn cpu_fallback_frames(&self) -> Option<u64> {
+        self.views
+            .iter()
+            .try_fold(self.closed_cpu_fallback, |sum, (_, view)| {
+                view.cpu_fallback_frames().map(|n| sum + n)
+            })
     }
 
     fn apply(&mut self, event: Event) {
@@ -359,11 +406,16 @@ impl Engine {
     fn reap_closed_views(&mut self) -> Vec<(ViewId, WebEvent)> {
         let mut events = Vec::new();
         let before = self.views.len();
+        let mut gone_cpu = 0;
         self.views.retain_mut(|(id, view)| {
             let (new, closed) = view.drain_events();
             events.extend(new.into_iter().map(|event| (*id, event)));
+            if closed {
+                gone_cpu += view.cpu_fallback_frames().unwrap_or(0);
+            }
             !closed
         });
+        self.closed_cpu_fallback += gone_cpu;
         for _ in self.views.len()..before {
             self.apply(Event::BrowserClosed);
         }

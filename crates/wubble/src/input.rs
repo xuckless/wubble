@@ -27,8 +27,8 @@ const PRIMARY: ModifiersState = if cfg!(target_os = "macos") {
 };
 
 /// Shortcuts the shell keeps even while the page has focus (`PRIMARY` +
-/// key): new tab, address. Matches the `KeyBinding`s in `app.slint`.
-const RESERVED_CHORDS: &[&str] = &["t", "l"];
+/// key): new tab, address, close tab. Matches the `KeyBinding`s in `app.slint`.
+const RESERVED_CHORDS: &[&str] = &["t", "l", "w"];
 
 /// What to do with a key event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +131,11 @@ impl InputState {
         })
     }
 
+    /// Another view is now the visible one: it has been told nothing yet.
+    pub fn forget_view_focus(&mut self) {
+        self.view_focused = false;
+    }
+
     /// A monotonic time for double-click detection.
     pub fn now(&self) -> Duration {
         self.epoch.elapsed()
@@ -191,7 +196,7 @@ mod tests {
 
     #[test]
     fn reserved_chords_stay_with_the_shell() {
-        for key in ["t", "l", "T"] {
+        for key in ["t", "l", "w", "T", "W"] {
             assert_eq!(route(true, &ch(key), PRIMARY), KeyRoute::Shell, "{key}");
         }
         // Other chords, and the reserved keys with other modifiers, go to the page.
@@ -236,6 +241,14 @@ mod tests {
         assert_eq!(input.focus_change(true, true), Some(true));
         assert_eq!(input.focus_change(true, true), None);
         assert_eq!(input.focus_change(false, true), Some(false));
+    }
+
+    #[test]
+    fn a_newly_visible_view_hears_the_focus_again() {
+        let mut input = InputState::default();
+        assert_eq!(input.focus_change(true, true), Some(true));
+        input.forget_view_focus();
+        assert_eq!(input.focus_change(true, true), Some(true));
     }
 
     #[test]

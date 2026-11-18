@@ -34,6 +34,7 @@ and list it in `vendor/welding/WUBBLE_CHANGES.md`; test with `cargo test -p weld
     cargo run -p wubble -- --smoke boot   # CEF boots and shuts down, no window
     cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
     cargo run -p wubble -- --smoke nav   # window navigates between two bundled pages, exits; run by hand only
+    cargo run -p wubble -- --smoke tabs   # window opens, switches, sleeps, restores and closes tabs, exits; run by hand only
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
 
 ## Code principles
