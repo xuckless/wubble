@@ -599,6 +599,33 @@ impl CefSurfaceProducer for LinuxCefProducer {
         }
     }
 
+    fn set_screen_area(&mut self, area: crate::ScreenArea) -> Result<(), WeldError> {
+        #[cfg(feature = "cef-runtime")]
+        {
+            {
+                let mut metrics = self.metrics.lock().unwrap();
+                if metrics.area() == Some(area) {
+                    return Ok(());
+                }
+                metrics.set_area(area);
+            }
+            // Same announcement as a scale change: CEF re-reads the view and
+            // screen rectangles only when told.
+            if let Some(host) = self.browser.host() {
+                host.notify_screen_info_changed();
+                host.was_resized();
+            }
+            return Ok(());
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            let _ = area;
+            Err(WeldError::PlatformUnsupported(
+                "screen area requires the cef-runtime feature",
+            ))
+        }
+    }
+
     fn scale_factor(&self) -> f32 {
         #[cfg(feature = "cef-runtime")]
         {

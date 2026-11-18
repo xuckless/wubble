@@ -623,10 +623,16 @@ impl Host {
             .visible_tab()
             .is_some_and(|t| self.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
-        self.page_smoke_step(page_smoke::Input::Worked {
-            framed,
-            popup_framed,
-        });
+        if self.checks.page_smoke.is_some() {
+            let view_width = self.model.visible_tab().map_or(0.0, |t| {
+                self.pane_layout(&window, t).size.width as f32 / window.window().scale_factor()
+            });
+            self.page_smoke_step(page_smoke::Input::Worked {
+                framed,
+                popup_framed,
+                view_width,
+            });
+        }
         if self.checks.quit_after.is_some() {
             self.idle_runs += 1;
             if self.idle_runs > SMOKE_MAX_IDLE_RUNS {

@@ -9,7 +9,8 @@ use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::TabId;
-use wubble_engine::view::Layout;
+use wubble_engine::view::{Layout, ScreenArea};
+use wubble_gfx::FrameSize;
 use wubble_gfx::pacing::PaceEvent;
 use wubble_ui::{AppWindow, SplitPane, SplitSeam};
 
@@ -67,13 +68,35 @@ impl Host {
 
     /// The layout of `tab`'s view: its pane's, or the whole content area for a tab not on screen.
     pub(super) fn pane_layout(&self, window: &AppWindow, tab: TabId) -> Layout {
-        let (width, height) = content_size(window);
+        let (width, _) = content_size(window);
         let rect = self
             .pane_rects(window)
             .into_iter()
             .find(|r| r.tab == tab)
             .unwrap_or(PageRect { tab, x: 0.0, width });
-        rect.layout(height, window.window().scale_factor())
+        self.layout_of(window, &rect)
+    }
+
+    /// `rect`'s view layout, with where it sits in the window: CEF treats the window as the
+    /// screen, so a `<select>` list can open outside the page.
+    fn layout_of(&self, window: &AppWindow, rect: &PageRect) -> Layout {
+        let (_, height) = content_size(window);
+        let scale = window.window().scale_factor();
+        let (x, y) = (
+            window.get_content_x() + rect.x as f32,
+            window.get_content_y(),
+        );
+        let size = window.window().size();
+        Layout {
+            area: Some(ScreenArea {
+                window: FrameSize::new(size.width, size.height),
+                origin: (
+                    (f64::from(x) * f64::from(scale)).round() as i32,
+                    (f64::from(y) * f64::from(scale)).round() as i32,
+                ),
+            }),
+            ..rect.layout(height, scale)
+        }
     }
 
     /// The focused page's top left in the window, logical pixels: its menu, popup and IME
@@ -142,11 +165,10 @@ impl Host {
     /// Each view on screen gets its pane's size (unchanged layouts cost nothing; a new one only
     /// asks CEF to resize, the stretched last frame shows meanwhile), then the shell's panes.
     pub(super) fn layout_panes(&mut self, window: &AppWindow) {
-        let (_, height) = content_size(window);
-        let scale = window.window().scale_factor();
         for rect in self.pane_rects(window) {
+            let layout = self.layout_of(window, &rect);
             if let Some(view) = self.tab_view(rect.tab) {
-                view.set_layout(rect.layout(height, scale));
+                view.set_layout(layout);
             }
         }
         self.render_panes(window);
@@ -219,12 +241,10 @@ impl Host {
     /// Takes each pane's new frame, if it has one, and the focused page's popup frame. Returns
     /// whether any pane got a frame.
     pub(super) fn present_panes(&mut self, window: &AppWindow) -> Result<bool, String> {
-        let (_, height) = content_size(window);
-        let scale = window.window().scale_factor();
         let focused = self.model.visible_tab();
         let mut presented = false;
         for rect in self.pane_rects(window) {
-            let layout = rect.layout(height, scale);
+            let layout = self.layout_of(window, &rect);
             let Some(view) = self.tab_view(rect.tab) else {
                 continue;
             };

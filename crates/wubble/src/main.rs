@@ -554,6 +554,7 @@ pub fn content_layout(window: &AppWindow) -> Layout {
             physical(window.get_content_height(), scale),
         ),
         scale,
+        area: None,
     }
 }
 

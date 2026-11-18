@@ -54,11 +54,32 @@ fn next_probe_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Physical size and device scale of the rectangle a view fills.
+/// Where a view sits in the host window (both physical pixels). The window
+/// stands in for the screen, so Blink can place popups such as `<select>`
+/// lists outside the view; see welding's `ScreenArea`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenArea {
+    pub window: FrameSize,
+    /// The view's top-left corner in the window.
+    pub origin: (i32, i32),
+}
+
+impl ScreenArea {
+    fn to_welding(self) -> welding::ScreenArea {
+        welding::ScreenArea {
+            window: dpi_size(self.window),
+            origin: self.origin,
+        }
+    }
+}
+
+/// Physical size and device scale of the rectangle a view fills, and where
+/// it sits in the window (`None` when the host does not say).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layout {
     pub size: FrameSize,
     pub scale: f32,
+    pub area: Option<ScreenArea>,
 }
 
 impl Layout {
@@ -115,6 +136,7 @@ pub enum ViewEvent {
 pub enum ViewEffect {
     Resize(FrameSize),
     SetScale(f32),
+    SetScreenArea(ScreenArea),
     /// Hand the frame to the host.
     Present,
     Close,
@@ -146,6 +168,9 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
             }
             if new.scale != current.scale {
                 effects.push(SetScale(new.scale));
+            }
+            if let Some(area) = new.area.filter(|_| new.area != current.area) {
+                effects.push(SetScreenArea(area));
             }
             (Resizing { wanted: new }, effects)
         }
@@ -246,6 +271,13 @@ impl View {
             &config.gpu,
             request_filter,
         )?;
+        let mut producer = producer;
+        if let Some(area) = layout.area {
+            // The creation config has no screen area; CEF reads it later.
+            if let Err(e) = producer.set_screen_area(area.to_welding()) {
+                eprintln!("wubble-engine: initial screen area failed: {e}");
+            }
+        }
         let browser_id = producer.browser_id();
         Ok(Self {
             producer,
@@ -1151,6 +1183,7 @@ impl View {
         let result = match effect {
             ViewEffect::Resize(size) => self.producer.resize(dpi_size(size)),
             ViewEffect::SetScale(scale) => self.producer.set_scale_factor(scale),
+            ViewEffect::SetScreenArea(area) => self.producer.set_screen_area(area.to_welding()),
             ViewEffect::Close => self.producer.close(),
             ViewEffect::Present | ViewEffect::ReportClosed => return false,
         };
@@ -1507,7 +1540,27 @@ mod tests {
     const BIG: FrameSize = FrameSize::new(1024, 768);
 
     fn layout(size: FrameSize, scale: f32) -> super::Layout {
-        super::Layout { size, scale }
+        super::Layout {
+            size,
+            scale,
+            area: None,
+        }
+    }
+
+    const AREA: ScreenArea = ScreenArea {
+        window: FrameSize::new(1000, 700),
+        origin: (10, 20),
+    };
+    const OTHER_AREA: ScreenArea = ScreenArea {
+        window: FrameSize::new(1000, 700),
+        origin: (30, 20),
+    };
+
+    fn placed(size: FrameSize, scale: f32, area: ScreenArea) -> super::Layout {
+        super::Layout {
+            area: Some(area),
+            ..layout(size, scale)
+        }
     }
 
     fn live() -> ViewState {
@@ -1532,6 +1585,8 @@ mod tests {
             Layout(layout(SMALL, 1.0)),
             Layout(layout(BIG, 1.0)),
             Layout(layout(SMALL, 2.0)),
+            Layout(placed(SMALL, 1.0, AREA)),
+            Layout(placed(SMALL, 1.0, OTHER_AREA)),
             Layout(layout(FrameSize::new(0, 0), 1.0)),
             Frame(SMALL),
             Frame(BIG),
@@ -1553,6 +1608,21 @@ mod tests {
             (Live { .. }, Layout(l)) if l == layout(SMALL, 2.0) => {
                 (resizing(SMALL, 2.0), vec![SetScale(2.0)])
             }
+            // A new area is announced; layouts without one never are.
+            (Live { .. }, Layout(l)) if l == placed(SMALL, 1.0, AREA) => {
+                (Resizing { wanted: l }, vec![SetScreenArea(AREA)])
+            }
+            (Live { .. }, Layout(l)) if l == placed(SMALL, 1.0, OTHER_AREA) => {
+                (Resizing { wanted: l }, vec![SetScreenArea(OTHER_AREA)])
+            }
+            (Resizing { .. }, Layout(l)) if l == placed(SMALL, 1.0, AREA) => (
+                Resizing { wanted: l },
+                vec![Resize(SMALL), SetScreenArea(AREA)],
+            ),
+            (Resizing { .. }, Layout(l)) if l == placed(SMALL, 1.0, OTHER_AREA) => (
+                Resizing { wanted: l },
+                vec![Resize(SMALL), SetScreenArea(OTHER_AREA)],
+            ),
             (Live { .. }, Frame(_)) => (state, vec![Present]),
             (Live { .. } | Resizing { .. }, CloseRequested) => (Closing, vec![Close]),
             (Resizing { .. }, Layout(l)) if l == layout(SMALL, 1.0) => {
@@ -1598,6 +1668,19 @@ mod tests {
                 all.extend(effects);
                 (next, all)
             })
+    }
+
+    #[test]
+    fn the_screen_area_is_announced_only_when_it_changes() {
+        let a = Layout(placed(SMALL, 1.0, AREA));
+        let (state, effects) = run(live(), &[a, a]);
+        assert_eq!(effects, vec![SetScreenArea(AREA)]);
+        let b = Layout(placed(SMALL, 1.0, OTHER_AREA));
+        let (_, effects) = run(state, &[b, b]);
+        assert_eq!(effects, vec![SetScreenArea(OTHER_AREA)]);
+        // A layout that does not say where the view is keeps what CEF has.
+        let (_, effects) = run(state, &[Layout(layout(SMALL, 1.0))]);
+        assert_eq!(effects, vec![]);
     }
 
     #[test]

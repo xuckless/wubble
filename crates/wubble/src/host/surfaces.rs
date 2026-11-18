@@ -117,7 +117,8 @@ impl Host {
         self.render_surfaces(window);
         // After the event took effect, so the smoke acts on the open surface.
         if let Some(event) = seen {
-            self.page_smoke_step(crate::page_smoke::Input::Page(&event));
+            let view = self.pane_layout(window, tab).size;
+            self.page_smoke_step(crate::page_smoke::Input::Page(&event, view));
         }
     }
 

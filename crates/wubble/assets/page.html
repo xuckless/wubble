@@ -4,15 +4,21 @@
 <meta charset="utf-8">
 <title>wubble page</title>
 <style>
+html { overflow: hidden; }
 body { margin: 0; background: #101820; color: #e8eef4; font: 16px sans-serif; }
-#pick { position: absolute; left: 20px; top: 20px; width: 200px; height: 30px; }
+/* At the right edge, with one label wider than the page but narrower than the
+   window: Blink right-aligns the list to the select, so it starts left of the
+   page (in the sidebar's margin) only if it is told the window is the screen.
+   The smoke window is 1280x800. */
+#pick, #pick option { font: 16px monospace; }
+#pick { position: absolute; right: 0; top: 20px; width: 60px; height: 30px; }
 #ask { position: absolute; left: 20px; top: 80px; width: 120px; height: 30px; }
 #go { position: absolute; left: 20px; top: 140px; line-height: 30px; }
 #text { position: absolute; left: 20px; top: 200px; }
 </style>
 </head>
 <body>
-<select id="pick"><option>one</option><option>two</option><option>three</option></select>
+<select id="pick"><option>mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm</option><option>two</option><option>three</option></select>
 <button id="ask" onclick="alert('hello from the page'); document.title = 'wubble page alerted'">alert</button>
 <a id="go" href="https://example.invalid/next">a link</a>
 <p id="text">The first needle, and the second needle: <code>--smoke page</code>.</p>

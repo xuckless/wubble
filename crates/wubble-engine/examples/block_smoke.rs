@@ -114,6 +114,7 @@ fn run(dir: &Path) -> Result<(), String> {
             layout: Layout {
                 size: FrameSize::new(400, 300),
                 scale: 1.0,
+                area: None,
             },
             frame_rate: 30,
             begin_frames: false,

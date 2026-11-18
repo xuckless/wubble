@@ -1008,6 +1008,15 @@ pub trait CefSurfaceProducer {
         ))
     }
 
+    /// Tell CEF where the view sits in the host window, and treat the window
+    /// as the screen, so popups (`<select>` lists) can extend outside the
+    /// view. A no-op when the area is unchanged. wubble change.
+    fn set_screen_area(&mut self, _area: crate::ScreenArea) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "screen area is not wired for this producer",
+        ))
+    }
+
     /// The scale factor currently reported to CEF.
     fn scale_factor(&self) -> f32 {
         1.0

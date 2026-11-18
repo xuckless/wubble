@@ -210,6 +210,19 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `on_accelerated_paint`; `vulkan_dmabuf.rs` `copy_dmabuf_to_owned` takes it
    and measures the whole copy and the `device.poll(Wait)` part. For
    wubble's hand-run `--measure`; costs three `Instant::now()` per frame.
+23. **Popups outside the view.** `view.rs`: new `ScreenArea { window, origin }`
+   (physical; re-exported from `lib.rs`) in `ViewMetrics`, with pure
+   `view_rect_dip`, `screen_rect_dip`, `screen_point` and `screen_point_dip`.
+   All three render handlers: `view_rect` also sets x and y, `screen_info`
+   sets `rect` and `available_rect`, new `root_screen_rect`, `screen_point`
+   reports the window point (device px; DIP on macOS). New
+   `CefSurfaceProducer::set_screen_area` (default `PlatformUnsupported`; the
+   three producers store the area, then `notify_screen_info_changed` and
+   `was_resized`, only when it changed). Ported from cefclient
+   `osr_window_win.cc` in its `real_screen_bounds` mode (BSD-3-Clause), with the
+   host window standing in for the screen so no global window position is
+   needed (Wayland has none). Without an area nothing changes. Tests: the
+   rectangles at scale 1, 2 and 1.5, origin carried, default unchanged.
 
 ## Not changed, on purpose
 
