@@ -41,11 +41,23 @@ export component CommandRow inherits RowBase {
         return Colors.coral;
     }
 
-    opacity: root.shown ? 1 : 0;
-    animate opacity {
-        duration: Motion.overlap-in;
-        delay: Motion.stagger * root.index;
-    }
+    states [
+        in when root.shown: {
+            opacity: 1;
+            in {
+                animate opacity {
+                    duration: Motion.overlap-in;
+                    delay: Motion.stagger * root.index;
+                }
+            }
+            out {
+                animate opacity { duration: Motion.overlap-out; }
+            }
+        }
+        out when !root.shown: {
+            opacity: 0;
+        }
+    ]
 
     HorizontalLayout {
         padding-left: Spacing.s3;

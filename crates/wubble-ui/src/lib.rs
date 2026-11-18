@@ -5,48 +5,73 @@ slint::include_modules!();
 #[cfg(test)]
 mod tests {
     use super::*;
+    use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
+    use slint::{
+        Model, ModelRc, SharedString,
+        platform::{Key, WindowEvent},
+    };
+    use std::{cell::Cell, rc::Rc, time::Duration};
 
-    /// Compile-time proof that `Colors` is exported and its `light` switch is
-    /// reachable from Rust. Never constructs a window.
-    #[allow(dead_code)]
-    fn theme_switch_is_reachable(app: &AppWindow) {
-        app.global::<Colors>().set_light(true);
-    }
-
-    /// Compile-time proof that the command bar surface is reachable from Rust.
-    #[allow(dead_code)]
-    fn command_bar_is_reachable(app: &AppWindow) {
-        app.set_command_bar_state(CommandBarState::Open);
-        app.set_command_results(slint::ModelRc::from(
-            &[CommandResult {
-                kind: CommandKind::OpenTab,
-                title: "t".into(),
-                subtitle: "s".into(),
-                shortcut: "k".into(),
-            }][..],
-        ));
-        app.set_command_query("q".into());
-        app.on_command_query_changed(|_| {});
-        app.on_command_result_chosen(|_| {});
-        app.on_command_dismissed(|| {});
-        app.on_new_tab_requested(|| {});
-        app.on_address_focus_requested(|| {});
-    }
-
-    #[test]
-    fn command_bar_state_is_one_enum() {
-        let src = include_str!("../ui/components/command-bar.slint");
-        assert!(src.contains("property <CommandBarState> state"));
-        for flag in ["open", "closing", "closed"] {
-            assert!(!src.contains(&format!("property <bool> {flag}")));
+    fn result(title: &str) -> CommandResult {
+        CommandResult {
+            kind: CommandKind::OpenTab,
+            title: title.into(),
+            subtitle: "".into(),
+            shortcut: "".into(),
         }
     }
 
+    fn press(app: &AppWindow, text: impl Into<SharedString>) {
+        let text = text.into();
+        app.window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        app.window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    }
+
+    fn settle() {
+        mock_elapsed_time(Duration::from_millis(500));
+    }
+
+    /// The testing platform can be installed once per process, so every
+    /// scenario runs in this single test, on one window.
     #[test]
-    fn app_exports_colors() {
-        let src = include_str!("../ui/app.slint");
-        assert!(src.contains(
-            "export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }"
-        ));
+    fn command_bar_lifecycle() {
+        init_integration_test_with_mock_time();
+        let app = AppWindow::new().unwrap();
+        let rows: Vec<_> = (0..3).map(|i| result(&format!("r{i}"))).collect();
+        app.set_command_results(ModelRc::from(rows.as_slice()));
+        let chosen = Rc::new(Cell::new(0));
+        let dismissed = Rc::new(Cell::new(0));
+        let c = chosen.clone();
+        app.on_command_result_chosen(move |_| c.set(c.get() + 1));
+        let d = dismissed.clone();
+        app.on_command_dismissed(move || d.set(d.get() + 1));
+        app.show().unwrap();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+
+        // Open.
+        app.invoke_request_new_tab();
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
+        assert_eq!(app.get_command_results().row_count(), 3);
+
+        // A second Enter while closing must not choose again.
+        press(&app, "\n");
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        press(&app, "\n");
+        assert_eq!(chosen.get(), 1);
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+
+        // A second Escape while closing must not dismiss again.
+        app.invoke_request_address_focus();
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
+        press(&app, Key::Escape);
+        press(&app, Key::Escape);
+        assert_eq!(dismissed.get(), 1);
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
     }
 }

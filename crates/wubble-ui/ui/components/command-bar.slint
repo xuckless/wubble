@@ -9,14 +9,16 @@ import { ScrollView } from "std-widgets.slint";
 export component CommandBar inherits Rectangle {
     in property <[CommandResult]> results;
     in-out property <string> query <=> input.text;
-    in-out property <CommandBarState> state: CommandBarState.closed;
+    out property <CommandBarState> state: CommandBarState.closed;
 
     callback query-changed(string);
     callback result-chosen(int);
     callback dismissed();
+    // Fired once the bar has fully closed; the host restores focus.
+    callback closed();
 
     // Keyboard selection; `current` is what the UI uses, clamped to the model.
-    in-out property <int> selected: 0;
+    property <int> selected: 0;
     property <int> count: root.results.length;
     property <int> current: max(0, min(root.selected, root.count - 1));
     property <length> row-pitch: Sizes.row-height + Spacing.s1;
@@ -40,15 +42,17 @@ export component CommandBar inherits Rectangle {
     }
 
     function choose(i: int) {
-        if (i >= 0 && i < root.count) {
+        if (root.state == CommandBarState.open && i >= 0 && i < root.count) {
             root.result-chosen(i);
             root.dispatch(CommandBarEvent.close);
         }
     }
 
     function dismiss() {
-        root.dismissed();
-        root.dispatch(CommandBarEvent.close);
+        if (root.state == CommandBarState.open) {
+            root.dismissed();
+            root.dispatch(CommandBarEvent.close);
+        }
     }
 
     // Port of listview.slint bring-into-view (see THIRD_PARTY_NOTICES.md).
@@ -96,6 +100,11 @@ export component CommandBar inherits Rectangle {
         if (self.state == CommandBarState.open) {
             input.focus();
             input.select-all();
+        } else if (self.state == CommandBarState.closed) {
+            input.clear-focus();
+            root.selected = 0;
+            list.content-y = 0px;
+            root.closed();
         }
     }
 
@@ -109,6 +118,7 @@ export component CommandBar inherits Rectangle {
 
     // Scrim; a click outside the panel dismisses.
     TouchArea {
+        enabled: root.state == CommandBarState.open;
         clicked => {
             root.dismiss();
         }
@@ -117,17 +127,10 @@ export component CommandBar inherits Rectangle {
         background: Colors.scrim;
     }
 
-    panel := FocusScope {
+    panel := Rectangle {
         width: min(Sizes.command-bar-width, root.width);
         x: (root.width - self.width) / 2;
         height: Sizes.command-input-height + root.visible-rows * root.row-pitch + (root.count > 0 ? Spacing.s2 : 0px);
-
-        KeyBinding {
-            keys: @keys(Escape);
-            activated => {
-                root.dismiss();
-            }
-        }
 
         Glass {
             radius: Radius.xl;
@@ -149,6 +152,7 @@ export component CommandBar inherits Rectangle {
                         single-line: true;
                         edited => {
                             root.selected = 0;
+                            list.content-y = 0px;
                             root.query-changed(self.text);
                         }
                         accepted => {
