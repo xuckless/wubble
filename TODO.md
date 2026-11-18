@@ -124,7 +124,8 @@ copies, on Linux/Wayland/NVIDIA. Nothing else starts until this passes.
 - [x] Measure: frame time, latency input→photon, count of fallback `OnPaint` (CPU) frames — must be 0 (counted on Linux through the welding fork; `--smoke frames` prints it). `wubble --measure` (see Decided "Frame-path measurement"); input to pixels is to the render, not to photons; no CPU fallback frame was logged in any run
 - [x] NVIDIA specifics: dmabuf modifiers, explicit sync. On CEF 156.0.30, RTX 5060 / 615.71.09 / Wayland imports block-linear dmabufs through welding/grafting and `--smoke frames=120` passes its pixel check; no explicit sync needed, CEF sends each frame after its GPU work completes (see "CEF version"). Each frame is copied inside the paint callback, so a pooled buffer is never read after CEF takes it back
 - [ ] macOS port of the spike: IOSurface → Metal wgpu texture; helper `.app` bundle layout
-- [ ] Windows CI runner builds the workspace; D3D11 shared-handle port follows once Linux + macOS pass
+- [~] CI (`.github/workflows/ci.yml`): Linux and macOS run fmt (Linux), clippy, test, build on push to main and PRs, with prebuilt CEF cached; the Windows job builds the same but is `continue-on-error` and unseen, so the first run may show compile errors to fix. Drop `continue-on-error` after its first green run (not yet run on GitHub)
+- [ ] Windows CI runner builds the workspace green; D3D11 shared-handle port follows once Linux + macOS pass
 - [x] ADR: keep `welding` as a dependency, or vendor/fork the import code: forked into `vendor/welding` (see "welding fork")
 
 ## M1 — Engine layer (a correct windowless browser)

@@ -30,8 +30,9 @@ pub fn device() -> Option<(wgpu::Device, wgpu::Queue, String)> {
     let adapter =
         block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
     let name = adapter.get_info().name;
-    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("an adapter was found, so a default device must be created");
+    // A CI runner's software adapter may refuse the default limits: skip too.
+    let (device, queue) =
+        block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     device.on_uncaptured_error(std::sync::Arc::new(|e| panic!("wgpu error: {e}")));
     Some((device, queue, name))
 }
