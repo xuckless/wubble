@@ -9,4 +9,7 @@ license.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+# Passwords in flight are wiped on drop (`secret`); already in Cargo.lock via wubble-vault.
+zeroize = "1"
 url.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }

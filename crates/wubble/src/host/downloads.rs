@@ -235,7 +235,7 @@ impl Host {
         }
     }
 
-    /// The popover's buttons.
+    /// The popover's and the downloads page's buttons.
     pub fn download_action(&mut self, id: i64, action: DownloadAction) {
         let event = match action {
             DownloadAction::Pause => DownloadEvent::Pause,
@@ -249,8 +249,35 @@ impl Host {
                 }
                 return;
             }
+            DownloadAction::Open => {
+                let path = self
+                    .downloads
+                    .get(id)
+                    .filter(|e| e.can_open())
+                    .map(|e| e.path.clone());
+                match path {
+                    Some(path) if path.exists() => {
+                        if let Err(e) = opener::open(&path) {
+                            eprintln!("wubble: cannot open {}: {e}", path.display());
+                        }
+                    }
+                    _ => {
+                        if let Some(window) = self.window.upgrade() {
+                            self.toast(&window, "File not found");
+                        }
+                    }
+                }
+                return;
+            }
         };
         self.apply_download(id, event);
+    }
+
+    /// "Clear finished": every entry that is done goes, through the one remove path.
+    pub(crate) fn downloads_cleared(&mut self) {
+        for id in download::finished_ids(&self.downloads.list) {
+            self.apply_download(id, DownloadEvent::Remove);
+        }
     }
 
     /// The tab's view is about to be closed by us (the tab closed, or its
@@ -311,10 +338,10 @@ impl Host {
                     }
                 }
                 DownloadEffect::StartAgain => {
-                    // Any live view can start it; the visible tab's is at hand.
-                    // The new download replaces this entry; without a view
-                    // the entry stays for a later retry.
-                    if let Some(view) = self.view() {
+                    // Any live view can start it (the downloads page's own tab has none, so
+                    // the visible tab's, else another's). The new download replaces this
+                    // entry; without a view the entry stays for a later retry.
+                    if let Some(view) = self.any_view() {
                         view.start_download(&entry.url);
                         self.forget_download(id);
                     } else if let Some(window) = self.window.upgrade() {

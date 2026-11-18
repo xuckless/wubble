@@ -4,6 +4,7 @@
 
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
+use wubble_core::pages::InternalPage;
 use wubble_core::space::{MAX_PANES, SpaceId};
 use wubble_core::tab::TabId;
 
@@ -52,6 +53,8 @@ pub enum Plan {
     Copy(String),
     /// Open DevTools on the visible page.
     DevTools,
+    /// Mod+D: the bookmark sheet for the visible page.
+    BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
     OpenBeside,
     Quit,
@@ -137,6 +140,15 @@ pub fn plan(action: Action, model: &Model) -> Plan {
                     opener: Some(t),
                 })
             }),
+        Action::OpenSettings => Plan::Model(Command::OpenInternal(InternalPage::Settings)),
+        Action::OpenHistory => Plan::Model(Command::OpenInternal(InternalPage::History)),
+        Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
+        Action::OpenDownloads => Plan::Model(Command::OpenInternal(InternalPage::Downloads)),
+        Action::OpenPasswords => Plan::Model(Command::OpenInternal(InternalPage::Passwords)),
+        Action::BookmarkPage => visible
+            .and_then(|t| model.tabs.get(&t))
+            .filter(|t| wubble_core::url::is_recordable(&t.url))
+            .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::Quit => Plan::Quit,
         Action::NewWindow | Action::NewSpace | Action::ToggleCompactMode => Plan::NotYet,
     }

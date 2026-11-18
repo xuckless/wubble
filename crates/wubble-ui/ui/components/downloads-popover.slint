@@ -2,7 +2,7 @@ import { Palette, Motion, Spacing, Fonts, Type, Chrome } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton, OverlapLayer } from "../components.slint";
 import { GlassTier, DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { DownloadRow } from "download-row.slint";
 
 // The downloads list, opened from the sidebar's download button: one row per download, newest
 // first, with its progress and the buttons its state allows (pause, resume, cancel, retry, show
@@ -81,106 +81,10 @@ export component DownloadsPopover inherits Rectangle {
                 index: i;
                 y: i * Shell.download-row;
                 height: Shell.download-row;
-                Rectangle {
-                    // Still has bytes to come (`DownloadState::is_active`).
-                    property <bool> active: item.status == DownloadStatus.running || item.status == DownloadStatus.paused || item.status == DownloadStatus.interrupted;
-                    property <bool> done: item.status == DownloadStatus.complete;
-                    border-radius: Shell.menu-row-radius;
-                    background: row-touch.has-hover ? Shell.command-selected : transparent;
-                    animate background {
-                        duration: Shell.menu-hover-ms;
-                        easing: Motion.easeOut;
-                    }
-                    row-touch := TouchArea { }
-                    HorizontalLayout {
-                        padding-left: Shell.menu-row-pad;
-                        padding-right: Spacing.s1;
-                        spacing: Spacing.s3;
-                        Rectangle {
-                            width: Shell.icon;
-                            Icon {
-                                y: (parent.height - self.height) / 2;
-                                path: IconPaths.download;
-                                tint: done ? Palette.mint : active ? Palette.ink : Palette.haze;
-                            }
-                        }
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            alignment: center;
-                            spacing: Spacing.s1;
-                            Text {
-                                text: item.name;
-                                color: Palette.ink;
-                                font-family: Fonts.ui;
-                                font-size: Type.body.size;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: item.detail;
-                                color: Palette.mist;
-                                font-family: Fonts.ui;
-                                font-size: Type.label.size;
-                                overflow: elide;
-                            }
-                            // The progress track, while there are bytes to come.
-                            Rectangle {
-                                visible: active;
-                                height: active ? Shell.download-track : 0px;
-                                border-radius: Shell.download-track / 2;
-                                background: Palette.rim;
-                                Rectangle {
-                                    x: 0px;
-                                    width: item.progress < 0 ? parent.width : parent.width * item.progress;
-                                    border-radius: parent.border-radius;
-                                    background: Palette.sky;
-                                    opacity: item.progress < 0 ? 0.35 : 1;
-                                    animate width {
-                                        duration: Shell.menu-in;
-                                        easing: Motion.easeOut;
-                                    }
-                                }
-                            }
-                        }
-                        if item.status == DownloadStatus.running: PressableButton {
-                            text: "Pause";
-                            clicked => {
-                                root.action(item.id, DownloadAction.pause);
-                            }
-                        }
-                        if item.status == DownloadStatus.paused || item.status == DownloadStatus.interrupted: PressableButton {
-                            text: "Resume";
-                            clicked => {
-                                root.action(item.id, DownloadAction.resume);
-                            }
-                        }
-                        if active: PressableButton {
-                            text: "Cancel";
-                            clicked => {
-                                root.action(item.id, DownloadAction.cancel);
-                            }
-                        }
-                        if item.status == DownloadStatus.cancelled || item.status == DownloadStatus.failed: PressableButton {
-                            text: "Retry";
-                            clicked => {
-                                root.action(item.id, DownloadAction.retry);
-                            }
-                        }
-                        if done: PressableButton {
-                            text: "Show";
-                            clicked => {
-                                root.action(item.id, DownloadAction.reveal);
-                            }
-                        }
-                        if !active: PressableButton {
-                            width: Chrome.controls;
-                            padding-x: (Chrome.controls - Shell.icon) / 2;
-                            clicked => {
-                                root.action(item.id, DownloadAction.remove);
-                            }
-                            Icon {
-                                path: IconPaths.close;
-                            }
-                        }
+                DownloadRow {
+                    item: item;
+                    action(id, a) => {
+                        root.action(id, a);
                     }
                 }
             }

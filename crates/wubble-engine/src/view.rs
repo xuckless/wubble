@@ -40,8 +40,8 @@ use crate::input::{
 use crate::media::{self, AudioProbe, Fullscreen, FullscreenInput, MediaEffect, ProbeInput};
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 use crate::page::{
-    ClipboardRequest, ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags, LogLevel,
-    MediaFlags, PageEvent, PermissionKind, Rect, RequestId,
+    ClipboardRequest, ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags,
+    FrameChannel, LogLevel, MediaFlags, PageEvent, PermissionKind, Rect, RequestId,
 };
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
@@ -542,6 +542,12 @@ impl View {
         self.apply(ViewEvent::Layout(layout));
     }
 
+    /// The frame size CEF paints at or was last asked for: the one owner of
+    /// a pane's wanted size. `None` once closing.
+    pub fn wanted_frame(&self) -> Option<FrameSize> {
+        target(self.state).map(Layout::frame_size)
+    }
+
     /// The newest frame CEF painted since the last call, if it is to be
     /// shown. Always `None` while hidden.
     pub fn take_frame(&mut self) -> Option<NativeFrame> {
@@ -596,20 +602,15 @@ impl View {
                     windows_key_code,
                     modifiers,
                 ))),
-                CefSurfaceEvent::Clipboard { kind, text, frame } => {
-                    let request = match kind.as_str() {
-                        "copy" => ClipboardRequest::Copy(text),
-                        "primary" => ClipboardRequest::Primary(text),
-                        "paste" => ClipboardRequest::Paste {
-                            primary: text == "primary",
-                        },
-                        "read" => match text.parse() {
-                            Ok(id) => ClipboardRequest::Read(id),
-                            Err(_) => continue,
-                        },
-                        _ => continue,
-                    };
-                    self.page.push(PageEvent::Clipboard { frame, request });
+                CefSurfaceEvent::FrameMessage {
+                    frame_id,
+                    frame_url,
+                    is_main,
+                    text,
+                } => {
+                    if let Some(event) = frame_message(frame_id, frame_url, is_main, text) {
+                        self.emit_page(event, mode);
+                    }
                 }
                 CefSurfaceEvent::ScriptCompleted { id, result } => {
                     let audible = result.ok().and_then(|json| json.trim().parse().ok());
@@ -740,6 +741,22 @@ impl View {
                 self.answer_download_path(id, None);
             }
             _ => {}
+        }
+    }
+
+    /// Hands `text` to the context script in the frame `frame` (a
+    /// [`PageEvent::FrameMessage`]'s frame id). False when that frame is
+    /// gone. `text` is never logged.
+    pub fn send_frame_message(&mut self, frame: &str, channel: FrameChannel, text: &str) -> bool {
+        match self.producer.send_frame_message(frame, &channel.join(text)) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "wubble-engine: view {}: frame message not sent: {e}",
+                    self.browser_id
+                );
+                false
+            }
         }
     }
 
@@ -925,10 +942,6 @@ impl View {
         self.zoom_step(welding::ZoomCommand::Out);
     }
 
-    pub fn zoom_reset(&mut self) {
-        self.zoom_step(welding::ZoomCommand::Reset);
-    }
-
     /// Clamped to 25..=500 %.
     pub fn set_zoom_percent(&mut self, percent: u32) {
         if self.is_open() {
@@ -1030,13 +1043,8 @@ impl View {
     /// Answers a frame's clipboard request ([`PageEvent::Clipboard`]): the text to
     /// paste, or a read's result.
     pub fn answer_clipboard(&mut self, frame: &str, text: &str, read: Option<u32>) {
-        self.send(|host| {
-            if let Some(browser) = host.browser()
-                && !welding::clipboard_bridge::answer_frame(&browser, frame, text, read)
-            {
-                eprintln!("wubble-engine: the frame that asked for the clipboard is gone");
-            }
-        });
+        let id = read.map(|r| r.to_string()).unwrap_or_default();
+        self.send_frame_message(frame, FrameChannel::Clipboard, &format!("{id}\n{text}"));
     }
 
     /// Opens DevTools in a window of CEF's own; with `at` (physical px,
@@ -1307,6 +1315,53 @@ enum Route {
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
+/// welding's frame message as the host's event, by its channel: the frame as
+/// CEF named it. `None` for a message on no channel or a clipboard request
+/// that is not one.
+fn frame_message(
+    frame_id: String,
+    frame_url: String,
+    is_main: bool,
+    text: String,
+) -> Option<PageEvent> {
+    let (channel, body) = FrameChannel::split(&text)?;
+    Some(match channel {
+        FrameChannel::Autofill => PageEvent::FrameMessage {
+            frame: crate::page::FrameInfo {
+                id: frame_id,
+                url: frame_url,
+                is_main,
+            },
+            text: wubble_core::secret::Secret::from(body.to_owned()),
+        },
+        FrameChannel::Clipboard => PageEvent::Clipboard {
+            frame: frame_id,
+            request: clipboard_request(body)?,
+        },
+        FrameChannel::Zoom => PageEvent::WheelZoom {
+            zoom_in: match body {
+                "in" => true,
+                "out" => false,
+                _ => return None,
+            },
+        },
+    })
+}
+
+/// `clipboard.js`'s `kind\ntext`.
+fn clipboard_request(body: &str) -> Option<ClipboardRequest> {
+    let (kind, text) = body.split_once('\n')?;
+    Some(match kind {
+        "copy" => ClipboardRequest::Copy(text.into()),
+        "primary" => ClipboardRequest::Primary(text.into()),
+        "paste" => ClipboardRequest::Paste {
+            primary: text == "primary",
+        },
+        "read" => ClipboardRequest::Read(text.parse().ok()?),
+        _ => return None,
+    })
+}
+
 fn route(event: NavigationEvent) -> Vec<Route> {
     use NavigationEvent as E;
     let one = |r| vec![r];
@@ -1901,6 +1956,89 @@ mod tests {
             let reports = effects.iter().filter(|e| **e == ReportClosed).count();
             let closes = effects.iter().filter(|e| **e == Close).count();
             assert_eq!((reports, closes), (1, 1), "{path:?}");
+        }
+    }
+
+    #[test]
+    fn a_frame_message_carries_cefs_frame() {
+        let event = frame_message(
+            "7-3".into(),
+            "https://a.test/f".into(),
+            false,
+            "autofill\n{}".into(),
+        )
+        .unwrap();
+        let PageEvent::FrameMessage { frame, text } = &event else {
+            panic!("{event:?}");
+        };
+        assert_eq!(
+            frame,
+            &crate::page::FrameInfo {
+                id: "7-3".into(),
+                url: "https://a.test/f".into(),
+                is_main: false,
+            }
+        );
+        assert_eq!(text.expose(), "{}");
+        assert!(event.request().is_none());
+        // The text never shows in diagnostics.
+        let secret = frame_message("1".into(), "u".into(), true, "autofill\npw-value".into());
+        assert!(!format!("{secret:?}").contains("pw-value"));
+    }
+
+    #[test]
+    fn clipboard_messages_become_clipboard_requests() {
+        let at = |text: &str| frame_message("7".into(), "u".into(), true, text.into());
+        let request = |text: &str| match at(text) {
+            Some(PageEvent::Clipboard { frame, request }) => {
+                assert_eq!(frame, "7");
+                Some(request)
+            }
+            other => {
+                assert_eq!(other, None);
+                None
+            }
+        };
+        assert_eq!(
+            request("clipboard\ncopy\na\nb"),
+            Some(ClipboardRequest::Copy("a\nb".into()))
+        );
+        assert_eq!(
+            request("clipboard\npaste\nprimary"),
+            Some(ClipboardRequest::Paste { primary: true })
+        );
+        assert_eq!(
+            request("clipboard\npaste\n"),
+            Some(ClipboardRequest::Paste { primary: false })
+        );
+        assert_eq!(
+            request("clipboard\nread\n4"),
+            Some(ClipboardRequest::Read(4))
+        );
+        assert_eq!(request("clipboard\nread\nx"), None);
+        assert_eq!(request("clipboard\nformat\nc:"), None);
+        assert_eq!(at("zoom\nin"), Some(PageEvent::WheelZoom { zoom_in: true }));
+        assert_eq!(
+            at("zoom\nout"),
+            Some(PageEvent::WheelZoom { zoom_in: false })
+        );
+        assert_eq!(at("zoom\nsideways"), None);
+        // No channel, or an unknown one: nothing.
+        assert_eq!(at("{}"), None);
+        assert_eq!(at("other\n{}"), None);
+    }
+
+    #[test]
+    fn channels_round_trip() {
+        for channel in [
+            FrameChannel::Autofill,
+            FrameChannel::Clipboard,
+            FrameChannel::Zoom,
+        ] {
+            assert_eq!(
+                FrameChannel::split(&channel.join("x\ny")),
+                Some((channel, "x\ny"))
+            );
         }
     }
 

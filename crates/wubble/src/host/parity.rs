@@ -7,6 +7,7 @@
 use slint::ComponentHandle;
 use slint::platform::{PointerEventButton, WindowEvent as SlintEvent};
 use slint::winit_030::EventResult;
+use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::winit::keyboard::{Key as WinitKey, NamedKey};
 use wubble_engine::input::{KeyInput, Point};
 use wubble_ui::{AppWindow, CommandBarState};
@@ -26,6 +27,10 @@ pub struct ParityRun {
     restoring: bool,
     /// Downloads and prints started before the item now running.
     downloads_before: usize,
+    /// Where a `Step::Press` holds the left button down, until its release.
+    held: Option<Point>,
+    /// Known gaps that failed, as expected.
+    gaps: Vec<&'static str>,
 }
 
 impl Default for ParityRun {
@@ -36,6 +41,8 @@ impl Default for ParityRun {
             failed: vec![],
             restoring: false,
             downloads_before: 0,
+            held: None,
+            gaps: vec![],
         }
     }
 }
@@ -87,6 +94,31 @@ fn slint_text(key: &KeyInput) -> Option<slint::SharedString> {
 }
 
 impl Host {
+    /// While `--smoke parity` runs it owns the pointer and the keyboard: the
+    /// desktop's own (someone using the machine, the pointer resting over the
+    /// window) would land between its steps. Its own input reaches Slint and
+    /// `Host::key` directly, never through winit.
+    pub(crate) fn parity_owns_input(&self, event: &WindowEvent) -> bool {
+        self.checks.parity.is_some()
+            && matches!(
+                event,
+                WindowEvent::CursorMoved { .. }
+                    | WindowEvent::CursorEntered { .. }
+                    | WindowEvent::CursorLeft { .. }
+                    | WindowEvent::MouseInput { .. }
+                    | WindowEvent::MouseWheel { .. }
+                    | WindowEvent::KeyboardInput { .. }
+                    | WindowEvent::ModifiersChanged(_)
+                    | WindowEvent::Ime(_)
+                    | WindowEvent::Touch(_)
+                    | WindowEvent::PinchGesture { .. }
+                    | WindowEvent::PanGesture { .. }
+                    | WindowEvent::DoubleTapGesture { .. }
+                    | WindowEvent::RotationGesture { .. }
+                    | WindowEvent::TouchpadPressure { .. }
+            )
+    }
+
     fn parity_run(&mut self) -> Option<&mut ParityRun> {
         self.checks.parity.as_mut()
     }
@@ -174,15 +206,22 @@ impl Host {
                 let result = self.parity_check(&window, check);
                 self.parity_step(Input::Checked(result));
             }
-            Action::Report { name, result } => {
-                match &result {
-                    Ok(()) => println!("parity: {name} ok"),
-                    Err(why) => println!("parity: {name} FAIL: {why}"),
-                }
-                if result.is_err()
-                    && let Some(run) = self.parity_run()
-                {
-                    run.failed.push(name);
+            Action::Report { name, result, gap } => {
+                let Some(run) = self.parity_run() else { return };
+                match (&result, gap) {
+                    (Ok(()), false) => println!("parity: {name} ok"),
+                    (Err(why), false) => {
+                        println!("parity: {name} FAIL: {why}");
+                        run.failed.push(name);
+                    }
+                    (Err(why), true) => {
+                        println!("parity: {name} known gap: {why}");
+                        run.gaps.push(name);
+                    }
+                    (Ok(()), true) => {
+                        println!("parity: {name} FAIL: passes, but the table marks it a known gap");
+                        run.failed.push(name);
+                    }
                 }
             }
             Action::Finish => {
@@ -190,7 +229,7 @@ impl Host {
                     return;
                 };
                 if run.failed.is_empty() {
-                    self.parity_passed = true;
+                    self.parity_passed = Some(run.gaps);
                     crate::quit();
                 } else {
                     self.fail(format!(
@@ -216,6 +255,11 @@ impl Host {
             let Some(window) = weak.upgrade() else { return };
             with_host(|h| h.input.keys = mods.state());
             for event in events {
+                // Where winit would have put the pointer: the host replays it there when
+                // the page's cursor changes.
+                if let SlintEvent::PointerMoved { position } = event {
+                    with_host(|h| h.input.pointer = Some(position));
+                }
                 window.window().dispatch_event(event);
             }
             with_host(|h| h.input.keys = Default::default());
@@ -251,6 +295,15 @@ impl Host {
         if !self.input.window_focused {
             self.input.window_focused = true;
             self.sync_focus(window);
+        }
+        // A left button a `Press` holds until its `Release` (or a left click).
+        let held = match step {
+            Step::Press(p) => Some(Some(p)),
+            Step::Release(_) | Step::Click(Button::Left, ..) => Some(None),
+            _ => None,
+        };
+        if let (Some(held), Some(run)) = (held, self.parity_run()) {
+            run.held = held;
         }
         let button = |b| match b {
             Button::Left => PointerEventButton::Left,
@@ -344,7 +397,12 @@ impl Host {
                     _ => self.parity_step(Input::Loaded),
                 }
             }
-            Step::Js(_) | Step::Choose(_) | Step::MenuHas(_) | Step::Settle(_) => {}
+            Step::Js(_)
+            | Step::Choose(_)
+            | Step::MenuHas(_)
+            | Step::Settle(_)
+            | Step::Until(_)
+            | Step::Retry(..) => {}
         }
     }
 
@@ -392,11 +450,30 @@ impl Host {
                     }
                 }
             }
+            HostOp::Neutral => {
+                let surface = self.model.visible_tab().and_then(|t| self.surfaces.get(&t));
+                let menu_open = surface.is_some_and(|s| matches!(s.menu, Menu::Open { .. }));
+                let find_open =
+                    surface.is_some_and(|s| matches!(s.find, crate::surface::FindBar::Open { .. }));
+                if menu_open {
+                    self.menu_dismissed();
+                }
+                if find_open {
+                    self.parity_host_op(window, HostOp::CloseFind);
+                }
+                self.parity_host_op(window, HostOp::CloseBar);
+                if let Some(p) = self.parity_run().and_then(|r| r.held) {
+                    self.parity_input(window, Step::Release(p));
+                }
+                for p in [parity::at::NEUTRAL_A, parity::at::NEUTRAL] {
+                    self.parity_input(window, Step::Click(Button::Left, parity::NONE, p));
+                }
+            }
             HostOp::ZoomReset => {
                 if let Some(view) = self.view()
                     && view.zoom_percent() != 100
                 {
-                    view.zoom_reset();
+                    view.set_zoom_percent(100);
                 }
             }
         }
@@ -486,6 +563,10 @@ impl Host {
                     }
                 );
                 is(down, format!("autoscroll {state:?}"))
+            }
+            HostCheck::Drag(want) => {
+                let dragging = !self.drag_idle();
+                is(dragging == want, format!("page drag running: {dragging}"))
             }
             HostCheck::Tooltip(_) => Err("no tooltip support".into()),
             HostCheck::Status(_) => Err("no status bubble".into()),

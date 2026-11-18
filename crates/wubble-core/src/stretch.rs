@@ -1,15 +1,16 @@
 //! What a page pane shows while its size changes (owner rule "Resize feel", TODO.md): the last
 //! complete frame, drawn to fill the pane's new rectangle, stretched further on the design's
-//! stretch spring while the size moves, until the frame painted at the new size arrives and the
-//! residual stretch settles back to exactly 1:1.
+//! stretch spring while the size moves, until the frame painted at the new size arrives: then the
+//! stretch overshoots once and settles back to exactly 1:1, and the stale frame fades out over it.
 //!
 //! One enum per pane ([`PaneView`]) and one pure [`transition`]; the springs ([`PaneSprings`]) are
-//! stepped by the frame driver. "Which frame size CEF is asked for" stays the engine's
-//! `ViewState`; this is only "what the pane shows".
+//! stepped by the frame driver. "Which frame size CEF is asked for" is the engine's `ViewState`,
+//! the one owner of the wanted size: [`transition`] takes it as an input and keeps no copy.
 //!
 //! Numbers: the design's window stretch (`WIN` in `browser/desktop.tsx` of the owner's design repo,
 //! `// @source window`): up to 3.5% at 2600 px/s, on the stretch spring (k 700, c 24, `K.stretch`).
-//! The design's 35% stretch is for small moving parts; a window-sized frame uses `WIN`.
+//! The design's 35% stretch is for small moving parts; a window-sized frame uses `WIN`. The
+//! cross-fade is the design's content swap (`Overlap` in the README's motion tokens: out 190 ms).
 
 use crate::motion::Stretch;
 
@@ -17,6 +18,13 @@ use crate::motion::Stretch;
 pub const WIN_STRETCH_MAX: f64 = 0.035;
 /// Full stretch at this speed, px/s (`WIN.stretchFull`).
 pub const WIN_STRETCH_FULL: f64 = 2600.0;
+/// The stale frame fades out over the new one in this long, seconds (`Overlap` out, 190 ms).
+pub const FADE: f64 = 0.19;
+/// The velocity (scale per second) the frame at the new size arrives with after a large size
+/// change: on the stretch spring it peaks near [`WIN_STRETCH_MAX`] (one damped wobble).
+pub const ARRIVAL_KICK: f64 = 3.4;
+/// A size change of this fraction of the new size or more gets the whole kick.
+pub const ARRIVAL_FULL: f64 = 0.4;
 
 /// A frame size in physical pixels (core has no gfx type).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,94 +39,171 @@ impl Px {
     }
 }
 
-/// What the pane shows.
+/// What the pane shows. The shown frame's size is carried by the state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaneView {
     /// The frame was painted for the pane's size: 1:1, no stretch.
-    Live,
-    /// A frame of size `from` (the last complete one) fills a rectangle of another size.
+    Live { size: Px },
+    /// A frame of size `from` (the last complete one) fills a rectangle wanting another size.
     Stretching { from: Px },
-    /// The frame at the wanted size has arrived; the residual stretch is settling.
-    Settling,
+    /// The frame at the wanted size is on screen; the residual stretch settles, and while
+    /// `fading` the stale frame it replaced fades out over it.
+    Settling { size: Px, fading: bool },
 }
 
-/// A pane's view and the frame size its rectangle wants.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Pane {
-    pub view: PaneView,
-    pub wanted: Px,
-}
-
-impl Pane {
-    /// A pane whose first frame is still to come, wanting `wanted`.
-    pub const fn new(wanted: Px) -> Self {
-        Self {
-            view: PaneView::Live,
-            wanted,
+impl PaneView {
+    /// The size of the frame on screen.
+    pub fn shown(self) -> Px {
+        match self {
+            PaneView::Live { size } | PaneView::Settling { size, .. } => size,
+            PaneView::Stretching { from } => from,
         }
     }
 
-    /// The size of the frame on screen.
-    pub fn shown(self) -> Px {
-        match self.view {
-            PaneView::Stretching { from } => from,
-            PaneView::Live | PaneView::Settling => self.wanted,
-        }
+    pub fn is_live(self) -> bool {
+        matches!(self, PaneView::Live { .. })
+    }
+
+    /// The stale frame still fades out over the new one.
+    pub fn is_fading(self) -> bool {
+        matches!(self, PaneView::Settling { fading: true, .. })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaneEvent {
-    /// The pane's rectangle now wants frames of this size.
-    Layout(Px),
+    /// The pane's rectangle was laid out (the wanted size may have changed).
+    Layout,
     /// A complete frame of this size is now on screen.
     Frame(Px),
+    /// The stale frame's fade finished.
+    Faded,
     /// The springs came to rest.
     Rest,
 }
 
-/// The one transition. No effects: the pane's drawing follows from the state.
-pub fn transition(pane: Pane, event: PaneEvent) -> Pane {
+/// What the host does after a transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneEffect {
+    /// The frame at the wanted size replaced a stale one of size `from`: kick the springs
+    /// ([`PaneSprings::arrive`]) and fade the stale frame out over it.
+    Arrived { from: Px },
+}
+
+/// The one transition. `wanted` is the frame size the engine asked CEF for (its `ViewState`).
+pub fn transition(view: PaneView, wanted: Px, event: PaneEvent) -> (PaneView, Option<PaneEffect>) {
     use PaneView::*;
-    let view = match event {
-        PaneEvent::Layout(wanted) if wanted == pane.wanted => pane.view,
+    match event {
         // back to the size on screen: nothing is stale any more
-        PaneEvent::Layout(wanted) if wanted == pane.shown() => Settling,
-        PaneEvent::Layout(_) => Stretching { from: pane.shown() },
-        PaneEvent::Frame(size) if size != pane.wanted => Stretching { from: size },
-        PaneEvent::Frame(_) => match pane.view {
-            Live => Live,
-            Stretching { .. } | Settling => Settling,
+        PaneEvent::Layout if wanted == view.shown() => match view {
+            Stretching { from } => (
+                Settling {
+                    size: from,
+                    fading: false,
+                },
+                None,
+            ),
+            other => (other, None),
         },
-        PaneEvent::Rest => match pane.view {
-            Settling => Live,
-            other => other,
+        PaneEvent::Layout => (Stretching { from: view.shown() }, None),
+        PaneEvent::Frame(size) if size != wanted => (Stretching { from: size }, None),
+        PaneEvent::Frame(size) => match view {
+            Live { .. } => (Live { size }, None),
+            Stretching { from } => (
+                Settling { size, fading: true },
+                Some(PaneEffect::Arrived { from }),
+            ),
+            // a second frame during the fade ends it: the stale one is no longer kept
+            Settling { .. } => (
+                Settling {
+                    size,
+                    fading: false,
+                },
+                None,
+            ),
         },
-    };
-    let wanted = match event {
-        PaneEvent::Layout(wanted) => wanted,
-        PaneEvent::Frame(_) | PaneEvent::Rest => pane.wanted,
-    };
-    Pane { view, wanted }
+        PaneEvent::Faded => match view {
+            Settling { size, .. } => (
+                Settling {
+                    size,
+                    fading: false,
+                },
+                None,
+            ),
+            other => (other, None),
+        },
+        PaneEvent::Rest => match view {
+            Settling {
+                size,
+                fading: false,
+            } => (Live { size }, None),
+            other => (other, None),
+        },
+    }
 }
 
 /// The extra stretch per axis, on top of filling the pane: it grows with the speed the pane's
-/// size changes and springs back with one or two damped wobbles.
-#[derive(Clone, Debug, Default)]
+/// size changes and springs back with one or two damped wobbles; and the stale frame's fade.
+#[derive(Clone, Debug)]
 pub struct PaneSprings {
     x: Stretch,
     y: Stretch,
+    /// 0 → 1: how far the stale frame has faded out.
+    fade: f64,
+}
+
+impl Default for PaneSprings {
+    fn default() -> Self {
+        Self {
+            x: Stretch::default(),
+            y: Stretch::default(),
+            fade: 1.0,
+        }
+    }
 }
 
 impl PaneSprings {
     /// One frame of `dt` seconds with the pane at `size` (logical px). Returns true while the
-    /// springs move.
+    /// stretch or the fade moves. A frame with no time passed (the first after idle) only notes
+    /// the size: a size jump in no time is not a speed. It still returns true when the size
+    /// changed, so the driver keeps its clock and the next frame measures the speed.
     pub fn step(&mut self, size: (f64, f64), dt: f64) -> bool {
+        if dt <= 0.0 {
+            let moved_x = self.x.seed(size.0);
+            let moved_y = self.y.seed(size.1);
+            // a spring at rest has exactly v 0 (`motion::step` snaps it)
+            return moved_x || moved_y || self.x.s.v != 0.0 || self.y.s.v != 0.0 || self.fade < 1.0;
+        }
+        self.fade = (self.fade + dt / FADE).min(1.0);
         // `Stretch` reaches `max` at `full` px/s; `WIN` reaches it at `stretchFull`.
         let full = WIN_STRETCH_FULL / WIN_STRETCH_MAX;
         let x = self.x.update_with(size.0, dt, WIN_STRETCH_MAX, full);
         let y = self.y.update_with(size.1, dt, WIN_STRETCH_MAX, full);
-        x || y
+        x || y || self.fade < 1.0
+    }
+
+    /// The pane was not stepped for a while (off screen): its next size is measured from
+    /// scratch, so a resize it missed is not a speed.
+    pub fn forget(&mut self) {
+        self.x.forget();
+        self.y.forget();
+    }
+
+    /// The frame at the new size `to` replaced one of `from`: a kick on each axis that changed,
+    /// in proportion to the change (whole at [`ARRIVAL_FULL`]), and the fade starts.
+    pub fn arrive(&mut self, from: Px, to: Px) {
+        let kick = |a: u32, b: u32| {
+            let rel = f64::from(a.abs_diff(b)) / f64::from(b.max(1));
+            ARRIVAL_KICK * (rel / ARRIVAL_FULL).min(1.0)
+        };
+        self.x.s.v += kick(from.w, to.w);
+        self.y.s.v += kick(from.h, to.h);
+        self.fade = 0.0;
+    }
+
+    /// How far the stale frame has faded out, 0 → 1.
+    pub fn fade(&self) -> f64 {
+        self.fade
     }
 
     /// The draw scale per axis for `view`: exactly 1 when `Live` (1:1 on whole pixels), never
@@ -126,8 +211,8 @@ impl PaneSprings {
     /// pane is clipped by it). The cross axis is not squashed: that too would leave a gap.
     pub fn scale(&self, view: PaneView) -> (f64, f64) {
         match view {
-            PaneView::Live => (1.0, 1.0),
-            PaneView::Stretching { .. } | PaneView::Settling => {
+            PaneView::Live { .. } => (1.0, 1.0),
+            PaneView::Stretching { .. } | PaneView::Settling { .. } => {
                 (self.x.x().max(1.0), self.y.x().max(1.0))
             }
         }
@@ -144,60 +229,109 @@ mod tests {
     const C: Px = Px::new(1080, 600);
     const DT: f64 = 1.0 / 60.0;
 
-    fn run(pane: Pane, events: &[PaneEvent]) -> Pane {
-        events.iter().fold(pane, |p, &e| transition(p, e))
+    fn view(v: PaneView, wanted: Px, e: PaneEvent) -> PaneView {
+        transition(v, wanted, e).0
     }
 
     #[test]
     fn a_new_size_stretches_the_frame_on_screen() {
-        let p = transition(Pane::new(A), PaneEvent::Layout(B));
-        assert_eq!(p.view, PaneView::Stretching { from: A });
-        assert_eq!(p.wanted, B);
+        let live = PaneView::Live { size: A };
+        let s = view(live, B, PaneEvent::Layout);
+        assert_eq!(s, PaneView::Stretching { from: A });
         // a second size only moves the target; the frame on screen is still A's
-        let p = transition(p, PaneEvent::Layout(C));
-        assert_eq!(p.view, PaneView::Stretching { from: A });
-        assert_eq!(p.wanted, C);
+        assert_eq!(view(s, C, PaneEvent::Layout), s);
     }
 
     #[test]
     fn a_stale_frame_replaces_the_one_stretched() {
-        let p = run(Pane::new(A), &[PaneEvent::Layout(C), PaneEvent::Frame(B)]);
-        assert_eq!(p.view, PaneView::Stretching { from: B });
-        assert_eq!(p.wanted, C);
+        let s = PaneView::Stretching { from: A };
+        assert_eq!(
+            view(s, C, PaneEvent::Frame(B)),
+            PaneView::Stretching { from: B }
+        );
     }
 
     #[test]
-    fn the_frame_at_the_wanted_size_settles_then_rest_is_live() {
-        let p = run(Pane::new(A), &[PaneEvent::Layout(B), PaneEvent::Frame(B)]);
-        assert_eq!(p.view, PaneView::Settling);
-        assert_eq!(transition(p, PaneEvent::Rest).view, PaneView::Live);
+    fn the_frame_at_the_wanted_size_arrives_fades_settles_then_rest_is_live() {
+        let s = PaneView::Stretching { from: A };
+        let (v, effect) = transition(s, B, PaneEvent::Frame(B));
+        assert_eq!(
+            v,
+            PaneView::Settling {
+                size: B,
+                fading: true
+            }
+        );
+        assert_eq!(effect, Some(PaneEffect::Arrived { from: A }));
+        // still fading: rest waits for the fade
+        assert_eq!(view(v, B, PaneEvent::Rest), v);
+        let done = view(v, B, PaneEvent::Faded);
+        assert_eq!(
+            done,
+            PaneView::Settling {
+                size: B,
+                fading: false
+            }
+        );
+        assert_eq!(view(done, B, PaneEvent::Rest), PaneView::Live { size: B });
         // a new size while settling stretches again, from the frame now on screen
-        let p = transition(p, PaneEvent::Layout(C));
-        assert_eq!(p.view, PaneView::Stretching { from: B });
+        assert_eq!(
+            view(v, C, PaneEvent::Layout),
+            PaneView::Stretching { from: B }
+        );
     }
 
     #[test]
-    fn back_to_the_size_on_screen_settles() {
-        let p = run(Pane::new(A), &[PaneEvent::Layout(B), PaneEvent::Layout(A)]);
-        assert_eq!(p.view, PaneView::Settling);
-        assert_eq!(p.wanted, A);
+    fn a_second_arrival_during_the_fade_ends_it() {
+        let v = PaneView::Settling {
+            size: B,
+            fading: true,
+        };
+        let (v, effect) = transition(v, B, PaneEvent::Frame(B));
+        assert_eq!(
+            v,
+            PaneView::Settling {
+                size: B,
+                fading: false
+            }
+        );
+        assert_eq!(effect, None);
     }
 
     #[test]
-    fn live_ignores_its_own_size_and_rest() {
-        let p = Pane::new(A);
-        assert_eq!(transition(p, PaneEvent::Layout(A)), p);
-        assert_eq!(transition(p, PaneEvent::Frame(A)), p);
-        assert_eq!(transition(p, PaneEvent::Rest), p);
+    fn back_to_the_size_on_screen_settles_without_a_fade() {
+        let s = PaneView::Stretching { from: A };
+        let (v, effect) = transition(s, A, PaneEvent::Layout);
+        assert_eq!(
+            v,
+            PaneView::Settling {
+                size: A,
+                fading: false
+            }
+        );
+        assert_eq!(effect, None);
+    }
+
+    #[test]
+    fn live_ignores_its_own_size_fade_and_rest() {
+        let live = PaneView::Live { size: A };
+        for e in [
+            PaneEvent::Layout,
+            PaneEvent::Frame(A),
+            PaneEvent::Faded,
+            PaneEvent::Rest,
+        ] {
+            assert_eq!(transition(live, A, e), (live, None), "{e:?}");
+        }
         // Rest only ends a settle: a stretched frame is still stale
-        let s = transition(p, PaneEvent::Layout(B));
-        assert_eq!(transition(s, PaneEvent::Rest), s);
+        let s = PaneView::Stretching { from: A };
+        assert_eq!(view(s, B, PaneEvent::Rest), s);
     }
 
     #[test]
     fn a_first_frame_at_another_size_stretches() {
         assert_eq!(
-            transition(Pane::new(B), PaneEvent::Frame(A)).view,
+            view(PaneView::Live { size: A }, B, PaneEvent::Frame(A)),
             PaneView::Stretching { from: A }
         );
     }
@@ -245,6 +379,103 @@ mod tests {
             assert!(n < 10_000);
         }
         assert!((springs.scale(view).0 - 1.0).abs() < 1e-3);
-        assert_eq!(springs.scale(PaneView::Live), (1.0, 1.0));
+        assert_eq!(springs.scale(PaneView::Live { size: A }), (1.0, 1.0));
+    }
+
+    /// Review finding: the first frame after idle steps with dt 0; a size jump then is no speed.
+    #[test]
+    fn a_size_jump_in_no_time_does_not_stretch() {
+        let mut springs = PaneSprings::default();
+        let view = PaneView::Stretching { from: A };
+        springs.step((1000.0, 600.0), 0.0);
+        springs.step((1010.0, 600.0), 0.0);
+        assert_eq!(springs.scale(view), (1.0, 1.0));
+        // the next real frame measures from 1010, not from nothing
+        springs.step((1010.0, 600.0), DT);
+        assert_eq!(springs.scale(view), (1.0, 1.0));
+    }
+
+    /// Review finding: the host's frame driver steps with dt 0 whenever the last frame did not
+    /// move (it drops its clock), so a stretch from rest must start anyway: a dt-0 frame whose
+    /// size changed reports movement, which keeps the clock for the next frame.
+    #[test]
+    fn a_drag_from_rest_stretches_under_the_hosts_clock() {
+        let mut springs = PaneSprings::default();
+        let view = PaneView::Stretching { from: A };
+        // at rest: the pane was laid out once and nothing moved since
+        assert!(!springs.step((1000.0, 600.0), 0.0));
+        // the host: dt 0 after a frame that did not move, DT after one that did
+        let mut moving = false;
+        let mut peak: f64 = 1.0;
+        let mut w = 1000.0;
+        for _ in 0..20 {
+            w += 30.0; // 1800 px/s
+            moving = springs.step((w, 600.0), if moving { DT } else { 0.0 });
+            peak = peak.max(springs.scale(view).0);
+        }
+        assert!(moving);
+        assert!(peak > 1.01, "{peak}");
+        // the same after a pause in the drag: the clock was dropped, and it starts again
+        while springs.step((w, 600.0), DT) {}
+        assert!(!springs.step((w, 600.0), 0.0));
+        moving = false;
+        let mut peak: f64 = 1.0;
+        for _ in 0..20 {
+            w -= 30.0;
+            moving = springs.step((w, 600.0), if moving { DT } else { 0.0 });
+            peak = peak.max(springs.scale(view).0);
+        }
+        assert!(peak > 1.01, "{peak}");
+    }
+
+    /// Review finding: a pane off screen while the window resized comes back without a twang.
+    #[test]
+    fn a_pane_back_on_screen_measures_from_scratch() {
+        let mut springs = PaneSprings::default();
+        let view = PaneView::Stretching { from: A };
+        springs.step((1000.0, 600.0), DT);
+        springs.forget();
+        springs.step((1300.0, 600.0), DT);
+        assert_eq!(springs.scale(view), (1.0, 1.0));
+        // and a real move still stretches
+        springs.step((1340.0, 600.0), DT);
+        assert!(springs.scale(view).0 > 1.0);
+    }
+
+    /// Review finding: the frame at the new size arrives with an overshoot that settles to
+    /// exactly 1, within a fixed number of fixed steps; the fade runs to 1 alongside.
+    #[test]
+    fn arrival_overshoots_once_and_settles_to_exactly_one() {
+        let mut springs = PaneSprings::default();
+        let settling = PaneView::Settling {
+            size: Px::new(1400, 600),
+            fading: true,
+        };
+        let w = 1400.0;
+        springs.step((w, 600.0), DT);
+        springs.arrive(Px::new(1000, 600), Px::new(1400, 600));
+        assert_eq!(springs.fade(), 0.0);
+        // a frame with no time passed (the first after idle) keeps the fade going
+        assert!(springs.step((w, 600.0), 0.0));
+        let mut peak: f64 = 1.0;
+        let mut steps = 0;
+        while springs.step((w, 600.0), DT) {
+            peak = peak.max(springs.scale(settling).0);
+            assert_eq!(springs.scale(settling).1, 1.0, "height did not change");
+            steps += 1;
+            assert!(steps < 120, "settles within 120 steps");
+        }
+        assert!(peak > 1.02 && peak <= 1.0 + WIN_STRETCH_MAX * 1.1, "{peak}");
+        assert_eq!(springs.scale(settling), (1.0, 1.0));
+        assert_eq!(springs.fade(), 1.0);
+        // a small change kicks in proportion
+        let mut small = PaneSprings::default();
+        small.step((1000.0, 600.0), DT);
+        small.arrive(Px::new(990, 600), Px::new(1000, 600));
+        let mut peak_small: f64 = 1.0;
+        while small.step((1000.0, 600.0), DT) {
+            peak_small = peak_small.max(small.scale(settling).0);
+        }
+        assert!(peak_small < 1.002, "{peak_small}");
     }
 }

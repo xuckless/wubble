@@ -342,6 +342,12 @@ pub enum Routed {
     Console(String),
     /// The page's icon, downloaded (`host/surfaces.rs`, `show_favicon`).
     Favicon(wubble_engine::favicon::FaviconImage),
+    /// The autofill content script in one of the page's frames
+    /// (`host/autofill.rs`).
+    Frame {
+        frame: wubble_engine::page::FrameInfo,
+        text: wubble_core::secret::Secret,
+    },
     /// A page saved as PDF, or not: the toast says which.
     Pdf {
         path: std::path::PathBuf,
@@ -351,6 +357,10 @@ pub enum Routed {
     Clipboard {
         frame: String,
         request: wubble_engine::page::ClipboardRequest,
+    },
+    /// A Ctrl+wheel the page left alone: one zoom step, in or out.
+    WheelZoom {
+        zoom_in: bool,
     },
     Ignore,
 }
@@ -387,6 +397,7 @@ pub fn route(event: PageEvent) -> Routed {
         // reports (a load, an address change) are not the user's.
         PageEvent::ZoomChanged { .. } => Routed::Ignore,
         PageEvent::Clipboard { frame, request } => Routed::Clipboard { frame, request },
+        PageEvent::WheelZoom { zoom_in } => Routed::WheelZoom { zoom_in },
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
@@ -425,6 +436,7 @@ pub fn route(event: PageEvent) -> Routed {
             spec: chooser::dialog_spec(mode, &title, &default_path, &accept),
         },
         PageEvent::CertificateError { id, url, code } => Routed::Cert { id, url, code },
+        PageEvent::FrameMessage { frame, text } => Routed::Frame { frame, text },
         PageEvent::LoadFailed { url, code, .. } => {
             Routed::Error(ErrorEvent::LoadFailed { url, code })
         }

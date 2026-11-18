@@ -67,7 +67,14 @@ export component CommandRow inherits Rectangle {
 
                 Rectangle {
                     width: Shell.command-icon;
-                    Icon {
+                    if root.item.icon.width > 0: Image {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        source: root.item.icon;
+                        width: Shell.icon;
+                        height: Shell.icon;
+                    }
+                    if root.item.icon.width == 0: Icon {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         path: root.icon(root.item.kind);

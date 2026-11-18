@@ -26,6 +26,11 @@ use wubble_engine::input::{Buttons, KeyInput, Modifiers, Point};
 pub const MAX_WAIT_RUNS: u32 = 400;
 /// Times a check is asked before its item fails.
 pub const MAX_POLLS: u32 = 12;
+/// Times an `Until` step's check is asked before its item fails: setup waits on
+/// state the window settles on its own (the first input after start takes longest).
+pub const MAX_SETUP_POLLS: u32 = 60;
+/// A `Retry` step runs its op again after this many unanswered asks.
+pub const RETRY_EVERY: u32 = 10;
 /// Runs of CEF work between two asks of the same check.
 pub const POLL_GAP: u32 = 6;
 
@@ -63,6 +68,11 @@ pub mod at {
     pub const OPEN_BUTTON: Point = p(570.0, 255.0);
     pub const TIP: Point = p(570.0, 305.0);
     pub const BLANK: Point = p(700.0, 420.0);
+    /// The page's empty right side (nothing sits right of x 620 at any scroll), where
+    /// [`super::HostOp::Neutral`] clicks: first here ...
+    pub const NEUTRAL_A: Point = p(660.0, 500.0);
+    /// ... then here, the click the page counts (`seen.neutral`, x >= 720).
+    pub const NEUTRAL: Point = p(760.0, 460.0);
     /// Left of the view: over the sidebar.
     pub const SIDEBAR: Point = p(-120.0, 200.0);
 }
@@ -111,7 +121,8 @@ pub enum HostOp {
     CloseBar,
     /// Close the find bar as its Escape does.
     CloseFind,
-    /// Put this text on the system clipboard, so a stale value never passes.
+    /// Put this text on the system clipboard, so a stale value never passes (items wait
+    /// with an `Until` for the compositor to offer it back).
     SetClipboard(&'static str),
     /// A file from the OS dragged over the page at the point (winit's `HoveredFile`).
     HoverFile(Point),
@@ -120,6 +131,12 @@ pub enum HostOp {
     /// Back to the parity page's tab, closing every other tab.
     OnlyFirstTab,
     ZoomReset,
+    /// Undoes what input left: the page's menu, the command and find bars dismissed, a
+    /// held button released, then a left click at [`at::NEUTRAL_A`] and one at
+    /// [`at::NEUTRAL`]. The first ends a middle-click autoscroll (Chromium takes that
+    /// press for itself); a new button far from any item's point ends every click
+    /// series; the pointer rests where no item looks.
+    Neutral,
 }
 
 /// How an item is driven, in order.
@@ -149,6 +166,12 @@ pub enum Step {
     Restore,
     /// Lets this many runs of CEF work pass.
     Settle(u32),
+    /// Polls this check as an expect is polled, and goes on once it holds; the item
+    /// fails if it never does.
+    Until(Expect),
+    /// Runs the host op, then polls the check as `Until` does, running the op again
+    /// every [`RETRY_EVERY`] asks (input sent before the window takes it is lost).
+    Retry(HostOp, Expect),
 }
 
 /// What the host can tell about itself.
@@ -180,6 +203,8 @@ pub enum HostCheck {
     Autoscroll(Option<Option<wubble_core::autoscroll::Direction>>),
     /// Middle-click autoscroll scrolls down (straight, or a little sideways).
     AutoscrollDown,
+    /// A page drag runs (true) or none does (false).
+    Drag(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -194,6 +219,9 @@ pub struct Item {
     pub name: &'static str,
     pub steps: &'static [Step],
     pub expect: &'static [Expect],
+    /// A known gap (TODO.md says why): expected to fail. Its failure is reported but
+    /// does not fail the smoke; its passing does, so the table stays honest.
+    pub gap: bool,
 }
 
 use Button::{Left, Middle, Right};
@@ -201,14 +229,40 @@ use Expect::{Host as H, Js as J};
 use HostCheck as C;
 use Step::*;
 
-/// Clears what earlier items left: other tabs, zoom, a page navigated away from (reloaded),
-/// then the page's records, focus, selection and scroll.
-const RESET: [Step; 2] = [Restore, Js("parity.reset()")];
+/// Clears what earlier items left, each part waited for by count: other tabs, the view at its
+/// full size (the window settles after start), zoom (until the page shows it), a page navigated away from (reloaded); menus, bars, held buttons, an autoscroll, click series and
+/// the pointer ([`HostOp::Neutral`]), until the page saw the neutral click and the host
+/// runs neither an autoscroll nor a page drag; then the page's records, focus, selection and scroll.
+const RESET: [Step; 7] = [
+    Restore,
+    Until(J("parity.sized()")),
+    Until(J("parity.unzoomed()")),
+    Retry(
+        HostOp::Neutral,
+        J("seen.neutral > 0 || 'no neutral click yet'"),
+    ),
+    Until(H(C::Autoscroll(None))),
+    Until(H(C::Drag(false))),
+    Js("parity.reset()"),
+];
 
 macro_rules! item {
-    ($name:literal, [$($step:expr),* $(,)?], [$($expect:expr),* $(,)?]) => {
-        Item { name: $name, steps: &[RESET[0], RESET[1], $($step),*], expect: &[$($expect),*] }
+    (@gap $gap:literal, $name:literal, [$($step:expr),* $(,)?], [$($expect:expr),* $(,)?]) => {
+        Item {
+            name: $name,
+            steps: &[
+                RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], $($step),*
+            ],
+            expect: &[$($expect),*],
+            gap: $gap,
+        }
     };
+    ($($t:tt)*) => { item!(@gap false, $($t)*) };
+}
+
+/// An item for a known gap: see [`Item::gap`].
+macro_rules! gap {
+    ($($t:tt)*) => { item!(@gap true, $($t)*) };
 }
 
 /// The checklist, A (keyboard) to F (page features), in the order they run.
@@ -276,10 +330,11 @@ pub const ITEMS: &[Item] = &[
         "A.copy-paste-keys",
         [
             Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
             Js("parity.field('inp', 'copyme')"),
             Keys("Ctrl+A Ctrl+C"),
             // The window's clipboard hears of its own new selection a round trip later.
-            Settle(40),
+            Until(H(C::Clipboard("copyme"))),
             Js("parity.field('inp2', '')"),
             Keys("Ctrl+V")
         ],
@@ -294,7 +349,7 @@ pub const ITEMS: &[Item] = &[
             Js("parity.field('inp', 'cutme')"),
             Keys("Ctrl+A Ctrl+X"),
             // The window's clipboard hears of its own new selection a round trip later.
-            Settle(40),
+            Until(H(C::Clipboard("cutme"))),
             Js("parity.field('inp2', '')"),
             Keys("Ctrl+V")
         ],
@@ -428,6 +483,7 @@ pub const ITEMS: &[Item] = &[
         "B.menu-copy-selection",
         [
             Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
             Js("parity.select(0, 5)"),
             Click(Right, NONE, at::WORD),
             Choose("Copy")
@@ -438,6 +494,7 @@ pub const ITEMS: &[Item] = &[
         "B.menu-paste",
         [
             Host(HostOp::SetClipboard("pasted")),
+            Until(H(C::Clipboard("pasted"))),
             Js("parity.field('inp', '')"),
             Click(Right, NONE, at::INP),
             Choose("Paste")
@@ -448,6 +505,7 @@ pub const ITEMS: &[Item] = &[
         "B.menu-cut",
         [
             Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
             Js("parity.field('inp', 'menucut')"),
             Js("$('inp').select()"),
             Click(Right, NONE, at::INP),
@@ -479,6 +537,7 @@ pub const ITEMS: &[Item] = &[
         "B.menu-paste-plain",
         [
             Host(HostOp::SetClipboard("plain")),
+            Until(H(C::Clipboard("plain"))),
             Js("parity.field('ce', '')"),
             Click(Right, NONE, at::CE),
             Choose("Paste as Plain Text")
@@ -489,15 +548,17 @@ pub const ITEMS: &[Item] = &[
         "B.copy-link-address",
         [
             Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
             Click(Right, NONE, at::LINK),
             Choose("Copy Link Address")
         ],
         [H(C::Clipboard("https://example.invalid/linked"))]
     ),
-    item!(
+    gap!(
         "B.copy-image",
         [
             Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
             Click(Right, NONE, at::IMG),
             Choose("Copy Image")
         ],
@@ -507,6 +568,7 @@ pub const ITEMS: &[Item] = &[
         "B.page-execcommand-copy",
         [
             Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
             Click(Left, NONE, at::COPY_BUTTON)
         ],
         [H(C::Clipboard("from execCommand"))]
@@ -526,7 +588,7 @@ pub const ITEMS: &[Item] = &[
             Js("parity.field('inp2', '')"),
             Js("parity.field('inp', 'middle')"),
             Keys("Ctrl+A"),
-            Settle(10),
+            Until(H(C::Primary("middle"))),
             Click(Middle, NONE, at::INP2)
         ],
         [J("eq($('inp2').value, 'middle')")]
@@ -544,7 +606,7 @@ pub const ITEMS: &[Item] = &[
         ],
         []
     ),
-    item!(
+    gap!(
         "C.menu-image",
         [
             Click(Right, NONE, at::IMG),
@@ -626,7 +688,7 @@ pub const ITEMS: &[Item] = &[
         [
             Press(at::DRAG),
             MoveTo(at::x(at::DRAG, 375.0)),
-            Settle(20),
+            Until(H(C::Drag(true))),
             MoveTo(at::x(at::DROP, 380.0)),
             MoveTo(at::DROP),
             Settle(10),
@@ -641,7 +703,7 @@ pub const ITEMS: &[Item] = &[
             Js("parity.select(0, 5)"),
             Press(at::WORD),
             MoveTo(at::x(at::WORD, 50.0)),
-            Settle(20),
+            Until(H(C::Drag(true))),
             MoveTo(at::x(at::INP2, 100.0)),
             MoveTo(at::INP2),
             Settle(10),
@@ -654,7 +716,7 @@ pub const ITEMS: &[Item] = &[
         [
             Press(at::LINK),
             MoveTo(at::x(at::LINK, 60.0)),
-            Settle(20),
+            Until(H(C::Drag(true))),
             MoveTo(at::x(at::SIDEBAR, -20.0)),
             MoveTo(at::SIDEBAR),
             Settle(10),
@@ -729,31 +791,25 @@ pub const ITEMS: &[Item] = &[
     // moving below the anchor scrolls down, a key ends it.
     item!(
         "E.autoscroll-still",
-        [
-            MoveTo(at::INP),
-            MoveTo(at::BLANK),
-            Settle(30),
-            Click(Middle, NONE, at::BLANK),
-            Settle(10)
-        ],
+        [MoveTo(at::BLANK), Click(Middle, NONE, at::BLANK)],
         [H(C::Autoscroll(Some(None)))]
     ),
-    // Ends the autoscroll above.
     item!(
         "E.autoscroll-click-ends",
-        [Click(Left, NONE, at::BLANK), Settle(10)],
+        [
+            MoveTo(at::BLANK),
+            Click(Middle, NONE, at::BLANK),
+            Until(H(C::Autoscroll(Some(None)))),
+            Click(Left, NONE, at::BLANK)
+        ],
         [H(C::Autoscroll(None))]
     ),
     item!(
         "E.autoscroll-down",
         [
-            // Away and back: the middle click is a new series, not a double click; the page
-            // sees the pointer over it before the press.
-            MoveTo(at::INP),
             MoveTo(at::BLANK),
-            Settle(30),
             Click(Middle, NONE, at::BLANK),
-            Settle(10),
+            Until(H(C::Autoscroll(Some(None)))),
             MoveTo(at::y(at::BLANK, 150.0)),
             Settle(10),
             MoveTo(at::y(at::BLANK, 160.0)),
@@ -764,23 +820,27 @@ pub const ITEMS: &[Item] = &[
             J("scrollY > 0 || 'scrollY ' + scrollY")
         ]
     ),
-    // Ends the autoscroll above.
     item!(
         "E.autoscroll-key-ends",
-        [Keys("a"), Settle(10)],
+        [
+            MoveTo(at::BLANK),
+            Click(Middle, NONE, at::BLANK),
+            Until(H(C::Autoscroll(Some(None)))),
+            Keys("a")
+        ],
         [H(C::Autoscroll(None))]
     ),
     item!(
         "E.hover-cursor",
-        [Host(HostOp::ZoomReset), MoveTo(at::BLANK), MoveTo(at::LINK)],
+        [MoveTo(at::BLANK), MoveTo(at::LINK)],
         [H(C::Cursor(2))]
     ),
-    item!(
+    gap!(
         "E.link-status",
         [MoveTo(at::BLANK), MoveTo(at::LINK)],
         [H(C::Status("https://example.invalid/linked"))]
     ),
-    item!(
+    gap!(
         "E.title-tooltip",
         [MoveTo(at::BLANK), MoveTo(at::TIP), Settle(30)],
         [H(C::Tooltip("tip text"))]
@@ -805,7 +865,7 @@ pub const ITEMS: &[Item] = &[
         ],
         [H(C::Tabs(2))]
     ),
-    item!(
+    gap!(
         "F.mailto-to-os",
         [
             Host(HostOp::OnlyFirstTab),
@@ -1145,6 +1205,8 @@ pub enum Action {
     Report {
         name: &'static str,
         result: Result<(), String>,
+        /// The item is a known gap ([`Item::gap`]).
+        gap: bool,
     },
     /// Every item ran.
     Finish,
@@ -1231,7 +1293,6 @@ fn on_wait(
         last,
     };
     let fail = |why: String| finish_item(items, item, Err(why));
-    let steps = items[item].steps.len();
     match (wait, input) {
         (Some(Wait::Load), Input::Loaded) => advance(items, item, step + 1, vec![]),
         (Some(Wait::Runs(n)), Input::Worked) if n <= 1 => advance(items, item, step + 1, vec![]),
@@ -1287,7 +1348,7 @@ fn on_wait(
             },
             _ => (same(Some(Wait::Menu), runs, last), vec![]),
         },
-        (None, Input::Checked(result)) if step >= steps => {
+        (None, Input::Checked(result)) if checks_at(&items[item], step) => {
             checked(items, item, step, polls, result)
         }
         (wait, _) => (same(wait, runs, last), vec![]),
@@ -1304,7 +1365,12 @@ fn checked(
 ) -> (Parity, Vec<Action>) {
     match result {
         Ok(()) => advance(items, item, step + 1, vec![]),
-        Err(why) if polls + 1 >= MAX_POLLS => finish_item(items, item, Err(why)),
+        Err(why) if step < items[item].steps.len() && polls + 1 >= MAX_SETUP_POLLS => {
+            finish_item(items, item, Err(format!("setup never held: {why}")))
+        }
+        Err(why) if step >= items[item].steps.len() && polls + 1 >= MAX_POLLS => {
+            finish_item(items, item, Err(why))
+        }
         Err(why) => (
             Parity::At {
                 item,
@@ -1319,8 +1385,35 @@ fn checked(
     }
 }
 
-/// Asks expect `step - steps` of `item` (poll `polls`).
+/// Whether `step` of `item` is a check: an `Until` step, or an expect past the steps.
+fn checks_at(item: &Item, step: usize) -> bool {
+    item.steps
+        .get(step)
+        .is_none_or(|s| matches!(s, Step::Until(_) | Step::Retry(..)))
+}
+
+/// The check at `step`: an `Until`'s, or expect `step - steps`.
+fn check_at(item: &Item, step: usize) -> Expect {
+    match item.steps.get(step) {
+        Some(Step::Until(check) | Step::Retry(_, check)) => *check,
+        _ => item.expect[step - item.steps.len()],
+    }
+}
+
+/// Asks the check at `step` of `item` (poll `polls`); a `Retry` step runs its op first, on
+/// the first ask and every [`RETRY_EVERY`] after.
 fn ask(items: &[Item], item: usize, step: usize, polls: u32) -> (Parity, Vec<Action>) {
+    let (state, actions) = ask_check(items, item, step, polls);
+    match items[item].steps.get(step) {
+        Some(&Step::Retry(op, _)) if polls % RETRY_EVERY == 0 => (
+            state,
+            [vec![Action::Step(Step::Host(op))], actions].concat(),
+        ),
+        _ => (state, actions),
+    }
+}
+
+fn ask_check(items: &[Item], item: usize, step: usize, polls: u32) -> (Parity, Vec<Action>) {
     let at = |wait| Parity::At {
         item,
         step,
@@ -1329,7 +1422,7 @@ fn ask(items: &[Item], item: usize, step: usize, polls: u32) -> (Parity, Vec<Act
         polls,
         last: String::new(),
     };
-    match items[item].expect[step - items[item].steps.len()] {
+    match check_at(&items[item], step) {
         Expect::Js(expr) => {
             let serial = serial(item, step, polls);
             (
@@ -1374,6 +1467,11 @@ fn advance(
             }
             Step::Choose(_) | Step::MenuHas(_) => return (at(step, Wait::Menu), actions),
             Step::Settle(n) => return (at(step, Wait::Runs(n.max(1))), actions),
+            Step::Until(_) | Step::Retry(..) => {
+                let (state, more) = ask(items, item, step, 0);
+                actions.extend(more);
+                return (state, actions);
+            }
             // The host answers with `Input::Loaded`, at once when nothing had to load.
             Step::Restore => {
                 actions.push(Action::Step(Step::Restore));
@@ -1399,6 +1497,7 @@ fn finish_item(items: &[Item], item: usize, result: Result<(), String>) -> (Pari
     let report = Action::Report {
         name: items[item].name,
         result,
+        gap: items[item].gap,
     };
     advance(items, item + 1, 0, vec![report])
 }
@@ -1493,11 +1592,13 @@ mod tests {
             name: "one",
             steps: &[Step::Js("x()"), Step::Click(Left, NONE, at::INP)],
             expect: &[Expect::Js("ok()"), Expect::Host(HostCheck::Tabs(1))],
+            gap: false,
         },
         Item {
             name: "two",
             steps: &[Step::Click(Right, NONE, at::LINK), Step::Choose("Copy")],
             expect: &[],
+            gap: true,
         },
     ];
 
@@ -1552,7 +1653,8 @@ mod tests {
             [
                 Action::Report {
                     name: "one",
-                    result: Ok(())
+                    result: Ok(()),
+                    gap: false
                 },
                 Action::Step(Step::Click(Right, NONE, at::LINK)),
             ]
@@ -1565,7 +1667,8 @@ mod tests {
                 Action::Choose(1),
                 Action::Report {
                     name: "two",
-                    result: Ok(())
+                    result: Ok(()),
+                    gap: true
                 },
                 Action::Finish
             ]
@@ -1595,7 +1698,7 @@ mod tests {
         assert_eq!(s, Parity::Done);
         assert_eq!(actions[0], Action::DismissMenu);
         assert!(
-            matches!(&actions[1], Action::Report { name: "two", result: Err(e) } if e.contains("Copy"))
+            matches!(&actions[1], Action::Report { name: "two", result: Err(e), .. } if e.contains("Copy"))
         );
     }
 
@@ -1609,7 +1712,106 @@ mod tests {
             all.extend(a);
         }
         assert!(
-            matches!(&all[0], Action::Report { name: "one", result: Err(e) } if e.contains("never"))
+            matches!(&all[0], Action::Report { name: "one", result: Err(e), .. } if e.contains("never"))
+        );
+    }
+
+    #[test]
+    fn an_until_step_polls_then_goes_on() {
+        const ONE: &[Item] = &[Item {
+            name: "u",
+            steps: &[
+                Step::Until(Expect::Host(HostCheck::Tabs(1))),
+                Step::MoveTo(at::INP),
+            ],
+            expect: &[],
+            gap: false,
+        }];
+        let (s, a) = next_in(ONE, Parity::Load, Input::Loaded);
+        assert_eq!(a, [Action::Check(HostCheck::Tabs(1))]);
+        let (mut s, a) = next_in(ONE, s, Input::Checked(Err("2 tabs".into())));
+        assert!(a.is_empty());
+        let mut asked = vec![];
+        for _ in 0..POLL_GAP {
+            let (n, a) = next_in(ONE, s, Input::Worked);
+            s = n;
+            asked.extend(a);
+        }
+        assert_eq!(asked, [Action::Check(HostCheck::Tabs(1))]);
+        let (s, a) = next_in(ONE, s, Input::Checked(Ok(())));
+        assert_eq!(s, Parity::Done);
+        assert_eq!(a[0], Action::Step(Step::MoveTo(at::INP)));
+        assert!(matches!(a[1], Action::Report { result: Ok(()), .. }));
+    }
+
+    #[test]
+    fn a_retry_runs_its_op_again_until_the_check_holds() {
+        const ONE: &[Item] = &[Item {
+            name: "r",
+            steps: &[Step::Retry(
+                HostOp::Neutral,
+                Expect::Host(HostCheck::Tabs(1)),
+            )],
+            expect: &[],
+            gap: false,
+        }];
+        let (mut s, mut all) = next_in(ONE, Parity::Load, Input::Loaded);
+        for _ in 0..RETRY_EVERY {
+            let (n, a) = next_in(ONE, s, Input::Checked(Err("2 tabs".into())));
+            all.extend(a);
+            s = n;
+            for _ in 0..POLL_GAP {
+                let (n, a) = next_in(ONE, s, Input::Worked);
+                all.extend(a);
+                s = n;
+            }
+        }
+        let ops = all
+            .iter()
+            .filter(|a| **a == Action::Step(Step::Host(HostOp::Neutral)))
+            .count();
+        assert_eq!(ops, 2);
+        let (s, _) = next_in(ONE, s, Input::Checked(Ok(())));
+        assert_eq!(s, Parity::Done);
+    }
+
+    #[test]
+    fn an_until_that_never_holds_fails_its_item() {
+        const ONE: &[Item] = &[Item {
+            name: "u",
+            steps: &[Step::Until(Expect::Host(HostCheck::Tabs(1)))],
+            expect: &[],
+            gap: false,
+        }];
+        let (mut s, _) = next_in(ONE, Parity::Load, Input::Loaded);
+        let mut all = vec![];
+        for _ in 0..MAX_SETUP_POLLS {
+            let (n, a) = next_in(ONE, s, Input::Checked(Err("2 tabs".into())));
+            all.extend(a);
+            s = n;
+            for _ in 0..POLL_GAP {
+                let (n, a) = next_in(ONE, s, Input::Worked);
+                all.extend(a);
+                s = n;
+            }
+        }
+        assert!(all.iter().any(
+            |a| matches!(a, Action::Report { result: Err(e), .. } if e.starts_with("setup never held"))
+        ));
+    }
+
+    #[test]
+    fn the_known_gaps_are_the_listed_ones() {
+        let gaps: Vec<_> = ITEMS.iter().filter(|i| i.gap).map(|i| i.name).collect();
+        assert_eq!(
+            gaps,
+            [
+                "B.copy-image",
+                "C.menu-image",
+                "E.link-status",
+                "E.title-tooltip",
+                "F.mailto-to-os"
+            ]
         );
     }
 

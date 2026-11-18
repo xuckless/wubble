@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
+use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::{
     BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Tier,
@@ -59,6 +60,23 @@ pub fn frame_load(
     scene.max(late)
 }
 
+/// The levels a glass setting lets the governor use, best and cheapest (`Quality`'s order:
+/// greater is cheaper). `Off` is the flat glass; the Slint-only fallback is not a level.
+pub fn levels(setting: GlassSetting) -> (Quality, Quality) {
+    match setting {
+        GlassSetting::Auto => (Quality::Full, Quality::Flat),
+        GlassSetting::Full => (Quality::Full, Quality::Full),
+        GlassSetting::Reduced => (Quality::HalfRes, Quality::Cached),
+        GlassSetting::Off => (Quality::Flat, Quality::Flat),
+    }
+}
+
+/// `quality` held inside the setting's levels.
+pub fn clamp(quality: Quality, setting: GlassSetting) -> Quality {
+    let (best, worst) = levels(setting);
+    quality.clamp(best, worst)
+}
+
 /// Which glass the window has, for the whole run.
 pub enum Glass {
     /// The wgpu scene draws the backdrop and the glass; Slint draws the content on top.
@@ -71,6 +89,8 @@ pub enum Glass {
 pub struct SceneHost {
     renderer: Renderer,
     governor: Governor,
+    /// The levels the user allows (`settings::GLASS_QUALITY`); the governor stays inside them.
+    setting: GlassSetting,
     /// The frame budget ([`frame_budget`]), once the window knows its monitor.
     budget: Option<Duration>,
     /// The tint the palette was last dyed from.
@@ -82,21 +102,26 @@ pub struct SceneHost {
     image_error_logged: bool,
 }
 
-/// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value.
+/// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value, `scene` the
+/// `settings::GLASS_SCENE` row.
 pub fn choose_with<R>(
     forced: Option<&str>,
+    scene: bool,
     build: impl FnOnce() -> Result<R, GfxError>,
 ) -> Result<R, String> {
     if forced == Some("slint") {
         return Err(format!("{GLASS_ENV}=slint"));
     }
+    if !scene {
+        return Err("the glass scene is off in settings".into());
+    }
     build().map_err(|e| e.to_string())
 }
 
 /// The glass for this run, logged; with the scene, tells the shell so (before it shows).
-pub fn choose(gpu: &GpuContext, window: &AppWindow) -> Glass {
+pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
     let forced = std::env::var(GLASS_ENV).ok();
-    match choose_with(forced.as_deref(), || {
+    match choose_with(forced.as_deref(), scene, || {
         Renderer::try_new(gpu, SceneOptions::default())
     }) {
         Ok(renderer) => {
@@ -108,6 +133,7 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow) -> Glass {
             Glass::Scene(Box::new(SceneHost {
                 renderer,
                 governor: Governor::new(Quality::Full),
+                setting: GlassSetting::Auto,
                 budget: None,
                 tint: None,
                 loading: false,
@@ -131,6 +157,7 @@ pub fn to_rect(item: &GlassItem) -> GlassRect {
         pressed: item.pressed,
         hover: item.hover,
         focus: item.focus,
+        bow: item.bow,
     }
 }
 
@@ -171,6 +198,29 @@ impl Glass {
         matches!(self, Glass::Scene(_))
     }
 
+    /// The user's glass setting, applied at once: the governor starts over at the best level
+    /// it allows (no measurements of other levels carry over).
+    pub fn set_setting(&mut self, setting: GlassSetting) {
+        let Glass::Scene(s) = self else {
+            return;
+        };
+        if s.setting == setting {
+            return;
+        }
+        s.setting = setting;
+        let (best, _) = levels(setting);
+        s.governor = Governor::new(best);
+        s.renderer.set_quality(best);
+    }
+
+    /// The scene's output size, physical px, once it has rendered (`--measure`).
+    pub fn scene_size(&self) -> Option<(u32, u32)> {
+        match self {
+            Glass::Scene(s) => s.renderer.output().map(|t| (t.width(), t.height())),
+            Glass::SlintOnly => None,
+        }
+    }
+
     /// One rendered frame, after the shell driver's step. `glass` is the panels' new list
     /// when it changed.
     pub fn frame(&mut self, window: &AppWindow, now: Instant, glass: Option<&[GlassItem]>) {
@@ -180,6 +230,16 @@ impl Glass {
         if let Some(items) = glass {
             s.set_items(window, items);
         }
+        // the sidebar glass's right edge follows the seam's string (the driver's table)
+        use slint::Model as _;
+        let offset: Vec<f32> = window.get_seam_edge().iter().collect();
+        s.renderer
+            .scene
+            .set_bow((offset.len() > 1).then(|| wubble_gfx::Edge {
+                y0: 0.0,
+                step: window.get_seam_edge_step(),
+                offset: &offset,
+            }));
         let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint
@@ -262,8 +322,14 @@ impl SceneHost {
             return;
         };
         let before = self.governor.quality();
-        self.governor = self.governor.next(cost, budget);
-        let after = self.governor.quality();
+        let next = self.governor.next(cost, budget);
+        let after = clamp(next.quality(), self.setting);
+        // A step outside the allowed levels is undone: the governor restarts at the bound.
+        self.governor = if after == next.quality() {
+            next
+        } else {
+            Governor::new(after)
+        };
         if after != before {
             // The load that moved it: the smoothed load of the level it left.
             let load = self.governor.load_at(before).unwrap_or_default();
@@ -294,6 +360,7 @@ mod tests {
             pressed: true,
             hover: false,
             focus: true,
+            bow: true,
             present: true,
         };
         assert_eq!(
@@ -305,6 +372,7 @@ mod tests {
                 pressed: true,
                 hover: false,
                 focus: true,
+                bow: true,
             }
         );
     }
@@ -312,14 +380,16 @@ mod tests {
     #[test]
     fn the_scene_is_off_when_forced_or_when_it_fails_to_build() {
         let built = || Ok::<_, GfxError>(7);
-        assert_eq!(choose_with(None, built), Ok(7));
-        assert_eq!(choose_with(Some("scene"), built), Ok(7));
+        assert_eq!(choose_with(None, true, built), Ok(7));
+        assert_eq!(choose_with(Some("scene"), true, built), Ok(7));
         assert_eq!(
-            choose_with(Some("slint"), built),
+            choose_with(Some("slint"), true, built),
             Err("WUBBLE_GLASS=slint".into())
         );
+        // The settings row turns the scene off for the Slint-only glass.
+        assert!(choose_with(None, false, built).is_err());
         let failed = || Err::<u8, _>(GfxError::Device("scene pipelines: bad".into()));
-        let reason = choose_with(None, failed).unwrap_err();
+        let reason = choose_with(None, true, failed).unwrap_err();
         assert!(reason.contains("scene pipelines: bad"), "{reason}");
     }
 
@@ -405,6 +475,20 @@ mod tests {
             g = g.next(frame_load(None, Some(budget * 2), budget).unwrap(), budget);
         }
         assert_eq!(g.quality(), Quality::HalfRes);
+    }
+
+    #[test]
+    fn the_glass_setting_bounds_the_level() {
+        use Quality::*;
+        let all = [Full, HalfRes, Cached, Flat];
+        for q in all {
+            assert_eq!(clamp(q, GlassSetting::Auto), q);
+            assert_eq!(clamp(q, GlassSetting::Full), Full);
+            assert_eq!(clamp(q, GlassSetting::Off), Flat);
+        }
+        assert_eq!(clamp(Full, GlassSetting::Reduced), HalfRes);
+        assert_eq!(clamp(Cached, GlassSetting::Reduced), Cached);
+        assert_eq!(clamp(Flat, GlassSetting::Reduced), Cached);
     }
 
     #[test]

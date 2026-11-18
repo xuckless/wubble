@@ -95,8 +95,9 @@ pub enum Intent {
 
 /// Schemes that are URLs without `//` (Chromium: about, data, view-source).
 const OPAQUE_SCHEMES: [&str; 3] = ["about", "data", "view-source"];
-/// Schemes accepted when typed as `scheme://...`.
-const HIER_SCHEMES: [&str; 4] = ["http", "https", "ftp", "file"];
+/// Schemes accepted when typed as `scheme://...`; `wubble` names the internal pages
+/// (`pages::InternalPage`).
+const HIER_SCHEMES: [&str; 5] = ["http", "https", "ftp", "file", "wubble"];
 /// Reserved TLDs that only count as a host with a subdomain (Chromium).
 const RESERVED_TLDS: [&str; 4] = ["example", "test", "local", "internal"];
 
@@ -481,6 +482,7 @@ mod tests {
             ("example.com", url("https://example.com/")),
             ("  example.com  ", url("https://example.com/")),
             ("http://example.com", url("http://example.com/")),
+            ("wubble://settings", url("wubble://settings")),
             ("https://a.b/c?d#e", url("https://a.b/c?d#e")),
             ("foo bar", search("foo bar")),
             ("foo.bar", url("https://foo.bar/")),

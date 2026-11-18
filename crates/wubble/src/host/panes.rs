@@ -5,20 +5,23 @@
 use std::time::Instant;
 
 use slint::ComponentHandle;
+use wubble_core::bow::EdgeTable;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::space::MAX_PANES;
-use wubble_core::stretch::{Pane, PaneEvent, PaneSprings, PaneView, Px, transition};
+use wubble_core::split::SPLIT;
+use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
 use wubble_engine::view::{Layout, ScreenArea};
-use wubble_gfx::FrameSize;
+use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
-use wubble_ui::{AppWindow, SplitPane, SplitSeam};
+use wubble_gfx::{Edge, FrameSize};
+use wubble_ui::{AppWindow, Palette, SplitPane, SplitSeam};
 
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
 use crate::menu::{self, MenuEvent};
-use crate::panes::PageRect;
+use crate::panes::{PageRect, RADIUS};
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
 
@@ -30,8 +33,29 @@ fn content_size(window: &AppWindow) -> (f64, f64) {
     )
 }
 
-fn px(size: wubble_gfx::FrameSize) -> Px {
+fn px(size: FrameSize) -> Px {
     Px::new(size.width, size.height)
+}
+
+/// The sidebar seam's edge table, as the driver published it this frame (window heights).
+fn seam_edge(window: &AppWindow) -> EdgeTable {
+    use slint::Model as _;
+    EdgeTable {
+        y0: 0.0,
+        step: window.get_seam_edge_step().into(),
+        offset: window.get_seam_edge().iter().collect(),
+    }
+}
+
+// a table the core samples fits the shaders' edge uniform whole
+const _: () = assert!(wubble_core::bow::MAX_SAMPLES <= wubble_gfx::EDGE_SAMPLES);
+
+fn edge(table: &EdgeTable) -> Edge<'_> {
+    Edge {
+        y0: table.y0 as f32,
+        step: table.step as f32,
+        offset: &table.offset,
+    }
 }
 
 /// Writes `rows` into the shell's model in place when it is one this host made (rows kept, only
@@ -153,7 +177,9 @@ impl Host {
         let strings = self.model.shown_split().is_some() && self.step_strings(window, dt);
         self.lay_out_views(window);
         let stretching = self.step_stretch(window, dt);
+        let bowed = self.mask_panes(window);
         self.render_panes(window);
+        self.measure_shell(window, bowed);
         let autoscrolling = self.autoscroll_frame(window, now);
         let moving = strings || stretching || autoscrolling;
         if !moving {
@@ -188,39 +214,146 @@ impl Host {
         self.lay_out_views(window);
         self.render_panes(window);
         // a pane that started stretching needs the frame driver
-        if self.frames.values().any(|f| f.pane.view != PaneView::Live) {
+        if self.frames.values().any(|f| !f.view.is_live()) {
             window.window().request_redraw();
         }
     }
 
-    /// Each view on screen gets its pane's layout, and its pane the size it now wants.
+    /// Each view on screen gets its pane's layout; its pane follows the size the view now wants
+    /// (the engine's `ViewState` owns it).
     fn lay_out_views(&mut self, window: &AppWindow) {
         for rect in self.pane_rects(window) {
             let layout = self.layout_of(window, &rect);
-            if let Some(view) = self.tab_view(rect.tab) {
-                view.set_layout(layout);
-            }
-            if let Some(frame) = self.frames.get_mut(&rect.tab) {
-                frame.pane = transition(frame.pane, PaneEvent::Layout(px(layout.frame_size())));
+            let Some(view) = self.tab_view(rect.tab) else {
+                continue;
+            };
+            view.set_layout(layout);
+            let wanted = view.wanted_frame();
+            if let (Some(frame), Some(wanted)) = (self.frames.get_mut(&rect.tab), wanted) {
+                frame.view = transition(frame.view, px(wanted), PaneEvent::Layout).0;
             }
         }
     }
 
-    /// One frame of `dt` seconds of each pane's stretch; a settled pane goes live. Returns
-    /// whether any still moves.
+    /// One frame of `dt` seconds of each pane's stretch and fade; a finished fade lets the stale
+    /// frame go, a settled pane goes live. A pane off screen forgets its last size, so a resize
+    /// it missed is no speed when it comes back. Returns whether any still moves.
     fn step_stretch(&mut self, window: &AppWindow, dt: f64) -> bool {
         let (_, height) = content_size(window);
+        let rects = self.pane_rects(window);
+        for (tab, frame) in &mut self.frames {
+            if !rects.iter().any(|r| r.tab == *tab) {
+                frame.springs.forget();
+            }
+        }
         let mut moving = false;
-        for rect in self.pane_rects(window) {
-            if let Some(frame) = self.frames.get_mut(&rect.tab) {
-                if frame.springs.step((rect.width, height), dt) {
-                    moving = true;
-                } else {
-                    frame.pane = transition(frame.pane, PaneEvent::Rest);
-                }
+        for rect in rects {
+            let Some(frame) = self.frames.get_mut(&rect.tab) else {
+                continue;
+            };
+            // Faded and Rest do not depend on the wanted size
+            let shown = frame.view.shown();
+            let still = frame.springs.step((rect.width, height), dt);
+            if frame.view.is_fading() && frame.springs.fade() >= 1.0 {
+                frame.view = transition(frame.view, shown, PaneEvent::Faded).0;
+                frame.prev = None;
+            }
+            if still {
+                moving = true;
+            } else {
+                frame.view = transition(frame.view, shown, PaneEvent::Rest).0;
             }
         }
         moving
+    }
+
+    /// While a string bends a pane's edge (the sidebar seam's along the first pane's left edge, a
+    /// split seam's along both panes it divides), the pane's frame is redrawn with that edge cut
+    /// along the string (`wubble_gfx::mask`); at rest nothing is masked. The content area stops
+    /// clipping while any pane is masked, so a bulge shows. Returns whether any pane is masked.
+    fn mask_panes(&mut self, window: &AppWindow) -> bool {
+        let (_, height) = content_size(window);
+        let scale = window.window().scale_factor();
+        let fullscreen = matches!(self.screen, Screen::Page { .. });
+        // the sidebar's string, in the panes' heights (they start at the content's top)
+        let seam = (!fullscreen)
+            .then(|| seam_edge(window))
+            .filter(|t| !t.is_straight())
+            .map(|t| t.shifted(-f64::from(window.get_content_y())));
+        let web = window.global::<Palette>().get_web();
+        let fill = [web.red(), web.green(), web.blue()].map(|c| f32::from(c) / 255.0);
+        let mut any = false;
+        for (i, rect) in self.pane_rects(window).into_iter().enumerate() {
+            // a fullscreen page is square and alone: nothing bends it
+            let (split_left, right) = if fullscreen {
+                (None, None)
+            } else {
+                self.panes.edges(rect.tab, height)
+            };
+            let left = if i == 0 { seam.clone() } else { split_left };
+            let slot = self.slots.iter().position(|s| *s == Some(rect.tab));
+            let Some(frame) = self.frames.get_mut(&rect.tab) else {
+                continue;
+            };
+            frame.masked = None;
+            let (Some(slot), true) = (slot, left.is_some() || right.is_some()) else {
+                continue;
+            };
+            let (sx, sy) = frame.springs.scale(frame.view);
+            let job = MaskJob {
+                pane: (rect.width as f32, height as f32),
+                scale,
+                stretch: ((sx - 1.0) as f32, (sy - 1.0) as f32),
+                clip: frame.clip,
+                radius: RADIUS as f32,
+                margin: SPLIT::margin as f32,
+                left: left.as_ref().map(edge),
+                right: right.as_ref().map(edge),
+                fill,
+                prev: frame.fading().map(|(image, clip, opacity)| Prev {
+                    image,
+                    clip,
+                    opacity,
+                }),
+            };
+            match self.presenters[slot].mask(&job) {
+                Ok(masked) => frame.masked = masked,
+                Err(e) => eprintln!("wubble: page edge mask: {e}"),
+            }
+            any |= frame.masked.is_some();
+        }
+        window.set_edge_bowed(any);
+        any
+    }
+
+    /// `--measure resize`: whether the scene and the panes were laid out for the window size of
+    /// this frame (observations; never asserted).
+    fn measure_shell(&self, window: &AppWindow, bowed: bool) {
+        let size = window.window().size();
+        let scene_off = self
+            .glass
+            .try_borrow()
+            .ok()
+            .and_then(|g| g.scene_size())
+            .is_some_and(|s| s != (size.width, size.height));
+        let (width, _) = content_size(window);
+        let rects = self.pane_rects(window);
+        let pane_off = rects
+            .last()
+            .is_some_and(|r| (r.x + r.width - width).abs() > 0.5);
+        // stretched past filling the pane, not only stale
+        let stretched = rects.iter().any(|r| {
+            self.frames.get(&r.tab).is_some_and(|f| {
+                let (sx, sy) = f.springs.scale(f.view);
+                sx > 1.0 || sy > 1.0
+            })
+        });
+        measure::shell(measure::Shell {
+            scene_off,
+            pane_off,
+            stretched,
+            bowed,
+        });
     }
 
     /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
@@ -234,7 +367,9 @@ impl Host {
             .into_iter()
             .map(|r| {
                 let frame = self.frames.get(&r.tab);
-                let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.pane.view));
+                let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));
+                let prev = frame.and_then(PaneFrame::fading);
+                let masked = frame.and_then(|f| f.masked.clone());
                 SplitPane {
                     id: crate::shell::pane_id(r.tab),
                     x0: r.x as f32,
@@ -246,6 +381,12 @@ impl Host {
                     stretch_y: (sy - 1.0) as f32,
                     fill,
                     focused: Some(r.tab) == focused,
+                    edge: masked.as_ref().map(|m| m.image.clone()).unwrap_or_default(),
+                    margin: masked.as_ref().map_or(0.0, |m| m.margin),
+                    prev_opacity: prev.map_or(0.0, |p| p.2),
+                    prev_clip_width: prev.map_or(0, |p| slint_int(p.1.width)),
+                    prev_clip_height: prev.map_or(0, |p| slint_int(p.1.height)),
+                    prev: prev.map(|p| p.0.clone()).unwrap_or_default(),
                 }
             })
             .collect();
@@ -299,6 +440,7 @@ impl Host {
                 continue;
             };
             view.set_layout(layout);
+            let wanted = view.wanted_frame().unwrap_or(layout.frame_size());
             let frame = view.take_frame();
             // The popup's placement comes from its events (`render_surfaces`).
             let popup = (Some(rect.tab) == focused)
@@ -336,25 +478,40 @@ impl Host {
                     presenter.probe(measure::PROBE.0, measure::PROBE.1)
                 });
             }
-            let wanted = px(layout.frame_size());
+            let wanted = px(wanted);
             let entry = self.frames.entry(rect.tab).or_insert_with(|| PaneFrame {
                 image: image.clone(),
                 clip,
-                size,
-                pane: Pane::new(wanted),
+                view: PaneView::Live { size: px(size) },
                 springs: PaneSprings::default(),
+                prev: None,
+                masked: None,
             });
-            entry.pane = transition(
-                transition(entry.pane, PaneEvent::Layout(wanted)),
-                PaneEvent::Frame(px(size)),
-            );
+            entry.view = transition(entry.view, wanted, PaneEvent::Layout).0;
+            let (view, effect) = transition(entry.view, wanted, PaneEvent::Frame(px(size)));
+            entry.view = view;
+            // the frame at the new size arrived: one damped wobble, and the stale frame (still
+            // intact in the other ring slot or the old ring) fades out over it
+            entry.prev = match effect {
+                Some(PaneEffect::Arrived { from }) => {
+                    entry.springs.arrive(from, wanted);
+                    Some((
+                        std::mem::replace(&mut entry.image, image.clone()),
+                        entry.clip,
+                    ))
+                }
+                None => None,
+            };
             entry.image = image;
             entry.clip = clip;
-            entry.size = size;
             presented = true;
         }
         if presented {
             self.render_panes(window);
+            // an arrival's wobble and fade, or a stale frame's stretch, need the frame driver
+            if self.frames.values().any(|f| !f.view.is_live()) {
+                window.window().request_redraw();
+            }
         }
         Ok(presented)
     }
@@ -377,7 +534,7 @@ impl Host {
             };
             // The first (or only) pane shows the bundled page: its swatches' exact colours.
             if last.is_none() {
-                pixels::check_swatches(shot, region)
+                pixels::check_swatches(shot, region, scale)
                     .map_err(|e| format!("pane of tab {}: {e}", r.tab.0))?;
             }
             let sample =
@@ -388,8 +545,11 @@ impl Host {
     }
 
     /// The last frame's size of `tab`, if it is on screen and has painted.
-    pub(super) fn frame_size(&self, tab: TabId) -> Option<wubble_gfx::FrameSize> {
-        self.frames.get(&tab).map(|f| f.size)
+    pub(super) fn frame_size(&self, tab: TabId) -> Option<FrameSize> {
+        self.frames.get(&tab).map(|f| {
+            let size = f.view.shown();
+            FrameSize::new(size.w, size.h)
+        })
     }
 
     // ----- the seams' gestures and the panes' close buttons, from the shell

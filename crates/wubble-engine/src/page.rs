@@ -296,14 +296,71 @@ pub enum ClipboardRequest {
     Read(u32),
 }
 
+/// The content scripts' channels on welding's one frame message (wubble-helper
+/// `compose`: `name\ntext` both ways). The names must match the helper's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameChannel {
+    /// `autofill.js`: [`PageEvent::FrameMessage`].
+    Autofill,
+    /// `clipboard.js`: [`PageEvent::Clipboard`].
+    Clipboard,
+    /// `zoom.js`: [`PageEvent::WheelZoom`].
+    Zoom,
+}
+
+impl FrameChannel {
+    const ALL: [(FrameChannel, &'static str); 3] = [
+        (FrameChannel::Autofill, "autofill"),
+        (FrameChannel::Clipboard, "clipboard"),
+        (FrameChannel::Zoom, "zoom"),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(c, _)| *c == self)
+            .map_or("", |(_, n)| n)
+    }
+
+    /// The channel a frame message came on, and its text; `None` for a message
+    /// on no known channel.
+    pub fn split(message: &str) -> Option<(FrameChannel, &str)> {
+        let (name, text) = message.split_once('\n')?;
+        let channel = Self::ALL.iter().find(|(_, n)| *n == name)?.0;
+        Some((channel, text))
+    }
+
+    /// `text` for this channel's script.
+    pub fn join(self, text: &str) -> String {
+        format!("{}\n{text}", self.name())
+    }
+}
+
+/// A frame of the page as the browser process sees it (CEF's own frame), not
+/// as the page describes itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameInfo {
+    /// CEF's frame identifier: [`crate::view::View::send_frame_message`] names it.
+    pub id: String,
+    /// The frame's URL when the message arrived.
+    pub url: String,
+    pub is_main: bool,
+}
+
 /// What the host learns about a page beyond navigation, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageEvent {
     /// A frame's clipboard request, when the engine runs with
-    /// `EngineConfig::clipboard_bridge`. `frame` names the frame for the answer.
+    /// `EngineConfig::clipboard_bridge` (wubble-helper `clipboard.js` on
+    /// [`FrameChannel::Clipboard`]). `frame` names the frame for the answer.
     Clipboard {
         frame: String,
         request: ClipboardRequest,
+    },
+    /// A Ctrl+wheel the page left alone (`zoom.js`): zoom one step in or out,
+    /// as Chromium does.
+    WheelZoom {
+        zoom_in: bool,
     },
     /// The page's icon, downloaded by CEF: raw RGBA, at most 64x64.
     ///
@@ -467,6 +524,13 @@ pub enum PageEvent {
         allowed: DragOps,
         x: i32,
         y: i32,
+    },
+    /// The context script (wubble-helper's `autofill.js`) in `frame` sent
+    /// `text`. It may hold form values, so it is a `Secret`: never printed.
+    /// Answer with `View::send_frame_message`.
+    FrameMessage {
+        frame: FrameInfo,
+        text: wubble_core::secret::Secret,
     },
 }
 

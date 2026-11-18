@@ -418,12 +418,14 @@ cef::wrap_client! {
         fn on_process_message_received(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _frame: Option<&mut cef::Frame>,
+            frame: Option<&mut cef::Frame>,
             source_process: cef::ProcessId,
             message: Option<&mut cef::ProcessMessage>,
         ) -> ::std::os::raw::c_int {
             if source_process != cef::ProcessId::RENDERER { return 0; }
             let Some(msg) = message else { return 0 };
+            // wubble change: the context script's frame messages.
+            if crate::handlers::frame_message_received(&self.events, frame, msg) { return 1; }
             let name = cef::CefString::from(&msg.name()).to_string();
             if name == crate::app::EVAL_RESULT {
                 // The renderer answering a request_script_result.

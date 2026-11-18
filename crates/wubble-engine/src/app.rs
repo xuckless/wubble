@@ -50,10 +50,65 @@ pub struct EngineConfig {
     /// Checks every request each view sends and injects cosmetic filters
     /// ([`crate::filter`]). `None`: nothing is filtered.
     pub content_filter: Option<Arc<dyn ContentFilter>>,
-    /// Carry the pages' clipboard through the host ([`PageEvent::Clipboard`]):
-    /// for a windowless Chromium on Wayland, whose own clipboard cannot reach the
-    /// system's (welding `clipboard_bridge`).
+    /// Chromium features chosen by the user's settings; CEF takes them only at start.
+    pub features: PageFeatures,
+    /// Runs the page clipboard through the host ([`CLIPBOARD_SWITCH`]): on for
+    /// Wayland, where Chromium's own clipboard cannot reach the system's.
     pub clipboard_bridge: bool,
+}
+
+/// The renderer switch that makes wubble-helper run its clipboard content
+/// script (`clipboard.js`, on the `clipboard` frame channel). Must match
+/// `CLIPBOARD_SWITCH` in wubble-helper/src/main.rs, duplicated on purpose as
+/// `SANDBOX` is: the helper cannot depend on this crate.
+pub const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
+
+/// Page features that are Chromium start switches (the settings' restart rows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageFeatures {
+    /// Scrollbars drawn over the page, thin and fading, instead of a classic gutter that takes
+    /// layout width (Chromium `features::kOverlayScrollbar`, the ChromeOS style). Measured on
+    /// CEF 156 windowless, Linux: a tall page's `innerWidth - documentElement.clientWidth` is 15
+    /// without it and 0 with it. `FluentOverlayScrollbar` alone changes nothing there.
+    pub overlay_scrollbars: bool,
+    /// Middle-click autoscroll (press the wheel, then move to scroll), which Chromium turns on
+    /// by default only on Windows (`features::kMiddleClickAutoscroll`).
+    pub middle_click_autoscroll: bool,
+}
+
+impl Default for PageFeatures {
+    fn default() -> Self {
+        Self {
+            overlay_scrollbars: true,
+            middle_click_autoscroll: true,
+        }
+    }
+}
+
+impl PageFeatures {
+    /// The switches: one `enable-features` (a switch given twice keeps one value, so every
+    /// feature goes in this one) and, for autoscroll, the Blink side of the same feature,
+    /// which older builds read alone.
+    fn switches(self) -> Vec<(String, Option<String>)> {
+        let features: Vec<&str> = [
+            (self.overlay_scrollbars, "OverlayScrollbar"),
+            (self.middle_click_autoscroll, "MiddleClickAutoscroll"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        let mut out = vec![];
+        if !features.is_empty() {
+            out.push(("enable-features".into(), Some(features.join(","))));
+        }
+        if self.middle_click_autoscroll {
+            out.push((
+                "enable-blink-features".into(),
+                Some("MiddleClickAutoscroll".into()),
+            ));
+        }
+        out
+    }
 }
 
 impl EngineConfig {
@@ -72,6 +127,7 @@ impl EngineConfig {
             pump_scheduler: None,
             clipboard_bridge: false,
             content_filter: None,
+            features: PageFeatures::default(),
         })
     }
 }
@@ -148,24 +204,9 @@ trait Platform {
 /// Chromium switches every wubble process gets on every OS. One entry per
 /// switch, each with the reason. A switch given twice keeps one value, so a
 /// platform table must not add its own `enable-features`: merge it here.
-const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[
-    // Scrollbars drawn over the page, thin and fading, instead of a classic
-    // gutter that takes layout width (Chromium `features::kOverlayScrollbar`,
-    // the ChromeOS style). Measured on CEF 156 windowless, Linux: a tall
-    // page's `innerWidth - documentElement.clientWidth` is 15 without it and
-    // 0 with it. `FluentOverlayScrollbar` alone changes nothing there.
-    //
-    // Middle-click autoscroll (press the wheel, then move to scroll), which
-    // Chromium turns on by default only on Windows
-    // (`features::kMiddleClickAutoscroll`). Same switch as above because a
-    // switch given twice keeps one value.
-    (
-        "enable-features",
-        Some("OverlayScrollbar,MiddleClickAutoscroll"),
-    ),
-    // The Blink side of the same feature; older builds read only this one.
-    ("enable-blink-features", Some("MiddleClickAutoscroll")),
-];
+/// The `enable-features` switch is not here: [`PageFeatures::switches`] writes it, from the
+/// user's settings.
+const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 struct Linux;
@@ -257,22 +298,53 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     let mut cef = CefRuntimeConfig::new(Current::framework_dir(&config.exe_dir), SANDBOX);
     cef.browser_subprocess_path = Current::helper_path(&config.exe_dir);
     cef.cache_path = Some(config.cache_dir.clone());
-    cef.command_line_switches = CHROMIUM_SWITCHES
-        .iter()
-        .chain(Current::CHROMIUM_SWITCHES)
-        .map(|(name, value)| ((*name).into(), value.map(Into::into)))
-        .collect();
+    cef.command_line_switches = config.features.switches();
+    cef.command_line_switches.extend(
+        CHROMIUM_SWITCHES
+            .iter()
+            .chain(Current::CHROMIUM_SWITCHES)
+            .map(|(name, value)| ((*name).into(), value.map(Into::into))),
+    );
     cef.pump_scheduler = config.pump_scheduler.clone();
     if config.clipboard_bridge {
-        cef.child_process_switches = vec![welding::clipboard_bridge::SWITCH.into()];
+        cef.child_process_switches = vec![CLIPBOARD_SWITCH.into()];
     }
     cef
+}
+
+/// Extra Chromium switches for experiments, from `WUBBLE_PROBE_SWITCHES`
+/// (`name=value;name;...`; unset is empty, so the shipped command line does not
+/// change). They come last, so one overrides a table entry of the same name
+/// (`enable-features` replaces the table's value, it does not extend it).
+/// Used by the HDR probe (`examples/hdr_probe.rs`) to try colour-profile and
+/// HDR feature switches without a rebuild.
+fn probe_switches(spec: Option<&str>) -> Vec<(String, Option<String>)> {
+    spec.unwrap_or_default()
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .map(|s| match s.split_once('=') {
+            Some((name, value)) => (name.to_string(), Some(value.to_string())),
+            None => (s.to_string(), None),
+        })
+        .collect()
 }
 
 /// The CEF version wubble is built against (the bundled libcef comes from the
 /// same `cef-dll-sys` release).
 pub fn version() -> &'static str {
     nul_terminated(cef::sys::CEF_VERSION)
+}
+
+/// CEF's own version and the Chromium version it wraps, from [`version`]
+/// (`156.0.30+g6028375+chromium-156.0.8078.96`): for the About section.
+pub fn cef_and_chromium() -> (&'static str, &'static str) {
+    split_version(version())
+}
+
+fn split_version(full: &str) -> (&str, &str) {
+    let cef = full.split('+').next().unwrap_or(full);
+    let chromium = full.rsplit_once("chromium-").map_or("unknown", |(_, v)| v);
+    (cef, chromium)
 }
 
 fn nul_terminated(bytes: &'static [u8]) -> &'static str {
@@ -341,7 +413,12 @@ pub struct Engine {
 impl Engine {
     /// Initialises CEF. Call once per process, on the UI thread.
     pub fn start(config: EngineConfig) -> Result<Self, EngineError> {
-        let cef = cef_config(&config);
+        let mut cef = cef_config(&config);
+        // Read here, not in `cef_config`, so that stays pure and its tests
+        // do not depend on the caller's environment.
+        cef.command_line_switches.extend(probe_switches(
+            std::env::var("WUBBLE_PROBE_SWITCHES").ok().as_deref(),
+        ));
         if let Some(helper) = cef
             .browser_subprocess_path
             .as_ref()
@@ -577,6 +654,7 @@ mod tests {
             cache_dir: PathBuf::from(cache_dir),
             pump_scheduler: None,
             content_filter: None,
+            features: PageFeatures::default(),
             clipboard_bridge: false,
         }
     }
@@ -640,6 +718,48 @@ mod tests {
                     "enable-blink-features".to_string(),
                     Some("MiddleClickAutoscroll".to_string())
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_version_splits_into_cef_and_chromium() {
+        assert_eq!(
+            split_version("156.0.30+g6028375+chromium-156.0.8078.96"),
+            ("156.0.30", "156.0.8078.96")
+        );
+        assert_eq!(split_version("x"), ("x", "unknown"));
+        assert_ne!(cef_and_chromium().1, "unknown");
+    }
+
+    #[test]
+    fn page_features_follow_the_settings() {
+        let off = PageFeatures {
+            overlay_scrollbars: false,
+            middle_click_autoscroll: false,
+        };
+        assert!(off.switches().is_empty());
+        let scrollbars = PageFeatures {
+            overlay_scrollbars: true,
+            ..off
+        };
+        assert_eq!(
+            scrollbars.switches(),
+            [(
+                "enable-features".to_string(),
+                Some("OverlayScrollbar".to_string())
+            )]
+        );
+    }
+
+    #[test]
+    fn probe_switches_parse_name_value_pairs() {
+        assert!(probe_switches(None).is_empty());
+        assert_eq!(
+            probe_switches(Some("force-color-profile=hdr10;;disable-gpu-vsync")),
+            vec![
+                ("force-color-profile".to_string(), Some("hdr10".to_string())),
+                ("disable-gpu-vsync".to_string(), None),
             ]
         );
     }
@@ -737,6 +857,7 @@ mod tests {
             cache_dir: dir,
             pump_scheduler: None,
             content_filter: None,
+            features: PageFeatures::default(),
             clipboard_bridge: false,
         })
         .err();

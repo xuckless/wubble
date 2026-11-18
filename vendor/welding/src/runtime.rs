@@ -108,10 +108,10 @@ pub struct CefRuntimeConfig {
     /// [`CefRuntime::do_message_loop_work`] on its own timer.
     pub pump_scheduler: Option<PumpScheduler>,
 
-    /// wubble change: bare switches added to every child process's command
-    /// line (CEF `OnBeforeChildProcessLaunch`), such as
-    /// [`crate::clipboard_bridge::SWITCH`]. Chromium hands only switches it
-    /// knows on to renderers, so these cannot go in `command_line_switches`.
+    /// wubble change (28): bare switches added to every child process's command
+    /// line (CEF `OnBeforeChildProcessLaunch`), such as a switch that tells
+    /// the helper which context scripts to run. Chromium hands only switches
+    /// it knows on to renderers, so these cannot go in `command_line_switches`.
     pub child_process_switches: Vec<String>,
 }
 
@@ -240,7 +240,7 @@ mod cef_backed {
             let args = cef::MainArgs {
                 instance: self.instance,
             };
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None);
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None, None, Default::default());
             let code =
                 cef::execute_process(Some(&args), Some(&mut app), self.sandbox_info.as_ptr());
             if code >= 0 { Ok(Some(code)) } else { Ok(None) }
@@ -258,9 +258,10 @@ mod cef_backed {
             let args = cef::MainArgs {
                 instance: self.instance,
             };
-            let mut app = crate::app::WeldApp::build_with(
+            let mut app = crate::app::WeldApp::build(
                 std::sync::Arc::new(config.command_line_switches.clone()),
                 config.pump_scheduler.clone(),
+                None,
                 std::sync::Arc::new(config.child_process_switches.clone()),
             );
             let settings = build_settings(&config);
@@ -294,7 +295,7 @@ mod cef_backed {
             let args = Args::new();
             // The same app both roles need: its render-process handler is what
             // makes script evaluation possible in the renderer.
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None);
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None, None, Default::default());
             let code = cef::execute_process(
                 Some(args.as_main_args()),
                 Some(&mut app),
@@ -314,10 +315,26 @@ mod cef_backed {
             args: &cef::args::Args,
             sandbox: CefSandboxMode,
         ) -> Result<i32, WeldError> {
+            Self::try_run_subprocess_with_script(args, sandbox, None)
+        }
+
+        /// [`Self::try_run_subprocess`], with a context script that a
+        /// renderer runs in every frame's new V8 context. wubble change, see
+        /// `WUBBLE_CHANGES.md` (26) and `app.rs`.
+        pub fn try_run_subprocess_with_script(
+            args: &cef::args::Args,
+            sandbox: CefSandboxMode,
+            context_script: Option<&'static str>,
+        ) -> Result<i32, WeldError> {
             pin_cef_api_version();
             #[cfg(target_os = "macos")]
             let _sandbox = MacSandbox::initialize(args.as_main_args(), sandbox)?;
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None);
+            let mut app = crate::app::WeldApp::build(
+                std::sync::Arc::new(Vec::new()),
+                None,
+                context_script,
+                Default::default(),
+            );
             Ok(cef::execute_process(
                 Some(args.as_main_args()),
                 Some(&mut app),
@@ -328,7 +345,16 @@ mod cef_backed {
         /// Compatibility wrapper for helpers that cannot surface setup errors.
         /// New helpers should call [`Self::try_run_subprocess`].
         pub fn run_subprocess(args: &cef::args::Args, sandbox: CefSandboxMode) -> i32 {
-            match Self::try_run_subprocess(args, sandbox) {
+            Self::run_subprocess_with_script(args, sandbox, None)
+        }
+
+        /// [`Self::run_subprocess`] with a context script (wubble change 26).
+        pub fn run_subprocess_with_script(
+            args: &cef::args::Args,
+            sandbox: CefSandboxMode,
+            context_script: Option<&'static str>,
+        ) -> i32 {
+            match Self::try_run_subprocess_with_script(args, sandbox, context_script) {
                 Ok(code) => code,
                 Err(error) => {
                     eprintln!("welding: {error}");
@@ -344,9 +370,10 @@ mod cef_backed {
             maybe_load_library(&config.cef_path)?;
             pin_cef_api_version();
             let args = Args::new();
-            let mut app = crate::app::WeldApp::build_with(
+            let mut app = crate::app::WeldApp::build(
                 std::sync::Arc::new(config.command_line_switches.clone()),
                 config.pump_scheduler.clone(),
+                None,
                 std::sync::Arc::new(config.child_process_switches.clone()),
             );
             let settings = build_settings(&config);

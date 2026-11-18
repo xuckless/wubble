@@ -43,6 +43,21 @@ pub struct Run {
     pub glass: bool,
     pub quality: Quality,
     pub frames: u32,
+    /// wubble: how far the thick panel's right edge bows at its middle height (0: straight).
+    pub bow: f32,
+}
+
+/// A bow peaking at `bend` at the thick panel's middle height, zero from its top and bottom
+/// edges out (a tent, every 4 px of window height).
+pub fn bow_table(bend: f32) -> Vec<f32> {
+    let (top, bot) = (THICK.y, THICK.y + THICK.h);
+    let mid = (top + bot) / 2.0;
+    (0..=(VIEW.1 / 4.0) as usize)
+        .map(|i| {
+            let y = i as f32 * 4.0;
+            bend * (1.0 - (y - mid).abs() / (mid - top)).max(0.0)
+        })
+        .collect()
 }
 
 /// Renders `run` at [`VIEW`], 1/60 s per frame, and reads the output back:
@@ -59,7 +74,8 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
             // after the first frame seeded the liquid, so the beam's random hue
             // leaves the liquid the same with and without glass
             if run.glass {
-                let panel = |rect, radius, tier, hover| GlassRect {
+                let panel = |rect, radius, tier: Tier, hover| GlassRect {
+                    bow: tier == Tier::Thick && run.bow != 0.0,
                     rect,
                     radius,
                     tier,
@@ -77,6 +93,13 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
                     radius: 15.0,
                 }));
                 r.scene.lap_beam();
+                let table = bow_table(run.bow);
+                r.scene
+                    .set_bow((run.bow != 0.0).then_some(wubble_gfx::Edge {
+                        y0: 0.0,
+                        step: 4.0,
+                        offset: &table,
+                    }));
             }
             // a ripple through the liquid and a press wave through the thick glass
             r.scene.tap(60.0, 50.0);

@@ -71,6 +71,7 @@ fn run(dir: &Path) -> Result<(), String> {
         pump_scheduler: None,
         content_filter: None,
         clipboard_bridge: false,
+        features: Default::default(),
     })
     .map_err(|e| e.to_string())?;
     let id = engine

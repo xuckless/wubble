@@ -252,36 +252,59 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `on_accelerated_paint` stamps `arrived`, retains and wraps the surface,
    copies it and stores `NativeFrame::Copied` (view and popup); new `on_paint`
    counts CPU fallback frames.
+26. **Context script in every frame.** `app.rs`: `WeldRenderProcessHandler`
+   takes `context_script: Option<&'static str>` (`WeldApp::build`'s third
+   argument; `None` everywhere but the new
+   `CefRuntime::{try_,}run_subprocess_with_script`, which wubble-helper calls
+   with its `autofill.js`). `on_context_created` evaluates the script (a
+   function expression) in the frame's new V8 context and calls it with two
+   native functions from a `wrap_v8_handler!` (`ContextNatives`): `send(text)`
+   posts a `FRAME_MESSAGE` (`"wubble.frame"`, at most
+   `MAX_FRAME_MESSAGE_BYTES`) to the browser from that frame; `register(fn)`
+   keeps `fn` and its context per frame id in a renderer thread-local.
+   Neither is put on `window`: page code has no name for them (closure
+   capture; CEF 156 has no isolated worlds and no `cef_register_extension`).
+   `on_context_released` drops the frame's entry if it is that context's;
+   a browser `FRAME_MESSAGE` in `on_process_message_received` calls the
+   registered function with the text inside its context. Pattern: cefclient
+   `client_renderer.cc` and cef-rs `wrapper/message_router.rs` (BSD-3-Clause;
+   MIT OR Apache-2.0). Not unit-tested (V8 needs a renderer); `--smoke
+   autofill` runs it.
+27. **Frame messages, browser side.** `surface.rs`: new
+   `CefSurfaceEvent::FrameMessage { frame_id, frame_url, is_main, text }`,
+   `WebEventQueue::push_frame_message` (drops text over
+   `MAX_FRAME_MESSAGE_BYTES` = 256 KiB and anything past
+   `MAX_PENDING_FRAME_MESSAGES` = 64 queued, a count not a rate), and
+   `CefSurfaceProducer::send_frame_message(frame_id, text)` (default
+   `PlatformUnsupported`). `handlers.rs`: shared `frame_message_received`
+   (the frame's id, URL and `is_main` read from CEF's `CefFrame`, never from
+   the text) and `send_frame_message` (`Browser::frame_by_identifier`, `Err`
+   when the frame is gone). The three platform clients call
+   `frame_message_received` first in `on_process_message_received`; the three
+   producers implement `send_frame_message` (Windows through its browser
+   accessor). Tests: order with the other events, the size cap, the pending
+   cap and room again after a drain. Not unit-tested: an unknown frame id
+   (needs a live browser).
 
-26. **Clipboard bridge (Wayland).** New `src/clipboard_bridge.rs`
-   (registered in `lib.rs`): a JS hook (`HOOK`) installed in every frame's
-   main world from the render process handler's new `on_context_created` /
-   `on_context_released` (`app.rs`), only when the renderer was launched with
-   `SWITCH` (`weld-clipboard-bridge`). It reports copies, cuts, `writeText` and
-   selection changes to the browser (`weld.clipboard` `[kind, text]`), cancels
-   Chromium's trusted `paste` and answers it from the host (`weld.paste`
-   `[text, read id]`, `renderer::answer`). `CefRuntimeConfig::
-   child_process_switches` (`runtime.rs`) reach renderers through the browser
-   process handler's new `on_before_child_process_launch`
-   (`WeldApp::build_with`, `app.rs`). `linux_cef/cef_backed.rs`: the client's
-   `on_process_message_received` turns `weld.clipboard` into the new
-   `CefSurfaceEvent::Clipboard { kind, text, frame }` (`surface.rs`); the host
-   answers with `clipboard_bridge::answer_frame`. Why: windowless Chromium on
-   Wayland has no surface, so no input serial to set the selection with and
-   no keyboard focus to be offered one.
-27. **Media state on the context menu.** `NavigationEvent::
+28. **Switches for child processes.** `runtime.rs`: new
+   `CefRuntimeConfig::child_process_switches`, added to every child
+   process's command line by the browser process handler's new
+   `on_before_child_process_launch` (`app.rs`, `WeldApp::build` takes them).
+   Chromium hands only switches it knows on to renderers, so a switch the
+   helper reads (wubble's `--wubble-clipboard-bridge`, which turns on its
+   clipboard content script on change 26's channel) cannot go in
+   `command_line_switches`.
+29. **Media state on the context menu.** `NavigationEvent::
    ContextMenuRequested` gains `media_flags` (`cef_context_menu_media_state_
    flags_t`: paused, muted, loop, controls, ...), read in `handlers.rs`
    `run_context_menu`.
-
-28. **Links opened elsewhere reach the host.** `handlers.rs`: the request
+30. **Links opened elsewhere reach the host.** `handlers.rs`: the request
    handler's new `on_open_urlfrom_tab` (a middle or Ctrl click on a link)
    reports `NavigationEvent::NewWindowRequested` and cancels CEF's in-place
    navigation; `NewWindowRequested` gains `background` (the disposition is
    `CEF_WOD_NEW_BACKGROUND_TAB`, `surface::background_disposition`), also set
    by `on_before_popup` on all three platforms.
-
-29. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
+31. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
    with the new `Panning` (middle, middle vertical/horizontal, eight compass
    points; exported from `lib.rs`); `cursor.rs` `from_cef` maps CEF's
    `CT_*PANNING` types to it (`CT_MIDDLEPANNING` was `Move`).

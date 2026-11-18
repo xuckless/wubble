@@ -91,16 +91,20 @@ pub enum Input {
 }
 
 /// `input` arrived with the pointer at `pointer`; the anchor is where the
-/// pointer was when autoscroll began.
+/// pointer was when autoscroll began. Chromium starts every autoscroll still
+/// (`MiddleClickAutoscrollCursor` is middle panning until the pointer leaves
+/// the dead zone), so only that cursor starts one: a compass cursor while off
+/// is a late answer to a move made before a press ended the last one.
 pub fn transition(state: Autoscroll, input: Input, pointer: At) -> Autoscroll {
     let anchor = match state {
         Autoscroll::Off => pointer,
         Autoscroll::Still { anchor } | Autoscroll::Moving { anchor, .. } => anchor,
     };
-    match input {
-        Input::Pressed | Input::Cursor(Pan::None) => Autoscroll::Off,
-        Input::Cursor(Pan::Still) => Autoscroll::Still { anchor },
-        Input::Cursor(Pan::Moving(direction)) => Autoscroll::Moving { anchor, direction },
+    match (state, input) {
+        (_, Input::Pressed | Input::Cursor(Pan::None)) => Autoscroll::Off,
+        (_, Input::Cursor(Pan::Still)) => Autoscroll::Still { anchor },
+        (Autoscroll::Off, Input::Cursor(Pan::Moving(_))) => Autoscroll::Off,
+        (_, Input::Cursor(Pan::Moving(direction))) => Autoscroll::Moving { anchor, direction },
     }
 }
 
@@ -185,6 +189,14 @@ mod tests {
             transition(Autoscroll::Off, Input::Pressed, A),
             Autoscroll::Off
         );
+    }
+
+    #[test]
+    fn a_compass_cursor_after_the_end_does_not_start_it_again() {
+        let s = transition(Autoscroll::Off, Input::Cursor(Pan::Still), A);
+        let s = transition(s, Input::Pressed, A);
+        let late = transition(s, Input::Cursor(Pan::Moving(Direction::SW)), A);
+        assert_eq!(late, Autoscroll::Off);
     }
 
     #[test]

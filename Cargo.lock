@@ -7876,12 +7876,14 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 name = "wubble"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "clap",
  "dirs",
  "log",
  "opener",
  "pollster 0.4.0",
  "rfd",
+ "serde_json",
  "slint",
  "smithay-clipboard",
  "tempfile",
@@ -7891,6 +7893,8 @@ dependencies = [
  "wubble-gfx",
  "wubble-store",
  "wubble-ui",
+ "wubble-vault",
+ "zeroize",
 ]
 
 [[package]]
@@ -7916,8 +7920,10 @@ dependencies = [
 name = "wubble-core"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "serde_json",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -7937,10 +7943,12 @@ name = "wubble-gfx"
 version = "0.0.0"
 dependencies = [
  "naga",
+ "pollster 0.4.0",
  "slint",
  "welding",
  "wgpu",
  "wgpu-profiler",
+ "winit",
 ]
 
 [[package]]

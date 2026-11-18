@@ -457,6 +457,24 @@ impl CefSurfaceProducer for WindowsCefProducer {
         Err(pending("cef_browser_host_t::was_resized"))
     }
 
+    // wubble change: the host's answer to a context script (see `WUBBLE_CHANGES.md`, 27).
+    fn send_frame_message(&mut self, frame_id: &str, text: &str) -> Result<(), WeldError> {
+        #[cfg(feature = "cef-runtime")]
+        {
+            let browser = self
+                .browser()
+                .ok_or_else(|| WeldError::BrowserOp("the browser is gone".into()))?;
+            return crate::handlers::send_frame_message(&browser, frame_id, text);
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            let _ = (frame_id, text);
+            Err(WeldError::PlatformUnsupported(
+                "frame messages require the cef-runtime feature",
+            ))
+        }
+    }
+
     fn request_script_result(&mut self, id: WebRequestId, script: &str) -> Result<(), WeldError> {
         #[cfg(feature = "cef-runtime")]
         {

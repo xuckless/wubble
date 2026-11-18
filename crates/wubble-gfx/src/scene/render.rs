@@ -42,7 +42,7 @@ use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 use super::quality::{BackdropClock, MAX_DT, Quality};
 use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
 use crate::import::poll_once;
-use crate::{GfxError, GpuContext};
+use crate::{EdgeU, GfxError, GpuContext, bytes};
 
 // @source slint-render-shaders
 pub(super) const PRELUDE: &str = concat!(
@@ -55,7 +55,11 @@ pub(super) const FLUID_WGSL: &str = include_str!("shaders/fluid.wgsl");
 pub(super) const COMPOSITE_WGSL: &str = include_str!("shaders/composite.wgsl");
 pub(super) const BLUR_WGSL: &str = include_str!("shaders/blur.wgsl");
 pub(super) const BLIT_WGSL: &str = include_str!("shaders/blit.wgsl");
-pub(super) const GLASS_WGSL: &str = include_str!("shaders/glass.wgsl");
+// wubble: the glass's bowed edge reads the shared edge table (edge.wgsl)
+pub(super) const GLASS_WGSL: &str = concat!(
+    include_str!("../edge.wgsl"),
+    include_str!("shaders/glass.wgsl")
+);
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -117,7 +121,9 @@ pub(super) struct GlassU {
     u_wave_n: i32,
     u_voice_amt: f32,
     u_material: f32,
-    _p: [f32; 3],
+    /// wubble: 1 when the right edge follows edge 0 of `EDGES` (glass.wgsl `uBow`)
+    u_bow: f32,
+    _p: [f32; 2],
     u_beam: [f32; 4],
     u_voice: [f32; 4],
     u_wave: [[f32; 4]; 4],
@@ -129,12 +135,6 @@ const _: () = {
     assert!(std::mem::size_of::<BlurU>() == 16);
     assert!(std::mem::size_of::<GlassU>() == 208);
 };
-
-fn bytes<T: Copy>(v: &T) -> &[u8] {
-    // SAFETY: the uniform structs are #[repr(C)], Copy, and made only of f32/i32 (no padding
-    // bytes the compiler could leave uninitialised: every gap is an explicit field).
-    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
-}
 
 // @source slint-render-targets
 struct Target {
@@ -316,7 +316,7 @@ struct Pipelines {
 }
 
 /// A shader body with the shared prelude, as every scene module is compiled.
-pub(super) fn with_prelude(body: &str) -> String {
+pub(crate) fn with_prelude(body: &str) -> String {
     format!("{PRELUDE}\n{body}")
 }
 
@@ -398,6 +398,8 @@ impl Pipelines {
 enum Res<'a> {
     U(u64, u64),
     Tex(u32, &'a wgpu::TextureView),
+    /// wubble: an arena slice at another binding (the glass's `EDGES`, binding 5)
+    Buf(u32, u64, u64),
 }
 
 // @source slint-render-renderer
@@ -628,6 +630,14 @@ impl Renderer {
                     binding: *b,
                     resource: wgpu::BindingResource::TextureView(v),
                 },
+                Res::Buf(b, off, size) => wgpu::BindGroupEntry {
+                    binding: *b,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.arena.buf,
+                        offset: *off,
+                        size: NonZeroU64::new(*size),
+                    }),
+                },
             });
         }
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -732,6 +742,8 @@ impl Renderer {
             .filter(|s| s.alpha > 0.001 && s.w >= 1.0 && s.h >= 1.0)
             .collect();
         let mut glass = Vec::with_capacity(surfaces.len());
+        // edge 0: the seam's string; edge 1 unused
+        let bow = self.arena.push(&[self.scene.bow, EdgeU::pack(None)]);
         for s in &surfaces {
             let gu = self.glass_u(s);
             let u = self.arena.push(&gu);
@@ -741,6 +753,7 @@ impl Renderer {
                     Res::U(u.0, u.1),
                     Res::Tex(3, &py.b1.view),
                     Res::Tex(4, &py.b2.view),
+                    Res::Buf(5, bow.0, bow.1),
                 ],
             ));
         }
@@ -804,12 +817,18 @@ impl Renderer {
     /// as `uMaterial` 2, the flat fill (the one change to glass.wgsl).
     fn glass_u(&self, s: &GlassSurface) -> GlassU {
         let pad = 70.0;
+        // wubble: a bowed edge reaches up to the bow further out, either way
+        let reach = if s.bow {
+            f64::from(self.scene.bow_reach)
+        } else {
+            0.0
+        };
         let (u_wave, u_wave_n) = wave_uniforms(&s.waves);
         GlassU {
             u_quad: [
                 (s.x - pad) as f32,
                 (s.y - pad) as f32,
-                (s.w + pad * 2.0) as f32,
+                (s.w + pad * 2.0 + reach) as f32,
                 (s.h + pad * 2.0) as f32,
             ],
             u_rect: [s.x as f32, s.y as f32, s.w as f32, s.h as f32],
@@ -831,7 +850,8 @@ impl Renderer {
             } else {
                 s.material as f32
             },
-            _p: [0.0; 3],
+            u_bow: if s.bow { 1.0 } else { 0.0 },
+            _p: [0.0; 2],
             u_beam: s
                 .beam
                 .map(|b| {
@@ -1168,5 +1188,6 @@ mod tests {
         assert_eq!(size(COMPOSITE_WGSL, "CompositeU"), size_of::<CompositeU>());
         assert_eq!(size(BLUR_WGSL, "BlurU"), size_of::<BlurU>());
         assert_eq!(size(GLASS_WGSL, "GlassU"), size_of::<GlassU>());
+        assert_eq!(size(GLASS_WGSL, "EdgeU"), size_of::<EdgeU>());
     }
 }

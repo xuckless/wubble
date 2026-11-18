@@ -28,10 +28,13 @@ pub enum Permission {
     StorageAccess,
     KeyboardLock,
     PointerLock,
+    /// Offering to save passwords; only `Block` is ever stored ("Never for
+    /// this site" on the save prompt). No page asks for it.
+    SavePasswords,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 11] = [
+    pub const ALL: [Permission; 12] = [
         Self::Camera,
         Self::Microphone,
         Self::Geolocation,
@@ -43,6 +46,7 @@ impl Permission {
         Self::StorageAccess,
         Self::KeyboardLock,
         Self::PointerLock,
+        Self::SavePasswords,
     ];
 
     /// The stored name. Stable: never rename one.
@@ -59,6 +63,7 @@ impl Permission {
             Self::StorageAccess => "storage-access",
             Self::KeyboardLock => "keyboard-lock",
             Self::PointerLock => "pointer-lock",
+            Self::SavePasswords => "password-save",
         }
     }
 
@@ -80,6 +85,7 @@ impl Permission {
             Self::StorageAccess => "Use info it has saved about you",
             Self::KeyboardLock => "See and control your keyboard",
             Self::PointerLock => "Use and move your mouse",
+            Self::SavePasswords => "Save your passwords",
         }
     }
 }
@@ -109,6 +115,11 @@ impl SitePermissions {
 
     pub fn forget(&mut self, origin: &str, kind: Permission) {
         self.0.remove(&(origin.to_string(), kind));
+    }
+
+    /// Every remembered decision, by origin then kind.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Permission, Decision)> {
+        self.0.iter().map(|((o, k), d)| (o.as_str(), *k, *d))
     }
 
     pub fn get(&self, origin: &str, kind: Permission) -> Option<Decision> {

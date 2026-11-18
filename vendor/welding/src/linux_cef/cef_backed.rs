@@ -360,12 +360,14 @@ cef::wrap_client! {
         fn on_process_message_received(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _frame: Option<&mut cef::Frame>,
+            frame: Option<&mut cef::Frame>,
             source_process: cef::ProcessId,
             message: Option<&mut cef::ProcessMessage>,
         ) -> ::std::os::raw::c_int {
             if source_process != cef::ProcessId::RENDERER { return 0; }
             let Some(msg) = message else { return 0 };
+            // wubble change: the context script's frame messages.
+            if crate::handlers::frame_message_received(&self.events, frame, msg) { return 1; }
             let name = cef::CefString::from(&msg.name()).to_string();
             if name == crate::app::EVAL_RESULT {
                 // The renderer answering a request_script_result.
@@ -379,18 +381,6 @@ cef::wrap_client! {
                             if ok { Ok(payload) } else { Err(payload) },
                         );
                     }
-                }
-                return 1;
-            }
-            // wubble change: a frame's clipboard request (`clipboard_bridge`).
-            if name == crate::clipboard_bridge::REQUEST {
-                let frame = _frame.map(|f| cef::CefString::from(&f.identifier()).to_string()).unwrap_or_default();
-                if let Some(args) = msg.argument_list() {
-                    self.events.push(CefSurfaceEvent::Clipboard {
-                        kind: cef::CefString::from(&args.string(0)).to_string(),
-                        text: cef::CefString::from(&args.string(1)).to_string(),
-                        frame,
-                    });
                 }
                 return 1;
             }

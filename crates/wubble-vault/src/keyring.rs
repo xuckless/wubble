@@ -27,6 +27,21 @@ pub trait KeyRing {
     fn set(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyRingError>;
 }
 
+/// A keyring chosen at run time: the OS one, or the fake for a smoke.
+impl KeyRing for Box<dyn KeyRing + Send> {
+    fn get(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, KeyRingError> {
+        (**self).get(service, account)
+    }
+
+    fn set(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyRingError> {
+        (**self).set(service, account, secret)
+    }
+}
+
 /// The real keyring (Keychain, Credential Manager, Secret Service).
 ///
 /// If the platform store cannot be initialised (for example Secret Service is not

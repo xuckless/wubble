@@ -11,6 +11,7 @@
 //! bitmaps) is a fallback only and must be counted/logged when hit.
 
 pub mod import;
+pub mod mask;
 pub mod pacing;
 pub mod scene;
 pub mod swatch;
@@ -44,9 +45,72 @@ impl FrameSize {
     }
 }
 
+/// A bowed edge's displacement along x, sampled every `step` logical px of height from `y0`
+/// (a borrowed `wubble_core::bow::EdgeTable`, which this crate does not name). At most
+/// [`EDGE_SAMPLES`] samples are used.
+#[derive(Clone, Copy, Debug)]
+pub struct Edge<'a> {
+    pub y0: f32,
+    pub step: f32,
+    pub offset: &'a [f32],
+}
+
+/// The samples one edge uniform holds (`EDGE_VEC4S` × vec4 in edge.wgsl).
+pub const EDGE_SAMPLES: usize = 256;
+
+/// One edge as edge.wgsl's `EdgeU` reads it: (step, y0, samples, unused) and the samples, 4 to
+/// a vec4. Shaders bind two (`EDGES`, binding 5).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct EdgeU {
+    tab: [f32; 4],
+    off: [[f32; 4]; EDGE_SAMPLES / 4],
+}
+
+const _: () = assert!(std::mem::size_of::<EdgeU>() == 16 + EDGE_SAMPLES * 4);
+
+impl EdgeU {
+    /// `None` and fewer than two samples read as straight.
+    pub(crate) fn pack(edge: Option<Edge>) -> Self {
+        let mut u = Self {
+            tab: [0.0; 4],
+            off: [[0.0; 4]; EDGE_SAMPLES / 4],
+        };
+        if let Some(e) = edge {
+            let n = e.offset.len().min(EDGE_SAMPLES);
+            for (i, &o) in e.offset[..n].iter().enumerate() {
+                u.off[i / 4][i % 4] = o;
+            }
+            u.tab = [e.step, e.y0, n as f32, 0.0];
+        }
+        u
+    }
+}
+
+/// A uniform mirror's bytes, for `queue.write_buffer` and the scene's arena.
+pub(crate) fn bytes<T: Copy>(v: &T) -> &[u8] {
+    // SAFETY: the uniform mirrors are #[repr(C)], Copy, and made only of f32/i32 (no padding
+    // bytes the compiler could leave uninitialised: every gap is an explicit field).
+    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edge_packs_four_to_a_vec4() {
+        let offset: Vec<f32> = (0..300).map(|i| i as f32).collect();
+        let u = EdgeU::pack(Some(Edge {
+            y0: 8.0,
+            step: 4.0,
+            offset: &offset,
+        }));
+        assert_eq!(u.tab, [4.0, 8.0, EDGE_SAMPLES as f32, 0.0]);
+        assert_eq!(u.off[0], [0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(u.off[EDGE_SAMPLES / 4 - 1][3], 255.0);
+        assert_eq!(EdgeU::pack(None).tab, [0.0; 4]);
+    }
 
     #[test]
     fn crop_keeps_only_what_fits() {

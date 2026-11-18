@@ -9,6 +9,7 @@ use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
 use slint::winit_030::winit::event::Ime as WinitIme;
 use std::path::PathBuf;
 
+use wubble_core::action::Action;
 use wubble_core::model::Command;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
@@ -124,6 +125,7 @@ impl Host {
                 log::debug!(target: "wubble::console", "{line}")
             }
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
+            Routed::Frame { frame, text } => self.autofill_message(tab, frame, &text),
             Routed::Pdf { path, text } => {
                 self.downloads.finish_pdf(&path);
                 self.toast(window, &text);
@@ -131,7 +133,16 @@ impl Host {
             Routed::Clipboard { frame, request } => {
                 self.clipboard_request(window, tab, frame, request)
             }
-            Routed::ImeBounds(_) | Routed::Ignore => {}
+            // The page under the wheel is the visible one's; only that one zooms, as
+            // the zoom keys do.
+            Routed::WheelZoom { zoom_in } if self.model.visible_tab() == Some(tab) => {
+                self.perform(if zoom_in {
+                    Action::ZoomIn
+                } else {
+                    Action::ZoomOut
+                })
+            }
+            Routed::WheelZoom { .. } | Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);
         // After the event took effect, so the smokes act on the open surface.
@@ -186,7 +197,7 @@ impl Host {
             let credentials = answer
                 .credentials
                 .as_ref()
-                .map(|(user, Secret(password))| (user.as_str(), password.as_str()));
+                .map(|(user, password)| (user.as_str(), password.expose()));
             view.answer_auth(answer.id, credentials);
         }
     }
@@ -290,6 +301,7 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
+                MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
                 MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
             }
         }
@@ -368,6 +380,7 @@ impl Host {
             self.surfaces.insert(tab, s.view_gone());
         }
         self.downloads_lost(tab);
+        self.autofill_gone(tab);
         self.audio.remove(&tab);
         if let Some(window) = self.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
@@ -425,6 +438,7 @@ impl Host {
             window.set_popup_frame(slint::Image::default());
         }
         window.set_page_fullscreen(matches!(self.screen, Screen::Page { .. }));
+        self.render_autofill(window, tab);
         self.drawn = Drawn {
             tab,
             menu: current.menu,
@@ -448,7 +462,7 @@ impl Host {
             let event = if accept {
                 AuthEvent::Submit {
                     user: text.into(),
-                    password: Secret(secret.into()),
+                    password: Secret::from(secret),
                 }
             } else {
                 AuthEvent::Cancel
@@ -545,9 +559,12 @@ impl Host {
     pub(super) fn user_zoomed(&mut self, tab: TabId, percent: u32) {
         let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
         if let Some(host) = url.as_deref().and_then(zoom::host_of) {
-            let table = std::mem::take(&mut self.site_zoom);
-            self.site_zoom = zoom::next_table(table, &host, percent);
-            self.store.set_site_zoom(self.site_zoom.clone());
+            let table = zoom::next_table(self.site_zoom.clone(), &host, percent, self.zoom_default);
+            // Applied as the setting: the table becomes `site_zoom` there.
+            self.write_setting(
+                wubble_core::settings::SITE_ZOOM.key,
+                &wubble_store::text_of::<wubble_store::SiteZoom>(&table),
+            );
         }
         if let Some(window) = self.window.upgrade() {
             self.toast(&window, &format!("{percent}%"));
@@ -556,7 +573,7 @@ impl Host {
 
     /// A tab committed `url`: show it at the zoom stored for its site.
     pub(super) fn restore_zoom(&mut self, tab: TabId, url: &str) {
-        let want = zoom::wanted(&self.site_zoom, url);
+        let want = zoom::wanted(&self.site_zoom, url, self.zoom_default);
         if let Some(view) = self.tab_view(tab)
             && view.zoom_percent() != want
         {
@@ -624,7 +641,7 @@ impl Host {
         }
     }
 
-    /// A frame's clipboard request (welding `clipboard_bridge`): copies go to the system
+    /// A frame's clipboard request (wubble-helper `clipboard.js`): copies go to the system
     /// clipboard, pastes come from it, or from the primary selection after a middle click.
     fn clipboard_request(
         &mut self,

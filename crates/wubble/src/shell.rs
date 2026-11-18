@@ -6,7 +6,8 @@
 use std::collections::BTreeMap;
 
 use wubble_core::model::{Dest, Model};
-use wubble_core::space::{Item, Rgb, SpaceId};
+use wubble_core::pages::InternalPage;
+use wubble_core::space::{Item, Rgb, SpaceIcon, SpaceId};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
 
@@ -43,6 +44,7 @@ pub struct SpaceRow {
     pub id: i32,
     pub name: String,
     pub tint: Rgb,
+    pub icon: SpaceIcon,
 }
 
 /// The sidebar for one model. Ids that do not fit Slint's `int` are
@@ -96,6 +98,7 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
                 id: slint_id(s.id.0)?,
                 name: s.name.clone(),
                 tint: s.tint,
+                icon: s.icon,
             })
         })
         .collect();
@@ -168,6 +171,9 @@ pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
 
 /// What a tab is called: its title, else its host, else "New tab".
 pub fn tab_title(tab: &Tab) -> String {
+    if let Some(page) = InternalPage::from_url(&tab.url) {
+        return page.title().to_owned();
+    }
     let host = url::address_parts(&tab.url).0;
     [tab.title.trim(), host]
         .into_iter()

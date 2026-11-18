@@ -17,7 +17,8 @@ use std::time::Instant;
 use wubble_core::lifecycle::{Activity, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
-    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceId, SplitGroup,
+    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
+    SplitGroup,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
 
@@ -61,7 +62,8 @@ impl Store {
         let mut space_at: HashMap<SpaceId, usize> = HashMap::new();
         let mut rows = c
             .query(
-                "SELECT id, name, tint, container_id, active_tab_id FROM spaces ORDER BY position",
+                "SELECT id, name, tint, container_id, active_tab_id, icon FROM spaces \
+                 ORDER BY position",
                 (),
             )
             .await?;
@@ -69,11 +71,14 @@ impl Store {
             let id = SpaceId(narrow(r.get(0)?, "space id")?);
             let tint: Option<String> = r.get(2)?;
             let active: Option<i64> = r.get(4)?;
+            let icon: String = r.get(5)?;
+            let icon = SpaceIcon::from_id(&icon).unwrap_or(SpaceIcon::nth(spaces.len()));
             space_at.insert(id, spaces.len());
             spaces.push(Space {
                 id,
                 name: r.get(1)?,
                 tint: tint.as_deref().and_then(parse_tint).unwrap_or(default_tint),
+                icon,
                 container: ContainerId(narrow(r.get(3)?, "container id")?),
                 pinned: vec![],
                 items: vec![],
@@ -301,8 +306,8 @@ async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -
 async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .await?;
     for (i, s) in m.spaces.iter().enumerate() {
@@ -314,6 +319,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             tint_text(s.tint),
             s.container.0,
             active,
+            s.icon.id(),
         ))
         .await?;
     }
@@ -489,6 +495,20 @@ mod tests {
         m = new_tab(m, "https://b.test/2", None, None);
         m = ap(m, Command::ActivateTab(TabId(2))); // Space A remembers tab 2
         m = ap(m, Command::SwitchSpace(SpaceId(1)));
+        m = ap(
+            m,
+            Command::SetSpaceIcon {
+                space: SpaceId(1),
+                icon: SpaceIcon::Study,
+            },
+        );
+        m = ap(
+            m,
+            Command::SetSpaceTint {
+                space: SpaceId(1),
+                tint: Rgb(4, 5, 6),
+            },
+        );
         m.check().unwrap();
         m
     }
@@ -765,6 +785,7 @@ mod tests {
                     id: SpaceId(0),
                     name: "Home".into(),
                     tint: Rgb(0xaa, 0xbb, 0xcc),
+                    icon: SpaceIcon::Personal,
                     container: D,
                     pinned: vec![TabId(10)],
                     // v1 never recorded the interleaving: folders first, then tabs.
@@ -783,6 +804,7 @@ mod tests {
                     id: SpaceId(1),
                     name: "Jobs".into(),
                     tint: Model::new(now()).spaces[0].tint,
+                    icon: SpaceIcon::Work,
                     container: ContainerId(1),
                     pinned: vec![],
                     items: vec![Item::Tab(TabId(20)), Item::Tab(TabId(21))],
@@ -951,11 +973,30 @@ mod tests {
             migrate::migrate(&mut store.conn, &MIGRATIONS[..6])
                 .await
                 .unwrap();
-            let m = rich();
+            let mut m = rich();
+            // v6 has no icon column: migration 10 gives each Space its icon by position.
+            for (i, s) in m.spaces.iter_mut().enumerate() {
+                s.icon = SpaceIcon::nth(i);
+            }
             let tx = store.conn.transaction().await.unwrap();
-            // the v6 writers, without the split table
+            // the v6 writers, without the split table or the icon
             write_containers(&tx, &m).await.unwrap();
-            write_spaces(&tx, &m).await.unwrap();
+            for (i, s) in m.spaces.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    (
+                        s.id.0,
+                        s.name.as_str(),
+                        i as i64,
+                        tint_text(s.tint),
+                        s.container.0,
+                        s.active.map(tab_id).transpose().unwrap(),
+                    ),
+                )
+                .await
+                .unwrap();
+            }
             write_folders(&tx, &m).await.unwrap();
             write_tabs(&tx, &m).await.unwrap();
             tx.execute("INSERT INTO session(id, active_space_id) VALUES (1, 1)", ())

@@ -3,7 +3,7 @@
 //!
 //! The pages' Chromium cannot reach them on Wayland (it has no surface, so no
 //! input serial to set the selection with and no keyboard focus to be offered
-//! one), so their copies and pastes come here (welding `clipboard_bridge`,
+//! one), so their copies and pastes come here (wubble-helper `clipboard.js`,
 //! `PageEvent::Clipboard`). The window has both. smithay-clipboard (MIT) is the
 //! crate Slint's winit backend uses for the same job; it carries text only.
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the

@@ -343,6 +343,16 @@ pub const DEFAULTS: &[Binding] = rows![
     // the design's split chord; Shift+\ types `|`, so the unsplit row names that
     "Mod+\\", ALL, Action::SplitNext, Shell;
     "Mod+|", ALL, Action::Unsplit, Shell;
+    // Chromium and Firefox on macOS (Cmd+,); Linux and Windows take the same chord on Ctrl
+    "Mod+,", ALL, Action::OpenSettings, Shell;
+    // Chromium's chords; Cmd+H hides the app on macOS, so its rows differ
+    "Ctrl+H", LW, Action::OpenHistory, Shell;
+    "Cmd+Y", MAC, Action::OpenHistory, Shell;
+    "Ctrl+Shift+O", LW, Action::OpenBookmarks, Shell;
+    "Cmd+Alt+B", MAC, Action::OpenBookmarks, Shell;
+    "Ctrl+J", LW, Action::OpenDownloads, Shell;
+    "Cmd+Shift+J", MAC, Action::OpenDownloads, Shell;
+    "Mod+D", ALL, Action::BookmarkPage, Shell;
     "Ctrl+Q", LINUX, Action::Quit, Shell;
     "Ctrl+Shift+Q", WIN, Action::Quit, Shell;
     "Cmd+Q", MAC, Action::Quit, Shell;
@@ -470,6 +480,156 @@ impl Keymap {
     }
 }
 
+// ----------------------------------------------------------------- editor
+
+/// One row of the keybinding editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BindingRow {
+    pub action: Action,
+    /// The shortcut it runs on now (overrides applied).
+    pub chord: Option<Chord>,
+    /// The shortcut of the default table.
+    pub default: Option<Chord>,
+    /// The user changed it.
+    pub overridden: bool,
+}
+
+/// A row per action of [`Action::all`], in that order.
+pub fn binding_rows(platform: Platform, overrides: &[Override]) -> Vec<BindingRow> {
+    let defaults = Keymap::defaults(platform);
+    let now = defaults.clone().with_overrides(overrides);
+    Action::all()
+        .into_iter()
+        .map(|action| {
+            let chord = now.shortcut_for(action);
+            let default = defaults.shortcut_for(action);
+            BindingRow {
+                action,
+                chord,
+                default,
+                overridden: chord != default,
+            }
+        })
+        .collect()
+}
+
+/// A chord the editor accepts: one with Ctrl, Alt or Cmd, or a function key. A bare letter
+/// would take the key from every text field.
+pub fn bindable(chord: Chord) -> bool {
+    chord.ctrl || chord.alt || chord.cmd || matches!(chord.key, Key::F(_))
+}
+
+/// The overrides after binding `chord` to `action` in place of the chords it runs on now, and
+/// the action that ran on `chord` until then (the conflict the editor shows), if another did.
+pub fn set_binding(
+    overrides: &[Override],
+    platform: Platform,
+    action: Action,
+    chord: Chord,
+) -> (Vec<Override>, Option<Action>) {
+    let chord = chord.normalize();
+    let now = Keymap::defaults(platform).with_overrides(overrides);
+    let previous = now
+        .action_for(chord)
+        .map(|(a, _)| a)
+        .filter(|a| *a != action);
+    // Without the action's own rebinding, the chords it still runs on are unbound.
+    let mut next: Vec<Override> = overrides
+        .iter()
+        .filter(|o| o.action != Some(action) && o.chord != chord)
+        .copied()
+        .collect();
+    let base = Keymap::defaults(platform).with_overrides(&next);
+    next.extend(
+        base.rows
+            .iter()
+            .filter(|(c, a, _)| *a == action && *c != chord)
+            .map(|&(chord, _, _)| Override {
+                chord,
+                action: None,
+            }),
+    );
+    next.push(Override {
+        chord,
+        action: Some(action),
+    });
+    (next, previous)
+}
+
+/// The overrides without the user's changes to `action`: it runs on its default chords again
+/// (unless another action was bound to one of them since).
+pub fn reset_binding(overrides: &[Override], platform: Platform, action: Action) -> Vec<Override> {
+    let defaults: Vec<Chord> = default_rows(platform)
+        .filter(|(_, a, _)| *a == action)
+        .map(|(c, _, _)| c)
+        .collect();
+    overrides
+        .iter()
+        .filter(|o| {
+            o.action != Some(action) && !(o.action.is_none() && defaults.contains(&o.chord))
+        })
+        .copied()
+        .collect()
+}
+
+/// Recording a new chord for an action in the editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capture {
+    Idle,
+    /// The next chord pressed is the action's.
+    Armed(Action),
+    /// `chord` runs `other` now: binding it takes it from `other`, once confirmed.
+    Conflict {
+        action: Action,
+        chord: Chord,
+        other: Action,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureEvent {
+    Arm(Action),
+    /// A key pressed while armed (the host routes every key here first while not `Idle`).
+    Pressed(Chord),
+    /// Take the chord from the other action.
+    Confirm,
+    /// Escape, a click elsewhere, or the page closing.
+    Cancel,
+}
+
+/// The one transition of [`Capture`]; the effect is the binding to store, if any.
+pub fn capture(
+    state: Capture,
+    event: CaptureEvent,
+    keymap: &Keymap,
+) -> (Capture, Option<(Action, Chord)>) {
+    match (state, event) {
+        (_, CaptureEvent::Arm(action)) => (Capture::Armed(action), None),
+        (_, CaptureEvent::Cancel) => (Capture::Idle, None),
+        (Capture::Armed(action), CaptureEvent::Pressed(chord)) => {
+            let chord = chord.normalize();
+            if !bindable(chord) {
+                return (state, None);
+            }
+            match keymap.action_for(chord).map(|(a, _)| a) {
+                Some(other) if other != action => (
+                    Capture::Conflict {
+                        action,
+                        chord,
+                        other,
+                    },
+                    None,
+                ),
+                _ => (Capture::Idle, Some((action, chord))),
+            }
+        }
+        (Capture::Conflict { action, chord, .. }, CaptureEvent::Confirm) => {
+            (Capture::Idle, Some((action, chord)))
+        }
+        (state, _) => (state, None),
+    }
+}
+
 // ------------------------------------------------------------- persistence
 
 /// `[["Ctrl+Shift+K","close-tab"],["Ctrl+B",null]]`; null unbinds.
@@ -479,6 +639,28 @@ pub fn overrides_to_json(overrides: &[Override]) -> String {
         .map(|o| json!([o.chord.to_string(), o.action.map(|a| a.id())]))
         .collect();
     Value::Array(rows).to_string()
+}
+
+/// The overrides the stored `keys.overrides` entries hold (each one an [`overrides_to_json`]
+/// list), in order, and how many entries did not parse (skipped, so a bad row never blocks
+/// startup).
+pub fn overrides_from_entries(entries: &[String]) -> (Vec<Override>, usize) {
+    let mut bad = 0;
+    let overrides = entries
+        .iter()
+        .filter_map(|entry| overrides_from_json(entry).inspect_err(|_| bad += 1).ok())
+        .flatten()
+        .collect();
+    (overrides, bad)
+}
+
+/// What the editor stores: one entry, or none without overrides.
+pub fn overrides_to_entries(overrides: &[Override]) -> Vec<String> {
+    if overrides.is_empty() {
+        vec![]
+    } else {
+        vec![overrides_to_json(overrides)]
+    }
 }
 
 /// Entries with an unknown action id or an unparseable chord are skipped so
@@ -636,7 +818,7 @@ mod tests {
     #[test]
     fn every_action_is_bound_except_allow_list() {
         // Chromium binds no key to muting a tab either.
-        let unbound = [Action::NewSpace, Action::ToggleMute];
+        let unbound = [Action::NewSpace, Action::ToggleMute, Action::OpenPasswords];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
             for a in Action::all() {
@@ -761,5 +943,162 @@ mod tests {
         );
         assert!(overrides_from_json("{not json").is_err());
         assert!(overrides_from_json("{}").is_err());
+    }
+
+    #[test]
+    fn page_chords_open_their_pages() {
+        let linux = Keymap::defaults(Platform::Linux);
+        let mac = Keymap::defaults(Platform::Mac);
+        let action = |m: &Keymap, c: &str| m.action_for(ch(c)).map(|r| r.0);
+        for (chord, want) in [
+            ("Ctrl+H", Action::OpenHistory),
+            ("Ctrl+Shift+O", Action::OpenBookmarks),
+            ("Ctrl+J", Action::OpenDownloads),
+            ("Ctrl+D", Action::BookmarkPage),
+        ] {
+            assert_eq!(ch(&ch(chord).to_string()), ch(chord));
+            assert_eq!(action(&linux, chord), Some(want));
+        }
+        for (chord, want) in [
+            ("Cmd+Y", Action::OpenHistory),
+            ("Cmd+Alt+B", Action::OpenBookmarks),
+            ("Cmd+Shift+J", Action::OpenDownloads),
+            ("Cmd+D", Action::BookmarkPage),
+        ] {
+            assert_eq!(action(&mac, chord), Some(want));
+        }
+    }
+
+    #[test]
+    fn ctrl_comma_opens_settings() {
+        let c = ch("Ctrl+,");
+        assert_eq!(c.key, Key::Char(','));
+        assert_eq!(ch(&c.to_string()), c);
+        assert_eq!(
+            Keymap::defaults(Platform::Linux).action_for(c).map(|r| r.0),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(
+            Keymap::defaults(Platform::Mac)
+                .action_for(ch("Cmd+,"))
+                .map(|r| r.0),
+            Some(Action::OpenSettings)
+        );
+        let ov = [Override {
+            chord: c,
+            action: Some(Action::Find),
+        }];
+        assert_eq!(overrides_from_json(&overrides_to_json(&ov)).unwrap(), ov);
+    }
+
+    #[test]
+    fn set_binding_replaces_the_actions_chords_and_names_the_previous_owner() {
+        let p = Platform::Linux;
+        let (ov, prev) = set_binding(&[], p, Action::CloseTab, ch("Ctrl+K"));
+        assert_eq!(prev, Some(Action::FocusAddress));
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+K")).unwrap().0, Action::CloseTab);
+        assert_eq!(km.action_for(ch("Ctrl+W")), None, "the old chord is gone");
+        assert_eq!(km.action_for(ch("Ctrl+F4")), None);
+        assert_eq!(km.shortcut_for(Action::CloseTab), Some(ch("Ctrl+K")));
+        // Rebinding again replaces the first rebinding.
+        let (ov, prev) = set_binding(&ov, p, Action::CloseTab, ch("Ctrl+Alt+J"));
+        assert_eq!(prev, None);
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+K")).unwrap().0, Action::FocusAddress);
+        assert_eq!(km.shortcut_for(Action::CloseTab), Some(ch("Ctrl+Alt+J")));
+        // The chord the action already has is no conflict.
+        assert_eq!(
+            set_binding(&ov, p, Action::CloseTab, ch("Ctrl+Alt+J")).1,
+            None
+        );
+    }
+
+    #[test]
+    fn reset_binding_restores_the_default() {
+        let p = Platform::Linux;
+        let (ov, _) = set_binding(&[], p, Action::CloseTab, ch("Ctrl+B"));
+        let (ov, _) = set_binding(&ov, p, Action::Find, ch("Ctrl+Alt+J"));
+        let ov = reset_binding(&ov, p, Action::CloseTab);
+        let km = Keymap::defaults(p).with_overrides(&ov);
+        assert_eq!(km.action_for(ch("Ctrl+W")).unwrap().0, Action::CloseTab);
+        assert_eq!(km.action_for(ch("Ctrl+B")), None);
+        assert_eq!(km.shortcut_for(Action::Find), Some(ch("Ctrl+Alt+J")));
+        assert_eq!(reset_binding(&ov, p, Action::Find), []);
+    }
+
+    #[test]
+    fn binding_rows_cover_every_action_and_mark_changes() {
+        let p = Platform::Linux;
+        let (ov, _) = set_binding(&[], p, Action::Reload, ch("Ctrl+B"));
+        let rows = binding_rows(p, &ov);
+        assert_eq!(
+            rows.iter().map(|r| r.action).collect::<Vec<_>>(),
+            Action::all()
+        );
+        let reload = rows.iter().find(|r| r.action == Action::Reload).unwrap();
+        assert!(reload.overridden);
+        assert_eq!(
+            (reload.chord, reload.default),
+            (Some(ch("Ctrl+B")), Some(ch("Ctrl+R")))
+        );
+        assert_eq!(rows.iter().filter(|r| r.overridden).count(), 1);
+        assert!(binding_rows(p, &[]).iter().all(|r| !r.overridden));
+    }
+
+    #[test]
+    fn stored_entries_decode_in_order_and_skip_bad_ones() {
+        let a = [Override {
+            chord: ch("Ctrl+B"),
+            action: Some(Action::Find),
+        }];
+        let b = [Override {
+            chord: ch("Ctrl+B"),
+            action: None,
+        }];
+        let entries = vec![overrides_to_json(&a), "{bad".into(), overrides_to_json(&b)];
+        let (ov, bad) = overrides_from_entries(&entries);
+        assert_eq!(bad, 1);
+        assert_eq!(ov, [a[0], b[0]]);
+        assert_eq!(overrides_to_entries(&[]), Vec::<String>::new());
+        assert_eq!(overrides_from_entries(&overrides_to_entries(&a)).0, a);
+    }
+
+    #[test]
+    fn capture_records_confirms_and_cancels() {
+        let km = Keymap::defaults(Platform::Linux);
+        let (s, out) = capture(Capture::Idle, CaptureEvent::Arm(Action::Find), &km);
+        assert_eq!((s, out), (Capture::Armed(Action::Find), None));
+        // A bare letter is not taken.
+        let (s, out) = capture(s, CaptureEvent::Pressed(ch("K")), &km);
+        assert_eq!((s, out), (Capture::Armed(Action::Find), None));
+        let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+Alt+J")), &km);
+        assert_eq!(
+            (s, out),
+            (Capture::Idle, Some((Action::Find, ch("Ctrl+Alt+J"))))
+        );
+        // A chord another action runs on asks first.
+        let (s, _) = capture(s, CaptureEvent::Arm(Action::Find), &km);
+        let (s, out) = capture(s, CaptureEvent::Pressed(ch("Ctrl+R")), &km);
+        assert_eq!(
+            s,
+            Capture::Conflict {
+                action: Action::Find,
+                chord: ch("Ctrl+R"),
+                other: Action::Reload
+            }
+        );
+        assert_eq!(out, None);
+        let (done, out) = capture(s, CaptureEvent::Confirm, &km);
+        assert_eq!(
+            (done, out),
+            (Capture::Idle, Some((Action::Find, ch("Ctrl+R"))))
+        );
+        assert_eq!(capture(s, CaptureEvent::Cancel, &km), (Capture::Idle, None));
+        // Pressing keys while idle does nothing.
+        assert_eq!(
+            capture(Capture::Idle, CaptureEvent::Pressed(ch("Ctrl+Alt+J")), &km),
+            (Capture::Idle, None)
+        );
     }
 }

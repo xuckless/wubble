@@ -8,6 +8,9 @@
 //!
 //! A missing or undecodable row yields the default: a bad settings row must not block startup.
 
+use std::collections::HashMap;
+
+use wubble_core::apply::GlassSetting;
 use wubble_core::omnibox::SearchEngine;
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
@@ -76,20 +79,19 @@ impl Codec for Option<SearchEngine> {
 
 impl Codec for SidebarMode {
     fn encode(&self) -> String {
-        match self {
-            SidebarMode::Extended => "extended",
-            SidebarMode::Rail => "rail",
-            SidebarMode::Hidden => "hidden",
-        }
-        .into()
+        self.id().into()
     }
     fn decode(s: &str) -> Option<Self> {
-        match s {
-            "extended" => Some(SidebarMode::Extended),
-            "rail" => Some(SidebarMode::Rail),
-            "hidden" => Some(SidebarMode::Hidden),
-            _ => None,
-        }
+        SidebarMode::from_id(s)
+    }
+}
+
+impl Codec for GlassSetting {
+    fn encode(&self) -> String {
+        self.id().into()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        GlassSetting::from_id(s)
     }
 }
 
@@ -152,8 +154,28 @@ settings! {
     BlockerListsAutoUpdate: bool = defs::BLOCKER_LISTS_AUTO_UPDATE;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
     HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
-    /// Per-site zoom (`wubble_core::zoom`): hosts at 100 % are absent.
+    /// Per-site zoom (`wubble_core::zoom`): hosts at the default zoom are absent.
     SiteZoom: ZoomTable = defs::SITE_ZOOM;
+    /// Percent; the zoom of sites without their own.
+    ZoomDefault: u32 = defs::ZOOM_DEFAULT;
+    /// A CEF start switch: read before the engine starts.
+    OverlayScrollbars: bool = defs::OVERLAY_SCROLLBARS;
+    /// A CEF start switch: read before the engine starts.
+    MiddleClickAutoscroll: bool = defs::MIDDLE_CLICK_AUTOSCROLL;
+    SleepFreezeAfter: u32 = defs::SLEEP_FREEZE_AFTER;
+    SleepDiscardAfter: u32 = defs::SLEEP_DISCARD_AFTER;
+    SleepKeepPinned: bool = defs::SLEEP_KEEP_PINNED;
+    GlassQuality: GlassSetting = defs::GLASS_QUALITY;
+    /// Read before the window exists: off, the shell runs Slint-only glass.
+    GlassScene: bool = defs::GLASS_SCENE;
+    PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
+    PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
+}
+
+/// A typed value as the text the `settings` table stores for it (the one encoding), for a
+/// write through the generic text path (`Store::set_text`).
+pub fn text_of<S: Setting>(value: &S::Value) -> String {
+    Codec::encode(value)
 }
 
 impl Store {
@@ -169,6 +191,35 @@ impl Store {
 
     pub async fn set_setting<S: Setting>(&mut self, value: S::Value) -> Result<()> {
         self.set_raw(S::DEF.key, &Codec::encode(&value)).await
+    }
+
+    /// Every stored row that is a setting of the table, `key -> text`, as stored (the page and
+    /// `apply::effect_of` read an invalid one as the default).
+    pub async fn all_settings(&self) -> Result<HashMap<String, String>> {
+        let mut rows = self
+            .conn
+            .query("SELECT key, value FROM settings", ())
+            .await?;
+        let mut out = HashMap::new();
+        while let Some(r) = rows.next().await? {
+            let key: String = r.get(0)?;
+            if defs::find(&key).is_some() {
+                out.insert(key, r.get(1)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Stores `text` under the setting `key` (the settings page's generic write). A key that is
+    /// no setting, or a value its kind refuses, is an error and leaves the row as it was.
+    pub async fn set_text(&mut self, key: &str, text: &str) -> Result<()> {
+        match defs::find(key) {
+            Some(def) if def.kind.accepts(text) => self.set_raw(def.key, text).await,
+            Some(_) => Err(crate::Error::Invalid(format!(
+                "{text:?} is not a value of {key}"
+            ))),
+            None => Err(crate::Error::Invalid(format!("{key} is not a setting"))),
+        }
     }
 
     pub(crate) async fn get_raw(&self, key: &str) -> Result<Option<String>> {
@@ -301,6 +352,31 @@ mod tests {
             assert_eq!(s.setting::<SearchEngineChoice>().await.unwrap(), None);
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
             assert!(s.setting::<BlockerEnabled>().await.unwrap());
+        });
+    }
+
+    #[test]
+    fn set_text_validates_and_all_settings_reads_back() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            assert!(s.all_settings().await.unwrap().is_empty());
+            s.set_text("blocker.enabled", "0").await.unwrap();
+            s.set_text("glass.quality", "reduced").await.unwrap();
+            assert!(s.set_text("blocker.enabled", "maybe").await.is_err());
+            assert!(s.set_text("zoom.default", "9000").await.is_err());
+            assert!(s.set_text("no.such", "1").await.is_err());
+            assert!(!s.setting::<BlockerEnabled>().await.unwrap());
+            assert_eq!(
+                s.setting::<GlassQuality>().await.unwrap(),
+                GlassSetting::Reduced
+            );
+            s.set_raw("not.a.setting", "x").await.unwrap();
+            let all = s.all_settings().await.unwrap();
+            assert_eq!(all.len(), 2);
+            assert_eq!(all["blocker.enabled"], "0");
+            // The typed write and the text write are one row.
+            s.set_setting::<ZoomDefault>(125).await.unwrap();
+            assert_eq!(s.all_settings().await.unwrap()["zoom.default"], "125");
         });
     }
 

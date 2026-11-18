@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>sign in</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; background: #f4f1ea; }
+  form { padding: 24px; }
+  input { display: block; margin: 0 0 12px; font: inherit; }
+  /* Large, so the smoke's click (autofill_smoke.rs SUBMIT_AT) lands on it. */
+  #go { position: fixed; left: 0; top: 200px; width: 100%; height: 260px; font: inherit; }
+  iframe { position: fixed; right: 0; top: 0; width: 220px; height: 120px; border: 0; }
+</style>
+</head>
+<body>
+<form method="post" action="/welcome">
+  <input name="user" id="user" autocomplete="username">
+  <input type="password" name="pass" id="pass" autocomplete="current-password">
+  <!-- A honeypot: never filled. -->
+  <input type="password" name="trap" id="trap" style="display: none">
+  <button id="go" type="submit">Sign in</button>
+</form>
+<!-- Another origin's sign-in form: never offered, never saved. -->
+<iframe src="http://localhost:{PORT}/frame"></iframe>
+<script>
+  // --smoke autofill: once the seeded login (alice / s3cret-seed) filled the visible fields and
+  // left the hidden one alone, say so in the title, then stand in for the user signing in as
+  // someone else (carol / c4rol-pw), a login the vault does not hold yet.
+  const user = document.getElementById("user");
+  const pass = document.getElementById("pass");
+  const trap = document.getElementById("trap");
+  pass.addEventListener("change", () => {
+    if (user.value === "alice" && pass.value === "s3cret-seed" && trap.value === "") {
+      user.value = "carol";
+      pass.value = "c4rol-pw";
+      document.title = "filled ok";
+    }
+  });
+</script>
+</body>
+</html>

@@ -53,6 +53,7 @@ impl Kind {
 pub const NATIVE_FRAME: bool = cfg!(target_os = "macos");
 
 /// The native window's attributes; pass to `BackendSelector::with_winit_window_attributes_hook`.
+/// Linux and BSD: the app id [`APP_ID`].
 /// macOS: a full-size content view under a transparent title bar with no title and no traffic
 /// lights (the shell draws them), so only AppKit's frame behaviour remains. Elsewhere unchanged:
 /// the window is frameless (`no-frame`).
@@ -66,8 +67,24 @@ pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
             .with_fullsize_content_view(true)
             .with_titlebar_buttons_hidden(true)
     };
+    // The app id (Wayland) and WM_CLASS (X11), so the compositor pairs the window with
+    // `wubble.desktop` and its icon (assets/icons/linux, scripts/install-linux-desktop.sh).
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    let attributes = {
+        use slint::winit_030::winit::platform::{
+            wayland::WindowAttributesExtWayland, x11::WindowAttributesExtX11,
+        };
+        WindowAttributesExtX11::with_name(
+            WindowAttributesExtWayland::with_name(attributes, APP_ID, APP_ID),
+            APP_ID,
+            APP_ID,
+        )
+    };
     attributes
 }
+
+/// The Wayland app id and X11 window class: the name of `wubble.desktop` and of the icon.
+pub const APP_ID: &str = "wubble";
 
 /// The window's mode. Not stored: it is read from the window each time (one owner).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

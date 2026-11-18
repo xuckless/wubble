@@ -13,6 +13,8 @@
 
 </div>
 
+wubble is an open-source web browser for Linux and macOS, written in Rust. It has vertical tabs, Spaces, split view and a built-in content blocker, and it is built on Chromium (CEF) with a [Slint](https://slint.dev) shell drawn on the GPU with [wgpu](https://wgpu.rs).
+
 > **Early.** wubble opens pages, keeps tabs and renders well on Linux, but it is not a daily browser yet. There are no releases; you build it from source.
 
 ## Build
@@ -50,8 +52,9 @@ On Linux, checked by the smoke runs in [AGENTS.md](AGENTS.md):
 - Context menu, find in page, zoom, JS dialogs, permission prompts, downloads, error pages.
 - A content blocker built on Brave's [adblock-rust](https://github.com/brave/adblock-rust). It downloads no lists unless you turn that on.
 - An encrypted password store keyed from the OS keyring.
+- A settings page (<kbd>Ctrl</kbd>+<kbd>,</kbd>) built from one table of settings, with a shortcut editor and per-Space name, icon and colour.
 
-Not there yet: extensions, sync, HDR output, a settings page, packaged builds. The order is in [TODO.md](TODO.md).
+Not there yet: extensions, sync, HDR output, packaged builds. The order is in [TODO.md](TODO.md).
 
 <kbd>Ctrl</kbd>+<kbd>T</kbd> new tab · <kbd>Ctrl</kbd>+<kbd>L</kbd> address · <kbd>Ctrl</kbd>+<kbd>W</kbd> close · <kbd>Ctrl</kbd>+<kbd>F</kbd> find · <kbd>Ctrl</kbd>+<kbd>\\</kbd> split · <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Z</kbd> sidebar
 

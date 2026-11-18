@@ -46,12 +46,24 @@ pub enum Action {
     SplitNext,
     /// Take the focused page out of its split.
     Unsplit,
+    /// Show the settings page (`pages::InternalPage::Settings`).
+    OpenSettings,
+    /// Show the history page (`pages::InternalPage::History`).
+    OpenHistory,
+    /// Show the bookmarks page.
+    OpenBookmarks,
+    /// Show the downloads page.
+    OpenDownloads,
+    /// Show the passwords page.
+    OpenPasswords,
+    /// Bookmark the visible page: opens the name and folder sheet.
+    BookmarkPage,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 34] = [
+const FIXED: [(&str, Action); 40] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -85,6 +97,12 @@ const FIXED: [(&str, Action); 34] = [
     ("toggle-mute", Action::ToggleMute),
     ("split-next", Action::SplitNext),
     ("unsplit", Action::Unsplit),
+    ("open-settings", Action::OpenSettings),
+    ("open-history", Action::OpenHistory),
+    ("open-bookmarks", Action::OpenBookmarks),
+    ("open-downloads", Action::OpenDownloads),
+    ("open-passwords", Action::OpenPasswords),
+    ("bookmark-page", Action::BookmarkPage),
     ("quit", Action::Quit),
 ];
 
@@ -117,6 +135,20 @@ impl Action {
         FIXED.iter().find(|(name, _)| *name == id).map(|&(_, a)| a)
     }
 
+    /// What the keybinding editor calls the action: its command-bar title, else its id in
+    /// words (`select-tab-3` reads "Select tab 3").
+    pub fn label(self) -> String {
+        if let Some(info) = PALETTE.iter().find(|i| i.action == self) {
+            return info.title.to_owned();
+        }
+        let words = self.id().replace('-', " ");
+        let mut chars = words.chars();
+        chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default()
+    }
+
     /// Every action, parameterised ones expanded over their range.
     pub fn all() -> Vec<Action> {
         let mut v: Vec<Action> = FIXED.iter().map(|&(_, a)| a).collect();
@@ -135,7 +167,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 9] = [
+pub const PALETTE: [ActionInfo; 15] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -182,6 +214,36 @@ pub const PALETTE: [ActionInfo; 9] = [
         title: "Toggle Compact Mode",
         keywords: "hide show",
     },
+    ActionInfo {
+        action: Action::OpenSettings,
+        title: "Settings",
+        keywords: "preferences options customise keyboard shortcuts",
+    },
+    ActionInfo {
+        action: Action::OpenHistory,
+        title: "History",
+        keywords: "visited pages browsing",
+    },
+    ActionInfo {
+        action: Action::OpenBookmarks,
+        title: "Bookmarks",
+        keywords: "favourites saved",
+    },
+    ActionInfo {
+        action: Action::OpenDownloads,
+        title: "Downloads",
+        keywords: "files saved",
+    },
+    ActionInfo {
+        action: Action::OpenPasswords,
+        title: "Passwords",
+        keywords: "logins credentials keys",
+    },
+    ActionInfo {
+        action: Action::BookmarkPage,
+        title: "Bookmark This Page",
+        keywords: "star save favourite",
+    },
 ];
 
 #[cfg(test)]
@@ -191,7 +253,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 52);
+        assert_eq!(all.len(), 58);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -202,7 +264,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 52);
+        assert_eq!(ids.len(), 58);
     }
 
     #[test]
@@ -221,6 +283,14 @@ mod tests {
             Action::from_id("select-space-10"),
             Some(Action::SelectSpace(10))
         );
+    }
+
+    #[test]
+    fn open_settings_and_labels() {
+        assert_eq!(Action::from_id("open-settings"), Some(Action::OpenSettings));
+        assert_eq!(Action::OpenSettings.label(), "Settings");
+        assert_eq!(Action::SelectTab(3).label(), "Select tab 3");
+        assert_eq!(Action::DevTools.label(), "Dev tools");
     }
 
     #[test]

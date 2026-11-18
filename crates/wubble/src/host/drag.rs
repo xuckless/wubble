@@ -12,7 +12,11 @@ use super::{Host, new_tab};
 use crate::page_drag::{self, DragEffect, DragInput, Over, PageDrag};
 
 impl Host {
-    /// The page in `tab` started a drag (CEF `StartDragging`).
+    /// The page in `tab` started a drag (CEF `StartDragging`). CEF asks a
+    /// little after the press and moves that began it; if the button was
+    /// already released by then, the drag ends at once with nothing dropped,
+    /// as an OS drag started after the release does. Otherwise it would hold
+    /// every later pointer move as a drag-over.
     pub(super) fn drag_started(&mut self, tab: TabId, data: DragData, allowed: DragOps) {
         let point = self.drag_point;
         self.apply_drag(
@@ -23,6 +27,18 @@ impl Host {
             },
             point,
         );
+        if !self
+            .input
+            .buttons
+            .is_down(wubble_engine::input::MouseButton::Left)
+        {
+            self.drag_cancelled();
+        }
+    }
+
+    /// No page drag runs (`--smoke parity`'s reset).
+    pub(super) fn drag_idle(&self) -> bool {
+        self.page_drag == PageDrag::Idle
     }
 
     /// Pointer input during a page drag goes to the drag, not to the page as

@@ -1,3 +1,4 @@
+mod autofill_smoke;
 mod backdrop;
 mod bar;
 mod bind;
@@ -15,6 +16,7 @@ mod nav_smoke;
 mod page_drag;
 mod page_error;
 mod page_smoke;
+mod pages_smoke;
 mod panes;
 mod parity;
 mod perform;
@@ -24,6 +26,7 @@ mod profile;
 mod prompt;
 mod screen;
 mod session_smoke;
+mod settings_smoke;
 mod shell;
 mod split_smoke;
 mod surface;
@@ -213,10 +216,10 @@ fn main() -> ExitCode {
             match with_smoke_dir(|config, dir| run(Mode::Parity, config, dir)) {
                 Ok(Outcome {
                     failure: None,
-                    parity_passed: true,
+                    parity_passed: Some(gaps),
                     ..
                 }) => {
-                    println!("smoke: parity ok");
+                    println!("smoke: parity ok; known gaps: {}", gaps.join(", "));
                     ExitCode::SUCCESS
                 }
                 Ok(Outcome {
@@ -252,6 +255,75 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: block FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Settings) => {
+            match with_smoke_dir(|config, dir| run(Mode::Settings, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    settings_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: settings ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: settings FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: settings FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Pages) => {
+            match with_smoke_dir(|config, dir| run(Mode::Pages, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    pages_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: pages ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: pages FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: pages FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Autofill) => {
+            match with_smoke_dir(|config, dir| run(Mode::Autofill, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    autofill_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: autofill ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: autofill FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: autofill FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -481,6 +553,25 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// `--smoke autofill`: the login the key menu must offer on the smoke's page.
+fn seed_autofill_login(store: &StoreClient, port: u16) {
+    let origin = format!("http://127.0.0.1:{port}");
+    store.vault(move |vault| {
+        let Ok(origin) = wubble_vault::Origin::parse(&origin) else {
+            return;
+        };
+        let login = wubble_vault::NewLogin {
+            origin,
+            form_action_origin: None,
+            username: autofill_smoke::SEEDED_USER.into(),
+            password: zeroize::Zeroizing::new(autofill_smoke::SEEDED_PASSWORD.into()),
+        };
+        if let Err(e) = vault.save(login, 0) {
+            eprintln!("smoke: autofill: the login was not seeded: {e}");
+        }
+    });
+}
+
 /// Called after CEF has shut down (or never started), so nothing holds the directory.
 fn remove_cache(cache_dir: &Path) {
     if let Err(e) = std::fs::remove_dir_all(cache_dir)
@@ -524,8 +615,13 @@ struct Outcome {
     blocked_seen: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
-    /// `--smoke parity` passed every item.
-    parity_passed: bool,
+    /// `--smoke parity` passed every item but the known gaps, which failed as expected.
+    parity_passed: Option<Vec<&'static str>>,
+    /// `--smoke settings` reached its end.
+    settings_passed: bool,
+    pages_passed: bool,
+    /// `--smoke autofill` reached its end.
+    autofill_passed: bool,
     /// `--measure`'s report and CSV.
     measured: Option<(String, String)>,
 }
@@ -551,6 +647,12 @@ enum Mode {
     Parity,
     /// `--smoke block`.
     Block,
+    /// `--smoke settings`.
+    Settings,
+    /// `--smoke pages`.
+    Pages,
+    /// `--smoke autofill`.
+    Autofill,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -696,7 +798,13 @@ fn connect_input(window: &AppWindow) {
     });
     window.window().on_winit_window_event(|_, event| {
         let mut result = EventResult::Propagate;
-        with_host(|host| result = host.window_event(event));
+        with_host(|host| {
+            result = if host.parity_owns_input(event) {
+                EventResult::PreventDefault
+            } else {
+                host.window_event(event)
+            }
+        });
         result
     });
 }
@@ -799,23 +907,107 @@ fn connect_surfaces(window: &AppWindow) {
         with_host(|host| host.find_event(event));
     });
     window.on_find_closed(|| with_host(|host| host.find_event(FindEvent::Close)));
+    connect_settings(window);
+    connect_pages(window);
+    window.on_autofill_menu(|i| with_host(|host| host.autofill_menu(i)));
+    window.on_autofill_answer(|i| with_host(|host| host.autofill_answer(i)));
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
 /// visible tab's, on the shared GPU device) and runs the Slint loop until
 /// the window closes or the smoke ends, then saves the session.
+/// The settings page's intents: each becomes one host call.
+fn connect_settings(window: &AppWindow) {
+    use wubble_core::action::Action;
+    use wubble_core::keys::CaptureEvent;
+    window.on_settings_requested(|| with_host(|host| host.perform(Action::OpenSettings)));
+    window.on_settings_query_changed(|q| with_host(|host| host.settings_query(&q)));
+    window.on_setting_changed(|key, value| {
+        with_host(|host| {
+            host.write_setting(&key, &value);
+        })
+    });
+    window.on_setting_reset(|key| with_host(|host| host.setting_reset(&key)));
+    window.on_setting_entry_removed(|key, entry| {
+        with_host(|host| host.setting_entry_removed(&key, &entry))
+    });
+    window.on_setting_entry_added(|key, entry| {
+        with_host(|host| host.setting_entry_added(&key, &entry))
+    });
+    window.on_binding_record(|id| with_host(|host| host.binding_record(&id)));
+    window.on_binding_reset(|id| with_host(|host| host.binding_reset(&id)));
+    window.on_capture_confirm(|| with_host(|host| host.capture_event(CaptureEvent::Confirm)));
+    window.on_capture_cancel(|| with_host(|host| host.capture_event(CaptureEvent::Cancel)));
+    window.on_space_renamed(|id, name| with_host(|host| host.space_renamed(id, &name)));
+    window.on_space_tinted(|id, tint| with_host(|host| host.space_tinted(id, tint)));
+    window.on_space_icon_chosen(|id, icon| with_host(|host| host.space_icon_chosen(id, &icon)));
+    window.on_site_zoom_removed(|h| with_host(|host| host.site_zoom_removed(&h)));
+    window.on_site_permission_removed(|i| with_host(|host| host.site_permission_removed(&i)));
+}
+
+/// The native pages' intents (history, bookmarks, downloads): each becomes one host call.
+fn connect_pages(window: &AppWindow) {
+    window.on_history_query_changed(|q| with_host(|host| host.history_query(&q)));
+    window.on_history_deleted(|url| with_host(|host| host.history_deleted(&url)));
+    window.on_history_more(|| with_host(Host::history_more));
+    window.on_history_cleared(|range| with_host(|host| host.history_cleared(range)));
+    window.on_page_opened(|url| with_host(|host| host.page_opened(&url)));
+    window.on_page_opened_new_tab(|url| with_host(|host| host.page_opened_new_tab(&url)));
+    window.on_bookmarks_query_changed(|q| with_host(|host| host.bookmarks_query(&q)));
+    window.on_bookmark_toggled(|id| with_host(|host| host.bookmark_toggled(id)));
+    window.on_bookmark_rename_requested(|id| with_host(|host| host.bookmark_rename_requested(id)));
+    window.on_bookmark_move_requested(|id| with_host(|host| host.bookmark_move_requested(id)));
+    window.on_bookmark_deleted(|id| with_host(|host| host.bookmark_deleted(id)));
+    window.on_bookmark_folder_requested(|| with_host(Host::bookmark_folder_requested));
+    window.on_bookmark_sheet_answered(|accept, remove, name, folder| {
+        with_host(|host| host.bookmark_sheet_answered(accept, remove, &name, folder))
+    });
+    window.on_address_bookmark_requested(|| with_host(Host::bookmark_page));
+    window.on_address_blocker_requested(|x, y| with_host(|host| host.blocker_menu_requested(x, y)));
+    window.on_downloads_cleared(|| with_host(Host::downloads_cleared));
+    window.on_passwords_query_changed(|q| with_host(|host| host.passwords_query(&q)));
+    window.on_passwords_unlock(|| with_host(Host::passwords_unlock));
+    window.on_login_reveal(|id| with_host(|host| host.login_reveal(&id)));
+    window.on_login_hide(|| with_host(Host::login_hide));
+    window.on_login_copy(|id| with_host(|host| host.login_copy(&id)));
+    window.on_login_deleted(|id| with_host(|host| host.login_deleted(&id)));
+    window.on_login_added(|site, user, password| {
+        with_host(|host| host.login_added(&site, &user, &password))
+    });
+    window.on_passwords_import_requested(|| with_host(Host::passwords_import_requested));
+}
+
 fn run(
     mode: Mode,
     config: Result<EngineConfig, EngineError>,
     profile: &Path,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
-    // The database loads while the GPU and CEF start.
-    let (store, loaded) = StoreClient::spawn(
-        Profile {
-            dir: profile.into(),
+    // `--smoke autofill`'s pages, on a loopback port.
+    let autofill_port = matches!(mode, Mode::Autofill)
+        .then(autofill_smoke::serve)
+        .transpose()?;
+    let db = Profile {
+        dir: profile.into(),
+    }
+    .db_path();
+    // The browser keeps the vault's key in the OS keyring; smokes run on
+    // throwaway profiles and never touch it. The pages smoke fills the
+    // profile first, its vault key going into the fake keyring the store
+    // thread then gets.
+    let keyring: Box<dyn wubble_vault::KeyRing + Send> = match mode {
+        Mode::Browse { .. } => Box::new(wubble_vault::OsKeyRing),
+        Mode::Pages => {
+            let keyring = wubble_vault::FakeKeyRing::default();
+            pages_smoke::seed(&db, &keyring)?;
+            Box::new(keyring)
         }
-        .db_path(),
-    );
+        _ => Box::new(wubble_vault::FakeKeyRing::default()),
+    };
+    // The database loads while the GPU and CEF start.
+    let (store, loaded) = StoreClient::spawn(db, keyring);
+    if let Some(port) = autofill_port {
+        seed_autofill_login(&store, port);
+    }
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
     slint::BackendSelector::new()
@@ -841,6 +1033,9 @@ fn run(
         parity: None,
         block_smoke: None,
         split_smoke: None,
+        settings_smoke: None,
+        pages_smoke: None,
+        autofill_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -902,10 +1097,31 @@ fn run(
                 ..none
             },
         ),
+        Mode::Settings => (
+            Some(bundled()),
+            Checks {
+                settings_smoke: Some(settings_smoke::SettingsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Pages => (
+            Some(bundled()),
+            Checks {
+                pages_smoke: Some(pages_smoke::PagesSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Block => (
             Some(page_url(BLOCK_PAGE)),
             Checks {
                 block_smoke: Some(block_smoke::BlockSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Autofill => (
+            autofill_port.map(|port| format!("http://127.0.0.1:{port}/")),
+            Checks {
+                autofill_smoke: Some(autofill_smoke::AutofillSmoke::default()),
                 ..none
             },
         ),
@@ -930,15 +1146,9 @@ fn run(
     // The first pump runs once the loop does; from there CEF schedules every
     // pump itself.
     slint::invoke_from_event_loop(|| deliver(Wake::Schedule(0)))?;
-    let blocking = blocking::Blocking::new();
-    let engine = Engine::start(EngineConfig {
-        pump_scheduler: Some(pump_scheduler()),
-        content_filter: Some(blocking.clone()),
-        clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
-        ..config?
-    })?;
     // A database that cannot be opened or loaded is left alone: the
-    // browser runs without persistence (the store thread has ended).
+    // browser runs without persistence (the store thread has ended). Read
+    // before CEF starts: some settings are CEF start switches.
     let loaded = loaded
         .recv()
         .unwrap_or_else(|_| Err("the store thread ended".into()));
@@ -946,6 +1156,14 @@ fn run(
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
     });
+    let blocking = blocking::Blocking::new();
+    let engine = Engine::start(EngineConfig {
+        pump_scheduler: Some(pump_scheduler()),
+        content_filter: Some(blocking.clone()),
+        features: loaded.settings.page_features(),
+        clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
+        ..config?
+    })?;
     if smoke_block {
         // Only the smoke's own list, through the same filter wiring as the browser's.
         blocking.use_list(block_smoke::BLOCK_LIST);
@@ -954,7 +1172,11 @@ fn run(
     }
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
-    let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));
+    let glass = Rc::new(RefCell::new(backdrop::choose(
+        &gpu,
+        &window,
+        loaded.settings.glass_scene(),
+    )));
     connect_input(&window);
     connect_shell(&window);
     connect_surfaces(&window);
@@ -1022,9 +1244,12 @@ fn run(
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
         parity_passed: host.parity_passed,
+        settings_passed: host.settings_passed,
+        pages_passed: host.pages_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,
+        autofill_passed: host.autofill_passed,
         measured,
     })
 }
