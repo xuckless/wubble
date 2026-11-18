@@ -1,0 +1,48 @@
+# AGENTS.md
+
+## What this is
+
+wubble is a Chromium-based browser with a Slint shell, GPL-3.0-only. Chromium
+renders web content off-screen; Slint composites it as GPU textures, so the whole
+UI is one scene. Roadmap, decisions and risks live in [TODO.md](TODO.md) — read
+its "Decided" table before proposing architecture.
+
+## Layout
+
+| Crate | Role | May depend on |
+|---|---|---|
+| `wubble-core` | Tabs, Spaces, sleep policy, suggestions. Pure logic | nothing heavy (no CEF, wgpu, Slint) |
+| `wubble-gfx` | Native texture handle → `wgpu::Texture` → `slint::Image` | wgpu, welding, slint |
+| `wubble-engine` | The only crate that names CEF types | core, gfx, cef |
+| `wubble-ui` | Slint shell (`ui/*.slint`) | slint |
+| `wubble` | Binary: wires the above | all |
+| `wubble-helper` | CEF subprocess entry point; stays tiny | cef |
+
+`ux/pack/` is a read-only snapshot of the design canvas. It is a style guideline
+(colour, glass, type, motion), not a layout spec.
+
+## Commands
+
+    cargo check --workspace        # first run downloads prebuilt CEF
+    cargo test -p wubble-core
+    cargo run -p wubble
+
+## Code principles
+
+1. **Declarative first.** UI is a function of state: Slint bindings over models, no imperative widget poking. Config, keybindings, policies and feature tables are data.
+2. **No implicit state machines.** Anything with a lifecycle is one `enum` of states plus one pure `fn transition(state, event) -> (state, effects)`. No behaviour may depend on combinations of scattered booleans or on callback ordering.
+3. **Effects at the edge.** Transitions return effects as values; only `wubble-engine` and `wubble-gfx` execute them. `wubble-core` stays pure and unit-tested.
+4. **One owner per state.** Each piece of state lives in one place; everything else derives from it.
+5. **No duplicated code.** Reuse or extend an existing function, type or Slint component before writing a new one. Per-platform code implements one shared trait. Two copies of the same constant, token or table count as duplication.
+
+## Working rules
+
+- Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 154). Do not bump one alone.
+- No CPU readback on the frame path. A fallback `OnPaint` frame is a bug to count and log.
+- 120 Hz budget: 8.33 ms per frame. Glass quality degrades before animation drops a frame.
+- Platforms: Linux (lead) and macOS are built locally; Windows is CI-only.
+- New logic in `wubble-core` comes with unit tests. Run the commands above before handing work back.
+- Nothing phones home by default. Any new network request made by wubble itself needs a flag that is off by default.
+- Keep `TODO.md` current: tick items you finish, record new decisions in its "Decided" table.
+- Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths.
+- Commit only when asked; one logical change per commit.

@@ -52,13 +52,7 @@ docs/adr/              one short record per architectural decision
 
 Rule: the shell never sees a CEF type. That boundary is what makes the M6 engine swap cheap.
 
-## Code principles
-
-1. **Declarative first.** UI is a function of state: Slint bindings over models, no imperative widget poking. Configuration, keybindings, policies and feature tables are data, not code paths.
-2. **No implicit state machines.** Anything with a lifecycle (tab liveness, navigation, IME composition, popup, drag, download, glass quality, CEF init) is one `enum` of states plus one pure `fn transition(state, event) -> (state, effects)`. No behaviour may depend on a combination of scattered booleans or on callback ordering.
-3. **Effects at the edge.** Transitions return effects as values; only `wubble-engine` and `wubble-gfx` execute them. `wubble-core` stays pure and unit-tested.
-4. **One owner per state.** Each piece of state lives in exactly one place; everything else derives from it.
-5. **No duplicated code.** Before writing something, look for an existing function, type or Slint component that does it and reuse or extend that. Shared logic goes in `wubble-core`; shared UI goes in one Slint component. Per-platform code implements one common trait instead of repeating the surrounding logic three times. Two copies of the same knowledge (a constant, a token, a mapping table) count as duplication too.
+Working rules and code principles: see [AGENTS.md](AGENTS.md).
 
 ## M0 — Prove the frame path (spikes, throwaway code allowed)
 
