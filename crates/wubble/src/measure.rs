@@ -69,6 +69,9 @@ pub enum Scenario {
     Resize,
     /// Keys and clicks that flip the probe square's colour.
     Typing,
+    /// The content blocker alone, windowless: compile, cache and per-request
+    /// cost of the bundled lists (`blocking::measure`).
+    Blocker,
 }
 
 impl Scenario {
@@ -78,6 +81,7 @@ impl Scenario {
             Self::Video => "video",
             Self::Resize => "resize",
             Self::Typing => "typing",
+            Self::Blocker => "blocker",
         }
     }
 
@@ -87,6 +91,8 @@ impl Scenario {
             Self::Video => include_str!("../assets/measure-video.html"),
             Self::Resize => include_str!("../assets/measure-resize.html"),
             Self::Typing => include_str!("../assets/measure-typing.html"),
+            // Windowless: `main` runs `blocking::measure` instead of a page.
+            Self::Blocker => "",
         }
     }
 

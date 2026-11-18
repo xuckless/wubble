@@ -335,6 +335,10 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
+            println!("{}", blocking::measure());
+            ExitCode::SUCCESS
+        }
         Command::Measure(m) => {
             measure::begin(m.scenario, m.seconds.get());
             let mode = Mode::Measure {

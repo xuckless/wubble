@@ -442,6 +442,7 @@ mod tests {
             ("video", Scenario::Video),
             ("resize", Scenario::Resize),
             ("typing", Scenario::Typing),
+            ("blocker", Scenario::Blocker),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),

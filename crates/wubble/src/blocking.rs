@@ -294,6 +294,77 @@ fn is_web(url: &str) -> bool {
         })
 }
 
+/// `--measure blocker`: the bundled default lists' cold compile, cache
+/// size, load from the cache and mean cost of one request decision over a
+/// fixed set of URLs. Printed for a person to read; nothing asserts on it.
+pub fn measure() -> String {
+    use std::time::Instant;
+    let sources = wubble_blocker::bundled_sources(&Selection::default());
+    let start = Instant::now();
+    let blocker = Blocker::from_sources(&sources);
+    let compile = start.elapsed();
+    let bytes = blocker.to_bytes();
+    let start = Instant::now();
+    let loaded = Blocker::from_bytes(&bytes).map(Blocker::with_bundled_resources);
+    let load = start.elapsed();
+    let Ok(loaded) = loaded else {
+        return "measure: blocker cache did not load".into();
+    };
+    const HOSTS: [&str; 8] = [
+        "news.example",
+        "cdn.news.example",
+        "pagead2.googlesyndication.com",
+        "www.google-analytics.com",
+        "static.doubleclick.net",
+        "connect.facebook.net",
+        "fonts.gstatic.com",
+        "images.shop.example",
+    ];
+    const KINDS: [ResourceType; 4] = [
+        ResourceType::Script,
+        ResourceType::Image,
+        ResourceType::Xhr,
+        ResourceType::Stylesheet,
+    ];
+    let urls: Vec<(String, ResourceType)> = (0..10_000usize)
+        .map(|i| {
+            let host = HOSTS[i % HOSTS.len()];
+            let kind = KINDS[(i / HOSTS.len()) % KINDS.len()];
+            (
+                format!("https://{host}/assets/{i}/file.js?v={i}&utm_source=x"),
+                kind,
+            )
+        })
+        .collect();
+    let mut blocked = 0usize;
+    let start = Instant::now();
+    for (url, kind) in &urls {
+        let req = NetRequest {
+            url,
+            source_url: "https://news.example/article",
+            resource_type: *kind,
+        };
+        if loaded.decide(req, Shields::On) != Decision::Allow {
+            blocked += 1;
+        }
+    }
+    let decide = start.elapsed();
+    format!(
+        "measure blocker ({} build): {} bundled lists\n  cold compile {:.0} ms\n  cache {:.1} MB, load {:.1} ms with resources\n  decide {:.2} us per request (mean of {}, {blocked} not allowed)",
+        if cfg!(debug_assertions) {
+            "dev, opt-level 1"
+        } else {
+            "release"
+        },
+        sources.len(),
+        compile.as_secs_f64() * 1e3,
+        bytes.len() as f64 / 1e6,
+        load.as_secs_f64() * 1e3,
+        decide.as_secs_f64() * 1e6 / urls.len() as f64,
+        urls.len(),
+    )
+}
+
 impl ContentFilter for Blocking {
     // Runs on CEF's IO thread and must not panic: the release profile aborts
     // on panic, so welding's catch-and-allow does not hold there. Hence the
