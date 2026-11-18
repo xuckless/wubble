@@ -70,8 +70,27 @@ jobs:
         id: cef
         run: echo "version=$(awk '/^name = "cef-dll-sys"/{getline; print $3}' Cargo.lock | tr -d '"')" >> "$GITHUB_OUTPUT"
 
-      - name: Cache prebuilt CEF
-        uses: actions/cache@v4
+      # cef-dll-sys forces the CMake "Ninja" generator on every OS; install it
+      # rather than rely on what the runner image ships (no-op if present).
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ninja -y --no-progress
+
+      # Windows has no rpath: test binaries run from target/debug/deps and need
+      # libcef.dll, which cef-dll-sys copies into target/debug.
+      - name: Put libcef.dll on PATH (Windows)
+        if: runner.os == 'Windows'
+        run: cygpath -w "$PWD/target/debug" >> "$GITHUB_PATH"
+
+      # Restore and save are split so the download is stored even when a later
+      # step fails (actions/cache alone saves only on success).
+      - name: Restore prebuilt CEF
+        id: cef-cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ env.CEF_PATH }}
           key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
@@ -90,3 +109,10 @@ jobs:
 
       - name: Build
         run: cargo build --workspace
+
+      - name: Save prebuilt CEF
+        if: always() && steps.cef-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CEF_PATH }}
+          key: cef-${{ runner.os }}-${{ runner.arch }}-${{ steps.cef.outputs.version }}
