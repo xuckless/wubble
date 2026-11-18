@@ -1,0 +1,70 @@
+import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { GlassTier } from "model.slint";
+
+// The tab hover preview: title, address and the page's last frame, on thick glass beside the
+// sidebar at the hovered row. Written from scratch: the design repo has no tooltip or hover card
+// (its README only says tooltips are capsule-shaped). Look and motion are Ultra Reactivate's
+// `.ur-o-tip-anchor [role=tooltip]` (src/ultra-reactivate/overlays.css, the owner's library):
+// scale .95 and a 3 px rise in over .18 s ease-out, out over .13 s ease-in. When it shows is
+// `wubble_core::hovercard` (Firefox's delays); the host drives `shown`. Pointer events pass
+// through, as the Toast's do.
+export component PreviewCard inherits Rectangle {
+    in property <bool> shown: false;
+    in property <string> title;
+    in property <string> address;
+    // The page's last frame; an empty image leaves the thumbnail out.
+    in property <image> thumb;
+
+    width: Shell.preview-width;
+    height: column.preferred-height + 2 * Shell.preview-pad;
+    visible: root.shown || panel.opacity > 0;
+
+    panel := GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.preview-radius;
+        over-content: true;
+        y: root.shown ? 0px : Shell.preview-rise;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: root.shown ? 1 : Motion.dropdownFrom;
+        opacity: root.shown ? 1 : 0;
+        animate y, transform-scale, opacity {
+            duration: root.shown ? Shell.preview-in : Shell.preview-out;
+            easing: root.shown ? Motion.easeOut : Motion.easeIn;
+        }
+        VerticalLayout {
+            padding: Shell.preview-pad;
+            spacing: Shell.preview-gap;
+            column := VerticalLayout {
+                spacing: Shell.preview-gap;
+                Text {
+                    text: root.title;
+                    overflow: elide;
+                    color: Palette.ink;
+                    font-family: Fonts.ui;
+                    font-size: Shell.preview-title;
+                    font-weight: Shell.toast-weight;
+                }
+                Text {
+                    text: root.address;
+                    overflow: elide;
+                    color: Palette.haze;
+                    font-family: Fonts.mono;
+                    font-size: Shell.preview-address;
+                }
+                if root.thumb.width > 0: Rectangle {
+                    height: self.width * root.thumb.height / root.thumb.width;
+                    border-radius: Shell.preview-thumb-radius;
+                    clip: true;
+                    Image {
+                        source: root.thumb;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: cover;
+                    }
+                }
+            }
+        }
+    }
+}

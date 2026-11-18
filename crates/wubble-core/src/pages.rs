@@ -484,15 +484,17 @@ pub enum InternalPage {
     Bookmarks,
     Downloads,
     Passwords,
+    Archive,
 }
 
 impl InternalPage {
-    pub const ALL: [InternalPage; 5] = [
+    pub const ALL: [InternalPage; 6] = [
         InternalPage::Settings,
         InternalPage::History,
         InternalPage::Bookmarks,
         InternalPage::Downloads,
         InternalPage::Passwords,
+        InternalPage::Archive,
     ];
 
     pub fn url(self) -> &'static str {
@@ -502,6 +504,7 @@ impl InternalPage {
             InternalPage::Bookmarks => "wubble://bookmarks",
             InternalPage::Downloads => "wubble://downloads",
             InternalPage::Passwords => "wubble://passwords",
+            InternalPage::Archive => "wubble://archive",
         }
     }
 
@@ -513,6 +516,7 @@ impl InternalPage {
             InternalPage::Bookmarks => "Bookmarks",
             InternalPage::Downloads => "Downloads",
             InternalPage::Passwords => "Passwords",
+            InternalPage::Archive => "Archive",
         }
     }
 

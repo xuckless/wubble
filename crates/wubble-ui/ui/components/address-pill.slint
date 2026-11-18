@@ -40,6 +40,10 @@ export component AddressPill inherits Rectangle {
     in property <bool> blocker-allowed: false;
     in property <int> blocked: 0;
     callback blocker-requested(length, length);
+    // Pop-ups the page asked for without a click and wubble held back (wubble_core::popup). The
+    // badge asks for its menu (open them, always allow the site) at the badge.
+    in property <int> popups-blocked: 0;
+    callback popups-requested(length, length);
 
     height: Chrome.address;
 
@@ -115,6 +119,31 @@ export component AddressPill inherits Rectangle {
                 }
             }
             // Above the whole-pill TouchArea, so a click here is not an address click.
+            if root.popups-blocked > 0: popups := Rectangle {
+                width: popups-row.preferred-width;
+                popups-row := HorizontalLayout {
+                    spacing: Spacing.s1;
+                    Icon {
+                        y: (parent.height - self.height) / 2;
+                        path: IconPaths.expand;
+                        size: Shell.address-icon;
+                        weight: Shell.address-icon-stroke;
+                        tint: Palette.amber;
+                    }
+                    Text {
+                        text: root.popups-blocked;
+                        color: Palette.mist;
+                        font-family: Fonts.mono;
+                        font-size: Type.address.size;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    clicked => {
+                        root.popups-requested(popups.absolute-position.x, popups.absolute-position.y + popups.height);
+                    }
+                }
+            }
             if root.blocker-visible: badge := Rectangle {
                 width: badge-row.preferred-width;
                 badge-row := HorizontalLayout {

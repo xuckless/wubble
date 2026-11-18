@@ -20,6 +20,7 @@ pub fn history_items(lines: &[HistoryLine], icon: impl Fn(&str) -> Image) -> Vec
         .map(|line| match line {
             HistoryLine::Day { label } => HistoryLineItem {
                 header: true,
+                key: -1,
                 label: label.as_str().into(),
                 title: Default::default(),
                 url: Default::default(),
@@ -27,6 +28,7 @@ pub fn history_items(lines: &[HistoryLine], icon: impl Fn(&str) -> Image) -> Vec
             },
             HistoryLine::Visit(row) => HistoryLineItem {
                 header: false,
+                key: id32(row.visit_id),
                 label: Default::default(),
                 // A page without a title shows its address.
                 title: if row.title.is_empty() {

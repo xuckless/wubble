@@ -265,6 +265,12 @@ export component TabRow inherits Rectangle {
     callback mute();
     // wubble change: a right click, pointer in window px (the tab's context menu).
     callback context(length, length);
+    // wubble change: the left button's press in window px (0 down, 3 cancel), for a drag that
+    // leaves the list (wubble_core::tabdrag); the host follows the pointer from the window.
+    callback track(int, length, length);
+    // wubble change: the pointer enters or leaves the row; the row's top in window px (the
+    // tab hover preview).
+    callback hovered(bool, length);
 
     height: Chrome.row;
     border-radius: Radius.sm;
@@ -278,12 +284,14 @@ export component TabRow inherits Rectangle {
     animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
 
     touch := TouchArea {
+        changed has-hover => { root.hovered(self.has-hover, root.absolute-position.y); }
         pointer-event(e) => {
             if (e.button == PointerEventButton.middle && e.kind == PointerEventKind.down) { root.close(); return; } // middle click closes
             // wubble change: right click opens the tab's menu
             if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) { root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); return; }
             if (e.button != PointerEventButton.left) { return; }
-            if (e.kind == PointerEventKind.down) { root.press(self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.down) { root.track(0, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); root.press(self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.cancel) { root.track(3, 0, 0); }
             if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
         }
         moved => { if (self.pressed) { root.drag(self.absolute-position.y + self.mouse-y); } }

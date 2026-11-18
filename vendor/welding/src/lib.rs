@@ -145,7 +145,7 @@ pub use surface::{
     CursorShape, Panning, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
     FileChooserMode, FocusDirection, ImeComposition, JsDialogKind, KeyEvent, KeyEventKind,
     MAX_MENU_DEPTH, MenuItem, MenuItemKind, MouseAction, MouseButton, MouseEvent,
-    NavigationEvent, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,
+    NavigationEvent, NewWindowKind, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,
     RequestFilter, ResourceRequest, SameSite,
     SnapshotPngCompletion, SnapshotRequestId, TouchInput, TouchPhase, WebRequestId, ZoomCommand,
 };

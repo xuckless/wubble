@@ -112,6 +112,17 @@ impl From<CursorShape> for Cursor {
     }
 }
 
+/// A page's request to open a window or tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopupRequest {
+    pub url: String,
+    /// Whether a click or key press led to it.
+    pub gesture: bool,
+    pub opened: wubble_core::popup::Opened,
+    /// The `width`/`height` window features, when both were given.
+    pub size: Option<(u32, u32)>,
+}
+
 /// What the host learns about a view, in the order it happened.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WebEvent {
@@ -129,13 +140,9 @@ pub enum WebEvent {
     /// The page's first icon URL, empty when it has none.
     FaviconChanged(String),
     CursorChanged(Cursor),
-    /// `window.open`, a `target=_blank` link, or a middle or Ctrl click on a
-    /// link. CEF opened nothing itself.
-    PopupRequested {
-        url: String,
-        /// Open it behind the current tab (a middle or Ctrl click).
-        background: bool,
-    },
+    /// `window.open` or a `target=_blank` link. CEF opened nothing itself; the host's
+    /// policy (`wubble_core::popup::decide`) says what opens.
+    PopupRequested(PopupRequest),
     /// The renderer process died. Unless the host draws its own crash page
     /// ([`NavInput::RendererTerminated`]), the view reloads the page once by
     /// itself.
@@ -200,10 +207,7 @@ pub enum NavInput {
     RendererTerminated {
         reload: bool,
     },
-    Popup {
-        url: String,
-        background: bool,
-    },
+    Popup(PopupRequest),
     Cursor(Cursor),
     // From the host.
     Load(String),
@@ -341,10 +345,7 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             };
             return (state, effects);
         }
-        NavInput::Popup { url, background } => (
-            page,
-            vec![Emit(WebEvent::PopupRequested { url, background })],
-        ),
+        NavInput::Popup(request) => (page, vec![Emit(WebEvent::PopupRequested(request))]),
         NavInput::Load(url) => (page, command(NavEffect::Load(url))),
         NavInput::Reload => (page, command(NavEffect::Reload)),
         NavInput::HardReload => (page, command(NavEffect::HardReload)),
@@ -572,19 +573,15 @@ mod tests {
     #[test]
     fn popups_are_reported_without_a_state_change() {
         let state = at(Phase::Loaded);
-        let popup = I::Popup {
+        let request = PopupRequest {
             url: "https://p/".into(),
-            background: true,
+            gesture: false,
+            opened: wubble_core::popup::Opened::PopupWindow,
+            size: Some((400, 300)),
         };
-        let (next, effects) = transition(state.clone(), popup);
+        let (next, effects) = transition(state.clone(), I::Popup(request.clone()));
         assert_eq!(next, state);
-        assert_eq!(
-            effects,
-            vec![E::Emit(WebEvent::PopupRequested {
-                url: "https://p/".into(),
-                background: true,
-            })]
-        );
+        assert_eq!(effects, vec![E::Emit(WebEvent::PopupRequested(request))]);
     }
 
     #[test]

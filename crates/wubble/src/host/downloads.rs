@@ -214,7 +214,7 @@ impl Host {
             },
             None => "Cannot print: no downloads folder",
         };
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.toast(&window, failure);
         }
     }
@@ -262,7 +262,7 @@ impl Host {
                         }
                     }
                     _ => {
-                        if let Some(window) = self.window.upgrade() {
+                        if let Some(window) = self.w.window.upgrade() {
                             self.toast(&window, "File not found");
                         }
                     }
@@ -290,7 +290,7 @@ impl Host {
             self.apply_download(id, DownloadEvent::Cancel);
         }
         if !ids.is_empty()
-            && let Some(window) = self.window.upgrade()
+            && let Some(window) = self.w.window.upgrade()
         {
             self.toast(&window, "Download cancelled: its tab closed");
         }
@@ -344,7 +344,7 @@ impl Host {
                     if let Some(view) = self.any_view() {
                         view.start_download(&entry.url);
                         self.forget_download(id);
-                    } else if let Some(window) = self.window.upgrade() {
+                    } else if let Some(window) = self.w.window.upgrade() {
                         self.toast(&window, "Open a page to retry the download");
                     }
                 }
@@ -358,7 +358,7 @@ impl Host {
             self.downloads.inflight.remove(&download);
             self.report_busy(tab);
         }
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_downloads(&window);
         }
     }

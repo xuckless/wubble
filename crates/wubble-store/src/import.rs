@@ -17,7 +17,7 @@ use std::pin::Pin;
 
 use turso::Connection;
 use wubble_core::import::{BookmarkNode as Imp, Imported, Placement, Source};
-use wubble_core::lifecycle::{Activity, Lifecycle, Pin as TabPin};
+use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin as TabPin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId,
@@ -185,6 +185,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             items: vec![],
             active: None,
             split: None,
+            never_sleep: false,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));
@@ -276,10 +277,12 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
                     TabPin::Unpinned
                 },
                 activity: Activity::Idle,
+                keep: Keep::Normal,
                 hidden_since: None,
             },
             container: container_of(t.container),
             opener: None,
+            last_active_ms: 0,
         });
         match (pinned, folder) {
             (true, _) => space.pinned.push(id),
@@ -315,8 +318,14 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             summary: sum,
         });
     }
-    let merged = Model::from_parts(spaces, containers, tabs, model.active_space, model.clock())
-        .map_err(Error::Corrupt)?;
+    let merged = Model::from_parts(
+        spaces,
+        containers,
+        tabs,
+        model.windows.clone(),
+        model.clock(),
+    )
+    .map_err(Error::Corrupt)?;
     Ok(Merged {
         model: merged,
         marks: new_marks,
@@ -656,7 +665,7 @@ mod tests {
         assert_eq!(a.spaces, b.spaces);
         assert_eq!(a.containers, b.containers);
         assert_eq!(a.tabs, b.tabs);
-        assert_eq!(a.active_space, b.active_space);
+        assert_eq!(a.active_space(), b.active_space());
     }
 
     const TABLES: &[&str] = &[
@@ -698,7 +707,7 @@ mod tests {
             summary: sum,
         } = merge_spaces(&model, &fixture(), &HashMap::new()).unwrap();
         m.check().unwrap();
-        assert_eq!(m.active_space, model.active_space);
+        assert_eq!(m.active_space(), model.active_space());
         assert_eq!(m.spaces[0], model.spaces[0]);
         assert_eq!(m.spaces.len(), 3);
         assert_eq!(marks.len(), 2);
@@ -980,7 +989,7 @@ mod tests {
                 .cloned()
                 .collect();
             let now = m.clock();
-            let m = Model::from_parts(m.spaces, m.containers, tabs, m.active_space, now).unwrap();
+            let m = Model::from_parts(m.spaces, m.containers, tabs, m.windows, now).unwrap();
             s.save_session(&m).await.unwrap();
             let (m2, sum) = s.apply_import(&m, &fixture(), 2).await.unwrap();
             assert_eq!(sum.spaces_added, 1);
@@ -1019,7 +1028,7 @@ mod tests {
                 spaces,
                 m1.containers.clone(),
                 tabs,
-                m1.active_space,
+                m1.windows.clone(),
                 m1.clock(),
             )
             .unwrap();

@@ -323,10 +323,10 @@ mod tests {
             StorageAccess,
         ];
         let mapped: Vec<Permission> = prompted.iter().filter_map(|&k| permission_of(k)).collect();
-        // Every kind but the save-password decision, which no page asks for.
+        // Every kind but the save-password and popup decisions, which no prompt asks for.
         let asked = Permission::ALL
             .iter()
-            .filter(|&&p| p != Permission::SavePasswords)
+            .filter(|&&p| !matches!(p, Permission::SavePasswords | Permission::Popups))
             .count();
         assert_eq!(mapped.len(), asked);
         for never in [

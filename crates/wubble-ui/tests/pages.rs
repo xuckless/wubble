@@ -47,6 +47,7 @@ fn click(app: &AppWindow, id: &str, button: PointerEventButton) {
 fn visit(title: &str, url: &str) -> HistoryLineItem {
     HistoryLineItem {
         header: false,
+        key: 0,
         label: Default::default(),
         title: title.into(),
         url: url.into(),
@@ -97,6 +98,7 @@ fn page_scenarios() {
     app.set_page(InternalPageKind::History);
     let header = HistoryLineItem {
         header: true,
+        key: -1,
         label: "Today".into(),
         title: Default::default(),
         url: Default::default(),

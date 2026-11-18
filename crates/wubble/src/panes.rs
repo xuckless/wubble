@@ -12,6 +12,7 @@ use wubble_core::model::{Command, Model};
 use wubble_core::space::SpaceId;
 use wubble_core::split::{Bow, Split, SplitEvent, string_line, string_rect};
 use wubble_core::tab::TabId;
+use wubble_core::window::WindowId;
 use wubble_engine::view::Layout;
 use wubble_gfx::FrameSize;
 
@@ -78,12 +79,15 @@ impl Panes {
     pub fn frame(
         &mut self,
         model: &Model,
+        window: WindowId,
         dt: f64,
         width: f64,
         height: f64,
     ) -> (bool, Vec<Command>) {
-        let space = model.active_space;
-        let Some(group) = model.shown_split() else {
+        let (Some(space), Some(group)) = (
+            model.window(window).and_then(|w| w.space()),
+            model.window_split(window),
+        ) else {
             self.split.reset();
             self.space = None;
             return (false, vec![]);
@@ -271,7 +275,7 @@ mod tests {
     fn settle(p: &mut Panes, m: &Model, w: f64, h: f64) -> Vec<Command> {
         let mut out = vec![];
         for _ in 0..2000 {
-            let (moving, commands) = p.frame(m, DT, w, h);
+            let (moving, commands) = p.frame(m, m.focused(), DT, w, h);
             out.extend(commands);
             if !moving {
                 return out;
@@ -284,7 +288,7 @@ mod tests {
     fn one_page_fills_the_content_area() {
         let m = with_tabs(2);
         let mut p = Panes::default();
-        assert_eq!(p.frame(&m, DT, 1000.0, 700.0), (false, vec![]));
+        assert_eq!(p.frame(&m, m.focused(), DT, 1000.0, 700.0), (false, vec![]));
         let t = m.visible_tab().unwrap();
         assert_eq!(
             p.rects(&m.visible_tabs(), 1000.0),
@@ -305,7 +309,7 @@ mod tests {
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let mut p = Panes::default();
         // the first frame places the seams at their stops, nothing animates
-        let (moving, commands) = p.frame(&m, 0.0, 1008.0, 700.0);
+        let (moving, commands) = p.frame(&m, m.focused(), 0.0, 1008.0, 700.0);
         assert!(!moving && commands.is_empty());
         let rects = p.rects(&m.visible_tabs(), 1008.0);
         let want = [(TabId(2), 0.0, 500.0), (TabId(1), 508.0, 500.0)]
@@ -325,13 +329,13 @@ mod tests {
         let m = with_tabs(2);
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1008.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1008.0, 700.0);
         let [a, b] = [TabId(2), TabId(1)];
         assert_eq!(p.edges(a, 700.0), (None, None));
         p.grab(0, 504.0, 300.0);
         p.drag(380.0, 300.0);
         for _ in 0..5 {
-            p.frame(&m, DT, 1008.0, 700.0);
+            p.frame(&m, m.focused(), DT, 1008.0, 700.0);
         }
         let (Some(right), None) = (p.edges(a, 700.0).1, p.edges(a, 700.0).0) else {
             panic!("the left pane's right edge bends")
@@ -350,19 +354,19 @@ mod tests {
         let m = with_tabs(2);
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1000.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1000.0, 700.0);
         p.grab(0, 500.0, 300.0);
         p.drag(400.0, 300.0);
         assert!(p.held());
         for _ in 0..60 {
-            p.frame(&m, DT, 1000.0, 700.0);
+            p.frame(&m, m.focused(), DT, 1000.0, 700.0);
         }
         p.release();
         let commands = settle(&mut p, &m, 1000.0, 700.0);
         let [Command::ResizeSplit { space, stops }] = commands.as_slice() else {
             panic!("{commands:?}")
         };
-        assert_eq!(*space, m.active_space);
+        assert_eq!(*space, m.active_space());
         assert!((stops[0] - 0.4).abs() < 0.01, "{stops:?}");
     }
 
@@ -372,7 +376,7 @@ mod tests {
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let (m, _) = apply(m, Command::SplitWith(TabId(2)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1200.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1200.0, 700.0);
         p.close(TabId(1));
         let commands = settle(&mut p, &m, 1200.0, 700.0);
         assert_eq!(commands[0], Command::Unsplit(TabId(1)));
@@ -389,23 +393,23 @@ mod tests {
         let m = with_tabs(2);
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1000.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1000.0, 700.0);
         p.grab(0, 500.0, 300.0);
         p.drag(400.0, 300.0);
         for _ in 0..60 {
-            p.frame(&m, DT, 1000.0, 700.0);
+            p.frame(&m, m.focused(), DT, 1000.0, 700.0);
         }
         p.release();
-        let (_, commands) = p.frame(&m, DT, 1000.0, 700.0);
+        let (_, commands) = p.frame(&m, m.focused(), DT, 1000.0, 700.0);
         assert_eq!(commands.len(), 1);
         // the model is not told yet: more frames, the same old model
         for _ in 0..3 {
-            p.frame(&m, DT, 1000.0, 700.0);
+            p.frame(&m, m.focused(), DT, 1000.0, 700.0);
             assert!((p.split.stops[0] - 0.4).abs() < 0.01, "{:?}", p.split.stops);
         }
         let m = commands.into_iter().fold(m, |m, c| apply(m, c).0);
         p.dispatched();
-        p.frame(&m, DT, 1000.0, 700.0);
+        p.frame(&m, m.focused(), DT, 1000.0, 700.0);
         assert!((p.split.stops[0] - 0.4).abs() < 0.01, "{:?}", p.split.stops);
     }
 
@@ -416,7 +420,7 @@ mod tests {
         let m = with_tabs(2);
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1000.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1000.0, 700.0);
         let [left, right] = m.visible_tabs()[..] else {
             panic!()
         };
@@ -441,11 +445,11 @@ mod tests {
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let (m, _) = apply(m, Command::SplitWith(TabId(2)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1200.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1200.0, 700.0);
         p.grab(1, 800.0, 300.0);
         let last = *m.visible_tabs().last().unwrap();
         let (m, _) = apply(m, Command::Unsplit(last));
-        p.frame(&m, DT, 1200.0, 700.0);
+        p.frame(&m, m.focused(), DT, 1200.0, 700.0);
         assert!(!p.held());
         p.release();
         assert!(settle(&mut p, &m, 1200.0, 700.0).is_empty());
@@ -456,7 +460,7 @@ mod tests {
         let m = with_tabs(2);
         let (m, _) = apply(m, Command::SplitWith(TabId(1)));
         let mut p = Panes::default();
-        p.frame(&m, 0.0, 1000.0, 700.0);
+        p.frame(&m, m.focused(), 0.0, 1000.0, 700.0);
         let (m, _) = apply(m, Command::ActivateTab(TabId(1)));
         // still the split (TabId(1) is a pane): nothing to forget
         assert_eq!(p.rects(&m.visible_tabs(), 1000.0).len(), 2);
@@ -469,7 +473,7 @@ mod tests {
             },
         );
         let (m, _) = apply(m, Command::SwitchSpace(SpaceId(1)));
-        assert_eq!(p.frame(&m, DT, 1000.0, 700.0), (false, vec![]));
+        assert_eq!(p.frame(&m, m.focused(), DT, 1000.0, 700.0), (false, vec![]));
         assert!(p.seams(700.0).is_empty());
     }
 }

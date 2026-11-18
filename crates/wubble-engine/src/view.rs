@@ -1388,8 +1388,16 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             urls.into_iter().next().unwrap_or_default(),
         ))),
         E::NewWindowRequested {
-            url, background, ..
-        } => one(Route::Nav(NavInput::Popup { url, background })),
+            url,
+            user_gesture,
+            kind,
+            size,
+        } => one(Route::Nav(NavInput::Popup(crate::nav::PopupRequest {
+            url,
+            gesture: user_gesture,
+            opened: popup_opened(kind),
+            size,
+        }))),
         E::ContentProcessTerminated { .. } => one(Route::Crashed),
         // ERR_ABORTED (-3) is a navigation replaced by another one.
         E::LoadError {
@@ -1611,6 +1619,18 @@ fn route(event: NavigationEvent) -> Vec<Route> {
 }
 
 /// welding's modifier set for drags.
+/// What the page asked for, in the popup policy's terms. Anything else opens as a tab would.
+fn popup_opened(kind: welding::NewWindowKind) -> wubble_core::popup::Opened {
+    use welding::NewWindowKind as K;
+    use wubble_core::popup::Opened;
+    match kind {
+        K::BackgroundTab => Opened::BackgroundTab,
+        K::Popup => Opened::PopupWindow,
+        K::Window => Opened::Window,
+        K::ForegroundTab | K::Other => Opened::ForegroundTab,
+    }
+}
+
 fn weld_modifiers(m: &Modifiers) -> welding::EventModifiers {
     welding::EventModifiers {
         shift: m.keys.shift_key(),
@@ -2046,6 +2066,36 @@ mod tests {
         let mut routed = route(event);
         assert_eq!(routed.len(), 1, "{routed:?}");
         routed.remove(0)
+    }
+
+    #[test]
+    fn popups_carry_the_gesture_kind_and_size() {
+        use wubble_core::popup::Opened;
+        let ask = |kind, size| {
+            route_one(NavigationEvent::NewWindowRequested {
+                url: "https://p.test/".into(),
+                user_gesture: true,
+                kind,
+                size,
+            })
+        };
+        assert_eq!(
+            ask(welding::NewWindowKind::Popup, Some((400, 300))),
+            Route::Nav(NavInput::Popup(crate::nav::PopupRequest {
+                url: "https://p.test/".into(),
+                gesture: true,
+                opened: Opened::PopupWindow,
+                size: Some((400, 300)),
+            }))
+        );
+        for (kind, opened) in [
+            (welding::NewWindowKind::ForegroundTab, Opened::ForegroundTab),
+            (welding::NewWindowKind::BackgroundTab, Opened::BackgroundTab),
+            (welding::NewWindowKind::Window, Opened::Window),
+            (welding::NewWindowKind::Other, Opened::ForegroundTab),
+        ] {
+            assert_eq!(popup_opened(kind), opened);
+        }
     }
 
     #[test]

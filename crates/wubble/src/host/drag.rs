@@ -48,7 +48,7 @@ impl Host {
         if self.page_drag == PageDrag::Idle {
             return false;
         }
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return false;
         };
         let over = self.drag_over(&window, point);

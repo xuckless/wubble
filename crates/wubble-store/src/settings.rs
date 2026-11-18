@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use wubble_core::apply::GlassSetting;
+use wubble_core::archive::ArchiveAfter;
 use wubble_core::omnibox::SearchEngine;
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
@@ -95,6 +96,15 @@ impl Codec for GlassSetting {
     }
 }
 
+impl Codec for ArchiveAfter {
+    fn encode(&self) -> String {
+        self.id().into()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        ArchiveAfter::from_id(s)
+    }
+}
+
 /// A JSON array of strings; entries are opaque to the store.
 impl Codec for Vec<String> {
     fn encode(&self) -> String {
@@ -165,6 +175,11 @@ settings! {
     SleepFreezeAfter: u32 = defs::SLEEP_FREEZE_AFTER;
     SleepDiscardAfter: u32 = defs::SLEEP_DISCARD_AFTER;
     SleepKeepPinned: bool = defs::SLEEP_KEEP_PINNED;
+    /// Hosts whose tabs never sleep.
+    SleepNeverSites: Vec<String> = defs::SLEEP_NEVER_SITES;
+    ArchiveAfterSetting: ArchiveAfter = defs::ARCHIVE_AFTER;
+    /// `host -> Space[, Container]` entries (`wubble_core::routing`).
+    RoutingRules: Vec<String> = defs::ROUTING_RULES;
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
     /// Read before the window exists: off, the shell runs Slint-only glass.
     GlassScene: bool = defs::GLASS_SCENE;

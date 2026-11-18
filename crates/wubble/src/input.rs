@@ -259,6 +259,13 @@ pub fn over_content(window: &AppWindow, p: slint::LogicalPosition) -> bool {
         && p.y < y + window.get_content_height()
 }
 
+/// The host-wide "a wubble window has focus" after a window's focus event, or `None` to
+/// ignore it. A gain always counts; a loss only from the model's focused window, since some
+/// platforms send the old window's loss after the new window's gain.
+pub fn window_focus(from_focused_window: bool, gained: bool) -> Option<bool> {
+    (gained || from_focused_window).then_some(gained)
+}
+
 /// Whether a press of `button` sends a wave through the backdrop: the left button only, not
 /// the right, middle or side buttons.
 pub fn taps_backdrop(button: WinitButton) -> bool {
@@ -667,5 +674,19 @@ mod tests {
         }
         // The side buttons still navigate.
         assert_eq!(button_action(WinitButton::Back), Some(Action::Back));
+    }
+
+    #[test]
+    fn a_late_loss_from_another_window_keeps_focus() {
+        // W2 gains focus first; W1's loss arrives after and must not unfocus W2's page
+        assert_eq!(window_focus(false, true), Some(true), "W2 gains");
+        assert_eq!(
+            window_focus(false, false),
+            None,
+            "W1's late loss is ignored"
+        );
+        // the focused window losing focus to another app does count
+        assert_eq!(window_focus(true, false), Some(false));
+        assert_eq!(window_focus(true, true), Some(true));
     }
 }

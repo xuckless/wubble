@@ -285,7 +285,6 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    accessor). Tests: order with the other events, the size cap, the pending
    cap and room again after a drain. Not unit-tested: an unknown frame id
    (needs a live browser).
-
 28. **macOS frame copy on its own Metal queue.** `metal.rs`:
    `copy_metal_to_owned` no longer goes through `copy_to_owned` (now
    Linux-only in `native_frame/mod.rs`): it creates the copy as a raw
@@ -317,13 +316,21 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
 31. **Links opened elsewhere reach the host.** `handlers.rs`: the request
    handler's new `on_open_urlfrom_tab` (a middle or Ctrl click on a link)
    reports `NavigationEvent::NewWindowRequested` and cancels CEF's in-place
-   navigation; `NewWindowRequested` gains `background` (the disposition is
-   `CEF_WOD_NEW_BACKGROUND_TAB`, `surface::background_disposition`), also set
-   by `on_before_popup` on all three platforms.
+   navigation; the disposition says whether it wants a background tab
+   (change 33's `NewWindowKind`).
 32. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
    with the new `Panning` (middle, middle vertical/horizontal, eight compass
    points; exported from `lib.rs`); `cursor.rs` `from_cef` maps CEF's
    `CT_*PANNING` types to it (`CT_MIDDLEPANNING` was `Move`).
+33. **What a popup asked for.** `surface.rs`: new `NewWindowKind`
+   (foreground tab, background tab, popup, window, other) and
+   `NavigationEvent::NewWindowRequested` gains `kind` and `size` (the
+   `width`/`height` window features when both are set). `handlers.rs`: shared
+   `new_window_requested` maps `cef::WindowOpenDisposition` and
+   `cef::PopupFeatures`; the three platform `on_before_popup` and change 31's `on_open_urlfrom_tab` call it; `kind` replaces change 31's `background` flag (a background tab is `NewWindowKind::BackgroundTab`). The popup
+   is still cancelled (one surface per producer); wubble's popup policy
+   (`wubble_core::popup`) decides what opens. Tests: the disposition mapping and
+   the size rule.
 
 ## Not changed, on purpose
 

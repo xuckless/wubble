@@ -38,7 +38,16 @@ pub(super) fn kind_of(page: Option<InternalPage>) -> InternalPageKind {
         Some(InternalPage::Bookmarks) => InternalPageKind::Bookmarks,
         Some(InternalPage::Downloads) => InternalPageKind::Downloads,
         Some(InternalPage::Passwords) => InternalPageKind::Passwords,
+        Some(InternalPage::Archive) => InternalPageKind::Archive,
     }
+}
+
+/// Which list of dated rows: the history page's visits or the archive page's tabs. Both are
+/// drawn by the same page component from `HistoryRow`s (the archive's `visit_id` is its id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Feed {
+    History,
+    Archive,
 }
 
 #[derive(Debug, Default)]
@@ -141,6 +150,7 @@ pub(super) struct PagesState {
     /// The page the window showed last: a page is fetched when it is entered.
     shown: Option<InternalPage>,
     history: History,
+    archive: History,
     bookmarks: Bookmarks,
     passwords: Passwords,
 }
@@ -321,8 +331,7 @@ fn utc_offset_min() -> i32 {
 impl Host {
     /// The internal page the visible tab shows.
     pub(super) fn shown_page(&self) -> Option<InternalPage> {
-        self.model
-            .visible_tab()
+        self.shown()
             .and_then(|t| self.model.tabs.get(&t))
             .and_then(|t| InternalPage::from_url(&t.url))
     }
@@ -330,7 +339,7 @@ impl Host {
     /// Tells the window which page shows, fetching a page's data when it is entered, and draws
     /// the page. The one place the page layer changes.
     pub(super) fn render_pages(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let page = self.shown_page();
@@ -345,7 +354,8 @@ impl Host {
             }
             self.pages.shown = page;
             match page {
-                Some(InternalPage::History) => self.history_fetch(false, HISTORY_PAGE),
+                Some(InternalPage::History) => self.feed_fetch(Feed::History, false, HISTORY_PAGE),
+                Some(InternalPage::Archive) => self.feed_fetch(Feed::Archive, false, HISTORY_PAGE),
                 Some(InternalPage::Bookmarks) => self.bookmarks_request(None),
                 _ => {}
             }
@@ -366,7 +376,7 @@ impl Host {
     }
 
     fn render_pill(&mut self, window: &AppWindow) {
-        let tab = self.model.visible_tab();
+        let tab = self.shown();
         let url = tab
             .and_then(|t| self.model.tabs.get(&t))
             .map(|t| t.url.clone())
@@ -384,10 +394,10 @@ impl Host {
 
     /// The badge was clicked: the blocker menu opens under it (`x`, `y` in window pixels).
     pub(crate) fn blocker_menu_requested(&mut self, x: f32, y: f32) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let Some(tab) = self.model.visible_tab() else {
+        let Some(tab) = self.shown() else {
             return;
         };
         let url = self
@@ -420,11 +430,30 @@ impl Host {
         self.render_pages();
     }
 
-    // ----- history
+    /// The menu's switch: the site joins or leaves the never-sleep list (the stored setting the
+    /// settings page shows).
+    pub(super) fn toggle_never_sleep_site(&mut self, site: &str) {
+        let key = defs::SLEEP_NEVER_SITES.key;
+        if self.model.never_sites().iter().any(|s| s == site) {
+            self.setting_entry_removed(key, site);
+        } else {
+            self.setting_entry_added(key, site);
+        }
+        self.render_pages();
+    }
+
+    // ----- history and archive
+
+    fn feed_mut(&mut self, feed: Feed) -> &mut History {
+        match feed {
+            Feed::History => &mut self.pages.history,
+            Feed::Archive => &mut self.pages.archive,
+        }
+    }
 
     /// Fetch `limit` rows: the next page after the loaded ones (`more`) or a fresh list.
-    fn history_fetch(&mut self, more: bool, limit: usize) {
-        let h = &mut self.pages.history;
+    fn feed_fetch(&mut self, feed: Feed, more: bool, limit: usize) {
+        let h = self.feed_mut(feed);
         h.generation += 1;
         let generation = h.generation;
         let before = h
@@ -432,15 +461,27 @@ impl Host {
             .last()
             .filter(|_| more)
             .map(|r| (r.visit_ms, r.visit_id));
-        self.store.visits(&h.query, before, limit, move |page| {
+        let arrived = move |page| {
             let _ = slint::invoke_from_event_loop(move || {
-                with_host(|host| host.visits_arrived(generation, more, limit, page));
+                with_host(|host| host.feed_arrived(feed, generation, more, limit, page));
             });
-        });
+        };
+        let query = h.query.clone();
+        match feed {
+            Feed::History => self.store.visits(&query, before, limit, arrived),
+            Feed::Archive => self.store.archived(&query, before, limit, arrived),
+        }
     }
 
-    fn visits_arrived(&mut self, generation: u64, more: bool, limit: usize, page: VisitsPage) {
-        let h = &mut self.pages.history;
+    fn feed_arrived(
+        &mut self,
+        feed: Feed,
+        generation: u64,
+        more: bool,
+        limit: usize,
+        page: VisitsPage,
+    ) {
+        let h = self.feed_mut(feed);
         if generation != h.generation {
             return;
         }
@@ -452,14 +493,17 @@ impl Host {
             h.rows = page.rows;
             h.icons = page.icons;
         }
-        self.render_history();
+        self.render_feed(feed);
     }
 
-    pub(super) fn render_history(&self) {
-        let Some(window) = self.window.upgrade() else {
+    fn render_feed(&self, feed: Feed) {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let h = &self.pages.history;
+        let h = match feed {
+            Feed::History => &self.pages.history,
+            Feed::Archive => &self.pages.archive,
+        };
         let groups = pages::history_page(&h.rows, utc_offset_min(), now_ms());
         let lines = pages::history_lines(&groups);
         let items = wubble_ui::pages::history_items(&lines, |url| {
@@ -468,20 +512,67 @@ impl Host {
                 .map(|f| favicon_image(f.width, f.height, &f.rgba))
                 .unwrap_or_default()
         });
-        crate::bind::sync(window.get_history_lines(), items, |m| {
-            window.set_history_lines(m)
-        });
-        window.set_history_searching(!h.query.trim().is_empty());
-        window.set_history_has_more(!h.exhausted);
+        let searching = !h.query.trim().is_empty();
+        match feed {
+            Feed::History => {
+                crate::bind::sync(window.get_history_lines(), items, |m| {
+                    window.set_history_lines(m)
+                });
+                window.set_history_searching(searching);
+                window.set_history_has_more(!h.exhausted);
+            }
+            Feed::Archive => {
+                crate::bind::sync(window.get_archive_lines(), items, |m| {
+                    window.set_archive_lines(m)
+                });
+                window.set_archive_searching(searching);
+                window.set_archive_has_more(!h.exhausted);
+            }
+        }
     }
 
     pub(crate) fn history_query(&mut self, query: &str) {
         query.clone_into(&mut self.pages.history.query);
-        self.history_fetch(false, HISTORY_PAGE);
+        self.feed_fetch(Feed::History, false, HISTORY_PAGE);
     }
 
     pub(crate) fn history_more(&mut self) {
-        self.history_fetch(true, HISTORY_PAGE);
+        self.feed_fetch(Feed::History, true, HISTORY_PAGE);
+    }
+
+    pub(crate) fn archive_query(&mut self, query: &str) {
+        query.clone_into(&mut self.pages.archive.query);
+        self.feed_fetch(Feed::Archive, false, HISTORY_PAGE);
+    }
+
+    pub(crate) fn archive_more(&mut self) {
+        self.feed_fetch(Feed::Archive, true, HISTORY_PAGE);
+    }
+
+    pub(crate) fn archive_deleted(&mut self, id: i32) {
+        self.store.delete_archive(i64::from(id));
+        self.archive_refetch();
+    }
+
+    /// Click on an archived tab: it leaves the Archive and opens again, in its own Space if that
+    /// still exists.
+    pub(crate) fn archive_restored(&mut self, id: i32) {
+        self.store.take_archive(i64::from(id), |tab| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| {
+                    if let Some(tab) = tab {
+                        host.reopen(tab.url, tab.space, Some(tab.container));
+                    }
+                    host.archive_refetch();
+                });
+            });
+        });
+    }
+
+    /// The loaded rows again, so "Show more" pages survive a delete or restore.
+    pub(super) fn archive_refetch(&mut self) {
+        let shown = self.pages.archive.rows.len().max(HISTORY_PAGE);
+        self.feed_fetch(Feed::Archive, false, shown);
     }
 
     fn history_clear(&mut self, what: HistoryClear) {
@@ -489,7 +580,7 @@ impl Host {
         let shown = self.pages.history.rows.len().max(HISTORY_PAGE);
         self.store.clear_history(what, move |_| {
             let _ = slint::invoke_from_event_loop(move || {
-                with_host(|host| host.history_fetch(false, shown));
+                with_host(|host| host.feed_fetch(Feed::History, false, shown));
             });
         });
     }
@@ -512,7 +603,7 @@ impl Host {
 
     /// A history or bookmark row clicked: the page's own tab goes there.
     pub(crate) fn page_opened(&mut self, url: &str) {
-        if let Some(tab) = self.model.visible_tab() {
+        if let Some(tab) = self.shown() {
             self.dispatch(Command::Navigate {
                 tab,
                 url: url.to_owned(),
@@ -522,7 +613,7 @@ impl Host {
 
     /// Middle-click: a new tab beside it.
     pub(crate) fn page_opened_new_tab(&mut self, url: &str) {
-        let opener = self.model.visible_tab();
+        let opener = self.shown();
         self.dispatch(Command::NewTab {
             url: url.to_owned(),
             container: None,
@@ -552,7 +643,7 @@ impl Host {
     }
 
     pub(super) fn render_bookmarks(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let b = &self.pages.bookmarks;
@@ -638,14 +729,10 @@ impl Host {
     /// Mod+D: the sheet for the visible web page. Not while an engine dialog waits for its
     /// answer (one sheet at a time).
     pub(crate) fn bookmark_page(&mut self) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
-        let Some(tab) = self
-            .model
-            .visible_tab()
-            .and_then(|t| self.model.tabs.get(&t))
-        else {
+        let Some(tab) = self.shown().and_then(|t| self.model.tabs.get(&t)) else {
             return;
         };
         if window.get_dialog().open || !wubble_core::url::is_recordable(&tab.url) {
@@ -695,14 +782,14 @@ impl Host {
         let (next, copy) = self.pages.passwords.apply(then, answer, Instant::now());
         if let Some(password) = copy {
             self.copy(&password);
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.w.window.upgrade() {
                 self.toast(&window, "Password copied");
             }
         }
         if let Some(command) = next {
             self.vault_request(command, Then::Apply);
         }
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -711,7 +798,7 @@ impl Host {
     fn passwords_left(&mut self) {
         self.pages.passwords = Passwords::default();
         self.vault_request(VaultCommand::Lock, Then::Apply);
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -721,7 +808,7 @@ impl Host {
         let p = &mut self.pages.passwords;
         if p.revealed.as_ref().is_some_and(|r| r.until <= now) {
             p.revealed = None;
-            if let Some(window) = self.window.upgrade() {
+            if let Some(window) = self.w.window.upgrade() {
                 self.render_passwords(&window);
             }
         }
@@ -744,7 +831,7 @@ impl Host {
 
     pub(crate) fn passwords_query(&mut self, query: &str) {
         query.clone_into(&mut self.pages.passwords.query);
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -762,7 +849,7 @@ impl Host {
 
     pub(crate) fn login_hide(&mut self) {
         self.pages.passwords.revealed = None;
-        if let Some(window) = self.window.upgrade() {
+        if let Some(window) = self.w.window.upgrade() {
             self.render_passwords(&window);
         }
     }
@@ -787,7 +874,7 @@ impl Host {
     /// "Import CSV": the OS file chooser, then the vault reads the file on the store thread.
     pub(crate) fn passwords_import_requested(&mut self) {
         use crate::chooser::{self, DialogSpec, Pick};
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         let spec = DialogSpec {

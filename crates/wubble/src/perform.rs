@@ -5,14 +5,15 @@
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::{MAX_PANES, SpaceId};
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
+
+use wubble_core::window::WindowTarget;
 
 use crate::surface::FindEvent;
 
 /// Actions with no implementation yet, each with the reason.
 pub const NOT_YET: &[(Action, &str)] = &[
-    (Action::NewWindow, "one window only (TODO.md, multi-window)"),
     (Action::NewSpace, "needs a name and tint prompt"),
     (
         Action::ToggleCompactMode,
@@ -57,6 +58,10 @@ pub enum Plan {
     BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
     OpenBeside,
+    /// Put the tabs back as the host kept them before the last tidy.
+    UndoTidy,
+    /// Close these tabs (each goes on the recently-closed list).
+    CloseTabs(Vec<TabId>),
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -121,7 +126,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         // the design's `split_next`: the next tab down, else a page chosen in the bar
         Action::SplitNext => match model.split_candidate() {
             Some(t) => Plan::Model(Command::SplitWith(t)),
-            None if visible.is_some() && model.visible_tabs().len() < MAX_PANES => Plan::OpenBeside,
+            None if visible.is_some() && model.pane_room() => Plan::OpenBeside,
             None => Plan::Nothing,
         },
         Action::Unsplit => match visible {
@@ -145,12 +150,33 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
         Action::OpenDownloads => Plan::Model(Command::OpenInternal(InternalPage::Downloads)),
         Action::OpenPasswords => Plan::Model(Command::OpenInternal(InternalPage::Passwords)),
+        Action::OpenArchive => Plan::Model(Command::OpenInternal(InternalPage::Archive)),
+        Action::TidyTabs => Plan::Model(Command::TidyTabs {
+            space: model.active_space(),
+        }),
+        Action::UndoTidyTabs => Plan::UndoTidy,
+        Action::CloseDuplicateTabs => {
+            let dupes = wubble_core::tidy::duplicates(model, model.active_space());
+            if dupes.is_empty() {
+                Plan::Nothing
+            } else {
+                Plan::CloseTabs(dupes)
+            }
+        }
         Action::BookmarkPage => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::Quit => Plan::Quit,
-        Action::NewWindow | Action::NewSpace | Action::ToggleCompactMode => Plan::NotYet,
+        Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
+        Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
+        Action::MoveTabToNewWindow => visible.map_or(Plan::Nothing, |tab| {
+            Plan::Model(Command::MoveTabToWindow {
+                tab,
+                to: WindowTarget::New,
+            })
+        }),
+        Action::NewSpace | Action::ToggleCompactMode => Plan::NotYet,
     }
 }
 
@@ -284,6 +310,58 @@ mod tests {
         assert_eq!(plan(Action::SelectSpace(3), &m), Plan::Nothing);
         assert_eq!(plan(Action::NextSpace, &m), switch(1));
         assert_eq!(plan(Action::PrevSpace, &m), switch(1));
+    }
+
+    #[test]
+    fn window_actions() {
+        let m = with_tabs(1);
+        assert_eq!(
+            plan(Action::NewWindow, &m),
+            Plan::Model(Command::NewWindow { space: None })
+        );
+        assert_eq!(
+            plan(Action::CloseWindow, &m),
+            Plan::Model(Command::CloseWindow(m.focused()))
+        );
+        assert_eq!(
+            plan(Action::MoveTabToNewWindow, &m),
+            Plan::Model(Command::MoveTabToWindow {
+                tab: TabId(1),
+                to: WindowTarget::New
+            })
+        );
+        let empty = Model::new(std::time::Instant::now());
+        assert_eq!(plan(Action::MoveTabToNewWindow, &empty), Plan::Nothing);
+    }
+
+    #[test]
+    fn archive_and_tidy_actions() {
+        let m = with_tabs(1);
+        assert_eq!(
+            plan(Action::OpenArchive, &m),
+            Plan::Model(Command::OpenInternal(InternalPage::Archive))
+        );
+        assert_eq!(
+            plan(Action::TidyTabs, &m),
+            Plan::Model(Command::TidyTabs {
+                space: m.active_space()
+            })
+        );
+        assert_eq!(plan(Action::UndoTidyTabs, &m), Plan::UndoTidy);
+        assert_eq!(plan(Action::CloseDuplicateTabs, &m), Plan::Nothing);
+        let (m, _) = apply(
+            m,
+            Command::NewTab {
+                url: "https://0.test/".into(),
+                container: None,
+                opener: None,
+            },
+        );
+        assert_eq!(
+            plan(Action::CloseDuplicateTabs, &m),
+            Plan::CloseTabs(vec![TabId(1)]),
+            "the visible one stays"
+        );
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub fn attach(window: &AppWindow) {
 /// The design's Spaces (`slint/tokens.slint` Spaces: names and accents) and a few tabs, two of
 /// them pinned as favourites, as commands in order; `model` is read for the opened tabs' ids.
 pub fn seed(dispatch: &mut dyn FnMut(Command), model: impl Fn() -> Model) {
-    let first = model().active_space;
+    let first = model().active_space();
     let space = |name: &str, tint| Command::NewSpace {
         name: name.into(),
         tint,

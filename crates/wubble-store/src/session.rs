@@ -14,13 +14,14 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use wubble_core::lifecycle::{Activity, Lifecycle, Pin};
+use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
     SplitGroup,
 };
 use wubble_core::tab::{Liveness, Tab, TabId};
+use wubble_core::window::{Geometry, Window, WindowId};
 
 use crate::*;
 
@@ -62,7 +63,7 @@ impl Store {
         let mut space_at: HashMap<SpaceId, usize> = HashMap::new();
         let mut rows = c
             .query(
-                "SELECT id, name, tint, container_id, active_tab_id, icon FROM spaces \
+                "SELECT id, name, tint, container_id, active_tab_id, icon, never_sleep FROM spaces \
                  ORDER BY position",
                 (),
             )
@@ -86,6 +87,7 @@ impl Store {
                     .map(|v| narrow(v, "tab id").map(|v: u64| TabId(v)))
                     .transpose()?,
                 split: None,
+                never_sleep: r.get::<i64>(6)? != 0,
             });
         }
         if spaces.is_empty() {
@@ -121,7 +123,7 @@ impl Store {
         let mut tabs = vec![];
         let mut rows = c
             .query(
-                "SELECT id, space_id, container_id, folder_id, pinned, position, url, title \
+                "SELECT id, space_id, container_id, folder_id, pinned, position, url, title, last_active \
                  FROM tabs ORDER BY space_id, pinned DESC, position",
                 (),
             )
@@ -158,10 +160,12 @@ impl Store {
                     liveness: Liveness::Discarded,
                     pin: if pinned { Pin::Pinned } else { Pin::Unpinned },
                     activity: Activity::Idle,
+                    keep: Keep::Normal,
                     hidden_since: None,
                 },
                 container: ContainerId(narrow(r.get(2)?, "container id")?),
                 opener: None,
+                last_active_ms: r.get(8)?,
             });
         }
         for (space, mut items) in spaces.iter_mut().zip(top) {
@@ -208,23 +212,74 @@ impl Store {
             }
             None => spaces[0].id,
         };
-        // The model keeps the shown tabs (each pane of a shown split) Active; every other tab
-        // has no renderer yet.
-        let shown: Vec<TabId> = spaces
+        let windows = self.load_windows(&space_at, active_space).await?;
+        // The model keeps the shown tabs (each pane of a shown split, in every window) Active;
+        // every other tab has no renderer yet.
+        let shown: Vec<TabId> = windows
             .iter()
-            .find(|s| s.id == active_space)
-            .and_then(|s| {
-                let a = s.active?;
-                Some(match &s.split {
-                    Some(g) if g.tabs.contains(&a) => g.tabs.clone(),
-                    _ => vec![a],
-                })
+            .filter_map(|w| spaces.iter().find(|s| Some(s.id) == w.space()))
+            .flat_map(|s| {
+                let a = s.active;
+                match &s.split {
+                    Some(g) if a.is_some_and(|a| g.tabs.contains(&a)) => g.tabs.clone(),
+                    _ => a.into_iter().collect(),
+                }
             })
-            .unwrap_or_default();
+            .collect();
         for t in tabs.iter_mut().filter(|t| shown.contains(&t.id)) {
             t.lifecycle.liveness = Liveness::Active;
         }
-        Model::from_parts(spaces, containers, tabs, active_space, now).map_err(Error::Corrupt)
+        Model::from_parts(spaces, containers, tabs, windows, now).map_err(Error::Corrupt)
+    }
+
+    /// The stored Main windows, focused last. A row on an unknown Space or on a Space an
+    /// earlier row shows is dropped, not an error; with none left (every session before v11)
+    /// one window shows `active_space`.
+    async fn load_windows(
+        &self,
+        space_at: &HashMap<SpaceId, usize>,
+        active_space: SpaceId,
+    ) -> Result<Vec<Window>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, space_id, width, height, x, y FROM windows ORDER BY position",
+                (),
+            )
+            .await?;
+        let mut windows: Vec<Window> = vec![];
+        while let Some(r) = rows.next().await? {
+            let id = WindowId(narrow(r.get(0)?, "window id")?);
+            let space = SpaceId(narrow(r.get(1)?, "space id")?);
+            if !space_at.contains_key(&space)
+                || windows
+                    .iter()
+                    .any(|w| w.id == id || w.space() == Some(space))
+            {
+                continue;
+            }
+            let int = |v: Option<i64>| v.and_then(|v| i32::try_from(v).ok());
+            let size = |v: Option<i64>| v.and_then(|v| u32::try_from(v).ok());
+            let (w, h, x, y) = (
+                size(r.get(2)?),
+                size(r.get(3)?),
+                int(r.get(4)?),
+                int(r.get(5)?),
+            );
+            let geometry = w.zip(h).map(|(width, height)| Geometry {
+                width,
+                height,
+                pos: x.zip(y),
+            });
+            windows.push(Window {
+                geometry,
+                ..Window::main(id, space)
+            });
+        }
+        if windows.is_empty() {
+            windows.push(Window::main(WindowId(0), active_space));
+        }
+        Ok(windows)
     }
 
     /// Replace the stored session with `model`, in one transaction. A model that fails
@@ -271,6 +326,7 @@ pub(crate) async fn write_model(
 ) -> Result<()> {
     // Children first; foreign keys are enforced per statement.
     for table in [
+        "windows",
         "split_panes",
         "tabs",
         "tab_folders",
@@ -285,11 +341,37 @@ pub(crate) async fn write_model(
     write_folders(tx, model).await?;
     write_tabs(tx, model).await?;
     write_splits(tx, model).await?;
+    write_windows(tx, model).await?;
     tx.execute(
         "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
-        (model.active_space.0,),
+        (model.active_space().0,),
     )
     .await?;
+    Ok(())
+}
+
+/// The Main windows, in focus order (Little and Popup windows are not kept).
+async fn write_windows(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
+    let mut st = tx
+        .prepare(
+            "INSERT INTO windows(id, position, space_id, width, height, x, y) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .await?;
+    let mains = m.windows.iter().filter_map(|w| Some((w, w.space()?)));
+    for (i, (w, space)) in mains.enumerate() {
+        let g = w.geometry;
+        st.execute((
+            i64::from(w.id.0),
+            i as i64,
+            space.0,
+            g.map(|g| i64::from(g.width)),
+            g.map(|g| i64::from(g.height)),
+            g.and_then(|g| g.pos).map(|p| i64::from(p.0)),
+            g.and_then(|g| g.pos).map(|p| i64::from(p.1)),
+        ))
+        .await?;
+    }
     Ok(())
 }
 
@@ -306,12 +388,15 @@ async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -
 async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon, never_sleep) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .await?;
     for (i, s) in m.spaces.iter().enumerate() {
-        let active = s.active.map(tab_id).transpose()?;
+        // A Space whose only tabs are in Little or Popup windows has no active tab; those
+        // windows are not kept, so its first tab is shown after a restart.
+        let active = s.active.or_else(|| m.order(s.id).first().copied());
+        let active = active.map(tab_id).transpose()?;
         st.execute((
             s.id.0,
             s.name.as_str(),
@@ -320,6 +405,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             s.container.0,
             active,
             s.icon.id(),
+            i64::from(s.never_sleep),
         ))
         .await?;
     }
@@ -344,8 +430,8 @@ async fn write_folders(tx: &turso::transaction::Transaction<'_>, m: &Model) -> R
 async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO tabs(id, space_id, container_id, folder_id, pinned, position, url, title) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO tabs(id, space_id, container_id, folder_id, pinned, position, url, title, last_active) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .await?;
     let mut put = async |t: TabId, space: SpaceId, folder: Option<FolderId>, pinned, pos: usize| {
@@ -359,6 +445,7 @@ async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Resu
             pos as i64,
             tab.url.as_str(),
             tab.title.as_str(),
+            tab.last_active_ms,
         ))
         .await?;
         Ok::<(), Error>(())
@@ -509,6 +596,22 @@ mod tests {
                 tint: Rgb(4, 5, 6),
             },
         );
+        // hidden tabs of unknown last visit are stamped by the first tick
+        m = ap(
+            m,
+            Command::Tick {
+                now: now(),
+                wall_ms: 5_000,
+                pressure: wubble_core::sleep::Pressure::None,
+            },
+        );
+        m = ap(
+            m,
+            Command::SetSpaceNeverSleep {
+                space: SpaceId(2),
+                on: true,
+            },
+        );
         m.check().unwrap();
         m
     }
@@ -527,6 +630,7 @@ mod tests {
                         Pin::Unpinned
                     },
                     activity: Activity::Idle,
+                    keep: Keep::Normal,
                     hidden_since: None,
                 },
                 opener: None,
@@ -542,7 +646,7 @@ mod tests {
             m.spaces.clone(),
             m.containers.clone(),
             tabs,
-            m.active_space,
+            m.windows.clone(),
             now(),
         )
         .unwrap()
@@ -554,7 +658,87 @@ mod tests {
         assert_eq!(a.spaces, b.spaces);
         assert_eq!(a.containers, b.containers);
         assert_eq!(a.tabs, b.tabs);
-        assert_eq!(a.active_space, b.active_space);
+        assert_eq!(a.active_space(), b.active_space());
+        assert_eq!(a.windows, b.windows);
+    }
+
+    #[test]
+    fn windows_round_trip_and_only_main_ones_are_kept() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let ap = |m, c| apply(m, c).0;
+            let mut m = ap(
+                rich(),
+                Command::NewWindow {
+                    space: Some(SpaceId(0)),
+                },
+            );
+            let size = |pos| Geometry {
+                width: 800,
+                height: 600,
+                pos,
+            };
+            for (w, pos) in [(0, Some((10, -20))), (1, None)] {
+                m = ap(
+                    m,
+                    Command::ResizeWindow {
+                        window: WindowId(w),
+                        geometry: size(pos),
+                    },
+                );
+            }
+            let with_little = ap(
+                m.clone(),
+                Command::OpenLittle {
+                    url: "https://l.test".into(),
+                    // the empty Space: its only tab is the Little window's
+                    space: Some(SpaceId(2)),
+                },
+            );
+            assert_eq!(with_little.windows.len(), 3);
+            store.save_session(&m).await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            assert_same(&loaded, &restored(&m));
+            assert_eq!(loaded.focused(), WindowId(1));
+            assert_eq!(
+                loaded.window(WindowId(0)).unwrap().geometry,
+                Some(size(Some((10, -20))))
+            );
+            // both windows' pages come back Active
+            assert_eq!(loaded.visible_tabs().len(), 2);
+            // a Little window's tab is kept as a tab of its Space, without its window
+            store.save_session(&with_little).await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            assert_eq!(loaded.windows, m.windows);
+            assert_eq!(loaded.tabs.len(), with_little.tabs.len());
+            loaded.check().unwrap();
+        });
+    }
+
+    #[test]
+    fn a_session_without_window_rows_has_one_window_on_its_active_space() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            store.save_session(&rich()).await.unwrap();
+            store.conn.execute("DELETE FROM windows", ()).await.unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            assert_eq!(loaded.windows, vec![Window::main(WindowId(0), SpaceId(1))]);
+            // a row on an unknown Space is dropped
+            store
+                .conn
+                .execute(
+                    "INSERT INTO windows(id, position, space_id) VALUES (5, 0, 2), (6, 1, 2)",
+                    (),
+                )
+                .await
+                .unwrap();
+            let loaded = store.load_session(now()).await.unwrap();
+            assert_eq!(
+                loaded.windows,
+                vec![Window::main(WindowId(5), SpaceId(2))],
+                "one Space twice"
+            );
+        });
     }
 
     #[test]
@@ -574,7 +758,7 @@ mod tests {
             let mut store = Store::open_in_memory().await.unwrap();
             let m = rich();
             // The fixture covers what the test claims.
-            assert_eq!(m.active_space, SpaceId(1));
+            assert_eq!(m.active_space(), SpaceId(1));
             assert_eq!(m.spaces[0].active, Some(TabId(2)));
             assert_eq!(m.spaces[0].pinned, vec![TabId(1)]);
             assert!(m.spaces[2].items.is_empty() && m.spaces[2].active.is_none());
@@ -582,6 +766,8 @@ mod tests {
             assert_eq!(m.tabs[&TabId(4)].container, ContainerId(1));
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
+            assert!(m.spaces[2].never_sleep && !m.spaces[0].never_sleep);
+            assert!(m.tabs.values().any(|t| t.last_active_ms == 5_000));
             store.save_session(&m).await.unwrap();
             assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
         });
@@ -626,7 +812,7 @@ mod tests {
             let good = rich();
             store.save_session(&good).await.unwrap();
             let mut bad = good.clone();
-            bad.active_space = SpaceId(99);
+            bad.windows[0].shown = wubble_core::window::Shown::Space(SpaceId(99));
             assert!(matches!(
                 store.save_session(&bad).await,
                 Err(Error::Corrupt(_))
@@ -775,10 +961,12 @@ mod tests {
                     liveness: Liveness::Discarded,
                     pin: if pinned { Pin::Pinned } else { Pin::Unpinned },
                     activity: Activity::Idle,
+                    keep: Keep::Normal,
                     hidden_since: None,
                 },
                 container: ContainerId(container),
                 opener: None,
+                last_active_ms: 0,
             };
             let spaces = vec![
                 Space {
@@ -799,6 +987,7 @@ mod tests {
                     ],
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
                     split: None,
+                    never_sleep: false,
                 },
                 Space {
                     id: SpaceId(1),
@@ -810,6 +999,7 @@ mod tests {
                     items: vec![Item::Tab(TabId(20)), Item::Tab(TabId(21))],
                     active: Some(TabId(21)), // the saved active tab
                     split: None,
+                    never_sleep: false,
                 },
             ];
             let containers = vec![
@@ -831,7 +1021,14 @@ mod tests {
             ];
             // Space 1 is shown, so its active tab is the one live tab.
             tabs[4].lifecycle.liveness = Liveness::Active;
-            let expected = Model::from_parts(spaces, containers, tabs, SpaceId(1), now()).unwrap();
+            let expected = Model::from_parts(
+                spaces,
+                containers,
+                tabs,
+                vec![Window::main(WindowId(0), SpaceId(1))],
+                now(),
+            )
+            .unwrap();
             assert_same(&store.load_session(now()).await.unwrap(), &expected);
             // The migrated database also accepts a normal save.
             store.save_session(&expected).await.unwrap();
@@ -861,7 +1058,7 @@ mod tests {
             migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
             // No session row.
             let m = store.load_session(now()).await.unwrap();
-            assert_eq!(m.active_space, SpaceId(3));
+            assert_eq!(m.active_space(), SpaceId(3));
             assert_eq!(m.spaces[0].pinned, vec![TabId(1)]);
             m.check().unwrap();
             // NULL, then a dangling active Space.
@@ -876,7 +1073,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(
-                    store.load_session(now()).await.unwrap().active_space,
+                    store.load_session(now()).await.unwrap().active_space(),
                     SpaceId(3)
                 );
             }
@@ -977,7 +1174,9 @@ mod tests {
             // v6 has no icon column: migration 10 gives each Space its icon by position.
             for (i, s) in m.spaces.iter_mut().enumerate() {
                 s.icon = SpaceIcon::nth(i);
+                s.never_sleep = false; // no such column before v12
             }
+            m.tabs.values_mut().for_each(|t| t.last_active_ms = 0);
             let tx = store.conn.transaction().await.unwrap();
             // the v6 writers, without the split table or the icon
             write_containers(&tx, &m).await.unwrap();
@@ -998,7 +1197,14 @@ mod tests {
                 .unwrap();
             }
             write_folders(&tx, &m).await.unwrap();
+            // v6 has no last_active column: the v12 writer, with the column added for it
+            tx.execute_batch("ALTER TABLE tabs ADD COLUMN last_active INTEGER NOT NULL DEFAULT 0")
+                .await
+                .unwrap();
             write_tabs(&tx, &m).await.unwrap();
+            tx.execute_batch("ALTER TABLE tabs DROP COLUMN last_active")
+                .await
+                .unwrap();
             tx.execute("INSERT INTO session(id, active_space_id) VALUES (1, 1)", ())
                 .await
                 .unwrap();

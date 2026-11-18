@@ -21,8 +21,9 @@
 
 use wubble_core::action::Action;
 use wubble_core::model::Model;
-use wubble_core::space::MAX_PANES;
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
+use wubble_core::window::{Shown, WindowId, WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -83,6 +84,19 @@ pub enum Command {
     Perform(Action),
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
+    /// Show the tab in another window, or a new one.
+    MoveToWindow(TabId, WindowTarget),
+    /// Open the pop-ups the page's tab held back.
+    OpenBlockedPopups,
+    /// Let the site open pop-ups from now on (`Permission::Popups`), and open the held ones.
+    AllowPopups(String),
+    /// The Little window's page becomes a tab of this Space; the window closes.
+    PromoteLittle(WindowId, SpaceId),
+    /// A Space's tabs never sleep (`true`), or may sleep again.
+    SpaceNeverSleep(SpaceId, bool),
+    /// The site joins the never-sleep list, or the listed entry leaves it (it is on the list
+    /// exactly when the entry is already there).
+    ToggleNeverSleepSite(String),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -456,6 +470,158 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
 /// a page chosen beside it; another tab of the Space goes beside the focused page; a pane leaves
 /// its split.
 pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let mut out = split_entries(model, tab);
+    if !out.is_empty() {
+        out.push(Entry {
+            label: String::new(),
+            command: Command::Separator,
+            enabled: false,
+        });
+    }
+    out.extend(window_entries(model, tab));
+    out.push(Entry {
+        label: String::new(),
+        command: Command::Separator,
+        enabled: false,
+    });
+    out.extend(sleep_entries(model, tab));
+    out
+}
+
+/// The tab row's never-sleep switches: its Space, and its site (when it has one). A site that
+/// is on the list only through a parent entry (`example.com` for `docs.example.com`) offers to
+/// take that entry off.
+pub fn sleep_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let entry = |label: String, command| Entry {
+        label,
+        command,
+        enabled: true,
+    };
+    let mut out = vec![];
+    if let Some(space) = model
+        .location(tab)
+        .and_then(|(s, _)| model.spaces.iter().find(|k| k.id == s))
+    {
+        out.push(if space.never_sleep {
+            entry(
+                "Let Tabs in This Space Sleep".into(),
+                Command::SpaceNeverSleep(space.id, false),
+            )
+        } else {
+            entry(
+                "Never Sleep Tabs in This Space".into(),
+                Command::SpaceNeverSleep(space.id, true),
+            )
+        });
+    }
+    if let Some(host) = model
+        .tabs
+        .get(&tab)
+        .and_then(|t| wubble_core::routing::host_key(&t.url))
+        .filter(|_| {
+            // a web page: internal pages have no site to keep awake
+            model
+                .tabs
+                .get(&tab)
+                .is_some_and(|t| !model.is_internal(t.id))
+        })
+    {
+        let listed = model
+            .never_sites()
+            .iter()
+            .find(|s| wubble_core::routing::host_in(&[s.as_str()], &host));
+        out.push(match listed {
+            Some(site) => entry(
+                format!("Let {site} Sleep"),
+                Command::ToggleNeverSleepSite(site.clone()),
+            ),
+            None => entry(
+                format!("Never Sleep {host}"),
+                Command::ToggleNeverSleepSite(host),
+            ),
+        });
+    }
+    out
+}
+
+/// "Move to New Window", then a row per other Main window, named after the Space it shows
+/// (the always-available path where a drag cannot reach another window, Wayland).
+pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let entry = |label: String, to| Entry {
+        label,
+        command: Command::MoveToWindow(tab, to),
+        enabled: true,
+    };
+    let own = model.window_of(tab);
+    let others = model.windows.iter().filter(|w| {
+        w.kind() == WindowKind::Main
+            && Some(w.id) != own
+            && w.space() != model.location(tab).map(|l| l.0)
+    });
+    std::iter::once(entry("Move to New Window".into(), WindowTarget::New))
+        .chain(others.filter_map(|w| {
+            let space = model.spaces.iter().find(|s| Some(s.id) == w.space())?;
+            Some(entry(
+                format!("Move to Window: {}", space.name),
+                WindowTarget::Existing(w.id),
+            ))
+        }))
+        .collect()
+}
+
+/// The page menu's rows of a Little window ("Open as Tab" into the active Space, "Open in
+/// <Space>" for the others) or a Popup window ("Open as Tab" in the Main window); none for a
+/// Main window. A Little or Popup window has no sidebar, so this menu is its way out.
+pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
+    let Some(w) = model.window(window) else {
+        return vec![];
+    };
+    let entry = |label: String, command| Entry {
+        label,
+        command,
+        enabled: true,
+    };
+    let active = model.active_space();
+    match w.shown {
+        Shown::Little(_) => std::iter::once(entry(
+            "Open as Tab".into(),
+            Command::PromoteLittle(window, active),
+        ))
+        .chain(model.spaces.iter().filter(|s| s.id != active).map(|s| {
+            entry(
+                format!("Open in {}", s.name),
+                Command::PromoteLittle(window, s.id),
+            )
+        }))
+        .collect(),
+        Shown::Popup(tab) => vec![entry(
+            "Open as Tab".into(),
+            Command::MoveToWindow(tab, WindowTarget::Existing(model.main_window())),
+        )],
+        Shown::Space(_) => vec![],
+    }
+}
+
+/// The address pill's pop-up menu: open what the page asked for, or allow the site.
+pub fn popup_entries(count: usize, site: Option<&str>) -> Vec<Entry> {
+    let mut out = vec![Entry {
+        label: if count == 1 {
+            "Open the Blocked Pop-up".into()
+        } else {
+            format!("Open {count} Blocked Pop-ups")
+        },
+        command: Command::OpenBlockedPopups,
+        enabled: true,
+    }];
+    out.extend(site.map(|site| Entry {
+        label: format!("Always Allow Pop-ups on {site}"),
+        command: Command::AllowPopups(site.to_owned()),
+        enabled: true,
+    }));
+    out
+}
+
+fn split_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     let entry = |label: &str, command| Entry {
         label: label.into(),
         command,
@@ -464,8 +630,8 @@ pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     if model.split_of(tab).is_some() {
         return vec![entry("Take Out of Split View", Command::Unsplit(tab))];
     }
-    let room = model.visible_tabs().len() < MAX_PANES;
-    let in_space = model.order(model.active_space).contains(&tab);
+    let room = model.pane_room();
+    let in_space = model.order(model.active_space()).contains(&tab);
     if !room || !in_space {
         return vec![];
     }
@@ -542,6 +708,8 @@ pub enum MenuEvent {
         id: RequestId,
         menu: Box<ContextMenu>,
         nav: NavFlags,
+        /// The window's own rows, after the page's (a Little or Popup window's way out).
+        extra: Vec<Entry>,
     },
     /// The shell opens its own menu.
     ShellRequested { at: (i32, i32), entries: Vec<Entry> },
@@ -569,13 +737,29 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
     use MenuEvent::*;
     let dismiss = |id| MenuEffect::Answer { id, command: None };
     match (state, event) {
-        (state, Requested { id, menu, nav }) => {
+        (
+            state,
+            Requested {
+                id,
+                menu,
+                nav,
+                extra,
+            },
+        ) => {
             // CEF holds one menu at a time; a newer one replaces the old.
             let mut effects = match state {
                 Menu::Open { id: old, .. } => vec![dismiss(old)],
                 Menu::Closed | Menu::Shell { .. } => vec![],
             };
-            let entries = entries(&menu, nav);
+            let mut entries = entries(&menu, nav);
+            if !entries.is_empty() && !extra.is_empty() {
+                entries.push(Entry {
+                    label: String::new(),
+                    command: Command::Separator,
+                    enabled: false,
+                });
+            }
+            entries.extend(extra);
             if entries.is_empty() {
                 effects.push(dismiss(id));
                 return (Menu::Closed, effects);
@@ -678,6 +862,7 @@ mod tests {
             id: RequestId(id),
             menu: Box::new(menu),
             nav: NavFlags::default(),
+            extra: vec![],
         }
     }
 
@@ -1049,7 +1234,7 @@ mod tests {
     fn a_tab_row_offers_the_split_entries_that_apply() {
         use wubble_core::model::{Command as Cmd, apply};
         let commands = |m: &Model, t: u64| -> Vec<Command> {
-            tab_entries(m, TabId(t))
+            split_entries(m, TabId(t))
                 .into_iter()
                 .map(|e| e.command)
                 .collect()
@@ -1071,6 +1256,164 @@ mod tests {
         let (m, _) = apply(m, Cmd::Unsplit(TabId(2)));
         let (m, _) = apply(m, Cmd::SplitWith(TabId(2)));
         assert!(commands(&m, 99).is_empty());
+    }
+
+    #[test]
+    fn a_tab_row_offers_the_other_windows() {
+        use wubble_core::model::{Command as Cmd, apply};
+        use wubble_core::window::WindowId;
+        let m = tabs(2);
+        let rows = |m: &Model, t: u64| -> Vec<(String, Command)> {
+            window_entries(m, TabId(t))
+                .into_iter()
+                .map(|e| (e.label, e.command))
+                .collect()
+        };
+        let new = |t| {
+            (
+                "Move to New Window".to_string(),
+                Command::MoveToWindow(TabId(t), WindowTarget::New),
+            )
+        };
+        assert_eq!(rows(&m, 1), [new(1)]);
+        let (m, _) = apply(m, Cmd::NewWindow { space: None });
+        let to_first = (
+            "Move to Window: Space 1".to_string(),
+            Command::MoveToWindow(TabId(1), WindowTarget::Existing(WindowId(0))),
+        );
+        let to_second = (
+            "Move to Window: Space 2".to_string(),
+            Command::MoveToWindow(TabId(1), WindowTarget::Existing(WindowId(1))),
+        );
+        assert_eq!(rows(&m, 1), [new(1), to_second]);
+        let (m, _) = apply(
+            m,
+            Cmd::MoveTabToWindow {
+                tab: TabId(1),
+                to: WindowTarget::Existing(WindowId(1)),
+            },
+        );
+        // the window showing its Space is not offered; the other one is
+        assert_eq!(rows(&m, 1), [new(1), to_first]);
+        // the tab menu's window rows come after a separator, before the sleep rows
+        let all = tab_entries(&m, TabId(1));
+        let at = all.len() - sleep_entries(&m, TabId(1)).len() - 2;
+        assert_eq!(all[at].command, rows(&m, 1)[1].1);
+    }
+
+    #[test]
+    fn the_tab_menu_offers_never_sleep_for_the_space_and_the_site() {
+        use wubble_core::model::{Command as Cmd, apply};
+        let m = tabs(1);
+        let rows = |m: &Model| -> Vec<(String, Command)> {
+            sleep_entries(m, TabId(1))
+                .into_iter()
+                .map(|e| (e.label, e.command))
+                .collect()
+        };
+        let space = m.spaces[0].id;
+        let host = wubble_core::routing::host_key(&m.tabs[&TabId(1)].url).unwrap();
+        assert_eq!(
+            rows(&m),
+            [
+                (
+                    "Never Sleep Tabs in This Space".to_string(),
+                    Command::SpaceNeverSleep(space, true)
+                ),
+                (
+                    format!("Never Sleep {host}"),
+                    Command::ToggleNeverSleepSite(host.clone())
+                ),
+            ]
+        );
+        let (m, _) = apply(m, Cmd::SetSpaceNeverSleep { space, on: true });
+        let (m, _) = apply(m, Cmd::SetNeverSleepSites(vec![host.clone()]));
+        assert_eq!(
+            rows(&m),
+            [
+                (
+                    "Let Tabs in This Space Sleep".to_string(),
+                    Command::SpaceNeverSleep(space, false)
+                ),
+                (
+                    format!("Let {host} Sleep"),
+                    Command::ToggleNeverSleepSite(host.clone())
+                ),
+            ]
+        );
+        // the tab menu carries them last
+        let all = tab_entries(&m, TabId(1));
+        assert_eq!(all.last().map(|e| &e.command), Some(&rows(&m)[1].1));
+    }
+
+    #[test]
+    fn little_and_popup_windows_offer_a_way_out() {
+        use wubble_core::model::{Command as Cmd, apply};
+        use wubble_core::space::{ContainerId, Rgb};
+        let (m, _) = apply(
+            tabs(1),
+            Cmd::NewSpace {
+                name: "Work".into(),
+                tint: Rgb(0, 0, 0),
+                container: ContainerId::DEFAULT,
+            },
+        );
+        assert!(
+            window_page_entries(&m, WindowId(0)).is_empty(),
+            "a Main window"
+        );
+        let (m, _) = apply(
+            m,
+            Cmd::OpenLittle {
+                url: "https://l.test".into(),
+                space: None,
+            },
+        );
+        let little = m.focused();
+        let rows: Vec<(String, Command)> = window_page_entries(&m, little)
+            .into_iter()
+            .map(|e| (e.label, e.command))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "Open as Tab".to_string(),
+                    Command::PromoteLittle(little, m.spaces[0].id)
+                ),
+                (
+                    "Open in Work".to_string(),
+                    Command::PromoteLittle(little, m.spaces[1].id)
+                ),
+            ]
+        );
+        let (m, _) = apply(
+            m,
+            Cmd::OpenPopupWindow {
+                url: "https://p.test".into(),
+                opener: TabId(1),
+                size: None,
+            },
+        );
+        let popup = m.focused();
+        let tab = m.window(popup).unwrap().tab().unwrap();
+        assert_eq!(
+            window_page_entries(&m, popup)[0].command,
+            Command::MoveToWindow(tab, WindowTarget::Existing(WindowId(0)))
+        );
+    }
+
+    #[test]
+    fn the_popup_menu() {
+        let e = popup_entries(2, Some("a.test"));
+        assert_eq!(e[0].label, "Open 2 Blocked Pop-ups");
+        assert_eq!(e[0].command, Command::OpenBlockedPopups);
+        assert_eq!(e[1].command, Command::AllowPopups("a.test".into()));
+        assert_eq!(
+            popup_entries(1, None).len(),
+            1,
+            "an opaque origin is not remembered"
+        );
     }
 
     #[test]

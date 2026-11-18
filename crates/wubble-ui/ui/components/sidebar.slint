@@ -60,6 +60,8 @@ export component Sidebar inherits Rectangle {
     in property <int> address-blocked: 0;
     callback address-bookmark-requested();
     callback address-blocker-requested(length, length);
+    in property <int> address-popups-blocked: 0;
+    callback address-popups-requested(length, length);
     in property <[TabItem]> pinned-tabs;
     in property <[TabItem]> tabs;
     in property <[SpaceItem]> spaces;
@@ -148,11 +150,21 @@ export component Sidebar inherits Rectangle {
     in property <float> capsule-origin: 0.3;
 
     callback tab-press(int, length);
+    // tab id, then TabRow `track`'s kind and pointer in window px
+    callback tab-track(int, int, length, length);
+    // The Space strip's first icon in window px, the step to the next and whether they run
+    // down (rail) instead of across: where a dragged tab can be dropped onto a Space.
+    out property <length> space-strip-x: strip.absolute-position.x;
+    out property <length> space-strip-y: strip.absolute-position.y;
+    out property <length> space-pitch: Shell.space-tile + Shell.space-gap;
+    out property <length> space-tile: Shell.space-tile;
     callback tab-drag(length);
     callback tab-release(int);
     callback tab-closed(int);        // tab id
     callback tab-mute-toggled(int);  // tab id: the speaker glyph
     callback tab-context(int, length, length);  // tab id, pointer in window px: right click
+    // tab id, whether the pointer is on its row, and the row's top in window px (hover preview)
+    callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
     callback window-close-requested();
@@ -256,6 +268,10 @@ export component Sidebar inherits Rectangle {
                 blocker-visible: root.address-blocker-visible;
                 blocker-allowed: root.address-blocker-allowed;
                 blocked: root.address-blocked;
+                popups-blocked: root.address-popups-blocked;
+                popups-requested(x, y) => {
+                    root.address-popups-requested(x, y);
+                }
                 bookmark-requested => {
                     root.address-bookmark-requested();
                 }
@@ -412,6 +428,9 @@ export component Sidebar inherits Rectangle {
                                     press(y) => {
                                         root.tab-press(i, y);
                                     }
+                                    track(kind, x, y) => {
+                                        root.tab-track(tab.id, kind, x, y);
+                                    }
                                     drag(y) => {
                                         root.tab-drag(y);
                                     }
@@ -426,6 +445,9 @@ export component Sidebar inherits Rectangle {
                                     }
                                     context(x, y) => {
                                         root.tab-context(tab.id, x, y);
+                                    }
+                                    hovered(on, y) => {
+                                        root.tab-hovered(tab.id, on, y);
                                     }
                                 }
                             }

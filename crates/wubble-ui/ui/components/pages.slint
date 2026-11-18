@@ -90,17 +90,25 @@ component OpenRow inherits Rectangle {
 
 // ───────────────────────────────────────────────────────────────────────────── history
 
+// The history page, and the archive page (the same list of dated rows, deleted by `key`).
 export component HistoryPage inherits Rectangle {
     in property <bool> open;
+    in property <string> title: "History";
+    in property <string> placeholder: "Search history";
+    in property <string> empty-text: "No history yet";
+    in property <string> empty-search-text: "No visits match";
+    // Offers "Clear browsing data".
+    in property <bool> clearable: true;
     // Day headers and visits, newest first.
     in property <[HistoryLineItem]> lines;
     // A search is running: the empty note says no match.
     in property <bool> searching;
     in property <bool> has-more;
     callback query-changed(string);
-    callback opened(string);
-    callback opened-new-tab(string);
-    callback deleted(string);
+    // (address, the row's key: the visit's or archived tab's id)
+    callback opened(string, int);
+    callback opened-new-tab(string, int);
+    callback deleted(string, int);
     callback more();
     // The range's index in `ranges`.
     callback cleared(int);
@@ -115,8 +123,8 @@ export component HistoryPage inherits Rectangle {
 
     frame := PageFrame {
         open: root.open;
-        title: "History";
-        placeholder: "Search history";
+        title: root.title;
+        placeholder: root.placeholder;
         query-changed(q) => {
             root.query-changed(q);
         }
@@ -124,7 +132,7 @@ export component HistoryPage inherits Rectangle {
         HorizontalLayout {
             padding-top: Spacing.s4;
             alignment: end;
-            TextButton {
+            if root.clearable: TextButton {
                 text: "Clear browsing data";
                 clicked => {
                     root.range = 0;
@@ -133,7 +141,7 @@ export component HistoryPage inherits Rectangle {
             }
         }
         if root.lines.length == 0: EmptyNote {
-                text: root.searching ? "No visits match" : "No history yet";
+                text: root.searching ? root.empty-search-text : root.empty-text;
         }
         for line in root.lines: VerticalLayout {
             padding-top: line.header ? Spacing.s6 : 0px;
@@ -142,10 +150,10 @@ export component HistoryPage inherits Rectangle {
             }
             if !line.header: OpenRow {
                 opened => {
-                    root.opened(line.url);
+                    root.opened(line.url, line.key);
                 }
                 opened-new-tab => {
-                    root.opened-new-tab(line.url);
+                    root.opened-new-tab(line.url, line.key);
                 }
                 HorizontalLayout {
                     padding-left: Spacing.s3;
@@ -161,7 +169,7 @@ export component HistoryPage inherits Rectangle {
                     IconButton {
                         icon-path: IconPaths.trash;
                         clicked => {
-                            root.deleted(line.url);
+                            root.deleted(line.url, line.key);
                         }
                     }
                 }

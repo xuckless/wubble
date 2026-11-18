@@ -187,7 +187,7 @@ impl Host {
     }
 
     fn parity_act(&mut self, action: Action) {
-        let Some(window) = self.window.upgrade() else {
+        let Some(window) = self.w.window.upgrade() else {
             return;
         };
         match action {
@@ -250,7 +250,7 @@ impl Host {
 
     /// Queues pointer events for Slint, with `mods` held as the raw keyboard reports them.
     fn parity_pointer(&self, mods: Mods, events: Vec<SlintEvent>) {
-        let weak = self.window.clone();
+        let weak = self.w.window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(window) = weak.upgrade() else { return };
             with_host(|h| h.input.keys = mods.state());
@@ -267,7 +267,7 @@ impl Host {
     }
 
     fn parity_keys(&self, keys: Vec<KeyInput>) {
-        let weak = self.window.clone();
+        let weak = self.w.window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(window) = weak.upgrade() else { return };
             for key in keys {
@@ -442,7 +442,7 @@ impl Host {
                 });
             }
             HostOp::OnlyFirstTab => {
-                let order = self.model.order(self.model.active_space);
+                let order = self.model.order(self.model.active_space());
                 if let Some(&first) = order.first() {
                     self.dispatch(wubble_core::model::Command::ActivateTab(first));
                     for &tab in &order[1..] {
@@ -482,7 +482,7 @@ impl Host {
     /// The answer to `check` now.
     fn parity_check(&mut self, window: &AppWindow, check: HostCheck) -> Result<(), String> {
         let is = |ok: bool, what: String| if ok { Ok(()) } else { Err(what) };
-        let order = self.model.order(self.model.active_space);
+        let order = self.model.order(self.model.active_space());
         match check {
             // What the compositor offers the window now: the system's clipboard, read
             // the way a paste reads it. (`wl-paste` and `wl-copy` would take keyboard

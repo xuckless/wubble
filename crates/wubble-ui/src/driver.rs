@@ -524,6 +524,15 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
     });
     let (d, w) = hook();
     window.on_tab_release(move |_| run(&d, &w, |s, w| s.tab_up(w)));
+    // the host took a drag that left the list: the row settles back, nothing is reordered
+    let (d, w) = hook();
+    window.on_tab_rows_cancel(move || {
+        run(&d, &w, |s, w| {
+            s.tabs.cancel();
+            s.read_model(w);
+            None
+        })
+    });
 
     // seam: one gesture for resize, rail and hidden
     let (d, w) = hook();
