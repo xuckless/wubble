@@ -1088,19 +1088,22 @@ fn reopening_a_pinned_tab_keeps_its_lifecycle_pinned() {
     assert_eq!(m.tabs[&new].lifecycle.pin, crate::lifecycle::Pin::Unpinned);
 }
 
-
+/// The clock is not stored, so a rebuilt model takes the original's.
 fn rebuild(m: &Model) -> Result<Model, String> {
-    Model::from_parts(
+    let mut rebuilt = Model::from_parts(
         m.spaces.clone(),
         m.containers.clone(),
         m.tabs.values().cloned().collect(),
         m.active_space,
-    )
+    )?;
+    rebuilt.clock = m.clock;
+    Ok(rebuilt)
 }
 
 #[test]
 fn from_parts_of_new_is_new() {
-    assert_eq!(rebuild(&Model::new()), Ok(Model::new()));
+    let m = Model::new();
+    assert_eq!(rebuild(&m), Ok(m));
 }
 
 #[test]
