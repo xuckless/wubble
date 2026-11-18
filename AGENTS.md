@@ -48,13 +48,19 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
 
-macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there):
+macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there; rsync the
+worktree without `target/` and `.git`; clippy needs `rustup component add clippy` once):
 
     cargo build --workspace && cargo run -p wubble-bundle   # writes target/debug/bundle/wubble.app
     target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke boot   # any wubble args; `open` fails over ssh
     cargo build --workspace --examples && cargo run -p wubble-bundle -- --exe target/debug/examples/frame_smoke
     target/debug/bundle/wubble.app/Contents/MacOS/wubble   # windowless zero-copy and colour check; re-bundle without --exe after
     cargo run -p wubble-engine --example frame_smoke   # the same check on Linux
+
+Window smokes need a GUI session: over ssh they hang creating the window, so always
+wrap them in `timeout`. At the Mac console, in a Terminal (after building the bundle):
+
+    for s in boot nav tabs session frames=120 split page block; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s 2>&1 | grep '^smoke'; done; pgrep -fl MacOS/wubble   # frames=120: `smoke: pixels ok` and `smoke: glass ok`; pgrep prints nothing
 
 ## Code principles
 
