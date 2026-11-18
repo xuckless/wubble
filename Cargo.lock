@@ -7453,10 +7453,13 @@ name = "wubble"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "pollster",
  "slint",
+ "tempfile",
  "wubble-core",
  "wubble-engine",
  "wubble-gfx",
+ "wubble-store",
  "wubble-ui",
 ]
 

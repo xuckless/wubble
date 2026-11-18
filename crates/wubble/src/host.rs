@@ -6,34 +6,47 @@
 //! ever become commands. The sidebar is re-derived from the model after each
 //! change (`shell::view_model`). Only the visible tab's view takes frames,
 //! layout and input; the others are hidden (`was_hidden`).
+//!
+//! Persistence runs at the edge: the session is saved through the store
+//! thread (`persist`) when the save policy says so and at shutdown, visits
+//! and titles are recorded as the engine reports them, and closed tabs go
+//! on the store's recently-closed list. Keys become actions through the
+//! keymap, and every action runs through [`Host::perform`].
 
 use std::collections::{BTreeMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
 use slint::winit_030::winit::event::WindowEvent;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
+use wubble_core::action::Action;
+use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
+use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::sleep::Pressure;
-use wubble_core::tab::TabId;
+use wubble_core::tab::{Liveness, TabId};
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, ViewId};
 use wubble_engine::input::Point;
 use wubble_engine::nav::{Cursor, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
 use wubble_gfx::pacing::{self, FrameStats};
-use wubble_ui::AppWindow;
+use wubble_store::{ClosedTab, HistoryHit, Transition};
+use wubble_ui::{AppWindow, CommandBarState, CompactMode};
 
-use crate::bar::{self, BarMode, BarRow};
-use crate::input::{self, InputState, KeyRoute};
+use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
+use crate::input::{self, InputState, KeyFocus, KeyRoute};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
+use crate::perform::{self, Plan, ViewOp};
+use crate::persist::{self, Loaded, SaveState, StoreClient, UiState};
 use crate::pixels;
+use crate::session_smoke::{self, SessionSmoke};
 use crate::tabs_smoke::{self, Seen, TabsSmoke};
 use crate::{
-    NAV_PAGE, SMOKE_MAX_IDLE_RUNS, TAB3_PAGE, Wake, content_layout, deliver, display_refresh_mhz,
-    page_url, physical, quit, slint_int,
+    NAV_PAGE, SMOKE_MAX_IDLE_RUNS, SMOKE_PAGE, TAB3_PAGE, Wake, content_layout, deliver,
+    display_refresh_mhz, page_url, physical, quit, slint_int, with_host,
 };
 
 /// How far ahead `--smoke tabs` ticks the lifecycle: past the discard delay.
@@ -107,7 +120,13 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
 /// What the command bar was opened for and what it lists.
 struct Bar {
     mode: BarMode,
+    query: String,
     rows: Vec<BarRow>,
+    /// The store's latest history hits; ranked against each new query until
+    /// that query's own hits arrive.
+    history: Vec<HistoryEntry>,
+    /// Bumped per query; a history reply for an older one is dropped.
+    generation: u64,
 }
 
 /// What a windowed run is for, as far as the host cares.
@@ -119,6 +138,7 @@ pub struct Checks {
     pub check_pixels: bool,
     pub nav_smoke: Option<NavSmoke>,
     pub tabs_smoke: Option<TabsSmoke>,
+    pub session_smoke: Option<SessionSmoke>,
 }
 
 /// Everything the pump drives. Owned by `HOST` in `main.rs`.
@@ -147,32 +167,59 @@ pub struct Host {
     checks: Checks,
     pub nav_title: Option<String>,
     pub tabs_passed: bool,
+    pub session_passed: bool,
     input: InputState,
+    keymap: Keymap,
+    store: StoreClient,
+    /// Session changes not yet saved.
+    save: SaveState,
+    /// `None` until the first-run choice.
+    search_engine: Option<SearchEngine>,
+    live_suggestions: bool,
+    /// The tab whose next committed URL was typed or picked in the bar.
+    typed_nav: Option<TabId>,
+    /// Each tab's last committed URL: a commit that only changes the
+    /// fragment, or repeats it (a restored tab), is no new visit.
+    committed: BTreeMap<TabId, String>,
     /// Why the loop was quit early, if it was.
     pub failure: Option<String>,
 }
 
 impl Host {
-    /// A host with one tab on `url`; its view opens once the window exists.
+    /// A host on the loaded session. Only the visible tab gets a view (once
+    /// the window exists); the other restored tabs stay Discarded until
+    /// activated, through the `Life::Restore` mapping. `open` is loaded in a
+    /// new tab.
     pub fn new(
         engine: Engine,
         window: &AppWindow,
         presenter: FramePresenter,
-        url: String,
+        loaded: Loaded,
+        store: StoreClient,
+        open: Option<String>,
         checks: Checks,
     ) -> Self {
+        let Loaded { model, settings } = loaded;
+        let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
+        let restore = model.visible_tab().map(|tab| Effect::Lifecycle {
+            tab,
+            effect: Life::Restore,
+        });
         let mut host = Self {
             engine,
             window: window.as_weak(),
             timer: slint::Timer::default(),
             presenter,
-            model: Model::new(),
+            model,
             views: BTreeMap::new(),
-            pending: VecDeque::new(),
+            pending: restore.into_iter().collect(),
             frame_rate: None,
             bar: Bar {
                 mode: BarMode::NewTab,
+                query: String::new(),
                 rows: vec![],
+                history: vec![],
+                generation: 0,
             },
             focus_view: None,
             presented: None,
@@ -182,15 +229,32 @@ impl Host {
             checks,
             nav_title: None,
             tabs_passed: false,
+            session_passed: false,
             input: InputState::default(),
+            keymap: input::keymap(Platform::current(), &settings.keybinding_overrides),
+            store,
+            save: SaveState::default(),
+            search_engine: settings.engine,
+            live_suggestions: settings.live_suggestions,
+            typed_nav: None,
+            committed,
             failure: None,
         };
-        host.dispatch(new_tab(url, None));
+        match open {
+            Some(url) => host.dispatch(new_tab(url, None)),
+            None => host.after_change(),
+        }
         host
     }
 
     /// The only way tabs change: apply, then execute the effects.
     pub fn dispatch(&mut self, command: Command) {
+        if persist::changes_session(&command) {
+            self.save = self.save.changed();
+        }
+        if let Command::CloseTab(tab) = command {
+            self.remember_closed(tab);
+        }
         let mut queue = VecDeque::from([command]);
         while let Some(command) = queue.pop_front() {
             let (model, effects) = model::apply(std::mem::take(&mut self.model), command);
@@ -199,6 +263,9 @@ impl Host {
             queue.extend(self.flush());
         }
         self.after_change();
+        if persist::should_save(self.save) {
+            self.save_now();
+        }
     }
 
     /// Executes queued effects once views can be opened. Returns commands
@@ -329,6 +396,7 @@ impl Host {
         self.close_tabs_of_gone_views();
         self.smoke_step(SmokeInput::Worked);
         self.tabs_smoke_step();
+        self.session_smoke_step();
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
@@ -452,8 +520,18 @@ impl Host {
                     });
                 }
             }
-            WebEvent::UrlChanged(url) => self.dispatch(Command::UrlChanged { tab, url }),
-            WebEvent::TitleChanged(title) => self.dispatch(Command::TitleChanged { tab, title }),
+            WebEvent::UrlChanged(url) => {
+                self.record_visit(tab, &url);
+                self.dispatch(Command::UrlChanged { tab, url });
+            }
+            WebEvent::TitleChanged(title) => {
+                if let Some(url) = self.committed.get(&tab)
+                    && wubble_store::is_recordable(url)
+                {
+                    self.store.update_title(url, &title);
+                }
+                self.dispatch(Command::TitleChanged { tab, title });
+            }
             WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
             WebEvent::LoadingChanged { loading, .. } => {
                 self.dispatch(Command::LoadingChanged { tab, loading });
@@ -489,8 +567,46 @@ impl Host {
         self.bar_query(window, &query);
     }
 
+    /// Renders the rows for `query` at once from what is at hand, and asks
+    /// the store for its history hits, which re-render when they arrive.
     pub fn bar_query(&mut self, window: &AppWindow, query: &str) {
-        self.bar.rows = bar::bar_rows(&self.model, query, self.bar.mode);
+        self.bar.query = query.into();
+        self.bar.generation += 1;
+        self.render_bar(window);
+        if query.trim().is_empty() {
+            return;
+        }
+        let generation = self.bar.generation;
+        self.store
+            .query_history(query, now_ms(), bar::HISTORY_HITS, move |hits| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.history_arrived(generation, hits));
+                });
+            });
+    }
+
+    fn history_arrived(&mut self, generation: u64, hits: Vec<HistoryHit>) {
+        if generation != self.bar.generation {
+            return;
+        }
+        self.bar.history = hits.into_iter().map(bar::history_entry).collect();
+        if let Some(window) = self.window.upgrade() {
+            self.render_bar(&window);
+        }
+    }
+
+    fn render_bar(&mut self, window: &AppWindow) {
+        let tabs = bar::open_tabs(&self.model);
+        let suggestions = bar::live_suggestions(self.live_suggestions, &self.bar.query);
+        let inputs = BarInputs {
+            tabs: &tabs,
+            history: &self.bar.history,
+            engine: self.search_engine,
+            keymap: &self.keymap,
+            suggestions: &suggestions,
+            now_ms: now_ms(),
+        };
+        self.bar.rows = bar::bar_rows(&inputs, &self.bar.query);
         crate::bind::render_bar(window, &self.bar.rows);
     }
 
@@ -499,24 +615,160 @@ impl Host {
             .ok()
             .and_then(|i| self.bar.rows.get(i));
         if let Some(row) = row {
-            let command = bar::action_command(row.action.clone());
-            self.dispatch(command);
+            let target = row.target.clone();
+            self.choose(&target);
         }
     }
 
-    /// Ctrl+W.
-    pub fn close_visible_tab(&mut self) {
-        if let Some(tab) = self.model.visible_tab() {
-            self.dispatch(Command::CloseTab(tab));
+    fn choose(&mut self, target: &RowTarget) {
+        match bar::target_command(target, self.bar.mode, self.search_engine) {
+            Some(Choice::Model(command)) => {
+                self.dispatch(command);
+                if bar::is_typed(target) {
+                    self.typed_nav = self.model.visible_tab();
+                }
+            }
+            Some(Choice::Perform(action)) => self.perform(action),
+            Some(Choice::SetEngine(engine)) => {
+                self.search_engine = Some(engine);
+                self.store.set_engine(engine);
+                // The text that offered the choice is searched with it.
+                if let omnibox::Intent::Search(q) = omnibox::classify(&self.bar.query)
+                    && !q.is_empty()
+                {
+                    self.choose(&RowTarget::Omni(Target::Search(q)));
+                }
+            }
+            None => {}
         }
     }
 
-    /// The coarse lifecycle tick.
+    // ----- actions
+
+    /// The one place an [`Action`] runs, from a key or the command bar.
+    pub fn perform(&mut self, action: Action) {
+        match perform::plan(action, &self.model) {
+            Plan::Model(command) => self.dispatch(command),
+            Plan::View(op) => {
+                if let Some(view) = self.view() {
+                    match op {
+                        ViewOp::Reload => view.reload(),
+                        ViewOp::Stop => view.stop(),
+                        ViewOp::Back => view.back(),
+                        ViewOp::Forward => view.forward(),
+                    }
+                }
+            }
+            // Later, outside the host: opening the bar calls back into it.
+            Plan::FocusAddress => {
+                let _ = self
+                    .window
+                    .upgrade_in_event_loop(|window| window.invoke_request_address_focus());
+            }
+            Plan::ReopenClosed => self.store.pop_closed(|closed| {
+                if let Some(closed) = closed {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.reopen(closed));
+                    });
+                }
+            }),
+            Plan::ToggleSidebar => {
+                if let Some(window) = self.window.upgrade() {
+                    window.invoke_toggle_compact();
+                }
+            }
+            Plan::Quit => quit(),
+            Plan::Nothing => {}
+            Plan::NotYet => eprintln!(
+                "wubble: {} is not available yet: {}",
+                action.id(),
+                perform::not_yet(action).unwrap_or_default()
+            ),
+        }
+    }
+
+    /// A tab off the recently-closed list, in the active Space (its own may
+    /// be gone), in its container if that still exists.
+    fn reopen(&mut self, closed: ClosedTab) {
+        let container = self
+            .model
+            .containers
+            .iter()
+            .any(|c| c.id == closed.container)
+            .then_some(closed.container);
+        self.dispatch(Command::NewTab {
+            url: closed.url,
+            container,
+            opener: None,
+        });
+    }
+
+    // ----- persistence
+
+    /// Called before a tab closes: it goes on the recently-closed list.
+    fn remember_closed(&mut self, tab: TabId) {
+        self.committed.remove(&tab);
+        if self.typed_nav == Some(tab) {
+            self.typed_nav = None;
+        }
+        let Some(t) = self.model.tabs.get(&tab) else {
+            return;
+        };
+        if t.url.is_empty() {
+            return;
+        }
+        self.store.push_closed(ClosedTab {
+            url: t.url.clone(),
+            title: t.title.clone(),
+            container: t.container,
+            space: self.model.location(tab).map(|(space, _)| space),
+            closed_at_ms: now_ms(),
+        });
+    }
+
+    /// The engine committed `url` in `tab`: a history visit unless it only
+    /// moved within the page. Typed if the bar started it. The title follows
+    /// with `TitleChanged`.
+    fn record_visit(&mut self, tab: TabId, url: &str) {
+        let previous = self.committed.insert(tab, url.to_string());
+        let typed = self.typed_nav == Some(tab);
+        if typed {
+            self.typed_nav = None;
+        }
+        if persist::visit_to_record(previous.as_deref(), url) {
+            let transition = if typed {
+                Transition::Typed
+            } else {
+                Transition::Link
+            };
+            self.store.record_visit(url, "", now_ms(), transition);
+        }
+    }
+
+    fn save_now(&mut self) {
+        if let Some(window) = self.window.upgrade() {
+            self.store.save(&self.model, ui_state(&window));
+            self.save = SaveState::default();
+        }
+    }
+
+    /// Orderly shutdown: the final save, then the store thread finishes and
+    /// closes the database. `ui` was read before the window went away.
+    pub fn shutdown(&mut self, ui: UiState) {
+        self.store.save(&self.model, ui);
+        std::mem::replace(&mut self.store, StoreClient::none()).shutdown();
+    }
+
+    /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
         self.dispatch(Command::Tick {
             now,
             pressure: Pressure::None,
         });
+        self.save = self.save.ticked();
+        if persist::should_save(self.save) {
+            self.save_now();
+        }
     }
 
     // ----- smokes
@@ -606,6 +858,44 @@ impl Host {
         }
     }
 
+    fn session_smoke_step(&mut self) {
+        let Some(state) = self.checks.session_smoke.take() else {
+            return;
+        };
+        let want = [page_url(SMOKE_PAGE), page_url(NAV_PAGE)];
+        let order = self.model.order(self.model.active_space);
+        let tabs: Vec<_> = order
+            .iter()
+            .filter_map(|t| self.model.tabs.get(t))
+            .collect();
+        let seen = session_smoke::Seen {
+            ready: self.frame_rate.is_some(),
+            urls: tabs.iter().map(|t| t.url.clone()).collect(),
+            views: self.engine.view_count(),
+            discarded: tabs
+                .iter()
+                .map(|t| t.lifecycle.liveness == Liveness::Discarded)
+                .collect(),
+            visible: order
+                .iter()
+                .position(|&t| Some(t) == self.model.visible_tab()),
+        };
+        let (state, action) = session_smoke::next(state, &seen, &want);
+        self.checks.session_smoke = Some(state);
+        match action {
+            Some(session_smoke::Action::OpenSecond) => {
+                let [_, second] = want;
+                self.dispatch(new_tab(second, None));
+            }
+            Some(session_smoke::Action::Pass) => {
+                self.session_passed = true;
+                quit();
+            }
+            Some(session_smoke::Action::Fail(reason)) => self.fail(reason),
+            None => {}
+        }
+    }
+
     // ----- input
 
     /// Tells the visible view about keyboard focus: it has it while the
@@ -658,18 +948,34 @@ impl Host {
                 ..
             } => {
                 let key = self.input.key_input(event);
-                let route = input::route(
-                    window.get_web_focused(),
-                    &key.unmodified,
-                    key.modifiers.keys,
-                );
-                if route != KeyRoute::Shell
-                    && let Some(view) = self.view()
+                let focus = if window.get_web_focused() {
+                    KeyFocus::Page
+                } else if window.get_command_bar_state() != CommandBarState::Closed {
+                    KeyFocus::Field
+                } else {
+                    KeyFocus::Shell
+                };
+                // Actions run on the press; releases follow the focus.
+                let binding = key
+                    .pressed
+                    .then(|| input::chord_of(&key.unmodified, key.modifiers.keys))
+                    .flatten()
+                    .and_then(|chord| self.keymap.action_for(chord));
+                let route = input::key_route(focus, binding, input::is_modifier(&key.unmodified));
+                if matches!(
+                    route,
+                    KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageAndPerform(_)
+                ) && let Some(view) = self.view()
                 {
                     view.key(&key);
                 }
-                if route == KeyRoute::Page {
-                    return EventResult::PreventDefault;
+                match route {
+                    KeyRoute::Perform(action) | KeyRoute::PageAndPerform(action) => {
+                        self.perform(action);
+                        return EventResult::PreventDefault;
+                    }
+                    KeyRoute::Page => return EventResult::PreventDefault,
+                    KeyRoute::PageAndShell | KeyRoute::Shell => {}
                 }
             }
             _ => {}
@@ -729,6 +1035,22 @@ impl Host {
         }
         quit();
     }
+}
+
+/// What of the shell's state is saved with the session. Peeking is the
+/// hidden sidebar shown for a moment, so it saves as compact.
+pub fn ui_state(window: &AppWindow) -> UiState {
+    UiState {
+        sidebar_width: window.get_sidebar_width(),
+        compact: window.get_compact_mode() != CompactMode::Expanded,
+    }
+}
+
+/// Wall-clock time for history and the recently-closed list.
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Snapshots the window and checks that the content rectangle shows the page.

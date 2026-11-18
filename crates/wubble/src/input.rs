@@ -16,19 +16,20 @@ use slint::winit_030::winit::event::KeyEvent;
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 use slint::winit_030::winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
+use wubble_core::action::Action;
+use wubble_core::keys::{self, Chord, Key as ChordKey, Keymap, Override, Platform, Route};
 use wubble_engine::input::{Buttons, KeyInput, Modifiers, MouseButton};
 
-/// The modifier the shell's own shortcuts use (Slint maps `Control` in
-/// `@keys` to Cmd on Apple).
-const PRIMARY: ModifiersState = if cfg!(target_os = "macos") {
-    ModifiersState::SUPER
-} else {
-    ModifiersState::CONTROL
-};
-
-/// Shortcuts the shell keeps even while the page has focus (`PRIMARY` +
-/// key): new tab, address, close tab. Matches the `KeyBinding`s in `app.slint`.
-const RESERVED_CHORDS: &[&str] = &["t", "l", "w"];
+/// Where keyboard focus is, as far as routing a key cares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyFocus {
+    /// The web content.
+    Page,
+    /// A shell text field (the open command bar): it owns editing keys.
+    Field,
+    /// The shell, with nothing that takes text.
+    Shell,
+}
 
 /// What to do with a key event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,13 +39,18 @@ pub enum KeyRoute {
     /// To the page, and on to Slint (modifier keys, so Slint's own
     /// tracking stays right).
     PageAndShell,
+    /// To Slint only.
     Shell,
+    /// Run the action; nobody else sees the key.
+    Perform(Action),
+    /// To the page, and run the action (see `key_route`).
+    PageAndPerform(Action),
 }
 
-/// `unmodified` is the key without modifiers, `mods` those held.
-pub fn route(page_focused: bool, unmodified: &Key, mods: ModifiersState) -> KeyRoute {
-    let modifier_key = matches!(
-        unmodified,
+/// Whether `key` is a modifier on its own.
+pub fn is_modifier(key: &Key) -> bool {
+    matches!(
+        key,
         Key::Named(
             NamedKey::Shift
                 | NamedKey::Control
@@ -54,15 +60,127 @@ pub fn route(page_focused: bool, unmodified: &Key, mods: ModifiersState) -> KeyR
                 | NamedKey::Meta
                 | NamedKey::Hyper
         )
-    );
-    let reserved = mods == PRIMARY
-        && matches!(unmodified, Key::Character(c)
-            if RESERVED_CHORDS.iter().any(|chord| c.eq_ignore_ascii_case(chord)));
-    match (page_focused, modifier_key, reserved) {
-        (false, _, _) | (true, _, true) => KeyRoute::Shell,
-        (true, true, false) => KeyRoute::PageAndShell,
-        (true, false, false) => KeyRoute::Page,
+    )
+}
+
+/// Where a key press goes. `binding` is what the keymap binds its chord to.
+///
+/// - `Route::Shell` bindings always run and never reach the page or Slint.
+/// - `Route::PageFirst` means "the page first, the action if the page does
+///   not handle it". The engine does not report whether the page handled a
+///   key yet (CEF `OnKeyEvent`), so with the page focused the key goes to the
+///   page *and* the action runs, which is what happens for every page that
+///   does not claim the key. In a shell text field the field keeps it
+///   (Escape closes the bar, it does not stop the page); with nothing
+///   focused the action runs.
+/// - Unbound keys go where the focus is; modifier keys also reach Slint.
+pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bool) -> KeyRoute {
+    match (focus, binding, modifier) {
+        (KeyFocus::Page, _, true) => KeyRoute::PageAndShell,
+        (_, _, true) => KeyRoute::Shell,
+        (_, Some((action, Route::Shell)), false) => KeyRoute::Perform(action),
+        (KeyFocus::Page, Some((action, Route::PageFirst)), false) => {
+            KeyRoute::PageAndPerform(action)
+        }
+        (KeyFocus::Field, Some((_, Route::PageFirst)), false) => KeyRoute::Shell,
+        (KeyFocus::Shell, Some((action, Route::PageFirst)), false) => KeyRoute::Perform(action),
+        (KeyFocus::Page, None, false) => KeyRoute::Page,
+        (KeyFocus::Field | KeyFocus::Shell, None, false) => KeyRoute::Shell,
     }
+}
+
+/// The keymap's chord for a key (without modifiers applied) and the held
+/// modifiers. Super is `cmd`: on macOS that is Cmd, elsewhere the keymap
+/// binds nothing to it. Keys the keymap cannot name are `None`.
+pub fn chord_of(unmodified: &Key, mods: ModifiersState) -> Option<Chord> {
+    let key = match unmodified {
+        Key::Character(text) => {
+            let mut chars = text.chars();
+            match (chars.next(), chars.next()) {
+                (Some(' '), None) => ChordKey::Space,
+                (Some(c), None) => ChordKey::Char(c),
+                _ => return None,
+            }
+        }
+        Key::Named(named) => match named {
+            NamedKey::Tab => ChordKey::Tab,
+            NamedKey::Enter => ChordKey::Enter,
+            NamedKey::Escape => ChordKey::Escape,
+            NamedKey::Space => ChordKey::Space,
+            NamedKey::Backspace => ChordKey::Backspace,
+            NamedKey::Delete => ChordKey::Delete,
+            NamedKey::ArrowLeft => ChordKey::Left,
+            NamedKey::ArrowRight => ChordKey::Right,
+            NamedKey::ArrowUp => ChordKey::Up,
+            NamedKey::ArrowDown => ChordKey::Down,
+            NamedKey::Home => ChordKey::Home,
+            NamedKey::End => ChordKey::End,
+            NamedKey::PageUp => ChordKey::PageUp,
+            NamedKey::PageDown => ChordKey::PageDown,
+            other => ChordKey::F(function_key(*other)?),
+        },
+        _ => return None,
+    };
+    Some(
+        Chord {
+            ctrl: mods.control_key(),
+            alt: mods.alt_key(),
+            shift: mods.shift_key(),
+            cmd: mods.super_key(),
+            key,
+        }
+        .normalize(),
+    )
+}
+
+/// F1 to F24.
+fn function_key(key: NamedKey) -> Option<u8> {
+    const KEYS: [NamedKey; 24] = [
+        NamedKey::F1,
+        NamedKey::F2,
+        NamedKey::F3,
+        NamedKey::F4,
+        NamedKey::F5,
+        NamedKey::F6,
+        NamedKey::F7,
+        NamedKey::F8,
+        NamedKey::F9,
+        NamedKey::F10,
+        NamedKey::F11,
+        NamedKey::F12,
+        NamedKey::F13,
+        NamedKey::F14,
+        NamedKey::F15,
+        NamedKey::F16,
+        NamedKey::F17,
+        NamedKey::F18,
+        NamedKey::F19,
+        NamedKey::F20,
+        NamedKey::F21,
+        NamedKey::F22,
+        NamedKey::F23,
+        NamedKey::F24,
+    ];
+    let i = KEYS.iter().position(|&k| k == key)?;
+    u8::try_from(i + 1).ok()
+}
+
+/// The platform's default keymap with the stored overrides applied. Each
+/// stored entry is a `keys::overrides_to_json` list; one that does not parse
+/// is skipped with a log line, so a bad setting never blocks startup.
+pub fn keymap(platform: Platform, stored: &[String]) -> Keymap {
+    let overrides: Vec<Override> = stored
+        .iter()
+        .filter_map(|entry| match keys::overrides_from_json(entry) {
+            Ok(list) => Some(list),
+            Err(e) => {
+                eprintln!("wubble: ignoring a keybinding override that does not parse: {e}");
+                None
+            }
+        })
+        .flatten()
+        .collect();
+    Keymap::defaults(platform).with_overrides(&overrides)
 }
 
 /// The CEF buttons; Back/Forward and others are not sent to the page.
@@ -163,15 +281,117 @@ mod tests {
         Key::Character(c.into())
     }
 
+    fn ctrl() -> ModifiersState {
+        ModifiersState::CONTROL
+    }
+
+    fn chord(s: &str) -> Option<Chord> {
+        Some(Chord::parse(s).unwrap())
+    }
+
     #[test]
-    fn keys_go_to_the_page_only_while_it_has_focus() {
-        let none = ModifiersState::empty();
-        assert_eq!(route(false, &ch("a"), none), KeyRoute::Shell);
-        assert_eq!(route(true, &ch("a"), none), KeyRoute::Page);
+    fn chords_from_winit_keys() {
+        let cases = [
+            (ch("t"), ctrl(), chord("Ctrl+T")),
+            (
+                ch("T"),
+                ctrl() | ModifiersState::SHIFT,
+                chord("Ctrl+Shift+T"),
+            ),
+            (ch("1"), ModifiersState::ALT, chord("Alt+1")),
+            (ch("="), ctrl(), chord("Ctrl+=")),
+            (ch(" "), ModifiersState::empty(), chord("Space")),
+            (ch("q"), ModifiersState::SUPER, chord("Cmd+Q")),
+            (
+                Key::Named(NamedKey::F5),
+                ModifiersState::empty(),
+                chord("F5"),
+            ),
+            (
+                Key::Named(NamedKey::F12),
+                ModifiersState::SHIFT,
+                chord("Shift+F12"),
+            ),
+            (Key::Named(NamedKey::Tab), ctrl(), chord("Ctrl+Tab")),
+            (
+                Key::Named(NamedKey::PageDown),
+                ctrl(),
+                chord("Ctrl+PageDown"),
+            ),
+            (
+                Key::Named(NamedKey::ArrowLeft),
+                ModifiersState::ALT,
+                chord("Alt+Left"),
+            ),
+            (
+                Key::Named(NamedKey::Escape),
+                ModifiersState::empty(),
+                chord("Escape"),
+            ),
+            (Key::Named(NamedKey::CapsLock), ctrl(), None),
+            (ch("ab"), ctrl(), None),
+        ];
+        for (key, mods, want) in cases {
+            assert_eq!(chord_of(&key, mods), want, "{key:?} {mods:?}");
+        }
+    }
+
+    #[test]
+    fn default_chords_reach_their_actions() {
+        let map = keymap(Platform::Linux, &[]);
+        let action = |key: Key, mods| chord_of(&key, mods).and_then(|c| map.action_for(c));
         assert_eq!(
-            route(true, &Key::Named(NamedKey::Escape), none),
-            KeyRoute::Page
+            action(ch("t"), ctrl()),
+            Some((Action::NewTab, Route::Shell))
         );
+        assert_eq!(
+            action(ch("l"), ctrl()),
+            Some((Action::FocusAddress, Route::PageFirst))
+        );
+        assert_eq!(action(ch("a"), ModifiersState::empty()), None);
+    }
+
+    #[test]
+    fn stored_overrides_apply_and_bad_ones_are_skipped() {
+        let stored = vec![
+            r#"[["Ctrl+B","new-tab"],["Ctrl+T",null]]"#.to_string(),
+            "not json".to_string(),
+        ];
+        let map = keymap(Platform::Linux, &stored);
+        assert_eq!(
+            map.action_for(Chord::parse("Ctrl+B").unwrap()),
+            Some((Action::NewTab, Route::Shell))
+        );
+        assert_eq!(map.action_for(Chord::parse("Ctrl+T").unwrap()), None);
+    }
+
+    #[test]
+    fn key_routes() {
+        use KeyFocus::{Field, Page, Shell};
+        let shell = Some((Action::NewTab, Route::Shell));
+        let page_first = Some((Action::Reload, Route::PageFirst));
+        let cases = [
+            // Shell-reserved chords run whatever has focus.
+            (Page, shell, KeyRoute::Perform(Action::NewTab)),
+            (Field, shell, KeyRoute::Perform(Action::NewTab)),
+            (Shell, shell, KeyRoute::Perform(Action::NewTab)),
+            // Page-first chords: the page and the action, the field alone,
+            // or the action alone.
+            (Page, page_first, KeyRoute::PageAndPerform(Action::Reload)),
+            (Field, page_first, KeyRoute::Shell),
+            (Shell, page_first, KeyRoute::Perform(Action::Reload)),
+            // Unbound keys go where the focus is.
+            (Page, None, KeyRoute::Page),
+            (Field, None, KeyRoute::Shell),
+            (Shell, None, KeyRoute::Shell),
+        ];
+        for (focus, binding, want) in cases {
+            assert_eq!(
+                key_route(focus, binding, false),
+                want,
+                "{focus:?} {binding:?}"
+            );
+        }
     }
 
     #[test]
@@ -182,33 +402,18 @@ mod tests {
             NamedKey::Alt,
             NamedKey::Super,
         ] {
+            let key = Key::Named(named);
+            assert!(is_modifier(&key), "{named:?}");
             assert_eq!(
-                route(true, &Key::Named(named), ModifiersState::empty()),
-                KeyRoute::PageAndShell,
-                "{named:?}"
+                key_route(KeyFocus::Page, None, is_modifier(&key)),
+                KeyRoute::PageAndShell
             );
             assert_eq!(
-                route(false, &Key::Named(named), ModifiersState::empty()),
+                key_route(KeyFocus::Shell, None, is_modifier(&key)),
                 KeyRoute::Shell
             );
         }
-    }
-
-    #[test]
-    fn reserved_chords_stay_with_the_shell() {
-        for key in ["t", "l", "w", "T", "W"] {
-            assert_eq!(route(true, &ch(key), PRIMARY), KeyRoute::Shell, "{key}");
-        }
-        // Other chords, and the reserved keys with other modifiers, go to the page.
-        assert_eq!(route(true, &ch("c"), PRIMARY), KeyRoute::Page);
-        assert_eq!(
-            route(true, &ch("t"), PRIMARY | ModifiersState::SHIFT),
-            KeyRoute::Page
-        );
-        assert_eq!(
-            route(true, &ch("t"), ModifiersState::empty()),
-            KeyRoute::Page
-        );
+        assert!(!is_modifier(&ch("a")));
     }
 
     #[test]

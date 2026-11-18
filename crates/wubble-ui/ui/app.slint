@@ -87,8 +87,6 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
-    // Ctrl+W: close the visible tab.
-    callback close-tab-requested();
 
     public function request-new-tab() {
         bar.dispatch(CommandBarEvent.open);
@@ -125,26 +123,9 @@ export component AppWindow inherits Window {
         MouseCursor.nwse-resize,
     ];
 
+    // Shortcuts are routed in Rust (wubble `input::key_route`, the
+    // `wubble_core::keys` table), not here.
     root-keys := FocusScope {
-        KeyBinding {
-            keys: @keys(Control + T);
-            activated => {
-                root.request-new-tab();
-            }
-        }
-        KeyBinding {
-            keys: @keys(Control + L);
-            activated => {
-                root.request-address-focus();
-            }
-        }
-        KeyBinding {
-            keys: @keys(Control + W);
-            activated => {
-                root.close-tab-requested();
-            }
-        }
-
         content := Rectangle {
             x: Spacing.s2 + root.content-inset * (root.sidebar-width + Spacing.s2);
             y: Spacing.s2;
