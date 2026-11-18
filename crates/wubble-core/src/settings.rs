@@ -88,7 +88,7 @@ pub const LIVE_SUGGESTIONS: SettingDef = SettingDef {
     key: "suggest.live",
     kind: SettingKind::Bool,
     default: "0",
-    label: "Search suggestions from the search engine",
+    label: "Search suggestions from the search engine (sends what you type, never addresses)",
     section: Section::Privacy,
     restart: false,
 };
