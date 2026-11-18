@@ -163,6 +163,17 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
         ),
         (_, Event::BusyChanged(activity)) => (Lifecycle { activity, ..s }, vec![]),
         (_, Event::PinnedChanged(pin)) => (Lifecycle { pin, ..s }, vec![]),
+        // Turned on for a frozen tab: it wakes at once, like a tab that became busy. A
+        // discarded tab stays discarded until shown: a reload in the background would not
+        // bring back what it was doing (playback, a call), only spend memory.
+        (Frozen, Event::NeverSleepChanged(true)) => (
+            Lifecycle {
+                liveness: Background,
+                never_sleep: true,
+                ..s
+            },
+            vec![Unfreeze],
+        ),
         (_, Event::NeverSleepChanged(never_sleep)) => (Lifecycle { never_sleep, ..s }, vec![]),
 
         (Active, Event::RendererGone) => (s, vec![Restore]),
@@ -447,6 +458,20 @@ mod tests {
         let (s, fx) = run(idle(Frozen), Event::BusyChanged(Activity::Busy));
         assert_eq!((s.liveness, fx), (Background, vec![Unfreeze]));
         assert_eq!(run(s, tick(3600, Pressure::Critical)), (s, vec![]));
+    }
+
+    #[test]
+    fn never_sleep_wakes_a_frozen_tab_but_not_a_discarded_one() {
+        let (s, fx) = run(idle(Frozen), Event::NeverSleepChanged(true));
+        assert_eq!(
+            (s.liveness, s.never_sleep, fx),
+            (Background, true, vec![Unfreeze])
+        );
+        assert_eq!(run(s, tick(3600, Pressure::Critical)), (s, vec![]));
+        let (s, fx) = run(idle(Discarded), Event::NeverSleepChanged(true));
+        assert_eq!((s.liveness, s.never_sleep, fx), (Discarded, true, vec![]));
+        let (s, fx) = run(s, Event::Shown);
+        assert_eq!((s.liveness, fx), (Active, vec![Restore, Show]));
     }
 
     #[test]

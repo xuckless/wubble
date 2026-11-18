@@ -14,6 +14,8 @@ pub struct Runner {
     state: RunState,
     idle: slint::Timer,
     last_pointer: Option<Instant>,
+    /// The state changed since the last [`Runner::take_changed`].
+    changed: bool,
 }
 
 impl Default for Runner {
@@ -22,6 +24,7 @@ impl Default for Runner {
             state: RunState::Running,
             idle: slint::Timer::default(),
             last_pointer: None,
+            changed: false,
         }
     }
 }
@@ -78,11 +81,23 @@ impl Runner {
         self.on(needs.event(), window);
     }
 
+    /// Whether the state changed since the last call: the first frame after a change follows a
+    /// gap (an idle tick, a pause), so its interval says nothing about lateness.
+    pub fn take_changed(&mut self) -> bool {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Takes one event: the new state, and the effect to execute.
+    fn step(&mut self, event: RunEvent) -> RunEffect {
+        let (next, effect) = run::transition(self.state, event);
+        self.changed |= next != self.state;
+        self.state = next;
+        effect
+    }
+
     /// Runs one event and executes its effect.
     pub fn on(&mut self, event: RunEvent, window: &AppWindow) {
-        let (next, effect) = run::transition(self.state, event);
-        self.state = next;
-        match effect {
+        match self.step(event) {
             RunEffect::None => {}
             RunEffect::RequestFrame => window.window().request_redraw(),
             RunEffect::StartIdleTimer => {
@@ -106,6 +121,22 @@ impl Runner {
 mod tests {
     use super::*;
     use slint::winit_030::winit::dpi::PhysicalSize;
+
+    #[test]
+    fn a_state_change_is_reported_once() {
+        let mut r = Runner::default();
+        r.step(RunEvent::Moving);
+        assert!(!r.take_changed());
+        // Running -> Paused -> Running: back where it was, still a change
+        r.step(RunEvent::Hidden);
+        r.step(RunEvent::Shown);
+        assert_eq!(r.state(), RunState::Running);
+        assert!(r.take_changed());
+        assert!(!r.take_changed());
+        r.step(RunEvent::Settled);
+        r.step(RunEvent::Activity);
+        assert!(r.take_changed());
+    }
 
     #[test]
     fn window_events_map_to_run_events() {

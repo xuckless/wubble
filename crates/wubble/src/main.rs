@@ -801,8 +801,8 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     let swipe = RefCell::new(host::Swipe::default());
-    window.on_space_swipe(move |dx| {
-        with_host(|host| host.space_swipe(&mut swipe.borrow_mut(), dx));
+    window.on_space_swipe(move |dx, dy| {
+        with_host(|host| host.space_swipe(&mut swipe.borrow_mut(), dx, dy));
     });
     window.on_space_switched(move |id| {
         if let Some(s) = shell::space_id(id) {
@@ -828,6 +828,7 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
+    window.on_command_dismissed(|| with_host(|host| host.bar_closed()));
     window.on_tab_context(|id, x, y| with_host(|host| host.tab_context(id, x, y)));
     let weak = window.as_weak();
     window.on_beside_requested(move || {

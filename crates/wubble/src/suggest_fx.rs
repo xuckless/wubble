@@ -9,7 +9,6 @@
 //! The HTTP code is a copy of `wubble_blocker::refresh::fetch_http` (ours).
 
 use std::sync::mpsc;
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use wubble_core::suggest::{self, DEBOUNCE_MS, Fetch, FetchEffect, FetchEvent, SuggestSettings};
@@ -62,41 +61,24 @@ pub struct SuggestFx {
     state: Fetch,
     deliver: Deliver,
     debounce: slint::Timer,
-    worker: Worker,
+    worker: mpsc::Sender<(u64, String)>,
 }
 
-struct Worker {
-    tx: Option<mpsc::Sender<(u64, String)>>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl Worker {
-    fn spawn(fetcher: impl Fetcher, deliver: Deliver) -> Self {
-        let (tx, rx) = mpsc::channel::<(u64, String)>();
-        let thread = std::thread::Builder::new()
-            .name("wubble-suggest".into())
-            .spawn(move || {
-                for (seq, url) in rx {
-                    let body = fetcher.get(&url).ok();
-                    deliver(FetchEvent::Reply { seq, body });
-                }
-            })
-            .ok();
-        Self {
-            tx: Some(tx),
-            thread,
-        }
-    }
-}
-
-impl Drop for Worker {
-    fn drop(&mut self) {
-        // closing the channel ends the loop after the request in flight (at most TIMEOUT)
-        self.tx.take();
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
+/// Starts the fetch thread; requests go in through the returned sender. The thread is detached:
+/// dropping the sender ends its loop after the request in flight, without blocking shutdown on
+/// it (its reply then goes to an event loop that is gone, which is harmless).
+fn spawn_worker(fetcher: impl Fetcher, deliver: Deliver) -> mpsc::Sender<(u64, String)> {
+    let (tx, rx) = mpsc::channel::<(u64, String)>();
+    // a failed spawn drops `rx`: every send then fails and is answered as a failed reply
+    let _ = std::thread::Builder::new()
+        .name("wubble-suggest".into())
+        .spawn(move || {
+            for (seq, url) in rx {
+                let body = fetcher.get(&url).ok();
+                deliver(FetchEvent::Reply { seq, body });
+            }
+        });
+    tx
 }
 
 impl SuggestFx {
@@ -105,7 +87,7 @@ impl SuggestFx {
             state: Fetch::default(),
             deliver,
             debounce: slint::Timer::default(),
-            worker: Worker::spawn(fetcher, deliver),
+            worker: spawn_worker(fetcher, deliver),
         }
     }
 
@@ -125,9 +107,7 @@ impl SuggestFx {
                     );
                 }
                 FetchEffect::Request { seq, url } => {
-                    if let Some(tx) = &self.worker.tx
-                        && tx.send((seq, url)).is_err()
-                    {
+                    if self.worker.send((seq, url)).is_err() {
                         // the worker is gone: answer as a failure so the machine moves on
                         (self.deliver)(FetchEvent::Reply { seq, body: None });
                     }

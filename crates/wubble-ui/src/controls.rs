@@ -35,31 +35,26 @@ impl Slot {
     }
 
     fn view(&self) -> ControlView {
-        match self {
+        // (x, scale x, scale y, origin, fill, value, held): one mapping for every control
+        let (x, sx, sy, origin, fill, value, held) = match self {
             Slot::Toggle(t) => {
                 let v = t.view();
-                ControlView {
-                    x: v.x as f32,
-                    scale_x: v.scale_x as f32,
-                    scale_y: v.scale_y as f32,
-                    origin: v.origin as f32,
-                    fill: v.fill as f32,
-                    value: if v.on { 1.0 } else { 0.0 },
-                    held: false,
-                }
+                let on = if v.on { 1.0 } else { 0.0 };
+                (v.x, v.scale_x, v.scale_y, v.origin, v.fill, on, false)
             }
             Slot::Slider(s) => {
                 let v = s.view();
-                ControlView {
-                    x: v.x as f32,
-                    scale_x: v.scale_x as f32,
-                    scale_y: v.scale_y as f32,
-                    origin: v.origin as f32,
-                    fill: 0.0,
-                    value: v.value as f32,
-                    held: v.held,
-                }
+                (v.x, v.scale_x, v.scale_y, v.origin, 0.0, v.value, v.held)
             }
+        };
+        ControlView {
+            x: x as f32,
+            scale_x: sx as f32,
+            scale_y: sy as f32,
+            origin: origin as f32,
+            fill: fill as f32,
+            value: value as f32,
+            held,
         }
     }
 }

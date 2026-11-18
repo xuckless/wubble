@@ -1083,6 +1083,11 @@ impl Host {
         crate::bind::render_bar(window, &self.bar.rows, &self.bar.icons, &self.favicons);
     }
 
+    /// The bar closed (Esc, a click outside, or a chosen row): nothing more may be fetched.
+    pub fn bar_closed(&mut self) {
+        self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
+    }
+
     pub fn bar_chosen(&mut self, index: i32) {
         let row = usize::try_from(index)
             .ok()
@@ -1091,6 +1096,8 @@ impl Host {
             let target = row.target.clone();
             self.choose(&target);
         }
+        // after reading the row: clearing the suggestions re-renders the rows
+        self.bar_closed();
     }
 
     fn choose(&mut self, target: &RowTarget) {

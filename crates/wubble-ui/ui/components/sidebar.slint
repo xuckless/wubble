@@ -161,7 +161,7 @@ export component Sidebar inherits Rectangle {
     callback address-activated();
     callback space-switched(int);    // space id
     callback scroll-wheel(length);
-    callback space-swipe(length);    // horizontal scroll delta over the tab list (Space swipe)
+    callback space-swipe(length, length);    // scroll deltas (x, y) over the tab list (Space swipe)
     callback scroll-touch-down(length);
     callback scroll-touch-move(length);
     callback scroll-touch-up();
@@ -324,8 +324,8 @@ export component Sidebar inherits Rectangle {
                     wheel(d) => {
                         root.scroll-wheel(d);
                     }
-                    wheel-x(d) => {
-                        root.space-swipe(d);
+                    wheel-xy(dx, dy) => {
+                        root.space-swipe(dx, dy);
                     }
                     touch-down(y) => {
                         root.scroll-touch-down(y);

@@ -82,7 +82,8 @@ pub enum Command {
     /// Closes every other tab of the tab's Space except the pinned ones (Chromium
     /// `CloseOtherTabs`), and shows it.
     CloseOthers(TabId),
-    /// Keep the tab awake while hidden: never frozen or discarded.
+    /// Keep the tab awake while hidden: never frozen or discarded. A frozen tab wakes at
+    /// once; a discarded one reloads when shown.
     SetNeverSleep {
         tab: TabId,
         on: bool,

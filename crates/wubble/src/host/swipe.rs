@@ -25,14 +25,17 @@ impl Default for Swipe {
 }
 
 impl Host {
-    /// A horizontal scroll delta over the sidebar (px, web sign: negative = fingers left).
-    pub fn space_swipe(&mut self, swipe: &mut Swipe, dx: f32) {
+    /// A scroll over the sidebar (px, web sign; see [`SpaceSwipe::scroll`]).
+    pub fn space_swipe(&mut self, swipe: &mut Swipe, dx: f32, dy: f32) {
         let now = swipe.since.elapsed().as_secs_f64() * 1000.0;
         let ids: Vec<_> = self.model.spaces.iter().map(|s| s.id).collect();
         let Some(active) = ids.iter().position(|&s| s == self.model.active_space) else {
             return;
         };
-        if let Some(to) = swipe.state.scroll(f64::from(dx), now, active, ids.len()) {
+        if let Some(to) = swipe
+            .state
+            .scroll(f64::from(dx), f64::from(dy), now, active, ids.len())
+        {
             self.dispatch(Command::SwitchSpace(ids[to]));
         }
     }

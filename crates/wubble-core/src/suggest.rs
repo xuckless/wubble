@@ -6,7 +6,7 @@
 //! unless the user turns them on.
 
 pub use crate::omnibox::SearchEngine;
-use crate::omnibox::suggest_url;
+use crate::omnibox::{Intent, classify, suggest_url};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiveSuggestions {
@@ -32,6 +32,7 @@ pub enum Source {
 
 /// Anything that could be a (partial) address stays on this machine, even
 /// when `classify` would still call it a search (`192.168.0`, `http://`).
+/// Input `classify` calls a URL (`about:blank`, `[::1]`) never gets here.
 fn looks_like_address(q: &str) -> bool {
     q.contains(['.', '/', '@'])
         || q.contains("://")
@@ -45,7 +46,10 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
         return Vec::new();
     }
     let mut out = vec![Source::Local];
-    if settings.live == LiveSuggestions::On && !looks_like_address(query) {
+    if settings.live == LiveSuggestions::On
+        && matches!(classify(query), Intent::Search(_))
+        && !looks_like_address(query)
+    {
         out.push(Source::Remote {
             url: suggest_url(settings.engine, query),
         });
@@ -272,6 +276,11 @@ mod tests {
             "foo/bar",
             "foo.",
             "user@host.com",
+            "about:blank",
+            "about:config",
+            "view-source:x",
+            "[::1]",
+            "[::1]:8080",
         ] {
             assert_eq!(
                 sources(q, &settings(LiveSuggestions::On)),
@@ -415,5 +424,19 @@ mod tests {
             LiveSuggestions::On,
         );
         assert!(requests(&fx).is_empty());
+        // a query queued behind an in-flight request is dropped by the close
+        let (_, fx) = run(
+            Fetch::default(),
+            vec![
+                Typed("rust".into()),
+                DebounceElapsed(1),
+                Typed("rust slint".into()),
+                DebounceElapsed(2),
+                Closed,
+                Reply { seq: 1, body: None },
+            ],
+            LiveSuggestions::On,
+        );
+        assert_eq!(requests(&fx).len(), 1);
     }
 }

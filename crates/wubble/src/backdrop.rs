@@ -246,11 +246,13 @@ impl Glass {
         let Glass::Scene(s) = self else {
             return;
         };
-        if s.run.state() == RunState::Paused {
-            return;
-        }
+        // even while paused: the registry reports a changed list once, and the scene must have
+        // the latest one when it resumes (cheap, no GPU work)
         if let Some(items) = glass {
             s.set_items(window, items);
+        }
+        if s.run.state() == RunState::Paused {
+            return;
         }
         // the sidebar glass's right edge follows the seam's string (the driver's table)
         use slint::Model as _;
@@ -275,8 +277,10 @@ impl Glass {
         }
         s.loading = loading;
 
-        // Idle frames are slow on purpose: they say nothing about the frame's load.
-        let full_rate = s.run.state() == RunState::Running;
+        // Idle frames are slow on purpose, and the first frame after a change of run state
+        // follows a gap (an idle tick, a pause): neither says anything about the frame's load.
+        let steady = !s.run.take_changed();
+        let full_rate = steady && s.run.state() == RunState::Running;
         let interval = s
             .renderer
             .last_frame()
