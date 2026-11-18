@@ -171,6 +171,20 @@ export component AppWindow inherits Window {
 
     // Pointer reports for the driver, in window coordinates.
     callback tab-press <=> sidebar.tab-press;
+    callback tab-track <=> sidebar.tab-track;
+    out property <length> space-strip-x <=> sidebar.space-strip-x;
+    out property <length> space-strip-y <=> sidebar.space-strip-y;
+    out property <length> space-pitch <=> sidebar.space-pitch;
+    out property <length> space-tile <=> sidebar.space-tile;
+    // A tab dragged out of the list (wubble_core::tabdrag), written by the host: its title
+    // follows the pointer, and the content edge it would split into is lit (0 none, 1 left,
+    // 2 right). Written for wubble: the design repo has no drag out of the list.
+    in property <string> drag-ghost;
+    in property <length> drag-x;
+    in property <length> drag-y;
+    in property <int> drag-zone: 0;
+    // The host took the drag from the row physics: the driver drops it.
+    callback tab-rows-cancel();
     callback tab-drag <=> sidebar.tab-drag;
     callback tab-release <=> sidebar.tab-release;
     callback seam-grab(length, length);
@@ -927,6 +941,36 @@ export component AppWindow inherits Window {
         }
         dismissed => {
             root.downloads-open = false;
+        }
+    }
+
+    // The drop zone at the content's edge, then the ghost, over everything but the menu.
+    if root.drag-zone > 0: Rectangle {
+        x: root.content-x + (root.drag-zone == 2 ? root.content-width * 0.75 : 0px);
+        y: root.content-y;
+        width: root.content-width * 0.25;
+        height: root.content-height;
+        border-radius: Radius.md;
+        background: Palette.ink.with-alpha(0.12);
+        border-width: Shell.drag-zone-border;
+        border-color: Palette.ink.with-alpha(0.35);
+    }
+    if root.drag-ghost != "": Rectangle {
+        x: root.drag-x + Spacing.s3;
+        y: root.drag-y + Spacing.s3;
+        width: min(ghost-text.preferred-width + 2 * Spacing.s3, Shell.drag-ghost-max);
+        height: Chrome.row;
+        border-radius: Radius.sm;
+        background: Palette.shell;
+        drop-shadow-blur: Shell.drag-ghost-blur;
+        drop-shadow-color: Shell.drag-ghost-shadow;
+        ghost-text := Text {
+            x: Spacing.s3;
+            width: parent.width - 2 * Spacing.s3;
+            text: root.drag-ghost;
+            color: Palette.ink;
+            vertical-alignment: center;
+            overflow: elide;
         }
     }
 

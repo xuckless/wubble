@@ -143,6 +143,14 @@ export component Sidebar inherits Rectangle {
     in property <float> capsule-origin: 0.3;
 
     callback tab-press(int, length);
+    // tab id, then TabRow `track`'s kind and pointer in window px
+    callback tab-track(int, int, length, length);
+    // The Space strip's first icon in window px, the step to the next and whether they run
+    // down (rail) instead of across: where a dragged tab can be dropped onto a Space.
+    out property <length> space-strip-x: strip.absolute-position.x;
+    out property <length> space-strip-y: strip.absolute-position.y;
+    out property <length> space-pitch: Shell.space-tile + Shell.space-gap;
+    out property <length> space-tile: Shell.space-tile;
     callback tab-drag(length);
     callback tab-release(int);
     callback tab-closed(int);        // tab id
@@ -387,6 +395,9 @@ export component Sidebar inherits Rectangle {
                                     compact: root.compact;
                                     press(y) => {
                                         root.tab-press(i, y);
+                                    }
+                                    track(kind, x, y) => {
+                                        root.tab-track(tab.id, kind, x, y);
                                     }
                                     drag(y) => {
                                         root.tab-drag(y);

@@ -717,7 +717,7 @@ fn with_host(f: impl FnOnce(&mut Host)) {
 }
 
 /// Runs `f` on the host in window `id` (one of its callbacks), if that window is still open.
-fn with_host_in(id: WindowId, f: impl FnOnce(&mut Host)) {
+pub(crate) fn with_host_in(id: WindowId, f: impl FnOnce(&mut Host)) {
     HOST.with(|cell| match cell.try_borrow_mut() {
         Ok(mut host) => {
             if let Some(host) = host.as_mut()
@@ -956,6 +956,9 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
     });
     window.on_command_result_chosen(move |index| with_host_in(win, |host| host.bar_chosen(index)));
     window.on_tab_context(move |id, x, y| with_host_in(win, |host| host.tab_context(id, x, y)));
+    window.on_tab_track(move |id, kind, x, y| {
+        with_host_in(win, |host| host.tab_track(id, kind, x, y))
+    });
     let weak = window.as_weak();
     window.on_beside_requested(move || {
         if let Some(window) = weak.upgrade() {

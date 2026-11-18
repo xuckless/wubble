@@ -287,6 +287,9 @@ export component TabRow inherits Rectangle {
     callback mute();
     // wubble change: a right click, pointer in window px (the tab's context menu).
     callback context(length, length);
+    // wubble change: the left button's pointer in window px (0 down, 1 move, 2 up, 3 cancel),
+    // for a drag that leaves the list (wubble_core::tabdrag). Up comes before `release`.
+    callback track(int, length, length);
 
     height: Chrome.row;
     border-radius: Radius.sm;
@@ -304,10 +307,12 @@ export component TabRow inherits Rectangle {
             // wubble change: right click opens the tab's menu
             if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) { root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); return; }
             if (e.button != PointerEventButton.left) { return; }
-            if (e.kind == PointerEventKind.down) { root.press(self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.down) { root.track(0, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); root.press(self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.up) { root.track(2, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.cancel) { root.track(3, 0, 0); }
             if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
         }
-        moved => { if (self.pressed) { root.drag(self.absolute-position.y + self.mouse-y); } }
+        moved => { if (self.pressed) { root.track(1, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); root.drag(self.absolute-position.y + self.mouse-y); } }
     }
 
     // wubble change: metrics from browser.css (.wb-tab padding 0 6 0 10, gap 10, an 18 px icon

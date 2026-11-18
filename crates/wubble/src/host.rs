@@ -16,6 +16,7 @@
 
 mod autofill;
 mod downloads;
+mod drag;
 mod pages;
 mod panes;
 mod settings;
@@ -315,6 +316,12 @@ pub struct Host {
     /// Pop-ups each tab's page asked for and the policy held back (`wubble_core::popup`),
     /// until the page commits another URL; the address pill offers them.
     held_popups: BTreeMap<TabId, Vec<PopupRequest>>,
+    /// A tab dragged from a sidebar row (`drag.rs`): one pointer, so one for every window.
+    tab_drag: wubble_core::tabdrag::Drag,
+    /// Where the pointer was at the drag's last event, window px.
+    drag_at: wubble_core::tabdrag::Point,
+    /// Asks the drag again once the pointer has rested on a Space's icon for the hover delay.
+    drag_timer: slint::Timer,
     /// Window and page fullscreen.
     screen: Screen,
     /// The page's IME composition.
@@ -439,6 +446,9 @@ impl Host {
             failure: None,
             surfaces: BTreeMap::new(),
             held_popups: BTreeMap::new(),
+            tab_drag: wubble_core::tabdrag::Drag::Idle,
+            drag_at: wubble_core::tabdrag::Point { x: 0.0, y: 0.0 },
+            drag_timer: slint::Timer::default(),
             screen: Screen::default(),
             ime: Ime::default(),
             audio: AudioMap::new(),
@@ -2095,7 +2105,17 @@ impl Host {
                     return EventResult::PreventDefault;
                 }
             }
-            // Esc leaves page fullscreen before anything else sees it.
+            // Esc drops a tab drag, then leaves page fullscreen, before anything else sees it.
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state == ElementState::Pressed
+                && event.logical_key == Key::Named(NamedKey::Escape)
+                && self.cancel_drag() =>
+            {
+                return EventResult::PreventDefault;
+            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
