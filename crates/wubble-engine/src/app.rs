@@ -109,12 +109,6 @@ impl fmt::Display for EngineError {
 
 impl std::error::Error for EngineError {}
 
-/// The CEF subprocess executable: next to the main binary on every platform
-/// so far (macOS's helper `.app` bundle will change this).
-fn helper_path(exe_dir: &Path) -> PathBuf {
-    exe_dir.join(format!("wubble-helper{}", std::env::consts::EXE_SUFFIX))
-}
-
 /// CEF's cache inside the per-user data directory.
 pub const CEF_CACHE: &str = "cef";
 
@@ -128,6 +122,12 @@ pub fn user_data_dir() -> Option<PathBuf> {
 trait Platform {
     /// Per-user data directory, given an environment lookup.
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
+
+    /// Where the CEF binaries are, given the main executable's directory.
+    fn framework_dir(exe_dir: &Path) -> PathBuf;
+
+    /// The CEF subprocess executable, or `None` when CEF finds it itself.
+    fn helper_path(exe_dir: &Path) -> Option<PathBuf>;
 
     /// Chromium switches every wubble process gets on this OS, after
     /// [`CHROMIUM_SWITCHES`].
@@ -156,10 +156,9 @@ const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[
     ("enable-blink-features", Some("MiddleClickAutoscroll")),
 ];
 
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 struct Linux;
 
-#[cfg(target_os = "linux")]
 impl Platform for Linux {
     /// No entries: CEF 156.0.30's defaults hand over real, tiled dmabufs on
     /// NVIDIA's proprietary driver (CEF #4237, #4313). `enable-features=Vulkan`,
@@ -169,6 +168,59 @@ impl Platform for Linux {
 
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         xdg_data_dir(env)
+    }
+
+    /// `libcef.so` and its resources sit next to the binary.
+    fn framework_dir(exe_dir: &Path) -> PathBuf {
+        exe_dir.to_path_buf()
+    }
+
+    fn helper_path(exe_dir: &Path) -> Option<PathBuf> {
+        Some(exe_dir.join("wubble-helper"))
+    }
+}
+
+/// macOS runs from `wubble.app/Contents/MacOS` (built by `wubble-bundle`).
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+struct MacOs;
+
+impl Platform for MacOs {
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        mac_data_dir(env)
+    }
+
+    /// `Contents/Frameworks`, holding `Chromium Embedded Framework.framework`.
+    fn framework_dir(exe_dir: &Path) -> PathBuf {
+        exe_dir.join("../Frameworks")
+    }
+
+    /// Chromium derives the helper apps (`wubble Helper (GPU).app`, ...) in
+    /// `Contents/Frameworks` from the main bundle's name, which is how
+    /// `cef::build_util::mac::bundle` lays them out.
+    fn helper_path(_exe_dir: &Path) -> Option<PathBuf> {
+        None
+    }
+}
+
+/// Windows: no windowless views yet (see `view.rs`), but CEF boots.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+struct Windows;
+
+impl Platform for Windows {
+    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+
+    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+        windows_data_dir(env)
+    }
+
+    fn framework_dir(exe_dir: &Path) -> PathBuf {
+        exe_dir.to_path_buf()
+    }
+
+    fn helper_path(exe_dir: &Path) -> Option<PathBuf> {
+        Some(exe_dir.join("wubble-helper.exe"))
     }
 }
 
@@ -198,32 +250,17 @@ fn windows_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     absolute_var(env, "APPDATA").map(|appdata| appdata.join("wubble"))
 }
 
-/// Placeholder until macOS and Windows get their own impl.
-#[cfg(not(target_os = "linux"))]
-struct Unsupported;
-
-#[cfg(not(target_os = "linux"))]
-impl Platform for Unsupported {
-    const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
-
-    fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-        if cfg!(target_os = "macos") {
-            mac_data_dir(env)
-        } else {
-            windows_data_dir(env)
-        }
-    }
-}
-
 #[cfg(target_os = "linux")]
 type Current = Linux;
-#[cfg(not(target_os = "linux"))]
-type Current = Unsupported;
+#[cfg(target_os = "macos")]
+type Current = MacOs;
+#[cfg(windows)]
+type Current = Windows;
 
 /// The welding config for `config`; pure so the mapping is testable.
 fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
-    let mut cef = CefRuntimeConfig::new(config.exe_dir.clone(), SANDBOX);
-    cef.browser_subprocess_path = Some(helper_path(&config.exe_dir));
+    let mut cef = CefRuntimeConfig::new(Current::framework_dir(&config.exe_dir), SANDBOX);
+    cef.browser_subprocess_path = Current::helper_path(&config.exe_dir);
     cef.cache_path = Some(config.cache_dir.clone());
     cef.command_line_switches = CHROMIUM_SWITCHES
         .iter()
@@ -546,17 +583,37 @@ mod tests {
     }
 
     #[test]
-    fn helper_and_cef_dir_sit_next_to_the_binary() {
+    fn cef_config_uses_the_current_platform_paths() {
+        let exe_dir = Path::new("/opt/wubble");
         let cef = cef_config(&config("/opt/wubble", "/c"));
-        let helper = cef.browser_subprocess_path.expect("helper set");
-        assert_eq!(helper.parent(), Some(Path::new("/opt/wubble")));
-        assert!(
-            helper
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("wubble-helper"))
+        assert_eq!(cef.cef_path, Current::framework_dir(exe_dir));
+        assert_eq!(cef.browser_subprocess_path, Current::helper_path(exe_dir));
+    }
+
+    #[test]
+    fn linux_and_windows_keep_cef_and_helper_next_to_the_binary() {
+        let exe_dir = Path::new("/opt/wubble");
+        assert_eq!(Linux::framework_dir(exe_dir), exe_dir);
+        assert_eq!(
+            Linux::helper_path(exe_dir),
+            Some(PathBuf::from("/opt/wubble/wubble-helper"))
         );
-        assert_eq!(cef.cef_path, Path::new("/opt/wubble"));
+        assert_eq!(Windows::framework_dir(exe_dir), exe_dir);
+        assert_eq!(
+            Windows::helper_path(exe_dir),
+            Some(exe_dir.join("wubble-helper.exe"))
+        );
+    }
+
+    #[test]
+    fn macos_finds_cef_in_the_bundles_frameworks() {
+        let exe_dir = Path::new("/Applications/wubble.app/Contents/MacOS");
+        let framework = MacOs::framework_dir(exe_dir);
+        assert_eq!(
+            framework,
+            Path::new("/Applications/wubble.app/Contents/MacOS/../Frameworks")
+        );
+        assert_eq!(MacOs::helper_path(exe_dir), None);
     }
 
     /// Regression: without it CEF used the shared `~/.config/cef_user_data`
@@ -672,6 +729,8 @@ mod tests {
         assert!(text.contains("cargo build --workspace"), "{text}");
     }
 
+    /// macOS has no helper path to check: CEF finds the helper apps itself.
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn start_without_helper_fails_before_touching_cef() {
         let dir = std::env::temp_dir().join("wubble-engine-test-no-helper");

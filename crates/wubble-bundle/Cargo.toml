@@ -1,0 +1,13 @@
+[package]
+name = "wubble-bundle"
+description = "macOS only: wraps the built wubble and wubble-helper binaries into wubble.app with the CEF framework and helper apps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# cef's `build_util::mac` exists only on macOS.
+[target.'cfg(target_os = "macos")'.dependencies]
+cef.workspace = true
+semver = "1"
