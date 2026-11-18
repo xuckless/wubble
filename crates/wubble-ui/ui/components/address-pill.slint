@@ -1,0 +1,34 @@
+import { Colors, Radius, Sizes, Spacing, Type } from "../tokens.slint";
+import { RowBase } from "row-base.slint";
+
+export component AddressPill inherits RowBase {
+    in property <string> host;
+    in property <string> path;
+
+    height: Sizes.address-height;
+    border-radius: Radius.pill;
+
+    HorizontalLayout {
+        padding-left: Spacing.s4;
+        padding-right: Spacing.s4;
+        alignment: start;
+
+        Text {
+            text: root.host;
+            color: Colors.ink;
+            font-family: Type.mono;
+            font-size: Type.body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.path;
+            color: Colors.haze;
+            font-family: Type.mono;
+            font-size: Type.body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}

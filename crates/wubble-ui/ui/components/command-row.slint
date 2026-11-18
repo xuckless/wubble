@@ -1,0 +1,100 @@
+import { Colors, Motion, Sizes, Spacing, Type } from "../tokens.slint";
+import { CommandKind, CommandResult } from "model.slint";
+import { RowBase } from "row-base.slint";
+import { GlyphTile } from "glyph-tile.slint";
+
+export component CommandRow inherits RowBase {
+    in property <CommandResult> item;
+    // Position in the list; drives the staggered entrance.
+    in property <int> index;
+    // True while the overlay is open; rows fade and shift in.
+    in property <bool> shown;
+
+    pure function glyph(kind: CommandKind) -> string {
+        if (kind == CommandKind.open-tab) {
+            return "T";
+        }
+        if (kind == CommandKind.history) {
+            return "H";
+        }
+        if (kind == CommandKind.bookmark) {
+            return "B";
+        }
+        if (kind == CommandKind.search) {
+            return "S";
+        }
+        return "A";
+    }
+    pure function tint(kind: CommandKind) -> color {
+        if (kind == CommandKind.open-tab) {
+            return Colors.sky;
+        }
+        if (kind == CommandKind.history) {
+            return Colors.lilac;
+        }
+        if (kind == CommandKind.bookmark) {
+            return Colors.blush;
+        }
+        if (kind == CommandKind.search) {
+            return Colors.mint;
+        }
+        return Colors.coral;
+    }
+
+    states [
+        in when root.shown: {
+            opacity: 1;
+            in {
+                animate opacity {
+                    duration: Motion.overlap-in;
+                    delay: Motion.stagger * root.index;
+                }
+            }
+            out {
+                animate opacity { duration: Motion.overlap-out; }
+            }
+        }
+        out when !root.shown: {
+            opacity: 0;
+        }
+    ]
+
+    HorizontalLayout {
+        padding-left: Spacing.s3;
+        padding-right: Spacing.s3;
+        spacing: Spacing.s3;
+        alignment: stretch;
+
+        GlyphTile {
+            glyph: root.glyph(root.item.kind);
+            tint: root.tint(root.item.kind);
+        }
+
+        Text {
+            text: root.item.title;
+            color: root.active ? Colors.ink : Colors.mist;
+            font-size: Type.body;
+            font-weight: root.active ? Type.medium : Type.regular;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.item.subtitle;
+            color: Colors.haze;
+            font-size: Type.label;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            width: Sizes.shortcut-hint-width;
+            text: root.item.shortcut;
+            color: Colors.haze;
+            font-family: Type.mono;
+            font-size: Type.caption;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}

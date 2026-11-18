@@ -10,6 +10,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 
 | Topic | Decision |
 |---|---|
+| Light theme | Only Ink, Sky and a few ground/Mist values come from the pack; the other light colours (Deep, Haze, Lilac, Blush, Mint, Coral, fills) are our own picks in `tokens.slint`, to be checked by eye. Theme is `Colors.light`, a bool inside each colour token, not a second token set |
+| Slint ids | Slint has only `int` (i32), so `TabItem.id` / `SpaceItem.id` are `int`; the wiring item converts from core `u64`/`u32` with `try_from`, never truncating silently |
 | Licence | GPL-3.0-only (matches Slint's GPL option; Chromium/CEF are BSD and compatible) |
 | Platforms | Daily-drive targets: Linux (lead, Wayland) and macOS, both built locally. Windows is built and tested on CI runners only and may trail by a milestone |
 | Engine, phase 1 | Prebuilt CEF 154 via the `cef` crate (stock Chromium, **not** ungoogled) |
@@ -27,6 +29,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption |
 | Layout | No top toolbar. Address pill at the top of the sidebar, then pinned, tabs, new-tab row, Space switcher |
 | New tab | Ctrl+T opens the command bar over the current page; a tab is created only when something is chosen. No start page |
+| Command bar state | One `CommandBarState` enum written only by a pure `next()` via `dispatch` in Slint; closing to closed is a Slint Timer equal to the out duration (no animation-finished callback) |
 | Passwords | Built-in manager (encrypted store, OS keyring) before extensions; extension password managers work once the extension pass (M6) lands |
 | Glass under load | Glass degrades automatically (lower-res blur → cached backdrop → flat tint); animation never drops frames for it |
 | Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate) with a declared schema and migrations: Spaces, tabs, session, history, bookmarks, passwords. Chromium keeps only cookies/cache per container |
@@ -114,8 +117,8 @@ Each item is done when it works on Linux and macOS; Windows is verified on CI.
 The pack sets colour, glass, type and motion feel. Layouts on its Browser board are illustrative; exact sizes quoted below are starting points.
 
 Foundations
-- [ ] Tokens as Slint globals: ground (Abyss/Deep/Shell/Rim), ink (Ink/Mist/Haze), film (Sky/Lilac/Blush/Mint), Coral; radius 6/10/14/20/28/pill; 4 pt spacing; light theme fills
-- [ ] Fonts embedded: Fredoka (display, 32 px+), Geist (interface), Geist Mono (addresses)
+- [x] Tokens as Slint globals: ground (Abyss/Deep/Shell/Rim), ink (Ink/Mist/Haze), film (Sky/Lilac/Blush/Mint), Coral; radius 6/10/14/20/28/pill; 4 pt spacing; light theme fills
+- [x] Fonts embedded: Fredoka (display, 32 px+), Geist (interface), Geist Mono (addresses)
 - [ ] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim)
 - [ ] Glass quality governor: measures frame time and steps blur quality down/up; exposed as explicit levels, not ad-hoc flags
 - [ ] Film rim (conic soap-film ring) on hover, press, drag and focus only
@@ -126,7 +129,7 @@ Daily-drive set
 - [ ] Vertical sidebar on Regular glass: tab rows 36 px, pinned section, "Today" group, new-tab row
 - [x] Spaces, containers and tab-tree model with one pure `apply(model, command)` (`wubble_core::model`) with tests
 - [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container
-- [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts
+- [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; glass, results wiring and actions remain)
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
 - [ ] Suggestion fetch effect (run `Source::Remote` requests, debounce, cancel stale) and the settings toggle for the flag
 - [ ] Compact mode: sidebar/toolbar hide and reveal; the stretchy seam ("Room to play") for sidebar width

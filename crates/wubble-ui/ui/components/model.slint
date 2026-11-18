@@ -1,0 +1,41 @@
+// Slint has only i32 integers, so ids are int here; the wiring layer converts from core ids.
+export struct TabItem {
+    id: int,
+    title: string,
+    glyph: string,
+    tint: color,
+}
+
+export struct SpaceItem {
+    id: int,
+    name: string,
+    tint: color,
+}
+
+export enum CommandKind {
+    open-tab,
+    history,
+    bookmark,
+    search,
+    action,
+}
+
+export struct CommandResult {
+    kind: CommandKind,
+    title: string,
+    subtitle: string,
+    shortcut: string,
+}
+
+// Lifecycle of the command bar overlay. Written only by CommandBar.dispatch.
+export enum CommandBarState {
+    closed,
+    open,
+    closing,
+}
+
+export enum CommandBarEvent {
+    open,
+    close,
+    settle,
+}

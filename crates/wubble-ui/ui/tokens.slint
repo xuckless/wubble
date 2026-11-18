@@ -1,0 +1,101 @@
+// Design tokens. The only file with colour, px and ms literals.
+// Values from the design pack (ux/pack/project/Tokens.dc.html, Main.dc.html).
+
+import "fonts/Fredoka-Variable.ttf";
+import "fonts/Geist-Variable.ttf";
+import "fonts/GeistMono-Variable.ttf";
+
+export global Colors {
+    // One source of theme. Light-theme values beyond the pack are our own (see TODO Decided).
+    in property <bool> light: false;
+
+    // ground
+    out property <color> abyss: light ? #F4F5F9 : #08090D;
+    out property <color> deep: light ? #ECEEF5 : #11131A;
+    out property <color> shell: light ? #E9ECF4 : #1A1D26;
+    out property <color> rim: light ? #D9DEEA : #2A2F3B;
+    // ink
+    out property <color> ink: light ? #11131A : #F2F4FA;
+    out property <color> mist: light ? #5A6072 : #A3A9B8;
+    out property <color> haze: light ? #6F7588 : #7E8496;
+    // film
+    out property <color> sky: light ? #1E6BD6 : #7CC8FF;
+    out property <color> lilac: light ? #7A5CE0 : #B8A6FF;
+    out property <color> blush: light ? #D1478F : #FF9ED8;
+    out property <color> mint: light ? #1B9A74 : #8AF2D0;
+    out property <color> coral: light ? #D4503F : #FF8F7F;
+    // text on a film-coloured tile (same in both themes)
+    out property <color> on-film: #0B0C12;
+    // fills
+    out property <color> glass-regular: light ? #FFFFFFAD : #1619216B;
+    out property <color> hover-fill: light ? #11131A0D : #FFFFFF0D;
+    out property <color> press-fill: light ? #11131A1A : #FFFFFF1A;
+    out property <color> scrim: light ? #11131A52 : #08090D66;
+}
+
+export global Radius {
+    out property <length> xs: 6px;
+    out property <length> sm: 10px;
+    out property <length> md: 14px;
+    out property <length> lg: 20px;
+    out property <length> xl: 28px;
+    out property <length> pill: 999px;
+}
+
+export global Spacing {
+    out property <length> s1: 4px;
+    out property <length> s2: 8px;
+    out property <length> s3: 12px;
+    out property <length> s4: 16px;
+    out property <length> s6: 24px;
+    out property <length> s8: 32px;
+    out property <length> s12: 48px;
+}
+
+export global Sizes {
+    out property <length> sidebar-width: 260px;
+    out property <length> row-height: 36px;
+    out property <length> pinned-tile: 48px;
+    out property <length> address-height: 40px;
+    out property <length> glyph: 18px;
+    out property <length> icon-button: 20px;
+    out property <length> space-dot: 24px;
+    out property <length> hairline: 1px;
+    out property <length> ring-width: 2px;
+    out property <length> pinned-glyph: 36px;
+    out property <length> space-dot-inset: 2px;
+    out property <int> pinned-max: 4;
+    out property <length> command-bar-width: 640px;
+    out property <length> command-bar-top: 64px;
+    out property <length> command-input-height: 52px;
+    out property <int> command-max-rows: 8;
+    out property <length> overlap-shift: 7px;
+    out property <length> shortcut-hint-width: 72px;
+    out property <length> window-width: 1280px;
+    out property <length> window-height: 800px;
+}
+
+export global Type {
+    out property <string> display: "Fredoka";
+    out property <string> ui: "Geist";
+    out property <string> mono: "Geist Mono";
+
+    out property <length> caption: 11px;
+    out property <length> label: 12px;
+    out property <length> body: 13px;
+    out property <length> body-lg: 14px;
+    out property <length> title: 17px;
+    out property <length> hero: 32px;
+
+    out property <int> regular: 400;
+    out property <int> medium: 500;
+    out property <int> semibold: 600;
+}
+
+export global Motion {
+    out property <duration> fast: 150ms;
+    // The pack's "Overlap" timings.
+    out property <duration> overlap-in: 240ms;
+    out property <duration> overlap-out: 190ms;
+    out property <duration> stagger: 30ms;
+}

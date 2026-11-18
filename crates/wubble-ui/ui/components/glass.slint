@@ -1,0 +1,11 @@
+import { Colors, Radius, Sizes } from "../tokens.slint";
+
+// Flat fill for now; real glass replaces the inside later without touching callers.
+export component Glass inherits Rectangle {
+    in property <length> radius: Radius.lg;
+    border-radius: root.radius;
+    background: Colors.glass-regular;
+    border-width: Sizes.hairline;
+    border-color: Colors.rim;
+    @children
+}

@@ -1,10 +1,17 @@
-// Placeholder shell. Real layout comes from the UX pack (see /ux).
+import { Colors, Radius, Sizes, Spacing, Type } from "tokens.slint";
+import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent } from "components/model.slint";
+import { CommandBar } from "components/command-bar.slint";
+import { Sidebar } from "components/sidebar.slint";
+
+export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }
 
 export component AppWindow inherits Window {
     title: "wubble";
-    preferred-width: 1280px;
-    preferred-height: 800px;
-    background: #111114;
+    preferred-width: Sizes.window-width;
+    preferred-height: Sizes.window-height;
+    background: Colors.abyss;
+    default-font-family: Type.ui;
+    default-font-size: Type.body;
 
     // The active tab's frame, supplied by wubble-gfx as a wgpu-backed image.
     in property <image> web-frame;
@@ -18,20 +25,86 @@ export component AppWindow inherits Window {
     out property <length> content-width: content.width;
     out property <length> content-height: content.height;
 
-    HorizontalLayout {
-        sidebar := Rectangle {
-            width: 240px;
-            background: #18181c;
-        }
-        content := Rectangle {
-            Image {
-                width: 100%;
-                height: 100%;
-                source: root.web-frame;
-                source-clip-width: root.web-frame-clip-width;
-                source-clip-height: root.web-frame-clip-height;
-                image-fit: fill;
+    in property <string> address-host <=> sidebar.address-host;
+    in property <string> address-path <=> sidebar.address-path;
+    in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
+    in property <[TabItem]> tabs <=> sidebar.tabs;
+    in property <[SpaceItem]> spaces <=> sidebar.spaces;
+    in property <int> active-tab-id <=> sidebar.active-tab-id;
+    in property <int> active-space-id <=> sidebar.active-space-id;
+
+    callback tab-activated <=> sidebar.tab-activated;
+    callback tab-closed <=> sidebar.tab-closed;
+    out property <CommandBarState> command-bar-state <=> bar.state;
+    in property <[CommandResult]> command-results <=> bar.results;
+    in-out property <string> command-query <=> bar.query;
+    callback command-query-changed <=> bar.query-changed;
+    callback command-result-chosen <=> bar.result-chosen;
+    callback command-dismissed <=> bar.dismissed;
+    // Intents: the bar opens itself; Rust may prefill the query.
+    callback new-tab-requested();
+    callback space-switched <=> sidebar.space-switched;
+    callback address-focus-requested();
+
+    public function request-new-tab() {
+        bar.dispatch(CommandBarEvent.open);
+        root.new-tab-requested();
+    }
+
+    public function request-address-focus() {
+        bar.dispatch(CommandBarEvent.open);
+        root.address-focus-requested();
+    }
+
+    root-keys := FocusScope {
+        KeyBinding {
+            keys: @keys(Control + T);
+            activated => {
+                root.request-new-tab();
             }
         }
+        KeyBinding {
+            keys: @keys(Control + L);
+            activated => {
+                root.request-address-focus();
+            }
+        }
+
+        HorizontalLayout {
+            padding: Spacing.s2;
+            spacing: Spacing.s2;
+
+            sidebar := Sidebar {
+                width: Sizes.sidebar-width;
+                new-tab-requested => {
+                    root.request-new-tab();
+                }
+                address-activated => {
+                    root.request-address-focus();
+                }
+            }
+
+            content := Rectangle {
+                border-radius: Radius.md;
+                clip: true;
+                Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.web-frame;
+                    source-clip-width: root.web-frame-clip-width;
+                    source-clip-height: root.web-frame-clip-height;
+                    image-fit: fill;
+                }
+                bar := CommandBar {
+                    closed => {
+                        root-keys.focus();
+                    }
+                }
+            }
+        }
+    }
+
+    init => {
+        root-keys.focus();
     }
 }
