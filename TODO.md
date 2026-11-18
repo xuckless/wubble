@@ -50,8 +50,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Chromium GPU on Linux | `enable-features=Vulkan` for every wubble process (`Platform::CHROMIUM_SWITCHES`). Without it NVIDIA 615 (Wayland and X11) produces no accelerated paint: Chromium's GL path cannot draw into the dmabuf shared images ("Unable to initialize SkSurface"). Not yet run on Mesa (Intel/AMD), where welding works without it |
 | CEF frame rate (interim) | The browser is created with `windowless_frame_rate` = the display refresh (current monitor, else the fastest connected one, since Wayland reports the monitor late), capped at 240, through the welding fork's `CefSurfaceConfig::windowless_frame_rate`. The view opens once winit has created the window. The fork also exposes `CefSurfaceConfig::external_begin_frame`, still off: turning it on (and calling `SendExternalBeginFrame` through `cef::browser_host_get_browser_by_identifier`) is the "Frame pacing" item |
 | CPU fallback count | Measured on Linux: the welding fork's `on_paint` counts every CPU frame (never read or shown) and `View::cpu_fallback_frames` reports it; the host logs new ones and `--smoke frames` prints the real `cpu_fallback`. Other platforms print `n/a`. The smoke still passes on `accelerated > 0`; whether `cpu_fallback > 0` should fail it is open |
-| View close | Event-driven: the welding fork pushes `CefSurfaceEvent::BrowserClosed` from `OnBeforeClose`; the engine drains every view's event queue after each run of CEF work and reports `BrowserClosed` to the lifecycle. A page that closes itself is reported the same way. Other welding events are drained and dropped until something uses them |
-| welding fork | `welding` 0.15.0 (MPL-2.0) vendored in `vendor/welding`, excluded from the workspace and from `cargo fmt` by its own `rustfmt.toml` (upstream style, `cargo test -p welding`). Changes, each marked `wubble change` and listed in `vendor/welding/WUBBLE_CHANGES.md`: browser-process `PumpScheduler`, `BrowserClosed` event, Linux `on_paint` count, `windowless_frame_rate` / `external_begin_frame` config. `grafting` is not forked. When moving CEF or welding, start from the new upstream release and re-apply the change list |
+| View close | Event-driven: the welding fork pushes `CefSurfaceEvent::BrowserClosed` from `OnBeforeClose`; the engine drains every view's event queue after each run of CEF work and reports `BrowserClosed` to the lifecycle. A page that closes itself is reported the same way |
+| Web events | One enum, `wubble_engine::nav::WebEvent` (URL, title, loading + can-go-back/forward, favicon URL, cursor, popup request, renderer gone), collected from every view after each run of CEF work into `PumpOutcome::events`. Navigation per view is the pure `nav::transition` over `NavState` (Blank/Loading/Loaded/Crashed): events only on change, Back/Forward only when possible, commands after a crash also repaint. Loading state and favicon URLs come from two welding fork callbacks (`OnLoadingStateChange`, `OnFaviconURLChange`), which welding lacked. Popups: welding's `OnBeforePopup` already cancels CEF's own window; the host only logs `PopupRequested` until tabs exist. A dead renderer is reloaded once per URL |
+| Web input | Keyboard from raw winit events (`slint::winit_030` `on_winit_window_event`), because Slint's `KeyEvent` keeps only text: no physical key, scancode or location, nothing for keys without text, Ctrl/Cmd swapped on Apple. Mouse, wheel and hover from a Slint `TouchArea` over the web frame (hit-testing against the shell, view-relative logical px = CEF DIP, grab and leave for free); click count from a ported cefclient tracker. Keys go to the page only while its `FocusScope` has focus; modifier keys also reach Slint; `PRIMARY`+T/L stay with the shell. The engine sends input straight to CEF's `BrowserHost` (welding's input path lacks click count, leave, wheel flags, system keys and a key table). Key codes: cefclient GTK's policy (layout character first, Chromium's US-position table for the rest, digit row and keypad positional). Lost: Caps/Num Lock state, AltGr flag, layout remaps of text-less keys, IME |
+| welding fork | `welding` 0.15.0 (MPL-2.0) vendored in `vendor/welding`, excluded from the workspace and from `cargo fmt` by its own `rustfmt.toml` (upstream style, `cargo test -p welding`). Changes, each marked `wubble change` and listed in `vendor/welding/WUBBLE_CHANGES.md`: browser-process `PumpScheduler`, `BrowserClosed` event, Linux `on_paint` count, `windowless_frame_rate` / `external_begin_frame` config, `LoadingStateChanged` / `FaviconUrlsChanged` events. `grafting` is not forked. When moving CEF or welding, start from the new upstream release and re-apply the change list |
 | Helper binary | `wubble-helper` is a separate package, so `cargo build --workspace` must run before `cargo run -p wubble`; the engine refuses to start with a message saying so if the helper is missing |
 
 ## Layout
@@ -98,13 +100,14 @@ copies, on Linux/Wayland/NVIDIA. Nothing else starts until this passes.
 Each item is done when it works on Linux and macOS; Windows is verified on CI.
 
 - [ ] View lifecycle: create, resize, HiDPI + fractional scale, visibility, close
-- [ ] Mouse, wheel (smooth + kinetic), touch, touchpad gestures (pinch-zoom, swipe-back)
-- [ ] Keyboard: layouts, dead keys, shortcuts routed shell-first vs page-first
-- [ ] Cursor shapes and custom cursors
+- [~] Mouse, wheel (smooth + kinetic), touch, touchpad gestures (pinch-zoom, swipe-back): mouse (move, leave, buttons with click count) and pixel wheel on both axes done (see "Web input"); kinetic phase, touch and gestures open
+- [~] Keyboard: layouts, dead keys, shortcuts routed shell-first vs page-first: key down/up/char with modifiers from raw winit, non-US layouts by character then position, shell keeps Ctrl/Cmd+T/L; dead keys unverified (hand check), Caps/Num Lock state and AltGr flag not available from winit
+- [~] Cursor shapes and custom cursors: CEF's shape applied to the window through `WebCursor`; custom (image) cursors and zoom-in/out open
+- [x] Navigation API on a view (load, back, forward, reload, stop) and one host event enum (`WebEvent`); `wubble [URL]`; `--smoke nav`
 - [ ] IME: composition, candidate window positioning (text-input-v3 / TSF / NSTextInputClient)
 - [ ] OSR popups: `<select>`, autofill, date/colour pickers — drawn as Slint layers that may leave the view rect
 - [ ] JS dialogs, context menus, permission prompts, file choosers, auth prompts — all Slint-native
-- [ ] `window.open` / popup windows → wubble's own policy (new tab, glance, real window)
+- [ ] `window.open` / popup windows → wubble's own policy (new tab, glance, real window). Reported as `WebEvent::PopupRequested` (CEF opens nothing); the policy is still open
 - [ ] Multi-window; invisible/hidden windows for background work
 - [ ] Clipboard, drag-and-drop (into, out of, and between views)
 - [ ] Downloads; printing / save as PDF
@@ -112,7 +115,7 @@ Each item is done when it works on Linux and macOS; Windows is verified on CI.
 - [ ] Find in page, zoom, text selection handles
 - [ ] Audio indicators, mute, media session
 - [ ] Accessibility tree bridged into Slint's AccessKit
-- [ ] Crash handling: renderer/GPU process death recovers the view
+- [~] Crash handling: renderer/GPU process death recovers the view. Renderer death: `WebEvent::RendererGone`, the host reloads once per URL with a repaint; GPU process death open
 - [ ] Sandbox enabled on all platforms
 
 ## M2 — Shell (styled after the UX pack)

@@ -1,14 +1,25 @@
-//! One windowless browser: frames, resize, HiDPI scale, close.
+//! One windowless browser: frames, resize, HiDPI scale, close, navigation
+//! and input.
 //!
-//! The lifecycle is the pure [`transition`]; [`View`] wraps welding's
-//! `PlatformCefProducer` (which owns the CEF render handler and the dmabuf
-//! custody) and runs the effects. Views are owned by [`crate::app::Engine`],
-//! which closes them on shutdown and reports each one closed to its lifecycle.
+//! The lifecycle is the pure [`transition`], navigation the pure
+//! [`nav::transition`]; [`View`] wraps welding's `PlatformCefProducer` (which
+//! owns the CEF render handler and the dmabuf custody) and runs the effects.
+//! Input goes straight to the view's CEF `BrowserHost`, translated by
+//! [`crate::input`]. Views are owned by [`crate::app::Engine`], which closes
+//! them on shutdown and reports each one closed to its lifecycle.
 
-use welding::{CefRuntime, CefSurfaceEvent, CefSurfaceProducer, PlatformCefProducer};
+use std::time::Duration;
+
+use cef::{ImplBrowser, ImplBrowserHost};
+use welding::{
+    CefRuntime, CefSurfaceEvent, CefSurfaceProducer, NavigationEvent, PlatformCefProducer,
+};
+use winit::keyboard::PhysicalKey;
 use wubble_gfx::{FrameSize, NativeFrame};
 
 use crate::app::EngineError;
+use crate::input::{self, CefKey, ClickTracker, KeyInput, Modifiers, MouseButton, Point};
+use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 
 /// Physical size and device scale of the rectangle a view fills.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -131,9 +142,18 @@ pub struct ViewConfig {
 /// One live windowless browser.
 pub struct View {
     producer: PlatformCefProducer,
-    /// For log lines; saved at creation because welding zeroes its own copy on close.
+    /// Saved at creation because welding zeroes its own copy on close.
     browser_id: i32,
     state: ViewState,
+    nav: NavState,
+    /// Emitted by navigation effects, handed out by [`Self::drain_events`].
+    events: Vec<WebEvent>,
+    /// Looked up on first input; CEF's own handle, released with the view.
+    host: Option<cef::BrowserHost>,
+    clicks: ClickTracker,
+    /// KEYUPs owed for keys pressed and not yet released, sent if focus
+    /// leaves first so no key sticks.
+    held_keys: Vec<(PhysicalKey, CefKey)>,
 }
 
 impl View {
@@ -145,7 +165,136 @@ impl View {
             producer,
             browser_id,
             state: ViewState::Live { layout },
+            nav: NavState::default(),
+            events: Vec::new(),
+            host: None,
+            clicks: ClickTracker::default(),
+            held_keys: Vec::new(),
         })
+    }
+
+    /// Navigation as the host last heard of it.
+    pub fn nav(&self) -> &NavState {
+        &self.nav
+    }
+
+    pub fn load(&mut self, url: &str) {
+        self.apply_nav(NavInput::Load(url.into()));
+    }
+
+    /// Ignored when there is nothing to go back to.
+    pub fn back(&mut self) {
+        self.apply_nav(NavInput::Back);
+    }
+
+    /// Ignored when there is nothing to go forward to.
+    pub fn forward(&mut self) {
+        self.apply_nav(NavInput::Forward);
+    }
+
+    pub fn reload(&mut self) {
+        self.apply_nav(NavInput::Reload);
+    }
+
+    /// Ignored unless loading.
+    pub fn stop(&mut self) {
+        self.apply_nav(NavInput::Stop);
+    }
+
+    /// `now` is any monotonic time (it only times double clicks).
+    pub fn mouse_move(&mut self, point: Point, modifiers: &Modifiers, now: Duration) {
+        self.clicks.moved(now, point);
+        let event = input::mouse_event(point, modifiers);
+        self.send(|host| host.send_mouse_move_event(Some(&event), 0));
+    }
+
+    pub fn mouse_leave(&mut self, point: Point, modifiers: &Modifiers, now: Duration) {
+        self.clicks.moved(now, point);
+        let event = input::mouse_event(point, modifiers);
+        self.send(|host| host.send_mouse_move_event(Some(&event), 1));
+    }
+
+    /// `modifiers` include the button itself while it is down.
+    pub fn mouse_button(
+        &mut self,
+        button: MouseButton,
+        pressed: bool,
+        point: Point,
+        modifiers: &Modifiers,
+        now: Duration,
+    ) {
+        let count = if pressed {
+            self.clicks.press(now, point, button)
+        } else {
+            self.clicks.count()
+        };
+        let event = input::mouse_event(point, modifiers);
+        let button = input::cef_button(button);
+        self.send(|host| {
+            host.send_mouse_click_event(Some(&event), button, (!pressed).into(), count)
+        });
+    }
+
+    /// Deltas in logical pixels, positive = up / left.
+    pub fn wheel(&mut self, point: Point, dx: f32, dy: f32, modifiers: &Modifiers) {
+        let (dx, dy, flags) = input::wheel_deltas(dx, dy, modifiers);
+        let event = cef::MouseEvent {
+            modifiers: flags,
+            ..input::mouse_event(point, modifiers)
+        };
+        self.send(|host| host.send_mouse_wheel_event(Some(&event), dx, dy));
+    }
+
+    pub fn key(&mut self, key: &KeyInput) {
+        self.held_keys
+            .retain(|(physical, _)| *physical != key.physical);
+        if key.pressed {
+            let release = KeyInput {
+                pressed: false,
+                repeat: false,
+                ..key.clone()
+            };
+            if let Some(&up) = input::key_events(&release).first() {
+                self.held_keys.push((key.physical, up));
+            }
+        }
+        for event in input::key_events(key) {
+            let event = cef::KeyEvent::from(event);
+            self.send(|host| host.send_key_event(Some(&event)));
+        }
+    }
+
+    /// Keyboard focus. Losing it releases every key still held.
+    pub fn focus(&mut self, focused: bool) {
+        if !focused {
+            for (_, up) in std::mem::take(&mut self.held_keys) {
+                let event = cef::KeyEvent::from(up);
+                self.send(|host| host.send_key_event(Some(&event)));
+            }
+        }
+        self.send(|host| host.set_focus(focused.into()));
+    }
+
+    /// The pointer grab ended without a release (Slint's `cancel`).
+    pub fn capture_lost(&mut self) {
+        self.send(|host| host.send_capture_lost_event());
+    }
+
+    /// Runs `f` on the browser host while the view is open.
+    fn send(&mut self, f: impl FnOnce(&cef::BrowserHost)) {
+        if !matches!(
+            self.state,
+            ViewState::Live { .. } | ViewState::Resizing { .. }
+        ) {
+            return;
+        }
+        if self.host.is_none() {
+            self.host = cef::browser_host_get_browser_by_identifier(self.browser_id)
+                .and_then(|browser| browser.host());
+        }
+        if let Some(host) = &self.host {
+            f(host);
+        }
     }
 
     /// Follows the host's content rectangle; unchanged layouts cost nothing.
@@ -174,20 +323,102 @@ impl View {
         self.producer.cpu_paint_count()
     }
 
-    /// Takes the callbacks welding queued since the last call. Returns true
-    /// exactly once, when the view reports itself closed. Only the close is
-    /// used so far; navigation and the other events are dropped here (so the
-    /// queue does not grow) until something consumes them.
-    pub(crate) fn drain_events(&mut self) -> bool {
+    /// Takes the callbacks welding queued since the last call and returns
+    /// what the host should hear, in order, and whether the view reported
+    /// itself closed (true exactly once). Events nothing uses are dropped
+    /// here so the queue does not grow.
+    pub(crate) fn drain_events(&mut self) -> (Vec<WebEvent>, bool) {
         let mut closed = false;
         while let Some(event) = self.producer.poll_web_event() {
-            if let CefSurfaceEvent::BrowserClosed = event {
-                closed |= self
-                    .apply(ViewEvent::GoneFromCef)
-                    .contains(&ViewEffect::ReportClosed);
+            match event {
+                CefSurfaceEvent::BrowserClosed => {
+                    closed |= self
+                        .apply(ViewEvent::GoneFromCef)
+                        .contains(&ViewEffect::ReportClosed);
+                }
+                CefSurfaceEvent::Navigation(event) => {
+                    if let Some(input) = self.nav_input(event) {
+                        self.apply_nav(input);
+                    }
+                }
+                _ => {}
             }
         }
-        closed
+        if let Some(shape) = self.producer.poll_cursor_shape() {
+            self.apply_nav(NavInput::Cursor(shape.into()));
+        }
+        (std::mem::take(&mut self.events), closed)
+    }
+
+    /// The navigation input a welding event stands for, if any.
+    fn nav_input(&self, event: NavigationEvent) -> Option<NavInput> {
+        match event {
+            NavigationEvent::AddressChanged { url } => Some(NavInput::Address(url)),
+            NavigationEvent::TitleChanged { title } => Some(NavInput::Title(title)),
+            NavigationEvent::LoadingStateChanged {
+                loading,
+                can_go_back,
+                can_go_forward,
+            } => Some(NavInput::Loading {
+                loading,
+                can_go_back,
+                can_go_forward,
+            }),
+            NavigationEvent::FaviconUrlsChanged { urls } => Some(NavInput::Favicon(
+                urls.into_iter().next().unwrap_or_default(),
+            )),
+            NavigationEvent::NewWindowRequested { url, .. } => Some(NavInput::Popup(url)),
+            NavigationEvent::ContentProcessTerminated { status, .. } => {
+                eprintln!(
+                    "wubble-engine: view {}: renderer gone ({status:?})",
+                    self.browser_id
+                );
+                Some(NavInput::RendererTerminated)
+            }
+            // ERR_ABORTED (-3) is a navigation replaced by another one.
+            NavigationEvent::LoadError {
+                url,
+                error_code,
+                error_text,
+            } if error_code != -3 => {
+                eprintln!(
+                    "wubble-engine: view {}: {url} failed: {error_text} ({error_code})",
+                    self.browser_id
+                );
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn apply_nav(&mut self, input: NavInput) {
+        let (next, effects) = nav::transition(std::mem::take(&mut self.nav), input);
+        self.nav = next;
+        for effect in effects {
+            self.execute_nav(effect);
+        }
+    }
+
+    /// The only place navigation effects touch CEF.
+    fn execute_nav(&mut self, effect: NavEffect) {
+        let result = match &effect {
+            NavEffect::Emit(event) => {
+                self.events.push(event.clone());
+                return;
+            }
+            NavEffect::Load(url) => self.producer.navigate_to_url(url),
+            NavEffect::Back => self.producer.go_back(),
+            NavEffect::Forward => self.producer.go_forward(),
+            NavEffect::Reload => self.producer.reload(),
+            NavEffect::Stop => self.producer.stop(),
+            NavEffect::Repaint => self.producer.request_repaint(),
+        };
+        if let Err(e) = result {
+            eprintln!(
+                "wubble-engine: view {}: {effect:?} failed: {e}",
+                self.browser_id
+            );
+        }
     }
 
     /// Runs the transition and its CEF effects. Returns the effects meant for

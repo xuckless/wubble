@@ -5,6 +5,26 @@ import { Sidebar } from "components/sidebar.slint";
 
 export { TabItem, SpaceItem, Colors, CommandResult, CommandKind, CommandBarState }
 
+// The pointer shapes a page can ask for: the engine's `Cursor`, one to one.
+export enum WebCursor {
+    default,
+    none,
+    pointer,
+    text,
+    wait,
+    progress,
+    crosshair,
+    move,
+    not-allowed,
+    help,
+    grab,
+    grabbing,
+    ns-resize,
+    ew-resize,
+    nesw-resize,
+    nwse-resize,
+}
+
 export component AppWindow inherits Window {
     title: "wubble";
     preferred-width: Sizes.window-width;
@@ -24,6 +44,20 @@ export component AppWindow inherits Window {
     // the browser from these and the window's scale factor.
     out property <length> content-width: content.width;
     out property <length> content-height: content.height;
+
+    // Input over the web content, in view-relative logical pixels. The host
+    // forwards it to the page; nothing here interprets it.
+    in property <WebCursor> web-cursor;
+    // The web content has keyboard focus (the host sends it keys only then).
+    out property <bool> web-focused: web-focus.has-focus;
+    callback web-pointer-moved(x: length, y: length);
+    callback web-pointer-left(x: length, y: length);
+    callback web-pointer-pressed(button: PointerEventButton, x: length, y: length);
+    callback web-pointer-released(button: PointerEventButton, x: length, y: length);
+    // The pointer grab ended without a release.
+    callback web-pointer-cancelled();
+    callback web-scrolled(x: length, y: length, delta-x: length, delta-y: length);
+    callback web-focus-changed(focused: bool);
 
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
@@ -54,6 +88,25 @@ export component AppWindow inherits Window {
     public function request-address-focus() {
         bar.dispatch(CommandBarEvent.open);
         root.address-focus-requested();
+    }
+
+    pure function mouse-cursor(cursor: WebCursor) -> MouseCursor {
+        if cursor == WebCursor.none { return MouseCursor.none; }
+        if cursor == WebCursor.pointer { return MouseCursor.pointer; }
+        if cursor == WebCursor.text { return MouseCursor.text; }
+        if cursor == WebCursor.wait { return MouseCursor.wait; }
+        if cursor == WebCursor.progress { return MouseCursor.progress; }
+        if cursor == WebCursor.crosshair { return MouseCursor.crosshair; }
+        if cursor == WebCursor.move { return MouseCursor.move; }
+        if cursor == WebCursor.not-allowed { return MouseCursor.not-allowed; }
+        if cursor == WebCursor.help { return MouseCursor.help; }
+        if cursor == WebCursor.grab { return MouseCursor.grab; }
+        if cursor == WebCursor.grabbing { return MouseCursor.grabbing; }
+        if cursor == WebCursor.ns-resize { return MouseCursor.ns-resize; }
+        if cursor == WebCursor.ew-resize { return MouseCursor.ew-resize; }
+        if cursor == WebCursor.nesw-resize { return MouseCursor.nesw-resize; }
+        if cursor == WebCursor.nwse-resize { return MouseCursor.nwse-resize; }
+        return MouseCursor.default;
     }
 
     root-keys := FocusScope {
@@ -95,9 +148,42 @@ export component AppWindow inherits Window {
                     source-clip-height: root.web-frame-clip-height;
                     image-fit: fill;
                 }
+                // Over the frame and under the command bar, so the bar takes
+                // its own pointer events and the page only gets the rest.
+                web-focus := FocusScope {
+                    width: 100%;
+                    height: 100%;
+                    changed has-focus => {
+                        root.web-focus-changed(self.has-focus);
+                    }
+                    TouchArea {
+                        mouse-cursor: root.mouse-cursor(root.web-cursor);
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down {
+                                web-focus.focus();
+                                root.web-pointer-pressed(event.button, self.mouse-x, self.mouse-y);
+                            } else if event.kind == PointerEventKind.up {
+                                root.web-pointer-released(event.button, self.mouse-x, self.mouse-y);
+                            } else if event.kind == PointerEventKind.move {
+                                root.web-pointer-moved(self.mouse-x, self.mouse-y);
+                            } else {
+                                root.web-pointer-cancelled();
+                            }
+                        }
+                        scroll-event(event) => {
+                            root.web-scrolled(self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                            accept
+                        }
+                        changed has-hover => {
+                            if !self.has-hover {
+                                root.web-pointer-left(self.mouse-x, self.mouse-y);
+                            }
+                        }
+                    }
+                }
                 bar := CommandBar {
                     closed => {
-                        root-keys.focus();
+                        web-focus.focus();
                     }
                 }
             }
@@ -105,6 +191,6 @@ export component AppWindow inherits Window {
     }
 
     init => {
-        root-keys.focus();
+        web-focus.focus();
     }
 }

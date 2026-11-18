@@ -22,6 +22,7 @@ pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
+use crate::nav::WebEvent;
 use crate::view::{View, ViewConfig};
 
 /// Sandbox off on every platform for now (TODO.md, M1 "Sandbox enabled").
@@ -194,12 +195,14 @@ pub enum PumpTimer {
 }
 
 /// The result of one pump call.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PumpOutcome {
     /// The last timer request (a later one replaces an earlier one).
     pub timer: Option<PumpTimer>,
     /// CEF did work, so views may have new frames.
     pub worked: bool,
+    /// What the views reported during that work, in order.
+    pub events: Vec<(ViewId, WebEvent)>,
 }
 
 /// The running CEF process. Drive it only from the thread that started it.
@@ -313,7 +316,7 @@ impl Engine {
                     PumpEffect::StartTimer(delay) => outcome.timer = Some(PumpTimer::Start(delay)),
                     PumpEffect::CancelTimer => outcome.timer = Some(PumpTimer::Cancel),
                     PumpEffect::RunWork => {
-                        self.run_work();
+                        outcome.events.extend(self.run_work());
                         outcome.worked = true;
                         next = Some(PumpEvent::WorkDone);
                     }
@@ -323,17 +326,19 @@ impl Engine {
         outcome
     }
 
-    /// One `do_message_loop_work`, then the views' callbacks (closes) it produced.
-    fn run_work(&mut self) {
+    /// One `do_message_loop_work`, then the views' callbacks it produced.
+    fn run_work(&mut self) -> Vec<(ViewId, WebEvent)> {
         if let Some(runtime) = &self.runtime {
             runtime.do_message_loop_work();
         }
-        self.reap_closed_views();
+        self.reap_closed_views()
     }
 
     /// The only place lifecycle effects touch CEF.
     fn execute(&mut self, effect: Effect) {
         match effect {
+            // Synchronous pumps (tick, shutdown) have no host to hear the
+            // views' web events; they are dropped.
             Effect::PumpOnce => {
                 self.pump(PumpEvent::Schedule(0));
             }
@@ -349,13 +354,20 @@ impl Engine {
         }
     }
 
-    /// Drops views CEF reported closed and reports each one to the lifecycle.
-    fn reap_closed_views(&mut self) {
+    /// Collects the views' events, drops views CEF reported closed and
+    /// reports each one to the lifecycle.
+    fn reap_closed_views(&mut self) -> Vec<(ViewId, WebEvent)> {
+        let mut events = Vec::new();
         let before = self.views.len();
-        self.views.retain_mut(|(_, view)| !view.drain_events());
+        self.views.retain_mut(|(id, view)| {
+            let (new, closed) = view.drain_events();
+            events.extend(new.into_iter().map(|event| (*id, event)));
+            !closed
+        });
         for _ in self.views.len()..before {
             self.apply(Event::BrowserClosed);
         }
+        events
     }
 }
 

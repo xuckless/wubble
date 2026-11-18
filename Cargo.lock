@@ -7412,6 +7412,7 @@ dependencies = [
  "cef",
  "dpi",
  "welding",
+ "winit",
  "wubble-core",
  "wubble-gfx",
 ]
