@@ -515,6 +515,17 @@ impl Renderer {
         self.quality = quality;
     }
 
+    /// The output texture read back as RGBA8 (width, height, pixels), for checks: it waits for
+    /// the GPU, so never on the frame path.
+    pub fn readback(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let t = self.output()?;
+        Some((
+            t.width(),
+            t.height(),
+            readback_rgba8(&self.device, &self.queue, t),
+        ))
+    }
+
     /// The texture Slint shows, once the first frame has a size.
     pub fn output(&self) -> Option<&wgpu::Texture> {
         self.sized.as_ref().map(|s| &s.out.tex)
@@ -524,8 +535,13 @@ impl Renderer {
     /// Slint draws: sizes the scene to the window, advances it by the time
     /// since the last call (capped at [`MAX_DT`]), renders it and asks for
     /// the next frame (the liquid always drifts). Returns the image to show at
-    /// the back of the window when the output texture is new (first frame,
-    /// resize); `Ok(None)` means the image already set is still the one.
+    /// the back of the window, a new one every frame (`Ok(None)` only before
+    /// the first): set it every frame, even when the output texture is the same.
+    /// wubble change: Slint caches what a rounded clip draws (the window's
+    /// corners) as a layer, redrawn only when a property under it changes; a
+    /// texture rendered into in place is not one, so the scene showed a frozen
+    /// frame, its glass at a stale layout (owner: "the glass doesn't grow past a
+    /// certain size", the extended pill's glass in rail mode).
     pub fn before_rendering(
         &mut self,
         window: &slint::Window,
@@ -537,9 +553,10 @@ impl Renderer {
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        let tex = self.render_under_ui(size.width, size.height, dpr, dt.min(MAX_DT));
+        self.render_under_ui(size.width, size.height, dpr, dt.min(MAX_DT));
         window.request_redraw();
-        tex.map(|t| slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string())))
+        self.output()
+            .map(|t| slint::Image::try_from(t.clone()).map_err(|e| GfxError::Image(e.to_string())))
             .transpose()
     }
 

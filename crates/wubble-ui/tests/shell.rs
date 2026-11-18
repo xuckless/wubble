@@ -329,6 +329,7 @@ fn shell_scenarios() {
     space_capsule(&app, &driver);
     popup_input(&app);
     split_panes(&app, &driver);
+    split_seam_drag(&app);
     header_and_footer(&app, &driver);
     rail_centre_line(&app, &driver);
     peek_panel_holds_its_contents(&app, &driver);
@@ -635,6 +636,152 @@ fn split_panes(app: &AppWindow, driver: &Shared) {
         pressed.borrow().len(),
         n,
         "the seam's press is not the page's"
+    );
+
+    app.set_panes(ModelRc::default());
+    app.set_seams(ModelRc::default());
+    pump(1);
+}
+
+/// The seam between two split pages, pressed, dragged 80 px and released through real pointer
+/// events, as the host runs it (crates/wubble/src/panes.rs, host/panes.rs): the callbacks drive
+/// the split physics (`wubble_core::split`), which is stepped per frame and written back into the
+/// `panes` and `seams` models in place. The panes resize and the release settles new stops (the
+/// host's `ResizeSplit`). Owner: "split tab resizing doesn't work yet".
+fn split_seam_drag(app: &AppWindow) {
+    use slint::VecModel;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use wubble_core::split::{Split, SplitEvent};
+
+    let (cx, cy, w, h) = (
+        app.get_content_x(),
+        app.get_content_y(),
+        f64::from(app.get_content_width()),
+        f64::from(app.get_content_height()),
+    );
+    let split = Rc::new(RefCell::new(Split::new()));
+    split.borrow_mut().sync(&[1, 2], &[0.5]);
+    let panes = Rc::new(VecModel::<SplitPane>::default());
+    let seams = Rc::new(VecModel::<SplitSeam>::default());
+    app.set_panes(ModelRc::from(panes.clone()));
+    app.set_seams(ModelRc::from(seams.clone()));
+    // one frame: step the physics, write the rows that changed
+    let frame = |dt: f64| {
+        let mut s = split.borrow_mut();
+        s.step(dt, w, h);
+        let rows: Vec<SplitPane> = s
+            .panes()
+            .iter()
+            .map(|p| pane(p.id as i32, p.x0 as f32, p.x1 as f32))
+            .collect();
+        let lines: Vec<SplitSeam> = s
+            .seams()
+            .iter()
+            .map(|&(x, _, _)| SplitSeam {
+                x: x as f32,
+                path: Default::default(),
+            })
+            .collect();
+        drop(s);
+        wubble_ui::sync(&panes, rows);
+        wubble_ui::sync(&seams, lines);
+        pump(1);
+    };
+    let s = split.clone();
+    app.on_split_grab(move |j, x, y| s.borrow_mut().grab(j as usize, f64::from(x), f64::from(y)));
+    let s = split.clone();
+    app.on_split_drag(move |x, y| s.borrow_mut().drag(f64::from(x), f64::from(y)));
+    let s = split.clone();
+    app.on_split_release(move || s.borrow_mut().release());
+    frame(0.0);
+    let seam = seams.row_data(0).unwrap().x;
+    let left = |m: &VecModel<SplitPane>| m.row_data(0).map(|p| p.x1 - p.x0).unwrap();
+    let before = left(&panes);
+
+    let y = cy + 300.0;
+    // Press at `from` (content px), move to `to` in eight steps a frame each, hold a second;
+    // returns the left pane's width while held, then lets go and returns what settled.
+    let drag = |from: f32, to: f32| {
+        pointer(app, cx + from, y);
+        button(app, cx + from, y, true);
+        assert_eq!(
+            split.borrow().held,
+            Some(0),
+            "the press at {from} grabbed the seam"
+        );
+        for k in 1..=8 {
+            pointer(app, cx + from + (to - from) * k as f32 / 8.0, y);
+            frame(f64::from(DT));
+        }
+        for _ in 0..60 {
+            frame(f64::from(DT));
+        }
+        let held = left(&panes);
+        button(app, cx + to, y, false);
+        assert_eq!(split.borrow().held, None, "the release let go");
+        let events = std::mem::take(&mut split.borrow_mut().events);
+        (held, events)
+    };
+
+    // grabbed at the edge of the design's 20 px strip (the port's 12 px missed it), dragged
+    // 80 px left: the pane follows the pointer and the release settles new stops
+    let from = seam - 9.0;
+    let (held, events) = drag(from, from - 80.0);
+    let want = from - 80.0 - 4.0;
+    assert!(
+        (held - want).abs() < 2.0,
+        "held, the left pane is {held} (was {before}), want {want}"
+    );
+    let [SplitEvent::Stops(stops)] = events.as_slice() else {
+        panic!("the release settled no stops: {events:?}")
+    };
+    let want = f64::from(from - 80.0) / w;
+    assert!(
+        (stops[0] - want).abs() < 0.01,
+        "stops {stops:?}, want {want}"
+    );
+    for _ in 0..120 {
+        frame(f64::from(DT));
+    }
+    assert!(
+        (left(&panes) - held).abs() < 2.0,
+        "it stays where it was let go"
+    );
+
+    // past the 280 px minimum it rubber-bands (held under it, not at the pointer), and settles
+    // at the minimum
+    let seam = seams.row_data(0).unwrap().x;
+    let (held, events) = drag(seam, 200.0);
+    let min = wubble_core::split::SPLIT::minPane as f32;
+    assert!(
+        held < min && held > min - 34.0,
+        "held past the minimum the pane is {held}"
+    );
+    assert!(
+        matches!(events.as_slice(), [SplitEvent::Stops(_)]),
+        "{events:?}"
+    );
+    for _ in 0..120 {
+        frame(f64::from(DT));
+    }
+    assert!(
+        (left(&panes) - min).abs() < 1.0,
+        "settled at {}",
+        left(&panes)
+    );
+
+    // dragged shut (under 140 px) and let go, the pane closes
+    let seam = seams.row_data(0).unwrap().x;
+    let (_, events) = drag(seam, 40.0);
+    assert!(events.is_empty(), "{events:?}");
+    for _ in 0..240 {
+        frame(f64::from(DT));
+    }
+    let events = std::mem::take(&mut split.borrow_mut().events);
+    assert!(
+        matches!(events.as_slice(), [SplitEvent::Closed { id: 1, .. }]),
+        "dragged shut, the left pane closes: {events:?}"
     );
 
     app.set_panes(ModelRc::default());

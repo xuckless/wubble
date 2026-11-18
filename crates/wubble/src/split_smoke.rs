@@ -1,11 +1,19 @@
 //! `--smoke split`: two tabs on the bundled page, split side by side; once the split rests,
 //! each pane must hold its own live view painting at its pane's size and show its page in the
-//! window; then the split is undone and one view stays. Every wait is "until the host sees X",
+//! window; then the seam between them is dragged [`DRAG`] px left and let go (the shell's seam
+//! callbacks), and both views must repaint at the new sizes; then the split is undone and one
+//! view stays. Every wait is "until the host sees X",
 //! bounded by a count of CEF work runs, never by time.
 
 use wubble_gfx::FrameSize;
 
 use crate::nav_smoke::MAX_WORK_RUNS;
+
+/// How far the smoke drags the seam left, logical px.
+pub const DRAG: f32 = 80.0;
+/// The left pane must narrow by more than this (physical px) for the drag to count: most of
+/// [`DRAG`] at any scale of at least 1.
+const NARROWED: u32 = 60;
 
 /// One page on screen: the frame size its pane asks for, and the size of its last frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,8 +52,19 @@ pub enum Stage {
     Opened,
     /// Split, waiting for two live panes at their sizes.
     Split,
-    /// The panes' pixels checked; waiting one run before unsplitting.
+    /// The panes' pixels checked; next, grab the seam and drag it.
     Checked,
+    /// The seam is held [`DRAG`] px left of where it rested, when the left pane was `left`
+    /// physical px wide; waiting for the pane to follow before letting go.
+    Held {
+        left: u32,
+    },
+    /// Let go; waiting for both panes to rest, painted at their new sizes.
+    Released {
+        left: u32,
+    },
+    /// The resize checked; next, unsplit.
+    Resized,
     /// Unsplit, waiting for one page alone.
     Unsplit,
     Done,
@@ -75,10 +94,21 @@ pub enum Action {
     Split,
     /// Snapshot the window and check every pane shows its page; a failure fails the smoke.
     CheckPixels,
+    /// Press the seam between the panes and drag it [`DRAG`] px left (held).
+    Grab,
+    /// Let go of the seam.
+    Release,
+    /// The panes rest at their new sizes, both painting at them: (left, right) physical px.
+    Resized(u32, u32),
     /// Take the focused page out of the split.
     Unsplit,
     Pass,
     Fail(String),
+}
+
+/// The left of two panes is narrower than `left` by more than [`NARROWED`].
+fn narrowed(seen: &Seen, left: u32) -> bool {
+    seen.panes.len() == 2 && seen.panes[0].want.width + NARROWED < left
 }
 
 pub fn next(s: SplitSmoke, seen: &Seen) -> (SplitSmoke, Option<Action>) {
@@ -87,7 +117,18 @@ pub fn next(s: SplitSmoke, seen: &Seen) -> (SplitSmoke, Option<Action>) {
         Stage::Start => Some((Stage::Opened, Action::OpenSecond)),
         Stage::Opened if seen.tabs == 2 && seen.showing(1) => Some((Stage::Split, Action::Split)),
         Stage::Split if seen.showing(2) => Some((Stage::Checked, Action::CheckPixels)),
-        Stage::Checked => Some((Stage::Unsplit, Action::Unsplit)),
+        Stage::Checked => seen
+            .panes
+            .first()
+            .map(|p| (Stage::Held { left: p.want.width }, Action::Grab)),
+        Stage::Held { left } if narrowed(seen, left) => {
+            Some((Stage::Released { left }, Action::Release))
+        }
+        Stage::Released { left } if seen.showing(2) && narrowed(seen, left) => Some((
+            Stage::Resized,
+            Action::Resized(seen.panes[0].want.width, seen.panes[1].want.width),
+        )),
+        Stage::Resized => Some((Stage::Unsplit, Action::Unsplit)),
         Stage::Unsplit if seen.tabs == 2 && seen.showing(1) => Some((Stage::Done, Action::Pass)),
         _ => None,
     };
@@ -152,6 +193,21 @@ mod tests {
         let (s, a) = next(s, &seen(2, vec![pane(496, true), pane(496, true)], 2));
         assert_eq!(a, Some(Action::CheckPixels));
         let (s, a) = next(s, &seen(2, vec![pane(496, true), pane(496, true)], 2));
+        assert_eq!(a, Some(Action::Grab));
+        // held: the left pane has not followed yet, then it has
+        let mut held = seen(2, vec![pane(496, true), pane(496, true)], 2);
+        held.at_rest = false;
+        let (s, a) = next(s, &held);
+        assert_eq!(a, None);
+        held.panes = vec![pane(416, false), pane(576, false)];
+        let (s, a) = next(s, &held);
+        assert_eq!(a, Some(Action::Release));
+        // let go: not until both have painted at their new sizes
+        let (s, a) = next(s, &seen(2, vec![pane(416, true), pane(576, false)], 2));
+        assert_eq!(a, None);
+        let (s, a) = next(s, &seen(2, vec![pane(416, true), pane(576, true)], 2));
+        assert_eq!(a, Some(Action::Resized(416, 576)));
+        let (s, a) = next(s, &seen(2, vec![pane(416, true), pane(576, true)], 2));
         assert_eq!(a, Some(Action::Unsplit));
         // two views still visible: not yet
         let (s, a) = next(s, &seen(2, vec![pane(1000, true)], 2));

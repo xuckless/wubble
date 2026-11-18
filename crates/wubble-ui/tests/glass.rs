@@ -74,6 +74,9 @@ fn glass_panels_report_their_items() {
 
     // The seam narrows the sidebar: its item follows.
     app.set_sidebar_width(220.0);
+    // the contents follow (the driver's contents spring, at rest): laid out wider, they would
+    // sit centred past the sidebar's left edge, and their glass would be cut there
+    app.set_sidebar_contents(220.0);
     pump(1);
     assert_eq!(item(&seen, sidebar).width, 220.0);
 

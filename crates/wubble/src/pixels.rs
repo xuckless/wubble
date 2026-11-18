@@ -99,6 +99,47 @@ pub fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region) -> Result
     Ok(sample)
 }
 
+/// Mean difference (0-255, per channel) above which the window does not show the scene.
+const MAX_SCENE_DIFF: u32 = 4;
+
+/// The window shows the scene's current frame in `region` (where Slint draws nothing over it):
+/// `scene` is that frame read back, RGBA8 at the snapshot's size. Returns the mean difference.
+/// A frozen copy (Slint's rounded-clip layer cache) differs wherever the liquid moved or the
+/// glass changed.
+pub fn check_shows_scene(
+    snapshot: &SharedPixelBuffer<Rgba8Pixel>,
+    scene: &[u8],
+    region: Region,
+) -> Result<u32, String> {
+    let width = snapshot.width();
+    if scene.len() != snapshot.as_slice().len() * 4 {
+        return Err("the scene's frame is not the window's size".into());
+    }
+    let pixels = snapshot.as_slice();
+    let mut sum = 0u32;
+    for row in 0..GRID {
+        for col in 0..GRID {
+            let x = region.x + region.width * (2 * col + 1) / (2 * GRID);
+            let y = region.y + region.height * (2 * row + 1) / (2 * GRID);
+            let i = (y * width + x) as usize;
+            let (p, q) = (pixels[i], &scene[i * 4..i * 4 + 3]);
+            sum += [p.r, p.g, p.b]
+                .iter()
+                .zip(q)
+                .map(|(a, b)| u32::from(a.abs_diff(*b)))
+                .sum::<u32>();
+        }
+    }
+    let mean = sum / (GRID * GRID * 3);
+    if mean > MAX_SCENE_DIFF {
+        return Err(format!(
+            "region {region:?} is not the scene's current frame (mean difference {mean} > \
+             {MAX_SCENE_DIFF}): the window shows a stale copy of the scene"
+        ));
+    }
+    Ok(mean)
+}
+
 /// The bundled smoke page's swatches show their exact colours (see
 /// [`wubble_gfx::swatch`]); `region` is where the page sits in the snapshot.
 pub fn check_swatches(
@@ -145,6 +186,24 @@ mod tests {
         });
         let sample = check(&b, ALL).expect("a bright gradient passes");
         assert_eq!(sample.distinct, (GRID * GRID) as usize);
+    }
+
+    #[test]
+    fn the_scene_shown_matches_its_frame() {
+        let b = buffer(64, 64, |x, y| Rgba8Pixel::new(x as u8, y as u8, 9, 255));
+        let rgba = |dx: u8| -> Vec<u8> {
+            b.as_slice()
+                .iter()
+                .flat_map(|p| [p.r.saturating_add(dx), p.g, p.b, 255])
+                .collect()
+        };
+        assert_eq!(check_shows_scene(&b, &rgba(0), ALL), Ok(0));
+        assert!(
+            check_shows_scene(&b, &rgba(40), ALL)
+                .unwrap_err()
+                .contains("stale")
+        );
+        assert!(check_shows_scene(&b, &[0; 4], ALL).is_err());
     }
 
     #[test]

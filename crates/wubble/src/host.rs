@@ -772,7 +772,7 @@ impl Host {
     }
 
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill.
+    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
         if !self.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
@@ -796,7 +796,14 @@ impl Host {
             height: physical(h, scale),
         };
         let sample = pixels::check_varied(shot, region)?;
-        println!("smoke: glass ok distinct={}", sample.distinct);
+        // What the window shows there is the scene's frame of this render, not an older one.
+        let (_, _, scene) = self
+            .glass
+            .borrow()
+            .readback()
+            .ok_or("the scene has no frame")?;
+        let diff = pixels::check_shows_scene(shot, &scene, region)?;
+        println!("smoke: glass ok distinct={} diff={diff}", sample.distinct);
         Ok(())
     }
 
@@ -1263,6 +1270,25 @@ impl Host {
                     ),
                     Err(e) => self.fail(e),
                 }
+            }
+            // The seam's gestures through the host's entry points the shell's `split-grab`,
+            // `split-drag` and `split-release` call (the Slint side, hit strip included, is
+            // tests/shell.rs `split_seam_drag`). Synthetic pointer events would race the real
+            // pointer: the host replays it on a cursor change.
+            Some(split_smoke::Action::Grab) => {
+                let height = window.get_content_height();
+                match self.panes.seams(height.into()).first() {
+                    Some(&(x, _)) => {
+                        let (x, y) = (x as f32, height / 2.0);
+                        self.split_grab(0, x, y);
+                        self.split_drag(x - split_smoke::DRAG, y);
+                    }
+                    None => self.fail("split: no seam to grab".into()),
+                }
+            }
+            Some(split_smoke::Action::Release) => self.split_release(),
+            Some(split_smoke::Action::Resized(left, right)) => {
+                println!("smoke: split resized panes {left}+{right}");
             }
             Some(split_smoke::Action::Unsplit) => {
                 if let Some(tab) = self.model.visible_tab() {

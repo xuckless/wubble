@@ -18,6 +18,9 @@ export component AddressPill inherits Rectangle {
     in property <bool> compact: false;
     // The scene draws this pill's glass (and its border beam).
     in property <bool> over-wgpu: false;
+    // The window x range the sidebar shows: the glass is cut to it (GlassPanel `clip-start`).
+    in property <length> glass-clip-start: -Shell.no-clip;
+    in property <length> glass-clip-end: Shell.no-clip;
     // A page is loading. The design's border beam (chrome.tsx `Address`) is the scene's
     // (`set_beam` on this pill's glass rect, `lap_beam` when loading starts); this is its Slint
     // fallback (GlowRing), used wherever the scene does not draw this pill (no scene, or the
@@ -42,6 +45,8 @@ export component AddressPill inherits Rectangle {
         visible: !root.compact;
         key: GlassKeys.address;
         over-wgpu: root.over-wgpu;
+        clip-start: root.glass-clip-start;
+        clip-end: root.glass-clip-end;
         tier: GlassTier.thin;
         radius: Shell.control-radius;
         hover: ta.has-hover;
