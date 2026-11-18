@@ -17,7 +17,6 @@ pub enum State {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     Initialised,
-    InitFailed,
     BrowserOpened,
     BrowserClosed,
     ShutdownRequested,
@@ -38,7 +37,6 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
     use {Effect::*, Event::*, State::*};
     match (state, event) {
         (Uninitialised, Initialised) => (Running { browsers: 0 }, vec![]),
-        (Uninitialised, InitFailed) => (Stopped, vec![]),
         (Running { browsers }, BrowserOpened) => (
             Running {
                 browsers: browsers.saturating_add(1),
@@ -71,9 +69,8 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
 mod tests {
     use super::{Effect::*, Event::*, State::*, *};
 
-    const EVENTS: [Event; 6] = [
+    const EVENTS: [Event; 5] = [
         Initialised,
-        InitFailed,
         BrowserOpened,
         BrowserClosed,
         ShutdownRequested,
@@ -92,7 +89,6 @@ mod tests {
     fn expected(state: State, event: Event) -> (State, Vec<Effect>) {
         match (state, event) {
             (Uninitialised, Initialised) => (Running { browsers: 0 }, vec![]),
-            (Uninitialised, InitFailed) => (Stopped, vec![]),
             (Running { browsers: n }, BrowserOpened) => (Running { browsers: n + 1 }, vec![]),
             (Running { browsers: 0 }, BrowserClosed) => (Running { browsers: 0 }, vec![]),
             (Running { browsers: n }, BrowserClosed) => (Running { browsers: n - 1 }, vec![]),
@@ -192,9 +188,6 @@ mod tests {
             assert_eq!(state, Stopped, "{path:?}");
             assert_eq!(shutdown_count(&effects), 1, "{path:?}");
         }
-        let (state, effects) = run(&[InitFailed, ShutdownRequested, Tick]);
-        assert_eq!(state, Stopped);
-        assert_eq!(shutdown_count(&effects), 0, "nothing to shut down");
     }
 
     #[test]

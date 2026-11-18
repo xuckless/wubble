@@ -43,12 +43,9 @@ fn main() -> ExitCode {
     }
 }
 
-fn start_engine() -> Result<Engine, EngineError> {
-    Engine::start(EngineConfig::from_current_exe()?)
-}
-
 /// Pumps until every browser is closed and CEF has shut down. Bounded by the
-/// lifecycle state, not by time.
+/// lifecycle state, not by time: it relies on the engine reporting every
+/// browser closed (see `Effect::CloseAllBrowsers` in wubble-engine).
 fn drain(engine: &mut Engine) {
     engine.request_shutdown();
     while !engine.is_stopped() {
@@ -56,17 +53,33 @@ fn drain(engine: &mut Engine) {
     }
 }
 
+/// Boots with a fresh per-process cache so concurrent smokes (lanes, CI jobs,
+/// a smoke next to an open browser) never share CEF's singleton lock.
 fn smoke_boot() -> Result<(), EngineError> {
-    let mut engine = start_engine()?;
-    for _ in 0..SMOKE_TICKS {
-        engine.tick();
+    let cache_dir = std::env::temp_dir().join(format!("wubble-smoke-{}", std::process::id()));
+    let config = EngineConfig {
+        cache_dir: cache_dir.clone(),
+        ..EngineConfig::from_current_exe()?
+    };
+    let result = Engine::start(config).map(|mut engine| {
+        for _ in 0..SMOKE_TICKS {
+            engine.tick();
+        }
+        drain(&mut engine);
+    });
+    // CEF has shut down (or never started), so nothing holds the directory.
+    if let Err(e) = std::fs::remove_dir_all(&cache_dir)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("smoke: could not remove {}: {e}", cache_dir.display());
     }
-    drain(&mut engine);
-    Ok(())
+    result
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let engine = Rc::new(RefCell::new(start_engine()?));
+    let engine = Rc::new(RefCell::new(Engine::start(
+        EngineConfig::from_current_exe()?,
+    )?));
     let window = AppWindow::new()?;
 
     let pump = slint::Timer::default();

@@ -7,7 +7,8 @@
 use welding::{CefRuntime, CefSandboxMode};
 
 fn main() {
-    // Must match `SANDBOX` in wubble-engine/src/app.rs.
+    // Must match `SANDBOX` in wubble-engine/src/app.rs. Duplicated on purpose:
+    // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
     let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
     std::process::exit(CefRuntime::run_subprocess(&cef::args::Args::new(), sandbox));
 }
