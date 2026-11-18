@@ -15,6 +15,7 @@ use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
+use wubble_gfx::scene::run::{RunEvent, RunState};
 use wubble_gfx::scene::{
     BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
 };
@@ -100,6 +101,8 @@ pub struct SceneHost {
     /// The last logical pointer position, for taps.
     pointer: Option<(f32, f32)>,
     image_error_logged: bool,
+    /// When the scene draws (`run_state`): full rate, idle drift or paused.
+    run: crate::run_state::Runner,
 }
 
 /// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value, `scene` the
@@ -146,6 +149,7 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
                 loading: false,
                 pointer: None,
                 image_error_logged: false,
+                run: Default::default(),
             }))
         }
         Err(reason) => {
@@ -242,6 +246,9 @@ impl Glass {
         let Glass::Scene(s) = self else {
             return;
         };
+        if s.run.state() == RunState::Paused {
+            return;
+        }
         if let Some(items) = glass {
             s.set_items(window, items);
         }
@@ -268,11 +275,17 @@ impl Glass {
         }
         s.loading = loading;
 
+        // Idle frames are slow on purpose: they say nothing about the frame's load.
+        let full_rate = s.run.state() == RunState::Running;
         let interval = s
             .renderer
             .last_frame()
-            .map(|t| now.saturating_duration_since(t));
-        match s.renderer.before_rendering(window.window(), now) {
+            .map(|t| now.saturating_duration_since(t))
+            .filter(|_| full_rate);
+        match s
+            .renderer
+            .before_rendering(window.window(), now, s.run.max_dt())
+        {
             // every frame: see `Renderer::before_rendering`
             Ok(Some(image)) => window.set_scene(image),
             Ok(None) => {}
@@ -283,6 +296,15 @@ impl Glass {
             }
         }
         s.govern(window, interval);
+        let animating = s.renderer.animating();
+        s.run.frame_done(window, now, animating, glass.is_some());
+    }
+
+    /// A window event that changes when the scene draws (`run_state::event_of`).
+    pub fn run_event(&mut self, event: RunEvent, window: &AppWindow) {
+        if let Glass::Scene(s) = self {
+            s.run.on(event, window);
+        }
     }
 
     /// The pointer moved, in logical px.
@@ -290,6 +312,7 @@ impl Glass {
         if let Glass::Scene(s) = self {
             s.pointer = Some((x, y));
             s.renderer.scene.pointer_move(x, y);
+            s.run.pointer_moved(Instant::now());
         }
     }
 

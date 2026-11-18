@@ -134,7 +134,12 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
             }
             Some(Row::Split) => out.push(mk(String::new(), Run::SplitEntries(tab))),
             Some(Row::Mute) => out.push(mk(
-                if facts.muted { "Unmute Tab" } else { "Mute Tab" }.into(),
+                if facts.muted {
+                    "Unmute Tab"
+                } else {
+                    "Mute Tab"
+                }
+                .into(),
                 Run::ToggleMute(tab),
             )),
             Some(Row::NeverSleep) => {
@@ -156,10 +161,9 @@ pub fn entries(model: &Model, tab: TabId, facts: Facts) -> Vec<Entry> {
                     ));
                 }
             }
-            Some(Row::Close) => out.push(mk(
-                "Close Tab".into(),
-                Run::Model(Command::CloseTab(tab)),
-            )),
+            Some(Row::Close) => {
+                out.push(mk("Close Tab".into(), Run::Model(Command::CloseTab(tab))))
+            }
         }
     }
     if out.last().is_some_and(|e| e.run == Run::Separator) {
@@ -244,7 +248,10 @@ mod tests {
             },
         );
         let e = entries(&m, TabId(1), Facts::default());
-        let mv: Vec<&Entry> = e.iter().filter(|e| e.label.starts_with("Move to")).collect();
+        let mv: Vec<&Entry> = e
+            .iter()
+            .filter(|e| e.label.starts_with("Move to"))
+            .collect();
         assert_eq!(mv.len(), 1);
         assert_eq!(mv[0].label, "Move to Work");
         let Run::Model(cmd) = mv[0].run.clone() else {

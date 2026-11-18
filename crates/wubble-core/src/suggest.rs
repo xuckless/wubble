@@ -120,7 +120,11 @@ pub enum FetchEffect {
 
 /// The live-suggestion fetch. Which input may leave the machine is [`sources`]'s rule alone:
 /// address-like input and the `Off` setting never produce a [`FetchEffect::Request`].
-pub fn transition(s: Fetch, e: FetchEvent, settings: &SuggestSettings) -> (Fetch, Vec<FetchEffect>) {
+pub fn transition(
+    s: Fetch,
+    e: FetchEvent,
+    settings: &SuggestSettings,
+) -> (Fetch, Vec<FetchEffect>) {
     use FetchEffect::*;
     use Phase::*;
     let in_flight = |p: &Phase| match p {
@@ -139,7 +143,13 @@ pub fn transition(s: Fetch, e: FetchEvent, settings: &SuggestSettings) -> (Fetch
             let req = in_flight(&s.phase);
             match (remote, req) {
                 (None, None) => (Fetch { phase: Idle, seq }, vec![Clear]),
-                (None, Some(req)) => (Fetch { phase: InFlight { req }, seq }, vec![Clear]),
+                (None, Some(req)) => (
+                    Fetch {
+                        phase: InFlight { req },
+                        seq,
+                    },
+                    vec![Clear],
+                ),
                 (Some(url), None) => (
                     Fetch {
                         phase: Debouncing { url },
@@ -358,14 +368,7 @@ mod tests {
         );
         assert!(!fx.iter().any(|e| matches!(e, FetchEffect::Show(_))));
         assert_eq!(requests(&fx)[0].0, 2);
-        let (s, fx) = run(
-            s,
-            vec![Reply {
-                seq: 2,
-                body: None,
-            }],
-            LiveSuggestions::On,
-        );
+        let (s, fx) = run(s, vec![Reply { seq: 2, body: None }], LiveSuggestions::On);
         assert_eq!(fx, vec![FetchEffect::Show(vec![])]);
         assert_eq!(s.phase, Phase::Idle);
     }

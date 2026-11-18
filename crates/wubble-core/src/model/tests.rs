@@ -1853,7 +1853,12 @@ fn duplicate_opens_the_same_page_after_it_and_shows_it() {
     let (m, ids) = with_tabs(3);
     let (m, _) = run(m, Command::ActivateTab(ids[0]));
     let (m, fx) = run(m, Command::DuplicateTab(ids[0]));
-    let Effect::CreateTab { tab, ref url, container } = fx[0] else {
+    let Effect::CreateTab {
+        tab,
+        ref url,
+        container,
+    } = fx[0]
+    else {
         panic!("{fx:?}")
     };
     assert_eq!((url.as_str(), container), ("https://a.test", D));
@@ -1921,7 +1926,10 @@ fn a_folder_collapses_and_expands() {
         },
     );
     let collapsed = |m: &Model| {
-        m.spaces[0].items.iter().any(|i| matches!(i, Item::Folder(x) if x.collapsed))
+        m.spaces[0]
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Folder(x) if x.collapsed))
     };
     assert!(collapsed(&m));
     let (m, _) = run(

@@ -50,8 +50,9 @@
 //!   glass refracts the backdrop, never web pixels. Glass over the page is
 //!   effects only (the beam is drawn that way).
 //! - No OS window transparency: the scene image is opaque.
-//! - A redraw every frame while the scene shows (`before_rendering` requests
-//!   it); pausing while hidden is not done yet.
+//! - Frames from the host by the run state ([`run`]): every vsync while something moves,
+//!   15 Hz while only the liquid drifts, none while the window is hidden. `before_rendering`
+//!   no longer asks for the next frame itself; [`Renderer::animating`] says whether it wants one.
 //!
 //! Left out: the design's start page (bubble, pops, minis, soft body, voice
 //! glow, W field: `bubble.wgsl`, `pop.wgsl`, `wfield.rs`, `softbody.rs`,
@@ -61,6 +62,7 @@
 
 mod quality;
 mod render;
+pub mod run;
 mod state;
 
 pub use quality::{
@@ -72,5 +74,5 @@ pub(crate) use render::with_prelude;
 pub use render::{Renderer, readback_rgba8};
 pub use state::{
     BEAM_LAP, Beam, BeamRect, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, Scene,
-    SceneOptions, Tier, hex, lap_beam_at, surface_of,
+    SceneOptions, Tier, film_level, hex, lap_beam_at, surface_of,
 };

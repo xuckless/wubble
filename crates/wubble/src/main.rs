@@ -21,6 +21,7 @@ mod persist;
 mod pixels;
 mod profile;
 mod prompt;
+mod run_state;
 mod screen;
 mod session_smoke;
 mod settings_smoke;

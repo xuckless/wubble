@@ -146,7 +146,12 @@ impl Slider {
                 self.shown = (clamp(self.x.x, 0.0, self.w) / self.w * 100.0).round();
             }
         } else {
-            moving |= step_k(&mut self.x, self.target / 100.0 * self.w, SLIDER::follow, dt);
+            moving |= step_k(
+                &mut self.x,
+                self.target / 100.0 * self.w,
+                SLIDER::follow,
+                dt,
+            );
         }
         let hold = if self.held { SLIDER::holdScale } else { 1.0 };
         moving |= step_k(&mut self.hs, hold, SLIDER::hold, dt);
@@ -648,10 +653,9 @@ impl Tooltip {
     pub fn hover(self, item: usize, now: f64, focus: bool) -> Tooltip {
         match self {
             Tooltip::Shown { .. } => Tooltip::Shown { item, glide: true },
-            Tooltip::Hidden { warm_until } if focus || now < warm_until => Tooltip::Shown {
-                item,
-                glide: false,
-            },
+            Tooltip::Hidden { warm_until } if focus || now < warm_until => {
+                Tooltip::Shown { item, glide: false }
+            }
             Tooltip::Intent { .. } if focus => Tooltip::Shown { item, glide: false },
             _ => Tooltip::Intent { item, since: now },
         }
@@ -671,10 +675,9 @@ impl Tooltip {
     /// Time passed: intent long enough becomes shown.
     pub fn tick(self, now: f64) -> Tooltip {
         match self {
-            Tooltip::Intent { item, since } if now - since >= DOCK::intent => Tooltip::Shown {
-                item,
-                glide: false,
-            },
+            Tooltip::Intent { item, since } if now - since >= DOCK::intent => {
+                Tooltip::Shown { item, glide: false }
+            }
             other => other,
         }
     }
@@ -873,15 +876,30 @@ mod tests {
         assert_eq!(t.due(), Some(1280.0));
         assert_eq!(t.tick(1279.0).shown(), None);
         let t = t.tick(1280.0);
-        assert_eq!(t, Tooltip::Shown { item: 0, glide: false });
+        assert_eq!(
+            t,
+            Tooltip::Shown {
+                item: 0,
+                glide: false
+            }
+        );
         let t = t.hover(1, 1300.0, false);
-        assert_eq!(t, Tooltip::Shown { item: 1, glide: true });
+        assert_eq!(
+            t,
+            Tooltip::Shown {
+                item: 1,
+                glide: true
+            }
+        );
         let t = t.leave(1400.0);
         assert_eq!(t.shown(), None);
         // back within the warm window: at once, in place
         assert_eq!(
             t.hover(2, 1900.0, false),
-            Tooltip::Shown { item: 2, glide: false }
+            Tooltip::Shown {
+                item: 2,
+                glide: false
+            }
         );
         // after it: intent again
         assert_eq!(t.hover(2, 1920.0, false).shown(), None);

@@ -1721,6 +1721,14 @@ impl Host {
         let Some(window) = self.window.upgrade() else {
             return EventResult::Propagate;
         };
+        if let Some(e) = crate::run_state::event_of(event, || {
+            window
+                .window()
+                .with_winit_window(|w| w.is_minimized())
+                .flatten()
+        }) {
+            self.glass.borrow_mut().run_event(e, &window);
+        }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
