@@ -775,30 +775,12 @@ impl Model {
     }
 
     /// Runs `event` through the tab's lifecycle and returns its effects.
-    ///
-    /// An event that can make a hidden tab eligible for sleep (it stopped being
-    /// busy, or was unpinned) is followed by a tick at the last tick's time and
-    /// pressure, so the tab is not left awake until a next tick that may never
-    /// come. The tick is a no-op for Active and Discarded tabs.
     fn lifecycle(&mut self, tab: TabId, event: lifecycle::Event) -> Vec<Effect> {
         let Some(t) = self.tabs.get_mut(&tab) else {
             return vec![];
         };
-        let (next, mut fx) = step(tab, t.lifecycle, event);
+        let (next, fx) = step(tab, t.lifecycle, event);
         t.lifecycle = next;
-        if matches!(
-            event,
-            lifecycle::Event::BusyChanged(Activity::Idle)
-                | lifecycle::Event::PinnedChanged(Pin::Unpinned)
-        ) {
-            let tick = lifecycle::Event::Tick {
-                now: self.clock,
-                pressure: self.pressure,
-            };
-            let (next, more) = step(tab, next, tick);
-            t.lifecycle = next;
-            fx.extend(more);
-        }
         fx
     }
 
@@ -823,6 +805,33 @@ impl Model {
             fx.extend(self.lifecycle(tab, lifecycle::Event::Shown));
         }
         fx
+    }
+
+    /// Judges again, by the last tick's time and pressure, every tab that the
+    /// command made eligible for sleep (it stopped being busy, or was unpinned),
+    /// so it is not left awake until a next tick that may never come. Runs after
+    /// [`Self::settle`], so a tab the same command brings into view is Active by
+    /// then and the tick leaves it alone.
+    fn rejudge(&mut self, before: &BTreeMap<TabId, Lifecycle>) -> Vec<Effect> {
+        let eligible: Vec<TabId> = before
+            .iter()
+            .filter(|&(id, was)| {
+                self.tabs.get(id).is_some_and(|t| {
+                    let now = t.lifecycle;
+                    (was.activity == Activity::Busy && now.activity == Activity::Idle)
+                        || (was.pin == Pin::Pinned && now.pin == Pin::Unpinned)
+                })
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        let tick = lifecycle::Event::Tick {
+            now: self.clock,
+            pressure: self.pressure,
+        };
+        eligible
+            .into_iter()
+            .flat_map(|tab| self.lifecycle(tab, tick))
+            .collect()
     }
 
     fn set_url(&mut self, tab: TabId, url: &str) -> bool {
@@ -851,7 +860,8 @@ fn step(tab: TabId, state: Lifecycle, event: lifecycle::Event) -> (Lifecycle, Ve
 /// Tab lifecycles are settled at the end: whatever the command, the result has
 /// exactly one visible, Active tab (if any), every other tab hidden, and the
 /// lifecycle effects of getting there appended as [`Effect::Lifecycle`]
-/// (closed tabs first, then hides, then the show).
+/// (closed tabs first, then hides, then the show, then the sleep of any hidden
+/// tab the command made eligible for it).
 pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
     let before: BTreeMap<TabId, Lifecycle> =
         m.tabs.iter().map(|(&id, t)| (id, t.lifecycle)).collect();
@@ -953,6 +963,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
     };
     fx.extend(m.settle(&before));
+    fx.extend(m.rejudge(&before));
     (m, fx)
 }
 

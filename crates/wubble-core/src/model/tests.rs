@@ -1116,6 +1116,34 @@ fn unpinning_a_long_hidden_tab_discards_it() {
     assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
 }
 
+/// Regression: the re-judge after unpinning ran before visibility settled, so a
+/// frozen pinned tab dragged into view was discarded and then restored.
+#[test]
+fn moving_a_frozen_pinned_tab_into_view_unfreezes_it() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::PinTab(ids[0]));
+    let (m, s1) = add_space(m, D);
+    let (m, _) = run(m, Command::SwitchSpace(s1));
+    let (m, _) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Frozen);
+    let (m, fx) = run_all(
+        m,
+        Command::MoveTab {
+            tab: ids[0],
+            to: Dest::Normal {
+                space: s1,
+                index: 0,
+            },
+        },
+    );
+    assert_eq!(
+        lifecycle_effects(&fx),
+        vec![life(ids[0], Life::Unfreeze), life(ids[0], Life::Show)]
+    );
+    assert_eq!(m.visible_tab(), Some(ids[0]));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Active);
+}
+
 #[test]
 fn new_and_from_parts_stamp_hides_with_the_given_time() {
     let start = t0() + Duration::from_secs(5);
