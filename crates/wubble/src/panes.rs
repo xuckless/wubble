@@ -23,13 +23,13 @@ const BOWED: f64 = 0.05;
 
 /// One page's place in the content area, in logical pixels: `x..x + width`, full height.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PaneRect {
+pub struct PageRect {
     pub tab: TabId,
     pub x: f64,
     pub width: f64,
 }
 
-impl PaneRect {
+impl PageRect {
     /// The view's layout for this pane at `scale`: whole physical pixels, so a settled seam
     /// resizes nothing.
     pub fn layout(&self, height: f64, scale: f32) -> Layout {
@@ -48,6 +48,10 @@ impl PaneRect {
 pub struct Panes {
     split: Split,
     space: Option<SpaceId>,
+    /// The physics settled something the model has not been told yet: until the host has
+    /// dispatched it (`dispatched`), the physics is ahead of the model and does not adopt it.
+    /// (driver.rs applies these to its model at once; the host dispatches them after rendering.)
+    pending: bool,
 }
 
 /// The split's ids are the tabs' ids.
@@ -76,9 +80,12 @@ impl Panes {
             self.split.reset();
             self.space = Some(space);
         }
-        self.split.sync(&ids(&group.tabs), &group.stops);
+        // a release or even between frames has already settled new stops
+        if !self.pending && self.split.events.is_empty() {
+            self.split.sync(&ids(&group.tabs), &group.stops);
+        }
         let moving = self.split.step(dt, width, height);
-        let commands = std::mem::take(&mut self.split.events)
+        let commands: Vec<Command> = std::mem::take(&mut self.split.events)
             .into_iter()
             .flat_map(|e| match e {
                 SplitEvent::Stops(stops) => vec![Command::ResizeSplit { space, stops }],
@@ -88,7 +95,13 @@ impl Panes {
                 ],
             })
             .collect();
+        self.pending |= !commands.is_empty();
         (moving, commands)
+    }
+
+    /// The host has dispatched every command `frame` returned: the model has caught up.
+    pub fn dispatched(&mut self) {
+        self.pending = false;
     }
 
     fn shown(&self) -> bool {
@@ -97,12 +110,16 @@ impl Panes {
 
     /// Each page on screen (`tabs`, left to right) and its rect: the whole content area for one
     /// page, the physics' rect for a pane of the split. A pane with no width (closing) or not
-    /// synced yet has none.
-    pub fn rects(&self, tabs: &[TabId], width: f64) -> Vec<PaneRect> {
+    /// synced yet has none. When the physics has closed a split down to one page before the
+    /// model unsplits it, that page is the one on screen.
+    pub fn rects(&self, tabs: &[TabId], width: f64) -> Vec<PageRect> {
         if !self.shown() {
-            return tabs
-                .first()
-                .map(|&tab| PaneRect { tab, x: 0.0, width })
+            let page = match self.split.ids.as_slice() {
+                [id] if self.space.is_some() => Some(TabId(*id)),
+                _ => tabs.first().copied(),
+            };
+            return page
+                .map(|tab| PageRect { tab, x: 0.0, width })
                 .into_iter()
                 .collect();
         }
@@ -110,7 +127,7 @@ impl Panes {
         tabs.iter()
             .filter_map(|&tab| {
                 let p = panes.iter().find(|p| p.id == tab.0)?;
-                Some(PaneRect {
+                Some(PageRect {
                     tab,
                     x: p.x0,
                     width: p.x1 - p.x0,
@@ -155,9 +172,7 @@ impl Panes {
     // The seams' gestures and a pane's close button (the physics owns them until they settle).
 
     pub fn grab(&mut self, seam: usize, x: f64, y: f64) {
-        if seam < self.split.c.len() {
-            self.split.grab(seam, x, y);
-        }
+        self.split.grab(seam, x, y);
     }
 
     pub fn drag(&mut self, x: f64, y: f64) {
@@ -227,7 +242,7 @@ mod tests {
         let t = m.visible_tab().unwrap();
         assert_eq!(
             p.rects(&m.visible_tabs(), 1000.0),
-            vec![PaneRect {
+            vec![PageRect {
                 tab: t,
                 x: 0.0,
                 width: 1000.0
@@ -248,7 +263,7 @@ mod tests {
         assert!(!moving && commands.is_empty());
         let rects = p.rects(&m.visible_tabs(), 1008.0);
         let want = [(TabId(2), 0.0, 500.0), (TabId(1), 508.0, 500.0)]
-            .map(|(tab, x, width)| PaneRect { tab, x, width });
+            .map(|(tab, x, width)| PageRect { tab, x, width });
         assert_eq!(rects, want);
         assert_eq!(p.seams(700.0), vec![(504.0, String::new())]);
         assert!(p.ring(m.visible_tab(), 700.0).starts_with("M"));
@@ -289,8 +304,78 @@ mod tests {
         let commands = settle(&mut p, &m, 1200.0, 700.0);
         assert_eq!(commands[0], Command::Unsplit(TabId(1)));
         let m = commands.into_iter().fold(m, |m, c| apply(m, c).0);
+        p.dispatched();
         assert_eq!(m.shown_split().unwrap().tabs.len(), 2);
         m.check().unwrap();
+    }
+
+    /// Until the model has the stops a release settled, the seam keeps heading for them (it
+    /// sprang back toward the model's old stops for a frame).
+    #[test]
+    fn a_released_seam_keeps_its_stops_until_the_model_has_them() {
+        let m = with_tabs(2);
+        let (m, _) = apply(m, Command::SplitWith(TabId(1)));
+        let mut p = Panes::default();
+        p.frame(&m, 0.0, 1000.0, 700.0);
+        p.grab(0, 500.0, 300.0);
+        p.drag(400.0, 300.0);
+        for _ in 0..60 {
+            p.frame(&m, DT, 1000.0, 700.0);
+        }
+        p.release();
+        let (_, commands) = p.frame(&m, DT, 1000.0, 700.0);
+        assert_eq!(commands.len(), 1);
+        // the model is not told yet: more frames, the same old model
+        for _ in 0..3 {
+            p.frame(&m, DT, 1000.0, 700.0);
+            assert!((p.split.stops[0] - 0.4).abs() < 0.01, "{:?}", p.split.stops);
+        }
+        let m = commands.into_iter().fold(m, |m, c| apply(m, c).0);
+        p.dispatched();
+        p.frame(&m, DT, 1000.0, 700.0);
+        assert!((p.split.stops[0] - 0.4).abs() < 0.01, "{:?}", p.split.stops);
+    }
+
+    /// Closing one page of two: once it has gone, the other fills the content area, before
+    /// the model unsplits (the closed page's view was laid out full width for a frame).
+    #[test]
+    fn closing_to_one_page_shows_the_page_left() {
+        let m = with_tabs(2);
+        let (m, _) = apply(m, Command::SplitWith(TabId(1)));
+        let mut p = Panes::default();
+        p.frame(&m, 0.0, 1000.0, 700.0);
+        let [left, right] = m.visible_tabs()[..] else {
+            panic!()
+        };
+        p.close(left);
+        let commands = settle(&mut p, &m, 1000.0, 700.0);
+        assert_eq!(commands[0], Command::Unsplit(left));
+        assert_eq!(
+            p.rects(&m.visible_tabs(), 1000.0),
+            vec![PageRect {
+                tab: right,
+                x: 0.0,
+                width: 1000.0
+            }]
+        );
+    }
+
+    /// A pane leaving the split while the seam beside it is held: letting go is harmless (it
+    /// indexed past the seams and panicked).
+    #[test]
+    fn a_pane_leaving_while_its_seam_is_held() {
+        let m = with_tabs(3);
+        let (m, _) = apply(m, Command::SplitWith(TabId(1)));
+        let (m, _) = apply(m, Command::SplitWith(TabId(2)));
+        let mut p = Panes::default();
+        p.frame(&m, 0.0, 1200.0, 700.0);
+        p.grab(1, 800.0, 300.0);
+        let last = *m.visible_tabs().last().unwrap();
+        let (m, _) = apply(m, Command::Unsplit(last));
+        p.frame(&m, DT, 1200.0, 700.0);
+        assert!(!p.held());
+        p.release();
+        assert!(settle(&mut p, &m, 1200.0, 700.0).is_empty());
     }
 
     #[test]

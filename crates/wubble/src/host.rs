@@ -491,9 +491,9 @@ impl Host {
         };
         // Another tab's frame (and cursor) must not stay on screen while
         // input already goes to the tabs shown now: blank until they paint.
-        let shown = self.shown_tabs();
+        let kept = self.framed_tabs();
         let before = self.frames.len();
-        self.frames.retain(|tab, _| shown.contains(tab));
+        self.frames.retain(|tab, _| kept.contains(tab));
         if self.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
         }
@@ -1060,8 +1060,8 @@ impl Host {
             visible_views: self.engine.visible_views(),
             shown_is_visible: shown,
             stale_frame: {
-                let on_screen = self.shown_tabs();
-                self.frames.keys().any(|t| !on_screen.contains(t))
+                let kept = self.framed_tabs();
+                self.frames.keys().any(|t| !kept.contains(t))
             },
         }
     }

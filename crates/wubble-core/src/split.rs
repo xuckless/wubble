@@ -283,6 +283,9 @@ impl Split {
                     -SPLIT::gap / 2.0
                 }
             };
+            // wubble change: the held seam follows its spring, or is let go when it no longer
+            // separates the same two panes (it indexed past the seams once a pane left).
+            let mut held = None;
             for j in 0..ids.len().saturating_sub(1) {
                 // a seam that already separated these two panes keeps its spring
                 let old = self.ids.iter().position(|&x| x == ids[j]);
@@ -296,6 +299,9 @@ impl Split {
                 };
                 if keep {
                     let o = old.unwrap();
+                    if self.held == Some(o) {
+                        held = Some(j);
+                    }
                     c.push(self.c[o]);
                     bend.push(self.bend[o]);
                     gy.push(self.gy[o]);
@@ -309,6 +315,7 @@ impl Split {
                 }
             }
             self.ids = ids.to_vec();
+            self.held = held;
             self.c = c;
             self.bend = bend;
             self.gy = gy;
@@ -332,6 +339,10 @@ impl Split {
 
     // @source slint-split-drag
     pub fn grab(&mut self, j: usize, px: f64, py: f64) {
+        // wubble change: a seam that no longer exists cannot be grabbed.
+        if j >= self.c.len() {
+            return;
+        }
         self.held = Some(j);
         self.px = px;
         self.py = py;
@@ -433,6 +444,12 @@ impl Split {
                     self.gy.remove(j);
                     self.stops.remove(j);
                     self.closing = None;
+                    // wubble change: a seam held while another closes keeps its index in step.
+                    self.held = match self.held {
+                        Some(h) if h > j => Some(h - 1),
+                        Some(h) if h == j => None,
+                        h => h,
+                    };
                     let stops = (0..self.stops.len()).map(|i| self.c[i].x / width).collect();
                     self.events.push(SplitEvent::Closed { id, stops });
                     return true;
@@ -701,6 +718,45 @@ mod tests {
             assert_eq!(bend(p.l), w[3].as_f64());
             assert_eq!(bend(p.r), w[4].as_f64());
         }
+    }
+
+    /// A pane leaving while a seam is held: the seam still between the same two panes stays
+    /// held, one that went is let go, and letting go of it does nothing.
+    #[test]
+    fn a_pane_leaving_lets_go_of_its_held_seam() {
+        let settled = |ids: &[u64]| {
+            let mut s = Split::new();
+            s.sync(ids, &even(ids.len()));
+            s.step(1.0 / 60.0, 1200.0, 700.0);
+            s
+        };
+        let mut s = settled(&[1, 2, 3]);
+        s.grab(1, 800.0, 300.0);
+        s.sync(&[1, 2], &[0.5]);
+        assert_eq!(s.held, None);
+        s.release();
+        assert!(s.events.is_empty());
+
+        let mut s = settled(&[1, 2, 3]);
+        s.grab(0, 400.0, 300.0);
+        s.sync(&[1, 2], &[0.5]);
+        assert_eq!(s.held, Some(0));
+        s.release();
+        assert!(matches!(s.events.as_slice(), [SplitEvent::Stops(_)]));
+
+        // a seam held while the pane left of it closes moves down an index
+        let mut s = settled(&[1, 2, 3]);
+        s.close(1);
+        s.grab(1, 800.0, 300.0);
+        for _ in 0..2000 {
+            if !s.events.is_empty() {
+                break;
+            }
+            s.step(1.0 / 60.0, 1200.0, 700.0);
+        }
+        assert_eq!(s.ids, vec![2, 3]);
+        assert_eq!(s.held, Some(0));
+        s.release();
     }
 
     /// Three panes in a window narrower than three minimum panes: the panes shrink instead of

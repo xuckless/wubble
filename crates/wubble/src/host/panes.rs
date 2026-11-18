@@ -5,6 +5,7 @@
 use std::time::Instant;
 
 use slint::ComponentHandle;
+use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::TabId;
@@ -13,7 +14,7 @@ use wubble_ui::{AppWindow, SplitPane, SplitSeam};
 
 use super::{Host, PaneFrame, Snapshot};
 use crate::menu::{self, MenuEvent};
-use crate::panes::PaneRect;
+use crate::panes::PageRect;
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
 
@@ -25,7 +26,24 @@ fn content_size(window: &AppWindow) -> (f64, f64) {
     )
 }
 
+/// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's
+/// other panes stay shown to CEF while one of them is fullscreen, so CEF will not repaint them
+/// when it ends: their frames must outlive it.
+fn framed_tabs(model: &Model, screen: &Screen) -> Vec<TabId> {
+    let mut tabs = model.visible_tabs();
+    if let Screen::Page { tab, .. } = *screen
+        && !tabs.contains(&tab)
+    {
+        tabs.push(tab);
+    }
+    tabs
+}
+
 impl Host {
+    pub(super) fn framed_tabs(&self) -> Vec<TabId> {
+        framed_tabs(&self.model, &self.screen)
+    }
+
     /// The tabs on screen, left to right: a fullscreen page alone, else the model's.
     pub(super) fn shown_tabs(&self) -> Vec<TabId> {
         match self.screen {
@@ -34,10 +52,10 @@ impl Host {
         }
     }
 
-    pub(super) fn pane_rects(&self, window: &AppWindow) -> Vec<PaneRect> {
+    pub(super) fn pane_rects(&self, window: &AppWindow) -> Vec<PageRect> {
         let (width, _) = content_size(window);
         match self.screen {
-            Screen::Page { tab, .. } => vec![PaneRect { tab, x: 0.0, width }],
+            Screen::Page { tab, .. } => vec![PageRect { tab, x: 0.0, width }],
             _ => self.panes.rects(&self.model.visible_tabs(), width),
         }
     }
@@ -49,7 +67,7 @@ impl Host {
             .pane_rects(window)
             .into_iter()
             .find(|r| r.tab == tab)
-            .unwrap_or(PaneRect { tab, x: 0.0, width });
+            .unwrap_or(PageRect { tab, x: 0.0, width });
         rect.layout(height, window.window().scale_factor())
     }
 
@@ -100,6 +118,10 @@ impl Host {
     fn apply_split_commands(&mut self) {
         for command in std::mem::take(&mut self.split_commands) {
             self.dispatch(command);
+        }
+        // a dispatch may have settled more, already queued again
+        if self.split_commands.is_empty() {
+            self.panes.dispatched();
         }
     }
 
@@ -172,13 +194,13 @@ impl Host {
         window.set_focus_ring(ring.into());
     }
 
-    /// The presenter slot of `tab`: its own while it stays on screen, else one no page on
-    /// screen holds.
+    /// The presenter slot of `tab`: its own while its frame is kept, else one no kept frame
+    /// holds.
     fn slot_for(&mut self, tab: TabId) -> usize {
         if let Some(i) = self.slots.iter().position(|s| *s == Some(tab)) {
             return i;
         }
-        let shown = self.shown_tabs();
+        let shown = self.framed_tabs();
         let i = self
             .slots
             .iter()
@@ -325,5 +347,35 @@ impl Host {
         let entries = menu::tab_entries(&self.model, tab);
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wubble_core::model::{Command, apply};
+
+    /// A split pane fullscreen keeps the other pane's frame: CEF still shows that view and will
+    /// not repaint it when fullscreen ends (it went blank).
+    #[test]
+    fn a_fullscreen_pane_keeps_the_other_panes_frames() {
+        let m = (0..2).fold(Model::new(Instant::now()), |m, i| {
+            apply(
+                m,
+                Command::NewTab {
+                    url: format!("https://{i}.test/"),
+                    container: None,
+                    opener: None,
+                },
+            )
+            .0
+        });
+        let (m, _) = apply(m, Command::SplitWith(TabId(1)));
+        let page = Screen::Page {
+            tab: TabId(1),
+            restore_window: false,
+        };
+        assert_eq!(framed_tabs(&m, &page), m.visible_tabs());
+        assert_eq!(m.visible_tabs().len(), 2);
     }
 }
