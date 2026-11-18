@@ -63,6 +63,8 @@ pub enum Command {
     ToggleBlocker(String),
     /// A divider between groups; never chosen.
     Separator,
+    /// A line of text (always disabled); never chosen.
+    Info,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -304,27 +306,50 @@ pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
     }
 }
 
-/// The address pill's blocker menu: what was blocked, and the switch for this site.
-pub fn blocker_entries(count: u32, host: &str, allowed: bool) -> Vec<Entry> {
-    vec![
-        Entry {
-            label: format!(
-                "Blocked {count} request{}",
-                if count == 1 { "" } else { "s" }
-            ),
-            command: Command::Separator,
-            enabled: false,
+/// Hosts the blocker menu names; the rest are summed in one row.
+pub const BLOCKER_MENU_HOSTS: usize = 5;
+
+/// The address pill's blocker menu: what was blocked (in all, then per
+/// host, most first: `hosts` as [`crate::blocking::Blocking::blocked_hosts`]
+/// gives them), and the switch for this site.
+pub fn blocker_entries(
+    count: u32,
+    hosts: &[(String, u32)],
+    host: &str,
+    allowed: bool,
+) -> Vec<Entry> {
+    let info = |label: String| Entry {
+        label,
+        command: Command::Info,
+        enabled: false,
+    };
+    let plural = |n: u32| if n == 1 { "" } else { "s" };
+    let mut out = vec![info(format!("Blocked {count} request{}", plural(count)))];
+    out.extend(
+        hosts
+            .iter()
+            .take(BLOCKER_MENU_HOSTS)
+            .map(|(h, n)| info(format!("{h} \u{2014} {n}"))),
+    );
+    let rest = hosts.get(BLOCKER_MENU_HOSTS..).unwrap_or_default();
+    if !rest.is_empty() {
+        let n: u32 = rest.iter().map(|(_, n)| n).sum();
+        let more = u32::try_from(rest.len()).unwrap_or(u32::MAX);
+        out.push(info(format!(
+            "{more} more host{} \u{2014} {n}",
+            plural(more)
+        )));
+    }
+    out.push(Entry {
+        label: if allowed {
+            format!("Turn on blocking on {host}")
+        } else {
+            format!("Turn off blocking on {host}")
         },
-        Entry {
-            label: if allowed {
-                format!("Turn on blocking on {host}")
-            } else {
-                format!("Turn off blocking on {host}")
-            },
-            command: Command::ToggleBlocker(host.to_owned()),
-            enabled: true,
-        },
-    ]
+        command: Command::ToggleBlocker(host.to_owned()),
+        enabled: true,
+    });
+    out
 }
 
 /// The menu of one tab, or one the shell opened.
@@ -454,17 +479,38 @@ mod tests {
 
     #[test]
     fn the_blocker_menu_names_the_count_and_the_switch() {
-        let on = blocker_entries(1, "a.test", false);
+        let on = blocker_entries(1, &[], "a.test", false);
         assert_eq!(on[0].label, "Blocked 1 request");
         assert!(!on[0].enabled);
         assert_eq!(on[1].label, "Turn off blocking on a.test");
         assert_eq!(on[1].command, Command::ToggleBlocker("a.test".into()));
-        let off = blocker_entries(0, "a.test", true);
+        let off = blocker_entries(0, &[], "a.test", true);
         assert_eq!(off[0].label, "Blocked 0 requests");
+        assert_eq!(off[1].label, "Turn on blocking on a.test");
+    }
+
+    #[test]
+    fn the_blocker_menu_breaks_the_count_down_by_host() {
+        let hosts: Vec<(String, u32)> = (1..=7u32)
+            .rev()
+            .map(|n| (format!("h{n}.test"), n))
+            .collect();
+        let count = hosts.iter().map(|(_, n)| n).sum();
+        let e = blocker_entries(count, &hosts, "a.test", false);
         assert_eq!(
-            off[1].label,
-            "Turn on blocking on host".replace("host", "a.test")
+            labels(&e),
+            [
+                "Blocked 28 requests",
+                "h7.test \u{2014} 7",
+                "h6.test \u{2014} 6",
+                "h5.test \u{2014} 5",
+                "h4.test \u{2014} 4",
+                "h3.test \u{2014} 3",
+                "2 more hosts \u{2014} 3",
+                "Turn off blocking on a.test",
+            ]
         );
+        assert!(e[..7].iter().all(|e| !e.enabled));
     }
 
     fn labels(entries: &[Entry]) -> Vec<&str> {

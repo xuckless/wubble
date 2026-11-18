@@ -400,10 +400,10 @@ impl Host {
             return;
         };
         let allowed = self.blocker_exceptions().contains(&host);
-        let count = self.blocked_of(tab).unwrap_or(0);
+        let (count, hosts) = self.blocked_breakdown(tab).unwrap_or_default();
         let scale = window.window().scale_factor();
         let at = ((x * scale) as i32, (y * scale) as i32);
-        let entries = crate::menu::blocker_entries(count, &host, allowed);
+        let entries = crate::menu::blocker_entries(count, &hosts, &host, allowed);
         self.apply_menu(tab, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

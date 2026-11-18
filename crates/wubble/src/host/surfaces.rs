@@ -260,7 +260,9 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
-                MenuEffect::Run(MenuCommand::Engine(_) | MenuCommand::Separator) => {}
+                MenuEffect::Run(
+                    MenuCommand::Engine(_) | MenuCommand::Separator | MenuCommand::Info,
+                ) => {}
             }
         }
         answered

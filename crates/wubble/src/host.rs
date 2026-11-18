@@ -632,6 +632,16 @@ impl Host {
         Some(self.blocking.blocked(browser))
     }
 
+    /// The blocker's count for `tab` and its breakdown by host, if it has a view.
+    fn blocked_breakdown(&mut self, tab: TabId) -> Option<(u32, Vec<(String, u32)>)> {
+        let id = *self.views.get(&tab)?;
+        let browser = self.engine.view(id)?.browser_id();
+        Some((
+            self.blocking.blocked(browser),
+            self.blocking.blocked_hosts(browser),
+        ))
+    }
+
     /// The blocker's count for each tab with a view.
     fn blocked_counts(&mut self) -> crate::shell::BlockedMap {
         let tabs: Vec<_> = self.views.keys().copied().collect();
