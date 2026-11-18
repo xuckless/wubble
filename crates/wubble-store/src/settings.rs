@@ -250,6 +250,9 @@ settings! {
     VideoControls: bool = defs::VIDEO_CONTROLS;
     /// Per-site video speed (`wubble_core::video`): sites at normal speed are absent.
     VideoRates: ZoomTable = defs::VIDEO_RATES;
+    /// Hosts where the video controls stay hidden.
+    VideoHiddenSites: Vec<String> = defs::VIDEO_HIDDEN_SITES;
+    VideoCollapsed: bool = defs::VIDEO_COLLAPSED;
     MediaKeys: bool = defs::MEDIA_KEYS;
     PipOnTabSwitch: bool = defs::PIP_ON_TAB_SWITCH;
     /// Off until the user turns it on: a request wubble makes itself.

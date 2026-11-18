@@ -122,7 +122,12 @@ impl Host {
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
-            Applied::Video { controls, rates } => self.set_video_settings(controls, rates),
+            Applied::Video {
+                controls,
+                rates,
+                hidden,
+                collapsed,
+            } => self.set_video_settings(controls, rates, hidden, collapsed),
             Applied::MediaKeys(on) => self.set_media_keys(on),
             Applied::PipOnTabSwitch(on) => self.set_pip_auto(on),
             Applied::Sponsor {

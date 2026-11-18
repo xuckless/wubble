@@ -203,6 +203,8 @@ pub enum HostCheck {
     Autoscroll(Option<Option<wubble_core::autoscroll::Direction>>),
     /// Middle-click autoscroll scrolls down (straight, or a little sideways).
     AutoscrollDown,
+    /// The autoscroll arrow is drawn longer than at rest (stretch above 1.05).
+    AutoscrollStretched,
     /// A page drag runs (true) or none does (false).
     Drag(bool),
 }
@@ -817,6 +819,7 @@ pub const ITEMS: &[Item] = &[
         ],
         [
             H(C::AutoscrollDown),
+            H(C::AutoscrollStretched),
             J("scrollY > 0 || 'scrollY ' + scrollY")
         ]
     ),

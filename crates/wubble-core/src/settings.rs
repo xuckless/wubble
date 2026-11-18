@@ -602,6 +602,26 @@ pub const VIDEO_RATES: SettingDef = SettingDef {
     section: Section::Hidden,
     restart: false,
 };
+/// Sites whose pages never show the video controls (the strip's "Hide on this site"); removing
+/// the row shows them again.
+pub const VIDEO_HIDDEN_SITES: SettingDef = SettingDef {
+    key: "video.hidden_sites",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Sites where video controls are hidden",
+    section: Section::General,
+    restart: false,
+};
+/// The strip is tucked into its tab at the page's edge (remembered from the strip's collapse
+/// button).
+pub const VIDEO_COLLAPSED: SettingDef = SettingDef {
+    key: "video.collapsed",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Video controls start folded into their tab",
+    section: Section::Hidden,
+    restart: false,
+};
 /// Media keys and the system's media controls (MPRIS on Linux) for the playing tab.
 pub const MEDIA_KEYS: SettingDef = SettingDef {
     key: "media.keys",
@@ -714,6 +734,8 @@ pub const ALL: &[&SettingDef] = &[
     &HINTS_ALPHABET,
     &VIDEO_CONTROLS,
     &VIDEO_RATES,
+    &VIDEO_HIDDEN_SITES,
+    &VIDEO_COLLAPSED,
     &MEDIA_KEYS,
     &PIP_ON_TAB_SWITCH,
     &SPONSOR_ENABLED,
@@ -833,6 +855,7 @@ mod tests {
         // No picture-in-picture window on this build: its setting could never act.
         for d in [
             &VIDEO_RATES,
+            &VIDEO_COLLAPSED,
             &SPONSOR_ASKED,
             &SPONSOR_ACTIONS,
             &PIP_ON_TAB_SWITCH,

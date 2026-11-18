@@ -3,7 +3,7 @@ import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
 import { GlassTier, VideoView } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
-import { IconPaths } from "icon.slint";
+import { Icon, IconPaths } from "icon.slint";
 import { TextButton } from "settings.slint";
 
 // Video controls over the page's main video (wubble_core::video): play, a progress bar with the
@@ -15,14 +15,32 @@ import { TextButton } from "settings.slint";
 // The strip is a compact one in the video's top right corner, never across the bottom, where
 // pages keep their own controls (YouTube's bar, `<video controls>`).
 // Intents only: `command(name, value)` with name play, speeds, rate, loop, mute, seek, pip,
-// frame, save (`value`: the rate, or the seek fraction).
+// frame, save, collapse, expand, peek, dismiss, hide-site (`value`: the rate, or the seek
+// fraction). The strip's right end has a collapse chevron, which tucks the strip into a tab on
+// the page's right edge (a click or a hover on the tab opens it again), and a close button
+// (a click hides the strip until the next navigation, a right-click hides it on this site).
 export component VideoControls inherits Rectangle {
+    // (element ids the tests find: root, strip, tab, close)
     in property <VideoView> video;
     // The speed menu's rows, slowest first (`wubble_core::video::RATES`).
     in property <[string]> rates;
     callback command(string, float);
     // The pointer is over the controls (they stay while it is).
     callback hovered(bool);
+    // The pointer is on the strip, the tab or the speed menu: one answer for all three, so one
+    // going away as another appears under the pointer does not read as leaving.
+    // set by the speed menu, which is only built while it is open
+    property <bool> menu-over;
+    property <bool> any-hover: hover.has-hover || tab-hover.has-hover || root.menu-over;
+    property <bool> speeds-open: root.video.speeds;
+    changed speeds-open => {
+        if !self.speeds-open {
+            root.menu-over = false;
+        }
+    }
+    changed any-hover => {
+        root.hovered(self.any-hover);
+    }
 
     x: root.video.x;
     y: root.video.y;
@@ -45,9 +63,6 @@ export component VideoControls inherits Rectangle {
         }
         hover := TouchArea {
             enabled: root.video.open;
-            changed has-hover => {
-                root.hovered(self.has-hover);
-            }
         }
         if root.video.open: HorizontalLayout {
             padding: Spacing.s1;
@@ -134,6 +149,56 @@ export component VideoControls inherits Rectangle {
                     root.command("save", 0);
                 }
             }
+            IconButton {
+                icon-path: IconPaths.chevron-right;
+                clicked => {
+                    root.command("collapse", 0);
+                }
+            }
+            close := IconButton {
+                icon-path: IconPaths.close;
+                clicked => {
+                    root.command("dismiss", 0);
+                }
+                secondary-clicked => {
+                    root.command("hide-site", 0);
+                }
+            }
+        }
+    }
+
+    // The collapsed strip: a tab docked to the page pane's right edge, where the strip was.
+    tab := GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        width: Shell.video-tab-width;
+        height: strip.height;
+        x: root.video.pane-right - root.x - self.width + (root.video.collapsed ? 0px : self.width);
+        y: Spacing.s2;
+        opacity: root.video.collapsed ? 1 : 0;
+        visible: root.video.collapsed || self.opacity > 0;
+        animate opacity, x {
+            duration: root.video.collapsed ? Motion.overlapIn : Motion.overlapOut;
+            easing: root.video.collapsed ? Motion.easeOut : Motion.easeIn;
+        }
+        tab-hover := TouchArea {
+            enabled: root.video.collapsed;
+            mouse-cursor: pointer;
+            clicked => {
+                root.command("expand", 0);
+            }
+            changed has-hover => {
+                if self.has-hover {
+                    root.command("peek", 0);
+                }
+            }
+        }
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            path: IconPaths.chevron-left;
+            tint: Palette.ink;
         }
     }
 
@@ -149,7 +214,7 @@ export component VideoControls inherits Rectangle {
         clip: true;
         TouchArea {
             changed has-hover => {
-                root.hovered(self.has-hover);
+                root.menu-over = self.has-hover;
             }
         }
         list := VerticalLayout {

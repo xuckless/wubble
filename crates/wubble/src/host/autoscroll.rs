@@ -7,7 +7,7 @@ use std::time::Instant;
 use slint::ComponentHandle;
 
 use wubble_core::autoscroll::{self, At, Autoscroll, Input};
-use wubble_core::motion::{Stretch, squash_of};
+use wubble_core::motion::{K, Spring, spring, squash_of, step_k};
 use wubble_core::tab::TabId;
 use wubble_engine::input::Point;
 use wubble_ui::AppWindow;
@@ -15,18 +15,35 @@ use wubble_ui::AppWindow;
 use super::Host;
 
 /// The arrow's stretch while autoscroll runs.
-#[derive(Default)]
 pub(super) struct AutoscrollPointer {
     state: Autoscroll,
     /// Window logical px.
     pointer: At,
-    stretch: Stretch,
-    /// The distance scrolled so far, which the stretch spring reads its speed from.
-    travel: f64,
+    /// The arrow's length factor, following `autoscroll::stretch_target` of the scroll speed.
+    stretch: Spring,
     last: Option<Instant>,
 }
 
+impl Default for AutoscrollPointer {
+    fn default() -> Self {
+        Self {
+            state: Autoscroll::Off,
+            pointer: At::default(),
+            stretch: spring(1.0),
+            last: None,
+        }
+    }
+}
+
 impl Host {
+    /// CSS px per logical px of the shown page.
+    fn autoscroll_zoom(&mut self) -> f64 {
+        self.model
+            .visible_tab()
+            .and_then(|t| self.tab_view(t))
+            .map_or(1.0, |v| f64::from(v.zoom_percent()) / 100.0)
+    }
+
     /// The pointer moved over `tab`'s pane to `point` (relative to the pane).
     pub(super) fn autoscroll_pointer(&mut self, window: &AppWindow, tab: TabId, point: Point) {
         let x = self
@@ -79,25 +96,20 @@ impl Host {
             self.autoscroll.last = None;
             return false;
         }
-        let zoom = self
-            .model
-            .visible_tab()
-            .and_then(|t| self.tab_view(t))
-            .map_or(1.0, |v| f64::from(v.zoom_percent()) / 100.0);
+        let zoom = self.autoscroll_zoom();
         let a = &mut self.autoscroll;
         let dt = a
             .last
             .replace(now)
             .map_or(0.0, |prev| now.duration_since(prev).as_secs_f64().min(0.05));
-        a.travel += autoscroll::scroll_speed(a.state, a.pointer, zoom) * dt;
-        if dt > 0.0 {
-            a.stretch.update(a.travel, dt);
-        }
+        let target = autoscroll::stretch_target(autoscroll::scroll_speed(a.state, a.pointer, zoom));
+        step_k(&mut a.stretch, target, K::stretch, dt);
         self.render_autoscroll(window);
         true
     }
 
-    fn render_autoscroll(&self, window: &AppWindow) {
+    fn render_autoscroll(&mut self, window: &AppWindow) {
+        let zoom = self.autoscroll_zoom();
         let a = &self.autoscroll;
         let on = a.state != Autoscroll::Off;
         window.set_autoscroll_on(on);
@@ -109,15 +121,23 @@ impl Host {
         window.set_autoscroll_x(a.pointer.x as f32);
         window.set_autoscroll_y(a.pointer.y as f32);
         let moving = match a.state {
-            Autoscroll::Moving { direction, .. } => {
-                window.set_autoscroll_heading(direction.degrees());
+            Autoscroll::Moving { anchor, direction } => {
+                let offset = At {
+                    x: (a.pointer.x - anchor.x) / zoom,
+                    y: (a.pointer.y - anchor.y) / zoom,
+                };
+                // the pointer's own direction turns smoothly; the cursor's eight only
+                // when the pointer is inside the dead zone
+                window.set_autoscroll_heading(
+                    autoscroll::heading(offset).unwrap_or_else(|| direction.degrees()),
+                );
                 true
             }
             _ => false,
         };
         window.set_autoscroll_moving(moving);
         // The arrow's length stretches; its width keeps the area.
-        let stretch = if moving { a.stretch.x() } else { 1.0 };
+        let stretch = if moving { a.stretch.x } else { 1.0 };
         window.set_autoscroll_stretch(stretch as f32);
         window.set_autoscroll_squash(squash_of(stretch) as f32);
     }

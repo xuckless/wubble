@@ -46,8 +46,8 @@ pub use settings::{
     ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
     ReaderThemeSetting, ReaderWidthSetting, RoutingRules, ScreenshotOutput, SearchEngineChoice,
     Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
-    SleepKeepPinned, SleepNeverSites, SponsorActions, SponsorAsked, SponsorEnabled, VideoControls,
-    VideoRates, ZoomDefault, text_of,
+    SleepKeepPinned, SleepNeverSites, SponsorActions, SponsorAsked, SponsorEnabled, VideoCollapsed,
+    VideoControls, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]
