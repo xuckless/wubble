@@ -13,6 +13,7 @@ wubble-core.workspace = true
 # which a browser embedding CEF must not get. Exact pin: pre-release semver is not range-safe.
 turso = { version = "=0.9.0-pre.5", default-features = false }
 thiserror = "2"
+serde_json.workspace = true
 
 [dev-dependencies]
 pollster = "0.4"

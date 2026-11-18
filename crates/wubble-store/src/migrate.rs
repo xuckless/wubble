@@ -3,7 +3,10 @@
 use crate::{Error, Result};
 
 /// `(version, SQL)`, strictly ascending from 1. Append only; never edit a shipped entry.
-pub const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../sql/001_init.sql"))];
+pub const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../sql/001_init.sql")),
+    (2, include_str!("../sql/002_core_model.sql")),
+];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
     migrations.last().map_or(0, |(v, _)| *v)
@@ -72,6 +75,7 @@ mod tests {
                 "visits",
                 "bookmarks",
                 "settings",
+                "recently_closed",
             ] {
                 let mut rows = conn
                     .query(

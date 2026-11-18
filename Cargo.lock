@@ -7440,6 +7440,7 @@ name = "wubble-store"
 version = "0.0.0"
 dependencies = [
  "pollster",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "turso",
