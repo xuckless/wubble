@@ -188,6 +188,18 @@ pub enum Event {
         kind: InputKind,
     },
     ResizeRequested,
+    /// One shell frame (the panes' step), what it laid out.
+    Shell(Shell),
+}
+
+/// One shell frame: whether the scene's texture and the panes were laid out for this frame's
+/// window size, and whether a pane was stretched (a stale frame) or masked (a bowed edge).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shell {
+    pub scene_off: bool,
+    pub pane_off: bool,
+    pub stretched: bool,
+    pub bowed: bool,
 }
 
 /// Frame counts over the recording.
@@ -210,6 +222,13 @@ pub struct Counts {
     /// Most stale frames taken in a row.
     pub longest_stale_run: u64,
     pub resizes: u64,
+    /// Shell frames; of them, the scene's texture not at the window's size, the panes not
+    /// spanning the content width, a pane stretched, a pane masked.
+    pub shell_frames: u64,
+    pub scene_off: u64,
+    pub pane_off: u64,
+    pub stretched: u64,
+    pub bowed: u64,
     pub inputs: u64,
     /// Inputs replaced by the next one before any frame showed them.
     pub unanswered: u64,
@@ -253,6 +272,14 @@ impl Recorder {
                 self.input = Some((at, kind, self.last_probe));
             }
             Event::ResizeRequested => self.counts.resizes += 1,
+            Event::Shell(shell) => {
+                let c = &mut self.counts;
+                c.shell_frames += 1;
+                c.scene_off += u64::from(shell.scene_off);
+                c.pane_off += u64::from(shell.pane_off);
+                c.stretched += u64::from(shell.stretched);
+                c.bowed += u64::from(shell.bowed);
+            }
         }
     }
 
@@ -415,6 +442,11 @@ impl Recorder {
         );
         let _ = writeln!(
             out,
+            "shell: frames={} scene_off={} pane_off={} stretched={} bowed={}",
+            c.shell_frames, c.scene_off, c.pane_off, c.stretched, c.bowed
+        );
+        let _ = writeln!(
+            out,
             "input: injected={} unanswered={}",
             c.inputs, c.unanswered
         );
@@ -568,6 +600,15 @@ pub fn rendered() {
         let now = Instant::now();
         if s.recording(now) {
             s.recorder.record(Event::Rendered(now));
+        }
+    });
+}
+
+/// Panes hook: one shell frame laid out (observations only, never asserted).
+pub fn shell(shell: Shell) {
+    with_session(|s| {
+        if s.recording(Instant::now()) {
+            s.recorder.record(Event::Shell(shell));
         }
     });
 }

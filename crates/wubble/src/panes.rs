@@ -7,6 +7,7 @@
 //! @ 6c840da): sync the physics to the model's split, step it, turn what it settled into model
 //! commands, write panes and seams. The focus ring is `browser/chrome.tsx` `split-layout`'s.
 
+use wubble_core::bow::{BOWED, Curve, EdgeTable, edge_table};
 use wubble_core::model::{Command, Model};
 use wubble_core::space::SpaceId;
 use wubble_core::split::{Bow, Split, SplitEvent, string_line, string_rect};
@@ -18,8 +19,6 @@ use crate::physical;
 
 /// The panes' corner radius and the strings' (split.ts: 14).
 pub const RADIUS: f64 = 14.0;
-/// A seam's string is drawn while it bows more than this (driver.rs).
-const BOWED: f64 = 0.05;
 
 /// One page's place in the content area, in logical pixels: `x..x + width`, full height.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -169,6 +168,23 @@ impl Panes {
             .collect()
     }
 
+    /// The left and right edges of `tab`'s pane as split strings bend them, pane-local heights
+    /// (the content area's, `height` high); `None` for an edge with no string or a straight one.
+    /// The same curve `seams` draws.
+    pub fn edges(&self, tab: TabId, height: f64) -> (Option<EdgeTable>, Option<EdgeTable>) {
+        if !self.shown() {
+            return (None, None);
+        }
+        let Some(p) = self.split.panes().into_iter().find(|p| p.id == tab.0) else {
+            return (None, None);
+        };
+        let table = |b: Option<Bow>| {
+            b.filter(|b| b.bend.abs() > BOWED)
+                .map(|b| edge_table(Curve::Split, b.bend, b.gy, RADIUS, height - RADIUS, height))
+        };
+        (table(p.l), table(p.r))
+    }
+
     /// The ring round the focused pane, following its bowed edges; "" for one page.
     pub fn ring(&self, focused: Option<TabId>, height: f64) -> String {
         let Some(f) = focused.filter(|_| self.shown()) else {
@@ -300,6 +316,33 @@ mod tests {
         // physical pixels per pane
         let l = rects[1].layout(700.0, 1.5);
         assert_eq!((l.size.width, l.size.height), (750, 1050));
+    }
+
+    /// A held split seam bends both panes' facing edges along its string, the same way; at
+    /// rest neither bends.
+    #[test]
+    fn a_bent_seam_bends_both_facing_edges() {
+        let m = with_tabs(2);
+        let (m, _) = apply(m, Command::SplitWith(TabId(1)));
+        let mut p = Panes::default();
+        p.frame(&m, 0.0, 1008.0, 700.0);
+        let [a, b] = [TabId(2), TabId(1)];
+        assert_eq!(p.edges(a, 700.0), (None, None));
+        p.grab(0, 504.0, 300.0);
+        p.drag(380.0, 300.0);
+        for _ in 0..5 {
+            p.frame(&m, DT, 1008.0, 700.0);
+        }
+        let (Some(right), None) = (p.edges(a, 700.0).1, p.edges(a, 700.0).0) else {
+            panic!("the left pane's right edge bends")
+        };
+        let (Some(left), None) = p.edges(b, 700.0) else {
+            panic!("the right pane's left edge bends")
+        };
+        assert_eq!(right, left);
+        assert!(right.at(300.0) < -1.0, "bowed toward the pointer");
+        let (x, path) = p.seams(700.0)[0].clone();
+        assert!(!path.is_empty() && x > 380.0);
     }
 
     #[test]

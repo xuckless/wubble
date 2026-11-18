@@ -6,6 +6,8 @@
 mod headless;
 
 use headless::{Run, THICK, VIEW, device, render};
+use wubble_gfx::FrameSize;
+use wubble_gfx::mask::{EdgeMask, MaskJob};
 use wubble_gfx::scene::Quality;
 
 const FRAMES: u32 = 30;
@@ -49,6 +51,7 @@ fn scene_renders_glass_over_the_backdrop() {
         glass,
         quality: Quality::Full,
         frames: FRAMES,
+        bow: 0.0,
     };
     let (w, h, with_glass) = render(&device, &queue, full(true));
     assert_eq!((w, h), (640, 400), "logical 320×200 at dpr 2");
@@ -115,6 +118,7 @@ fn every_quality_draws_glass_and_flat_freezes_and_flattens() {
                 glass,
                 quality,
                 frames,
+                bow: 0.0,
             },
         );
         assert_eq!((w, h), (640, 400));
@@ -175,4 +179,156 @@ fn scene_builds_and_has_no_cost_before_a_frame() {
     let mut r = wubble_gfx::scene::Renderer::from_device(device, queue, Default::default())
         .expect("the scene builds on the test device");
     assert_eq!(r.take_cost(), None);
+}
+
+/// The sidebar's glass follows the bowed seam: with its right edge bowed 30 px at mid height the
+/// panel reaches into the strip right of its straight edge there, and nothing changes at the rows
+/// above it, where the string is straight.
+#[test]
+fn a_bowed_glass_edge_differs_from_a_straight_one_only_where_it_bows() {
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let run = |bow| Run {
+        glass: true,
+        quality: Quality::Full,
+        frames: 3,
+        bow,
+    };
+    let (w, _, straight) = render(&device, &queue, run(0.0));
+    let (_, _, bowed) = render(&device, &queue, run(30.0));
+    let mid = THICK.y + THICK.h / 2.0;
+    // just right of the straight edge, at the peak: glass now
+    let strip = (THICK.x + THICK.w + 4.0, mid - 2.0, 16.0, 4.0);
+    assert_ne!(region(&bowed, w, strip), region(&straight, w, strip));
+    // the rows above the panel's top, where the bow is zero: the same
+    let above = (THICK.x, 0.0, THICK.w + 40.0, THICK.y - 1.0);
+    assert_eq!(region(&bowed, w, above), region(&straight, w, above));
+}
+
+/// A solid texture of `rgba`, `w`×`h`, sampled by the mask.
+fn solid(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    w: u32,
+    h: u32,
+    rgba: [u8; 4],
+) -> wgpu::Texture {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("solid"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let data: Vec<u8> = (0..w * h).flat_map(|_| rgba).collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w * 4),
+            rows_per_image: Some(h),
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    tex
+}
+
+fn edge(offset: &[f32]) -> Option<wubble_gfx::Edge<'_>> {
+    Some(wubble_gfx::Edge {
+        y0: 0.0,
+        step: 4.0,
+        offset,
+    })
+}
+
+/// The page mask: inside the bowed edge the frame (alpha 1), in the cut nothing (alpha 0), in a
+/// bulge past the frame the fill colour, and with straight edges the frame 1:1 with only the
+/// margins and corners transparent.
+#[test]
+fn the_mask_cuts_and_bulges_along_the_tables() {
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (pw, ph) = (200u32, 160u32);
+    let red = [200, 30, 40, 255];
+    let source = solid(&device, &queue, pw, ph, red);
+    let mut mask = EdgeMask::new(&device);
+    // left edge pinched in 20 px at mid height, right edge bulging out 20 px
+    let cut: Vec<f32> = (0..=40)
+        .map(|i| if (16..=24).contains(&i) { 20.0 } else { 0.0 })
+        .collect();
+    let bulge = cut.clone();
+    let fill = [0.0, 1.0, 0.0];
+    let job = MaskJob {
+        pane: (pw as f32, ph as f32),
+        scale: 1.0,
+        stretch: (0.0, 0.0),
+        clip: FrameSize::new(pw, ph),
+        radius: 14.0,
+        margin: 72.0,
+        left: edge(&cut),
+        right: edge(&bulge),
+        fill,
+    };
+    mask.run(&device, &queue, &source, &job).expect("mask");
+    let tex = mask.latest().expect("drawn");
+    assert_eq!((tex.width(), tex.height()), (pw + 144, ph));
+    let img = wubble_gfx::scene::readback_rgba8(&device, &queue, tex);
+    let at = |x: u32, y: u32| {
+        let o = ((y * tex.width() + x) * 4) as usize;
+        [img[o], img[o + 1], img[o + 2], img[o + 3]]
+    };
+    let m = 72;
+    // inside: the frame, opaque
+    assert_eq!(at(m + 100, 80), red);
+    // the left cut at mid height (0..20 px in from the pane's edge): clear
+    assert_eq!(at(m + 5, 80)[3], 0);
+    // ...but not at the top, where the edge is straight
+    assert_eq!(at(m + 5, 40), red);
+    // the right bulge past the frame: the fill colour, opaque
+    assert_eq!(at(m + pw + 10, 80), [0, 255, 0, 255]);
+    // the margin beyond it, and beyond the straight right edge higher up: clear
+    assert_eq!(at(m + pw + 30, 80)[3], 0);
+    assert_eq!(at(m + pw + 5, 40)[3], 0);
+
+    // straight edges: the frame 1:1 in the pane, nothing in the margins
+    let straight = MaskJob {
+        left: None,
+        right: None,
+        ..job
+    };
+    mask.run(&device, &queue, &source, &straight).expect("mask");
+    let img = wubble_gfx::scene::readback_rgba8(&device, &queue, mask.latest().unwrap());
+    let w = pw + 144;
+    let px = |x: u32, y: u32| {
+        let o = ((y * w + x) * 4) as usize;
+        [img[o], img[o + 1], img[o + 2], img[o + 3]]
+    };
+    for y in [20, 80, 140] {
+        for x in [0, 50, pw - 1] {
+            assert_eq!(px(m + x, y), red, "({x}, {y})");
+        }
+        assert_eq!(px(m - 1, y)[3], 0);
+        assert_eq!(px(m + pw, y)[3], 0);
+    }
 }

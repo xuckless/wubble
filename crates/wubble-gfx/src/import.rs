@@ -21,6 +21,7 @@ use welding::wgpu;
 use welding::{HostWgpuContext, WgpuTextureImporter};
 
 use crate::FrameSize;
+use crate::mask::{EdgeMask, MaskJob, Masked};
 
 /// What went wrong on the GPU side. The text is the underlying error verbatim.
 #[derive(Debug)]
@@ -170,6 +171,7 @@ impl GpuContext {
             ctx: HostWgpuContext::new(self.device.clone(), self.queue.clone()),
             blit: Blitter::new(&self.device),
             ring: None,
+            mask: EdgeMask::new(&self.device),
         }
     }
 }
@@ -235,27 +237,27 @@ pub(crate) fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> 
 /// display-encoded and writes them to the surface unchanged, so the target is
 /// NOT an sRGB format: an sRGB target would be decoded to linear on sampling
 /// and shown too dark (#808080 came out as #373737). The blit re-encodes.
-const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(crate) const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Number of blit targets. Two, so consecutive frames are different images
 /// and setting one on the window always changes the property.
 const RING_LEN: usize = 2;
 
 /// One Slint-compatible texture and its `Image`, wrapped once.
-struct Target {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    image: slint::Image,
+pub(crate) struct Target {
+    pub(crate) texture: wgpu::Texture,
+    pub(crate) view: wgpu::TextureView,
+    pub(crate) image: slint::Image,
 }
 
-struct Ring {
-    size: FrameSize,
+pub(crate) struct Ring {
+    pub(crate) size: FrameSize,
     targets: [Target; RING_LEN],
     next: usize,
 }
 
 impl Ring {
-    fn new(device: &wgpu::Device, size: FrameSize) -> Result<Self, GfxError> {
+    pub(crate) fn new(device: &wgpu::Device, size: FrameSize) -> Result<Self, GfxError> {
         let target = || -> Result<Target, GfxError> {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("wubble web frame"),
@@ -291,10 +293,15 @@ impl Ring {
     }
 
     /// The target for the next frame; advances the ring.
-    fn advance(&mut self) -> &Target {
+    pub(crate) fn advance(&mut self) -> &Target {
         let slot = self.next;
         self.next = (slot + 1) % RING_LEN;
         &self.targets[slot]
+    }
+
+    /// The target `advance` returned last.
+    pub(crate) fn latest(&self) -> &Target {
+        &self.targets[(self.next + RING_LEN - 1) % RING_LEN]
     }
 }
 
@@ -303,6 +310,8 @@ pub struct FramePresenter {
     ctx: HostWgpuContext,
     blit: Blitter,
     ring: Option<Ring>,
+    /// The bowed-edge pass over the latest frame (`crate::mask`).
+    mask: EdgeMask,
 }
 
 impl FramePresenter {
@@ -333,7 +342,7 @@ impl FramePresenter {
     /// latency probe only, never on the normal frame path.
     pub fn probe(&self, x: u32, y: u32) -> Option<[u8; 4]> {
         let ring = self.ring.as_ref()?;
-        let target = &ring.targets[(ring.next + RING_LEN - 1) % RING_LEN];
+        let target = ring.latest();
         let (device, queue) = (&self.ctx.device, &self.ctx.queue);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("wubble probe"),
@@ -380,6 +389,18 @@ impl FramePresenter {
             .ok()?;
         let data = slice.get_mapped_range().ok()?;
         Some([data[0], data[1], data[2], data[3]])
+    }
+
+    /// The latest frame with its bowed edges cut (`crate::mask`), `None` before the first frame.
+    /// Needs no new frame: a bending string redraws the same one.
+    pub fn mask(&mut self, job: &MaskJob) -> Result<Option<Masked>, GfxError> {
+        let Some(ring) = self.ring.as_ref() else {
+            return Ok(None);
+        };
+        let source = &ring.latest().texture;
+        self.mask
+            .run(&self.ctx.device, &self.ctx.queue, source, job)
+            .map(Some)
     }
 
     /// The device frames are presented on, for welding's in-callback copy.

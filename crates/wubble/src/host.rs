@@ -200,14 +200,18 @@ pub struct Checks {
     pub begin_frames: bool,
 }
 
-/// The last frame shown in a pane: the image, the part of it to show, the size CEF painted,
-/// and what the pane shows of it while its size changes (`wubble_core::stretch`).
+/// The last frame shown in a pane: the image, the part of it to show, and what the pane shows
+/// of it while its size changes (`wubble_core::stretch`; the view's state carries the size CEF
+/// painted, the engine's `ViewState` the size it wants).
 struct PaneFrame {
     image: slint::Image,
     clip: wubble_gfx::FrameSize,
-    size: wubble_gfx::FrameSize,
-    pane: wubble_core::stretch::Pane,
+    view: wubble_core::stretch::PaneView,
     springs: wubble_core::stretch::PaneSprings,
+    /// The stale frame (and its clip) fading out over this one while `view` is fading.
+    prev: Option<(slint::Image, wubble_gfx::FrameSize)>,
+    /// The frame cut along a bowed string, while one bends this pane's edge.
+    masked: Option<wubble_gfx::mask::Masked>,
 }
 
 /// The external begin-frame driver's state and its timer.
@@ -751,8 +755,8 @@ impl Host {
                     layout.size.width,
                     layout.size.height,
                     layout.scale,
-                    frame.size.width,
-                    frame.size.height,
+                    frame.view.shown().w,
+                    frame.view.shown().h,
                     frame.clip.width,
                     frame.clip.height
                 );
@@ -1238,7 +1242,9 @@ impl Host {
             visible_views: self.engine.visible_views(),
             at_rest: self.panes_last.is_none()
                 && self.split_commands.is_empty()
-                && !self.panes.held(),
+                && !self.panes.held()
+                && self.frames.values().all(|f| f.view.is_live()),
+            masked: self.frames.values().filter(|f| f.masked.is_some()).count(),
         };
         let (state, action) = split_smoke::next(state, &seen);
         self.checks.split_smoke = Some(state);
@@ -1264,6 +1270,15 @@ impl Host {
                     Err(e) => self.fail(e),
                 }
             }
+            Some(split_smoke::Action::Bend) => {
+                let height = f64::from(window.get_content_height());
+                if let Some(&(x, _)) = self.panes.seams(height).first() {
+                    let (x, y) = (x as f32, (height / 2.0) as f32);
+                    self.split_grab(0, x, y);
+                    self.split_drag(x - 150.0, y);
+                }
+            }
+            Some(split_smoke::Action::Release) => self.split_release(),
             Some(split_smoke::Action::Unsplit) => {
                 if let Some(tab) = self.model.visible_tab() {
                     self.dispatch(Command::Unsplit(tab));

@@ -179,6 +179,19 @@ impl Stretch {
     pub fn x(&self) -> f64 {
         self.s.x
     }
+
+    /// wubble change: take `value` as the last one seen without measuring a velocity (a frame
+    /// with no time passed: the size jumped, nothing moved at a speed).
+    pub fn seed(&mut self, value: f64) {
+        self.last = value;
+    }
+
+    /// wubble change: forget the last value and the velocity (the part was not stepped for a
+    /// while, e.g. off screen): the next update measures from scratch.
+    pub fn forget(&mut self) {
+        self.last = f64::NAN;
+        self.vel = 0.0;
+    }
 }
 
 /// Cross-axis scale that keeps area constant.

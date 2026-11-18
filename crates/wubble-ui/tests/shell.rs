@@ -652,9 +652,27 @@ fn frame_rects(app: &AppWindow) -> Vec<(f32, f32, f32, f32)> {
         .collect()
 }
 
+/// The masked frames (the frame cut along a bowed string), as the pane rects.
+fn edge_rects(app: &AppWindow) -> Vec<(f32, f32, f32, f32)> {
+    ElementHandle::find_by_element_id(app, "SplitView::pane-edge")
+        .map(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            (p.x, p.y, s.width, s.height)
+        })
+        .collect()
+}
+
+fn scale_to(app: &AppWindow, scale_factor: f32) {
+    app.window()
+        .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+    pump(1);
+}
+
 /// TODO.md "Resize feel": a pane's frame always fills the pane (a stale one is scaled to it),
 /// stretched further while the size moves and 1:1 on whole pixels at rest. One page alone follows
-/// the window in the same layout pass, with nothing pushed from the host.
+/// the window in the same layout pass, with nothing pushed from the host. At rest the frame is
+/// exactly the pane, one frame pixel per physical pixel, also at a fractional scale (review:
+/// the lone page's `fill` must stay on whole physical pixels).
 fn stretched_panes(app: &AppWindow) {
     let (cx, cy, w, h) = (
         app.get_content_x(),
@@ -687,14 +705,60 @@ fn stretched_panes(app: &AppWindow) {
         (got.2 - w * 1.03).abs() < 1e-3 && (got.3 - h * 1.03).abs() < 1e-3,
         "{got:?}"
     );
-    // at rest, 1:1 on whole pixels
-    app.set_panes(ModelRc::from([stale].as_slice()));
-    pump(1);
-    let got = frame_rects(app)[0];
-    for v in [got.0, got.1, got.2, got.3] {
-        assert_eq!(v, v.round(), "{got:?}");
+    assert!(got.2 > w, "a stretching frame is wider than its pane");
+    // at rest: a frame painted for the pane (clip = the pane's physical size), 1:1, at scale 1
+    // and 1.25, with a content width (1001) that is fractional in physical px at 1.25
+    for scale in [1.0f32, 1.25] {
+        scale_to(app, scale);
+        app.window().set_size(LogicalSize::new(1277.0, 800.0));
+        pump(1);
+        let (cx, cy, w, h) = (
+            app.get_content_x(),
+            app.get_content_y(),
+            app.get_content_width(),
+            app.get_content_height(),
+        );
+        let phys = |l: f32| l * scale;
+        for v in [cx, cy, w, h] {
+            assert!(
+                (phys(v) - phys(v).round()).abs() < 1e-3,
+                "at {scale}: {v} is not on whole physical pixels"
+            );
+        }
+        let rest = SplitPane {
+            id: 1,
+            fill: true,
+            clip_width: phys(w).round() as i32,
+            clip_height: phys(h).round() as i32,
+            ..Default::default()
+        };
+        app.set_panes(ModelRc::from([rest].as_slice()));
+        pump(1);
+        let got = frame_rects(app)[0];
+        assert_eq!(got, (cx, cy, w, h), "at {scale}");
+        assert!(
+            (phys(got.2) - phys(w).round()).abs() < 1e-3
+                && (phys(got.3) - phys(h).round()).abs() < 1e-3,
+            "at {scale}: the frame is not 1:1: {got:?}"
+        );
     }
+    scale_to(app, 1.0);
+    app.window().set_size(LogicalSize::new(1280.0, 800.0));
+    pump(1);
+    // a masked pane: its frame cut along the string, drawn 1:1 from `margin` left of the pane,
+    // wider by the margin each side; the plain frame is not drawn then
+    let masked = SplitPane {
+        id: 1,
+        x0: 0.0,
+        x1: 600.0,
+        margin: 72.0,
+        ..Default::default()
+    };
+    app.set_panes(ModelRc::from([masked.clone()].as_slice()));
+    pump(1);
+    assert_eq!(edge_rects(app), vec![(cx - 72.0, cy, 600.0 + 144.0, h)]);
     // the window grows: the pane and its frame follow without the host
+    app.set_panes(ModelRc::from([stale].as_slice()));
     app.window().set_size(LogicalSize::new(1400.0, 860.0));
     pump(1);
     let (w2, h2) = (app.get_content_width(), app.get_content_height());
@@ -706,8 +770,9 @@ fn stretched_panes(app: &AppWindow) {
 }
 
 /// While the seam is held and bowed the sidebar's sections ride the string at their own height
-/// (design browser/chrome.tsx `[data-ride]`), the one at the grab height most; released and
-/// settled, every one is back in its column.
+/// (design browser/chrome.tsx `[data-ride]`): each by the edge table at its centre height, the
+/// same table the glass edge and the page edge follow; the Slint-only glass outline bulges by the
+/// same amount. Released and settled, every one is back in its column and nothing is bowed.
 fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
     settle(app, driver);
     let rest = app.get_side_edges();
@@ -722,7 +787,14 @@ fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
     pointer(app, x + 60.0, y);
     frames(app, driver, 3);
     assert!(app.get_seam_bowed());
-    assert!(app.get_seam_ride().row_count() > 0);
+    let table: Vec<f32> = app.get_seam_edge().iter().collect();
+    assert!(table.len() > 1);
+    let step = app.get_seam_edge_step();
+    let edge = wubble_core::bow::EdgeTable {
+        y0: 0.0,
+        step: step.into(),
+        offset: table.clone(),
+    };
     pump(1);
     let held = app.get_side_edges();
     let pill = held.pill - rest.pill;
@@ -732,10 +804,47 @@ fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
         lights < pill,
         "the header rides less, nearer the end: {lights} {pill}"
     );
+    // the Slint-only outline reaches the sidebar's width plus the bend at the grab height
+    let outline = app.get_sidebar_outline();
+    assert!(!outline.is_empty());
+    // every command of the path takes x y pairs: the x values are the even ones
+    let numbers: Vec<f32> = outline
+        .split(|c: char| c.is_ascii_alphabetic() || c == ' ')
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    let xs: Vec<f32> = numbers.iter().step_by(2).copied().collect();
+    let reach = xs.iter().copied().fold(f32::MIN, f32::max);
+    let bend = edge.max_abs() as f32;
+    assert!(
+        (reach - (app.get_sidebar_width() + bend)).abs() < 0.05,
+        "outline reaches {reach}, width {} + bend {bend}",
+        app.get_sidebar_width()
+    );
     button(app, x + 60.0, y, false);
     settle(app, driver);
     pump(1);
-    assert_eq!(app.get_seam_ride().row_count(), 0);
+    assert_eq!(app.get_seam_edge().row_count(), 0);
+    assert!(app.get_sidebar_outline().is_empty());
     assert_eq!(app.get_side_edges().pill, rest.pill);
     pointer(app, 900.0, 300.0);
+
+    // a known table: every section rides it exactly at its own height (linear between samples)
+    let flat = vec![10.0f32; 201];
+    app.set_seam_edge(ModelRc::from(flat.as_slice()));
+    app.set_seam_edge_step(4.0);
+    pump(1);
+    let e = app.get_side_edges();
+    assert_eq!(e.pill - rest.pill, 10.0);
+    assert_eq!(e.lights - rest.lights, 10.0);
+    let ramp: Vec<f32> = (0..201).map(|i| i as f32 * 0.4).collect(); // 0.1 per px of height
+    app.set_seam_edge(ModelRc::from(ramp.as_slice()));
+    pump(1);
+    let e = app.get_side_edges();
+    let pill = e.pill - rest.pill;
+    // the pill's section is centred about its own centre height
+    assert!((pill - y * 0.1).abs() < 2.0, "pill {pill} at {y}");
+    assert!(e.lights - rest.lights < pill);
+    app.set_seam_edge(ModelRc::default());
+    pump(1);
+    assert_eq!(app.get_side_edges().pill, rest.pill);
 }

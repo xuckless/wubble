@@ -11,6 +11,7 @@
 //! bitmaps) is a fallback only and must be counted/logged when hit.
 
 pub mod import;
+pub mod mask;
 pub mod pacing;
 pub mod scene;
 pub mod swatch;
@@ -44,9 +45,50 @@ impl FrameSize {
     }
 }
 
+/// A bowed edge's displacement along x, sampled every `step` logical px of height from `y0`
+/// (a borrowed `wubble_core::bow::EdgeTable`, which this crate does not name). At most
+/// [`EDGE_SAMPLES`] samples are used.
+#[derive(Clone, Copy, Debug)]
+pub struct Edge<'a> {
+    pub y0: f32,
+    pub step: f32,
+    pub offset: &'a [f32],
+}
+
+/// The samples one edge uniform holds (64 × vec4 in WGSL).
+pub const EDGE_SAMPLES: usize = 256;
+
+/// An edge as a shader reads it: (step, y0, samples) and the samples, 4 to a vec4. `None` and
+/// fewer than two samples read as straight.
+pub(crate) fn pack_edge(edge: Option<Edge>) -> ([f32; 3], [[f32; 4]; 64]) {
+    let mut out = [[0.0; 4]; 64];
+    let Some(e) = edge else {
+        return ([0.0; 3], out);
+    };
+    let n = e.offset.len().min(EDGE_SAMPLES);
+    for (i, &o) in e.offset[..n].iter().enumerate() {
+        out[i / 4][i % 4] = o;
+    }
+    ([e.step, e.y0, n as f32], out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edge_packs_four_to_a_vec4() {
+        let offset: Vec<f32> = (0..300).map(|i| i as f32).collect();
+        let (tab, out) = pack_edge(Some(Edge {
+            y0: 8.0,
+            step: 4.0,
+            offset: &offset,
+        }));
+        assert_eq!(tab, [4.0, 8.0, EDGE_SAMPLES as f32]);
+        assert_eq!(out[0], [0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(out[63][3], 255.0);
+        assert_eq!(pack_edge(None).0, [0.0; 3]);
+    }
 
     #[test]
     fn crop_keeps_only_what_fits() {

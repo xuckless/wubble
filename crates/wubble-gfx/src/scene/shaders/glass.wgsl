@@ -24,7 +24,8 @@ struct GlassU {
   uWaveN: i32,
   uVoiceAmt: f32,
   uMaterial: f32,    // 1 full glass, 0 effects only, 2 flat fill (wubble)
-  _p0: f32, _p1: f32, _p2: f32,
+  uBow: f32,         // wubble: 1 = the right edge follows B (the bowed seam)
+  _p1: f32, _p2: f32,
   uBeam: vec4<f32>,  // head, length (fractions of the perimeter), strength, hue
   uVoice: vec4<f32>, // low, mid, high, phase
   uWave: array<vec4<f32>, 4>,
@@ -35,6 +36,23 @@ struct GlassU {
 // uBg is declared in the GLSL but never read there either; only the pyramid levels are used.
 @group(0) @binding(3) var uB1: texture_2d<f32>;
 @group(0) @binding(4) var uB2: texture_2d<f32>;
+
+// wubble: the seam's bowed string (wubble_core::bow::EdgeTable, window logical px): the right
+// edge of a glass flagged uBow follows it, so the sidebar bulges and pinches with the string.
+struct BowU {
+  tab: vec4<f32>,                 // step, y0, samples, unused
+  off: array<vec4<f32>, 64>,
+};
+@group(0) @binding(5) var<uniform> B: BowU;
+
+fn bowAt(y: f32) -> f32 {
+  if (B.tab.z < 2.0 || B.tab.x <= 0.0) { return 0.0; }
+  let u = (y - B.tab.y) / B.tab.x;
+  if (u < 0.0 || u > B.tab.z - 1.0) { return 0.0; }
+  let i = min(u32(floor(u)), u32(B.tab.z) - 2u);
+  let t = u - f32(i);
+  return mix(B.off[i / 4u][i % 4u], B.off[(i + 1u) / 4u][(i + 1u) % 4u], t);
+}
 
 @vertex
 fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQuad, U.uView); }
@@ -52,7 +70,9 @@ fn sat(c: vec3<f32>, s: f32) -> vec3<f32> { let l = dot(c, vec3<f32>(0.2126, 0.7
 @fragment
 fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   let vPx = fin.vPx;
-  let half_ = U.uRect.zw * 0.5; let c = U.uRect.xy + half_; let p = vPx - c;
+  // wubble: a bowed right edge moves by the string's offset at this height (the left stays)
+  let bw = select(0.0, bowAt(vPx.y), U.uBow > 0.5);
+  let half_ = vec2<f32>(max(0.5, (U.uRect.z + bw) * 0.5), U.uRect.w * 0.5); let c = U.uRect.xy + half_; let p = vPx - c;
   let r = min(U.uR, min(half_.x, half_.y));
   let d = sdRound(p, half_, r);
   let aa = 0.75 / U.uDpr;

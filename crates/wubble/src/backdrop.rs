@@ -131,6 +131,7 @@ pub fn to_rect(item: &GlassItem) -> GlassRect {
         pressed: item.pressed,
         hover: item.hover,
         focus: item.focus,
+        bow: item.bow,
     }
 }
 
@@ -163,6 +164,14 @@ impl Glass {
         matches!(self, Glass::Scene(_))
     }
 
+    /// The scene's output size, physical px, once it has rendered (`--measure`).
+    pub fn scene_size(&self) -> Option<(u32, u32)> {
+        match self {
+            Glass::Scene(s) => s.renderer.output().map(|t| (t.width(), t.height())),
+            Glass::SlintOnly => None,
+        }
+    }
+
     /// One rendered frame, after the shell driver's step. `glass` is the panels' new list
     /// when it changed.
     pub fn frame(&mut self, window: &AppWindow, now: Instant, glass: Option<&[GlassItem]>) {
@@ -172,6 +181,16 @@ impl Glass {
         if let Some(items) = glass {
             s.set_items(window, items);
         }
+        // the sidebar glass's right edge follows the seam's string (the driver's table)
+        use slint::Model as _;
+        let offset: Vec<f32> = window.get_seam_edge().iter().collect();
+        s.renderer
+            .scene
+            .set_bow((offset.len() > 1).then(|| wubble_gfx::Edge {
+                y0: 0.0,
+                step: window.get_seam_edge_step(),
+                offset: &offset,
+            }));
         let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint
@@ -285,6 +304,7 @@ mod tests {
             pressed: true,
             hover: false,
             focus: true,
+            bow: true,
             present: true,
         };
         assert_eq!(
@@ -296,6 +316,7 @@ mod tests {
                 pressed: true,
                 hover: false,
                 focus: true,
+                bow: true,
             }
         );
     }

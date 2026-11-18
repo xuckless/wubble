@@ -68,6 +68,7 @@ pub use quality::{
     HOLD_FRAMES, MAX_BACKDROP_DT, MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality, SAMPLE_CAP,
     SETTLE_FRAMES, UP_FRACTION, should_render,
 };
+pub(crate) use render::with_prelude;
 pub use render::{Renderer, readback_rgba8};
 pub use state::{
     BEAM_LAP, Beam, BeamRect, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, Scene,

@@ -1,6 +1,8 @@
 //! `--smoke split`: two tabs on the bundled page, split side by side; once the split rests,
 //! each pane must hold its own live view painting at its pane's size and show its page in the
-//! window; then the split is undone and one view stays. Every wait is "until the host sees X",
+//! window; then its seam is pulled, and both panes must show their frame cut along the bowed
+//! string (the page edge mask) until it is let go and rests straight again; then the split is
+//! undone and one view stays. Every wait is "until the host sees X",
 //! bounded by a count of CEF work runs, never by time.
 
 use wubble_gfx::FrameSize;
@@ -25,6 +27,8 @@ pub struct Seen {
     pub visible_views: usize,
     /// The split's strings rest and nothing they settled waits.
     pub at_rest: bool,
+    /// Panes showing their frame cut along a bowed string.
+    pub masked: usize,
 }
 
 impl Seen {
@@ -44,8 +48,12 @@ pub enum Stage {
     Opened,
     /// Split, waiting for two live panes at their sizes.
     Split,
-    /// The panes' pixels checked; waiting one run before unsplitting.
+    /// The panes' pixels checked; waiting one run before pulling the seam.
     Checked,
+    /// The seam pulled, waiting for both panes' edges to bow with it.
+    Bending,
+    /// Let go, waiting for the string to rest straight and the masks to go.
+    Released,
     /// Unsplit, waiting for one page alone.
     Unsplit,
     Done,
@@ -75,6 +83,10 @@ pub enum Action {
     Split,
     /// Snapshot the window and check every pane shows its page; a failure fails the smoke.
     CheckPixels,
+    /// Grab the seam and pull it toward the left pane.
+    Bend,
+    /// Let go of the seam.
+    Release,
     /// Take the focused page out of the split.
     Unsplit,
     Pass,
@@ -87,7 +99,11 @@ pub fn next(s: SplitSmoke, seen: &Seen) -> (SplitSmoke, Option<Action>) {
         Stage::Start => Some((Stage::Opened, Action::OpenSecond)),
         Stage::Opened if seen.tabs == 2 && seen.showing(1) => Some((Stage::Split, Action::Split)),
         Stage::Split if seen.showing(2) => Some((Stage::Checked, Action::CheckPixels)),
-        Stage::Checked => Some((Stage::Unsplit, Action::Unsplit)),
+        Stage::Checked => Some((Stage::Bending, Action::Bend)),
+        Stage::Bending if seen.masked == 2 => Some((Stage::Released, Action::Release)),
+        Stage::Released if seen.showing(2) && seen.masked == 0 => {
+            Some((Stage::Unsplit, Action::Unsplit))
+        }
         Stage::Unsplit if seen.tabs == 2 && seen.showing(1) => Some((Stage::Done, Action::Pass)),
         _ => None,
     };
@@ -129,6 +145,7 @@ mod tests {
             panes,
             visible_views,
             at_rest: true,
+            masked: 0,
         }
     }
 
@@ -151,7 +168,36 @@ mod tests {
         assert_eq!(a, None);
         let (s, a) = next(s, &seen(2, vec![pane(496, true), pane(496, true)], 2));
         assert_eq!(a, Some(Action::CheckPixels));
-        let (s, a) = next(s, &seen(2, vec![pane(496, true), pane(496, true)], 2));
+        let two = seen(2, vec![pane(496, true), pane(496, true)], 2);
+        let (s, a) = next(s, &two);
+        assert_eq!(a, Some(Action::Bend));
+        // one edge bowed is not both
+        let (s, a) = next(
+            s,
+            &Seen {
+                masked: 1,
+                ..two.clone()
+            },
+        );
+        assert_eq!(a, None);
+        let (s, a) = next(
+            s,
+            &Seen {
+                masked: 2,
+                ..two.clone()
+            },
+        );
+        assert_eq!(a, Some(Action::Release));
+        // still bowed (twanging): not yet
+        let (s, a) = next(
+            s,
+            &Seen {
+                masked: 2,
+                ..two.clone()
+            },
+        );
+        assert_eq!(a, None);
+        let (s, a) = next(s, &two);
         assert_eq!(a, Some(Action::Unsplit));
         // two views still visible: not yet
         let (s, a) = next(s, &seen(2, vec![pane(1000, true)], 2));

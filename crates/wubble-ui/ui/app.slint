@@ -23,7 +23,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -133,11 +133,17 @@ export component AppWindow inherits Window {
     in property <length> sidebar-saved: Chrome.sidebarDefault;    // Seam.saved: the peek's width
     in property <string> seam-path;
     in property <bool> seam-bowed: false;
-    // How far each height of the window rides the bowed string (Seam::ride), one sample per
-    // `ride-step` from the top; empty while the string is straight. The sidebar's sections
-    // follow it (design browser/chrome.tsx `[data-ride]`).
-    in property <[length]> seam-ride;
-    out property <length> ride-step: Shell.ride-step;
+    // How far the bowed string is displaced at each height of the window (wubble_core::bow
+    // EdgeTable), one sample per `seam-edge-step` from the top; empty while it is straight. The
+    // sidebar's sections ride it (design browser/chrome.tsx `[data-ride]`), and the sidebar's
+    // glass edge and the page's edge follow it.
+    in property <[length]> seam-edge;
+    in property <length> seam-edge-step;
+    // The sidebar glass's bowed outline for Slint-only glass (string_rect_of), "" when straight.
+    in property <string> sidebar-outline;
+    // A pane shows its frame cut along a bowed string (SplitPane.edge): the content area neither
+    // clips nor fills, so the bulge shows. The host sets it with the panes.
+    in property <bool> edge-bowed: false;
     // scroller.rs: the tab list
     in property <length> scroll-y <=> sidebar.scroll-y;
     in property <length> thumb-top <=> sidebar.thumb-top;
@@ -419,9 +425,9 @@ export component AppWindow inherits Window {
             width: round((parent.width - self.x - parent.gap) / 1phx) * 1phx;
             height: parent.height - 2 * parent.gap;
             border-radius: root.page-fullscreen ? 0px : Radius.md;
-            clip: true;
+            clip: !root.edge-bowed;
             // Between split panes the window's glass shows (the design's `.wb-split` web view).
-            background: root.panes.length > 1 ? transparent : Palette.web;
+            background: root.panes.length > 1 || root.edge-bowed ? transparent : Palette.web;
             // Over the frames and under the command bar, so the bar takes
             // its own pointer events and the pages only get the rest.
             web-focus := FocusScope {
@@ -550,8 +556,10 @@ export component AppWindow inherits Window {
             width: Chrome.inset + sidebar.width;
             height: parent.height;
 
-            // The sidebar's Regular glass, drawn by the scene up to the seam. Slint-only glass has
-            // no sidebar panel (the plain ground shows), as before the scene.
+            // The sidebar's Regular glass, drawn by the scene up to the seam; its right edge bows
+            // with the seam's string. Slint-only glass has no sidebar panel at rest (the plain
+            // ground shows), as before the scene; while the string bends it draws the bowed
+            // outline, so the edge still reads as rubber.
             GlassPanel {
                 key: GlassKeys.sidebar;
                 x: sidebar.x;
@@ -560,8 +568,10 @@ export component AppWindow inherits Window {
                 height: sidebar.height;
                 tier: GlassTier.regular;
                 radius: Radius.lg;
-                over-wgpu: true;
-                visible: GlassLayer.scene-active;
+                over-wgpu: GlassLayer.scene-active;
+                follows-seam: true;
+                outline: root.hidden-at-rest ? "" : root.sidebar-outline;
+                visible: GlassLayer.scene-active || self.outline != "";
                 present: !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open && !root.page-fullscreen;
             }
 
@@ -595,7 +605,8 @@ export component AppWindow inherits Window {
                 glass-over-wgpu: GlassLayer.scene-active && !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
                 floating: root.hidden-at-rest;
                 // the peek floats off the seam: its sections hold still
-                ride: root.hidden-at-rest ? [] : root.seam-ride;
+                ride: root.hidden-at-rest ? [] : root.seam-edge;
+                ride-step: root.seam-edge-step;
                 window-movable: !root.full-screen;
                 window-move-requested => {
                     root.window-begin-move();
