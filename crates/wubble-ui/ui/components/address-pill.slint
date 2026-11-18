@@ -1,34 +1,91 @@
-import { Colors, Radius, Sizes, Spacing, Type } from "../tokens.slint";
-import { RowBase } from "row-base.slint";
+// The address bar at the top of the sidebar. Written for wubble from the design repo's web
+// chrome (src/wubble/browser/browser.css `.wb-address`, `.wb-rail-addr`, and chrome.tsx
+// `Address`, xuckless/the-wallpaper-project @ 6c840da): the Slint port has no address bar.
+// Thin glass, radius 12, no shadow, the film rim on hover; host in Ink and the rest in Haze,
+// Geist Mono 13. On the rail it is a search button.
 
-export component AddressPill inherits RowBase {
+import { Palette, Chrome, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, PressableButton } from "../components.slint";
+import { GlassTier } from "model.slint";
+import { Icon, IconPaths } from "icon.slint";
+
+export component AddressPill inherits Rectangle {
     in property <string> host;
     in property <string> path;
+    in property <bool> compact: false;
+    callback activated();
 
-    height: Sizes.address-height;
-    border-radius: Radius.pill;
+    height: Chrome.address;
 
-    HorizontalLayout {
-        padding-left: Spacing.s4;
-        padding-right: Spacing.s4;
-        alignment: start;
-
-        Text {
-            text: root.host;
-            color: Colors.ink;
-            font-family: Type.mono;
-            font-size: Type.body;
-            vertical-alignment: center;
-            overflow: elide;
+    if !root.compact: GlassPanel {
+        tier: GlassTier.thin;
+        radius: Shell.control-radius;
+        film: ta.has-hover;
+        // useGlass(…, { shadow: 0 })
+        drop-shadow-blur: 0px;
+        drop-shadow-offset-y: 0px;
+        drop-shadow-color: transparent;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: ta.pressed ? Shell.address-press : 1;
+        animate transform-scale {
+            duration: Shell.address-press-ms;
+            easing: Motion.easeOut;
         }
 
-        Text {
-            text: root.path;
-            color: Colors.haze;
-            font-family: Type.mono;
-            font-size: Type.body;
-            vertical-alignment: center;
-            overflow: elide;
+        ta := TouchArea {
+            mouse-cursor: text;
+            clicked => {
+                root.activated();
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: Shell.side-grid;
+            padding-right: Shell.side-grid;
+            spacing: Spacing.s2;
+            Rectangle {
+                width: Shell.address-icon;
+                Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: IconPaths.bubble;
+                    size: Shell.address-icon;
+                    weight: Shell.address-icon-stroke;
+                    tint: Palette.mint;
+                }
+            }
+            Text {
+                text: root.host;
+                color: Palette.ink;
+                font-family: Fonts.mono;
+                font-size: Type.address.size;
+                font-weight: Type.address.weight;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Text {
+                text: root.path;
+                horizontal-stretch: 1;
+                color: Palette.haze;
+                font-family: Fonts.mono;
+                font-size: Type.address.size;
+                font-weight: Type.address.weight;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    if root.compact: PressableButton {
+        x: (parent.width - self.width) / 2;
+        width: Shell.rail-item;
+        height: Chrome.address;
+        border-radius: Shell.control-radius;
+        clicked => {
+            root.activated();
+        }
+        Icon {
+            path: IconPaths.search;
         }
     }
 }

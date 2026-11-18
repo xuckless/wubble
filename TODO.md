@@ -10,7 +10,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 
 | Topic | Decision |
 |---|---|
-| Light theme | Only Ink, Sky and a few ground/Mist values come from the pack; the other light colours (Deep, Haze, Lilac, Blush, Mint, Coral, fills) are our own picks in `tokens.slint`, to be checked by eye. Theme is `Colors.light`, a bool inside each colour token, not a second token set |
+| Theme | Dark only, as the design repo decides ("Dark only; light mode comes later"). The tokens are the port's `tokens.slint` verbatim (Palette, Spaces, Radius, Spacing, Chrome, Glass, Fonts, Type, Motion); the light values invented earlier are deleted. Values the port has no token for come from the design repo's CSS (`browser.css`) and live in `app-tokens.slint` |
 | Slint ids | Slint has only `int` (i32), so `TabItem.id` / `SpaceItem.id` are `int`; the wiring item converts from core `u64`/`u32` with `try_from`, never truncating silently |
 | Key routing | Each default binding has a `Route` column: `Shell` (shell always takes it: NewTab, CloseTab, ReopenClosedTab, NewWindow, Next/PrevTab, Quit, Fullscreen, spaces, sidebar; the Chromium `kReservedCommandIds` / Firefox `reserved` set plus wubble-only actions) or `PageFirst` (page gets the key, the shell acts only if unhandled, via CEF `OnKeyEvent`; everything else, incl. Zen's Mod+Alt+S compact mode). Overrides take the action's default route. In page fullscreen only Fullscreen stays `Shell` |
 | Licence | GPL-3.0-only (matches Slint's GPL option; Chromium/CEF are BSD and compatible) |
@@ -28,7 +28,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | UX source | The owner's design repo `xuckless/the-wallpaper-project`, directory `src/wubble` (private; clone to `~/Dev/wubble-wt/ref/the-wallpaper-project`). It defines the UI feel, UX and interactions, and wubble's UX is built to match it. Its `slint/` directory is a ready Slint + Rust + WGSL port (tokens, springs, seam, split view, tabs, scroller, components, wgpu glass/fluid renderer) meant to be copied in. It does not cover the whole feature set: features it lacks follow its style. Where it differs from an earlier decision in this table, raise it. The older canvas snapshot in `ux/pack/` is superseded |
 | Glass | Wubble draws its own glass (blur + saturate + tint + specular + rim) so it looks the same on every OS; the window itself is also transparent where the OS allows |
 | Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption |
-| Layout | No top toolbar. Address pill at the top of the sidebar, then pinned, tabs, new-tab row, Space switcher |
+| Layout | No top toolbar. The sidebar follows the design repo's `chrome.tsx` / `browser.css`: address pill, favourites (pinned tabs, 4 columns), the Space name, tabs, new-tab row, Space switcher at the bottom; padding 6, 12 between groups, every icon and label on one grid 24 px from the window edge. Window lights and back/forward/reload are not built yet |
 | New tab | Ctrl+T opens the command bar over the current page; a tab is created only when something is chosen. The design repo's bubble start page is deferred (confirmed 2026-11-18); the repo is a kit of what we might need, not a list of what must ship |
 | Command bar state | One `CommandBarState` enum written only by a pure `next()` via `dispatch` in Slint; closing to closed is a Slint Timer equal to the out duration (no animation-finished callback) |
 | Passwords | Built-in manager (encrypted store, OS keyring) before extensions; extension password managers work once the extension pass (M6) lands |
@@ -48,7 +48,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | NVIDIA Linux frames (interim) | Prebuilt CEF 154 delivers empty dmabufs on NVIDIA (LINEAR buffers the driver cannot render into; Chromium commit a531c83a). Owner approved a temporary CPU fallback (2026-11-18): software paint uploaded to a GPU texture, NVIDIA-Linux only, logged and counted, removed once zero-copy works there. Zero-copy stays the rule everywhere else |
 | CEF version | Move to CEF 156.0.30+ (`cef` crate 156.6) once the welding fork lands. Probe on this machine (RTX 5060, driver 615, Wayland): 156.0.30 delivers real frames with an NVIDIA block-linear modifier at default settings (CEF fix #4237 / #4313, not in the 154 branch). Do NOT pass `enable-features=Vulkan`: it yields empty frames even on 156. NVIDIA dmabufs carry no implicit fence. If 156 works through wubble's own import path, the CPU fallback is not built |
 | Tab sleeping | Freeze after 1 min hidden, discard after 15 min, discard immediately under critical memory pressure. Pinned tabs freeze but never discard. Busy tabs (audio, capture) are left alone |
-| Shell animation | One rendering notifier, owned by `wubble_ui::driver`, steps the `wubble_core::shell` spring bank once per rendered frame and requests a redraw only while a spring moves. Press feedback (0.97, 200 ms) is a Slint `animate` in `RowBase`, not a spring. Compact-mode lifecycle is a pure core transition mirrored into a Slint enum; Slint `states` only restyle |
+| Shell animation | The design repo's Slint port is the single implementation: pure physics in `wubble_core::{motion, seam, tabs, scroller}` (f64, copied 1:1, numeric parity with the TS checked against a stored bun run), and `wubble_ui::driver` (the port's frame body) pushes the values into Slint `in` properties. The per-frame hook is wubble's one vsynced rendering notifier, not the port's 16 ms `slint::Timer`; it requests a redraw only while something moves. Tweens (0.97 press, hover fades, film rim, overlap) stay Slint `animate` with the token easings. The sidebar has the port's three modes, extended (200–340, resizable), rail (56) and hidden, on one width spring owned by `Seam` (rubber band, snap to the rail under 128, hidden under 22 from the rail); the toggle is hidden ↔ extended, anything else hides (`chrome.tsx` `cycleSidebar`); double-clicking the seam flips rail/extended. Peek is presentation-only: one Slint bool set by two Slint Timers (60 ms in, 260 ms out). The driver never edits the Slint models: it re-reads the ids on `shell-model-changed`, a click is `tab-activated`, a drag `tab-moved(id, to)` (the host does not handle `tab-moved` yet, so a dropped row springs back to the model order). Selection shows by fill and the touch sheen; no focus borders |
 | CEF sandbox | Off on Linux for now: welding `CefSandboxMode::UnsandboxedTrustedContent` (`no_sandbox=1`) in both `wubble-engine` (`SANDBOX`) and `wubble-helper`. The constant is duplicated on purpose (the helper must stay tiny and cannot depend on `wubble-engine`, which pulls in wgpu); the sandbox item must change both. Turned on by the M1 item "Sandbox enabled on all platforms" |
 | CEF cache directory | Always wubble's own `root_cache_path`, never CEF's shared default `~/.config/cef_user_data` (its process-singleton lock made concurrent runs fail or crash). Browser: `$XDG_DATA_HOME/wubble/cef`, else `~/.local/share/wubble/cef` (Linux, via the `Platform` trait; macOS/Windows not yet). `--smoke boot`: a fresh per-process temp directory, removed on exit, so concurrent smokes never share the lock. Second-instance handling (handing a relaunch to the running browser) is not built yet |
 | CEF message pump | Schedule-driven, with CEF's `external_message_pump` on: `OnScheduleMessagePumpWork` (welding fork's `PumpScheduler`, any thread) → `slint::invoke_from_event_loop` → `Engine::schedule_pump`, which runs `wubble_core::pump` (a port of cefclient's `MainMessageLoopExternalPump`: delay replaces the pending timer, at most 33 ms between runs, re-entrant requests re-run) and asks the host for one single-shot `slint::Timer`. The host picks up frames after each run of work. `Engine::tick` (a synchronous run) remains only for `--smoke boot` and the shutdown drain, which have no event loop. Windows never calls the hook (CEF's own loop thread) |
@@ -134,25 +134,25 @@ The pack sets colour, glass, type and motion feel. Layouts on its Browser board 
 Foundations
 - [x] Tokens as Slint globals: ground (Abyss/Deep/Shell/Rim), ink (Ink/Mist/Haze), film (Sky/Lilac/Blush/Mint), Coral; radius 6/10/14/20/28/pill; 4 pt spacing; light theme fills
 - [x] Fonts embedded: Fredoka (display, 32 px+), Geist (interface), Geist Mono (addresses)
-- [x] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim) (`wubble-ui` `Glass` + `GlassBackdrops`, backdrop pass in `wubble_gfx::glass`; host wiring into the present loop and the on-screen look are the next batch)
+- [x] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim) (`wubble-ui` `GlassPanel`, the port's Slint-only fallback, + `GlassBackdrops`, backdrop pass in `wubble_gfx::glass`; host wiring into the present loop and the on-screen look are the next batch)
 - [x] Glass quality governor: measures frame time and steps blur quality down/up; exposed as explicit levels, not ad-hoc flags (`glass::Quality` + pure `Governor::next` with retry backoff; the host supplies the measured costs, next batch)
 - [ ] Film rim (conic soap-film ring) on hover, press, drag and focus only
 - [x] Motion library in Rust (springs, rubber band, stretch, easing constants in wubble-core::motion; press/squash/wobble/Overlap compose these): follow spring, stretch spring (volume-preserving), rubber band, press 0.97, squash, wobble, Overlap in/out with stagger
 - [ ] App icons exported per platform from the Icons board
 
 Daily-drive set
-- [ ] Vertical sidebar on Regular glass: tab rows 36 px, pinned section, "Today" group, new-tab row
+- [ ] Vertical sidebar on Regular glass: tab rows 36 px, pinned section, "Today" group, new-tab row (rows, favourites, new-tab row, scrolling list and drag-reorder in the UI done; no "Today" group; glass waits for the wgpu renderer)
 - [x] Spaces, containers and tab-tree model with one pure `apply(model, command)` (`wubble_core::model`) with tests
 - [x] Tabs for real: one `Model` in the binary drives the engine (a view per live tab, only the visible one shown) and the sidebar (`view_model`); Ctrl+T/L/W, tab click/close, Space switch, popups as tabs; `--smoke tabs` (see "Tabs in the host")
-- [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container
+- [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container (switcher with the drawn icons and the stretching capsule done; the model has no icon per Space yet, so the three drawn icons repeat)
 - [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; results wired: a go/search row first, then switch-to-tab over open tabs, through one minimal `bar::resolve` classifier; glass, history/bookmarks and actions remain)
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
 - [x] Command bar brain (`wubble_core::omnibox`): `classify` (Chromium Parse rules), one search-engine table, `rank` over tabs/history/bookmarks/actions; wiring to Slint results remains
 - [x] Keybindings and actions as data (`wubble_core::action`, `keys`): one `Action` enum shared with the command bar, `DEFAULTS` chord table (Zen first, then Firefox/Chromium) with per-platform rows, chord parser/formatter, user overrides + conflict detection; the key-event router and editor UI remain
 - [ ] Suggestion fetch effect (run `Source::Remote` requests, debounce, cancel stale) and the settings toggle for the flag
-- [x] Compact mode: sidebar hide and reveal; straight resizable seam ("Room to play", rubber band + spring). Bending string, wobble and stretch still open
-- [ ] URL pill (Thin glass): host in Ink, rest in Haze
-- [ ] Web view inset: radius 14, 8 px gap from glass
+- [x] Compact mode: the design repo's three sidebar modes (extended, rail, hidden with peek) on one width spring; the seam is the rubber string, bowing while held and twanging on release (`wubble_core::seam`)
+- [x] URL pill (Thin glass): host in Ink, rest in Haze (the port's Slint-only `GlassPanel` until the wgpu glass lands)
+- [x] Web view inset: radius 14, 8 px gap from glass
 - [x] Turso schema + migrations (`wubble-store`): session, history, bookmarks table, settings
 - [ ] Session restore and history recording wired into the app
 - [ ] First-run: search engine choice (Google / DuckDuckGo)
@@ -160,7 +160,7 @@ Daily-drive set
 After daily-drive
 - [ ] Component sheet: elastic slider, toggle, pin, download button, toolbar dock + gliding tooltip, menus, checkboxes
 - [ ] Split view (2–4 panes); glance / peek
-- [ ] Tab drag: reorder, between Spaces, into split, out to a window
+- [ ] Tab drag: reorder, between Spaces, into split, out to a window (reorder: the UI emits `tab-moved(id, to)`; the host's `on_tab_moved` → `Command::MoveTab` is not wired)
 - [ ] Bookmarks, settings UI, keybinding editor
 - [ ] Touch sizing (44 px rows)
 

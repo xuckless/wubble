@@ -9,14 +9,16 @@ use slint::{
     ComponentHandle, LogicalPosition, LogicalSize, ModelRc,
     platform::{PointerEventButton, WindowEvent},
 };
+use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
+use wubble_core::tabs::SpaceSwitcher;
 use wubble_ui::driver::{self, Driver};
-use wubble_ui::{AppWindow, CompactMode, SpaceItem};
+use wubble_ui::{AppWindow, SidebarMode, SpaceItem};
 
 const DT: f32 = 0.016;
 
 type Shared = std::rc::Rc<std::cell::RefCell<Driver>>;
 
-/// Frame deltas until the springs rest. Count-bounded, not time-bounded.
+/// Frame deltas until everything rests. Count-bounded, not time-bounded.
 fn settle(app: &AppWindow, driver: &Shared) {
     for _ in 0..4000 {
         if !driver.borrow_mut().advance(app, DT) {
@@ -26,9 +28,16 @@ fn settle(app: &AppWindow, driver: &Shared) {
     panic!("springs never settled");
 }
 
-/// Lets Slint run its `changed` handlers.
-fn pump() {
-    mock_elapsed_time(Duration::from_millis(1));
+/// A fixed number of frames, for a held seam (it moves for as long as it is held).
+fn frames(app: &AppWindow, driver: &Shared, n: usize) {
+    for _ in 0..n {
+        driver.borrow_mut().advance(app, DT);
+    }
+}
+
+/// Lets Slint run its `changed` handlers, timers and tweens for `ms` of mock time.
+fn pump(ms: u64) {
+    mock_elapsed_time(Duration::from_millis(ms));
 }
 
 fn at(x: f32, y: f32) -> LogicalPosition {
@@ -38,16 +47,37 @@ fn at(x: f32, y: f32) -> LogicalPosition {
 fn pointer(app: &AppWindow, x: f32, y: f32) {
     app.window()
         .dispatch_event(WindowEvent::PointerMoved { position: at(x, y) });
-    pump();
+    pump(1);
 }
 
-fn advance_writes_properties_and_stops(app: &AppWindow, driver: &Shared) {
-    assert_eq!(app.get_compact_mode(), CompactMode::Expanded);
-    app.invoke_toggle_compact();
-    assert_eq!(app.get_compact_mode(), CompactMode::Hidden);
+fn button(app: &AppWindow, x: f32, y: f32, down: bool) {
+    let (position, button) = (at(x, y), PointerEventButton::Left);
+    app.window().dispatch_event(if down {
+        WindowEvent::PointerPressed { position, button }
+    } else {
+        WindowEvent::PointerReleased { position, button }
+    });
+    pump(1);
+}
+
+/// The seam's centre: the sidebar's edge plus half the inset.
+fn seam_x(app: &AppWindow) -> f32 {
+    INSET as f32 + app.get_sidebar_width() + INSET as f32 / 2.0
+}
+
+fn three_modes(app: &AppWindow, driver: &Shared) {
     settle(app, driver);
-    assert_eq!(app.get_sidebar_slide(), 0.0);
-    assert_eq!(app.get_content_inset(), 0.0);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
+    assert_eq!(app.get_sidebar_width(), SIDEBAR_DEFAULT as f32);
+    assert_eq!(app.get_content_x(), 268.0);
+
+    app.invoke_toggle_sidebar();
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Hidden);
+    settle(app, driver);
+    assert_eq!(app.get_sidebar_width(), 0.0);
+    assert_eq!(app.get_sidebar_opacity(), 0.0);
+    assert_eq!(app.get_content_x(), 8.0);
+    assert_eq!(app.get_content_width(), 1280.0 - 16.0);
 
     // The frame hook asks for no redraw once idle, and stays idle.
     let base = std::time::Instant::now();
@@ -58,64 +88,105 @@ fn advance_writes_properties_and_stops(app: &AppWindow, driver: &Shared) {
             .frame(app, base + Duration::from_millis(16))
     );
 
-    // toggle_compact_roundtrip
-    app.invoke_toggle_compact();
-    assert_eq!(app.get_compact_mode(), CompactMode::Expanded);
+    app.invoke_toggle_sidebar();
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
     settle(app, driver);
-    assert_eq!(app.get_sidebar_slide(), 1.0);
-    assert_eq!(app.get_content_inset(), 1.0);
+    assert_eq!(app.get_sidebar_width(), SIDEBAR_DEFAULT as f32);
+    assert_eq!(app.get_content_x(), 268.0);
+    assert!(!app.get_sidebar_rail());
 }
 
-fn hover_zone_survives_child_hover(app: &AppWindow, driver: &Shared) {
-    app.invoke_toggle_compact();
+fn peek(app: &AppWindow, driver: &Shared) {
+    app.invoke_toggle_sidebar();
     settle(app, driver);
-    assert_eq!(app.get_compact_mode(), CompactMode::Hidden);
+    pump(1);
+    assert!(!app.get_peeking());
 
+    // Into the edge strip: it peeks 60 ms later.
     pointer(app, 3.0, 300.0);
-    assert_eq!(app.get_compact_mode(), CompactMode::Peeking);
-    settle(app, driver);
-    // Over a child row of the sidebar: the zone must keep its hover.
-    pointer(app, 100.0, 40.0);
-    assert_eq!(app.get_compact_mode(), CompactMode::Peeking);
+    pump(30);
+    assert!(!app.get_peeking());
+    pump(40);
+    assert!(app.get_peeking());
+    // The slide (340 ms), then over a child row: still peeking.
+    pump(400);
+    pointer(app, 100.0, 80.0);
+    pump(400);
+    assert!(app.get_peeking());
+    // Off the sidebar: it leaves 260 ms later.
     pointer(app, 900.0, 300.0);
-    assert_eq!(app.get_compact_mode(), CompactMode::Hidden);
-    settle(app, driver);
+    pump(200);
+    assert!(app.get_peeking());
+    pump(100);
+    assert!(!app.get_peeking());
 
-    app.invoke_toggle_compact();
+    // A peek never outlives the hidden mode (once the sidebar has slid away from the edge).
+    pump(400);
+    pointer(app, 3.0, 300.0);
+    pump(100);
+    assert!(app.get_peeking());
+    app.invoke_toggle_sidebar();
+    pump(1);
+    assert!(!app.get_peek());
     settle(app, driver);
-    assert_eq!(app.get_compact_mode(), CompactMode::Expanded);
     pointer(app, 900.0, 300.0);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
 }
 
-fn seam_drag_follows_pointer_and_rubber_bands(app: &AppWindow, driver: &Shared) {
-    let max = 360.0;
-    // The handle straddles the sidebar's right edge (8 + 260 + 4).
-    let grab = at(272.0, 300.0);
-    app.window()
-        .dispatch_event(WindowEvent::PointerMoved { position: grab });
-    pump();
-    app.window().dispatch_event(WindowEvent::PointerPressed {
-        position: grab,
-        button: PointerEventButton::Left,
-    });
-    // Inside the limits the width follows the pointer one to one.
-    pointer(app, 302.0, 300.0);
-    settle(app, driver);
-    assert_eq!(app.get_sidebar_width(), 290.0);
+fn seam_drag(app: &AppWindow, driver: &Shared) {
+    // Inside the limits the width follows the pointer one to one (the pointer includes the inset).
+    let x = seam_x(app);
+    pointer(app, x, 300.0);
+    button(app, x, 300.0, true);
+    pointer(app, x + 30.0, 300.0);
+    frames(app, driver, 600);
+    assert_eq!(app.get_sidebar_width(), x + 30.0 - INSET as f32);
+    assert!(app.get_seam_bowed());
+    assert!(!app.get_seam_path().is_empty());
     // Far past the maximum it is banded, never beyond max + 34.
     pointer(app, 900.0, 300.0);
-    settle(app, driver);
+    frames(app, driver, 600);
     let held = app.get_sidebar_width();
-    assert!(held > max && held < max + 34.0, "{held}");
-    app.window().dispatch_event(WindowEvent::PointerReleased {
-        position: at(900.0, 300.0),
-        button: PointerEventButton::Left,
-    });
+    let max = SEAM::max as f32;
+    assert!(held > max && held < max + SEAM::bandK as f32, "{held}");
+    button(app, 900.0, 300.0, false);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
     settle(app, driver);
     assert_eq!(app.get_sidebar_width(), max);
+    assert!(!app.get_seam_bowed());
+
+    // Pulled under the rail snap point (128): the rail.
+    let x = seam_x(app);
+    pointer(app, x, 300.0);
+    button(app, x, 300.0, true);
+    pointer(app, INSET as f32 + 100.0, 300.0);
+    frames(app, driver, 60);
+    button(app, INSET as f32 + 100.0, 300.0, false);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Rail);
+    settle(app, driver);
+    assert_eq!(app.get_sidebar_width(), SEAM::rail as f32);
+    assert!(app.get_sidebar_rail());
+
+    // From the rail, under 22: hidden.
+    let x = seam_x(app);
+    pointer(app, x, 300.0);
+    button(app, x, 300.0, true);
+    pointer(app, INSET as f32 + 10.0, 300.0);
+    frames(app, driver, 10);
+    button(app, INSET as f32 + 10.0, 300.0, false);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Hidden);
+    settle(app, driver);
+    assert_eq!(app.get_sidebar_width(), 0.0);
+
+    // Toggled back, it returns to the saved width.
+    app.invoke_toggle_sidebar();
+    settle(app, driver);
+    assert_eq!(app.get_sidebar_width(), max);
+    assert_eq!(app.get_sidebar_saved(), max);
+    pointer(app, 900.0, 300.0);
 }
 
-fn space_indicator_follows_active(app: &AppWindow, driver: &Shared) {
+fn space_capsule(app: &AppWindow, driver: &Shared) {
     let spaces: Vec<SpaceItem> = (1..=3)
         .map(|id| SpaceItem {
             id,
@@ -125,24 +196,24 @@ fn space_indicator_follows_active(app: &AppWindow, driver: &Shared) {
         .collect();
     app.set_spaces(ModelRc::from(spaces.as_slice()));
     app.set_active_space_id(3);
-    pump();
+    pump(1);
     settle(app, driver);
-    assert_eq!(app.get_space_indicator(), 2.0);
+    assert_eq!(app.get_space_index(), 2);
+    assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
     app.set_active_space_id(1);
-    pump();
+    pump(1);
     settle(app, driver);
-    assert_eq!(app.get_space_indicator(), 0.0);
+    assert_eq!(app.get_capsule_offset(), 0.0);
 
     // Id set before the model: the index resolves when the model arrives.
     app.set_spaces(ModelRc::default());
     app.set_active_space_id(3);
-    pump();
-    settle(app, driver);
-    assert_eq!(app.get_space_indicator(), 0.0);
+    pump(1);
+    assert_eq!(app.get_space_index(), -1);
     app.set_spaces(ModelRc::from(spaces.as_slice()));
-    pump();
+    pump(1);
     settle(app, driver);
-    assert_eq!(app.get_space_indicator(), 2.0);
+    assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
 }
 
 #[test]
@@ -152,8 +223,8 @@ fn shell_scenarios() {
     app.show().unwrap();
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
     let driver = driver::connect(&app);
-    advance_writes_properties_and_stops(&app, &driver);
-    hover_zone_survives_child_hover(&app, &driver);
-    seam_drag_follows_pointer_and_rubber_bands(&app, &driver);
-    space_indicator_follows_active(&app, &driver);
+    three_modes(&app, &driver);
+    peek(&app, &driver);
+    seam_drag(&app, &driver);
+    space_capsule(&app, &driver);
 }

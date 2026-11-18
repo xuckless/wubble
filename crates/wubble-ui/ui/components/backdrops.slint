@@ -1,0 +1,35 @@
+import { Shell } from "../app-tokens.slint";
+import { GlassTier } from "model.slint";
+
+// Backdrop textures from wubble-gfx (`glass::GlassBackdrop::render`), one
+// per tier in use, set by the host every web frame. An empty image (the
+// default, and what the host sets at Flat quality) means the flat tier fill.
+// Kept for the gfx lane while the port's GlassPanel uses its Slint-only
+// fallback (`over-wgpu: false`); nothing in the shell reads it yet.
+export global GlassBackdrops {
+    in property <image> thin;
+    in property <image> regular;
+    in property <image> thick;
+    // Backdrop pixels per logical pixel: `Backdrops::px_per_frame_px` times
+    // the window scale factor (a global cannot read the scale factor).
+    in property <float> scale;
+    // Where the web frame's top-left sits in the window.
+    in property <length> frame-x;
+    in property <length> frame-y;
+
+    public pure function image(tier: GlassTier) -> image {
+        tier == GlassTier.thin ? root.thin : tier == GlassTier.thick ? root.thick : root.regular
+    }
+
+    // A window length measured from the frame origin, in backdrop pixels.
+    public pure function to-backdrop(offset: length) -> int {
+        round(offset / Shell.px * root.scale)
+    }
+
+    // Whether a panel at window position (x, y) of size (w, h) shows its
+    // backdrop: the tier has an image, and the panel is wholly over the web
+    // frame (else flat entirely). Compared in lengths, before any rounding.
+    public pure function shows(tier: GlassTier, x: length, y: length, w: length, h: length) -> bool {
+        root.image(tier).width > 0 && root.scale > 0 && x >= root.frame-x && y >= root.frame-y && x + w <= root.frame-x + root.image(tier).width * Shell.px / root.scale && y + h <= root.frame-y + root.image(tier).height * Shell.px / root.scale
+    }
+}

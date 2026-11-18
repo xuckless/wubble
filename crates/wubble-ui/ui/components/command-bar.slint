@@ -1,11 +1,15 @@
-import { Colors, Motion, Radius, Sizes, Spacing, Type } from "../tokens.slint";
-import { CommandBarEvent, CommandBarState, CommandResult } from "model.slint";
-import { Glass } from "glass.slint";
+import { Palette, Motion, Radius, Spacing, Fonts } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { CommandBarEvent, CommandBarState, CommandResult, GlassTier } from "model.slint";
 import { CommandRow } from "command-row.slint";
 import { ScrollView } from "std-widgets.slint";
 
 // Command bar overlay; fills its parent (the content area).
 // `state` has one writer, `dispatch`; everything else reads it.
+// Look and motion from the design repo's web command bar (src/wubble/browser/browser.css
+// `.wb-cmd*`, `.wb-scrim`, xuckless/the-wallpaper-project @ 6c840da): thick glass over the page,
+// radius 20, 72 from the top; it drops in 7 px over the overlap timings.
 export component CommandBar inherits Rectangle {
     in property <[CommandResult]> results;
     in-out property <string> query <=> input.text;
@@ -21,8 +25,8 @@ export component CommandBar inherits Rectangle {
     property <int> selected: 0;
     property <int> count: root.results.length;
     property <int> current: max(0, min(root.selected, root.count - 1));
-    property <length> row-pitch: Sizes.row-height + Spacing.s1;
-    property <int> visible-rows: min(root.count, Sizes.command-max-rows);
+    property <length> row-pitch: Shell.command-row-height;
+    property <int> visible-rows: min(root.count, Shell.command-max-rows);
 
     pure function next(s: CommandBarState, e: CommandBarEvent) -> CommandBarState {
         if (e == CommandBarEvent.open) {
@@ -76,23 +80,23 @@ export component CommandBar inherits Rectangle {
     states [
         shown when root.state == CommandBarState.open: {
             opacity: 1;
-            panel.y: Sizes.command-bar-top;
+            panel.y: Shell.command-bar-top;
             in {
                 animate opacity, panel.y {
-                    duration: Motion.overlap-in;
-                    easing: ease-out;
+                    duration: Motion.overlapIn;
+                    easing: Motion.easeOut;
                 }
             }
             out {
                 animate opacity, panel.y {
-                    duration: Motion.overlap-out;
-                    easing: ease-in;
+                    duration: Motion.overlapOut;
+                    easing: Motion.easeInOut;
                 }
             }
         }
         hidden when root.state != CommandBarState.open: {
             opacity: 0;
-            panel.y: Sizes.command-bar-top - Sizes.overlap-shift;
+            panel.y: Shell.command-bar-top - Motion.overlapShift;
         }
     ]
 
@@ -109,7 +113,7 @@ export component CommandBar inherits Rectangle {
     }
 
     Timer {
-        interval: Motion.overlap-out;
+        interval: Motion.overlapOut;
         running: root.state == CommandBarState.closing;
         triggered => {
             root.dispatch(CommandBarEvent.settle);
@@ -124,82 +128,84 @@ export component CommandBar inherits Rectangle {
         }
     }
     Rectangle {
-        background: Colors.scrim;
+        background: Shell.scrim;
     }
 
-    panel := Rectangle {
-        width: min(Sizes.command-bar-width, root.width);
+    panel := GlassPanel {
+        width: min(Shell.command-bar-width, root.width - Spacing.s4 * 2);
         x: (root.width - self.width) / 2;
-        height: Sizes.command-input-height + root.visible-rows * root.row-pitch + (root.count > 0 ? Spacing.s2 : 0px);
+        height: Shell.side-pad + Shell.command-input-height + (root.count > 0 ? Spacing.s1 + root.visible-rows * root.row-pitch : 0px) + Spacing.s2;
+        tier: GlassTier.thick;
+        radius: Radius.lg;
+        over-content: true;
+        // Swallow clicks so they do not reach the scrim.
+        TouchArea { }
 
-        Glass {
-            radius: Radius.xl;
-            // Swallow clicks so they do not reach the scrim.
-            TouchArea { }
+        VerticalLayout {
+            padding-top: Shell.side-pad;
+            padding-left: Spacing.s2;
+            padding-right: Spacing.s2;
+            padding-bottom: Spacing.s2;
+            spacing: root.count > 0 ? Spacing.s1 : 0px;
 
-            VerticalLayout {
-                padding-bottom: root.count > 0 ? Spacing.s2 : 0px;
-                spacing: 0px;
-
-                Rectangle {
-                    height: Sizes.command-input-height;
-                    input := TextInput {
-                        x: Spacing.s6;
-                        width: parent.width - 2 * Spacing.s6;
-                        font-family: Type.ui;
-                        font-size: Type.body-lg;
-                        color: Colors.ink;
-                        single-line: true;
-                        edited => {
-                            root.selected = 0;
-                            list.content-y = 0px;
-                            root.query-changed(self.text);
-                        }
-                        accepted => {
-                            root.choose(root.current);
-                        }
-                        // Adapted from combobox-base.slint popup-key-handler.
-                        key-pressed(event) => {
-                            if (event.text == Key.UpArrow) {
-                                root.move(-1);
-                                return accept;
-                            }
-                            if (event.text == Key.DownArrow) {
-                                root.move(1);
-                                return accept;
-                            }
-                            if (event.text == Key.Escape) {
-                                root.dismiss();
-                                return accept;
-                            }
-                            return reject;
-                        }
+            Rectangle {
+                height: Shell.command-input-height;
+                input := TextInput {
+                    x: Spacing.s3;
+                    width: parent.width - Spacing.s3 - Spacing.s1;
+                    font-family: Fonts.ui;
+                    font-size: Shell.command-input-font;
+                    color: Palette.ink;
+                    selection-background-color: Palette.rim;
+                    single-line: true;
+                    edited => {
+                        root.selected = 0;
+                        list.content-y = 0px;
+                        root.query-changed(self.text);
                     }
-                    Text {
-                        x: Spacing.s6;
-                        text: "Search or enter address";
-                        color: Colors.haze;
-                        font-size: Type.body-lg;
-                        vertical-alignment: center;
-                        visible: input.text == "";
+                    accepted => {
+                        root.choose(root.current);
+                    }
+                    // Adapted from combobox-base.slint popup-key-handler.
+                    key-pressed(event) => {
+                        if (event.text == Key.UpArrow) {
+                            root.move(-1);
+                            return accept;
+                        }
+                        if (event.text == Key.DownArrow) {
+                            root.move(1);
+                            return accept;
+                        }
+                        if (event.text == Key.Escape) {
+                            root.dismiss();
+                            return accept;
+                        }
+                        return reject;
                     }
                 }
+                Text {
+                    x: Spacing.s3;
+                    text: "Search or enter address";
+                    color: Palette.haze;
+                    font-family: Fonts.ui;
+                    font-size: Shell.command-input-font;
+                    vertical-alignment: center;
+                    visible: input.text == "";
+                }
+            }
 
-                list := ScrollView {
-                    height: root.visible-rows * root.row-pitch;
-                    VerticalLayout {
-                        padding-left: Spacing.s2;
-                        padding-right: Spacing.s2;
-                        spacing: Spacing.s1;
-                        alignment: start;
-                        for r[i] in root.results: CommandRow {
-                            item: r;
-                            index: i;
-                            shown: root.state == CommandBarState.open;
-                            active: i == root.current;
-                            activated => {
-                                root.choose(i);
-                            }
+            list := ScrollView {
+                height: root.visible-rows * root.row-pitch;
+                visible: root.count > 0;
+                VerticalLayout {
+                    alignment: start;
+                    for r[i] in root.results: CommandRow {
+                        item: r;
+                        index: i;
+                        shown: root.state == CommandBarState.open;
+                        active: i == root.current;
+                        activated => {
+                            root.choose(i);
                         }
                     }
                 }

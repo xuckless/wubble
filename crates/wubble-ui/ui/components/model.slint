@@ -1,9 +1,12 @@
 // Slint has only i32 integers, so ids are int here; the wiring layer converts from core ids.
+// The port's `TabItem` (design repo src/wubble/slint/components.slint, @source slint-tab-row)
+// plus `id`. `favicon` is the site's real favicon, never a letter tile; an empty image shows the
+// neutral globe glyph.
 export struct TabItem {
     id: int,
     title: string,
-    glyph: string,
-    tint: color,
+    url: string,
+    favicon: image,
 }
 
 export struct SpaceItem {
@@ -40,11 +43,11 @@ export enum CommandBarEvent {
     settle,
 }
 
-// Mirrors wubble_core::shell::CompactMode; Rust owns the lifecycle.
-export enum CompactMode {
-    expanded,
+// Mirrors wubble_core::seam::SidebarMode; the seam (Rust) owns it.
+export enum SidebarMode {
+    extended,
+    rail,
     hidden,
-    peeking,
 }
 
 // Mirrors wubble_gfx::glass::Tier.

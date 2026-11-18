@@ -1,0 +1,408 @@
+// Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
+// `src/wubble/slint/components.slint`, copied verbatim except the marked `wubble change`s.
+// wubble change: SplitView is not copied (split view is out of scope), and `Sidebar` lives in
+// components/sidebar.slint (it gains wubble's address pill, favourites, new-tab row and Space
+// capsule, built on the pieces here).
+//
+// Wubble components for Slint: the pieces whose layout and motion Slint can express itself.
+// Everything reads the token globals from tokens.slint.
+//
+// What lives where:
+// - Fades, the 0.97 press and the overlap swap use Slint `animate` (duration + cubic-bezier).
+// - Anything springy (tab indicator, its stretch, seams, window) is integrated in Rust
+//   (motion.rs) and arrives here as plain `in` properties; see driver.rs. Slint's `animate`
+//   has no spring, no velocity and can't retarget from the current velocity.
+// - Real glass (backdrop blur, refraction, dispersion, the swirling film rim) is the wgpu pass
+//   in shaders/glass.wgsl. GlassPanel below is the Slint-only approximation for surfaces that
+//   sit over content the wgpu scene can't see (menus over the web view, tooltips), and the
+//   chrome that draws the panel's content on top of the wgpu glass.
+
+import { Palette, Spaces, Radius, Spacing, Chrome, Glass, GlassTierStyle, Fonts, Type, Motion } from "tokens.slint";
+// wubble change: the tier is wubble's enum, `TabItem` comes from the shared model, the neutral
+// glyph and the CSS row metrics come from icon.slint / app-tokens.slint.
+import { GlassTier, TabItem } from "components/model.slint";
+import { Icon, IconPaths } from "components/icon.slint";
+import { Shell } from "app-tokens.slint";
+
+// @source slint-space-icons
+// The three Space icons: 24×24 stroke icons, 1.7 stroke, round caps and joins. The same path
+// data is in space-icons.json for the web app. Never a letter in a square.
+export global SpaceIconPaths {
+    // Personal: a small house with an arched door
+    out property <string> personal: "M4 10.5 12 4l8 6.5M6 9v9.5A1.5 1.5 0 0 0 7.5 20h9a1.5 1.5 0 0 0 1.5-1.5V9M10 20v-4a2 2 0 0 1 4 0v4";
+    // Work: a briefcase with a handle, a belt line and a clasp
+    out property <string> work: "M5 7.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2ZM9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3 12.5h18M12 11v3";
+    // Study: an open book, two curved pages on a spine
+    out property <string> study: "M12 7C10.2 5.4 7.4 4.7 4 5v12.5c3.4-.3 6.2.4 8 2M12 7c1.8-1.6 4.6-2.3 8-2v12.5c-3.4-.3-6.2.4-8 2M12 7v12.5";
+}
+
+export component SpaceIcon inherits Path {
+    // "personal" | "work" | "study"
+    in property <string> kind: "personal";
+    in property <color> tint: Palette.ink;
+    width: 24px;
+    height: 24px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: root.kind == "work" ? SpaceIconPaths.work : root.kind == "study" ? SpaceIconPaths.study : SpaceIconPaths.personal;
+    fill: transparent;
+    stroke: root.tint;
+    // Slint strokes in logical px, not viewbox units: keep the icon at 24px (or scale this too).
+    stroke-width: 1.7px;
+    stroke-line-cap: round;
+    animate stroke { duration: 150ms; easing: Motion.easeOut; }
+}
+
+// @source slint-glass-panel
+// Glass approximated in Slint: tier fill + drop shadow + 1px inner rim (7% all round, 22% on
+// top) + the specular band (white 10% → 0 over the top 42%). Slint has no backdrop-filter, so
+// there is no blur or refraction here: put the wgpu glass quad (render.rs, same rect, radius
+// and tier) underneath and this panel's fill is skipped with `over-wgpu: true`.
+// The film rim (touch only) fades in over 200 ms and out over 150 ms like wubble.css; Slint has
+// no conic gradient, so the rim is a linear film-colour sweep. The swirling version is the wgpu
+// film rim (uFilm).
+export component GlassPanel inherits Rectangle {
+    in property <GlassTier> tier: GlassTier.regular;   // wubble change: the enum, not 0 / 1 / 2
+    in property <length> radius: Radius.lg;
+    in property <bool> film: false;          // touched: hover / press / drag / focus
+    in property <color> tint: transparent;   // the Space colour at 10% on sidebar glass
+    in property <bool> over-wgpu: false;     // the wgpu glass pass draws the material underneath
+    in property <bool> over-content: false;  // over live web content: thick uses Glass.thickOverContent
+
+    property <GlassTierStyle> t: root.tier == GlassTier.thin ? Glass.thin : root.tier == GlassTier.regular ? Glass.regular : Glass.thick;
+    property <float> shadow-alpha: root.tier == GlassTier.thin ? 0.35 : root.tier == GlassTier.regular ? 0.45 : 0.55;
+
+    border-radius: root.radius;
+    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Glass.thickOverContent : root.t.fill;
+    drop-shadow-offset-y: root.over-wgpu ? 0px : root.t.shadowY;
+    drop-shadow-blur: root.over-wgpu ? 0px : root.t.shadowBlur;
+    drop-shadow-color: root.over-wgpu ? transparent : rgba(0, 0, 0, root.shadow-alpha);
+
+    // tint at 10%
+    Rectangle {
+        border-radius: root.radius;
+        background: root.tint.transparentize(0.9);
+        visible: !root.over-wgpu && root.tint.alpha > 0;
+    }
+
+    // specular band
+    Rectangle {
+        y: 0;
+        height: parent.height * Glass.specularStop;
+        border-top-left-radius: root.radius;
+        border-top-right-radius: root.radius;
+        background: @linear-gradient(180deg, Glass.specular 0%, transparent 100%);
+        visible: !root.over-wgpu;
+    }
+
+    // 1px inner rim, 7% all round
+    Rectangle {
+        border-radius: root.radius;
+        border-width: 1px;
+        border-color: Glass.rimAll;
+        visible: !root.over-wgpu;
+    }
+    // ... and 22% along the top edge (inset 0 1px 0)
+    Rectangle {
+        x: root.radius;
+        y: 0;
+        width: max(0px, parent.width - root.radius * 2);
+        height: 1px;
+        background: Glass.rimTop;
+        visible: !root.over-wgpu;
+    }
+
+    // film rim, only on touch
+    Rectangle {
+        border-radius: root.radius;
+        border-width: 1.5px;
+        border-color: @linear-gradient(120deg, Palette.sky 0%, Palette.lilac 33%, Palette.blush 66%, Palette.mint 100%);
+        opacity: root.film ? 0.8 : 0;
+        animate opacity { duration: root.film ? 200ms : 150ms; easing: Motion.easeOut; }
+    }
+
+    @children
+}
+
+// @source slint-pressable
+// Press: scale to 0.97 over 120 ms ease-out, back over 200 ms ease-out (wubble.css .wb-press).
+// Never used where physics owns the transform (the tab indicator, the bubble).
+export component PressableButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    out property <bool> pressed: touch.pressed;
+    out property <bool> hovered: touch.has-hover;
+
+    min-height: Chrome.controls;
+    border-radius: Radius.sm;
+    background: touch.has-hover ? Palette.shell : transparent;
+    animate background { duration: 150ms; easing: Motion.easeOut; }
+
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: touch.pressed ? Motion.pressScale : 1;
+    animate transform-scale {
+        duration: touch.pressed ? Motion.pressMs : Motion.pressRelease;
+        easing: Motion.easeOut;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.s3;
+        padding-right: Spacing.s3;
+        spacing: Spacing.s2;
+        alignment: center;
+        @children
+        if root.text != "": Text {
+            text: root.text;
+            vertical-alignment: center;
+            color: root.enabled ? Palette.ink : Palette.haze;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+            font-weight: Type.label.weight;
+        }
+    }
+}
+
+// @source slint-overlap
+// Overlap: old and new share the screen. The incoming layer fades in over 240 ms ease-out from
+// 7px below at 0.98; the outgoing one fades out over 190 ms ease-in-out, 5px up, to 0.98.
+// Slint has no keyframes and can't blur an arbitrary subtree, so this is the opacity/shift/
+// scale part of wb-in / wb-out; the 4px blur is skipped. Stack two layers and flip `shown`.
+// `delay` staggers rows by Motion.overlapStagger (30 ms) per `index`.
+export component OverlapLayer inherits Rectangle {
+    in property <bool> shown: true;
+    in property <int> index: 0;
+    property <duration> stagger: root.shown ? Motion.overlapStagger * root.index : 0ms;
+
+    opacity: root.shown ? 1 : 0;
+    // leaving goes up 5px, entering comes from 7px below. Without keyframes the layer starts its
+    // entrance from where it last left (−5px): the shift is approximate, the timing exact.
+    property <length> shift: root.shown ? 0px : -5px;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: root.shown ? 1 : 0.98;
+    animate opacity, transform-scale {
+        duration: root.shown ? Motion.overlapIn : Motion.overlapOut;
+        delay: root.stagger;
+        easing: root.shown ? Motion.easeOut : Motion.easeInOut;
+    }
+    animate shift {
+        duration: root.shown ? Motion.overlapIn : Motion.overlapOut;
+        delay: root.stagger;
+        easing: root.shown ? Motion.easeOut : Motion.easeInOut;
+    }
+
+    Rectangle {
+        y: root.shift;
+        @children
+    }
+}
+
+// @source slint-tab-row
+// wubble change: `TabItem` (with an `id`) is in components/model.slint.
+
+export component TabRow inherits Rectangle {
+    in property <TabItem> tab;
+    in property <bool> selected: false;
+    in property <bool> compact: false;   // rail mode: icon only
+    // pointer y in window px; tabs.rs decides click vs drag (6 px) and the reorder
+    callback press(length);
+    callback drag(length);
+    callback release();
+    callback close();
+
+    height: Chrome.row;
+    border-radius: Radius.sm;
+    // the selected row's background is the indicator (drawn by Sidebar), so rows only hover
+    background: touch.has-hover && !root.selected ? Palette.shell : transparent;
+    animate background { duration: 150ms; easing: Motion.easeOut; }
+
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: touch.pressed ? Motion.pressScale : 1;
+    animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
+
+    touch := TouchArea {
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.middle && e.kind == PointerEventKind.down) { root.close(); return; } // middle click closes
+            if (e.button != PointerEventButton.left) { return; }
+            if (e.kind == PointerEventKind.down) { root.press(self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
+        }
+        moved => { if (self.pressed) { root.drag(self.absolute-position.y + self.mouse-y); } }
+    }
+
+    // wubble change: metrics from browser.css (.wb-tab padding 0 6 0 10, gap 10, an 18 px icon
+    // box), so the icon sits on the sidebar's 24 px grid; the favicon shows only when the model
+    // has one, else the neutral globe (icons.tsx `Favicon`), never a letter tile.
+    HorizontalLayout {
+        padding-left: root.compact ? (root.width - Shell.tab-icon) / 2 : Shell.side-grid;
+        padding-right: Shell.side-pad;
+        spacing: Shell.side-grid;
+        Rectangle {
+            width: Shell.tab-icon;
+            if root.tab.favicon.width > 0: Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                source: root.tab.favicon;
+                width: Shell.icon;
+                height: Shell.icon;
+            }
+            if root.tab.favicon.width == 0: Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                path: IconPaths.globe;
+                tint: root.selected ? Palette.ink : Palette.mist;
+            }
+        }
+        if !root.compact: Text {
+            text: root.tab.title;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+            color: root.selected ? Palette.ink : Palette.mist;
+            font-family: Fonts.ui;
+            font-size: Type.body.size;
+            font-weight: Type.body.weight;
+            animate color { duration: 150ms; easing: Motion.easeOut; }
+        }
+        // wubble change: the close button's slot stays in the layout (as .wb-tab-x, which only
+        // fades), and the button itself sits outside it, below.
+        if !root.compact: Rectangle {
+            width: 22px;
+        }
+    }
+    // wubble change: shown while the row or the button itself is hovered. In the port the button
+    // appeared only while the row's TouchArea had hover, which it loses to the button's own
+    // TouchArea, so the button flickered away under the pointer.
+    Rectangle {
+        x: root.width - Shell.side-pad - self.width;
+        width: 22px;
+        visible: !root.compact && (touch.has-hover || close-touch.has-hover || root.selected);
+        close-touch := TouchArea { clicked => { root.close(); } }
+        Path {
+            width: 10px;
+            height: 10px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            commands: "M1 1 9 9M9 1 1 9";
+            stroke: close-touch.has-hover ? Palette.ink : Palette.haze;
+            stroke-width: 1.5px;
+            stroke-line-cap: round;
+        }
+    }
+}
+
+// @source slint-seam
+// The rubber-string seam (seam.rs). The hit strip sits on the sidebar's edge; grab/drag/release
+// go to Rust with window coordinates, and Rust writes back `seam-x` and `seam-path` (the bowed
+// string from Seam::clip, in this element's coordinates). Pulling past the minimum snaps to the
+// rail, and further to hidden: one gesture for resize and all three modes.
+export component Seam inherits Rectangle {
+    in property <length> seam-x;
+    in property <string> seam-path;      // "M… C… C…": empty while the string is straight
+    in property <bool> bowed: false;
+    callback grab(length, length);       // window px
+    callback drag(length, length);
+    callback release();
+    // wubble change: double-click flips rail and extended (chrome.tsx `onDblClick`)
+    callback double-clicked();
+
+    touch := TouchArea {
+        x: root.seam-x - 4px;
+        width: 8px;
+        mouse-cursor: col-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.grab(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
+        }
+        moved => { if (self.pressed) { root.drag(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); } }
+        double-clicked => { root.double-clicked(); }
+    }
+    // the straight hairline at rest
+    Rectangle {
+        x: root.seam-x - 0.5px;
+        width: 1px;
+        background: Palette.sky;
+        visible: !root.bowed;
+        opacity: touch.has-hover || touch.pressed ? 0.6 : 0;
+        animate opacity { duration: touch.has-hover ? 200ms : 150ms; easing: Motion.easeOut; }
+    }
+    // the bowed string while held or twanging
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: root.seam-path;
+        visible: root.bowed && root.seam-path != "";
+        fill: transparent;
+        stroke: Palette.sky;
+        stroke-width: 1px;
+        opacity: 0.6;
+    }
+}
+
+// @source slint-scroller
+// A scroll view on Wubble physics (scroller.rs) instead of Flickable's: wheel, keys and touch go
+// to Rust, and Rust writes back the content offset (rubber-banded past the ends) and the thumb,
+// which squashes at the ends like the content. Slint's wheel delta is positive when scrolling
+// toward the top on most backends, the opposite of the web's deltaY, so it's negated here.
+export component WubbleScroller inherits Rectangle {
+    in property <length> content-y;      // ScrollRender.shown
+    in property <length> thumb-top;
+    in property <length> thumb-height;
+    in property <bool> thumb-visible;
+    out property <length> viewport-height: self.height;
+    out property <length> content-height: content.preferred-height;
+    callback wheel(length);              // web-style deltaY in px
+    callback touch-down(length);
+    callback touch-move(length);
+    callback touch-up();
+    callback thumb-down(length);
+    callback thumb-move(length);
+    callback thumb-up();
+
+    clip: true;
+    TouchArea {
+        scroll-event(e) => {
+            root.wheel(-e.delta-y);
+            accept
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.touch-down(self.mouse-y); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.touch-up(); }
+        }
+        moved => { if (self.pressed) { root.touch-move(self.mouse-y); } }
+    }
+    content := VerticalLayout {
+        y: -root.content-y;
+        width: root.width;
+        height: self.preferred-height;
+        @children
+    }
+    Rectangle {
+        x: root.width - 7px;
+        y: root.thumb-top;
+        width: 4px;
+        height: root.thumb-height;
+        border-radius: 2px;
+        background: Palette.mist;
+        opacity: root.thumb-visible ? 0.55 : 0;
+        animate opacity { duration: root.thumb-visible ? 150ms : 300ms; easing: Motion.easeOut; }
+        TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { root.thumb-down(self.absolute-position.y + self.mouse-y); }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.thumb-up(); }
+            }
+            moved => { if (self.pressed) { root.thumb-move(self.absolute-position.y + self.mouse-y); } }
+        }
+    }
+}
