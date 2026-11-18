@@ -349,6 +349,7 @@ Measured by hand on the owner's machines, never in tests. Each item starts with 
 - [ ] Page load: time to first paint and to load end against Chromium on the same machine; cache, preconnect and blocker cost
 - [ ] Input: key and pointer to pixels, scroll smoothness at the display rate
 - [ ] Memory: per-tab cost live, frozen and discarded; shell and scene baseline; renderer process limits
+- [ ] Video playback under load (owner, 2026-11-18: a 4K60 YouTube video used about 20% of every core, and while lane builds ran the UI lagged, connections dropped and the video froze): find whether 4K VP9/AV1 decodes in software on Linux NVIDIA (prebuilt CEF, no VA-API), what hardware decode needs, and give the browser, GPU and network processes priority over background work
 - [ ] CPU and GPU at idle and during video: no redraw when nothing changes, scene paused when hidden, glass cost
 - [ ] Release build settings (LTO, codegen units, symbols) and binary size
 
