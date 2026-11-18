@@ -16,7 +16,7 @@ use slint::winit_030::WinitWindowAccessor;
 use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::{
-    BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Tier,
+    BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
@@ -125,14 +125,21 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
         Renderer::try_new(gpu, SceneOptions::default())
     }) {
         Ok(renderer) => {
-            if !renderer.measures_cost() {
-                eprintln!("wubble: glass: no GPU timestamps, quality follows dropped frames only");
-            }
+            let signal = if renderer.measures_cost() {
+                Signal::SceneCost
+            } else {
+                eprintln!(
+                    "wubble: glass: no GPU timestamps ({}), quality follows dropped frames, \
+                     a step down kept only when it helps",
+                    renderer.timestamp_features()
+                );
+                Signal::Lateness
+            };
             eprintln!("wubble: glass: scene");
             window.global::<GlassLayer>().set_scene_active(true);
             Glass::Scene(Box::new(SceneHost {
                 renderer,
-                governor: Governor::new(Quality::Full),
+                governor: Governor::new(Quality::Full, signal),
                 setting: GlassSetting::Auto,
                 budget: None,
                 tint: None,
@@ -209,7 +216,7 @@ impl Glass {
         }
         s.setting = setting;
         let (best, _) = levels(setting);
-        s.governor = Governor::new(best);
+        s.governor = Governor::new(best, s.governor.signal());
         s.renderer.set_quality(best);
     }
 
@@ -328,7 +335,7 @@ impl SceneHost {
         self.governor = if after == next.quality() {
             next
         } else {
-            Governor::new(after)
+            Governor::new(after, self.governor.signal())
         };
         if after != before {
             // The load that moved it: the smoothed load of the level it left.
@@ -441,7 +448,7 @@ mod tests {
     fn frames_paced_at_300_hz_are_not_late() {
         // 3.33 ms apart, scene at 1 ms of GPU: well inside the budget at Full, held there
         let budget = frame_budget(Some(300_002));
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..10_000 {
             let load = frame_load(
                 Some(Duration::from_millis(1)),
@@ -457,7 +464,7 @@ mod tests {
     fn a_scene_over_its_share_degrades_the_glass_before_the_frame_drops() {
         // 5 ms of scene in an 8.33 ms frame: the frame still fits, the glass steps down
         let (budget, scene) = (DEFAULT_BUDGET, Duration::from_millis(5));
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..wubble_gfx::scene::SETTLE_FRAMES {
             g = g.next(
                 frame_load(Some(scene), Some(budget), budget).unwrap(),
@@ -470,7 +477,7 @@ mod tests {
     #[test]
     fn dropped_frames_degrade_the_glass_without_timestamps() {
         let budget = DEFAULT_BUDGET;
-        let mut g = Governor::new(Quality::Full);
+        let mut g = Governor::new(Quality::Full, Signal::SceneCost);
         for _ in 0..wubble_gfx::scene::SETTLE_FRAMES {
             g = g.next(frame_load(None, Some(budget * 2), budget).unwrap(), budget);
         }

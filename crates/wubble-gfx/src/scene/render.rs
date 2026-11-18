@@ -499,6 +499,17 @@ impl Renderer {
         self.profiler.is_some()
     }
 
+    /// The device's timestamp features, for the log line that says why there are no costs.
+    pub fn timestamp_features(&self) -> String {
+        let f = self.device.features();
+        format!(
+            "TIMESTAMP_QUERY={} INSIDE_ENCODERS={} INSIDE_PASSES={}",
+            f.contains(wgpu::Features::TIMESTAMP_QUERY),
+            f.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+            f.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES),
+        )
+    }
+
     /// The GPU time of the scene's work in the latest frame whose
     /// timestamps have come back (one to three frames late), once: `None`
     /// until another frame's come back, and always when the device has no

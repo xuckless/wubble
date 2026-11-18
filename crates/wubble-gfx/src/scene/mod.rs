@@ -65,8 +65,8 @@ mod state;
 
 pub use quality::{
     AVG_WEIGHT, BackdropClock, CACHED_REFRESH_CALLS, DOWN_FRACTION, FIT_FRACTION, Governor,
-    HOLD_FRAMES, MAX_BACKDROP_DT, MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality, SAMPLE_CAP,
-    SETTLE_FRAMES, UP_FRACTION, should_render,
+    HELP_FRACTION, HOLD_FRAMES, MAX_BACKDROP_DT, MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality,
+    SAMPLE_CAP, SETTLE_FRAMES, Signal, UP_FRACTION, should_render,
 };
 pub(crate) use render::with_prelude;
 pub use render::{Renderer, readback_rgba8};
