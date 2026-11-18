@@ -1,0 +1,13 @@
+{
+  "version": 5,
+  "lastUserContextId": 6,
+  "identities": [
+    {"userContextId": 1, "public": true, "icon": "fingerprint", "color": "blue", "l10nId": "user-context-personal2", "accessKey": "user-context-accesskey-personal"},
+    {"userContextId": 2, "public": true, "icon": "briefcase", "color": "orange", "l10nId": "user-context-work2"},
+    {"userContextId": 3, "public": true, "icon": "dollar", "color": "green", "l10nId": "user-context-banking2"},
+    {"userContextId": 4, "public": true, "icon": "cart", "color": "pink", "l10nId": "user-context-shopping2"},
+    {"userContextId": 5, "public": false, "icon": "", "color": "", "name": "userContextIdInternal.thumbnail"},
+    {"userContextId": 6, "public": true, "icon": "circle", "color": "red", "name": "Gaming"},
+    {"userContextId": 4294967295, "public": false, "name": "userContextIdInternal.webextStorageLocal"}
+  ]
+}
