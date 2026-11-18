@@ -369,9 +369,32 @@ fn install_shell_driver(
 /// lifecycle state, not by time: the engine closes its views and reports each
 /// one closed once CEF has let go of it.
 fn drain(engine: &mut Engine) {
+    trace("shutdown requested");
     engine.request_shutdown();
+    let mut ticks = 0u64;
     while !engine.is_stopped() {
         engine.tick();
+        ticks += 1;
+        // A shutdown that never ends shows as a count that keeps growing.
+        if ticks.is_power_of_two() && ticks >= 1 << 10 {
+            trace(&format!("still shutting down after {ticks} ticks"));
+        }
+    }
+    trace(&format!("stopped after {ticks} ticks"));
+}
+
+/// `WUBBLE_TRACE=1`: stage lines on stderr with the time since the first one, for finding where
+/// a run that hangs (once, 300 s, right after a rebuild: never reproduced) is stuck. Take
+/// `eu-stack -p <pid>` of the process and its children next to the last line. Off by default.
+fn trace(stage: &str) {
+    static START: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+    let start = START.get_or_init(|| std::env::var_os("WUBBLE_TRACE").map(|_| Instant::now()));
+    if let Some(start) = start {
+        eprintln!(
+            "wubble: trace +{}ms pid {}: {stage}",
+            start.elapsed().as_millis(),
+            std::process::id()
+        );
     }
 }
 
@@ -440,10 +463,18 @@ fn remove_cache(cache_dir: &Path) {
 }
 
 fn smoke_boot(config: Result<EngineConfig, EngineError>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = Engine::start(config?)?;
+    let config = config?;
+    trace(&format!(
+        "starting CEF from {}, cache {}",
+        config.exe_dir.display(),
+        config.cache_dir.display()
+    ));
+    let mut engine = Engine::start(config)?;
+    trace("CEF started");
     for _ in 0..SMOKE_TICKS {
         engine.tick();
     }
+    trace("ticked");
     drain(&mut engine);
     Ok(())
 }
