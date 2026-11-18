@@ -67,7 +67,9 @@ fn looks_like_address(query: &str) -> bool {
 fn percent_encode_into(input: &str, out: &mut String) {
     for b in input.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -93,13 +95,19 @@ mod tests {
     use super::*;
 
     fn settings(live: LiveSuggestions) -> SuggestSettings {
-        SuggestSettings { engine: SearchEngine::DuckDuckGo, live }
+        SuggestSettings {
+            engine: SearchEngine::DuckDuckGo,
+            live,
+        }
     }
 
     #[test]
     fn off_by_default_and_local_only() {
         assert_eq!(LiveSuggestions::default(), LiveSuggestions::Off);
-        assert_eq!(sources("rust slint", &settings(LiveSuggestions::Off)), [Source::Local]);
+        assert_eq!(
+            sources("rust slint", &settings(LiveSuggestions::Off)),
+            [Source::Local]
+        );
         assert!(sources("   ", &settings(LiveSuggestions::On)).is_empty());
     }
 
@@ -109,22 +117,38 @@ mod tests {
             sources("c++ & rust", &settings(LiveSuggestions::On)),
             [
                 Source::Local,
-                Source::Remote { url: "https://duckduckgo.com/ac/?type=list&q=c%2B%2B%20%26%20rust".into() },
+                Source::Remote {
+                    url: "https://duckduckgo.com/ac/?type=list&q=c%2B%2B%20%26%20rust".into()
+                },
             ]
         );
     }
 
     #[test]
     fn addresses_are_never_sent() {
-        for q in ["github.com/foo", "https://bank.example/login", "localhost:3000"] {
-            assert_eq!(sources(q, &settings(LiveSuggestions::On)), [Source::Local], "{q}");
+        for q in [
+            "github.com/foo",
+            "https://bank.example/login",
+            "localhost:3000",
+        ] {
+            assert_eq!(
+                sources(q, &settings(LiveSuggestions::On)),
+                [Source::Local],
+                "{q}"
+            );
         }
     }
 
     #[test]
     fn parses_opensearch_and_rejects_garbage() {
-        assert_eq!(parse_opensearch(r#"["ru",["rust","ruby"]]"#), Ok(vec!["rust".into(), "ruby".into()]));
+        assert_eq!(
+            parse_opensearch(r#"["ru",["rust","ruby"]]"#),
+            Ok(vec!["rust".into(), "ruby".into()])
+        );
         assert_eq!(parse_opensearch(r#"{"ru":1}"#), Err(MalformedSuggestions));
-        assert_eq!(parse_opensearch(r#"["ru",[1,2]]"#), Err(MalformedSuggestions));
+        assert_eq!(
+            parse_opensearch(r#"["ru",[1,2]]"#),
+            Err(MalformedSuggestions)
+        );
     }
 }

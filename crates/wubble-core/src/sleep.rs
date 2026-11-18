@@ -73,9 +73,18 @@ mod tests {
     fn escalates_with_time() {
         let now = Instant::now() + Duration::from_secs(10_000);
         let p = SleepPolicy::default();
-        assert_eq!(p.target(&tab(5, now), now, Pressure::None), Liveness::Background);
-        assert_eq!(p.target(&tab(120, now), now, Pressure::None), Liveness::Frozen);
-        assert_eq!(p.target(&tab(3600, now), now, Pressure::None), Liveness::Discarded);
+        assert_eq!(
+            p.target(&tab(5, now), now, Pressure::None),
+            Liveness::Background
+        );
+        assert_eq!(
+            p.target(&tab(120, now), now, Pressure::None),
+            Liveness::Frozen
+        );
+        assert_eq!(
+            p.target(&tab(3600, now), now, Pressure::None),
+            Liveness::Discarded
+        );
     }
 
     #[test]
@@ -85,7 +94,10 @@ mod tests {
 
         let mut busy = tab(3600, now);
         busy.busy = true;
-        assert_eq!(p.target(&busy, now, Pressure::Critical), Liveness::Background);
+        assert_eq!(
+            p.target(&busy, now, Pressure::Critical),
+            Liveness::Background
+        );
 
         let mut pinned = tab(3600, now);
         pinned.pinned = true;
@@ -96,6 +108,9 @@ mod tests {
     fn critical_pressure_discards_immediately() {
         let now = Instant::now() + Duration::from_secs(10_000);
         let p = SleepPolicy::default();
-        assert_eq!(p.target(&tab(1, now), now, Pressure::Critical), Liveness::Discarded);
+        assert_eq!(
+            p.target(&tab(1, now), now, Pressure::Critical),
+            Liveness::Discarded
+        );
     }
 }
