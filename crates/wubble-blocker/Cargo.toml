@@ -1,0 +1,15 @@
+[package]
+name = "wubble-blocker"
+description = "Content blocking on Brave's adblock-rust: network decisions, cosmetic rules, per-site shields."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# default-features = false drops `single-thread`, which would make Engine !Send/!Sync.
+adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+serde_json.workspace = true
+thiserror = "2"
+url = "2"
