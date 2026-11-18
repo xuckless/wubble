@@ -437,6 +437,12 @@ export component AppWindow inherits Window {
     changed downloads-open => {
         root.settle-focus();
     }
+    // The screenshot overlay took the keys; closed, they go back.
+    changed shot-picking => {
+        if !root.shot-picking {
+            root.settle-focus();
+        }
+    }
     changed find-focus => {
         if root.find.open && !root.overlay-open {
             find-ui.take-focus();

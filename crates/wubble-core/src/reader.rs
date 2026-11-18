@@ -225,15 +225,25 @@ pub struct ReaderPrefs {
 impl ReaderPrefs {
     pub fn from_stored(stored: &HashMap<String, String>) -> Self {
         use settings as s;
-        let word = |def| value_of(def, stored);
         Self {
-            size: word(&s::READER_SIZE).parse().unwrap_or(18),
-            width: ReaderWidth::from_id(word(&s::READER_WIDTH)).unwrap_or(ReaderWidth::Medium),
-            font: ReaderFont::from_id(word(&s::READER_FONT)).unwrap_or(ReaderFont::Serif),
-            theme: ReaderTheme::from_id(word(&s::READER_THEME)).unwrap_or(ReaderTheme::Dark),
-            detect: word(&s::READER_DETECT) == "1",
+            size: read(&s::READER_SIZE, stored, |w| w.parse().ok()),
+            width: read(&s::READER_WIDTH, stored, ReaderWidth::from_id),
+            font: read(&s::READER_FONT, stored, ReaderFont::from_id),
+            theme: read(&s::READER_THEME, stored, ReaderTheme::from_id),
+            detect: value_of(&s::READER_DETECT, stored) == "1",
         }
     }
+}
+
+/// `def`'s stored value, or its declared default when the stored one does not parse.
+fn read<T>(
+    def: &settings::SettingDef,
+    stored: &HashMap<String, String>,
+    parse: impl Fn(&str) -> Option<T>,
+) -> T {
+    parse(value_of(def, stored))
+        .or_else(|| parse(def.default))
+        .expect("a setting's default parses")
 }
 
 impl Default for ReaderPrefs {
@@ -375,6 +385,13 @@ mod tests {
         assert_eq!(p.font, ReaderFont::Sans);
         assert_eq!(p.theme, ReaderTheme::Sepia);
         assert!(!p.detect);
+        // A corrupt stored value falls back to the declared default.
+        let bad: HashMap<String, String> = [("reader.size", "big"), ("reader.font", "comic")]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        let p = ReaderPrefs::from_stored(&bad);
+        assert_eq!((p.size, p.font), (18, ReaderFont::Serif));
     }
 
     #[test]

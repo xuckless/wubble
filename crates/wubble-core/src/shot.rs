@@ -235,8 +235,10 @@ pub enum ShotEvent {
     Request(ShotRequest),
     /// The overlay's region, viewport CSS px.
     Picked(RectF),
-    /// Escape on the overlay, or the page went away under it.
+    /// Escape on the overlay, or a navigation under it: ignored once a capture is out.
     Cancel,
+    /// The page's view is gone (closed, discarded, crashed): no answer can come any more.
+    PageGone,
     MeasureSent {
         id: u64,
         rect: Option<RectF>,
@@ -323,10 +325,13 @@ pub fn transition(state: Shot, event: ShotEvent) -> (Shot, Vec<ShotEffect>) {
             Err(_) => (Shot::Idle, vec![E::Toast(FAILED)]),
         },
         (Shot::Saving, Saved(text)) => (Shot::Idle, vec![E::Toast(text)]),
+        (Shot::Picking, PageGone) => (Shot::Idle, vec![E::HideOverlay]),
+        (Shot::Measuring { .. } | Shot::Capturing(_), PageGone) => (Shot::Idle, vec![]),
         (Shot::Idle | Shot::Measuring { .. } | Shot::Capturing(_), SendFailed) => {
             (Shot::Idle, vec![E::Toast(FAILED)])
         }
-        // Stale answers; a cancel with no overlay up.
+        // Stale answers; a cancel with no overlay up; a page gone while saving (the saver still
+        // answers).
         (state, _) => (state, vec![]),
     }
 }
@@ -541,5 +546,24 @@ mod tests {
             (Shot::Idle, vec![E::Toast("Could not take the screenshot")])
         );
         assert_eq!(transition(Shot::Capturing(2), SendFailed).0, Shot::Idle);
+    }
+
+    #[test]
+    fn a_page_gone_mid_shot_frees_the_machine() {
+        for busy in [Shot::Capturing(1), Shot::Measuring { id: 1, rect: None }] {
+            let (s, e) = transition(busy, PageGone);
+            assert_eq!((s, e), (Shot::Idle, vec![]));
+            // The next screenshot is taken, not refused.
+            assert_eq!(
+                transition(s, Request(ShotRequest::Visible)).1,
+                vec![E::Capture(Capture::Visible)]
+            );
+        }
+        assert_eq!(
+            transition(Shot::Picking, PageGone),
+            (Shot::Idle, vec![E::HideOverlay])
+        );
+        // Saving does not need the page: its answer still comes.
+        assert_eq!(transition(Shot::Saving, PageGone), (Shot::Saving, vec![]));
     }
 }

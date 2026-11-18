@@ -79,11 +79,40 @@ pub fn targets_from_json(text: &str) -> Vec<Target> {
                 href: item
                     .get("href")
                     .and_then(Value::as_str)
-                    .filter(|h| !h.is_empty())
+                    .filter(|h| opens_in_a_tab(h))
                     .map(str::to_owned),
             })
         })
         .collect()
+}
+
+/// Whether a link's address can be opened in a new tab: not empty, and not a script
+/// (`javascript:` runs in the page it is on, so a click is what it needs).
+fn opens_in_a_tab(href: &str) -> bool {
+    let scheme = href.split_once(':').map(|(s, _)| s.trim());
+    !href.trim().is_empty() && !scheme.is_some_and(|s| s.eq_ignore_ascii_case("javascript"))
+}
+
+/// A key while the labels show, from the host's keyboard: the hint machine's event, or `None`
+/// for a chord that is not hint typing (Ctrl, Alt or Super held: the shortcuts, the hint
+/// action's own chord among them, go to the keymap).
+pub fn key_event(key: HintKey, ctrl_alt_or_super: bool, shift: bool) -> Option<HintEvent> {
+    if ctrl_alt_or_super {
+        return None;
+    }
+    Some(match key {
+        HintKey::Escape => HintEvent::Cancel,
+        HintKey::Backspace => HintEvent::Backspace,
+        HintKey::Char(ch) => HintEvent::Key(ch.to_ascii_lowercase(), shift),
+    })
+}
+
+/// The keys [`key_event`] knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HintKey {
+    Escape,
+    Backspace,
+    Char(char),
 }
 
 /// Hint mode of the visible page.
@@ -307,9 +336,12 @@ mod tests {
     #[test]
     fn targets_parse_from_the_scripts_answer() {
         let json = r#"[{"x":1,"y":2,"w":30,"h":10,"href":"https://a.test/"},
-            {"x":5,"y":6,"w":7,"h":8,"href":""},{"x":"bad"},{"x":1,"y":1,"w":1,"h":1}]"#;
+            {"x":5,"y":6,"w":7,"h":8,"href":""},{"x":"bad"},{"x":1,"y":1,"w":1,"h":1},
+            {"x":1,"y":1,"w":1,"h":1,"href":" JavaScript:void(0)"}]"#;
         let t = targets_from_json(json);
-        assert_eq!(t.len(), 3);
+        assert_eq!(t.len(), 4);
+        // A script link has no address to open: Shift on it clicks.
+        assert_eq!(t[3].href, None);
         assert_eq!(t[0].href.as_deref(), Some("https://a.test/"));
         assert_eq!(t[0].centre(), (16.0, 7.0));
         assert_eq!(t[1].href, None);
@@ -418,6 +450,25 @@ mod tests {
         assert_eq!(
             transition(Hints::Collecting(3), HintEvent::Key('a', false), HOME),
             (Hints::Collecting(3), vec![])
+        );
+    }
+
+    #[test]
+    fn modified_chords_are_not_hint_typing() {
+        // Alt+F (the hint action's chord) goes to the keymap, which toggles hints off.
+        assert_eq!(key_event(HintKey::Char('f'), true, false), None);
+        assert_eq!(key_event(HintKey::Escape, true, false), None);
+        assert_eq!(
+            key_event(HintKey::Char('F'), false, true),
+            Some(HintEvent::Key('f', true))
+        );
+        assert_eq!(
+            key_event(HintKey::Escape, false, false),
+            Some(HintEvent::Cancel)
+        );
+        assert_eq!(
+            key_event(HintKey::Backspace, false, false),
+            Some(HintEvent::Backspace)
         );
     }
 

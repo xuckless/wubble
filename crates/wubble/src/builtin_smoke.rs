@@ -40,6 +40,9 @@ pub const TALL: f64 = 3000.0;
 /// The region dragged on `tall.html`, view logical px.
 pub const REGION: ((f32, f32), (f32, f32)) = ((20.0, 30.0), (120.0, 110.0));
 
+/// The DevTools calls one page-theme change sends (`pagetheme::calls`).
+const THEME_CALLS: u32 = 2;
+
 /// The page's colour scheme and body colour, tagged so its answer is known.
 const THEME_CHECK: &str = "({check:'theme',dark:matchMedia('(prefers-color-scheme: dark)').matches,\
     bg:getComputedStyle(document.body).backgroundColor})";
@@ -53,10 +56,11 @@ const RESTORED_CHECK: &str =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     Loaded,
-    /// The page theme was set; waiting for this many theme replies in all.
+    /// The page theme was set; waiting for this many more replies to its DevTools calls (the
+    /// only ones out then).
     ThemeReplies {
         theme: Theme,
-        want: u32,
+        left: u32,
     },
     ThemeChecked(Theme),
     Readerable,
@@ -122,8 +126,6 @@ pub struct Seen {
     pub loading: bool,
     pub reader: Reader,
     pub hints: Hints,
-    /// Page-theme replies so far, and how many were refused.
-    pub theme_replies: (u32, u32),
     /// The window's scale factor and the view's size, physical px.
     pub scale: f32,
     pub view: (u32, u32),
@@ -213,27 +215,24 @@ pub fn next(state: BuiltinSmoke, input: Input) -> (BuiltinSmoke, Vec<Action>) {
         (Loaded, Worked(seen)) if seen.framed && !seen.loading => (
             to(ThemeReplies {
                 theme: Theme::Dark,
-                want: seen.theme_replies.0 + 2,
+                left: THEME_CALLS,
             }),
             vec![
                 Action::Setting("screenshot.output", "file"),
                 Action::Setting("pages.theme", "dark"),
             ],
         ),
-        // Set while answering a page event: the replies count from the next run on.
-        (ThemeReplies { theme, want: 0 }, Worked(seen)) => (
-            to(ThemeReplies {
-                theme,
-                want: seen.theme_replies.0 + 2,
-            }),
-            vec![],
-        ),
-        (ThemeReplies { theme, want }, Worked(seen)) if seen.theme_replies.0 >= want => {
-            match seen.theme_replies.1 {
-                0 => (to(ThemeChecked(theme)), vec![Action::Eval(THEME_CHECK)]),
-                n => fail(format!("{n} page-theme call(s) refused")),
-            }
-        }
+        (ThemeReplies { theme, left }, Page(PageEvent::CdpReply { result, .. })) => match result {
+            Err(e) => fail(format!("a page-theme call was refused: {e}")),
+            Ok(_) if left <= 1 => (to(ThemeChecked(theme)), vec![Action::Eval(THEME_CHECK)]),
+            Ok(_) => (
+                to(ThemeReplies {
+                    theme,
+                    left: left - 1,
+                }),
+                vec![],
+            ),
+        },
         (ThemeChecked(theme), Page(event))
             if check(event).is_some_and(|v| v["check"] == "theme") =>
         {
@@ -253,7 +252,7 @@ pub fn next(state: BuiltinSmoke, input: Input) -> (BuiltinSmoke, Vec<Action>) {
                 Theme::Dark => (
                     to(ThemeReplies {
                         theme: Theme::Light,
-                        want: 0,
+                        left: THEME_CALLS,
                     }),
                     vec![Action::Setting("pages.theme", "light")],
                 ),
@@ -390,17 +389,23 @@ pub fn region_ok(saved: &Saved, scale: f32) -> bool {
 mod tests {
     use super::*;
     use wubble_core::hints::Target;
-    use wubble_engine::cdp::EvalId;
+    use wubble_engine::cdp::{CdpId, EvalId};
 
-    fn seen(replies: u32) -> Seen {
+    fn seen() -> Seen {
         Seen {
             framed: true,
             loading: false,
             reader: Reader::default(),
             hints: Hints::Off,
-            theme_replies: (replies, 0),
             scale: 1.0,
             view: (800, 600),
+        }
+    }
+
+    fn accepted() -> PageEvent {
+        PageEvent::CdpReply {
+            id: CdpId(1),
+            result: Ok(Value::Null),
         }
     }
 
@@ -421,20 +426,21 @@ mod tests {
     #[test]
     fn dark_then_light_then_the_reader() {
         let s = BuiltinSmoke::new("tall".into(), "pdf".into());
-        let (s, a) = next(s, Input::Worked(&seen(2)));
+        let (s, a) = next(s, Input::Worked(&seen()));
         assert_eq!(a[1], Action::Setting("pages.theme", "dark"));
-        let (s, a) = next(s, Input::Worked(&seen(3)));
+        let (s, a) = next(s, Input::Page(&accepted()));
         assert!(a.is_empty());
-        let (s, a) = next(s, Input::Worked(&seen(4)));
+        let (s, a) = next(s, Input::Worked(&seen()));
+        assert!(a.is_empty());
+        let (s, a) = next(s, Input::Page(&accepted()));
         assert_eq!(a, vec![Action::Eval(THEME_CHECK)]);
         let dark = answer(&format!(
             r#"{{"check":"theme","dark":true,"bg":"{DARK_BG}"}}"#
         ));
         let (s, a) = next(s, Input::Page(&dark));
         assert_eq!(a, vec![Action::Setting("pages.theme", "light")]);
-        // The light replies count from where they are now.
-        let (s, _) = next(s, Input::Worked(&seen(4)));
-        let (s, a) = next(s, Input::Worked(&seen(6)));
+        let (s, _) = next(s, Input::Page(&accepted()));
+        let (s, a) = next(s, Input::Page(&accepted()));
         assert_eq!(a, vec![Action::Eval(THEME_CHECK)]);
         let light = answer(&format!(
             r#"{{"check":"theme","dark":false,"bg":"{LIGHT_BG}"}}"#
@@ -443,13 +449,13 @@ mod tests {
         assert_eq!(step(s.clone()), Step::Readerable);
         let found = Seen {
             reader: Reader::Off { readerable: true },
-            ..seen(6)
+            ..seen()
         };
         let (s, a) = next(s, Input::Worked(&found));
         assert_eq!(a, vec![Action::Perform(UserAction::ToggleReader)]);
         let on = Seen {
             reader: Reader::On,
-            ..seen(6)
+            ..seen()
         };
         let (s, _) = next(s, Input::Worked(&on));
         let built = answer(&format!(
@@ -477,18 +483,18 @@ mod tests {
         let s = BuiltinSmoke::At {
             step: Step::ThemeReplies {
                 theme: Theme::Dark,
-                want: 2,
+                left: 2,
             },
             runs: 0,
             tall: String::new(),
             pdf: String::new(),
         };
-        let refused = Seen {
-            theme_replies: (2, 1),
-            ..seen(2)
+        let refused = PageEvent::CdpReply {
+            id: CdpId(1),
+            result: Err("no".into()),
         };
         assert!(matches!(
-            next(s, Input::Worked(&refused)).0,
+            next(s, Input::Page(&refused)).0,
             BuiltinSmoke::Done
         ));
     }
@@ -515,7 +521,7 @@ mod tests {
                 typed: String::new(),
                 new_tab: false,
             },
-            ..seen(0)
+            ..seen()
         };
         let (s, a) = next(s, Input::Worked(&shown));
         assert_eq!(a, vec![Action::Type("s".into())]);
@@ -528,7 +534,7 @@ mod tests {
         };
         let (s, a) = next(s, Input::Web(&loaded));
         assert_eq!(a, vec![Action::Perform(UserAction::ScreenshotFullPage)]);
-        let host = seen(0);
+        let host = seen();
         let short = Saved {
             file: Some(true),
             clipboard: None,
@@ -579,7 +585,7 @@ mod tests {
         };
         let mut last = vec![];
         for _ in 0..=MAX_STEP_RUNS {
-            (s, last) = next(s, Input::Worked(&seen(0)));
+            (s, last) = next(s, Input::Worked(&seen()));
         }
         assert_eq!(s, BuiltinSmoke::Done);
         assert!(matches!(&last[..], [Action::Fail(e)] if e.contains("Readerable")));

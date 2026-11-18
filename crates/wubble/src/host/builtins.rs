@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
-use wubble_core::hints::{self, HintEffect, HintEvent, Hints};
+use wubble_core::hints::{self, HintEffect, HintEvent, HintKey, Hints};
 use wubble_core::pagetheme::{self, PageTheme, ThemeTable};
 use wubble_core::reader::{self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs};
 use wubble_core::settings as defs;
@@ -33,24 +33,20 @@ pub(super) struct Builtins {
     /// What each live view was last told (`pagetheme::sync`); absent: nothing yet.
     applied: BTreeMap<TabId, PageTheme>,
     /// The page-theme calls in flight, to report a refused one.
-    theme_calls: BTreeMap<u64, TabId>,
+    theme_calls: BTreeSet<u64>,
     reader: BTreeMap<TabId, Reader>,
     reader_prefs: ReaderPrefs,
     /// Tabs showing a PDF in Chromium's viewer, and the content-type questions in flight.
     pdf: BTreeSet<TabId>,
     kind_probes: BTreeMap<u64, TabId>,
-    /// Hint mode, on the page of `hints_tab`.
-    hints: Hints,
-    hints_tab: Option<TabId>,
+    /// Hint mode and the tab whose page shows it; `None`: off.
+    hints: Option<(TabId, Hints)>,
     alphabet: &'static str,
-    /// The screenshot in flight, of `shot_tab`'s page.
-    shot: Shot,
-    shot_tab: Option<TabId>,
+    /// The screenshot in flight and the tab it is of; `None`: idle.
+    shot: Option<(TabId, Shot)>,
     output: ShotOutput,
     /// Started on the first screenshot.
     saver: Option<Saver>,
-    /// Page-theme replies seen, and how many were refused, for `--smoke builtins`.
-    theme_replies: (u32, u32),
 }
 
 impl Default for Builtins {
@@ -59,19 +55,16 @@ impl Default for Builtins {
             theme_default: PageTheme::Auto,
             theme_sites: ThemeTable::new(),
             applied: BTreeMap::new(),
-            theme_calls: BTreeMap::new(),
+            theme_calls: BTreeSet::new(),
             reader: BTreeMap::new(),
             reader_prefs: ReaderPrefs::default(),
             pdf: BTreeSet::new(),
             kind_probes: BTreeMap::new(),
-            hints: Hints::Off,
-            hints_tab: None,
+            hints: None,
             alphabet: hints::alphabet(""),
-            shot: Shot::Idle,
-            shot_tab: None,
+            shot: None,
             output: ShotOutput::Both,
             saver: None,
-            theme_replies: (0, 0),
         }
     }
 }
@@ -158,12 +151,16 @@ impl Host {
         self.builtins.applied.remove(&tab);
         self.builtins.pdf.remove(&tab);
         self.builtins.reader.remove(&tab);
-        if self.builtins.hints_tab == Some(tab) {
-            self.builtins.hints = Hints::Off;
-            self.builtins.hints_tab = None;
+        if self.hints_tab() == Some(tab) {
+            self.builtins.hints = None;
         }
-        if self.builtins.shot_tab == Some(tab) {
-            self.shot_event(tab, ShotEvent::Cancel);
+        self.shot_page_gone(tab);
+    }
+
+    /// No answer can come from `tab`'s page any more: a screenshot of it ends.
+    fn shot_page_gone(&mut self, tab: TabId) {
+        if self.shot_tab() == Some(tab) {
+            self.shot_event(tab, ShotEvent::PageGone);
         }
     }
 
@@ -174,10 +171,10 @@ impl Host {
             WebEvent::LoadStarted => {
                 self.builtins.pdf.remove(&tab);
                 self.reader_event(tab, ReaderEvent::PageStarted);
-                if self.builtins.hints_tab == Some(tab) {
+                if self.hints_tab() == Some(tab) {
                     self.hint_event(tab, HintEvent::Cancel);
                 }
-                if self.builtins.shot_tab == Some(tab) {
+                if self.shot_tab() == Some(tab) {
                     self.shot_event(tab, ShotEvent::Cancel);
                 }
             }
@@ -195,6 +192,7 @@ impl Host {
             WebEvent::RendererGone => {
                 self.builtins.applied.remove(&tab);
                 self.reader_event(tab, ReaderEvent::PageStarted);
+                self.shot_page_gone(tab);
             }
             _ => {}
         }
@@ -204,15 +202,13 @@ impl Host {
     pub(super) fn builtins_answer(&mut self, tab: TabId, event: &PageEvent) {
         match event {
             PageEvent::CdpReply { id, result } => {
-                if self.builtins.theme_calls.remove(&id.0).is_some() {
-                    self.builtins.theme_replies.0 += 1;
+                if self.builtins.theme_calls.remove(&id.0) {
                     if let Err(e) = result {
-                        self.builtins.theme_replies.1 += 1;
                         eprintln!("wubble: page theme refused: {e}");
                     }
                     return;
                 }
-                if self.builtins.shot == Shot::Capturing(id.0) {
+                if self.shot_state() == Shot::Capturing(id.0) {
                     let data = result.as_ref().map_err(Clone::clone).and_then(|v| {
                         v.get("data")
                             .and_then(serde_json::Value::as_str)
@@ -250,12 +246,13 @@ impl Host {
                     }
                     _ => {}
                 }
-                if self.builtins.hints == Hints::Collecting(id) {
+                if matches!(&self.builtins.hints, Some((_, Hints::Collecting(want))) if *want == id)
+                {
                     let targets = text.map(hints::targets_from_json).unwrap_or_default();
                     self.hint_event(tab, HintEvent::Targets(id, targets));
                     return;
                 }
-                if matches!(self.builtins.shot, Shot::Measuring { id: want, .. } if want == id) {
+                if matches!(self.shot_state(), Shot::Measuring { id: want, .. } if want == id) {
                     let metrics = text.and_then(shot::Metrics::from_json);
                     self.shot_event(tab, ShotEvent::Measured(id, metrics));
                 }
@@ -298,9 +295,7 @@ impl Host {
         if sent.len() == 2 {
             self.builtins.applied.insert(tab, theme);
         }
-        self.builtins
-            .theme_calls
-            .extend(sent.into_iter().map(|id| (id, tab)));
+        self.builtins.theme_calls.extend(sent);
     }
 
     /// The visible site's theme, one step on (the action and the pill menu's rows).
@@ -414,15 +409,29 @@ impl Host {
 
     // ----- link hints
 
+    /// The tab whose page shows hints.
+    fn hints_tab(&self) -> Option<TabId> {
+        self.builtins.hints.as_ref().map(|(t, _)| *t)
+    }
+
     fn hint_event(&mut self, tab: TabId, event: HintEvent) {
         // Hints live on one page; anything for another first clears that one.
-        if let Some(other) = self.builtins.hints_tab.filter(|t| *t != tab) {
-            self.hint_event(other, HintEvent::Cancel);
-        }
-        let state = std::mem::take(&mut self.builtins.hints);
+        let state = match self.builtins.hints.take() {
+            Some((on, state)) if on == tab => state,
+            Some((other, state)) => {
+                let (_, effects) =
+                    hints::transition(state, HintEvent::Cancel, self.builtins.alphabet);
+                self.hint_effects(other, effects);
+                Hints::Off
+            }
+            None => Hints::Off,
+        };
         let (next, effects) = hints::transition(state, event, self.builtins.alphabet);
-        self.builtins.hints_tab = (next != Hints::Off).then_some(tab);
-        self.builtins.hints = next;
+        self.builtins.hints = (next != Hints::Off).then_some((tab, next));
+        self.hint_effects(tab, effects);
+    }
+
+    fn hint_effects(&mut self, tab: TabId, effects: Vec<HintEffect>) {
         for effect in effects {
             match effect {
                 HintEffect::Collect => {
@@ -476,53 +485,67 @@ impl Host {
 
     /// A key while hint mode is on takes the key from everything else: a letter types, Escape
     /// leaves, Backspace takes one back. Returns whether it was taken.
+    /// A chord with Ctrl, Alt or Super is not taken: it goes on to the keymap (the hint
+    /// action's own chord turns hints off there).
     pub(super) fn hint_key(&mut self, key: &KeyInput) -> bool {
-        let Some(tab) = self.builtins.hints_tab else {
+        let Some(tab) = self.hints_tab() else {
             return false;
         };
         if self.model.visible_tab() != Some(tab) {
             self.hint_event(tab, HintEvent::Cancel);
             return false;
         }
-        if !key.pressed {
-            return true;
-        }
-        let event = match &key.unmodified {
-            Key::Named(NamedKey::Escape) => HintEvent::Cancel,
-            Key::Named(NamedKey::Backspace) => HintEvent::Backspace,
-            Key::Character(c) => match c.chars().next() {
-                Some(ch) => HintEvent::Key(ch.to_ascii_lowercase(), key.modifiers.keys.shift_key()),
-                None => return true,
-            },
-            // Modifiers and the rest: kept from the page while the labels show.
-            _ => return true,
+        let m = key.modifiers.keys;
+        let chord = m.control_key() || m.alt_key() || m.super_key();
+        let hint_key = match &key.unmodified {
+            Key::Named(NamedKey::Escape) => Some(HintKey::Escape),
+            Key::Named(NamedKey::Backspace) => Some(HintKey::Backspace),
+            Key::Character(c) => c.chars().next().map(HintKey::Char),
+            _ => None,
         };
-        self.hint_event(tab, event);
+        // Modifiers and the rest: kept from the page while the labels show, unless a chord.
+        let Some(hint_key) = hint_key else {
+            return !chord;
+        };
+        let Some(event) = hints::key_event(hint_key, chord, m.shift_key()) else {
+            return false;
+        };
+        if key.pressed {
+            self.hint_event(tab, event);
+        }
         true
     }
 
     /// `--smoke builtins` types a label as the keys would.
     pub(crate) fn hint_typed(&mut self, ch: char, shift: bool) {
-        if let Some(tab) = self.builtins.hints_tab {
+        if let Some(tab) = self.hints_tab() {
             self.hint_event(tab, HintEvent::Key(ch, shift));
         }
     }
 
     /// The page scrolled under the labels: they no longer sit on their targets.
     pub(super) fn hints_scrolled(&mut self) {
-        if let Some(tab) = self.builtins.hints_tab {
+        if let Some(tab) = self.hints_tab() {
             self.hint_event(tab, HintEvent::Cancel);
         }
     }
 
     // ----- screenshots
 
+    /// The tab a screenshot is in flight of.
+    fn shot_tab(&self) -> Option<TabId> {
+        self.builtins.shot.map(|(t, _)| t)
+    }
+
+    fn shot_state(&self) -> Shot {
+        self.builtins.shot.map(|(_, s)| s).unwrap_or_default()
+    }
+
     fn shot_event(&mut self, tab: TabId, event: ShotEvent) {
         // One screenshot at a time, of the page it started on.
-        let tab = self.builtins.shot_tab.unwrap_or(tab);
-        let (next, effects) = shot::transition(self.builtins.shot, event);
-        self.builtins.shot = next;
-        self.builtins.shot_tab = (next != Shot::Idle).then_some(tab);
+        let (tab, state) = self.builtins.shot.unwrap_or((tab, Shot::Idle));
+        let (next, effects) = shot::transition(state, event);
+        self.builtins.shot = (next != Shot::Idle).then_some((tab, next));
         for effect in effects {
             match effect {
                 ShotEffect::ShowOverlay | ShotEffect::HideOverlay => self.redraw_builtins(),
@@ -601,16 +624,30 @@ impl Host {
         }
     }
 
-    /// The overlay's drag, from corner `a` to corner `b` (logical px in the content area).
-    pub(crate) fn shot_picked(&mut self, a: (f32, f32), b: (f32, f32)) {
-        let (Some(window), Some(tab)) = (self.window.upgrade(), self.model.visible_tab()) else {
-            return;
-        };
-        let origin = self.focus_origin(&window);
-        let (x0, y0) = (
+    /// Where the visible pane's page starts in the content area, logical px.
+    fn content_origin(&self, window: &AppWindow) -> (f32, f32) {
+        let origin = self.focus_origin(window);
+        (
             origin.0 - window.get_content_x(),
             origin.1 - window.get_content_y(),
-        );
+        )
+    }
+
+    /// The overlay's drag, from corner `a` to corner `b` (logical px in the content area). The
+    /// overlay sits over the visible page: if that is no longer the page it was opened on, the
+    /// pick is cancelled.
+    pub(crate) fn shot_picked(&mut self, a: (f32, f32), b: (f32, f32)) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let Some(tab) = self.shot_tab() else {
+            return;
+        };
+        if self.model.visible_tab() != Some(tab) {
+            self.shot_event(tab, ShotEvent::Cancel);
+            return;
+        }
+        let (x0, y0) = self.content_origin(&window);
         let scale = window.window().scale_factor();
         let size = self.pane_layout(&window, tab).size;
         let view = (
@@ -637,7 +674,7 @@ impl Host {
     }
 
     pub(crate) fn shot_cancelled(&mut self) {
-        if let Some(tab) = self.builtins.shot_tab.or(self.model.visible_tab()) {
+        if let Some(tab) = self.shot_tab().or(self.model.visible_tab()) {
             self.shot_event(tab, ShotEvent::Cancel);
         }
     }
@@ -673,8 +710,12 @@ impl Host {
             reader: tab
                 .and_then(|t| self.builtins.reader.get(&t).copied())
                 .unwrap_or_default(),
-            hints: self.builtins.hints.clone(),
-            theme_replies: self.builtins.theme_replies,
+            hints: self
+                .builtins
+                .hints
+                .as_ref()
+                .map(|(_, h)| h.clone())
+                .unwrap_or_default(),
             scale,
             view,
         }
@@ -718,9 +759,7 @@ impl Host {
                     let Some(window) = self.window.upgrade() else {
                         continue;
                     };
-                    let origin = self.focus_origin(&window);
-                    let x = origin.0 - window.get_content_x();
-                    let y = origin.1 - window.get_content_y();
+                    let (x, y) = self.content_origin(&window);
                     self.shot_picked((a.0 + x, a.1 + y), (b.0 + x, b.1 + y));
                 }
                 smoke::Action::Pass(what) => {
@@ -749,13 +788,12 @@ impl Host {
         window.set_reader_available(reader.available());
         window.set_reader_on(reader == Reader::On);
         let p = self.builtins.reader_prefs;
-        window.set_reader_size(i32::try_from(p.size).unwrap_or(18));
+        window.set_reader_size(i32::try_from(p.size).unwrap_or(i32::MAX));
         window.set_reader_width(p.width as i32);
         window.set_reader_font(p.font as i32);
         window.set_reader_theme(p.theme as i32);
-        window.set_shot_picking(self.builtins.shot == Shot::Picking);
-        let origin = self.focus_origin(window);
-        let x = origin.0 - window.get_content_x();
+        window.set_shot_picking(self.shot_state() == Shot::Picking);
+        let (x, _) = self.content_origin(window);
         let width = tab.map_or(0.0, |t| {
             self.pane_layout(window, t).size.width as f32 / window.window().scale_factor()
         });
