@@ -91,6 +91,9 @@ mod cef_input;
 mod handlers;
 #[cfg(feature = "cef-runtime")]
 mod drag;
+// wubble change, see `WUBBLE_CHANGES.md`.
+#[cfg(feature = "cef-runtime")]
+mod keyboard;
 #[cfg(feature = "cef-runtime")]
 mod profile;
 #[cfg(feature = "cef-runtime")]

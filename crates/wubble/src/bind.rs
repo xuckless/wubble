@@ -58,7 +58,7 @@ pub fn render_bar(window: &AppWindow, rows: &[BarRow]) {
                 kind: r.kind,
                 title: r.title.as_str().into(),
                 subtitle: r.subtitle.as_str().into(),
-                shortcut: "".into(),
+                shortcut: r.shortcut.as_str().into(),
             })
             .collect(),
     ));

@@ -101,6 +101,18 @@ impl Store {
         Ok(Some(visit_id))
     }
 
+    /// Set the stored title of an already recorded `url`, without counting a visit. An empty
+    /// title (pages report one while loading) and a URL never recorded change nothing.
+    pub async fn update_title(&mut self, url: &str, title: &str) -> Result<()> {
+        if title.is_empty() {
+            return Ok(());
+        }
+        self.conn
+            .execute("UPDATE urls SET title = ?2 WHERE url = ?1", (url, title))
+            .await?;
+        Ok(())
+    }
+
     /// Command-bar history suggestions for `prefix`, best first. An empty prefix returns nothing.
     pub async fn query_history(
         &self,
@@ -311,6 +323,31 @@ mod tests {
                 .unwrap();
             assert_eq!(urls(&s, "a.com/a_", 10).await, ["https://a.com/a_b"]);
             assert_eq!(urls(&s, "a.com/50%", 10).await, ["https://a.com/50%25"]);
+        });
+    }
+
+    #[test]
+    fn update_title_changes_only_the_title() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            s.record_visit("https://a.com/", "", 10, Transition::Typed)
+                .await
+                .unwrap();
+            s.update_title("https://a.com/", "A").await.unwrap();
+            s.update_title("https://a.com/", "").await.unwrap();
+            s.update_title("https://never.com/", "N").await.unwrap();
+            let hits = s.query_history("a.com", 20, 10).await.unwrap();
+            assert_eq!(
+                hits,
+                vec![HistoryHit {
+                    url: "https://a.com/".into(),
+                    title: "A".into(),
+                    visit_count: 1,
+                    typed_count: 1,
+                    last_visit_ms: 10,
+                }]
+            );
+            assert!(s.query_history("never", 20, 10).await.unwrap().is_empty());
         });
     }
 }

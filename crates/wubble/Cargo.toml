@@ -14,3 +14,10 @@ wubble-gfx.workspace = true
 wubble-ui.workspace = true
 slint.workspace = true
 clap.workspace = true
+wubble-store.workspace = true
+# Drives the store's async methods on its own thread; already in Cargo.lock
+# through wubble-store's tests.
+pollster = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

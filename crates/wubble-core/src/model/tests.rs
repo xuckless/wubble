@@ -1261,3 +1261,50 @@ fn from_parts_rejects_invalid_parts() {
     );
     assert!(r.is_err(), "unknown active space");
 }
+
+#[test]
+fn cycle_wraps_and_handles_missing_and_empty() {
+    let items = [1, 2, 3];
+    assert_eq!(cycle(&items, Some(1), 1), Some(2));
+    assert_eq!(cycle(&items, Some(3), 1), Some(1));
+    assert_eq!(cycle(&items, Some(1), -1), Some(3));
+    assert_eq!(cycle(&items, Some(2), 4), Some(3));
+    assert_eq!(cycle(&items, None, 1), Some(1));
+    assert_eq!(cycle(&items, Some(9), -1), Some(3));
+    assert_eq!(cycle::<i32>(&[], Some(1), 1), None);
+}
+
+#[test]
+fn tab_order_helpers_follow_the_sidebar_order() {
+    let (m, ids) = with_tabs(3);
+    // Pinning moves the last tab to the front of the order.
+    let (m, _) = run(m, Command::PinTab(ids[2]));
+    let (m, _) = run(m, Command::ActivateTab(ids[2]));
+    assert_eq!(m.order(s0()), vec![ids[2], ids[0], ids[1]]);
+    assert_eq!(m.tab_step(1), Some(ids[0]));
+    assert_eq!(m.tab_step(-1), Some(ids[1]), "wraps back to the end");
+    assert_eq!(m.nth_tab(0), Some(ids[2]));
+    assert_eq!(m.nth_tab(2), Some(ids[1]));
+    assert_eq!(m.nth_tab(3), None);
+    assert_eq!(m.last_tab(), Some(ids[1]));
+}
+
+#[test]
+fn tab_order_helpers_on_an_empty_space() {
+    let m = Model::new();
+    assert_eq!(m.tab_step(1), None);
+    assert_eq!(m.nth_tab(0), None);
+    assert_eq!(m.last_tab(), None);
+}
+
+#[test]
+fn space_helpers_wrap() {
+    let (m, s1) = add_space(Model::new(), D);
+    assert_eq!(m.space_step(1), Some(s1));
+    assert_eq!(m.space_step(-1), Some(s1));
+    let (m, _) = run(m, Command::SwitchSpace(s1));
+    assert_eq!(m.space_step(1), Some(s0()));
+    assert_eq!(m.nth_space(0), Some(s0()));
+    assert_eq!(m.nth_space(1), Some(s1));
+    assert_eq!(m.nth_space(2), None);
+}

@@ -373,6 +373,11 @@ cef::wrap_client! {
             Some(self.display_handler.clone())
         }
 
+        // wubble change: unhandled keys for the host's page-first shortcuts.
+        fn keyboard_handler(&self) -> Option<cef::KeyboardHandler> {
+            Some(crate::keyboard::WeldKeyboardHandler::build(self.events.clone()))
+        }
+
         fn on_process_message_received(
             &self,
             _browser: Option<&mut cef::Browser>,

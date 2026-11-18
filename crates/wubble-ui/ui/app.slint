@@ -161,8 +161,6 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
-    // Ctrl+W: close the visible tab.
-    callback close-tab-requested();
 
     public function request-new-tab() {
         root.command-origin = sidebar.new-tab-origin;
@@ -229,35 +227,9 @@ export component AppWindow inherits Window {
         enabled: !root.full-screen;
     }
 
+    // Shortcuts are routed in Rust (wubble `input::key_route`, the
+    // `wubble_core::keys` table), not here.
     root-keys := FocusScope {
-        KeyBinding {
-            keys: @keys(Control + T);
-            activated => {
-                root.request-new-tab();
-            }
-        }
-        KeyBinding {
-            keys: @keys(Control + L);
-            activated => {
-                root.request-address-focus();
-            }
-        }
-        KeyBinding {
-            keys: @keys(Control + W);
-            activated => {
-                root.close-tab-requested();
-            }
-        }
-        // Action::ToggleSidebar (wubble-core keys.rs, Ctrl+Alt+Z; Slint reads Control as Command
-        // on macOS). The way back from a seam-hidden sidebar besides the peek.
-        KeyBinding {
-            keys: @keys(Control + Alt + Z);
-            activated => {
-                root.toggle-sidebar();
-            }
-        }
-
-        // The web view: beside the sidebar once it has width, else the whole inset window.
         content := Rectangle {
             x: Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px);
             y: Chrome.inset;

@@ -1,21 +1,26 @@
 //! The command bar's rows and what choosing one does, as pure functions over
-//! the model.
+//! `wubble_core::omnibox` (classify and rank) and the keymap.
 //!
-//! Slint's bar fires `result-chosen` only for an existing row, so a
-//! non-empty query always gets a first "go to" or "search" row: Enter on
+//! Slint's bar fires `result-chosen` only for an existing row; `omnibox::rank`
+//! always puts the classified intent ("open" or "search") first, so Enter on
 //! free text chooses it.
 
+use wubble_core::action::Action;
+use wubble_core::keys::Keymap;
 use wubble_core::model::{Command, Model};
+use wubble_core::omnibox::{
+    self, Candidates, HistoryEntry, Kind, OmniResult, OpenTab, SearchEngine, Target,
+};
 use wubble_core::tab::TabId;
-use wubble_core::url;
+use wubble_store::HistoryHit;
 use wubble_ui::CommandKind;
 
 use crate::shell::tab_title;
 
-/// Search engine for text that is not an address: its name and query URL.
-/// Fixed until the first-run choice exists (TODO.md "Search").
-const SEARCH_NAME: &str = "DuckDuckGo";
-const SEARCH_URL: &str = "https://duckduckgo.com/?q=";
+/// Rows the bar shows at most.
+pub const MAX_ROWS: usize = 12;
+/// History hits asked of the store per query.
+pub const HISTORY_HITS: usize = 20;
 
 /// What Enter on the query does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,11 +31,13 @@ pub enum BarMode {
     Navigate(TabId),
 }
 
+/// What a row stands for: an omnibox result, or (first run only) a search
+/// engine to choose. The engine choice is the bar's own row, not a global
+/// `Action`: it exists only until a choice is stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BarAction {
-    OpenUrl(String),
-    Navigate { tab: TabId, url: String },
-    Activate(TabId),
+pub enum RowTarget {
+    Omni(Target),
+    PickEngine(SearchEngine),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,142 +45,185 @@ pub struct BarRow {
     pub kind: CommandKind,
     pub title: String,
     pub subtitle: String,
-    pub action: BarAction,
+    /// The action's shortcut, from the keymap; empty for other rows.
+    pub shortcut: String,
+    pub target: RowTarget,
 }
 
-/// What typed text stands for. Both carry the URL to load.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Resolved {
-    Address(String),
-    Search(String),
+/// Everything the rows are ranked over.
+pub struct BarInputs<'a> {
+    pub tabs: &'a [OpenTab],
+    pub history: &'a [HistoryEntry],
+    /// `None` until the first-run choice.
+    pub engine: Option<SearchEngine>,
+    pub keymap: &'a Keymap,
+    /// Live engine suggestions, already fetched (always empty for now, see
+    /// [`live_suggestions`]).
+    pub suggestions: &'a [String],
+    pub now_ms: i64,
 }
 
-impl Resolved {
-    pub fn url(&self) -> &str {
-        match self {
-            Self::Address(url) | Self::Search(url) => url,
-        }
-    }
+/// What choosing a row does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Choice {
+    Model(Command),
+    Perform(Action),
+    /// Store the search engine (first run).
+    SetEngine(SearchEngine),
 }
 
-/// The one input classifier (a minimal stand-in until the core lane's real
-/// one): text with a scheme, a dot or `localhost` and no spaces is an
-/// address, anything else is searched.
-pub fn resolve(input: &str) -> Resolved {
-    let text = input.trim();
-    let as_url = url::from_cli_arg(text);
-    let has_scheme = as_url == text;
-    let lower = text.to_ascii_lowercase();
-    let host_like = text.contains('.')
-        || lower == "localhost"
-        || lower.starts_with("localhost:")
-        || lower.starts_with("localhost/");
-    if !text.is_empty() && !text.contains(char::is_whitespace) && (has_scheme || host_like) {
-        Resolved::Address(as_url)
-    } else {
-        let mut search = String::from(SEARCH_URL);
-        url::percent_encode_into(text, &mut search);
-        Resolved::Search(search)
-    }
-}
-
-/// The rows for `query`: the go/search row, then the open tabs whose title
-/// or URL contains it (any case), active Space first. Nothing for a blank query.
-pub fn bar_rows(model: &Model, query: &str, mode: BarMode) -> Vec<BarRow> {
-    let text = query.trim();
-    if text.is_empty() {
-        return vec![];
-    }
-    let resolved = resolve(text);
-    let action = match mode {
-        BarMode::NewTab => BarAction::OpenUrl(resolved.url().into()),
-        BarMode::Navigate(tab) => BarAction::Navigate {
-            tab,
-            url: resolved.url().into(),
-        },
-    };
-    let first = match &resolved {
-        Resolved::Address(url) => BarRow {
-            kind: CommandKind::Action,
-            title: url.clone(),
-            subtitle: "Go to address".into(),
-            action,
-        },
-        Resolved::Search(_) => BarRow {
-            kind: CommandKind::Search,
-            title: text.into(),
-            subtitle: format!("Search {SEARCH_NAME}"),
-            action,
-        },
-    };
-    let needle = text.to_lowercase();
+/// The open tabs, active Space first, each Space in sidebar order.
+pub fn open_tabs(model: &Model) -> Vec<OpenTab> {
     let mut spaces: Vec<_> = model.spaces.iter().map(|s| s.id).collect();
     spaces.sort_by_key(|&s| s != model.active_space);
-    let tabs = spaces
+    spaces
         .into_iter()
         .flat_map(|s| model.order(s))
         .filter_map(|id| model.tabs.get(&id))
-        .filter(|t| {
-            t.title.to_lowercase().contains(&needle) || t.url.to_lowercase().contains(&needle)
-        })
-        .map(|t| BarRow {
-            kind: CommandKind::OpenTab,
+        .map(|t| OpenTab {
+            id: t.id,
             title: tab_title(t),
-            subtitle: url::address_parts(&t.url).0.into(),
-            action: BarAction::Activate(t.id),
-        });
-    std::iter::once(first).chain(tabs).collect()
+            url: t.url.clone(),
+        })
+        .collect()
 }
 
-/// The model command a chosen row stands for.
-pub fn action_command(action: BarAction) -> Command {
-    match action {
-        BarAction::OpenUrl(url) => Command::NewTab {
+pub fn history_entry(hit: HistoryHit) -> HistoryEntry {
+    let HistoryHit {
+        url,
+        title,
+        visit_count,
+        typed_count,
+        last_visit_ms,
+    } = hit;
+    HistoryEntry {
+        url,
+        title,
+        visit_count,
+        typed_count,
+        last_visit_ms,
+    }
+}
+
+/// The seam for live engine suggestions. Fetching is not implemented: with
+/// the setting on this logs once and the bar keeps to local results.
+// TODO(remote suggestions): fetch `omnibox::suggest_url(engine, query)` off
+// the UI thread (debounced, stale replies dropped) and pass the parsed list
+// as `BarInputs::suggestions`. TODO.md "Suggestion fetch effect".
+pub fn live_suggestions(enabled: bool, _query: &str) -> Vec<String> {
+    static LOGGED: std::sync::Once = std::sync::Once::new();
+    if enabled {
+        LOGGED.call_once(|| {
+            eprintln!("wubble: live suggestions are on, but fetching is not implemented yet");
+        });
+    }
+    vec![]
+}
+
+fn kind(k: Kind) -> CommandKind {
+    match k {
+        Kind::OpenTab => CommandKind::OpenTab,
+        Kind::History => CommandKind::History,
+        Kind::Bookmark => CommandKind::Bookmark,
+        Kind::Search => CommandKind::Search,
+        Kind::Action => CommandKind::Action,
+    }
+}
+
+fn omni_row(r: OmniResult, keymap: &Keymap) -> BarRow {
+    let shortcut = match r.target {
+        Target::Action(a) => keymap
+            .shortcut_for(a)
+            .map(|c| c.to_string())
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    BarRow {
+        kind: kind(r.kind),
+        title: r.title,
+        subtitle: r.subtitle,
+        shortcut,
+        target: RowTarget::Omni(r.target),
+    }
+}
+
+/// The first-run rows: one per engine in `omnibox::ENGINES`.
+fn engine_rows() -> impl Iterator<Item = BarRow> {
+    omnibox::ENGINES.iter().map(|e| BarRow {
+        kind: CommandKind::Action,
+        title: format!("Search with {}", e.name),
+        subtitle: "Choose the search engine".into(),
+        shortcut: String::new(),
+        target: RowTarget::PickEngine(e.engine),
+    })
+}
+
+/// The rows for `query`. Once an engine is chosen: `omnibox::rank` (nothing
+/// for a blank query). Before: the engine choice instead of every search
+/// row, after the "open" row if the query is an address.
+pub fn bar_rows(inputs: &BarInputs, query: &str) -> Vec<BarRow> {
+    let cands = Candidates {
+        tabs: inputs.tabs,
+        history: inputs.history,
+        bookmarks: &[],
+        suggestions: inputs.suggestions,
+    };
+    // Before the choice the engine only names the search rows, which are
+    // replaced below.
+    let ranking_engine = inputs.engine.unwrap_or(SearchEngine::DuckDuckGo);
+    let ranked = omnibox::rank(query, ranking_engine, &cands, inputs.now_ms, MAX_ROWS);
+    let rows = ranked.into_iter().map(|r| omni_row(r, inputs.keymap));
+    if inputs.engine.is_some() {
+        return rows.collect();
+    }
+    let mut rows: Vec<BarRow> = rows
+        .filter(|r| !matches!(r.target, RowTarget::Omni(Target::Search(_))))
+        .collect();
+    let at = usize::from(matches!(omnibox::classify(query), omnibox::Intent::Url(_)));
+    let at = at.min(rows.len());
+    rows.splice(at..at, engine_rows());
+    rows.truncate(MAX_ROWS);
+    rows
+}
+
+/// What choosing `target` in a bar opened in `mode` does. A search needs an
+/// engine: without one it is `None` (the first-run rows replace it).
+pub fn target_command(
+    target: &RowTarget,
+    mode: BarMode,
+    engine: Option<SearchEngine>,
+) -> Option<Choice> {
+    let load = |url: String| match mode {
+        BarMode::NewTab => Command::NewTab {
             url,
             container: None,
             opener: None,
         },
-        BarAction::Navigate { tab, url } => Command::Navigate { tab, url },
-        BarAction::Activate(tab) => Command::ActivateTab(tab),
-    }
+        BarMode::Navigate(tab) => Command::Navigate { tab, url },
+    };
+    Some(match target {
+        RowTarget::Omni(Target::Url(url)) => Choice::Model(load(url.clone())),
+        RowTarget::Omni(Target::Search(q)) => {
+            Choice::Model(load(omnibox::fill(engine?.info().search, q)))
+        }
+        RowTarget::Omni(Target::OpenTab(tab)) => Choice::Model(Command::ActivateTab(*tab)),
+        RowTarget::Omni(Target::Action(a)) => Choice::Perform(*a),
+        RowTarget::PickEngine(e) => Choice::SetEngine(*e),
+    })
+}
+
+/// Whether choosing `target` loads something the user typed or picked from
+/// the bar: such a load is a typed visit in history.
+pub fn is_typed(target: &RowTarget) -> bool {
+    matches!(target, RowTarget::Omni(Target::Url(_) | Target::Search(_)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wubble_core::keys::Platform;
     use wubble_core::model::apply;
     use wubble_core::space::{ContainerId, Rgb, SpaceId};
-
-    fn address(url: &str) -> Resolved {
-        Resolved::Address(url.into())
-    }
-
-    fn search(encoded: &str) -> Resolved {
-        Resolved::Search(format!("{SEARCH_URL}{encoded}"))
-    }
-
-    #[test]
-    fn resolve_tells_addresses_from_searches() {
-        let cases = [
-            ("example.com", address("https://example.com")),
-            (
-                "  example.com/a?b=1  ",
-                address("https://example.com/a?b=1"),
-            ),
-            ("https://x", address("https://x")),
-            ("about:blank", address("about:blank")),
-            ("localhost:3000", address("https://localhost:3000")),
-            ("localhost", address("https://localhost")),
-            ("rust lifetimes", search("rust%20lifetimes")),
-            ("hello", search("hello")),
-            ("what is example.com", search("what%20is%20example.com")),
-            ("über", search("%C3%BCber")),
-            ("a?&#b", search("a%3F%26%23b")),
-        ];
-        for (input, want) in cases {
-            assert_eq!(resolve(input), want, "{input}");
-        }
-    }
 
     fn tab(m: Model, url: &str, title: &str) -> (Model, TabId) {
         let (m, _) = apply(
@@ -195,55 +245,30 @@ mod tests {
         (m, t)
     }
 
-    fn actions(rows: &[BarRow]) -> Vec<BarAction> {
-        rows.iter().map(|r| r.action.clone()).collect()
+    fn rows(engine: Option<SearchEngine>, tabs: &[OpenTab], query: &str) -> Vec<BarRow> {
+        let keymap = Keymap::defaults(Platform::Linux);
+        bar_rows(
+            &BarInputs {
+                tabs,
+                history: &[],
+                engine,
+                keymap: &keymap,
+                suggestions: &[],
+                now_ms: 0,
+            },
+            query,
+        )
     }
 
-    #[test]
-    fn a_blank_query_has_no_rows() {
-        let (m, _) = tab(
-            Model::new(std::time::Instant::now()),
-            "https://a.test/",
-            "A",
-        );
-        assert_eq!(bar_rows(&m, "", BarMode::NewTab), vec![]);
-        assert_eq!(bar_rows(&m, "   ", BarMode::NewTab), vec![]);
+    fn targets(rows: &[BarRow]) -> Vec<RowTarget> {
+        rows.iter().map(|r| r.target.clone()).collect()
     }
 
-    #[test]
-    fn the_first_row_opens_or_navigates() {
-        let (m, t) = tab(
-            Model::new(std::time::Instant::now()),
-            "https://a.test/",
-            "A",
-        );
-        let rows = bar_rows(&m, "example.com", BarMode::NewTab);
-        assert_eq!(rows[0].kind, CommandKind::Action);
-        assert_eq!(
-            rows[0].action,
-            BarAction::OpenUrl("https://example.com".into())
-        );
-        let rows = bar_rows(&m, "cats", BarMode::Navigate(t));
-        assert_eq!(rows[0].kind, CommandKind::Search);
-        assert_eq!(rows[0].title, "cats");
-        assert_eq!(
-            rows[0].action,
-            BarAction::Navigate {
-                tab: t,
-                url: format!("{SEARCH_URL}cats"),
-            }
-        );
-    }
+    const DDG: Option<SearchEngine> = Some(SearchEngine::DuckDuckGo);
 
     #[test]
-    fn open_tabs_match_title_or_url_active_space_first() {
-        let (m, a) = tab(
-            Model::new(std::time::Instant::now()),
-            "https://mail.test/",
-            "Inbox",
-        );
-        let (m, b) = tab(m, "https://docs.test/", "Docs about MAIL");
-        let (m, _) = tab(m, "https://other.test/", "Other");
+    fn open_tabs_list_the_active_space_first() {
+        let (m, a) = tab(Model::new(std::time::Instant::now()), "https://mail.test/", "Inbox");
         let (m, _) = apply(
             m,
             Command::NewSpace {
@@ -253,45 +278,206 @@ mod tests {
             },
         );
         let (m, _) = apply(m, Command::SwitchSpace(SpaceId(1)));
-        let (m, w) = tab(m, "https://w.test/mail", "W");
-        let rows = bar_rows(&m, "Mail", BarMode::NewTab);
-        assert_eq!(
-            actions(&rows[1..]),
-            vec![
-                BarAction::Activate(w),
-                BarAction::Activate(a),
-                BarAction::Activate(b),
-            ]
-        );
-        assert_eq!(rows[1].kind, CommandKind::OpenTab);
-        assert_eq!(rows[2].title, "Inbox");
-        assert_eq!(rows[2].subtitle, "mail.test");
+        let (m, w) = tab(m, "https://w.test/", "");
+        let tabs = open_tabs(&m);
+        assert_eq!(tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [w, a]);
+        assert_eq!(tabs[0].title, "w.test", "an untitled tab shows its host");
     }
 
     #[test]
-    fn actions_map_to_model_commands() {
-        let t = TabId(4);
+    fn the_first_row_is_the_intent() {
+        let rows_for = |q| rows(DDG, &[], q);
+        let r = rows_for("example.com");
         assert_eq!(
-            action_command(BarAction::OpenUrl("u".into())),
-            Command::NewTab {
-                url: "u".into(),
+            r[0].target,
+            RowTarget::Omni(Target::Url("https://example.com/".into()))
+        );
+        let r = rows_for("cats");
+        assert_eq!(r[0].kind, CommandKind::Search);
+        assert_eq!(r[0].target, RowTarget::Omni(Target::Search("cats".into())));
+        assert!(rows_for("").is_empty());
+    }
+
+    #[test]
+    fn tabs_and_actions_are_ranked_with_shortcuts() {
+        let (m, t) = tab(Model::new(std::time::Instant::now()), "https://reload.test/", "Reloaded news");
+        let r = rows(DDG, &open_tabs(&m), "reload");
+        let found = targets(&r);
+        assert!(
+            found.contains(&RowTarget::Omni(Target::OpenTab(t))),
+            "{r:?}"
+        );
+        let action = r
+            .iter()
+            .find(|r| r.target == RowTarget::Omni(Target::Action(Action::Reload)))
+            .expect("the Reload action");
+        assert_eq!(action.kind, CommandKind::Action);
+        assert_eq!(action.shortcut, "Ctrl+R");
+        let tab_row = r
+            .iter()
+            .find(|r| r.target == RowTarget::Omni(Target::OpenTab(t)))
+            .unwrap();
+        assert_eq!(tab_row.shortcut, "");
+    }
+
+    #[test]
+    fn the_first_run_offers_the_two_engines() {
+        let picks = |r: &[BarRow]| -> Vec<RowTarget> {
+            r.iter()
+                .filter(|r| matches!(r.target, RowTarget::PickEngine(_)))
+                .map(|r| r.target.clone())
+                .collect()
+        };
+        let both = vec![
+            RowTarget::PickEngine(SearchEngine::Google),
+            RowTarget::PickEngine(SearchEngine::DuckDuckGo),
+        ];
+        // A blank query and a search: the choice comes first, no search row.
+        assert_eq!(targets(&rows(None, &[], "")), both);
+        let r = rows(None, &[], "cats");
+        assert_eq!(targets(&r[..2]), both);
+        assert!(
+            !targets(&r).contains(&RowTarget::Omni(Target::Search("cats".into()))),
+            "{r:?}"
+        );
+        assert!(r.iter().all(|r| r.kind != CommandKind::Search));
+        // An address still opens first.
+        let r = rows(None, &[], "example.com");
+        assert_eq!(
+            r[0].target,
+            RowTarget::Omni(Target::Url("https://example.com/".into()))
+        );
+        assert_eq!(targets(&r[1..3]), both);
+        // Once chosen, never again.
+        for q in ["", "cats", "example.com"] {
+            assert_eq!(picks(&rows(DDG, &[], q)), vec![], "{q}");
+            assert_eq!(picks(&rows(Some(SearchEngine::Google), &[], q)), vec![]);
+        }
+    }
+
+    #[test]
+    fn live_suggestions_never_change_the_rows() {
+        for enabled in [false, true] {
+            assert_eq!(live_suggestions(enabled, "cats"), Vec::<String>::new());
+        }
+        let off = rows(DDG, &[], "cats");
+        let keymap = Keymap::defaults(Platform::Linux);
+        let on = bar_rows(
+            &BarInputs {
+                tabs: &[],
+                history: &[],
+                engine: DDG,
+                keymap: &keymap,
+                suggestions: &live_suggestions(true, "cats"),
+                now_ms: 0,
+            },
+            "cats",
+        );
+        assert_eq!(on, off);
+    }
+
+    #[test]
+    fn history_rows_open_their_url() {
+        let keymap = Keymap::defaults(Platform::Linux);
+        let history = [history_entry(HistoryHit {
+            url: "https://rust-lang.org/".into(),
+            title: "Rust".into(),
+            visit_count: 3,
+            typed_count: 1,
+            last_visit_ms: 0,
+        })];
+        let r = bar_rows(
+            &BarInputs {
+                tabs: &[],
+                history: &history,
+                engine: DDG,
+                keymap: &keymap,
+                suggestions: &[],
+                now_ms: 0,
+            },
+            "rust",
+        );
+        let row = r.iter().find(|r| r.kind == CommandKind::History).unwrap();
+        assert_eq!(
+            row.target,
+            RowTarget::Omni(Target::Url("https://rust-lang.org/".into()))
+        );
+    }
+
+    #[test]
+    fn targets_map_to_choices() {
+        let t = TabId(4);
+        let new_tab = |url: &str| {
+            Choice::Model(Command::NewTab {
+                url: url.into(),
                 container: None,
                 opener: None,
-            }
-        );
-        assert_eq!(
-            action_command(BarAction::Navigate {
+            })
+        };
+        let navigate = |url: &str| {
+            Choice::Model(Command::Navigate {
                 tab: t,
-                url: "u".into()
-            }),
-            Command::Navigate {
-                tab: t,
-                url: "u".into()
-            }
-        );
-        assert_eq!(
-            action_command(BarAction::Activate(t)),
-            Command::ActivateTab(t)
-        );
+                url: url.into(),
+            })
+        };
+        let url = RowTarget::Omni(Target::Url("https://a.test/".into()));
+        let search = RowTarget::Omni(Target::Search("a b".into()));
+        let google = Some(SearchEngine::Google);
+        let cases = [
+            (&url, BarMode::NewTab, DDG, Some(new_tab("https://a.test/"))),
+            (
+                &url,
+                BarMode::Navigate(t),
+                None,
+                Some(navigate("https://a.test/")),
+            ),
+            (
+                &search,
+                BarMode::NewTab,
+                google,
+                Some(new_tab("https://www.google.com/search?q=a%20b")),
+            ),
+            (
+                &search,
+                BarMode::Navigate(t),
+                DDG,
+                Some(navigate("https://duckduckgo.com/?q=a%20b")),
+            ),
+            (&search, BarMode::NewTab, None, None),
+            (
+                &RowTarget::Omni(Target::OpenTab(TabId(9))),
+                BarMode::Navigate(t),
+                DDG,
+                Some(Choice::Model(Command::ActivateTab(TabId(9)))),
+            ),
+            (
+                &RowTarget::Omni(Target::Action(Action::ReopenClosedTab)),
+                BarMode::NewTab,
+                DDG,
+                Some(Choice::Perform(Action::ReopenClosedTab)),
+            ),
+            (
+                &RowTarget::PickEngine(SearchEngine::Google),
+                BarMode::NewTab,
+                None,
+                Some(Choice::SetEngine(SearchEngine::Google)),
+            ),
+        ];
+        for (target, mode, engine, want) in cases {
+            assert_eq!(
+                target_command(target, mode, engine),
+                want,
+                "{target:?} {mode:?} {engine:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_loads_from_the_bar_are_typed() {
+        assert!(is_typed(&RowTarget::Omni(Target::Url("u".into()))));
+        assert!(is_typed(&RowTarget::Omni(Target::Search("q".into()))));
+        assert!(!is_typed(&RowTarget::Omni(Target::OpenTab(TabId(1)))));
+        assert!(!is_typed(&RowTarget::Omni(Target::Action(Action::Reload))));
+        assert!(!is_typed(&RowTarget::PickEngine(SearchEngine::Google)));
     }
 }

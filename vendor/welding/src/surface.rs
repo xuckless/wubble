@@ -98,6 +98,13 @@ pub enum CefSurfaceEvent {
     /// CEF has destroyed the browser (`OnBeforeClose`); no further callbacks
     /// follow for it. wubble change, see `WUBBLE_CHANGES.md`.
     BrowserClosed,
+    /// A key-down the page did not handle (CEF `OnKeyEvent`), as CEF reports
+    /// it: its Windows key code and `EVENTFLAG_*` modifiers. wubble change,
+    /// see `WUBBLE_CHANGES.md`.
+    KeyUnhandled {
+        windows_key_code: i32,
+        modifiers: u32,
+    },
 }
 
 /// The strings of a list CEF passed to a callback, which still owns it.
@@ -167,6 +174,10 @@ mod web_event_tests {
         }));
         events.push(CefSurfaceEvent::Navigation(NavigationEvent::RequestsDismissed { ids: vec![2] }));
         events.push(CefSurfaceEvent::BrowserClosed);
+        events.push(CefSurfaceEvent::KeyUnhandled {
+            windows_key_code: 0x52,
+            modifiers: 1 << 2,
+        });
 
         assert!(matches!(
             events.poll(),
@@ -215,6 +226,13 @@ mod web_event_tests {
                 if ids == [2]
         ));
         assert!(matches!(events.poll(), Some(CefSurfaceEvent::BrowserClosed)));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::KeyUnhandled {
+                windows_key_code: 0x52,
+                modifiers: 4,
+            })
+        ));
         assert!(events.poll().is_none());
     }
 

@@ -33,7 +33,7 @@ use crate::download::{self, Download, DownloadEffect, DownloadInput};
 use crate::drag::{self, DragSource, DragSourceInput};
 use crate::find::{self, Find, FindEffect, FindInput};
 use crate::input::{
-    self, CefKey, ClickTracker, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
+    self, CefKey, ClickTracker, KeyId, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
 };
 use crate::media::{self, Fullscreen, FullscreenInput, MediaEffect};
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
@@ -262,6 +262,11 @@ impl View {
         self.apply_nav(NavInput::Reload);
     }
 
+    /// Reloads without the cache (CEF `ReloadIgnoreCache`).
+    pub fn hard_reload(&mut self) {
+        self.apply_nav(NavInput::HardReload);
+    }
+
     /// Ignored unless loading.
     pub fn stop(&mut self) {
         self.apply_nav(NavInput::Stop);
@@ -446,6 +451,13 @@ impl View {
                         self.apply_route(routed, mode);
                     }
                 }
+                CefSurfaceEvent::KeyUnhandled {
+                    windows_key_code,
+                    modifiers,
+                } => self.events.push(WebEvent::KeyUnhandled(KeyId::reported(
+                    windows_key_code,
+                    modifiers,
+                ))),
                 _ => {}
             }
         }
@@ -940,6 +952,14 @@ impl View {
             NavEffect::Back => self.producer.go_back(),
             NavEffect::Forward => self.producer.go_forward(),
             NavEffect::Reload => self.producer.reload(),
+            // welding's producer has no ignore-cache reload; CEF's browser does.
+            NavEffect::HardReload => {
+                if let Some(browser) = cef::browser_host_get_browser_by_identifier(self.browser_id)
+                {
+                    browser.reload_ignore_cache();
+                }
+                Ok(())
+            }
             NavEffect::Stop => self.producer.stop(),
             NavEffect::Repaint => self.producer.request_repaint(),
         };

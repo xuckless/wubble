@@ -282,6 +282,36 @@ impl From<CefKey> for cef::KeyEvent {
     }
 }
 
+/// A key-down sent to the page, as CEF's unhandled-key report names it
+/// (`WebEvent::KeyUnhandled`): its Windows key code and the Shift, Ctrl, Alt
+/// and Cmd flags. Side, keypad, repeat and lock flags are left out, since CEF
+/// need not report them as they were sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyId {
+    windows_key_code: i32,
+    modifiers: u32,
+}
+
+impl KeyId {
+    const MODIFIERS: u32 = flag::SHIFT | flag::CONTROL | flag::ALT | flag::COMMAND;
+
+    /// The key-down `key` sends; `None` for a release.
+    pub fn of(key: &KeyInput) -> Option<Self> {
+        let down = key_events(key)
+            .into_iter()
+            .find(|e| e.kind == KeyKind::RawKeyDown)?;
+        Some(Self::reported(down.windows_key_code, down.modifiers))
+    }
+
+    /// From CEF's report (welding `CefSurfaceEvent::KeyUnhandled`).
+    pub(crate) fn reported(windows_key_code: i32, modifiers: u32) -> Self {
+        Self {
+            windows_key_code,
+            modifiers: modifiers & Self::MODIFIERS,
+        }
+    }
+}
+
 /// The CEF events for one key: RAWKEYDOWN then one CHAR per UTF-16 unit of
 /// the text on press (none for keys without text), KEYUP on release. As
 /// cefclient GTK: Enter types `\r`, Ctrl types the control character, Alt
@@ -873,6 +903,29 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn a_reported_key_down_matches_the_one_sent() {
+        let ctrl_r = KeyInput {
+            modifiers: mods(ModifiersState::CONTROL),
+            location: KeyLocation::Left,
+            ..key(KeyCode::KeyR, ch("r"), None)
+        };
+        let id = KeyId::of(&ctrl_r).expect("a press");
+        // CEF may add side and lock flags; they do not matter.
+        assert_eq!(
+            KeyId::reported(0x52, flag::CONTROL | flag::LEFT | flag::REPEAT),
+            id
+        );
+        // Plain R or Ctrl+Shift+R is another key-down.
+        assert_ne!(KeyId::reported(0x52, 0), id);
+        assert_ne!(KeyId::reported(0x52, flag::CONTROL | flag::SHIFT), id);
+        let release = KeyInput {
+            pressed: false,
+            ..ctrl_r
+        };
+        assert_eq!(KeyId::of(&release), None);
     }
 
     #[test]

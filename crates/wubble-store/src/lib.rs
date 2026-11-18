@@ -19,7 +19,7 @@ pub use history::{HistoryHit, Transition, is_recordable, url_key};
 pub use migrate::MIGRATIONS;
 pub use settings::{
     BlockerEnabled, BlockerExceptions, CompactMode, KeybindingOverrides, LiveSuggestions,
-    SearchEngine, SearchEngineChoice, Setting, SidebarWidth,
+    SearchEngineChoice, Setting, SidebarWidth,
 };
 
 #[derive(Debug, thiserror::Error)]
