@@ -93,6 +93,16 @@ impl Downloads {
     fn get(&self, id: i64) -> Option<&DownloadEntry> {
         self.list.iter().find(|e| e.id == id)
     }
+
+    /// The downloads folder, when there is one.
+    pub(super) fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
+    /// A running download or print holds `path`.
+    pub(super) fn reserved(&self, path: &Path) -> bool {
+        self.pdfs.contains(path) || self.inflight.values().any(|f| f.path == path)
+    }
 }
 
 impl Host {
@@ -296,7 +306,48 @@ impl Host {
         self.downloads.inflight.retain(|_, f| f.tab != tab);
     }
 
-    fn apply_download(&mut self, id: i64, event: DownloadEvent) {
+    /// A new running entry of the list (a media download), stored and shown; its id.
+    pub(super) fn add_download_entry(&mut self, url: &str, path: &Path, total: Option<u64>) -> i64 {
+        let d = &mut self.downloads;
+        let entry = DownloadEntry {
+            id: d.next_id,
+            url: url.to_owned(),
+            name: file_name(path),
+            path: path.to_path_buf(),
+            received: 0,
+            total,
+            state: DownloadState::Running,
+            started_ms: now_ms(),
+        };
+        d.next_id += 1;
+        self.store.add_download(&entry);
+        let (id, text) = (entry.id, format!("Downloading {}", entry.name));
+        self.downloads.list.insert(0, entry);
+        if let Some(window) = self.window.upgrade() {
+            self.toast(&window, &text);
+            self.render_downloads(&window);
+        }
+        id
+    }
+
+    /// The entry's file moved to `path` (a media download's final name).
+    pub(super) fn set_download_path(&mut self, id: i64, path: &Path) {
+        if let Some(e) = self.downloads.list.iter_mut().find(|e| e.id == id) {
+            e.path = path.to_path_buf();
+            e.name = file_name(path);
+            self.store.update_download(e);
+        }
+    }
+
+    pub(super) fn download_url(&self, id: i64) -> Option<String> {
+        self.downloads.get(id).map(|e| e.url.clone())
+    }
+
+    pub(super) fn forget_download_entry(&mut self, id: i64) {
+        self.forget_download(id);
+    }
+
+    pub(super) fn apply_download(&mut self, id: i64, event: DownloadEvent) {
         let Some(at) = self.downloads.list.iter().position(|e| e.id == id) else {
             return;
         };
@@ -308,6 +359,26 @@ impl Host {
             self.downloads.unsaved.insert(id);
         }
         let running = self.downloads.running(id);
+        // A media download's buttons steer its job, not a CEF download.
+        if self.media.owns(id) {
+            for effect in effects {
+                match effect {
+                    DownloadEffect::Save => {
+                        self.downloads.unsaved.remove(&id);
+                        self.store.update_download(&entry);
+                    }
+                    DownloadEffect::Forget => {
+                        self.media_list_effect(id, DownloadEffect::Forget);
+                        self.forget_download(id);
+                    }
+                    effect => self.media_list_effect(id, effect),
+                }
+            }
+            if let Some(window) = self.window.upgrade() {
+                self.render_downloads(&window);
+            }
+            return;
+        }
         for effect in effects {
             match effect {
                 DownloadEffect::Save => {
@@ -327,6 +398,11 @@ impl Host {
                         DownloadEffect::PauseEngine => view.pause_download(download),
                         DownloadEffect::ResumeEngine => view.resume_download(download),
                         _ => view.cancel_download(download),
+                    }
+                }
+                DownloadEffect::StartAgain if super::media::is_stream_entry(&entry.url) => {
+                    if let Some(window) = self.window.upgrade() {
+                        self.toast(&window, "Open the page again to save this video");
                     }
                 }
                 DownloadEffect::StartAgain => {
@@ -374,6 +450,11 @@ impl Host {
         let items: Vec<DownloadItem> = self.downloads.list.iter().map(item).collect();
         window.set_downloads(super::surfaces::model(items));
     }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
 }
 
 /// One row of the popover.

@@ -172,6 +172,8 @@ pub enum DownloadEvent {
     Finished,
     Interrupted(String),
     Cancelled,
+    /// Ended without a file, for this reason (a media download that cannot be saved).
+    Failed(String),
     /// The engine no longer has this download: the process restarted, or
     /// the view it belonged to closed.
     Lost,
@@ -217,6 +219,7 @@ pub fn transition(
         (_, E::Interrupted(e)) if active => (S::Interrupted(e), vec![Fx::Save]),
         (_, E::Cancelled) if active => (S::Cancelled, vec![Fx::Save]),
         (_, E::Lost) if active => (S::Failed(LOST.into()), vec![Fx::Save]),
+        (_, E::Failed(e)) if active => (S::Failed(e), vec![Fx::Save]),
         (S::Running, E::Pause) => (S::Paused, vec![Fx::PauseEngine, Fx::Save]),
         (S::Paused | S::Interrupted(_), E::Resume | E::Retry) => {
             (S::Running, vec![Fx::ResumeEngine, Fx::Save])
@@ -442,6 +445,7 @@ mod tests {
             Finished,
             Interrupted("net".into()),
             Cancelled,
+            Failed("bad".into()),
             Lost,
             Pause,
             Resume,
@@ -468,6 +472,7 @@ mod tests {
             E::Interrupted(err) if active => (S::Interrupted(err.clone()), vec![Fx::Save]),
             E::Cancelled if active => (S::Cancelled, vec![Fx::Save]),
             E::Lost if active => (S::Failed(LOST.into()), vec![Fx::Save]),
+            E::Failed(err) if active => (S::Failed(err.clone()), vec![Fx::Save]),
             E::Pause if *s == S::Running => (S::Paused, vec![Fx::PauseEngine, Fx::Save]),
             E::Resume | E::Retry if matches!(s, S::Paused | S::Interrupted(_)) => {
                 (S::Running, vec![Fx::ResumeEngine, Fx::Save])

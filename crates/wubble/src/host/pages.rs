@@ -365,7 +365,7 @@ impl Host {
         }
     }
 
-    fn render_pill(&mut self, window: &AppWindow) {
+    pub(super) fn render_pill(&mut self, window: &AppWindow) {
         let tab = self.model.visible_tab();
         let url = tab
             .and_then(|t| self.model.tabs.get(&t))
@@ -380,6 +380,7 @@ impl Host {
         window.set_address_blocker_visible(web && badge.visible);
         window.set_address_blocker_allowed(badge.site_allowed);
         window.set_address_blocked(i32::try_from(badge.count).unwrap_or(i32::MAX));
+        window.set_address_media_visible(web && tab.is_some_and(|t| self.media.has_media(t)));
     }
 
     /// The badge was clicked: the blocker menu opens under it (`x`, `y` in window pixels).

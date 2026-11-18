@@ -32,7 +32,7 @@ use wubble_gfx::{FrameSize, NativeFrame};
 use crate::app::{EngineError, RequestMode};
 use crate::download::{self, Download, DownloadEffect, DownloadInput};
 use crate::drag::{self, DragSource, DragSourceInput};
-use crate::filter::ContentFilter;
+use crate::filter::{ContentFilter, ResponseObserver};
 use crate::find::{self, Find, FindEffect, FindInput};
 use crate::input::{
     self, CefKey, ClickTracker, KeyId, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
@@ -266,16 +266,18 @@ impl View {
         runtime: &CefRuntime,
         config: ViewConfig,
         filter: Option<Arc<dyn ContentFilter>>,
+        observer: Option<Arc<dyn ResponseObserver>>,
     ) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
         let request_filter = filter.clone().map(crate::filter::request_filter);
+        let response_observer = observer.map(crate::filter::response_observer);
         let producer = new_producer(
             runtime,
             config.url,
             layout,
             (config.frame_rate, config.begin_frames),
             &config.gpu,
-            request_filter,
+            (request_filter, response_observer),
         )?;
         let mut producer = producer;
         if let Some(area) = layout.area {
@@ -1527,7 +1529,10 @@ fn new_producer(
     layout: Layout,
     (frame_rate, begin_frames): (u32, bool),
     gpu: &HostWgpuContext,
-    request_filter: Option<welding::RequestFilter>,
+    (request_filter, response_observer): (
+        Option<welding::RequestFilter>,
+        Option<welding::ResponseObserver>,
+    ),
 ) -> Result<PlatformCefProducer, EngineError> {
     let config = welding::PlatformCefConfig {
         surface: welding::CefSurfaceConfig {
@@ -1542,6 +1547,7 @@ fn new_producer(
             handle_auth_challenges: true,
             ask_download_path: true,
             request_filter,
+            response_observer,
             ..welding::CefSurfaceConfig::default()
         },
     };
@@ -1558,7 +1564,10 @@ fn new_producer(
     _layout: Layout,
     _pacing: (u32, bool),
     _gpu: &HostWgpuContext,
-    _request_filter: Option<welding::RequestFilter>,
+    _hooks: (
+        Option<welding::RequestFilter>,
+        Option<welding::ResponseObserver>,
+    ),
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
         "windowless views are not supported on Windows yet".into(),

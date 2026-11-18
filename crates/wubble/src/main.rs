@@ -10,6 +10,7 @@ mod host;
 mod ime;
 mod input;
 mod measure;
+mod media_smoke;
 mod menu;
 mod nav_smoke;
 mod page_error;
@@ -297,6 +298,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: autofill FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Media) => {
+            match with_smoke_dir(|config, dir| run(Mode::Media, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    media_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: media ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: media FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: media FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -597,6 +621,8 @@ struct Outcome {
     pages_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
+    /// `--smoke media` reached its end.
+    media_passed: bool,
     /// `--measure`'s report and CSV.
     measured: Option<(String, String)>,
 }
@@ -626,6 +652,8 @@ enum Mode {
     Pages,
     /// `--smoke autofill`.
     Autofill,
+    /// `--smoke media`.
+    Media,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -931,6 +959,7 @@ fn connect_pages(window: &AppWindow) {
     });
     window.on_address_bookmark_requested(|| with_host(Host::bookmark_page));
     window.on_address_blocker_requested(|x, y| with_host(|host| host.blocker_menu_requested(x, y)));
+    window.on_address_media_requested(|x, y| with_host(|host| host.media_menu_requested(x, y)));
     window.on_downloads_cleared(|| with_host(Host::downloads_cleared));
     window.on_passwords_query_changed(|q| with_host(|host| host.passwords_query(&q)));
     window.on_passwords_unlock(|| with_host(Host::passwords_unlock));
@@ -952,6 +981,10 @@ fn run(
     // `--smoke autofill`'s pages, on a loopback port.
     let autofill_port = matches!(mode, Mode::Autofill)
         .then(autofill_smoke::serve)
+        .transpose()?;
+    // `--smoke media`'s fixtures, on a loopback port.
+    let media_port = matches!(mode, Mode::Media)
+        .then(media_smoke::serve)
         .transpose()?;
     let db = Profile {
         dir: profile.into(),
@@ -1002,6 +1035,7 @@ fn run(
         settings_smoke: None,
         pages_smoke: None,
         autofill_smoke: None,
+        media_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -1084,6 +1118,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Media => (
+            media_port.map(|port| format!("http://127.0.0.1:{port}/")),
+            Checks {
+                media_smoke: Some(media_smoke::MediaSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Session(phase) => (
             None,
             Checks {
@@ -1116,9 +1157,11 @@ fn run(
         Loaded::default()
     });
     let blocking = blocking::Blocking::new();
+    let media_observer = host::MediaObserver::new();
     let engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
         content_filter: Some(blocking.clone()),
+        response_observer: Some(media_observer.clone()),
         features: loaded.settings.page_features(),
         ..config?
     })?;
@@ -1157,6 +1200,7 @@ fn run(
         checks,
         downloads,
         blocking,
+        media_observer,
     );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
@@ -1207,6 +1251,7 @@ fn run(
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,
         autofill_passed: host.autofill_passed,
+        media_passed: host.media_passed,
         measured,
     })
 }

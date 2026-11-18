@@ -98,6 +98,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         }
         Control::ListEditor => item.control = SettingControl::List,
         Control::MapEditor => item.control = SettingControl::Map,
+        Control::TextField => item.control = SettingControl::Text,
     }
     item
 }
@@ -158,6 +159,7 @@ mod tests {
                 Control::Slider { .. } => SettingControl::Slider,
                 Control::ListEditor => SettingControl::List,
                 Control::MapEditor => SettingControl::Map,
+                Control::TextField => SettingControl::Text,
             };
             assert_eq!(item.control, want, "{}", item.key);
         }

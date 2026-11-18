@@ -48,6 +48,11 @@ export component AddressPill inherits Rectangle {
     in property <bool> blocker-allowed: false;
     in property <int> blocked: 0;
     callback blocker-requested(length, length);
+    // wubble: the media downloader's glyph (the icon set's download arrow), shown when the page
+    // plays a stream that can be saved (or one to explain). Its click asks for the media menu
+    // at the glyph (window coordinates). No widget in the design repo for it: the badge's shape.
+    in property <bool> media-visible: false;
+    callback media-requested(length, length);
 
     height: Chrome.address;
 
@@ -118,6 +123,21 @@ export component AddressPill inherits Rectangle {
                 overflow: elide;
             }
             // Above the whole-pill TouchArea, so a click here is not an address click.
+            if root.media-visible: media := Rectangle {
+                width: Shell.address-icon;
+                Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: IconPaths.download;
+                    size: Shell.address-icon;
+                    weight: Shell.address-icon-stroke;
+                    tint: media-area.has-hover ? Palette.ink : Palette.mint;
+                }
+                media-area := TouchArea {
+                    clicked => {
+                        root.media-requested(media.absolute-position.x, media.absolute-position.y + media.height);
+                    }
+                }
+            }
             if root.blocker-visible: badge := Rectangle {
                 width: badge-row.preferred-width;
                 badge-row := HorizontalLayout {

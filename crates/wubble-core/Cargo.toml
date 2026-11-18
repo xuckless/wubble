@@ -13,3 +13,10 @@ serde_json.workspace = true
 zeroize = "1"
 url.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+# Media downloader (`media`): HLS playlists (MIT), DASH manifests (parser only, MIT; not
+# `dash-mpd`, which pulls an HTTP client), and AES-128-CBC for plain HLS keys (MIT OR Apache-2.0,
+# already in Cargo.lock).
+m3u8-rs = "6.0.1"
+dash-mpd-core = "0.1.0"
+aes = "0.9.4"
+cbc = { version = "0.2.1", features = ["alloc"] }

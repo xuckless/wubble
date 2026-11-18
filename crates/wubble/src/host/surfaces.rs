@@ -260,6 +260,9 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
+                MenuEffect::Run(MenuCommand::SaveMedia { item, choice }) => {
+                    self.save_media(tab, item, choice)
+                }
                 MenuEffect::Run(
                     MenuCommand::Engine(_) | MenuCommand::Separator | MenuCommand::Info,
                 ) => {}

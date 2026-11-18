@@ -68,6 +68,7 @@ enum SmokeArg {
     Pages,
     Session,
     Autofill,
+    Media,
     SessionPhase(Phase),
 }
 
@@ -83,6 +84,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "pages" => Ok(SmokeArg::Pages),
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
+        None if value == "media" => Ok(SmokeArg::Media),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -125,6 +127,9 @@ pub enum Smoke {
     Session,
     /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
     Autofill,
+    /// A loopback page plays a file, an HLS stream and a DRM-marked one: detect, save, join,
+    /// check sizes and hashes.
+    Media,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -210,6 +215,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
+            (Some(SmokeArg::Media), None, None) => Smoke::Media,
         };
         Ok(Command::Smoke(smoke))
     }

@@ -95,6 +95,16 @@ impl Codec for GlassSetting {
     }
 }
 
+/// Text as it is (a choice's word, a folder path); the setting's kind validates it.
+impl Codec for String {
+    fn encode(&self) -> String {
+        self.clone()
+    }
+    fn decode(s: &str) -> Option<Self> {
+        Some(s.to_owned())
+    }
+}
+
 /// A JSON array of strings; entries are opaque to the store.
 impl Codec for Vec<String> {
     fn encode(&self) -> String {
@@ -176,6 +186,16 @@ settings! {
     GlassScene: bool = defs::GLASS_SCENE;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
+    MediaEnabled: bool = defs::MEDIA_ENABLED;
+    /// A request wubble makes itself (YouTube's player API): off by default.
+    MediaYoutube: bool = defs::MEDIA_YOUTUBE;
+    /// One of `wubble_core::media::select::QUALITY_WORDS`.
+    MediaQuality: String = defs::MEDIA_QUALITY;
+    /// Empty: the downloads folder.
+    MediaSaveDir: String = defs::MEDIA_SAVE_DIR;
+    MediaAskEachTime: bool = defs::MEDIA_ASK_EACH_TIME;
+    MediaConcurrency: u32 = defs::MEDIA_CONCURRENCY;
+    MediaMinBytes: u32 = defs::MEDIA_MIN_BYTES;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

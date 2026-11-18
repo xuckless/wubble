@@ -61,6 +61,9 @@ pub enum Command {
     Perform(Action),
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
+    /// Save a stream the page plays: the tab's detected `item`, its `choice`-th way to save
+    /// (`wubble_core::media::select::choices`).
+    SaveMedia { item: u32, choice: usize },
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -352,6 +355,55 @@ pub fn blocker_entries(
     out
 }
 
+/// One stream of the media menu: its id, its title, and what is known of it.
+pub struct MediaRow<'a> {
+    pub item: u32,
+    pub title: &'a str,
+    pub found: &'a wubble_core::media::detect::Found,
+}
+
+/// The media menu: per stream a title line, then a row per way to save it (or why it cannot be
+/// saved).
+pub fn media_entries(rows: &[MediaRow]) -> Vec<Entry> {
+    use wubble_core::media::detect::Found;
+    let info = |label: String| Entry {
+        label,
+        command: Command::Info,
+        enabled: false,
+    };
+    let mut out = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            out.push(Entry {
+                label: String::new(),
+                command: Command::Separator,
+                enabled: false,
+            });
+        }
+        out.push(info(row.title.to_owned()));
+        match row.found {
+            Found::Resolving => out.push(info("Reading the stream\u{2026}".into())),
+            Found::Refused(refusal) => out.push(info(refusal.message())),
+            Found::Ready(variants) => {
+                out.extend(
+                    wubble_core::media::select::choices(variants)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(choice, c)| Entry {
+                            label: format!("Save {}", c.label),
+                            command: Command::SaveMedia {
+                                item: row.item,
+                                choice,
+                            },
+                            enabled: true,
+                        }),
+                );
+            }
+        }
+    }
+    out
+}
+
 /// The menu of one tab, or one the shell opened.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Menu {
@@ -476,6 +528,59 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
 mod tests {
     use super::*;
     use wubble_engine::page::EditFlags;
+
+    #[test]
+    fn the_media_menu_lists_choices_and_refusals() {
+        use wubble_core::media::detect::Found;
+        use wubble_core::media::{Container, Refusal, Track, Variant};
+        let ready = Found::Ready(vec![Variant::file(
+            "https://a.test/v.mp4",
+            Track::Muxed,
+            Container::Mp4,
+            Some(2000),
+            true,
+        )]);
+        let protected = Found::Refused(Refusal::Protected);
+        let resolving = Found::Resolving;
+        let rows = [
+            MediaRow {
+                item: 4,
+                title: "Clip",
+                found: &ready,
+            },
+            MediaRow {
+                item: 5,
+                title: "Film",
+                found: &protected,
+            },
+            MediaRow {
+                item: 6,
+                title: "Show",
+                found: &resolving,
+            },
+        ];
+        let entries = media_entries(&rows);
+        let labels: Vec<&str> = entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Clip",
+                "Save MP4 \u{b7} 2.0 KB",
+                "",
+                "Film",
+                "Protected, cannot be saved",
+                "",
+                "Show",
+                "Reading the stream\u{2026}"
+            ]
+        );
+        assert_eq!(
+            entries[1].command,
+            Command::SaveMedia { item: 4, choice: 0 }
+        );
+        assert!(entries[1].enabled && !entries[4].enabled);
+        assert_eq!(entries[2].command, Command::Separator);
+    }
 
     #[test]
     fn the_blocker_menu_names_the_count_and_the_switch() {

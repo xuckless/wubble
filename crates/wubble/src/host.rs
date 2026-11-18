@@ -16,6 +16,9 @@
 
 mod autofill;
 mod downloads;
+mod media;
+
+pub use media::MediaObserver;
 mod pages;
 mod panes;
 mod settings;
@@ -214,6 +217,7 @@ pub struct Checks {
     pub settings_smoke: Option<SettingsSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
+    pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -343,6 +347,8 @@ pub struct Host {
     pub blocked_seen: Option<u32>,
     /// `--smoke autofill` reached its end.
     pub autofill_passed: bool,
+    /// `--smoke media` reached its end.
+    pub media_passed: bool,
     /// Password autofill per tab (`host/autofill.rs`).
     autofill: autofill::Autofill,
     /// The content blocker, whose per-view counts the tab rows show.
@@ -352,6 +358,8 @@ pub struct Host {
     /// Certificate errors the user proceeded past, for this run only.
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
+    /// The media downloader: each tab's streams and the download jobs (`host/media.rs`).
+    media: media::Media,
     pace: Option<Pace>,
 }
 
@@ -373,6 +381,7 @@ impl Host {
         checks: Checks,
         downloads_dir: Option<PathBuf>,
         blocking: Arc<Blocking>,
+        media_observer: Arc<media::MediaObserver>,
     ) -> Self {
         let Loaded {
             model,
@@ -463,11 +472,13 @@ impl Host {
             page_zoom: None,
             blocked_seen: None,
             autofill_passed: false,
+            media_passed: false,
             autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
             cert_exceptions: CertExceptions::default(),
             downloads: downloads::Downloads::new(downloads_dir, downloads),
+            media: media::Media::new(media_observer),
             pace: begin_frames.then(|| Pace {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
@@ -747,6 +758,7 @@ impl Host {
         for (view, event) in self.engine.take_page_events() {
             self.on_page_event(&window, view, event);
         }
+        self.media_pump();
         self.close_tabs_of_gone_views();
         self.smoke_step(SmokeInput::Worked);
         self.tabs_smoke_step();
@@ -933,6 +945,7 @@ impl Host {
                 }
             }
             WebEvent::UrlChanged(url) => {
+                self.media_navigated(tab, &url);
                 self.autofill_navigated(tab, &url);
                 self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
@@ -1177,6 +1190,7 @@ impl Host {
 
     /// Called before a tab closes: it goes on the recently-closed list.
     fn remember_closed(&mut self, tab: TabId) {
+        self.media_tab_closed(tab);
         self.committed.remove(&tab);
         self.typed_nav.ended(tab);
         let Some(t) = self.model.tabs.get(&tab) else {
@@ -1220,6 +1234,7 @@ impl Host {
     /// Orderly shutdown: the final save, then the store thread finishes and
     /// closes the database. `ui` was read before the window went away.
     pub fn shutdown(&mut self, ui: UiState) {
+        self.media_shutdown();
         self.save_download_progress();
         self.store.save(&self.model, ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();

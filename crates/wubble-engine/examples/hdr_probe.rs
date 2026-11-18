@@ -99,6 +99,7 @@ fn run(dir: &Path) -> Result<(), String> {
         cache_dir: dir.join("cache"),
         pump_scheduler: None,
         content_filter: None,
+        response_observer: None,
         features: Default::default(),
     })
     .map_err(|e| e.to_string())?;

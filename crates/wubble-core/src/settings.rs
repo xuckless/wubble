@@ -25,6 +25,8 @@ pub enum SettingKind {
     Choice(&'static [&'static str]),
     /// A JSON object of string to whole number.
     Map,
+    /// Any one line of text (a folder path; empty for the default).
+    Text,
 }
 
 impl SettingKind {
@@ -44,6 +46,7 @@ impl SettingKind {
             SettingKind::Map => {
                 serde_json::from_str::<std::collections::BTreeMap<String, u32>>(text).is_ok()
             }
+            SettingKind::Text => !text.contains(['\n', '\r']),
         }
     }
 }
@@ -307,6 +310,74 @@ pub const PASSWORDS_AUTOFILL: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
+/// The media downloader: a download glyph on the address pill when a page plays a video or
+/// audio stream (detection reads response headers only, nothing is fetched until asked).
+pub const MEDIA_ENABLED: SettingDef = SettingDef {
+    key: "media.enabled",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Offer to save videos and audio",
+    section: Section::General,
+    restart: false,
+};
+/// Ask YouTube's player API for a video's formats (a request wubble makes itself, so off by
+/// default; `media::youtube`).
+pub const MEDIA_YOUTUBE: SettingDef = SettingDef {
+    key: "media.youtube",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Look up YouTube video formats (asks YouTube)",
+    section: Section::General,
+    restart: false,
+};
+/// The quality a download takes when the menu is not asked (`media::select::Quality`).
+pub const MEDIA_QUALITY: SettingDef = SettingDef {
+    key: "media.quality",
+    kind: SettingKind::Choice(&crate::media::select::QUALITY_WORDS),
+    default: "720p",
+    label: "Video quality",
+    section: Section::General,
+    restart: false,
+};
+/// Where saved media goes; empty: the downloads folder.
+pub const MEDIA_SAVE_DIR: SettingDef = SettingDef {
+    key: "media.save_dir",
+    kind: SettingKind::Text,
+    default: "",
+    label: "Save videos to (empty: the downloads folder)",
+    section: Section::General,
+    restart: false,
+};
+/// The glyph opens the menu of qualities; off, it saves the default quality at once.
+pub const MEDIA_ASK_EACH_TIME: SettingDef = SettingDef {
+    key: "media.ask_each_time",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Ask which quality each time",
+    section: Section::General,
+    restart: false,
+};
+/// Segments one media download fetches at once.
+pub const MEDIA_CONCURRENCY: SettingDef = SettingDef {
+    key: "media.concurrency",
+    kind: SettingKind::Count { min: 1, max: 8 },
+    default: "4",
+    label: "Parallel fetches per video download",
+    section: Section::Hidden,
+    restart: false,
+};
+/// Files known to be smaller than this many bytes are not offered (sounds, pings).
+pub const MEDIA_MIN_BYTES: SettingDef = SettingDef {
+    key: "media.min_bytes",
+    kind: SettingKind::Count {
+        min: 0,
+        max: 100_000_000,
+    },
+    default: "65536",
+    label: "Smallest file offered (bytes)",
+    section: Section::Hidden,
+    restart: false,
+};
 
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
@@ -334,6 +405,13 @@ pub const ALL: &[&SettingDef] = &[
     &GLASS_SCENE,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
+    &MEDIA_ENABLED,
+    &MEDIA_YOUTUBE,
+    &MEDIA_QUALITY,
+    &MEDIA_SAVE_DIR,
+    &MEDIA_ASK_EACH_TIME,
+    &MEDIA_CONCURRENCY,
+    &MEDIA_MIN_BYTES,
 ];
 
 /// The definition of `key`, if it is a setting.
@@ -389,6 +467,19 @@ mod tests {
     }
 
     #[test]
+    fn media_rows_default_off_where_they_reach_out() {
+        // The YouTube lookup is a request wubble makes itself: off by default.
+        assert_eq!(MEDIA_YOUTUBE.default, "0");
+        assert_eq!(MEDIA_ENABLED.default, "1");
+        assert!(MEDIA_QUALITY.kind.accepts("1080p") && !MEDIA_QUALITY.kind.accepts("4k"));
+        assert_eq!(
+            find("media.save_dir").map(|d| d.kind),
+            Some(SettingKind::Text)
+        );
+        assert!(MEDIA_CONCURRENCY.kind.accepts("8") && !MEDIA_CONCURRENCY.kind.accepts("0"));
+    }
+
+    #[test]
     fn sidebar_width_default_is_the_design_default() {
         assert_eq!(
             SIDEBAR_WIDTH.default.parse::<f64>().unwrap(),
@@ -429,6 +520,9 @@ mod tests {
             (SettingKind::Map, "{\"a.test\": 125}", true),
             (SettingKind::Map, "{\"a.test\": -5}", false),
             (SettingKind::Map, "[]", false),
+            (SettingKind::Text, "", true),
+            (SettingKind::Text, "/home/x/Videos", true),
+            (SettingKind::Text, "a\nb", false),
         ];
         for (kind, text, want) in cases {
             assert_eq!(kind.accepts(text), *want, "{kind:?} {text:?}");

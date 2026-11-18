@@ -110,6 +110,7 @@ impl Host {
             }
             Applied::Glass(setting) => self.glass.borrow_mut().set_setting(setting),
             Applied::Passwords(settings) => self.autofill.set_settings(settings),
+            Applied::Media(settings) => self.apply_media_settings(settings),
             Applied::RestartOnly => {}
         }
     }
