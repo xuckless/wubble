@@ -27,15 +27,6 @@ pub enum Id {
     SpaceIndicator,
 }
 
-impl Id {
-    pub const ALL: [Id; N] = [
-        Id::SidebarWidth,
-        Id::Slide,
-        Id::ContentInset,
-        Id::SpaceIndicator,
-    ];
-}
-
 /// Number of animated values.
 pub const N: usize = 4;
 
@@ -96,8 +87,11 @@ pub enum Event {
     /// The pointer entered the sidebar's hover zone.
     ZoneEntered,
     ZoneLeft,
+    /// `width` is the width currently displayed, which differs from the
+    /// committed one while a spring-back is still running.
     SeamPressed {
         x: f32,
+        width: f32,
     },
     SeamDragged {
         x: f32,
@@ -135,14 +129,18 @@ pub fn transition(s: Shell, e: Event, l: Limits) -> Shell {
             },
             ..s
         },
-        Event::SeamPressed { x } if s.compact == Expanded && x.is_finite() => Shell {
-            seam: Seam::Held {
-                press_x: x,
-                start_width: s.width,
-                x,
-            },
-            ..s
-        },
+        Event::SeamPressed { x, width }
+            if s.compact == Expanded && x.is_finite() && width.is_finite() =>
+        {
+            Shell {
+                seam: Seam::Held {
+                    press_x: x,
+                    start_width: width,
+                    x,
+                },
+                ..s
+            }
+        }
         Event::SeamDragged { x } if x.is_finite() => match s.seam {
             Seam::Held {
                 press_x,
@@ -310,7 +308,10 @@ mod tests {
         }
         for mode in [Hidden, Peeking] {
             for e in [
-                Event::SeamPressed { x: 10.0 },
+                Event::SeamPressed {
+                    x: 10.0,
+                    width: 260.0,
+                },
                 Event::SeamDragged { x: 20.0 },
                 Event::SeamReleased,
             ] {
@@ -334,7 +335,14 @@ mod tests {
 
     #[test]
     fn toggle_drops_a_drag() {
-        let mut s = transition(shell(Expanded), Event::SeamPressed { x: 5.0 }, L);
+        let mut s = transition(
+            shell(Expanded),
+            Event::SeamPressed {
+                x: 5.0,
+                width: 260.0,
+            },
+            L,
+        );
         assert_ne!(s.seam, Seam::Idle);
         s = transition(s, Event::ToggleCompact, L);
         assert_eq!(s.seam, Seam::Idle);
@@ -400,7 +408,14 @@ mod tests {
     }
 
     fn held_target(drag_to: f32) -> Target {
-        let mut s = transition(shell(Expanded), Event::SeamPressed { x: 100.0 }, L);
+        let mut s = transition(
+            shell(Expanded),
+            Event::SeamPressed {
+                x: 100.0,
+                width: 260.0,
+            },
+            L,
+        );
         s = transition(s, Event::SeamDragged { x: drag_to }, L);
         targets(&s, L)[Id::SidebarWidth as usize]
     }
@@ -419,7 +434,14 @@ mod tests {
 
     #[test]
     fn seam_release_commits_clamped() {
-        let mut s = transition(shell(Expanded), Event::SeamPressed { x: 100.0 }, L);
+        let mut s = transition(
+            shell(Expanded),
+            Event::SeamPressed {
+                x: 100.0,
+                width: 260.0,
+            },
+            L,
+        );
         s = transition(s, Event::SeamDragged { x: 5000.0 }, L);
         s = transition(s, Event::SeamReleased, L);
         assert_eq!(s.width, L.max);
@@ -443,9 +465,37 @@ mod tests {
     }
 
     #[test]
+    fn seam_press_starts_from_displayed_width() {
+        // Mid spring-back from a banded 394 toward 360: the press must not
+        // snap the target to the committed width.
+        let s = transition(
+            shell(Expanded),
+            Event::SeamPressed {
+                x: 100.0,
+                width: 394.0,
+            },
+            L,
+        );
+        let t = targets(&s, L)[Id::SidebarWidth as usize];
+        assert_eq!(t.value, rubber_band_clamp(394.0, L.min, L.max, BAND_SEAM));
+        let s = transition(s, Event::SeamReleased, L);
+        assert_eq!(s.width, L.max);
+    }
+
+    #[test]
     fn non_finite_pointer_is_ignored() {
         let s = shell(Expanded);
-        assert_eq!(transition(s, Event::SeamPressed { x: f32::NAN }, L), s);
+        assert_eq!(
+            transition(
+                s,
+                Event::SeamPressed {
+                    x: f32::NAN,
+                    width: 260.0
+                },
+                L
+            ),
+            s
+        );
     }
 
     #[test]
@@ -492,12 +542,5 @@ mod tests {
         assert_eq!(index_of([4, 5, 6], 6), 2);
         assert_eq!(index_of([4, 5, 6], 9), 0);
         assert_eq!(index_of(Vec::<i32>::new(), 1), 0);
-    }
-
-    #[test]
-    fn id_all_matches_discriminants() {
-        for (i, id) in Id::ALL.iter().enumerate() {
-            assert_eq!(*id as usize, i);
-        }
     }
 }

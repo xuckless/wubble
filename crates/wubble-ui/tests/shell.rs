@@ -49,10 +49,14 @@ fn advance_writes_properties_and_stops(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_sidebar_slide(), 0.0);
     assert_eq!(app.get_content_inset(), 0.0);
 
-    // At rest, advancing writes nothing and asks for no frame.
-    app.set_sidebar_slide(0.5);
-    assert!(!driver.borrow_mut().advance(app, DT));
-    assert_eq!(app.get_sidebar_slide(), 0.5);
+    // The frame hook asks for no redraw once idle, and stays idle.
+    let base = std::time::Instant::now();
+    assert!(!driver.borrow_mut().frame(app, base));
+    assert!(
+        !driver
+            .borrow_mut()
+            .frame(app, base + Duration::from_millis(16))
+    );
 
     // toggle_compact_roundtrip
     app.invoke_toggle_compact();
@@ -128,6 +132,17 @@ fn space_indicator_follows_active(app: &AppWindow, driver: &Shared) {
     pump();
     settle(app, driver);
     assert_eq!(app.get_space_indicator(), 0.0);
+
+    // Id set before the model: the index resolves when the model arrives.
+    app.set_spaces(ModelRc::default());
+    app.set_active_space_id(3);
+    pump();
+    settle(app, driver);
+    assert_eq!(app.get_space_indicator(), 0.0);
+    app.set_spaces(ModelRc::from(spaces.as_slice()));
+    pump();
+    settle(app, driver);
+    assert_eq!(app.get_space_indicator(), 2.0);
 }
 
 #[test]

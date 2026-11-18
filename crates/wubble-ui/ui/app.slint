@@ -50,6 +50,10 @@ export component AppWindow inherits Window {
     changed active-space-id => {
         root.space-changed(root.active-space-id);
     }
+    // The index depends on the model too: it may be set or reordered later.
+    changed spaces => {
+        root.space-changed(root.active-space-id);
+    }
 
     callback tab-activated <=> sidebar.tab-activated;
     callback tab-closed <=> sidebar.tab-closed;

@@ -17,32 +17,16 @@ use wubble_core::shell::{self, Bank, Event, Id, Limits, Shell, index_of};
 
 use crate::{AppWindow, Sizes};
 
-/// Binds each animated value to its Slint property.
-struct Row {
-    id: Id,
-    set: fn(&AppWindow, f32),
-}
-
-/// One row per [`Id`], in `Id::ALL` order. Targets and presets live in
-/// `shell::targets`.
-const TABLE: [Row; shell::N] = [
-    Row {
-        id: Id::SidebarWidth,
-        set: |w, v| w.set_sidebar_width(v),
-    },
-    Row {
-        id: Id::Slide,
-        set: |w, v| w.set_sidebar_slide(v),
-    },
-    Row {
-        id: Id::ContentInset,
-        set: |w, v| w.set_content_inset(v),
-    },
-    Row {
-        id: Id::SpaceIndicator,
-        set: |w, v| w.set_space_indicator(v),
-    },
-];
+/// The declared table: the Slint setter of each animated value, indexed by
+/// [`Id`]. Targets and presets live in `shell::targets`.
+const SETTERS: [fn(&AppWindow, f32); shell::N] = {
+    let mut t: [fn(&AppWindow, f32); shell::N] = [|_, _| {}; shell::N];
+    t[Id::SidebarWidth as usize] = |w, v| w.set_sidebar_width(v);
+    t[Id::Slide as usize] = |w, v| w.set_sidebar_slide(v);
+    t[Id::ContentInset as usize] = |w, v| w.set_content_inset(v);
+    t[Id::SpaceIndicator as usize] = |w, v| w.set_space_indicator(v);
+    t
+};
 
 impl From<shell::CompactMode> for crate::CompactMode {
     fn from(m: shell::CompactMode) -> Self {
@@ -61,8 +45,6 @@ pub struct Driver {
     /// Time of the previous frame while moving; `None` while idle, so the
     /// first frame after a wake steps with dt 0.
     last: Option<Instant>,
-    /// What each property was last set to, so idle frames write nothing.
-    written: [Option<f32>; shell::N],
 }
 
 impl Driver {
@@ -80,7 +62,6 @@ impl Driver {
             limits,
             bank,
             last: None,
-            written: [None; shell::N],
         };
         driver.advance(window, 0.0);
         driver
@@ -95,32 +76,36 @@ impl Driver {
         window.window().request_redraw();
     }
 
-    /// Step the springs by `dt` seconds and write the changed values.
+    /// Step the springs by `dt` seconds and write the values.
     /// Returns true while another frame is needed.
     pub fn advance(&mut self, window: &AppWindow, dt: f32) -> bool {
         let moving = self.bank.step(dt);
-        let values = self.bank.values();
-        for row in &TABLE {
-            let value = values[row.id as usize];
-            let written = &mut self.written[row.id as usize];
-            if *written != Some(value) {
-                (row.set)(window, value);
-                *written = Some(value);
-            }
+        // Slint's `Property::set` ignores an unchanged value, so idle writes are free.
+        for (set, value) in SETTERS.iter().zip(self.bank.values()) {
+            set(window, value);
         }
         moving
     }
 
-    fn frame(&mut self, window: &AppWindow, now: Instant) {
+    /// One rendered frame at `now`. Returns true while another frame is
+    /// needed; once idle it forgets the last frame time, so the next wake
+    /// steps with dt 0.
+    pub fn frame(&mut self, window: &AppWindow, now: Instant) -> bool {
         let dt = self
             .last
             .replace(now)
             .map_or(0.0, |prev| now.duration_since(prev).as_secs_f32());
-        if self.advance(window, dt) {
-            window.window().request_redraw();
-        } else {
+        let moving = self.advance(window, dt);
+        if !moving {
             self.last = None;
         }
+        moving
+    }
+
+    /// Press on the seam: starts from the width on screen, not the committed one.
+    fn press(&mut self, window: &AppWindow, x: f32) {
+        let width = self.bank.values()[Id::SidebarWidth as usize];
+        self.dispatch(window, Event::SeamPressed { x, width });
     }
 }
 
@@ -132,16 +117,18 @@ fn space_index(window: &AppWindow, id: i32) -> usize {
 /// tests can drive it without a renderer.
 pub fn connect(window: &AppWindow) -> Rc<RefCell<Driver>> {
     let driver = Rc::new(RefCell::new(Driver::new(window)));
-    let send = |event: fn(f32) -> Event| {
-        let (driver, weak) = (Rc::clone(&driver), window.as_weak());
-        move |x: f32| dispatch(&driver, &weak, event(x))
-    };
     let fixed = |event: Event| {
         let (driver, weak) = (Rc::clone(&driver), window.as_weak());
         move || dispatch(&driver, &weak, event)
     };
-    window.on_seam_pressed(send(|x| Event::SeamPressed { x }));
-    window.on_seam_dragged(send(|x| Event::SeamDragged { x }));
+    let (d, weak) = (Rc::clone(&driver), window.as_weak());
+    window.on_seam_pressed(move |x| {
+        if let Some(window) = weak.upgrade() {
+            d.borrow_mut().press(&window, x);
+        }
+    });
+    let (d, weak) = (Rc::clone(&driver), window.as_weak());
+    window.on_seam_dragged(move |x| dispatch(&d, &weak, Event::SeamDragged { x }));
     window.on_seam_released(fixed(Event::SeamReleased));
     window.on_compact_toggle_requested(fixed(Event::ToggleCompact));
     let (d, weak) = (Rc::clone(&driver), window.as_weak());
@@ -176,20 +163,9 @@ pub fn install(window: &AppWindow) -> Result<(), SetRenderingNotifierError> {
     window.window().set_rendering_notifier(move |state, _api| {
         if let slint::RenderingState::BeforeRendering = state
             && let Some(window) = weak.upgrade()
+            && driver.borrow_mut().frame(&window, Instant::now())
         {
-            driver.borrow_mut().frame(&window, Instant::now());
+            window.window().request_redraw();
         }
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn table_covers_every_id() {
-        for (row, id) in TABLE.iter().zip(Id::ALL) {
-            assert_eq!(row.id, id);
-        }
-    }
 }
