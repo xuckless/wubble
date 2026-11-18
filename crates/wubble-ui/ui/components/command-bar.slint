@@ -161,7 +161,8 @@ export component CommandBar inherits Rectangle {
                     font-family: Fonts.ui;
                     font-size: Shell.command-input-font;
                     color: Palette.ink;
-                    selection-background-color: Palette.rim;
+                    selection-background-color: Shell.selection-fill;
+                    selection-foreground-color: Shell.selection-ink;
                     single-line: true;
                     edited => {
                         root.selected = 0;
