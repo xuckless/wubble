@@ -1,7 +1,8 @@
 import { Palette, Motion, Radius, Spacing, Fonts } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
-import { CommandBarEvent, CommandBarState, CommandResult, GlassTier, Origin } from "model.slint";
+import { BeamShape, CommandBarEvent, CommandBarState, CommandResult, GlassTier, Origin } from "model.slint";
+import { BorderBeam } from "border-beam.slint";
 import { CommandRow } from "command-row.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -19,6 +20,9 @@ export component CommandBar inherits Rectangle {
     // Where the bar was invoked from, in window coordinates; the panel grows from there. The
     // host sets it before every open.
     in property <Origin> origin: { x: 0px, y: 0px };
+    // The beam that laps the bar while you type (command.tsx "thinking"); the bar is Slint
+    // glass over the page, so Slint draws it.
+    in property <BeamShape> beam;
 
     callback query-changed(string);
     callback result-chosen(int);
@@ -143,6 +147,11 @@ export component CommandBar inherits Rectangle {
         }
         // Swallow clicks so they do not reach the scrim.
         TouchArea { }
+
+        BorderBeam {
+            radius: Radius.lg;
+            shape: root.beam;
+        }
 
         VerticalLayout {
             padding-top: Shell.side-pad;

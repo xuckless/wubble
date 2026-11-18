@@ -382,11 +382,26 @@ export component TabRow inherits Rectangle {
     // wubble change: shown while the row or the button itself is hovered. In the port the button
     // appeared only while the row's TouchArea had hover, which it loses to the button's own
     // TouchArea, so the button flickered away under the pointer.
+    // wubble change: it fades and grows in as .wb-tab-x does (browser.css: opacity 0 → 1 over
+    // .15 s, scale .8 → 1 over .2 s ease-out; a 22 px tile, radius 7, white 10% on its own hover).
+    property <bool> close-shown: !root.compact && (touch.has-hover || close-touch.has-hover || root.selected);
     Rectangle {
         x: root.width - Shell.side-pad - self.width;
+        y: (root.height - self.height) / 2;
         width: 22px;
-        visible: !root.compact && (touch.has-hover || close-touch.has-hover || root.selected);
-        close-touch := TouchArea { clicked => { root.close(); } }
+        height: 22px;
+        border-radius: Shell.tab-close-radius;
+        background: close-touch.has-hover ? Shell.tab-close-hover : transparent;
+        animate background { duration: 150ms; easing: Motion.easeOut; }
+        visible: !root.compact;
+        opacity: root.close-shown ? 1 : 0;
+        animate opacity { duration: 150ms; easing: Motion.easeOut; }
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: root.close-shown ? 1 : 0.8;
+        animate transform-scale { duration: 200ms; easing: Motion.easeOut; }
+        close-touch := TouchArea {
+            clicked => { root.close(); }
+        }
         Path {
             width: 10px;
             height: 10px;

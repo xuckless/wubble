@@ -14,6 +14,7 @@
 import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel, PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
+import { PageScroll } from "page-scroll.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, GlassTier } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
@@ -266,6 +267,13 @@ export component Slider inherits Rectangle {
         height: Shell.slider-knob;
         border-radius: self.width / 2;
         background: Palette.ink;
+        // the held knob swells to 1.1 (touch.tsx SLIDER.holdScale)
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: ta.pressed ? 1.1 : 1;
+        animate transform-scale {
+            duration: Motion.overlapIn;
+            easing: Motion.easeSpring;
+        }
         drop-shadow-blur: Shell.slider-shadow-blur;
         drop-shadow-offset-y: Shell.slider-shadow-y;
         drop-shadow-color: Shell.slider-shadow;
@@ -537,14 +545,25 @@ export component PageFrame inherits Rectangle {
     in property <bool> searchable: true;
     callback query-changed(string);
 
-    property <length> scroll: 0px;
-
     public function take-focus() {
         search.take-focus();
     }
     // Back to the top: a new query or a page switch starts there.
     public function scroll-to-top() {
-        root.scroll = 0px;
+        PageScroll.reset();
+    }
+    // The open frame scrolls on the design's physics (PageScroll, the driver's scroller).
+    changed open => {
+        if root.open {
+            PageScroll.reset();
+            root.report();
+        }
+    }
+    function report() {
+        if root.open {
+            PageScroll.viewport = scroller.viewport-height;
+            PageScroll.content = scroller.content-height;
+        }
     }
 
     visible: root.open;
@@ -555,13 +574,36 @@ export component PageFrame inherits Rectangle {
         over-content: true;
 
         scroller := WubbleScroller {
-            property <length> room: max(0px, self.content-height - self.viewport-height);
-            content-y: min(root.scroll, self.room);
-            thumb-visible: self.room > 0px;
-            thumb-height: self.room > 0px ? max(Spacing.s6, self.viewport-height * self.viewport-height / self.content-height) : 0px;
-            thumb-top: self.room > 0px ? min(root.scroll, self.room) / self.room * (self.viewport-height - self.thumb-height) : 0px;
+            content-y: root.open ? PageScroll.y : 0px;
+            thumb-visible: root.open && PageScroll.thumb-visible;
+            thumb-height: PageScroll.thumb-height;
+            thumb-top: PageScroll.thumb-top;
+            changed viewport-height => {
+                root.report();
+            }
+            changed content-height => {
+                root.report();
+            }
             wheel(d) => {
-                root.scroll = max(0px, min(self.room, root.scroll + d));
+                PageScroll.wheel(d);
+            }
+            touch-down(y) => {
+                PageScroll.touch-down(y);
+            }
+            touch-move(y) => {
+                PageScroll.touch-move(y);
+            }
+            touch-up => {
+                PageScroll.touch-up();
+            }
+            thumb-down(y) => {
+                PageScroll.thumb-down(y);
+            }
+            thumb-move(y) => {
+                PageScroll.thumb-move(y);
+            }
+            thumb-up => {
+                PageScroll.thumb-up();
             }
 
             HorizontalLayout {
@@ -589,7 +631,7 @@ export component PageFrame inherits Rectangle {
                             icon-path: IconPaths.search;
                             placeholder: root.placeholder;
                             edited(q) => {
-                                root.scroll = 0px;
+                                PageScroll.reset();
                                 root.query-changed(q);
                             }
                         }

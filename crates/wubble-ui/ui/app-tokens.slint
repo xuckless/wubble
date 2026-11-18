@@ -27,7 +27,6 @@ export global Shell {
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
     out property <duration> light-fill-ms: 200ms;
     out property <duration> light-glyph-ms: 150ms;
-    out property <color> beam-sheen: rgba(255, 255, 255, 0.35);
     out property <length> light: 12px;
     out property <length> light-gap: 8px;
     out property <length> light-gap-rail: 6px;
@@ -36,11 +35,24 @@ export global Shell {
     out property <color> light-glyph-ink: rgba(8, 9, 13, 0.7);
     out property <float> light-press-x: 0.8;
     out property <float> light-press-y: 1.15;
-    // chrome.tsx Address border beam: 1500 ms, brightens in 120 ms
-    out property <duration> beam-ms: 1500ms;
-    out property <duration> beam-in: 120ms;
     // the ring's width: GlassPanel's film rim (1.5)
     out property <length> glow-width: 1.5px;
+    // the checkbox's tick lands this long behind its fill (touch.tsx CHECKS.tickDelay)
+    out property <duration> check-tick-delay: 70ms;
+    // …and leaves first, faster (touch.css `.tp-ck-box path`: .1 s)
+    out property <duration> check-tick-out: 100ms;
+    // .wb-tab-x: a 22 px tile, radius 7, white 10% while hovered
+    out property <length> tab-close-radius: 7px;
+    // a closed row shrinks to 0.94 as it leaves (browser.css `wb-tab-out`)
+    out property <float> tab-exit-shrink: 0.06;
+    out property <color> tab-close-hover: rgba(255, 255, 255, 0.1);
+    // The Slint border beam's tail, in strokes (border-beam.slint)
+    out property <int> beam-segments: 10;
+    // one logical px: lengths to the beam path's viewbox numbers
+    out property <length> beam-unit: 1px;
+    // …and its bloom: a wide faint stroke under the line (the shader blurs; Slint cannot)
+    out property <length> beam-bloom: 5px;
+    out property <float> beam-bloom-alpha: 0.3;
     // browser.css .wb-side-peek: padding 10 8 10 10 (the extended sidebar's is side-pad, 6)
     out property <length> peek-pad-start: 10px;
     out property <length> peek-pad-end: 8px;
@@ -147,8 +159,6 @@ export global Shell {
     out property <length> menu-separator: 9px;   // a hairline rule with 4 px either side
     out property <length> menu-rule: 1px;
     out property <duration> menu-hover-ms: 150ms;   // button background .15s
-    out property <duration> menu-in: 200ms;
-    out property <duration> menu-out: 160ms;
     // .ur-o-dialog: min(380, 100vw - 32) wide, padding 26, radius 20; h3 19 / 560; p 14.5 muted,
     // 8 above and 22 below; actions right-aligned 8 apart; buttons 42 high, padding 0 16,
     // radius 11, 14 / 540; enters over 300 ms (.22,1,.36,1), leaves over 210 ms.

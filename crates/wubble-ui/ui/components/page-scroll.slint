@@ -1,0 +1,25 @@
+// The scroll physics of the shown native page (settings, history, bookmarks, downloads,
+// passwords): the design's pages scroll in its `Scroller` (browser/scroller.tsx, the owner's
+// design repo; wubble_core::scroller, stepped by the shell driver), with the wheel on a
+// near-critical spring and both ends rubber-banding. One page frame is open at a time, so one
+// global: the open PageFrame reports its sizes and input here, the driver writes back where the
+// content and the thumb are.
+export global PageScroll {
+    // the driver: content offset (rubber-banded past the ends) and the thumb
+    in-out property <length> y;
+    in-out property <length> thumb-top;
+    in-out property <length> thumb-height;
+    in-out property <bool> thumb-visible;
+    // the open page frame
+    in-out property <length> viewport;
+    in-out property <length> content;
+    callback wheel(length);
+    callback touch-down(length);
+    callback touch-move(length);
+    callback touch-up();
+    callback thumb-down(length);
+    callback thumb-move(length);
+    callback thumb-up();
+    // back to the top at once (a new query, another page)
+    callback reset();
+}

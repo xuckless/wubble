@@ -27,15 +27,19 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
+use wubble_core::beam::{self, Beam};
 use wubble_core::bow::{BOWED, Curve, EdgeTable};
-use wubble_core::motion::DT_CAP;
+use wubble_core::motion::{DT_CAP, OVERLAP_IN, overlap_in};
 use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
 use wubble_core::split::{Bow, string_rect_of};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
-use crate::{AppWindow, GlassItem, GlassLayer, Radius, SidebarMode, sync};
+use crate::{
+    AppWindow, BeamShape, GlassItem, GlassLayer, LeavingRow, PageScroll, Radius, SidebarMode,
+    TabItem, sync,
+};
 
 impl From<seam::SidebarMode> for SidebarMode {
     fn from(m: seam::SidebarMode) -> Self {
@@ -71,8 +75,30 @@ pub struct Driver {
     spaces: SpaceSwitcher,
     seam: Seam,
     scroll: Scroller,
+    /// The open native page's scroller (`PageScroll`): the design's pages scroll in its
+    /// `Scroller` too.
+    page_scroll: Scroller,
+    /// The address pill's border beam (wubble_core::beam), and what turns the shown tab and its
+    /// loading flag into the beam's events; `laps` counts laps started, for their hues.
+    beam: Beam,
+    watch: beam::Watch,
+    laps: u64,
+    /// The shown tab, and the seconds since another one was shown: its page enters on the
+    /// Overlap entrance (webview.tsx gives the shown view `wb-in`).
+    page_tab: Option<i64>,
+    page_t: f64,
+    /// Seconds since another Space was shown: its name enters (`wb-in`).
+    space_t: f64,
+    /// The command bar's beam while typing, and the query it last saw.
+    thinking: beam::Thinking,
+    query: slint::SharedString,
     row_y: Rc<VecModel<f32>>,
     row_scale: Rc<VecModel<f32>>,
+    row_enter: Rc<VecModel<f32>>,
+    /// The rows' items as last read, and those of rows on their way out (what they showed).
+    items: Vec<TabItem>,
+    gone: Vec<TabItem>,
+    leaving: Rc<VecModel<LeavingRow>>,
     /// The seam's edge table (`seam-edge`): how far the bowed string is displaced at each height.
     edge: Rc<VecModel<f32>>,
     /// The scroller's millisecond clock: real time from this origin once installed; without
@@ -103,6 +129,11 @@ fn row_ids(ids: &[i32]) -> Vec<u64> {
         .collect()
 }
 
+/// Whether the Slint row `t` is core row `id` (`row_ids`).
+fn same(t: &TabItem, id: u64) -> bool {
+    u64::try_from(t.id).is_ok_and(|i| i == id)
+}
+
 fn index(i: i32) -> usize {
     usize::try_from(i).unwrap_or(usize::MAX)
 }
@@ -115,9 +146,13 @@ impl Driver {
     fn new(window: &AppWindow, seam: Seam) -> Self {
         let row_y = Rc::new(VecModel::<f32>::default());
         let row_scale = Rc::new(VecModel::<f32>::default());
+        let row_enter = Rc::new(VecModel::<f32>::default());
+        let leaving = Rc::new(VecModel::<LeavingRow>::default());
         let edge = Rc::new(VecModel::<f32>::default());
         window.set_row_y(ModelRc::from(row_y.clone()));
         window.set_row_scale(ModelRc::from(row_scale.clone()));
+        window.set_row_enter(ModelRc::from(row_enter.clone()));
+        window.set_leaving_rows(ModelRc::from(leaving.clone()));
         window.set_seam_edge(ModelRc::from(edge.clone()));
         let (ids, row) = model_rows(window);
         let space = active_space(window);
@@ -130,8 +165,21 @@ impl Driver {
             spaces: SpaceSwitcher::new(space.unwrap_or(0)),
             seam,
             scroll: Scroller::new(),
+            page_scroll: Scroller::new(),
+            beam: Beam::Idle,
+            watch: beam::Watch::default(),
+            laps: 0,
+            page_tab: None,
+            page_t: OVERLAP_IN,
+            space_t: OVERLAP_IN,
+            thinking: beam::Thinking::Idle,
+            query: Default::default(),
             row_y,
             row_scale,
+            row_enter,
+            items: window.get_tabs().iter().collect(),
+            gone: vec![],
+            leaving,
             edge,
             origin: None,
             clock_ms: 0.0,
@@ -150,10 +198,23 @@ impl Driver {
     fn read_model(&mut self, window: &AppWindow) {
         let (ids, row) = model_rows(window);
         self.tabs.set_ids(&row_ids(&ids), row);
+        // keep what a dropped row showed while it leaves
+        let items: Vec<TabItem> = window.get_tabs().iter().collect();
+        let old = std::mem::replace(&mut self.items, items);
+        for l in &self.tabs.leaving {
+            if !self.gone.iter().any(|g| same(g, l.id))
+                && let Some(item) = old.iter().find(|t| same(t, l.id))
+            {
+                self.gone.push(item.clone());
+            }
+        }
         self.ids = ids;
         window.set_selected_row(slint_index(row));
         let space = active_space(window);
         if let Some(i) = space {
+            if i != self.spaces.active {
+                self.space_t = 0.0;
+            }
             self.spaces.active = i;
         }
         window.set_space_index(slint_index(space));
@@ -198,6 +259,24 @@ impl Driver {
             &self.row_scale,
             self.tabs.rows.iter().map(|r| r.s.x as f32).collect(),
         );
+        sync(
+            &self.row_enter,
+            self.tabs.rows.iter().map(|r| r.entrance() as f32).collect(),
+        );
+        let leaving = &self.tabs.leaving;
+        self.gone.retain(|g| leaving.iter().any(|l| same(g, l.id)));
+        let rows = leaving
+            .iter()
+            .filter_map(|l| {
+                let tab = self.gone.iter().find(|g| same(g, l.id))?;
+                Some(LeavingRow {
+                    tab: tab.clone(),
+                    y: l.y as f32,
+                    e: l.progress() as f32,
+                })
+            })
+            .collect();
+        sync(&self.leaving, rows);
         let ind = self.tabs.indicator();
         window.set_indicator_y(ind.y as f32);
         window.set_indicator_stretch(ind.stretch as f32);
@@ -269,7 +348,70 @@ impl Driver {
             window.set_thumb_height(h as f32);
         }
         window.set_thumb_visible(r.thumb_visible);
+
+        // the open native page's scroller
+        let page = window.global::<PageScroll>();
+        self.page_scroll.measure(
+            f64::from(page.get_viewport()),
+            f64::from(page.get_content()),
+        );
+        moving |= self.page_scroll.step(dt, now);
+        let r = self.page_scroll.render(now);
+        page.set_y(r.shown as f32);
+        if let Some((top, h)) = r.thumb {
+            page.set_thumb_top(top as f32);
+            page.set_thumb_height(h as f32);
+        }
+        page.set_thumb_visible(r.thumb_visible);
+
+        // the address pill's border beam: a lap when another tab is shown, lapping while the
+        // page loads, fading once it has loaded (beam.rs)
+        moving |= self.step_beam(window, dt);
+        moving |= self.step_page(window, dt);
+        self.space_t = (self.space_t + dt).min(OVERLAP_IN);
+        window.set_space_enter(overlap_in(self.space_t) as f32);
+        moving |= self.space_t < OVERLAP_IN;
         moving
+    }
+
+    /// A tab switch: the newly shown page enters (one page only: a split's panes keep their
+    /// places). Not on the first page.
+    fn step_page(&mut self, window: &AppWindow, dt: f64) -> bool {
+        let tab = Some(i64::from(window.get_active_tab_id())).filter(|&id| id >= 0);
+        let was = std::mem::replace(&mut self.page_tab, tab);
+        if was.is_some() && tab.is_some() && was != tab && window.get_panes().row_count() <= 1 {
+            self.page_t = 0.0;
+        } else {
+            self.page_t = (self.page_t + dt).min(OVERLAP_IN);
+        }
+        window.set_page_enter(overlap_in(self.page_t) as f32);
+        self.page_t < OVERLAP_IN
+    }
+
+    fn step_beam(&mut self, window: &AppWindow, dt: f64) -> bool {
+        let tab = Some(i64::from(window.get_active_tab_id())).filter(|&id| id >= 0);
+        let hue = beam::hue(self.laps);
+        if let Some(event) = self.watch.observe(tab, window.get_address_loading(), hue) {
+            if matches!(
+                event,
+                beam::Event::Shown { .. } | beam::Event::LoadStarted { .. }
+            ) {
+                self.laps += 1;
+            }
+            self.beam = beam::transition(self.beam, event);
+        }
+        self.beam = beam::transition(self.beam, beam::Event::Tick(dt));
+        window.set_address_beam(shape_of(self.beam.shape()));
+
+        // the command bar thinks while you type (command.tsx)
+        let query = window.get_command_query();
+        if query != self.query {
+            self.thinking = beam::Thinking::typed(query.trim().is_empty());
+            self.query = query;
+        }
+        self.thinking = self.thinking.tick(dt);
+        window.set_command_beam(shape_of(self.thinking.shape()));
+        self.beam.running() || self.thinking != beam::Thinking::Idle
     }
 
     /// One rendered frame at `now`. Returns true while another frame is needed; once idle it
@@ -285,6 +427,16 @@ impl Driver {
         }
         moving
     }
+}
+
+/// A beam shape for Slint; none draws nothing.
+fn shape_of(shape: Option<beam::Shape>) -> BeamShape {
+    shape.map_or(BeamShape::default(), |s| BeamShape {
+        head: s.head as f32,
+        length: s.length as f32,
+        strength: s.strength as f32,
+        hue: s.hue as f32,
+    })
 }
 
 type Shared = Rc<RefCell<Driver>>;
@@ -498,7 +650,74 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
             None
         })
     });
+    wire_page_scroll(window, &driver);
     Wired { driver, glass }
+}
+
+/// The open native page's scroller: wheel, touch and the thumb from `PageScroll`.
+fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
+    let page = window.global::<PageScroll>();
+    let hook = || (Rc::clone(driver), window.as_weak());
+    let (d, w) = hook();
+    page.on_wheel(move |dy| {
+        run(&d, &w, |s, _| {
+            let now = s.now_ms();
+            s.page_scroll.wheel(f64::from(dy), DeltaMode::Pixel, now);
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_touch_down(move |y| {
+        run(&d, &w, |s, _| {
+            let now = s.now_ms();
+            s.page_scroll.touch_down(f64::from(y), now);
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_touch_move(move |y| {
+        run(&d, &w, |s, _| {
+            let now = s.now_ms();
+            s.page_scroll.touch_move(f64::from(y), now);
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_touch_up(move || {
+        run(&d, &w, |s, _| {
+            s.page_scroll.touch_up();
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_thumb_down(move |y| {
+        run(&d, &w, |s, _| {
+            s.page_scroll.thumb_down(f64::from(y));
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_thumb_move(move |y| {
+        run(&d, &w, |s, _| {
+            s.page_scroll.thumb_move(f64::from(y));
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_thumb_up(move || {
+        run(&d, &w, |s, _| {
+            let now = s.now_ms();
+            s.page_scroll.thumb_up(now);
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_reset(move || {
+        run(&d, &w, |s, _| {
+            s.page_scroll.reset();
+            None
+        })
+    });
 }
 
 /// Wire the shell driver, its seam starting as `seam`, and register the window's one

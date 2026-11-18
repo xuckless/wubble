@@ -16,6 +16,13 @@ import { SheetButton } from "sheet-button.slint";
 // remembered decision).
 export component PermissionPrompt inherits Rectangle {
     in property <PermissionView> prompt;
+    // What the panel shows: the open request's, kept while it leaves.
+    property <PermissionView> shown;
+    changed open => {
+        if root.open {
+            root.shown = root.prompt;
+        }
+    }
     // (allow, remember)
     callback answered(bool, bool);
 
@@ -26,13 +33,18 @@ export component PermissionPrompt inherits Rectangle {
     property <int> serial: root.prompt.serial;
     changed serial => {
         root.remember = false;
+        if root.open {
+            root.shown = root.prompt;
+        }
     }
 
     width: Shell.prompt-width;
     height: body.preferred-height;
-    visible: root.open;
+    // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
+    // the panel has faded; only the open prompt answers.
+    visible: root.open || panel.opacity > 0;
 
-    GlassPanel {
+    panel := GlassPanel {
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
         over-content: true;
@@ -40,8 +52,8 @@ export component PermissionPrompt inherits Rectangle {
         transform-scale: root.open ? 1 : Motion.dropdownFrom;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Shell.menu-in : Shell.menu-out;
-            easing: root.open ? Motion.easeOut : Motion.easeIn;
+            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
         TouchArea { }
 
@@ -49,14 +61,14 @@ export component PermissionPrompt inherits Rectangle {
             padding: Spacing.s4;
             spacing: Spacing.s2;
             Text {
-                text: root.prompt.title;
+                text: root.shown.title;
                 color: Palette.ink;
                 font-family: Fonts.ui;
                 font-size: Type.heading.size;
                 font-weight: Type.heading.weight;
                 overflow: elide;
             }
-            for line in root.prompt.lines: Text {
+            for line in root.shown.lines: Text {
                 text: line;
                 color: Palette.mist;
                 font-family: Fonts.ui;
@@ -76,14 +88,18 @@ export component PermissionPrompt inherits Rectangle {
                 SheetButton {
                     text: "Block";
                     clicked => {
-                        root.answered(false, root.remember);
+                        if root.open {
+                            root.answered(false, root.remember);
+                        }
                     }
                 }
                 SheetButton {
                     text: "Allow";
                     primary: true;
                     clicked => {
-                        root.answered(true, root.remember);
+                        if root.open {
+                            root.answered(true, root.remember);
+                        }
                     }
                 }
             }

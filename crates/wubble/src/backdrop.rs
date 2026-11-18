@@ -6,7 +6,7 @@
 //! `src/wubble/slint`, owner's code, moved into that one notifier): the scene renders under the
 //! UI and its image is the window's bottom layer. The scene is fed from data only: the glass
 //! list the panels report (`wubble_ui::glass`), the active Space's tint, the address pill's
-//! `loading`, the pointer (from the host's winit filter) and, for the quality governor, each
+//! beam (`address-beam`, the driver's), the pointer (from the host's winit filter) and, for the quality governor, each
 //! frame's load ([`frame_load`]).
 
 use std::time::{Duration, Instant};
@@ -16,7 +16,7 @@ use slint::winit_030::WinitWindowAccessor;
 use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::{
-    BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Tier,
+    Beam, BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Tier,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
@@ -95,8 +95,6 @@ pub struct SceneHost {
     budget: Option<Duration>,
     /// The tint the palette was last dyed from.
     tint: Option<Rgb>,
-    /// The address pill's `loading` last frame (the beam laps on its rising edge).
-    loading: bool,
     /// The last logical pointer position, for taps.
     pointer: Option<(f32, f32)>,
     image_error_logged: bool,
@@ -136,7 +134,6 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
                 setting: GlassSetting::Auto,
                 budget: None,
                 tint: None,
-                loading: false,
                 pointer: None,
                 image_error_logged: false,
             }))
@@ -247,11 +244,16 @@ impl Glass {
             s.renderer.scene.set_palette(dye(t).map(rgb01));
             s.tint = tint;
         }
-        let loading = window.get_address_loading();
-        if loading && !s.loading {
-            s.renderer.scene.lap_beam();
-        }
-        s.loading = loading;
+        // the driver owns the beam's lap (wubble_core::beam); the scene draws this frame's shape
+        let b = window.get_address_beam();
+        s.renderer
+            .scene
+            .set_beam_shape((b.strength > 0.0).then_some(Beam {
+                head: b.head.into(),
+                length: b.length.into(),
+                strength: b.strength.into(),
+                hue: b.hue.into(),
+            }));
 
         let interval = s
             .renderer

@@ -9,7 +9,9 @@
 //! In Slint: push `rows()` into `[float]` models for each row's y and scale, and the indicator's
 //! y / stretch / origin into the Sidebar's `indicator-*` properties (driver.rs).
 
-use crate::motion::{K, Spring, Stretch, clamp, spring, squash_of, step};
+use crate::motion::{
+    K, OVERLAP_IN, Spring, Stretch, bezier, clamp, ease, overlap_in, spring, squash_of, step,
+};
 
 // @source slint-tabs
 #[allow(non_snake_case, non_upper_case_globals)]
@@ -29,6 +31,25 @@ pub struct RowAnim {
     pub id: u64,
     pub y: Spring,
     pub s: Spring,
+    /// wubble: seconds since the row was inserted, for its Overlap entrance (`.wb-tab` runs
+    /// `wb-in`, browser.css); `OVERLAP_IN` or more once it has arrived. The TS has CSS run it.
+    pub enter: f64,
+}
+
+impl RowAnim {
+    fn arrived(id: u64, slot: usize) -> Self {
+        RowAnim {
+            id,
+            y: spring(slot as f64 * TABS::pitch),
+            s: spring(1.0),
+            enter: OVERLAP_IN,
+        }
+    }
+
+    /// How far its entrance is, 0..1 (1 once arrived).
+    pub fn entrance(&self) -> f64 {
+        overlap_in(self.enter)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -39,6 +60,26 @@ struct Drag {
     y0: f64,
     start: f64,
     moved: bool,
+}
+
+/// wubble: a row the model dropped, kept while it leaves (`.wb-tab-closing` runs `wb-tab-out`:
+/// 190 ms in-out to clear, blurred and 0.94; tabs.tsx keeps the row until then). The TS delays
+/// the close itself; here the host has already closed the tab, so the row leaves where it was
+/// while the others close the gap (Overlap: old and new share the screen).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Leaving {
+    pub id: u64,
+    /// where it was, px
+    pub y: f64,
+    /// seconds since it left
+    pub t: f64,
+}
+
+impl Leaving {
+    /// How far it has gone, 0..1, on the in-out curve.
+    pub fn progress(&self) -> f64 {
+        bezier(ease::inOut, self.t / (TABS::exitMs / 1000.0))
+    }
 }
 
 /// What a pointer-up on a row means.
@@ -69,6 +110,8 @@ pub struct TabRows {
     /// wubble change: `None` when the active tab is not a row (a pinned tab, an empty Space);
     /// the indicator then rests at the top and the Sidebar hides it.
     pub active: Option<usize>,
+    /// rows on their way out (wubble)
+    pub leaving: Vec<Leaving>,
     ind_y: Spring,
     stretch: Stretch,
     drag: Option<Drag>,
@@ -79,15 +122,12 @@ impl TabRows {
         let rows = ids
             .iter()
             .enumerate()
-            .map(|(i, &id)| RowAnim {
-                id,
-                y: spring(i as f64 * TABS::pitch),
-                s: spring(1.0),
-            })
+            .map(|(i, &id)| RowAnim::arrived(id, i))
             .collect();
         TabRows {
             rows,
             active,
+            leaving: vec![],
             ind_y: spring(active.unwrap_or(0) as f64 * TABS::pitch),
             stretch: Stretch::new(),
             drag: None,
@@ -95,18 +135,38 @@ impl TabRows {
     }
 
     /// Sync with the model: new rows start at their slot (they appear in place and fade in).
+    /// A Space switch replaces every row, so the whole list enters (tabs.tsx remounts the
+    /// list per Space: `key={sp.id}`).
     pub fn set_ids(&mut self, ids: &[u64], active: Option<usize>) {
         let mut next = Vec::with_capacity(ids.len());
         for (i, &id) in ids.iter().enumerate() {
             match self.rows.iter().position(|r| r.id == id) {
                 Some(j) => next.push(self.rows[j].clone()),
                 None => next.push(RowAnim {
-                    id,
-                    y: spring(i as f64 * TABS::pitch),
-                    s: spring(1.0),
+                    enter: 0.0,
+                    ..RowAnim::arrived(id, i)
                 }),
             }
         }
+        // Rows the model dropped leave where they were, unless nothing stayed (another Space: the
+        // list is a new one, as tabs.tsx remounts it per Space).
+        let kept = self.rows.iter().any(|r| ids.contains(&r.id));
+        if kept {
+            self.leaving
+                .extend(
+                    self.rows
+                        .iter()
+                        .filter(|r| !ids.contains(&r.id))
+                        .map(|r| Leaving {
+                            id: r.id,
+                            y: r.y.x,
+                            t: 0.0,
+                        }),
+                );
+        } else {
+            self.leaving.clear();
+        }
+        self.leaving.retain(|l| !ids.contains(&l.id));
         self.rows = next;
         self.active = active;
         // wubble change: the host's model can change under a held press (a tab closes itself,
@@ -222,8 +282,18 @@ impl TabRows {
     pub fn step(&mut self, dt: f64) -> bool {
         let mut moving = false;
         let d = self.drag;
+        let exit = TABS::exitMs / 1000.0;
+        for l in &mut self.leaving {
+            l.t += dt;
+        }
+        self.leaving.retain(|l| l.t < exit);
+        moving |= !self.leaving.is_empty();
         let slots: Vec<Option<usize>> = self.rows.iter().map(|r| self.slot_of(r.id)).collect();
         for (r, slot) in self.rows.iter_mut().zip(slots) {
+            if r.enter < OVERLAP_IN {
+                r.enter += dt;
+                moving = true;
+            }
             let dragging = matches!(d, Some(d) if d.moved && d.id == r.id);
             if dragging {
                 r.y.x = d.unwrap().y0;
@@ -317,6 +387,41 @@ impl SpaceSwitcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inserted_rows_enter_and_first_rows_do_not() {
+        let mut t = TabRows::new(&[1, 2], Some(0));
+        let arrived = overlap_in(OVERLAP_IN);
+        assert!(
+            t.rows.iter().all(|r| r.entrance() == arrived),
+            "at launch: in place"
+        );
+        t.set_ids(&[1, 3, 2], Some(0));
+        assert_eq!(t.rows[1].entrance(), 0.0, "a new tab starts from nothing");
+        assert_eq!(t.rows[0].entrance(), arrived);
+        assert!(t.step(0.016));
+        let mid = t.rows[1].entrance();
+        assert!(mid > 0.0 && mid < 1.0);
+        for _ in 0..20 {
+            t.step(0.016);
+        }
+        assert_eq!(t.rows[1].entrance(), arrived);
+        // a closed row leaves where it was, over 190 ms
+        t.set_ids(&[1, 2], Some(0));
+        assert_eq!(t.leaving.len(), 1);
+        assert_eq!((t.leaving[0].id, t.leaving[0].y), (3, TABS::pitch));
+        t.step(0.1);
+        let p = t.leaving[0].progress();
+        assert!(p > 0.0 && p < 1.0);
+        for _ in 0..10 {
+            t.step(0.016);
+        }
+        assert!(t.leaving.is_empty(), "gone after exitMs");
+        // another Space: every row is new, so the whole list enters (and none leaves)
+        t.set_ids(&[7, 8], None);
+        assert!(t.leaving.is_empty());
+        assert!(t.rows.iter().all(|r| r.entrance() == 0.0));
+    }
 
     #[test]
     fn drag_reorders_and_settles() {

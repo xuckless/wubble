@@ -148,17 +148,69 @@ fn moving(app: &AppWindow) {
     assert_eq!(*log.borrow(), ["maximise"]);
 }
 
+/// The address pill's border beam (wubble_core::beam via the driver), drawn by Slint here (no
+/// scene): one lap when another tab is shown, lapping while the page loads, then the design's
+/// fade. Frames are stepped by hand (16 ms each).
 fn loading(app: &AppWindow) {
-    assert_eq!(app.get_address_sheen(), 0.0);
+    app.set_active_tab_id(1);
+    let driver = wubble_ui::driver::wire(app, wubble_core::seam::Seam::new()).driver;
+    let frames = |n: usize| {
+        for _ in 0..n {
+            driver.borrow_mut().advance(app, 0.016);
+        }
+        mock_elapsed_time(Duration::from_millis(1));
+        app.get_address_sheen()
+    };
+    assert_eq!(frames(10), 0.0, "nothing on the first page");
+    // another tab: one lap of 1.5 s, bright after 120 ms, gone after it
+    app.set_active_tab_id(2);
+    assert!(frames(10) > 0.99);
+    assert!(
+        driver.borrow_mut().advance(app, 0.016),
+        "the lap wants frames"
+    );
+    assert_eq!(frames(90), 0.0, "the lap ended");
+    assert!(!driver.borrow_mut().advance(app, 0.016), "idle again");
+    // a load laps for as long as it runs
     app.set_address_loading(true);
-    mock_elapsed_time(Duration::from_millis(200));
-    assert!(app.get_address_sheen() > 0.99);
+    assert_eq!(frames(400), 1.0, "still lapping after 6 s");
+    let head = app.get_address_beam().head;
+    assert_ne!(frames(5), 0.0);
+    assert_ne!(app.get_address_beam().head, head, "the head runs on");
+    // loaded: the rest of the lap, 975 ms
     app.set_address_loading(false);
-    mock_elapsed_time(Duration::from_millis(750));
-    let mid = app.get_address_sheen();
-    assert!(mid > 0.0 && mid < 1.0);
-    mock_elapsed_time(Duration::from_millis(1500));
-    assert_eq!(app.get_address_sheen(), 0.0);
+    let mid = frames(30);
+    assert!(mid > 0.0 && mid < 1.0, "fading: {mid}");
+    assert_eq!(frames(40), 0.0, "faded");
+}
+
+/// The native pages scroll on the design's scroller (PageScroll, driven by the shell driver): the
+/// wheel glides there, a push past the end rubber-bands and comes home.
+fn page_scroll(app: &AppWindow) {
+    let driver = wubble_ui::driver::wire(app, wubble_core::seam::Seam::new()).driver;
+    let page = app.global::<wubble_ui::PageScroll>();
+    page.set_viewport(100.0);
+    page.set_content(300.0);
+    let frames = |n: usize| {
+        for _ in 0..n {
+            mock_elapsed_time(Duration::from_millis(16));
+            driver.borrow_mut().advance(app, 0.016);
+        }
+        page.get_y()
+    };
+    page.invoke_wheel(50.0);
+    let early = frames(2);
+    assert!(
+        early > 0.0 && early < 50.0,
+        "on a spring, not a jump: {early}"
+    );
+    assert!((frames(60) - 50.0).abs() < 0.5);
+    page.invoke_wheel(400.0);
+    let over = frames(4);
+    assert!(over > 200.0, "past the end it gives: {over}");
+    assert!((frames(200) - 200.0).abs() < 0.5, "and comes home");
+    page.invoke_reset();
+    assert_eq!(frames(1), 0.0);
 }
 
 #[test]
@@ -171,4 +223,5 @@ fn window_frame() {
     edges(&app);
     moving(&app);
     loading(&app);
+    page_scroll(&app);
 }
