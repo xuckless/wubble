@@ -296,6 +296,20 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    and libcef_dll `CefStreamResourceHandler` (BSD-3-Clause), no code copied.
    Lets the content blocker serve uBO's `$redirect=` stubs, which Chromium
    would refuse as a `data:` redirect target. Test: the data URL parsing.
+29. **Response observer.** `surface.rs`: new `ResponseInfo` (URL, browser
+   id, raw resource type, status, MIME type without parameters,
+   `Content-Length`, raw `Content-Range` and `Content-Disposition`,
+   `Accept-Ranges: bytes`) and `ResponseObserver` (a shared closure, a
+   panic caught where unwinding is on); `CefSurfaceConfig::response_observer`
+   (default `None`). `handlers.rs`: `SharedHandlers::build` takes it next to
+   the request filter; `resource_request_handler` returns the handler when
+   either is set (the filter becomes optional inside it), and the handler's
+   new `on_resource_response` reports the headers and returns false (the
+   request is never changed). The three platform producers pass it on. Shape
+   from cefclient `ClientHandler::OnResourceResponse` (BSD-3-Clause), no code
+   copied. wubble's media downloader detects video, audio, HLS and DASH by
+   the response's MIME type, which the request hook cannot see. Test: the
+   header reading and a panicking observer.
 
 ## Not changed, on purpose
 

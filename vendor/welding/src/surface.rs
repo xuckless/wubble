@@ -828,6 +828,77 @@ impl std::fmt::Debug for RequestFilter {
     }
 }
 
+/// wubble change 29, see `WUBBLE_CHANGES.md`: the headers of one response
+/// CEF received, as [`ResponseObserver`] sees it. Built on CEF's IO thread.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResponseInfo {
+    pub url: String,
+    /// CEF's browser identifier, 0 when the request has no browser.
+    pub browser_id: i32,
+    /// CEF's raw `cef_resource_type_t` of the request.
+    pub resource_type: u32,
+    pub status: i32,
+    /// The MIME type without parameters, lower case (may be empty).
+    pub mime: String,
+    /// `Content-Length`, when present and a number.
+    pub content_length: Option<u64>,
+    /// The raw `Content-Range` header (empty when absent).
+    pub content_range: String,
+    /// The raw `Content-Disposition` header (empty when absent).
+    pub content_disposition: String,
+    /// `Accept-Ranges: bytes`.
+    pub accepts_ranges: bool,
+}
+
+impl ResponseInfo {
+    /// The header values as CEF hands them over: the MIME type cut at its
+    /// parameters and lower-cased, the length parsed.
+    pub(crate) fn from_headers(
+        url: String,
+        browser_id: i32,
+        resource_type: u32,
+        status: i32,
+        mime: &str,
+        header: impl Fn(&str) -> String,
+    ) -> Self {
+        let mime = mime.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+        Self {
+            url,
+            browser_id,
+            resource_type,
+            status,
+            mime,
+            content_length: header("Content-Length").trim().parse().ok(),
+            content_range: header("Content-Range").trim().to_owned(),
+            content_disposition: header("Content-Disposition").trim().to_owned(),
+            accepts_ranges: header("Accept-Ranges").trim().eq_ignore_ascii_case("bytes"),
+        }
+    }
+}
+
+/// wubble change 29: sees the headers of every response a view's requests
+/// get (CEF `OnResourceResponse`). Called on CEF's IO thread: it must not
+/// wait on the host's UI thread, and should be cheap and panic-free (a
+/// panic is caught where unwinding is on, see [`RequestFilter::check`]).
+#[derive(Clone)]
+pub struct ResponseObserver(pub(crate) Arc<dyn Fn(&ResponseInfo) + Send + Sync>);
+
+impl ResponseObserver {
+    pub fn new(observer: impl Fn(&ResponseInfo) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(observer))
+    }
+
+    pub fn seen(&self, response: &ResponseInfo) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(response)));
+    }
+}
+
+impl std::fmt::Debug for ResponseObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ResponseObserver")
+    }
+}
+
 /// Configuration for a single CEF browser surface.
 pub struct CefSurfaceConfig {
     pub initial_url: String,
@@ -921,6 +992,9 @@ pub struct CefSurfaceConfig {
     /// it. `None`, the default, installs no resource-request handler.
     /// wubble change, see `WUBBLE_CHANGES.md`.
     pub request_filter: Option<RequestFilter>,
+    /// Sees the headers of every response. `None`, the default, observes
+    /// nothing. wubble change 29, see `WUBBLE_CHANGES.md`.
+    pub response_observer: Option<ResponseObserver>,
 }
 
 impl Default for CefSurfaceConfig {
@@ -940,6 +1014,7 @@ impl Default for CefSurfaceConfig {
             windowless_frame_rate: 60,
             external_begin_frame: false,
             request_filter: None,
+            response_observer: None,
         }
     }
 }
@@ -2408,7 +2483,32 @@ mod request_vocabulary_tests {
     #[test]
     fn no_request_filter_by_default() {
         assert!(CefSurfaceConfig::default().request_filter.is_none());
+        assert!(CefSurfaceConfig::default().response_observer.is_none());
         assert_eq!(format!("{:?}", RequestFilter::new(|_| RequestAction::Allow)), "RequestFilter");
+    }
+
+    #[test]
+    // wubble change 29.
+    fn response_info_reads_the_headers() {
+        let headers = |name: &str| {
+            match name {
+                "Content-Length" => " 1234 ",
+                "Content-Range" => "bytes 0-99/5000",
+                "Accept-Ranges" => "Bytes",
+                _ => "",
+            }
+            .to_owned()
+        };
+        let info = ResponseInfo::from_headers("https://v.test/a".into(), 3, 8, 206, "Video/MP4; codecs=avc1", headers);
+        assert_eq!(info.mime, "video/mp4");
+        assert_eq!(info.content_length, Some(1234));
+        assert_eq!(info.content_range, "bytes 0-99/5000");
+        assert!(info.accepts_ranges);
+        assert_eq!((info.browser_id, info.resource_type, info.status), (3, 8, 206));
+        let bare = ResponseInfo::from_headers(String::new(), 0, 0, 200, "", |_| "x".into());
+        assert_eq!((bare.mime.as_str(), bare.content_length, bare.accepts_ranges), ("", None, false));
+        let panics = ResponseObserver::new(|_| panic!("observer bug"));
+        panics.seen(&bare);
     }
 
     #[test]

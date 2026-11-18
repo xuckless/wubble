@@ -172,6 +172,7 @@ impl LinuxCefProducer {
                 scripts.clone(),
                 metrics.clone(),
                 config.surface.request_filter.clone(), // wubble change
+                config.surface.response_observer.clone(), // wubble change 29
             );
             let devtools = Arc::new(crate::devtools::DevToolsChannel::default());
             devtools.set_enabled(config.surface.devtools_protocol);

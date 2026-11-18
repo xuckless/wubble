@@ -40,6 +40,7 @@ use crate::held::{Answer, Held, RequestId};
 use crate::permissions::{Pending, PermissionKind};
 use crate::surface::{
     CefSurfaceConfig, CefSurfaceEvent, MenuSource, NavigationEvent, RequestAction, RequestFilter,
+    ResponseInfo, ResponseObserver,
     ResourceRequest, WebEventQueue,
 };
 
@@ -497,6 +498,8 @@ impl SharedHandlers {
         metrics: Arc<Mutex<crate::view::ViewMetrics>>,
         // wubble change: checks each request before it is sent.
         request_filter: Option<RequestFilter>,
+        // wubble change 29: sees each response's headers.
+        response_observer: Option<ResponseObserver>,
     ) -> Self {
         Self {
             request: WeldRequestHandler::new(
@@ -504,6 +507,7 @@ impl SharedHandlers {
                 requests.clone(),
                 scripts,
                 request_filter,
+                response_observer,
             ),
             download: WeldDownloadHandler::new(events.clone(), requests.clone()),
             permission: WeldPermissionHandler::new(events.clone(), requests.clone()),
@@ -522,11 +526,13 @@ cef::wrap_request_handler! {
         requests: Arc<Requests>,
         scripts: Arc<crate::app::PendingScripts>,
         request_filter: Option<RequestFilter>,
+        response_observer: Option<ResponseObserver>,
     }
 
     impl RequestHandler {
         // wubble change: a resource-request handler only when the host set
-        // a filter, so without one CEF's default handling is untouched.
+        // a filter or a response observer (change 29), so without either
+        // CEF's default handling is untouched.
         // Shape from cefclient `ClientHandler::GetResourceRequestHandler`
         // (chromiumembedded/cef, BSD-3-Clause); no code copied.
         fn resource_request_handler(
@@ -539,9 +545,12 @@ cef::wrap_request_handler! {
             request_initiator: Option<&cef::CefString>,
             _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
         ) -> Option<cef::ResourceRequestHandler> {
-            let filter = self.request_filter.clone()?;
+            if self.request_filter.is_none() && self.response_observer.is_none() {
+                return None;
+            }
             Some(WeldResourceRequestHandler::new(
-                filter,
+                self.request_filter.clone(),
+                self.response_observer.clone(),
                 opt_string(request_initiator),
                 is_navigation != 0,
                 Arc::new(Mutex::new(None)),
@@ -673,7 +682,9 @@ fn in_site(host: &str, site: &str) -> bool {
 
 cef::wrap_resource_request_handler! {
     struct WeldResourceRequestHandler {
-        filter: RequestFilter,
+        filter: Option<RequestFilter>,
+        // wubble change 29.
+        observer: Option<ResponseObserver>,
         initiator: String,
         is_navigation: bool,
         // wubble change 28: what `RequestAction::Serve` decided, taken by
@@ -692,6 +703,7 @@ cef::wrap_resource_request_handler! {
             _callback: Option<&mut cef::Callback>,
         ) -> cef::ReturnValue {
             let Some(request) = request else { return cef::ReturnValue::CONTINUE };
+            let Some(filter) = &self.filter else { return cef::ReturnValue::CONTINUE };
             let url = cef_string(request.url());
             let resource_type = request.resource_type();
             let main_frame = resource_type == cef::ResourceType::MAIN_FRAME;
@@ -713,7 +725,7 @@ cef::wrap_resource_request_handler! {
                 is_navigation: self.is_navigation,
                 browser_id: browser.map_or(0, |b| b.identifier()),
             };
-            let action = self.filter.check(&checked);
+            let action = filter.check(&checked);
             let mut served = self.served.lock().unwrap_or_else(|e| e.into_inner());
             *served = None;
             match action {
@@ -731,6 +743,34 @@ cef::wrap_resource_request_handler! {
                     None => cef::ReturnValue::CANCEL,
                 },
             }
+        }
+
+        // wubble change 29: reports the response's headers; never changes
+        // the request (returns false). Called on the IO thread. Shape from
+        // cefclient `ClientHandler::OnResourceResponse` (BSD-3-Clause); no
+        // code copied.
+        fn on_resource_response(
+            &self,
+            browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            response: Option<&mut cef::Response>,
+        ) -> ::std::os::raw::c_int {
+            let (Some(observer), Some(request), Some(response)) = (&self.observer, request, response)
+            else {
+                return 0;
+            };
+            let header = |name: &str| cef_string(response.header_by_name(Some(&cef::CefString::from(name))));
+            let info = ResponseInfo::from_headers(
+                cef_string(request.url()),
+                browser.map_or(0, |b| b.identifier()),
+                request.resource_type().get_raw(),
+                response.status(),
+                &cef_string(response.mime_type()),
+                header,
+            );
+            observer.seen(&info);
+            0
         }
 
         // wubble change 28: serves what `on_before_resource_load` decided;
