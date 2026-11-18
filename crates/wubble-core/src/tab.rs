@@ -1,6 +1,6 @@
 //! Tab identity and lifecycle.
 
-use std::time::Instant;
+use crate::lifecycle::Lifecycle;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(pub u64);
@@ -23,9 +23,5 @@ pub struct Tab {
     pub id: TabId,
     pub url: String,
     pub title: String,
-    pub liveness: Liveness,
-    pub pinned: bool,
-    /// Playing audio, capturing media, holding a connection the user cares about, etc.
-    pub busy: bool,
-    pub last_visible: Instant,
+    pub lifecycle: Lifecycle,
 }

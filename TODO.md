@@ -132,7 +132,8 @@ After daily-drive
 ## M3 — Memory and sleeping
 
 - [x] Sleep policy as a pure function (`wubble_core::sleep`) with tests
-- [ ] Apply liveness: hide → freeze → discard → restore, with snapshot texture for discarded tabs
+- [x] Tab lifecycle state machine (`wubble_core::lifecycle`) with tests
+- [ ] Apply liveness effects in the engine: hide → freeze → discard → restore, with snapshot texture for discarded tabs
 - [ ] "Busy" detection: audio, capture, WebRTC, downloads, unsaved form input
 - [ ] Memory pressure source per OS (Linux PSI, Windows memory notifications, macOS dispatch source)
 - [ ] Per-tab memory/CPU accounting and a task manager view

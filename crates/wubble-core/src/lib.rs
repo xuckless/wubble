@@ -2,6 +2,7 @@
 //!
 //! Everything here must stay unit-testable without a GPU or a browser process.
 
+pub mod lifecycle;
 pub mod session;
 pub mod sleep;
 pub mod space;
