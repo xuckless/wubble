@@ -181,9 +181,13 @@ impl Stretch {
     }
 
     /// wubble change: take `value` as the last one seen without measuring a velocity (a frame
-    /// with no time passed: the size jumped, nothing moved at a speed).
-    pub fn seed(&mut self, value: f64) {
+    /// with no time passed: the size jumped, nothing moved at a speed). Returns whether it moved
+    /// from a known last value: the caller then keeps its clock running, so the next frame
+    /// measures a speed.
+    pub fn seed(&mut self, value: f64) -> bool {
+        let moved = !self.last.is_nan() && self.last != value;
         self.last = value;
+        moved
     }
 
     /// wubble change: forget the last value and the velocity (the part was not stepped for a

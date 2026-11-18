@@ -164,17 +164,15 @@ impl Default for PaneSprings {
 
 impl PaneSprings {
     /// One frame of `dt` seconds with the pane at `size` (logical px). Returns true while the
-    /// stretch or the fade moves. A frame with no time passed (the first after idle) only notes the size: a
-    /// size jump in no time is not a speed.
+    /// stretch or the fade moves. A frame with no time passed (the first after idle) only notes
+    /// the size: a size jump in no time is not a speed. It still returns true when the size
+    /// changed, so the driver keeps its clock and the next frame measures the speed.
     pub fn step(&mut self, size: (f64, f64), dt: f64) -> bool {
         if dt <= 0.0 {
-            self.x.seed(size.0);
-            self.y.seed(size.1);
-            return self.x.x() != 1.0
-                || self.y.x() != 1.0
-                || self.x.s.v != 0.0
-                || self.y.s.v != 0.0
-                || self.fade < 1.0;
+            let moved_x = self.x.seed(size.0);
+            let moved_y = self.y.seed(size.1);
+            // a spring at rest has exactly v 0 (`motion::step` snaps it)
+            return moved_x || moved_y || self.x.s.v != 0.0 || self.y.s.v != 0.0 || self.fade < 1.0;
         }
         self.fade = (self.fade + dt / FADE).min(1.0);
         // `Stretch` reaches `max` at `full` px/s; `WIN` reaches it at `stretchFull`.
@@ -395,6 +393,39 @@ mod tests {
         // the next real frame measures from 1010, not from nothing
         springs.step((1010.0, 600.0), DT);
         assert_eq!(springs.scale(view), (1.0, 1.0));
+    }
+
+    /// Review finding: the host's frame driver steps with dt 0 whenever the last frame did not
+    /// move (it drops its clock), so a stretch from rest must start anyway: a dt-0 frame whose
+    /// size changed reports movement, which keeps the clock for the next frame.
+    #[test]
+    fn a_drag_from_rest_stretches_under_the_hosts_clock() {
+        let mut springs = PaneSprings::default();
+        let view = PaneView::Stretching { from: A };
+        // at rest: the pane was laid out once and nothing moved since
+        assert!(!springs.step((1000.0, 600.0), 0.0));
+        // the host: dt 0 after a frame that did not move, DT after one that did
+        let mut moving = false;
+        let mut peak: f64 = 1.0;
+        let mut w = 1000.0;
+        for _ in 0..20 {
+            w += 30.0; // 1800 px/s
+            moving = springs.step((w, 600.0), if moving { DT } else { 0.0 });
+            peak = peak.max(springs.scale(view).0);
+        }
+        assert!(moving);
+        assert!(peak > 1.01, "{peak}");
+        // the same after a pause in the drag: the clock was dropped, and it starts again
+        while springs.step((w, 600.0), DT) {}
+        assert!(!springs.step((w, 600.0), 0.0));
+        moving = false;
+        let mut peak: f64 = 1.0;
+        for _ in 0..20 {
+            w -= 30.0;
+            moving = springs.step((w, 600.0), if moving { DT } else { 0.0 });
+            peak = peak.max(springs.scale(view).0);
+        }
+        assert!(peak > 1.01, "{peak}");
     }
 
     /// Review finding: a pane off screen while the window resized comes back without a twang.

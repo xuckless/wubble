@@ -193,7 +193,8 @@ pub enum Event {
 }
 
 /// One shell frame: whether the scene's texture and the panes were laid out for this frame's
-/// window size, and whether a pane was stretched (a stale frame) or masked (a bowed edge).
+/// window size, and whether a pane was stretched (drawn past filling it, scale > 1) or masked
+/// (a bowed edge).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Shell {
     pub scene_off: bool,
