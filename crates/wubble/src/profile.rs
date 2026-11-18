@@ -1,5 +1,5 @@
 //! Where a run keeps its data: the profile directory, holding wubble's
-//! database and (in browse mode) CEF's cache.
+//! database and (in browse mode) CEF's cache; and where downloads go.
 
 use std::path::{Path, PathBuf};
 
@@ -30,14 +30,24 @@ impl Profile {
     }
 }
 
+/// `--downloads` if given, else the OS downloads directory (the XDG user
+/// dir on Linux, `~/Downloads` on macOS, the known folder on Windows, via
+/// the `dirs` crate). `None`: downloads are declined.
+pub fn downloads_dir(cli: Option<PathBuf>) -> Option<PathBuf> {
+    choose_dir(cli, dirs::download_dir)
+}
+
 /// `cli` wins over the per-user default, which is only looked up without it.
 /// A relative `cli` is taken from the current directory.
+fn choose_dir(cli: Option<PathBuf>, default: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    match cli {
+        Some(dir) => Some(absolute(&dir)),
+        None => default(),
+    }
+}
+
 fn choose(cli: Option<PathBuf>, default: impl FnOnce() -> Option<PathBuf>) -> Option<Profile> {
-    let dir = match cli {
-        Some(dir) => absolute(&dir),
-        None => default()?,
-    };
-    Some(Profile { dir })
+    choose_dir(cli, default).map(|dir| Profile { dir })
 }
 
 fn absolute(dir: &Path) -> PathBuf {
@@ -69,6 +79,19 @@ mod tests {
         let p = choose(Some("rel".into()), || None).unwrap();
         assert!(p.dir.is_absolute(), "{p:?}");
         assert!(p.dir.ends_with("rel"));
+    }
+
+    #[test]
+    fn the_cli_downloads_folder_wins() {
+        let default = || -> Option<PathBuf> { panic!("not looked up") };
+        assert_eq!(choose_dir(Some("/dl".into()), default), Some("/dl".into()));
+        assert_eq!(
+            choose_dir(None, || Some("/home/u/Downloads".into())),
+            Some("/home/u/Downloads".into())
+        );
+        assert_eq!(choose_dir(None, || None), None);
+        let rel = choose_dir(Some("dl".into()), || None).unwrap();
+        assert!(rel.is_absolute() && rel.ends_with("dl"), "{rel:?}");
     }
 
     #[test]

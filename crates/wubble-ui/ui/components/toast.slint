@@ -1,0 +1,60 @@
+import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { GlassTier } from "model.slint";
+
+// A brief notice: the zoom level after Ctrl +/-/0, "Press Esc to exit full screen". One
+// component for both. Written from scratch: the design repo has no toast. Look and motion are
+// Ultra Reactivate's `.ur-o-toast` (src/ultra-reactivate/overlays.css, the owner's library):
+// 46 high, radius 14, rising 14 px from .95 on a 400 ms spring; on thick glass over content.
+// The host bumps `serial` with each notice; it shows for Shell.toast-shown, a later one restarts
+// the time. Pointer events pass through to the page.
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <int> serial;
+
+    property <bool> shown: false;
+    changed serial => {
+        root.shown = true;
+        hide.running = false;
+        hide.running = true;
+    }
+    hide := Timer {
+        interval: Shell.toast-shown;
+        running: false;
+        triggered => {
+            root.shown = false;
+            self.running = false;
+        }
+    }
+
+    width: label.preferred-width + 2 * Shell.toast-pad;
+    height: Shell.toast-height;
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.toast-radius;
+        over-content: true;
+        y: root.shown ? 0px : Shell.toast-rise;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: root.shown ? 1 : Motion.dropdownFrom;
+        opacity: root.shown ? 1 : 0;
+        animate y, transform-scale {
+            duration: root.shown ? Shell.toast-in : Shell.toast-out;
+            easing: root.shown ? Motion.easeSpring : Motion.easeIn;
+        }
+        animate opacity {
+            duration: root.shown ? Shell.menu-in : Shell.toast-out;
+            easing: root.shown ? Motion.easeOut : Motion.easeIn;
+        }
+        label := Text {
+            text: root.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            color: Palette.ink;
+            font-family: Fonts.ui;
+            font-size: Shell.toast-font;
+            font-weight: Shell.toast-weight;
+        }
+    }
+}

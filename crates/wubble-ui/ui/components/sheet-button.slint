@@ -1,0 +1,14 @@
+import { Palette } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { PressableButton } from "../components.slint";
+
+// A sheet's button (dialog, sign-in, error panel, permission prompt): Ultra Reactivate's
+// `.ur-o-dialog` buttons, 42 high, radius 11, 16 at the sides. `primary`: the default action,
+// filled at rest.
+export component SheetButton inherits PressableButton {
+    in property <bool> primary;
+    height: Shell.sheet-button;
+    padding-x: Shell.sheet-button-pad;
+    border-radius: Shell.sheet-button-radius;
+    background: self.primary ? (self.hovered ? Palette.rim : Palette.shell) : (self.hovered ? Palette.shell : transparent);
+}

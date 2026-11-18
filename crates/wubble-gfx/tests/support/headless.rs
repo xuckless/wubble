@@ -47,7 +47,8 @@ pub struct Run {
 /// Renders `run` at [`VIEW`], 1/60 s per frame, and reads the output back:
 /// (width, height, tightly packed RGBA).
 pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32, Vec<u8>) {
-    let mut r = Renderer::from_device(device.clone(), queue.clone(), SceneOptions::default());
+    let mut r = Renderer::from_device(device.clone(), queue.clone(), SceneOptions::default())
+        .expect("the scene builds on the test device");
     r.set_quality(run.quality);
     r.scene.pointer_move(150.0, 90.0);
     let (w, h, dpr) = VIEW;

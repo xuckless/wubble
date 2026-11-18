@@ -1,22 +1,35 @@
+mod backdrop;
 mod bar;
 mod bind;
+mod chooser;
 mod cli;
 mod host;
+mod ime;
 mod input;
+mod menu;
 mod nav_smoke;
+mod page_error;
+mod page_smoke;
+mod panes;
 mod perform;
 mod persist;
 mod pixels;
 mod profile;
+mod prompt;
+mod screen;
 mod session_smoke;
 mod shell;
+mod split_smoke;
+mod surface;
 mod tabs_smoke;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use backdrop::Glass;
 use cli::{Command, Phase, Smoke};
 use host::{Checks, Host};
 use nav_smoke::NavSmoke;
@@ -25,13 +38,16 @@ use profile::Profile;
 use session_smoke::SessionSmoke;
 use slint::ComponentHandle;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
+use split_smoke::SplitSmoke;
 use tabs_smoke::TabsSmoke;
+use wubble_core::seam::Seam;
 use wubble_engine::app::{self, Engine, EngineConfig, EngineError, PumpScheduler};
 use wubble_engine::input::Point;
 use wubble_engine::view::Layout;
 use wubble_gfx::pacing::FrameStats;
 use wubble_gfx::{FrameSize, GpuContext};
 use wubble_ui::AppWindow;
+use wubble_ui::glass::GlassRegistry;
 
 /// Pumps `--smoke boot` gives CEF before shutting down. A count, not a clock.
 const SMOKE_TICKS: usize = 10;
@@ -49,6 +65,9 @@ pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
 /// The third page of `--smoke tabs`.
 pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
+/// The page `--smoke page` drives.
+pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
+
 /// `--smoke tabs`'s pages, in tab order.
 pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
 
@@ -56,13 +75,21 @@ pub const TABS_SMOKE_PAGES: [&str; 3] = [SMOKE_PAGE, NAV_PAGE, TAB3_PAGE];
 /// policy's delays are a minute and more.
 const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
 
+/// How often live tabs are asked whether they play sound (the speaker glyph;
+/// CEF has no audible callback, see `wubble_engine::media`).
+const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
+
 fn main() -> ExitCode {
     let command = match cli::parse(std::env::args_os()) {
         Ok(command) => command,
         Err(e) => e.exit(),
     };
     match command {
-        Command::Run { url, profile } => match browse(url, profile) {
+        Command::Run {
+            url,
+            profile,
+            downloads,
+        } => match browse(url, profile, downloads) {
             Ok(Outcome { failure: None, .. }) => ExitCode::SUCCESS,
             Ok(Outcome {
                 failure: Some(e), ..
@@ -124,6 +151,52 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: tabs FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Split) => {
+            match with_smoke_dir(|config, dir| run(Mode::Split, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    split_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: split ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: split FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: split FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Page) => {
+            match with_smoke_dir(|config, dir| run(Mode::Page, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    page_zoom: Some(zoom),
+                    ..
+                }) => {
+                    println!("smoke: page ok zoom={zoom}%");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: page FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: page FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -191,10 +264,26 @@ fn main() -> ExitCode {
     }
 }
 
-/// Starts the spring-driven shell: sidebar seam, compact mode, Space indicator.
-fn install_shell_driver(window: &AppWindow) -> Result<(), Box<dyn std::error::Error>> {
-    wubble_ui::driver::install(window)?;
-    Ok(())
+/// Starts the spring-driven shell (sidebar seam from the saved `ui`, tab rows, Space
+/// indicator) and hands the scene its frames from the same, single rendering notifier.
+fn install_shell_driver(
+    window: &AppWindow,
+    ui: persist::UiState,
+    glass: &Rc<RefCell<Glass>>,
+) -> Result<Rc<RefCell<GlassRegistry>>, Box<dyn std::error::Error>> {
+    let seam = Seam::restored(ui.sidebar_width.into(), ui.mode);
+    let glass = Rc::clone(glass);
+    let panels = wubble_ui::driver::install(window, seam, move |window, now, items| {
+        if let Ok(mut glass) = glass.try_borrow_mut() {
+            glass.frame(window, now, items);
+        }
+        // The split's strings, stepped with the rest of the shell. Inside rendering the host
+        // may be busy (a pump renders); then this frame skips them and asks for the next.
+        if split_frame(window, now) {
+            window.window().request_redraw();
+        }
+    })?;
+    Ok(panels)
 }
 
 /// Pumps until every browser is closed and CEF has shut down. Bounded by the
@@ -212,13 +301,15 @@ fn drain(engine: &mut Engine) {
 fn browse(
     url: Option<String>,
     profile: Option<PathBuf>,
+    downloads: Option<PathBuf>,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
         ..config
     });
-    run(Mode::Browse { url }, config, &profile.dir)
+    let downloads = profile::downloads_dir(downloads);
+    run(Mode::Browse { url, downloads }, config, &profile.dir)
 }
 
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
@@ -289,18 +380,29 @@ struct Outcome {
     tabs_passed: bool,
     /// The `--smoke session` phase reached its end.
     session_passed: bool,
+    /// The zoom `--smoke page` passed with.
+    page_zoom: Option<u32>,
+    /// `--smoke split` reached its end.
+    split_passed: bool,
 }
 
 /// What the window is for.
 enum Mode {
-    /// `url`, or the bundled page if `None`.
-    Browse { url: Option<String> },
+    /// `url`, or the bundled page if `None`; downloads go to `downloads`.
+    Browse {
+        url: Option<String>,
+        downloads: Option<PathBuf>,
+    },
     /// Quit after `frames` accelerated frames of `url` (bundled page if `None`).
     Frames { frames: u64, url: Option<String> },
     /// `--smoke nav`.
     Nav,
     /// `--smoke tabs`.
     Tabs,
+    /// `--smoke split`.
+    Split,
+    /// `--smoke page`.
+    Page,
     /// One phase of `--smoke session`.
     Session(Phase),
 }
@@ -331,6 +433,17 @@ fn with_host(f: impl FnOnce(&mut Host)) {
         }
         Err(_) => eprintln!("wubble: host busy, input or pump request dropped"),
     });
+}
+
+/// The split's frame from the rendering notifier: whether another frame is needed. A busy host
+/// (rendering inside a pump) skips this one and asks for the next; no host needs none.
+fn split_frame(window: &AppWindow, now: Instant) -> bool {
+    HOST.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut host) => host
+            .as_mut()
+            .is_some_and(|host| host.split_frame(window, now)),
+        Err(_) => true,
+    })
 }
 
 /// Hands a pump request to the host.
@@ -398,17 +511,28 @@ pub fn page_url(html: &str) -> String {
 /// Hands the shell's web-content callbacks and raw window events to the host.
 fn connect_input(window: &AppWindow) {
     let point = |x: f32, y: f32| Point { x, y };
-    window.on_web_pointer_moved(move |x, y| with_host(|host| host.pointer_moved(point(x, y))));
-    window.on_web_pointer_left(move |x, y| with_host(|host| host.pointer_left(point(x, y))));
-    window.on_web_pointer_pressed(move |button, x, y| {
-        with_host(|host| host.pointer_button(button, true, point(x, y)))
+    window.on_web_pointer_moved(move |pane, x, y| {
+        with_host(|host| host.pointer_moved(pane, point(x, y)))
     });
-    window.on_web_pointer_released(move |button, x, y| {
-        with_host(|host| host.pointer_button(button, false, point(x, y)))
+    window.on_web_pointer_left(move |pane, x, y| {
+        with_host(|host| host.pointer_left(pane, point(x, y)))
     });
-    window.on_web_pointer_cancelled(|| with_host(Host::pointer_cancelled));
-    window
-        .on_web_scrolled(move |x, y, dx, dy| with_host(|host| host.scrolled(point(x, y), dx, dy)));
+    window.on_web_pointer_pressed(move |pane, button, x, y| {
+        with_host(|host| host.pointer_button(pane, button, true, point(x, y)))
+    });
+    window.on_web_pointer_released(move |pane, button, x, y| {
+        with_host(|host| host.pointer_button(pane, button, false, point(x, y)))
+    });
+    window.on_web_pointer_cancelled(|pane| with_host(|host| host.pointer_cancelled(pane)));
+    window.on_web_scrolled(move |pane, x, y, dx, dy| {
+        with_host(|host| host.scrolled(pane, point(x, y), dx, dy))
+    });
+    // The split's seams and the panes' close buttons.
+    window.on_split_grab(|j, x, y| with_host(|host| host.split_grab(j, x, y)));
+    window.on_split_drag(|x, y| with_host(|host| host.split_drag(x, y)));
+    window.on_split_release(|| with_host(Host::split_release));
+    window.on_split_even(|| with_host(Host::split_even));
+    window.on_pane_close(|id| with_host(|host| host.pane_close(id)));
     let weak = window.as_weak();
     window.on_web_focus_changed(move |_| {
         if let Some(window) = weak.upgrade() {
@@ -437,6 +561,12 @@ fn connect_shell(window: &AppWindow) {
             command(Cmd::CloseTab(t));
         }
     });
+    // A row dragged to slot `to` of the flat tab list.
+    window.on_tab_moved(|id, to| {
+        if let (Some(tab), Ok(to)) = (shell::tab_id(id), usize::try_from(to)) {
+            with_host(|host| host.move_tab(tab, to));
+        }
+    });
     window.on_space_switched(move |id| {
         if let Some(s) = shell::space_id(id) {
             command(Cmd::SwitchSpace(s));
@@ -461,6 +591,54 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
+    window.on_tab_context(|id, x, y| with_host(|host| host.tab_context(id, x, y)));
+    let weak = window.as_weak();
+    window.on_beside_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            with_host(|host| host.bar_for_beside(&window));
+        }
+    });
+    window.on_tab_mute_toggled(|id| {
+        if let Some(tab) = shell::tab_id(id) {
+            with_host(|host| host.toggle_mute(tab));
+        }
+    });
+}
+
+/// Hands the page's own UI (menu, dialog sheet, find bar) to the host.
+fn connect_surfaces(window: &AppWindow) {
+    use surface::FindEvent;
+    window.on_menu_chosen(|i| {
+        if let Ok(i) = usize::try_from(i) {
+            with_host(|host| host.menu_chosen(i));
+        }
+    });
+    window.on_menu_dismissed(|| {
+        with_host(|host| {
+            host.menu_dismissed();
+        })
+    });
+    window.on_dialog_answered(|accept, text, secret| {
+        with_host(|host| host.dialog_answered(accept, &text, &secret))
+    });
+    window.on_permission_answered(|allow, remember| {
+        with_host(|host| host.permission_answered(allow, remember))
+    });
+    window.on_error_primary(|| with_host(Host::error_primary));
+    window.on_error_secondary(|| with_host(Host::error_secondary));
+    window.on_download_action(|id, action| {
+        with_host(|host| host.download_action(i64::from(id), action))
+    });
+    window.on_find_edited(|q| with_host(|host| host.find_event(FindEvent::Query(q.into()))));
+    window.on_find_step(|forward| {
+        let event = if forward {
+            FindEvent::Next
+        } else {
+            FindEvent::Prev
+        };
+        with_host(|host| host.find_event(event));
+    });
+    window.on_find_closed(|| with_host(|host| host.find_event(FindEvent::Close)));
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
@@ -498,12 +676,19 @@ fn run(
         nav_smoke: None,
         tabs_smoke: None,
         session_smoke: None,
+        page_smoke: None,
+        split_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    // Smokes download into their throwaway profile.
+    let downloads = match &mode {
+        Mode::Browse { downloads, .. } => downloads.clone(),
+        _ => Some(profile.join("downloads")),
+    };
     // `url` is opened in a new tab; without one a fresh profile gets the
     // bundled page and a restored session opens nothing new.
     let (url, checks) = match mode {
-        Mode::Browse { url } => (url, none),
+        Mode::Browse { url, .. } => (url, none),
         Mode::Frames { frames, url } => {
             // Only the bundled page has known colours to check against.
             let check_pixels = url.is_none();
@@ -527,6 +712,20 @@ fn run(
             Some(bundled()),
             Checks {
                 tabs_smoke: Some(TabsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Split => (
+            Some(bundled()),
+            Checks {
+                split_smoke: Some(SplitSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Page => (
+            Some(page_url(PAGE_PAGE)),
+            Checks {
+                page_smoke: Some(page_smoke::PageSmoke::default()),
                 ..none
             },
         ),
@@ -556,20 +755,39 @@ fn run(
     });
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
+    let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));
     connect_input(&window);
     connect_shell(&window);
+    connect_surfaces(&window);
     wubble_ui::window::wire(&window);
-    install_shell_driver(&window)?;
-    if loaded.settings.ui.compact {
-        window.invoke_toggle_sidebar();
-    }
-    let host = Host::new(engine, &window, gpu.presenter(), loaded, store, url, checks);
+    let panels = install_shell_driver(&window, loaded.settings.ui, &glass)?;
+    let host = Host::new(
+        engine,
+        &window,
+        [
+            gpu.presenter(),
+            gpu.presenter(),
+            gpu.presenter(),
+            gpu.presenter(),
+        ],
+        glass,
+        panels,
+        loaded,
+        store,
+        url,
+        checks,
+        downloads,
+    );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.
     let lifecycle = slint::Timer::default();
+    let audible = slint::Timer::default();
     if browsing {
         lifecycle.start(slint::TimerMode::Repeated, LIFECYCLE_TICK, || {
             with_host(|host| host.tick(Instant::now()))
+        });
+        audible.start(slint::TimerMode::Repeated, AUDIBLE_PROBE_EVERY, || {
+            with_host(Host::probe_audible)
         });
     }
 
@@ -577,6 +795,7 @@ fn run(
     // Read while the window still exists.
     let ui = host::ui_state(&window);
     drop(lifecycle);
+    drop(audible);
     drop(window);
     let mut host = HOST.take().ok_or("the host went missing")?;
     host.shutdown(ui);
@@ -588,6 +807,8 @@ fn run(
         failure: host.failure.take().map(Into::into),
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
+        split_passed: host.split_passed,
         session_passed: host.session_passed,
+        page_zoom: host.page_zoom,
     })
 }

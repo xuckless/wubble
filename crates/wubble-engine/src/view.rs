@@ -35,7 +35,7 @@ use crate::find::{self, Find, FindEffect, FindInput};
 use crate::input::{
     self, CefKey, ClickTracker, KeyId, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
 };
-use crate::media::{self, Fullscreen, FullscreenInput, MediaEffect};
+use crate::media::{self, AudioProbe, Fullscreen, FullscreenInput, MediaEffect, ProbeInput};
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 use crate::page::{
     ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags, LogLevel, PageEvent,
@@ -43,6 +43,14 @@ use crate::page::{
 };
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
+
+/// Script ids are unique per process, so a view never mistakes another
+/// script's answer for its probe's.
+fn next_probe_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Physical size and device scale of the rectangle a view fills.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -191,6 +199,7 @@ pub struct View {
     find: Find,
     fullscreen: Fullscreen,
     muted: bool,
+    audio: AudioProbe,
     zoom: Zoom,
     drag: DragSource,
 }
@@ -234,6 +243,7 @@ impl View {
             find: Find::default(),
             fullscreen: Fullscreen::default(),
             muted: false,
+            audio: AudioProbe::default(),
             zoom: Zoom::default(),
             drag: DragSource::default(),
         })
@@ -458,6 +468,13 @@ impl View {
                     windows_key_code,
                     modifiers,
                 ))),
+                CefSurfaceEvent::ScriptCompleted { id, result } => {
+                    let audible = result.ok().and_then(|json| json.trim().parse().ok());
+                    self.apply_probe(ProbeInput::Answered {
+                        id: id.get(),
+                        audible,
+                    });
+                }
                 _ => {}
             }
         }
@@ -480,9 +497,17 @@ impl View {
 
     fn apply_route(&mut self, routed: Route, mode: RequestMode) {
         match routed {
+            Route::Crashed => {
+                eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
+                // A host that asks about requests draws its own crash page,
+                // whose Reload recovers; reloading here would hide it.
+                self.apply_nav(NavInput::RendererTerminated {
+                    reload: mode == RequestMode::DefaultNow,
+                });
+            }
             Route::Nav(input) => {
-                if input == NavInput::RendererTerminated {
-                    eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
+                if matches!(input, NavInput::Address(_)) {
+                    self.apply_probe(ProbeInput::Navigated);
                 }
                 self.apply_nav(input);
             }
@@ -524,8 +549,9 @@ impl View {
     }
 
     /// Answers a request as a dismissed prompt would (welding gives the same
-    /// answers when the view closes).
-    fn decline(&mut self, request: &PageEvent) {
+    /// answers when the view closes): for requests the host has no prompt
+    /// for. Anything that is not a request is ignored.
+    pub fn decline(&mut self, request: &PageEvent) {
         match *request {
             PageEvent::DialogRequested { id, kind, .. } => {
                 self.answer_dialog(id, kind.default_accept(), "");
@@ -641,6 +667,13 @@ impl View {
 
     pub fn cancel_download(&mut self, id: DownloadId) {
         self.apply_download(id, DownloadInput::Cancel, RequestMode::AskHost);
+    }
+
+    /// Downloads `url` as a new download (CEF `BrowserHost::StartDownload`);
+    /// it arrives as a fresh `DownloadRequested`. A retry starts over.
+    pub fn start_download(&mut self, url: &str) {
+        let url = cef::CefString::from(url);
+        self.send(|host| host.start_download(Some(&url)));
     }
 
     fn apply_download(&mut self, id: DownloadId, input: DownloadInput, mode: RequestMode) {
@@ -787,6 +820,33 @@ impl View {
 
     pub fn is_muted(&self) -> bool {
         self.muted
+    }
+
+    /// Asks the page whether it plays sound ([`media::AUDIBLE_PROBE`]);
+    /// [`PageEvent::Audible`] follows when the answer changed. Ignored while
+    /// the last probe is unanswered or the view is closing.
+    pub fn probe_audible(&mut self) {
+        if !self.is_open() || !self.audio.idle() {
+            return;
+        }
+        let id = next_probe_id();
+        match self
+            .producer
+            .request_script_result(welding::WebRequestId::new(id), media::AUDIBLE_PROBE)
+        {
+            Ok(()) => self.apply_probe(ProbeInput::Sent(id)),
+            // No main frame yet (still loading), say: the next probe retries.
+            Err(e) => eprintln!(
+                "wubble-engine: view {}: audible probe: {e}",
+                self.browser_id
+            ),
+        }
+    }
+
+    fn apply_probe(&mut self, input: ProbeInput) {
+        let (next, event) = media::probe(self.audio, input);
+        self.audio = next;
+        self.page.extend(event);
     }
 
     fn execute_media(&mut self, effects: Vec<MediaEffect>) {
@@ -1015,6 +1075,8 @@ enum Route {
     DragStarted(PageEvent),
     /// Zoom is per host and may change on navigation without a callback.
     ObserveZoom,
+    /// The renderer process ended.
+    Crashed,
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1043,7 +1105,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             urls.into_iter().next().unwrap_or_default(),
         ))),
         E::NewWindowRequested { url, .. } => one(Route::Nav(NavInput::Popup(url))),
-        E::ContentProcessTerminated { .. } => one(Route::Nav(NavInput::RendererTerminated)),
+        E::ContentProcessTerminated { .. } => one(Route::Crashed),
         // ERR_ABORTED (-3) is a navigation replaced by another one.
         E::LoadError {
             url,

@@ -1,0 +1,129 @@
+import { Palette, Motion, Spacing, Fonts, Type, Chrome } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, PressableButton } from "../components.slint";
+import { FindView, GlassTier } from "model.slint";
+import { Icon, IconPaths } from "icon.slint";
+
+// Find in page: a strip at the content's top right, as Chromium places its find bar. Written
+// from scratch: the design repo has no find bar. The surface is Ultra Reactivate's
+// `.ur-o-surface` (radius 14, enters at .95 over 200 ms) on thick glass over content; the
+// buttons are the port's PressableButton. Enter steps to the next match, Shift+Enter to the
+// previous, Escape closes (Chromium find_bar_view.cc, Firefox findbar.js behaviour).
+export component FindBar inherits Rectangle {
+    in property <FindView> find;
+    callback edited(string);
+    // true: next, false: previous.
+    callback step(bool);
+    callback closed();
+
+    property <bool> open: root.find.open;
+
+    public function take-focus() {
+        input.focus();
+        input.select-all();
+    }
+
+    // The query follows the model when it opens (the last search) or the host changes it.
+    property <string> model-query: root.find.query;
+    changed model-query => {
+        if input.text != root.model-query {
+            input.text = root.model-query;
+        }
+    }
+
+    visible: root.open;
+    width: Shell.find-width;
+    height: Shell.find-height;
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        transform-origin: { x: self.width, y: 0px };
+        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        opacity: root.open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: Shell.menu-in;
+            easing: Motion.easeOut;
+        }
+        TouchArea { }
+
+        HorizontalLayout {
+            padding-left: Spacing.s3;
+            padding-right: Spacing.s1;
+            spacing: Spacing.s1;
+            input := TextInput {
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                single-line: true;
+                color: Palette.ink;
+                selection-background-color: Palette.rim;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                edited => {
+                    root.edited(self.text);
+                }
+                key-pressed(event) => {
+                    if event.text == Key.Return {
+                        root.step(!event.modifiers.shift);
+                        return accept;
+                    }
+                    if event.text == Key.Escape {
+                        root.closed();
+                        return accept;
+                    }
+                    return reject;
+                }
+                Text {
+                    text: "Find in page";
+                    visible: input.text == "";
+                    color: Palette.haze;
+                    font-family: Fonts.ui;
+                    font-size: Type.body.size;
+                    vertical-alignment: center;
+                    height: parent.height;
+                }
+            }
+            Text {
+                text: root.find.counter;
+                vertical-alignment: center;
+                color: Palette.haze;
+                font-family: Fonts.ui;
+                font-size: Type.label.size;
+            }
+            PressableButton {
+                padding-x: Spacing.s1;
+                width: Chrome.controls;
+                clicked => {
+                    root.step(false);
+                }
+                Icon {
+                    path: IconPaths.chevron-up;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            PressableButton {
+                padding-x: Spacing.s1;
+                width: Chrome.controls;
+                clicked => {
+                    root.step(true);
+                }
+                Icon {
+                    path: IconPaths.chevron-down;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            PressableButton {
+                padding-x: Spacing.s1;
+                width: Chrome.controls;
+                clicked => {
+                    root.closed();
+                }
+                Icon {
+                    path: IconPaths.close;
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+        }
+    }
+}

@@ -16,7 +16,9 @@ use std::time::Instant;
 
 use wubble_core::lifecycle::{Activity, Lifecycle, Pin};
 use wubble_core::model::Model;
-use wubble_core::space::{Container, ContainerId, Folder, FolderId, Item, Rgb, Space, SpaceId};
+use wubble_core::space::{
+    Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceId, SplitGroup,
+};
 use wubble_core::tab::{Liveness, Tab, TabId};
 
 use crate::*;
@@ -78,6 +80,7 @@ impl Store {
                 active: active
                     .map(|v| narrow(v, "tab id").map(|v: u64| TabId(v)))
                     .transpose()?,
+                split: None,
             });
         }
         if spaces.is_empty() {
@@ -161,6 +164,26 @@ impl Store {
             space.items = items.into_iter().map(|(_, i)| i).collect();
         }
 
+        // Splits: a group that is not a valid split of its Space's tabs is dropped, not an error,
+        // so a damaged layout never costs the session.
+        let mut groups: Vec<(Vec<TabId>, Vec<Option<f64>>)> = vec![(vec![], vec![]); spaces.len()];
+        let mut rows = c
+            .query(
+                "SELECT space_id, tab_id, stop FROM split_panes ORDER BY space_id, position",
+                (),
+            )
+            .await?;
+        while let Some(r) = rows.next().await? {
+            let space = SpaceId(narrow(r.get(0)?, "space id")?);
+            if let Some(&si) = space_at.get(&space) {
+                groups[si].0.push(TabId(narrow(r.get(1)?, "tab id")?));
+                groups[si].1.push(r.get(2)?);
+            }
+        }
+        for (space, (panes, stops)) in spaces.iter_mut().zip(groups) {
+            space.split = split_group(space, panes, stops);
+        }
+
         let mut rows = c
             .query("SELECT active_space_id FROM session WHERE id = 1", ())
             .await?;
@@ -180,12 +203,20 @@ impl Store {
             }
             None => spaces[0].id,
         };
-        // The model keeps the shown tab Active; every other tab has no renderer yet.
-        let shown = spaces
+        // The model keeps the shown tabs (each pane of a shown split) Active; every other tab
+        // has no renderer yet.
+        let shown: Vec<TabId> = spaces
             .iter()
             .find(|s| s.id == active_space)
-            .and_then(|s| s.active);
-        for t in tabs.iter_mut().filter(|t| Some(t.id) == shown) {
+            .and_then(|s| {
+                let a = s.active?;
+                Some(match &s.split {
+                    Some(g) if g.tabs.contains(&a) => g.tabs.clone(),
+                    _ => vec![a],
+                })
+            })
+            .unwrap_or_default();
+        for t in tabs.iter_mut().filter(|t| shown.contains(&t.id)) {
             t.lifecycle.liveness = Liveness::Active;
         }
         Model::from_parts(spaces, containers, tabs, active_space, now).map_err(Error::Corrupt)
@@ -205,6 +236,28 @@ impl Store {
     }
 }
 
+/// The split stored for `space`: its panes left to right and the stop after each (`None` on the
+/// last). `None` unless it is a valid split of the Space's tabs.
+fn split_group(space: &Space, tabs: Vec<TabId>, stops: Vec<Option<f64>>) -> Option<SplitGroup> {
+    let (last, seams) = stops.split_last()?;
+    let stops: Vec<f64> = seams.iter().copied().collect::<Option<_>>()?;
+    let in_space = |t: &TabId| {
+        space.pinned.contains(t)
+            || space.items.iter().any(|i| match i {
+                Item::Tab(x) => x == t,
+                Item::Folder(f) => f.tabs.contains(t),
+            })
+    };
+    let fits = last.is_none()
+        && (2..=MAX_PANES).contains(&tabs.len())
+        && SplitGroup::stops_fit(&stops, tabs.len())
+        && tabs
+            .iter()
+            .enumerate()
+            .all(|(i, t)| in_space(t) && !tabs[..i].contains(t));
+    fits.then_some(SplitGroup { tabs, stops })
+}
+
 /// Delete the whole stored session and write `model` in its place, inside `tx`. The caller has
 /// run `Model::check`. Shared by `save_session` and `apply_import`.
 pub(crate) async fn write_model(
@@ -212,13 +265,21 @@ pub(crate) async fn write_model(
     model: &Model,
 ) -> Result<()> {
     // Children first; foreign keys are enforced per statement.
-    for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
+    for table in [
+        "split_panes",
+        "tabs",
+        "tab_folders",
+        "spaces",
+        "containers",
+        "session",
+    ] {
         tx.execute(format!("DELETE FROM {table}"), ()).await?;
     }
     write_containers(tx, model).await?;
     write_spaces(tx, model).await?;
     write_folders(tx, model).await?;
     write_tabs(tx, model).await?;
+    write_splits(tx, model).await?;
     tx.execute(
         "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
         (model.active_space.0,),
@@ -309,6 +370,22 @@ async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Resu
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+async fn write_splits(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
+    let mut st = tx
+        .prepare(
+            "INSERT INTO split_panes(space_id, position, tab_id, stop) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .await?;
+    for s in &m.spaces {
+        let Some(g) = &s.split else { continue };
+        for (i, &t) in g.tabs.iter().enumerate() {
+            st.execute((s.id.0, i as i64, tab_id(t)?, g.stops.get(i).copied()))
+                .await?;
         }
     }
     Ok(())
@@ -437,10 +514,9 @@ mod tests {
             })
             .collect();
         let mut tabs: Vec<Tab> = tabs;
-        if let Some(shown) = m.visible_tab() {
-            for t in tabs.iter_mut().filter(|t| t.id == shown) {
-                t.lifecycle.liveness = Liveness::Active;
-            }
+        let shown = m.visible_tabs();
+        for t in tabs.iter_mut().filter(|t| shown.contains(&t.id)) {
+            t.lifecycle.liveness = Liveness::Active;
         }
         Model::from_parts(
             m.spaces.clone(),
@@ -701,6 +777,7 @@ mod tests {
                         Item::Tab(TabId(11)),
                     ],
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
+                    split: None,
                 },
                 Space {
                     id: SpaceId(1),
@@ -710,6 +787,7 @@ mod tests {
                     pinned: vec![],
                     items: vec![Item::Tab(TabId(20)), Item::Tab(TabId(21))],
                     active: Some(TabId(21)), // the saved active tab
+                    split: None,
                 },
             ];
             let containers = vec![
@@ -780,6 +858,122 @@ mod tests {
                     SpaceId(3)
                 );
             }
+        });
+    }
+
+    /// `rich()` with a three-pane split shown in Space B and a hidden two-pane split in Space A.
+    fn with_splits() -> Model {
+        let ap = |m, c| apply(m, c).0;
+        let mut m = rich();
+        m = new_tab(m, "https://b.test/3", None, None);
+        // Space B: tabs 6, 7, 8; focus 6, split with 7 then 8
+        m = ap(m, Command::ActivateTab(TabId(6)));
+        m = ap(m, Command::SplitWith(TabId(7)));
+        m = ap(m, Command::SplitWith(TabId(8)));
+        m = ap(
+            m,
+            Command::ResizeSplit {
+                space: SpaceId(1),
+                stops: vec![0.25, 0.625],
+            },
+        );
+        // Space A: 2 beside 5, then shown, then left for Space B again
+        m = ap(m, Command::ActivateTab(TabId(5)));
+        m = ap(m, Command::SplitWith(TabId(2)));
+        m = ap(m, Command::SwitchSpace(SpaceId(1)));
+        m.check().unwrap();
+        m
+    }
+
+    #[test]
+    fn splits_round_trip() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let m = with_splits();
+            let b = m.spaces[1].split.clone().unwrap();
+            assert_eq!(b.tabs, vec![TabId(6), TabId(7), TabId(8)]);
+            assert_eq!(m.visible_tabs().len(), 3);
+            assert_eq!(m.spaces[0].split.as_ref().unwrap().tabs.len(), 2);
+            assert!(m.spaces[2].split.is_none());
+            store.save_session(&m).await.unwrap();
+            let back = store.load_session(now()).await.unwrap();
+            assert_same(&back, &restored(&m));
+            for t in [6, 7, 8] {
+                assert_eq!(back.tabs[&TabId(t)].lifecycle.liveness, Liveness::Active);
+            }
+            assert_eq!(
+                back.spaces[1].split.as_ref().unwrap().stops,
+                vec![0.25, 0.625]
+            );
+        });
+    }
+
+    #[test]
+    fn a_bad_stored_split_is_dropped_and_the_session_kept() {
+        run(async {
+            let mut store = Store::open_in_memory().await.unwrap();
+            let m = with_splits();
+            store.save_session(&m).await.unwrap();
+            for damage in [
+                // a pane from another Space
+                "UPDATE split_panes SET tab_id = 2 WHERE space_id = 1 AND position = 1",
+                // seams out of order
+                "UPDATE split_panes SET stop = 0.9 WHERE space_id = 1 AND position = 0",
+                // a missing seam
+                "UPDATE split_panes SET stop = NULL WHERE space_id = 1 AND position = 1",
+                // a pane short
+                "DELETE FROM split_panes WHERE space_id = 0 AND position = 1",
+            ] {
+                store.save_session(&m).await.unwrap();
+                store.conn.execute(damage, ()).await.unwrap();
+                let back = store.load_session(now()).await.unwrap();
+                back.check().unwrap();
+                assert_eq!(back.tabs.len(), m.tabs.len(), "{damage}");
+                let space = if damage.contains("space_id = 0") {
+                    0
+                } else {
+                    1
+                };
+                assert_eq!(back.spaces[space].split, None, "{damage}");
+                assert_eq!(
+                    back.spaces[1 - space].split,
+                    m.spaces[1 - space].split,
+                    "{damage}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn migrating_v6_to_v7_keeps_the_session_and_adds_no_split() {
+        run(async {
+            let mut store = Store::connect(":memory:").await.unwrap();
+            migrate::migrate(&mut store.conn, &MIGRATIONS[..6])
+                .await
+                .unwrap();
+            let m = rich();
+            let tx = store.conn.transaction().await.unwrap();
+            // the v6 writers, without the split table
+            write_containers(&tx, &m).await.unwrap();
+            write_spaces(&tx, &m).await.unwrap();
+            write_folders(&tx, &m).await.unwrap();
+            write_tabs(&tx, &m).await.unwrap();
+            tx.execute("INSERT INTO session(id, active_space_id) VALUES (1, 1)", ())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            assert!(
+                store
+                    .conn
+                    .query("SELECT * FROM split_panes", ())
+                    .await
+                    .is_err()
+            );
+            migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
+            assert_eq!(migrate::schema_version(&store.conn).await.unwrap(), 7);
+            let back = store.load_session(now()).await.unwrap();
+            assert_same(&back, &restored(&m));
+            store.save_session(&with_splits()).await.unwrap();
         });
     }
 }

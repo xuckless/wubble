@@ -18,34 +18,26 @@
 //!   it every 8th frame (at its real speed), then freeze it and draw the
 //!   glass as a flat fill.
 //!
-//! # Host wiring (next batch)
+//! # Host wiring
 //!
 //! The window has one rendering notifier (Slint 1.19 refuses a second one with
 //! `SetRenderingNotifierError::AlreadySet`), owned by the `wubble-ui` driver,
-//! so the scene does not install its own: the host creates it from the
-//! `GpuContext` and calls it from that notifier on `BeforeRendering`:
+//! so the scene does not install its own: the host (`crates/wubble/src/backdrop.rs`)
+//! builds it with [`Renderer::try_new`] on the `GpuContext` (falling back to
+//! Slint-only glass on `Err`) and calls [`Renderer::before_rendering`] from
+//! the driver's per-frame hook, setting the returned image as the window's
+//! `scene`. It feeds the scene from the window's state:
 //!
-//! ```ignore
-//! let scene = Rc::new(RefCell::new(scene::Renderer::new(&gpu, scene::SceneOptions::default())));
-//! // in the notifier, on RenderingState::BeforeRendering, before anything else:
-//! match scene.borrow_mut().before_rendering(app.window(), Instant::now()) {
-//!     Ok(Some(image)) => app.set_scene(image),
-//!     Ok(None) => {}
-//!     Err(e) => eprintln!("wubble: scene image: {e}"),
-//! }
-//! ```
-//!
-//! and feeds the scene from the window's state:
-//!
-//! - `scene.set_glass(&rects)` on every layout or hover/press/focus change
+//! - `scene.set_glass(&rects)` whenever the panels' reported list changes
 //!   (back to front, logical px, at most [`MAX_GLASS`]);
 //! - `scene.set_palette(space_colours)` on a Space switch (600 ms crossfade);
 //! - `scene.pointer_move(x, y)` / `pointer_leave()` from the window's pointer
 //!   events, `scene.tap(x, y)` on a press;
 //! - `scene.set_beam(Some(address_bar))` with the layout and `scene.lap_beam()`
 //!   when a page starts loading;
-//! - `renderer.set_quality(governor.quality())` once per frame, after
-//!   `governor = governor.next(frame_cost, budget)`.
+//! - `renderer.set_quality(governor.quality())` after
+//!   `governor = governor.next(cost, budget)`, for each GPU frame cost
+//!   [`Renderer::take_cost`] hands back (GPU timestamps; none without them).
 //!
 //! # What the window needs
 //!

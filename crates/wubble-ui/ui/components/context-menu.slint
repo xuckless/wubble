@@ -1,0 +1,154 @@
+import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, OverlapLayer } from "../components.slint";
+import { GlassTier, MenuEntry } from "model.slint";
+
+// The page's context menu; fills its parent (the window) so a click anywhere outside the panel
+// dismisses it (and is consumed, as Chromium's menu consumes it). Written from scratch: the
+// design repo has no menu. Looks and timings are Ultra Reactivate's `.ur-o-surface`
+// (src/ultra-reactivate/overlays.css, the owner's library): 220 wide, padding 6, radius 14,
+// rows 40 high with radius 9, entering at .95 over 200 ms ease-out from the pointer, rows
+// staggered 30 ms. On thick glass over content (GlassPanel), as the command bar.
+// Keys: Up/Down move, Enter/Space choose, Escape dismisses. `chosen` and `dismissed` are
+// intents; the host answers the engine and closes it.
+export component ContextMenu inherits Rectangle {
+    in property <bool> open;
+    // Where the pointer was, in this element's coordinates.
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <[MenuEntry]> entries;
+    callback chosen(int);
+    callback dismissed();
+    // The panel's left edge, after flipping and clamping.
+    out property <length> panel-x: panel.x;
+
+    property <int> count: root.entries.length;
+    // Keyboard highlight; -1 for none (the pointer highlights by hover).
+    property <int> current: -1;
+
+    public function take-focus() {
+        root.current = -1;
+        keys.focus();
+    }
+
+    // The next row from `from` by `delta`, wrapping and stepping over a divider (dividers are
+    // never adjacent, first or last); -1 when empty. Disabled rows can be highlighted, but
+    // choosing one does nothing (menu.rs).
+    function step(from: int, delta: int) -> int {
+        if root.count == 0 {
+            return -1;
+        }
+        let i = mod(from + delta + root.count, root.count);
+        return root.entries[i].separator ? mod(i + delta + root.count, root.count) : i;
+    }
+
+    // Opens to the right of and below the pointer; flips where it would leave the parent, then
+    // clamps into it (8 px from the edges).
+    pure function place(anchor: length, size: length, limit: length) -> length {
+        let flipped = anchor + size > limit - Spacing.s2 ? anchor - size : anchor;
+        return max(Spacing.s2, min(flipped, limit - size - Spacing.s2));
+    }
+
+    visible: root.open;
+
+    // The scrim: transparent, catches the outside click.
+    TouchArea {
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                root.dismissed();
+            }
+        }
+        scroll-event(e) => {
+            root.dismissed();
+            accept
+        }
+    }
+
+    // Keys only; no area, so it never takes the pointer from the scrim.
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.dismissed();
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.current = root.step(root.current < 0 ? -1 : root.current, 1);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.current = root.step(root.current < 0 ? root.count : root.current, -1);
+                return accept;
+            }
+            if (event.text == Key.Return || event.text == " ") && root.current >= 0 {
+                root.chosen(root.current);
+                return accept;
+            }
+            return accept;
+        }
+    }
+
+    panel := GlassPanel {
+        width: Shell.menu-width;
+        height: list.preferred-height;
+        x: root.place(root.anchor-x, self.width, root.width);
+        y: root.place(root.anchor-y, self.height, root.height);
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        transform-origin: {
+            x: max(0px, min(self.width, root.anchor-x - self.x)),
+            y: max(0px, min(self.height, root.anchor-y - self.y)),
+        };
+        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        opacity: root.open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: root.open ? Shell.menu-in : Shell.menu-out;
+            easing: root.open ? Motion.easeOut : Motion.easeIn;
+        }
+        // Swallow clicks between rows so they do not reach the scrim.
+        TouchArea { }
+
+        list := VerticalLayout {
+            padding: Shell.menu-pad;
+            // The rows enter on the Overlap stagger (OverlapLayer, the design repo's port).
+            for entry[i] in root.entries: OverlapLayer {
+                shown: root.open;
+                index: i;
+                height: entry.separator ? Shell.menu-separator : Shell.menu-row;
+                if entry.separator: Rectangle {
+                    x: Shell.menu-row-pad;
+                    width: parent.width - 2 * Shell.menu-row-pad;
+                    height: Shell.menu-rule;
+                    background: Palette.rim;
+                }
+                if !entry.separator: Rectangle {
+                    border-radius: Shell.menu-row-radius;
+                    background: entry.enabled && (row-touch.has-hover || i == root.current) ? Shell.command-selected : transparent;
+                    animate background {
+                        duration: Shell.menu-hover-ms;
+                        easing: Motion.easeOut;
+                    }
+                    row-touch := TouchArea {
+                        enabled: entry.enabled;
+                        clicked => {
+                            root.chosen(i);
+                        }
+                    }
+                    Text {
+                        x: Shell.menu-row-pad;
+                        width: parent.width - 2 * Shell.menu-row-pad;
+                        height: parent.height;
+                        text: entry.label;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        color: entry.enabled ? Palette.ink : Palette.haze;
+                        font-family: Fonts.ui;
+                        font-size: Type.body.size;
+                    }
+                }
+            }
+        }
+    }
+}

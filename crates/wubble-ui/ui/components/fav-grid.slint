@@ -8,13 +8,15 @@
 import { Palette, Chrome, Spacing, Glass, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
-import { GlassTier, TabItem } from "model.slint";
+import { GlassTier, GlassKeys, TabItem } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
 export component FavGrid inherits Rectangle {
     in property <[TabItem]> tabs;
     in property <int> active-tab-id: -1;
     in property <bool> compact: false;
+    // The scene draws the tiles' glass.
+    in property <bool> over-wgpu: false;
     callback activated(int);
 
     property <int> cols: root.compact ? 1 : Shell.fav-columns;
@@ -30,17 +32,19 @@ export component FavGrid inherits Rectangle {
         y: floor(i / root.cols) * (root.tile-h + root.gap);
         width: root.tile-w;
         height: root.tile-h;
+        key: GlassKeys.favourites + tab.id;
+        over-wgpu: root.over-wgpu;
         tier: GlassTier.thin;
         radius: Shell.control-radius;
-        film: ta.has-hover;
-        background: tab.id == root.active-tab-id ? Shell.selected-fill : Glass.thin.fill;
+        hover: ta.has-hover;
+        pressed: ta.pressed;
+        background: tab.id == root.active-tab-id ? Shell.selected-fill : root.over-wgpu ? transparent : Glass.thin.fill;
         animate background {
             duration: Motion.pressRelease;
             easing: Motion.easeOut;
         }
-        transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: ta.pressed ? Motion.pressScale : 1;
-        animate transform-scale {
+        scale: ta.pressed ? Motion.pressScale : 1;
+        animate scale {
             duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
             easing: Motion.easeOut;
         }

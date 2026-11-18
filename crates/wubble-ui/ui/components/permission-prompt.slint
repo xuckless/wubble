@@ -1,0 +1,92 @@
+import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel } from "../components.slint";
+import { GlassTier, PermissionView } from "model.slint";
+import { CheckBox } from "check-box.slint";
+import { SheetButton } from "sheet-button.slint";
+
+// A site asks for a permission: "<site> wants to", one line per kind, a "Remember for this site"
+// toggle, Block and Allow. Placed by the parent under the address pill, where Chromium puts its
+// bubble; not modal (the page stays usable, as Chromium's bubble is), and it never takes the
+// keyboard, so no keystroke meant for the page answers it (keyjacking). Written from scratch: the
+// design repo has no permission prompt. Looks and timings are the context menu's and the dialog
+// sheet's (Ultra Reactivate `.ur-o-surface` / `.ur-o-dialog`, overlays.css): thick glass over
+// content, radius 14, buttons 42 high; it drops in at .95 over 200 ms ease-out from its top left.
+// Only its buttons answer. `answered` is the intent; the host answers the engine (and stores a
+// remembered decision).
+export component PermissionPrompt inherits Rectangle {
+    in property <PermissionView> prompt;
+    // (allow, remember)
+    callback answered(bool, bool);
+
+    property <bool> open: root.prompt.open;
+    property <bool> remember: false;
+
+    // A new request starts with the toggle off.
+    property <int> serial: root.prompt.serial;
+    changed serial => {
+        root.remember = false;
+    }
+
+    width: Shell.prompt-width;
+    height: body.preferred-height;
+    visible: root.open;
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        transform-origin: { x: 0px, y: 0px };
+        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        opacity: root.open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: root.open ? Shell.menu-in : Shell.menu-out;
+            easing: root.open ? Motion.easeOut : Motion.easeIn;
+        }
+        TouchArea { }
+
+        body := VerticalLayout {
+            padding: Spacing.s4;
+            spacing: Spacing.s2;
+            Text {
+                text: root.prompt.title;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Type.heading.size;
+                font-weight: Type.heading.weight;
+                overflow: elide;
+            }
+            for line in root.prompt.lines: Text {
+                text: line;
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                wrap: word-wrap;
+            }
+            CheckBox {
+                text: "Remember for this site";
+                checked <=> root.remember;
+            }
+            Rectangle {
+                height: Spacing.s1;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: Spacing.s2;
+                SheetButton {
+                    text: "Block";
+                    clicked => {
+                        root.answered(false, root.remember);
+                    }
+                }
+                SheetButton {
+                    text: "Allow";
+                    primary: true;
+                    clicked => {
+                        root.answered(true, root.remember);
+                    }
+                }
+            }
+        }
+    }
+}

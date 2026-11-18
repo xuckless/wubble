@@ -1,0 +1,52 @@
+import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+
+// A check box and its label, one target. Written from scratch: the design repo has no toggle.
+// Mint when checked, the tick drawn over it; colours ease like a menu row's hover.
+export component CheckBox inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+
+    height: Spacing.s4 + Spacing.s2;
+
+    TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+        }
+    }
+    Rectangle {
+        x: 0px;
+        width: Spacing.s4;
+        height: Spacing.s4;
+        border-radius: Radius.xs / 2;
+        border-width: Shell.check-rim;
+        border-color: root.checked ? Palette.mint : Palette.haze;
+        background: root.checked ? Palette.mint : transparent;
+        animate background, border-color {
+            duration: Shell.menu-hover-ms;
+            easing: Motion.easeOut;
+        }
+        if root.checked: Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: 16;
+            viewbox-height: 16;
+            commands: "M4 8.5l3 3 5-6";
+            stroke: Palette.abyss;
+            stroke-width: Shell.check-tick;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+            fill: transparent;
+        }
+    }
+    Text {
+        x: Spacing.s4 + Spacing.s2;
+        width: parent.width - self.x;
+        text: root.text;
+        color: Palette.mist;
+        font-family: Fonts.ui;
+        font-size: Type.label.size;
+        font-weight: Type.label.weight;
+        vertical-alignment: center;
+    }
+}

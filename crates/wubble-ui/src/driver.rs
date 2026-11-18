@@ -15,6 +15,10 @@
 //!   ids back on `shell-model-changed` and reports a click (`tab-activated`) or a reorder
 //!   (`tab-moved`) as an intent.
 //! - No `FrameClock`: dt comes from the notifier's frame times, capped at `DT_CAP`.
+//! - The notifier also carries the host's per-frame hook (the wgpu scene: wubble-ui must not
+//!   name wubble-gfx), called after the driver's step with the frame's glass list
+//!   ([`crate::glass`]), so the properties it reads are this frame's.
+//! - The seam starts from the saved width and mode ([`Seam::restored`]), at rest.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -26,7 +30,8 @@ use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
-use crate::{AppWindow, Radius, SidebarMode};
+use crate::glass::GlassRegistry;
+use crate::{AppWindow, GlassItem, GlassLayer, Radius, SidebarMode};
 
 impl From<seam::SidebarMode> for SidebarMode {
     fn from(m: seam::SidebarMode) -> Self {
@@ -115,7 +120,7 @@ fn sync(m: &VecModel<f32>, v: Vec<f32>) {
 }
 
 impl Driver {
-    fn new(window: &AppWindow) -> Self {
+    fn new(window: &AppWindow, seam: Seam) -> Self {
         let row_y = Rc::new(VecModel::<f32>::default());
         let row_scale = Rc::new(VecModel::<f32>::default());
         window.set_row_y(ModelRc::from(row_y.clone()));
@@ -124,7 +129,6 @@ impl Driver {
         let space = active_space(window);
         window.set_selected_row(slint_index(row));
         window.set_space_index(slint_index(space));
-        let seam = Seam::new();
         window.set_sidebar_mode(seam.mode.into());
         let mut driver = Self {
             tabs: TabRows::new(&row_ids(&ids), row),
@@ -270,6 +274,12 @@ impl Driver {
 
 type Shared = Rc<RefCell<Driver>>;
 
+/// The driver and the glass registry of one window.
+pub struct Wired {
+    pub driver: Shared,
+    pub glass: Rc<RefCell<GlassRegistry>>,
+}
+
 /// Run `f` on the driver, wake the frame loop, then report what `f` asked for.
 fn run(
     driver: &RefCell<Driver>,
@@ -288,14 +298,23 @@ fn run(
     }
 }
 
-/// Connect the Slint callbacks to a new driver. Separate from [`install`] so tests can drive
-/// it without a renderer.
-pub fn connect(window: &AppWindow) -> Shared {
-    let driver = Rc::new(RefCell::new(Driver::new(window)));
+/// Connect the Slint callbacks to a new driver whose seam starts as `seam`, and the panels'
+/// reports to a new glass registry. Separate from [`install`] so tests can drive it without a
+/// renderer.
+pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
+    let driver = Rc::new(RefCell::new(Driver::new(window, seam)));
+    let glass = Rc::new(RefCell::new(GlassRegistry::default()));
     let hook = || (Rc::clone(&driver), window.as_weak());
 
+    let g = Rc::clone(&glass);
+    window
+        .global::<GlassLayer>()
+        .on_report(move |item| g.borrow_mut().report(item));
+
     let (d, w) = hook();
+    let g = Rc::clone(&glass);
     window.on_shell_model_changed(move || {
+        g.borrow_mut().request_sweep();
         run(&d, &w, |s, w| {
             s.read_model(w);
             None
@@ -426,22 +445,42 @@ pub fn connect(window: &AppWindow) -> Shared {
             None
         })
     });
-    driver
+    Wired { driver, glass }
 }
 
-/// Wire the shell driver and register the window's one rendering notifier.
-pub fn install(window: &AppWindow) -> Result<(), SetRenderingNotifierError> {
-    let driver = connect(window);
+/// Wire the shell driver, its seam starting as `seam`, and register the window's one
+/// rendering notifier. On every frame, after the driver's step, `hook` gets the window, the
+/// frame time and the glass list when it changed (back to front). Returns the registry, the
+/// list's one owner, for readers outside the frame (the pixel smoke).
+pub fn install(
+    window: &AppWindow,
+    seam: Seam,
+    mut hook: impl FnMut(&AppWindow, Instant, Option<&[GlassItem]>) + 'static,
+) -> Result<Rc<RefCell<GlassRegistry>>, SetRenderingNotifierError> {
+    let Wired { driver, glass } = wire(window, seam);
+    let registry = Rc::clone(&glass);
     driver.borrow_mut().origin = Some(Instant::now());
     let weak = window.as_weak();
     window.window().set_rendering_notifier(move |state, _api| {
-        if let slint::RenderingState::BeforeRendering = state
-            && let Some(window) = weak.upgrade()
-            && driver.borrow_mut().frame(&window, Instant::now())
-        {
+        let slint::RenderingState::BeforeRendering = state else {
+            return;
+        };
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+        let now = Instant::now();
+        let moving = driver.borrow_mut().frame(&window, now);
+        let frame = glass.borrow_mut().frame();
+        if frame.bump {
+            let layer = window.global::<GlassLayer>();
+            layer.set_generation(layer.get_generation().wrapping_add(1));
+        }
+        if moving || frame.bump {
             window.window().request_redraw();
         }
-    })
+        hook(&window, now, frame.glass.as_deref());
+    })?;
+    Ok(registry)
 }
 
 #[cfg(test)]

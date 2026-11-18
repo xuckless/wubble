@@ -369,6 +369,9 @@ pub enum PageEvent {
     /// window (or screen) and maps Esc to `View::exit_fullscreen`.
     FullscreenChanged(bool),
     MutedChanged(bool),
+    /// The answer of `View::probe_audible` changed: a media element of the
+    /// main document plays with sound (or stopped).
+    Audible(bool),
     Console {
         level: LogLevel,
         message: String,

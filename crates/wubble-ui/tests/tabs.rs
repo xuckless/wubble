@@ -76,6 +76,7 @@ fn tabs(ids: impl IntoIterator<Item = i32>) -> ModelRc<TabItem> {
             title: format!("tab {id}").into(),
             url: "".into(),
             favicon: Default::default(),
+            ..Default::default()
         })
         .collect();
     ModelRc::from(items.as_slice())
@@ -186,7 +187,7 @@ fn tab_list_scenarios() {
     app.on_tab_closed(move |id| l.borrow_mut().closed.push(id));
     let l = log.clone();
     app.on_tab_moved(move |id, to| l.borrow_mut().moved.push((id, to)));
-    let driver = driver::connect(&app);
+    let driver = driver::wire(&app, wubble_core::seam::Seam::new()).driver;
     model_changed_syncs_rows(&app, &driver);
     tab_click_activates(&app, &driver, &log);
     tab_close_middle_click(&app, &driver, &log);

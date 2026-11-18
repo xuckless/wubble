@@ -173,7 +173,7 @@ fn slint_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'s
 /// Polls a wgpu future once; native wgpu resolves adapter requests immediately.
 /// Copied from Slint 1.19 i-slint-core `graphics/wgpu_30.rs` `poll_once`
 /// (GPL-3.0-only option of Slint's licence).
-fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> {
+pub(crate) fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> {
     let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
     match std::pin::pin!(future).poll(&mut ctx) {
         std::task::Poll::Ready(result) => Some(result),

@@ -339,6 +339,9 @@ pub const DEFAULTS: &[Binding] = rows![
     "Cmd+Ctrl+F", MAC, Action::Fullscreen, Shell;
     "Mod+Shift+D", ALL, Action::TogglePinTab, PageFirst;
     "Mod+Shift+C", ALL, Action::CopyUrl, PageFirst;
+    // the design's split chord; Shift+\ types `|`, so the unsplit row names that
+    "Mod+\\", ALL, Action::SplitNext, Shell;
+    "Mod+|", ALL, Action::Unsplit, Shell;
     "Ctrl+Q", LINUX, Action::Quit, Shell;
     "Ctrl+Shift+Q", WIN, Action::Quit, Shell;
     "Cmd+Q", MAC, Action::Quit, Shell;
@@ -624,11 +627,15 @@ mod tests {
         assert_eq!(sc(Platform::Linux, Action::SelectTab(1)), "Ctrl+1");
         assert_eq!(sc(Platform::Mac, Action::SelectTab(1)), "Cmd+1");
         assert_eq!(sc(Platform::Windows, Action::Quit), "Ctrl+Shift+Q");
+        assert_eq!(sc(Platform::Linux, Action::SplitNext), "Ctrl+\\");
+        assert_eq!(sc(Platform::Mac, Action::SplitNext), "Cmd+\\");
+        assert_eq!(sc(Platform::Linux, Action::Unsplit), "Ctrl+|");
     }
 
     #[test]
     fn every_action_is_bound_except_allow_list() {
-        let unbound = [Action::NewSpace];
+        // Chromium binds no key to muting a tab either.
+        let unbound = [Action::NewSpace, Action::ToggleMute];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);
             for a in Action::all() {

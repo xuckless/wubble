@@ -3,19 +3,24 @@
 //! Everything here must stay unit-testable without a GPU or a browser process.
 
 pub mod action;
+pub mod download;
 pub mod import;
 pub mod keys;
 pub mod lifecycle;
 pub mod model;
 pub mod motion;
+pub mod neterror;
 pub mod omnibox;
 pub mod pump;
 pub mod scroller;
 pub mod seam;
 pub mod session;
+pub mod site;
 pub mod sleep;
 pub mod space;
+pub mod split;
 pub mod suggest;
 pub mod tab;
 pub mod tabs;
 pub mod url;
+pub mod zoom;

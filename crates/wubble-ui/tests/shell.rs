@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
 use slint::{
-    ComponentHandle, LogicalPosition, LogicalSize, ModelRc,
+    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc,
     platform::{PointerEventButton, WindowEvent},
 };
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
 use wubble_core::tabs::SpaceSwitcher;
 use wubble_ui::driver::{self, Driver};
-use wubble_ui::{AppWindow, SidebarMode, SpaceItem};
+use wubble_ui::{AppWindow, PopupView, SidebarMode, SpaceItem, SplitPane, SplitSeam};
 
 const DT: f32 = 0.016;
 
@@ -218,15 +218,136 @@ fn space_capsule(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
 }
 
+/// The sidebar button (right of the lights, in the top row) hides the extended sidebar.
+fn sidebar_button(app: &AppWindow, driver: &Shared) {
+    settle(app, driver);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
+    // 30 square, its right edge 4 past the sidebar's 6 px padding, in the 30 high top row
+    let x = INSET as f32 + SIDEBAR_DEFAULT as f32 - 6.0 + 4.0 - 15.0;
+    let y = INSET as f32 + 6.0 + 15.0;
+    pointer(app, x, y);
+    button(app, x, y, true);
+    button(app, x, y, false);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Hidden);
+    app.invoke_toggle_sidebar();
+    settle(app, driver);
+    pointer(app, 900.0, 300.0);
+}
+
+/// A popup moved to fit the window is drawn where it fits, but a press on it reaches the page
+/// at the engine's own rect, where CEF hit-tests the popup.
+fn popup_input(app: &AppWindow) {
+    let got = std::rc::Rc::new(std::cell::Cell::new(None));
+    let sink = got.clone();
+    app.on_web_pointer_pressed(move |pane, _, x, y| sink.set(Some((pane, x, y))));
+    app.set_popup(PopupView {
+        shown: true,
+        // Drawn 100 px further left and 20 px lower than the engine put it.
+        x: 1000.0,
+        y: 100.0,
+        width: 200.0,
+        height: 100.0,
+        origin_x: 1100.0,
+        origin_y: 80.0,
+    });
+    pump(1);
+    pointer(app, 1010.0, 110.0);
+    button(app, 1010.0, 110.0, true);
+    button(app, 1010.0, 110.0, false);
+    assert_eq!(got.get(), Some((app.get_active_tab_id(), 1110.0, 90.0)));
+    app.set_popup(PopupView::default());
+    pump(1);
+    pointer(app, 900.0, 300.0);
+}
+
 #[test]
 fn shell_scenarios() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
     app.show().unwrap();
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
-    let driver = driver::connect(&app);
+    let driver = driver::wire(&app, wubble_core::seam::Seam::new()).driver;
     three_modes(&app, &driver);
+    sidebar_button(&app, &driver);
     peek(&app, &driver);
     seam_drag(&app, &driver);
     space_capsule(&app, &driver);
+    popup_input(&app);
+    split_panes(&app, &driver);
+}
+
+fn pane(id: i32, x0: f32, x1: f32) -> SplitPane {
+    SplitPane {
+        id,
+        x0,
+        x1,
+        focused: id == 1,
+        ..Default::default()
+    }
+}
+
+/// One page is one pane filling the content area; three panes keep their rects, and every press
+/// reaches the page under it with that pane's id and pane-relative coordinates. A seam's strip
+/// takes the pointer over the gap.
+fn split_panes(app: &AppWindow, driver: &Shared) {
+    settle(app, driver);
+    let pressed = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+    let sink = pressed.clone();
+    app.on_web_pointer_pressed(move |pane, _, x, y| sink.borrow_mut().push((pane, x, y)));
+    let grabbed = std::rc::Rc::new(std::cell::Cell::new(None));
+    let sink = grabbed.clone();
+    app.on_split_grab(move |j, x, _| sink.set(Some((j, x))));
+    let (cx, cy, w) = (
+        app.get_content_x(),
+        app.get_content_y(),
+        app.get_content_width(),
+    );
+    let click = |x: f32, y: f32| {
+        pointer(app, x, y);
+        button(app, x, y, true);
+        button(app, x, y, false);
+    };
+
+    app.set_panes(ModelRc::from([pane(1, 0.0, w)].as_slice()));
+    pump(1);
+    click(cx + 30.0, cy + 40.0);
+    assert_eq!(pressed.borrow().last(), Some(&(1, 30.0, 40.0)));
+
+    let third = 300.0;
+    let panes = [
+        pane(1, 0.0, third - 4.0),
+        pane(2, third + 4.0, 2.0 * third - 4.0),
+        pane(3, 2.0 * third + 4.0, w),
+    ];
+    app.set_panes(ModelRc::from(panes.as_slice()));
+    let seams = [third, 2.0 * third].map(|x| SplitSeam {
+        x,
+        path: Default::default(),
+    });
+    app.set_seams(ModelRc::from(seams.as_slice()));
+    pump(1);
+    assert_eq!(app.get_panes().iter().collect::<Vec<_>>(), panes.to_vec());
+    click(cx + 2.0 * third + 14.0, cy + 50.0);
+    assert_eq!(pressed.borrow().last(), Some(&(3, 10.0, 50.0)));
+    click(cx + third - 14.0, cy + 300.0);
+    assert_eq!(pressed.borrow().last(), Some(&(1, third - 14.0, 300.0)));
+    // the close button of the first pane is the shell's
+    let closed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let sink = closed.clone();
+    app.on_pane_close(move |id| sink.set(id));
+    click(cx + third - 4.0 - 8.0 - 14.0, cy + 8.0 + 14.0);
+    assert_eq!(closed.get(), 1);
+    // the strip over the second seam
+    let n = pressed.borrow().len();
+    click(cx + 2.0 * third + 1.0, cy + 300.0);
+    assert_eq!(grabbed.get(), Some((1, 2.0 * third + 1.0)));
+    assert_eq!(
+        pressed.borrow().len(),
+        n,
+        "the seam's press is not the page's"
+    );
+
+    app.set_panes(ModelRc::default());
+    app.set_seams(ModelRc::default());
+    pump(1);
 }

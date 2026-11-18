@@ -100,6 +100,28 @@ impl Seam {
         }
     }
 
+    /// wubble change: the seam as the last session left it, at rest. `saved`
+    /// is the extended width (clamped to `SEAM::min..=SEAM::max`; not finite
+    /// gives the default), and every spring starts at its target for `mode`,
+    /// so the window opens without a twang.
+    pub fn restored(saved: f64, mode: SidebarMode) -> Self {
+        let saved = if saved.is_finite() {
+            clamp(saved, SEAM::min, SEAM::max)
+        } else {
+            SIDEBAR_DEFAULT
+        };
+        let mut seam = Seam {
+            saved,
+            mode,
+            held_mode: mode,
+            ..Seam::new()
+        };
+        let w = seam.target_for(mode);
+        seam.w = spring(w);
+        seam.contents = spring(w);
+        seam
+    }
+
     pub fn target_for(&self, mode: SidebarMode) -> f64 {
         match mode {
             SidebarMode::Extended => self.saved,
@@ -316,6 +338,26 @@ mod tests {
         s.drag(INSET + 10.0, 300.0);
         s.step(1.0 / 60.0, 800.0);
         assert_eq!(s.release(), SidebarMode::Hidden);
+    }
+
+    #[test]
+    fn restored_rests_at_its_mode_with_the_saved_width_clamped() {
+        for (saved, mode, w) in [
+            (300.0, SidebarMode::Extended, 300.0),
+            (900.0, SidebarMode::Extended, SEAM::max),
+            (10.0, SidebarMode::Extended, SEAM::min),
+            (f64::NAN, SidebarMode::Extended, SIDEBAR_DEFAULT),
+            (300.0, SidebarMode::Rail, SEAM::rail),
+            (300.0, SidebarMode::Hidden, 0.0),
+        ] {
+            let mut s = Seam::restored(saved, mode);
+            assert_eq!(s.mode, mode);
+            assert_eq!(s.w.x, w, "{saved} {mode:?}");
+            assert_eq!(s.w.x, s.target_for(mode));
+            assert!(!s.step(1.0 / 60.0, 800.0), "{saved} {mode:?} is at rest");
+            assert_eq!(s.contents.x, w);
+        }
+        assert_eq!(Seam::restored(300.0, SidebarMode::Hidden).saved, 300.0);
     }
 
     #[test]

@@ -13,10 +13,12 @@
 mod bookmarks;
 mod check;
 mod closed;
+mod downloads;
 mod history;
 mod import;
 mod logins;
 mod migrate;
+mod permissions;
 mod session;
 mod settings;
 
@@ -29,8 +31,8 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::{LoginRow, NewLogin};
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, CompactMode, HistoryRetentionDays, KeybindingOverrides,
-    LiveSuggestions, SearchEngineChoice, Setting, SidebarWidth,
+    BlockerEnabled, BlockerExceptions, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
 };
 
 #[derive(Debug, thiserror::Error)]

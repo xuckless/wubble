@@ -11,6 +11,8 @@ license.workspace = true
 slint.workspace = true
 wgpu.workspace = true
 welding.workspace = true
+# GPU timestamps of the scene's frames, for the quality governor (MIT OR Apache-2.0).
+wgpu-profiler = "0.28"
 
 [dev-dependencies]
 # WGSL validation of the scene shaders in tests; same version wgpu 30 uses.

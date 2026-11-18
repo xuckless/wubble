@@ -50,6 +50,11 @@ const CHECKS: &[(&str, &str)] = &[
          (SELECT 1 FROM tabs t WHERE t.id = s.active_tab_id AND t.space_id = s.id)",
     ),
     (
+        "split pane that is not a tab of its space",
+        "SELECT p.space_id FROM split_panes p WHERE NOT EXISTS \
+         (SELECT 1 FROM tabs t WHERE t.id = p.tab_id AND t.space_id = p.space_id)",
+    ),
+    (
         "session whose active space is missing",
         "SELECT s.id FROM session s WHERE s.active_space_id IS NOT NULL AND NOT EXISTS \
          (SELECT 1 FROM spaces p WHERE p.id = s.active_space_id)",
@@ -279,6 +284,11 @@ mod tests {
             detects("UPDATE spaces SET active_tab_id = 99", "active tab").await;
             detects("UPDATE session SET active_space_id = 99", "active space").await;
             detects(
+                "INSERT INTO split_panes(space_id, position, tab_id, stop) VALUES (0, 0, 99, 0.5)",
+                "split pane",
+            )
+            .await;
+            detects(
                 "INSERT INTO tab_folders(id, space_id, name, position) VALUES (5, 99, 'x', 0)",
                 "folder in missing space",
             )
@@ -315,7 +325,10 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 3);
+            assert_eq!(
+                migrate::schema_version(&s.conn).await.unwrap(),
+                migrate::latest(MIGRATIONS)
+            );
 
             // Old data intact and consistent.
             assert_eq!(s.check_consistency().await.unwrap(), Vec::<String>::new());
@@ -327,7 +340,12 @@ mod tests {
             );
             assert_eq!(s.bookmark_children(None).await.unwrap()[0].title, "Folder");
             assert_eq!(s.search_bookmarks("b.test", 5).await.unwrap().len(), 1);
-            assert!(s.setting::<crate::CompactMode>().await.unwrap());
+            // The old boolean `ui.compact` = true is the hidden mode now, and is gone.
+            assert_eq!(
+                s.setting::<crate::SidebarModeSetting>().await.unwrap(),
+                wubble_core::seam::SidebarMode::Hidden
+            );
+            assert_eq!(s.get_raw("ui.compact").await.unwrap(), None);
             assert_eq!(s.recently_closed().await.unwrap().len(), 1);
 
             // New tables work, and old paths keep working on the migrated file.

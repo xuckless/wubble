@@ -181,6 +181,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             pinned: vec![],
             items: vec![],
             active: None,
+            split: None,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));

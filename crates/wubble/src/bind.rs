@@ -27,6 +27,9 @@ fn tab_items(rows: &[TabRow]) -> ModelRc<TabItem> {
                 url: r.url.as_str().into(),
                 // No favicon is fetched yet: the row shows the neutral glyph.
                 favicon: Default::default(),
+                audible: r.audible,
+                muted: r.muted,
+                in_split: r.in_split,
             })
             .collect(),
     )

@@ -15,7 +15,8 @@
 
 import { Palette, Radius, Spacing, Chrome, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
-import { TabRow, OverlapLayer, WubbleScroller, SpaceIcon } from "../components.slint";
+import { TabRow, OverlapLayer, WubbleScroller, SpaceIcon, PressableButton } from "../components.slint";
+import { Icon, IconPaths } from "icon.slint";
 import { TabItem, SpaceItem, Origin } from "model.slint";
 import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
@@ -38,6 +39,9 @@ export component Sidebar inherits Rectangle {
     in property <float> indicator-stretch: 1;
     in property <float> indicator-origin: 0.3;
     in property <bool> compact: false;       // the 56px icon rail
+    // The wgpu scene draws the glass of the pill and the favourites (and the sidebar's own,
+    // in app.slint).
+    in property <bool> glass-over-wgpu: false;
     // The window can be moved by dragging the sidebar's glass (off in full screen).
     in property <bool> window-movable: true;
     // The address pill is loading a page (see AddressPill).
@@ -47,6 +51,13 @@ export component Sidebar inherits Rectangle {
     // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
     out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
+    // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
+    out property <Origin> address-below: { x: pill.absolute-position.x, y: pill.absolute-position.y + pill.height };
+    // There are downloads to list: the download button shows beside the sidebar button.
+    in property <bool> has-downloads: false;
+    callback downloads-requested();
+    // The download button's bottom left, in window coordinates: the popover opens there.
+    out property <Origin> downloads-anchor: { x: downloads.absolute-position.x, y: downloads.absolute-position.y + downloads.height };
     in property <bool> rows-shown: true;     // flip to replay the row entrance
     // the tab list's scroller
     in property <length> scroll-y;
@@ -65,12 +76,16 @@ export component Sidebar inherits Rectangle {
     callback tab-drag(length);
     callback tab-release(int);
     callback tab-closed(int);        // tab id
+    callback tab-mute-toggled(int);  // tab id: the speaker glyph
+    callback tab-context(int, length, length);  // tab id, pointer in window px: right click
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
     callback window-close-requested();
     callback window-minimise-requested();
     callback window-toggle-fullscreen-requested();
     callback address-activated();
+    // the sidebar button (chrome.tsx `cycleSidebar`)
+    callback sidebar-toggle-requested();
     callback space-switched(int);    // space id
     callback scroll-wheel(length);
     callback scroll-touch-down(length);
@@ -83,7 +98,7 @@ export component Sidebar inherits Rectangle {
     out property <length> pitch: Chrome.row + Chrome.rowGap;
     property <length> list-height: max(0px, root.tabs.length * root.pitch - Chrome.rowGap);
 
-    background: transparent;   // the glass under it is the window's (the wgpu GlassSurface later)
+    background: transparent;   // the glass under it is the scene's (app.slint), or none without it
     clip: true;
 
     // Under everything: the glass the controls do not claim moves the window (the design's
@@ -113,9 +128,47 @@ export component Sidebar inherits Rectangle {
                     root.window-toggle-fullscreen-requested();
                 }
             }
+            // .wb-nav's sidebar button (chrome.tsx, icons.tsx `sidebar`), right of the lights.
+            // The design's back, forward and reload buttons beside it are not built yet.
+            nav := PressableButton {
+                visible: !root.compact;
+                x: parent.width - self.width + Shell.nav-outset;
+                y: (parent.height - self.height) / 2;
+                width: Chrome.controls;
+                height: Chrome.controls;
+                border-radius: Shell.nav-radius;
+                padding-x: (Chrome.controls - Shell.icon) / 2;
+                background: self.hovered ? Shell.nav-hover : transparent;
+                clicked => {
+                    root.sidebar-toggle-requested();
+                }
+                Icon {
+                    path: IconPaths.sidebar;
+                    tint: nav.hovered ? Palette.ink : Palette.mist;
+                }
+            }
+            // wubble: the downloads button (icons.tsx `download`), left of the sidebar button.
+            downloads := PressableButton {
+                visible: !root.compact && root.has-downloads;
+                x: nav.x - self.width;
+                y: nav.y;
+                width: Chrome.controls;
+                height: Chrome.controls;
+                border-radius: Shell.nav-radius;
+                padding-x: (Chrome.controls - Shell.icon) / 2;
+                background: self.hovered ? Shell.nav-hover : transparent;
+                clicked => {
+                    root.downloads-requested();
+                }
+                Icon {
+                    path: IconPaths.download;
+                    tint: downloads.hovered ? Palette.ink : Palette.mist;
+                }
+            }
         }
 
         pill := AddressPill {
+            over-wgpu: root.glass-over-wgpu;
             loading: root.address-loading;
             host: root.address-host;
             path: root.address-path;
@@ -129,6 +182,7 @@ export component Sidebar inherits Rectangle {
             tabs: root.pinned-tabs;
             active-tab-id: root.active-tab-id;
             compact: root.compact;
+            over-wgpu: root.glass-over-wgpu;
             activated(id) => {
                 root.tab-activated(id);
             }
@@ -238,6 +292,12 @@ export component Sidebar inherits Rectangle {
                                 }
                                 close => {
                                     root.tab-closed(tab.id);
+                                }
+                                mute => {
+                                    root.tab-mute-toggled(tab.id);
+                                }
+                                context(x, y) => {
+                                    root.tab-context(tab.id, x, y);
                                 }
                             }
                         }

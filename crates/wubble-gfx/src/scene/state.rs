@@ -81,7 +81,7 @@ impl Rect {
 }
 
 /// Glass thickness. Mirrored by the Slint `GlassTier` (checked in
-/// `crates/wubble/tests/glass_mirror.rs`).
+/// `crates/wubble/src/backdrop.rs`, test `slint_glass_tier_mirrors_the_scene`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tier {
     Thin,

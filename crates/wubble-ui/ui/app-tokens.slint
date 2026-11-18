@@ -12,6 +12,11 @@ export global Shell {
     out property <length> edge-corner: 16px;
     // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
     out property <length> side-top: 30px;
+    // .wb-ib (the sidebar button in .wb-nav): 30 square (Chrome.controls), radius 9, white 7%
+    // on hover; .wb-side-top margin-right -4
+    out property <length> nav-radius: 9px;
+    out property <color> nav-hover: rgba(255, 255, 255, 0.07);
+    out property <length> nav-outset: 4px;
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
     out property <duration> light-fill-ms: 200ms;
     out property <duration> light-glyph-ms: 150ms;
@@ -101,4 +106,68 @@ export global Shell {
     out property <length> shortcut-hint-width: 72px;
     out property <color> command-selected: rgba(255, 255, 255, 0.08);
     out property <color> scrim: rgba(5, 6, 9, 0.32);
+
+    // ── The page's own UI. The design repo has no menu, sheet, toast or find bar; their looks
+    // and timings are Ultra Reactivate's (the owner's library, src/ultra-reactivate/overlays.css
+    // in the same repo), named by rule.
+    // .ur-o-surface: 220 wide, padding 6, radius 14; enters at .95 over 200 ms ease-out, leaves
+    // over 160 ms ease-in; rows 40 high, radius 9, padding 0 12; rows stagger 30 ms after 40.
+    out property <length> menu-width: 220px;
+    out property <length> menu-pad: 6px;
+    out property <length> menu-radius: 14px;
+    out property <length> menu-row: 40px;
+    out property <length> menu-row-radius: 9px;
+    out property <length> menu-row-pad: 12px;
+    out property <length> menu-separator: 9px;   // a hairline rule with 4 px either side
+    out property <length> menu-rule: 1px;
+    out property <duration> menu-hover-ms: 150ms;   // button background .15s
+    out property <duration> menu-in: 200ms;
+    out property <duration> menu-out: 160ms;
+    // .ur-o-dialog: min(380, 100vw - 32) wide, padding 26, radius 20; h3 19 / 560; p 14.5 muted,
+    // 8 above and 22 below; actions right-aligned 8 apart; buttons 42 high, padding 0 16,
+    // radius 11, 14 / 540; enters over 300 ms (.22,1,.36,1), leaves over 210 ms.
+    out property <length> sheet-width: 380px;
+    out property <length> sheet-margin: 16px;
+    out property <length> sheet-pad: 26px;
+    out property <length> sheet-radius: 20px;
+    out property <length> sheet-title: 19px;
+    out property <int> sheet-title-weight: 560;
+    out property <length> sheet-body: 14.5px;
+    out property <length> sheet-button: 42px;
+    out property <length> sheet-button-radius: 11px;
+    out property <length> sheet-button-pad: 16px;
+    out property <length> sheet-input: 40px;
+    out property <duration> sheet-in: 300ms;
+    out property <float> sheet-from: 0.95;
+    // .ur-o-toast: 46 high, padding 0 12, radius 14, 14 / 540; rises 14 px from .95 over a
+    // 400 ms spring. Shown for 1.5 s (Chromium's zoom bubble closes after 1.5 s).
+    out property <length> toast-height: 46px;
+    out property <length> toast-pad: 16px;
+    out property <length> toast-font: 14px;
+    out property <int> toast-weight: 540;
+    out property <length> toast-radius: 14px;
+    out property <length> toast-rise: 14px;
+    out property <duration> toast-in: 400ms;
+    out property <duration> toast-out: 190ms;
+    out property <duration> toast-shown: 1500ms;
+    // The find bar: an .ur-o-surface strip at the content's top right (Chromium's place), the
+    // command bar's input metrics.
+    out property <length> find-width: 360px;
+    out property <length> find-height: 44px;
+    // The speaker glyph in a tab row (hand drawn on the 24 grid: the bucket has none).
+    out property <length> speaker: 22px;
+    // The permission prompt: an .ur-o-surface under the address pill (Chromium's bubble place),
+    // 8 below it, 320 wide; the downloads popover: the same surface, 360 wide, rows 60 high with
+    // a 3 px progress track; the error panel's column is 440 wide.
+    out property <length> prompt-width: 320px;
+    out property <length> prompt-gap: 8px;
+    out property <length> downloads-width: 360px;
+    out property <length> download-row: 60px;
+    out property <length> download-track: 3px;
+    out property <int> download-max-rows: 6;
+    out property <length> error-width: 440px;
+    out property <length> error-icon: 40px;
+    // The prompt's "remember" check box: a 1 px rim, a 1.6 px tick.
+    out property <length> check-rim: 1px;
+    out property <length> check-tick: 1.6px;
 }

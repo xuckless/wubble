@@ -15,8 +15,10 @@ struct Cli {
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
     /// stops, no window), `frames=N` (show N zero-copy frames, then exit; on
     /// the bundled page, also check the window shows it), `nav` (navigate between two bundled pages, then exit), `tabs` (open,
-    /// switch, sleep, restore and close tabs on bundled pages, then exit) or
-    /// `session` (open two tabs, quit, start again and check they come back).
+    /// switch, sleep, restore and close tabs on bundled pages, then exit), `split` (two
+    /// bundled pages side by side, each checked, then unsplit and exit), `page`
+    /// (a bundled page's select popup, alert, context menu, find and zoom,
+    /// then exit) or `session` (open two tabs, quit, start again and check they come back).
     /// `session-phase=1|2` is one half of `session`, run by it.
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke)]
     smoke: Option<SmokeArg>,
@@ -26,6 +28,9 @@ struct Cli {
     /// Profile directory (database and CEF cache) instead of the per-user one.
     #[arg(long, value_name = "DIR")]
     profile: Option<PathBuf>,
+    /// Where downloads go instead of the OS downloads folder.
+    #[arg(long, value_name = "DIR", conflicts_with = "smoke")]
+    downloads: Option<PathBuf>,
 }
 
 /// The `--smoke` value alone; `--url` is joined in by `Command::try_from`.
@@ -35,6 +40,8 @@ enum SmokeArg {
     Frames(NonZeroU32),
     Nav,
     Tabs,
+    Split,
+    Page,
     Session,
     SessionPhase(Phase),
 }
@@ -44,6 +51,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "boot" => Ok(SmokeArg::Boot),
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
+        None if value == "split" => Ok(SmokeArg::Split),
+        None if value == "page" => Ok(SmokeArg::Page),
         None if value == "session" => Ok(SmokeArg::Session),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
@@ -52,7 +61,9 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `session` or `session-phase=1|2`".into(),
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `session` or \
+             `session-phase=1|2`"
+                .into(),
         ),
     }
 }
@@ -70,6 +81,11 @@ pub enum Smoke {
     Nav,
     /// Three tabs on bundled pages: switch, sleep, restore, close.
     Tabs,
+    /// Two bundled pages side by side: two live views at their panes' sizes, each pane's
+    /// pixels, then unsplit.
+    Split,
+    /// The bundled page's select popup, alert, context menu, find and zoom.
+    Page,
     /// Runs both session phases on a temporary profile.
     Session,
     /// One half of `Session`, on the profile in `profile`.
@@ -93,6 +109,8 @@ pub enum Command {
         url: Option<String>,
         /// `--profile`, else the per-user profile.
         profile: Option<PathBuf>,
+        /// `--downloads`, else the OS downloads folder.
+        downloads: Option<PathBuf>,
     },
     Smoke(Smoke),
 }
@@ -107,6 +125,7 @@ impl TryFrom<Cli> for Command {
                 return Ok(Command::Run {
                     url: cli.page.as_deref().map(wubble_core::url::from_cli_arg),
                     profile,
+                    downloads: cli.downloads,
                 });
             }
             (Some(SmokeArg::SessionPhase(phase)), None, Some(profile)) => {
@@ -128,6 +147,8 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
+            (Some(SmokeArg::Split), None, None) => Smoke::Split,
+            (Some(SmokeArg::Page), None, None) => Smoke::Page,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
         };
         Ok(Command::Smoke(smoke))
@@ -158,6 +179,7 @@ mod tests {
         Some(Command::Run {
             url: url.map(String::from),
             profile: None,
+            downloads: None,
         })
     }
 
@@ -188,6 +210,15 @@ mod tests {
     }
 
     #[test]
+    fn smoke_split() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "split"]).ok(),
+            Some(Command::Smoke(Smoke::Split))
+        );
+        assert!(parse(["wubble", "--smoke", "split", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
     fn smoke_tabs() {
         assert_eq!(
             parse(["wubble", "--smoke", "tabs"]).ok(),
@@ -198,8 +229,19 @@ mod tests {
     }
 
     #[test]
+    fn smoke_page() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "page"]).ok(),
+            Some(Command::Smoke(Smoke::Page))
+        );
+        assert!(parse(["wubble", "--smoke", "page", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
     fn a_url_does_not_combine_with_a_smoke() {
-        for smoke in ["boot", "nav", "tabs", "frames=3", "session"] {
+        for smoke in [
+            "boot", "nav", "tabs", "split", "page", "frames=3", "session",
+        ] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),
                 "{smoke}"
@@ -249,9 +291,12 @@ mod tests {
             Some(Command::Run {
                 url: Some("https://example.com".into()),
                 profile: Some("/tmp/p".into()),
+                downloads: None,
             })
         );
-        for smoke in ["boot", "nav", "tabs", "frames=3", "session"] {
+        for smoke in [
+            "boot", "nav", "tabs", "split", "page", "frames=3", "session",
+        ] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "--profile", "/tmp/p"]).is_err(),
                 "{smoke}"
@@ -289,6 +334,19 @@ mod tests {
             );
         }
         assert!(parse(["wubble", "--smoke", "session", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
+    fn downloads_folder_for_the_browser_only() {
+        assert_eq!(
+            parse(["wubble", "--downloads", "/tmp/d"]).ok(),
+            Some(Command::Run {
+                url: None,
+                profile: None,
+                downloads: Some("/tmp/d".into()),
+            })
+        );
+        assert!(parse(["wubble", "--smoke", "page", "--downloads", "/tmp/d"]).is_err());
     }
 
     #[test]

@@ -163,3 +163,16 @@ fn every_quality_draws_glass_and_flat_freezes_and_flattens() {
         "Full moves"
     );
 }
+
+/// The scene builds without a validation error, and reports no frame cost
+/// before it has rendered. Only presence is checked, never a value.
+#[test]
+fn scene_builds_and_has_no_cost_before_a_frame() {
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let mut r = wubble_gfx::scene::Renderer::from_device(device, queue, Default::default())
+        .expect("the scene builds on the test device");
+    assert_eq!(r.take_cost(), None);
+}

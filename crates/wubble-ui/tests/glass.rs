@@ -1,67 +1,154 @@
-//! The Glass component's backdrop logic, through the `GlassBackdrops` global
-//! on the testing backend. Pure functions of properties; no timing.
+//! The glass panels' items for the wgpu scene, on the testing backend: what each GlassPanel
+//! reports through `GlassLayer.report` as layout, touch and the scene switch change. Mock time
+//! only. The platform can be installed once per process, so the scenarios run in one test.
 
-use i_slint_backend_testing::init_integration_test_with_mock_time;
-use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
-use wubble_ui::{AppWindow, GlassBackdrops, GlassTier};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::Duration;
 
-fn backdrop(width: u32, height: u32) -> Image {
-    Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(width, height))
+use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
+use slint::{
+    ComponentHandle, LogicalPosition, ModelRc,
+    platform::{PointerEventButton, WindowEvent},
+};
+use wubble_core::seam::INSET;
+use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier, SidebarMode, TabItem};
+
+type Seen = Rc<RefCell<BTreeMap<i32, GlassItem>>>;
+
+fn pump(ms: u64) {
+    mock_elapsed_time(Duration::from_millis(ms));
 }
 
-/// The testing platform can be installed once per process, so the scenarios
-/// run in order inside one test.
+fn item(seen: &Seen, key: i32) -> GlassItem {
+    seen.borrow()
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| panic!("panel {key} never reported"))
+}
+
+fn press(app: &AppWindow, x: f32, y: f32, down: bool) {
+    let (position, button) = (LogicalPosition::new(x, y), PointerEventButton::Left);
+    app.window().dispatch_event(if down {
+        WindowEvent::PointerPressed { position, button }
+    } else {
+        WindowEvent::PointerReleased { position, button }
+    });
+}
+
 #[test]
-fn glass_backdrop_selection_and_clip() {
+fn glass_panels_report_their_items() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
-    let glass = app.global::<GlassBackdrops>();
+    // The last report of every key, present or not (the registry would drop absent ones).
+    let seen: Seen = Rc::default();
+    let s = Rc::clone(&seen);
+    let layer = app.global::<GlassLayer>();
+    layer.on_report(move |item| {
+        s.borrow_mut().insert(item.key, item);
+    });
+    let keys = app.global::<GlassKeys>();
+    let (sidebar, address) = (keys.get_sidebar(), keys.get_address());
+    app.show().unwrap();
+    // The panels reported on `init`, before this handler: a bump asks again.
+    layer.set_generation(layer.get_generation() + 1);
+    pump(1);
 
-    // Each tier picks its own image.
-    glass.set_thin(backdrop(10, 10));
-    glass.set_regular(backdrop(20, 20));
-    glass.set_thick(backdrop(30, 30));
-    for (tier, side) in [
-        (GlassTier::Thin, 10),
-        (GlassTier::Regular, 20),
-        (GlassTier::Thick, 30),
-    ] {
-        assert_eq!(glass.invoke_image(tier).size().width, side);
+    // Without the scene every panel is absent (the Slint glass draws itself).
+    assert!(!item(&seen, address).present);
+    assert!(seen.borrow().values().all(|i| !i.present));
+
+    // With it: the sidebar's Regular glass up to the seam and the pill's Thin glass.
+    layer.set_scene_active(true);
+    pump(1);
+    let side = item(&seen, sidebar);
+    assert!(side.present);
+    assert_eq!((side.x, side.y), (INSET as f32, INSET as f32));
+    assert_eq!(side.width, app.get_sidebar_width());
+    assert_eq!(side.tier, GlassTier::Regular);
+    let pill = item(&seen, address);
+    assert!(pill.present);
+    assert_eq!(pill.tier, GlassTier::Thin);
+    assert!(pill.x > side.x && pill.y > side.y && pill.width > 100.0);
+
+    // The seam narrows the sidebar: its item follows.
+    app.set_sidebar_width(220.0);
+    pump(1);
+    assert_eq!(item(&seen, sidebar).width, 220.0);
+
+    // A pinned tab is a favourite tile, keyed by its tab id.
+    let tab = TabItem {
+        id: 5,
+        title: "a".into(),
+        url: "https://a.test/".into(),
+        favicon: Default::default(),
+        ..Default::default()
+    };
+    app.set_pinned_tabs(ModelRc::from([tab].as_slice()));
+    pump(1);
+    let fav_key = keys.get_favourites() + 5;
+    let fav = item(&seen, fav_key);
+    assert!(fav.present && !fav.pressed);
+
+    // Pressed, it shrinks to 0.97 about its centre, and the item says so.
+    let (cx, cy) = (fav.x + fav.width / 2.0, fav.y + fav.height / 2.0);
+    press(&app, cx, cy, true);
+    pump(500);
+    let down = item(&seen, fav_key);
+    assert!(down.pressed && down.hover);
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(
+        near(down.width, fav.width * 0.97),
+        "{} vs {}",
+        down.width,
+        fav.width
+    );
+    assert!(near(down.height, fav.height * 0.97));
+    assert!(
+        near(down.x + down.width / 2.0, cx),
+        "scaled about the centre: {fav:?} {down:?}"
+    );
+    assert!(near(down.y + down.height / 2.0, cy));
+    press(&app, cx, cy, false);
+    pump(500);
+    assert!(near(item(&seen, fav_key).width, fav.width));
+
+    // A generation bump makes every live panel report again.
+    seen.borrow_mut().clear();
+    layer.set_generation(layer.get_generation() + 1);
+    pump(1);
+    for key in [sidebar, address, fav_key] {
+        assert!(item(&seen, key).present, "{key} reported again");
     }
 
-    // A 1000x600 frame at x=268, y=8 (logical), backdrop at half size.
-    glass.set_frame_x(268.0);
-    glass.set_frame_y(8.0);
-    glass.set_scale(0.5);
-    let shows = |x, y, w, h| glass.invoke_shows(GlassTier::Regular, x, y, w, h);
+    // Hidden at rest the sidebar slides away with its parent (the peek's zone): the pill's
+    // item follows an ancestor's move, and is absent while the scene cannot show it.
+    app.set_sidebar_mode(SidebarMode::Hidden);
+    app.set_sidebar_width(0.0);
+    pump(1);
+    let gone = item(&seen, address);
+    assert!(!gone.present);
+    assert!(gone.x < 0.0, "moved with the zone: x {}", gone.x);
+    assert!(!item(&seen, sidebar).present);
+    app.set_peek(true);
+    pump(1000);
+    assert!(near(item(&seen, address).x, pill.x), "back with the peek");
+    // The scene draws no beam over the peek, so the pill's loading shows as the Slint sheen.
+    app.set_address_loading(true);
+    pump(200);
+    assert!(app.get_address_sheen() > 0.99, "sheen over the peek");
 
-    // An empty image (Flat: the host sets none) never shows a backdrop.
-    glass.set_regular(Image::default());
-    assert!(!shows(368.0, 58.0, 640.0, 300.0));
-    assert!(!shows(268.0, 8.0, 0.0, 0.0));
+    // Back over the scene, which draws the pill and its beam: no sheen on top.
+    app.set_peek(false);
+    app.set_sidebar_mode(SidebarMode::Extended);
+    app.set_sidebar_width(252.0);
+    pump(1);
+    assert_eq!(app.get_address_sheen(), 0.0, "no sheen over the scene");
+    app.set_address_loading(false);
 
-    glass.set_regular(backdrop(500, 300));
-    assert!(shows(368.0, 58.0, 640.0, 300.0));
-    // Over the frame's edge or outside it: flat.
-    assert!(!shows(200.0, 58.0, 100.0, 100.0));
-    assert!(!shows(368.0, 0.0, 100.0, 100.0));
-    assert!(!shows(900.0, 58.0, 400.0, 100.0));
-    assert!(shows(268.0, 8.0, 1000.0, 600.0));
-    // Flush with the right and bottom edges at odd offsets: the offset and the
-    // size would each round up (50.5 + 449.5), yet the panel is inside.
-    assert!(shows(268.0 + 101.0, 8.0 + 101.0, 899.0, 499.0));
-    assert!(!shows(268.0 + 101.0, 8.0, 899.5, 100.0));
-    // Clip end minus clip start stays inside the image: 500 - 51.
-    assert_eq!(
-        glass.invoke_to_backdrop(101.0 + 899.0) - glass.invoke_to_backdrop(101.0),
-        449
-    );
-
-    // Source clip of a panel at (368, 58): 50 backdrop px in, 320 wide.
-    assert_eq!(glass.invoke_to_backdrop(368.0 - 268.0), 50);
-    assert_eq!(glass.invoke_to_backdrop(58.0 - 8.0), 25);
-    assert_eq!(glass.invoke_to_backdrop(640.0), 320);
-    // Scale folds in the window scale factor: 0.5 * 2.0 at HiDPI.
-    glass.set_scale(1.0);
-    assert_eq!(glass.invoke_to_backdrop(100.5), 101);
+    // The scene off again: everything absent.
+    layer.set_scene_active(false);
+    pump(1);
+    assert!(seen.borrow().values().all(|i| !i.present));
 }
