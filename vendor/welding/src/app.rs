@@ -89,6 +89,12 @@ impl PendingScripts {
 /// Message names on the browser/renderer channel.
 pub(crate) const EVAL_REQUEST: &str = "weld.eval";
 pub(crate) const EVAL_RESULT: &str = "weld.eval.result";
+/// A context script's message, both ways (renderer `send`, browser
+/// `send_frame_message`). wubble change, see `WUBBLE_CHANGES.md` (26).
+pub(crate) const FRAME_MESSAGE: &str = "wubble.frame";
+/// The names of the two native functions handed to a context script.
+const NATIVE_SEND: &str = "send";
+const NATIVE_REGISTER: &str = "register";
 
 /// Wrap the caller's script so the renderer always returns a JSON string.
 ///
@@ -104,14 +110,164 @@ pub(crate) fn wrap_script(script: &str) -> String {
 
 #[cfg(feature = "cef-runtime")]
 mod cef_backed {
-    use super::{EVAL_REQUEST, EVAL_RESULT};
+    use super::{EVAL_REQUEST, EVAL_RESULT, FRAME_MESSAGE, NATIVE_REGISTER, NATIVE_SEND};
     use cef::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
+    // wubble change (26): a context script in every frame.
+    //
+    // The script is a function expression, evaluated in each frame's V8
+    // context as it is created (before the page's own scripts run) and called
+    // once with two native functions: `send(text)` posts a `FRAME_MESSAGE` to
+    // the browser from that frame, `register(fn)` names the function the
+    // browser's `FRAME_MESSAGE`s are handed to. Neither is put on `window`,
+    // so page code has no name to reach them by; the script keeps them in its
+    // closure. This is closure capture, not an isolated world (CEF 156 has
+    // none): the page shares the heap and the DOM with the script, and can
+    // patch builtins the script did not capture first. The browser takes the
+    // frame and its URL from CEF, not from the text, so a page can only ever
+    // speak for its own frame. Pattern: cefclient `client_renderer.cc`
+    // `OnContextCreated` with a `CefV8Handler` (BSD-3-Clause), as cef-rs's
+    // `wrapper/message_router.rs` does it (MIT OR Apache-2.0).
+    thread_local! {
+        /// Per frame id: the context the script ran in and the function it registered.
+        static REGISTERED: RefCell<HashMap<String, (cef::V8Context, cef::V8Value)>> =
+            RefCell::new(HashMap::new());
+    }
+
+    wrap_v8_handler! {
+        struct ContextNatives {}
+
+        impl V8Handler {
+            fn execute(
+                &self,
+                name: Option<&CefString>,
+                _object: Option<&mut V8Value>,
+                arguments: Option<&[Option<V8Value>]>,
+                _retval: Option<&mut Option<V8Value>>,
+                exception: Option<&mut CefString>,
+            ) -> i32 {
+                let name = name.map(|n| n.to_string()).unwrap_or_default();
+                let arg = arguments.and_then(|a| a.first()).and_then(Option::as_ref);
+                let Some(ctx) = v8_context_get_current_context() else {
+                    return 0;
+                };
+                let Some(frame) = ctx.frame() else {
+                    return 0;
+                };
+                let fail = |exception: Option<&mut CefString>, why: &str| {
+                    if let Some(e) = exception {
+                        *e = CefString::from(why);
+                    }
+                    1
+                };
+                match name.as_str() {
+                    NATIVE_SEND => {
+                        let Some(text) = arg.filter(|v| v.is_string() != 0) else {
+                            return fail(exception, "send takes a string");
+                        };
+                        let text = CefString::from(&text.string_value()).to_string();
+                        if text.len() > crate::surface::MAX_FRAME_MESSAGE_BYTES {
+                            return 1;
+                        }
+                        let name: CefString = FRAME_MESSAGE.into();
+                        if let Some(mut message) = process_message_create(Some(&name)) {
+                            if let Some(list) = message.argument_list() {
+                                let text: CefString = text.as_str().into();
+                                list.set_string(0, Some(&text));
+                            }
+                            frame.send_process_message(ProcessId::BROWSER, Some(&mut message));
+                        }
+                        1
+                    }
+                    NATIVE_REGISTER => {
+                        let Some(function) = arg.filter(|v| v.is_function() != 0) else {
+                            return fail(exception, "register takes a function");
+                        };
+                        let id = crate::handlers::cef_string(frame.identifier());
+                        REGISTERED.with(|r| r.borrow_mut().insert(id, (ctx, function.clone())));
+                        1
+                    }
+                    _ => 0,
+                }
+            }
+        }
+    }
+
+    /// Runs the context script in a new frame context: evaluates it to its
+    /// function and calls that with the natives.
+    fn run_context_script(script: &str, ctx: &mut V8Context) {
+        let code: CefString = script.into();
+        let url: CefString = "wubble://context-script".into();
+        let mut retval: Option<V8Value> = None;
+        let mut exception: Option<V8Exception> = None;
+        let ran = ctx.eval(Some(&code), Some(&url), 1, Some(&mut retval), Some(&mut exception));
+        let Some(function) = retval.filter(|v| ran != 0 && v.is_function() != 0) else {
+            return;
+        };
+        let mut natives = ContextNatives::new();
+        let send: CefString = NATIVE_SEND.into();
+        let register: CefString = NATIVE_REGISTER.into();
+        let args = [
+            v8_value_create_function(Some(&send), Some(&mut natives)),
+            v8_value_create_function(Some(&register), Some(&mut natives)),
+        ];
+        function.execute_function_with_context(Some(ctx), None, Some(&args));
+    }
+
+    /// The browser's message for the script in `frame`: handed to the
+    /// function it registered, inside its context.
+    fn deliver(frame: &Frame, text: &str) {
+        let id = crate::handlers::cef_string(frame.identifier());
+        let Some((mut ctx, function)) = REGISTERED.with(|r| r.borrow().get(&id).cloned()) else {
+            return;
+        };
+        if ctx.enter() == 0 {
+            return;
+        }
+        let text: CefString = text.into();
+        let arg = [v8_value_create_string(Some(&text))];
+        function.execute_function_with_context(Some(&mut ctx), None, Some(&arg));
+        ctx.exit();
+    }
+
     cef::wrap_render_process_handler! {
-        pub(crate) struct WeldRenderProcessHandler {}
+        pub(crate) struct WeldRenderProcessHandler {
+            context_script: Option<&'static str>,
+        }
 
         impl RenderProcessHandler {
+            fn on_context_created(
+                &self,
+                _browser: Option<&mut Browser>,
+                _frame: Option<&mut Frame>,
+                context: Option<&mut V8Context>,
+            ) {
+                if let (Some(script), Some(ctx)) = (self.context_script, context) {
+                    run_context_script(script, ctx);
+                }
+            }
+
+            fn on_context_released(
+                &self,
+                _browser: Option<&mut Browser>,
+                frame: Option<&mut Frame>,
+                context: Option<&mut V8Context>,
+            ) {
+                let (Some(frame), Some(ctx)) = (frame, context) else {
+                    return;
+                };
+                let id = crate::handlers::cef_string(frame.identifier());
+                REGISTERED.with(|r| {
+                    let mut r = r.borrow_mut();
+                    if r.get(&id).is_some_and(|(c, _)| c.is_same(Some(&mut *ctx)) != 0) {
+                        r.remove(&id);
+                    }
+                });
+            }
+
             fn on_process_message_received(
                 &self,
                 _browser: Option<&mut cef::Browser>,
@@ -122,7 +278,15 @@ mod cef_backed {
                 let (Some(frame), Some(message)) = (frame, message) else {
                     return 0;
                 };
-                if cef::CefString::from(&message.name()).to_string() != EVAL_REQUEST {
+                let name = cef::CefString::from(&message.name()).to_string();
+                if name == FRAME_MESSAGE {
+                    if let Some(args) = message.argument_list() {
+                        let text = cef::CefString::from(&args.string(0)).to_string();
+                        deliver(frame, &text);
+                    }
+                    return 1;
+                }
+                if name != EVAL_REQUEST {
                     return 0;
                 }
                 let Some(args) = message.argument_list() else {
@@ -233,14 +397,16 @@ mod cef_backed {
     }
 
     impl WeldApp {
-        /// `scheduler` is `Some` only in the browser process.
+        /// `scheduler` is `Some` only in the browser process; `context_script`
+        /// only matters in a renderer (wubble change 26).
         pub(crate) fn build(
             switches: Arc<Vec<(String, Option<String>)>>,
             scheduler: Option<crate::runtime::PumpScheduler>,
+            context_script: Option<&'static str>,
         ) -> cef::App {
             Self::new(
                 switches,
-                WeldRenderProcessHandler::new(),
+                WeldRenderProcessHandler::new(context_script),
                 scheduler.map(WeldBrowserProcessHandler::new),
             )
         }

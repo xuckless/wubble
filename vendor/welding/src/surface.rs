@@ -105,7 +105,24 @@ pub enum CefSurfaceEvent {
         windows_key_code: i32,
         modifiers: u32,
     },
+    /// The context script in one frame called its `send` with `text`. The
+    /// frame's id, URL and kind are the browser process's own view of the
+    /// sending frame (`CefFrame`), never anything the page wrote. The text
+    /// may hold page data (form values): do not log it. wubble change, see
+    /// `WUBBLE_CHANGES.md` (27).
+    FrameMessage {
+        frame_id: String,
+        frame_url: String,
+        is_main: bool,
+        text: String,
+    },
 }
+
+/// A frame message longer than this (bytes) is dropped. wubble change (27).
+pub const MAX_FRAME_MESSAGE_BYTES: usize = 256 * 1024;
+/// At most this many frame messages wait in a view's queue; later ones are
+/// dropped until the host drains it. A count, not a rate. wubble change (27).
+pub const MAX_PENDING_FRAME_MESSAGES: usize = 64;
 
 /// The strings of a list CEF passed to a callback, which still owns it.
 /// wubble change, see `WUBBLE_CHANGES.md`.
@@ -128,6 +145,30 @@ impl WebEventQueue {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push_back(event);
+    }
+
+    /// Queues a frame message unless it is too long or too many wait
+    /// already; whether it was queued. wubble change (27).
+    pub(crate) fn push_frame_message(&self, event: CefSurfaceEvent) -> bool {
+        let CefSurfaceEvent::FrameMessage { text, .. } = &event else {
+            return false;
+        };
+        if text.len() > MAX_FRAME_MESSAGE_BYTES {
+            return false;
+        }
+        let mut queue = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending = queue
+            .iter()
+            .filter(|e| matches!(e, CefSurfaceEvent::FrameMessage { .. }))
+            .count();
+        if pending >= MAX_PENDING_FRAME_MESSAGES {
+            return false;
+        }
+        queue.push_back(event);
+        true
     }
 
     pub(crate) fn poll(&self) -> Option<CefSurfaceEvent> {
@@ -178,6 +219,7 @@ mod web_event_tests {
             windows_key_code: 0x52,
             modifiers: 1 << 2,
         });
+        assert!(events.push_frame_message(frame_message("f1", "after")));
 
         assert!(matches!(
             events.poll(),
@@ -233,7 +275,48 @@ mod web_event_tests {
                 modifiers: 4,
             })
         ));
+        assert!(matches!(
+            events.poll(),
+            Some(CefSurfaceEvent::FrameMessage { frame_id, text, .. })
+                if frame_id == "f1" && text == "after"
+        ));
         assert!(events.poll().is_none());
+    }
+
+    fn frame_message(frame_id: &str, text: &str) -> CefSurfaceEvent {
+        CefSurfaceEvent::FrameMessage {
+            frame_id: frame_id.into(),
+            frame_url: "https://a.test/".into(),
+            is_main: true,
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn frame_messages_keep_order_and_respect_the_caps() {
+        let events = WebEventQueue::default();
+        assert!(events.push_frame_message(frame_message("f", "1")));
+        events.push(CefSurfaceEvent::BrowserClosed);
+        assert!(events.push_frame_message(frame_message("f", "2")));
+        // Too long: dropped, the queue unchanged.
+        let long = "x".repeat(MAX_FRAME_MESSAGE_BYTES + 1);
+        assert!(!events.push_frame_message(frame_message("f", &long)));
+        // Not a frame message: refused.
+        assert!(!events.push_frame_message(CefSurfaceEvent::BrowserClosed));
+        for i in 2..MAX_PENDING_FRAME_MESSAGES {
+            assert!(events.push_frame_message(frame_message("f", &i.to_string())));
+        }
+        assert!(!events.push_frame_message(frame_message("f", "over")));
+        let texts: Vec<String> = std::iter::from_fn(|| events.poll())
+            .filter_map(|e| match e {
+                CefSurfaceEvent::FrameMessage { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), MAX_PENDING_FRAME_MESSAGES);
+        assert_eq!(texts[..2], ["1", "2"]);
+        // Drained: there is room again.
+        assert!(events.push_frame_message(frame_message("f", "again")));
     }
 
     #[test]
@@ -1381,6 +1464,16 @@ pub trait CefSurfaceProducer {
     /// provides this natively (`cef_frame_t::execute_java_script`) without
     /// requiring a CDP round-trip.
     fn execute_script(&mut self, script: &str, source_url: &str) -> Result<(), WeldError>;
+
+    /// Hands `text` to the context script's registered function in the frame
+    /// `frame_id` (from a [`CefSurfaceEvent::FrameMessage`]). `Err` when the
+    /// browser or that frame is gone. wubble change, see `WUBBLE_CHANGES.md`
+    /// (27).
+    fn send_frame_message(&mut self, _frame_id: &str, _text: &str) -> Result<(), WeldError> {
+        Err(WeldError::PlatformUnsupported(
+            "frame messages are not wired for this producer",
+        ))
+    }
 
     /// Evaluate `script` and return its value later under caller-minted `id`.
     ///

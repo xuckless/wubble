@@ -62,6 +62,55 @@ fn stale(what: &'static str) -> WeldError {
     WeldError::PlatformUnsupported(what)
 }
 
+// ── Frame messages (wubble change 27) ─────────────────────────────────────
+
+/// A renderer process message from the context script: queued with the
+/// browser's own view of the sending frame (id, URL, main or not), so a page
+/// cannot claim another frame or origin. Whether `msg` was a frame message.
+/// Shared by the three platform clients.
+pub(crate) fn frame_message_received(
+    events: &WebEventQueue,
+    frame: Option<&mut cef::Frame>,
+    msg: &mut cef::ProcessMessage,
+) -> bool {
+    if cef::CefString::from(&msg.name()).to_string() != crate::app::FRAME_MESSAGE {
+        return false;
+    }
+    let (Some(frame), Some(args)) = (frame, msg.argument_list()) else {
+        return true;
+    };
+    let text = cef::CefString::from(&args.string(0)).to_string();
+    events.push_frame_message(CefSurfaceEvent::FrameMessage {
+        frame_id: cef_string(frame.identifier()),
+        frame_url: cef_string(frame.url()),
+        is_main: frame.is_main() != 0,
+        text,
+    });
+    true
+}
+
+/// Sends `text` to the context script's registered function in `frame_id`.
+pub(crate) fn send_frame_message(
+    browser: &cef::Browser,
+    frame_id: &str,
+    text: &str,
+) -> Result<(), WeldError> {
+    let id: cef::CefString = frame_id.into();
+    let frame = browser
+        .frame_by_identifier(Some(&id))
+        .ok_or_else(|| WeldError::BrowserOp("that frame is gone".into()))?;
+    let name: cef::CefString = crate::app::FRAME_MESSAGE.into();
+    let mut message = cef::process_message_create(Some(&name))
+        .ok_or_else(|| WeldError::BrowserOp("could not create a process message".into()))?;
+    let args = message
+        .argument_list()
+        .ok_or_else(|| WeldError::BrowserOp("process message has no argument list".into()))?;
+    let text: cef::CefString = text.into();
+    args.set_string(0, Some(&text));
+    frame.send_process_message(cef::ProcessId::RENDERER, Some(&mut message));
+    Ok(())
+}
+
 // ── Defaults ──────────────────────────────────────────────────────────────
 
 impl Answer for cef::AuthCallback {
