@@ -62,7 +62,7 @@ fn stale(what: &'static str) -> WeldError {
     WeldError::PlatformUnsupported(what)
 }
 
-// ── Frame messages (wubble change 27) ─────────────────────────────────────
+// ── Frame messages (wubble changes 27, 28) ─────────────────────────────────
 
 /// A renderer process message from the context script: queued with the
 /// browser's own view of the sending frame (id, URL, main or not), so a page
@@ -84,9 +84,15 @@ pub(crate) fn frame_message_received(
         frame_id: cef_string(frame.identifier()),
         frame_url: cef_string(frame.url()),
         is_main: frame.is_main() != 0,
+        pid: sender_pid(args.int(1)),
         text,
     });
     true
+}
+
+/// The renderer pid argument (wubble change 28): 0 when absent or not a pid.
+pub(crate) fn sender_pid(raw: std::os::raw::c_int) -> u32 {
+    u32::try_from(raw).unwrap_or(0)
 }
 
 /// Sends `text` to the context script's registered function in `frame_id`.
@@ -1166,5 +1172,17 @@ mod request_filter_tests {
         // A suffix that is not a subdomain is another site.
         let main = Some("https://notb.test/".to_owned());
         assert_eq!(top_url("https://ads.test/x.js", false, main, "https://b.test/", ""), "https://b.test/");
+    }
+}
+
+#[cfg(test)]
+mod frame_message_tests {
+    use super::sender_pid;
+
+    #[test]
+    fn the_sender_pid_is_kept_and_a_bad_one_is_zero() {
+        assert_eq!(sender_pid(4242), 4242);
+        assert_eq!(sender_pid(0), 0);
+        assert_eq!(sender_pid(-1), 0);
     }
 }

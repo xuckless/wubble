@@ -17,6 +17,8 @@ clap.workspace = true
 wubble-store.workspace = true
 wubble-blocker.workspace = true
 wubble-vault.workspace = true
+# Memory pressure and the Task manager's process meter.
+wubble-sysmem.workspace = true
 # The autofill fill message (`host/autofill.rs`).
 serde_json.workspace = true
 # Passwords handed to the vault (`host/autofill.rs`, the passwords page); already in Cargo.lock.

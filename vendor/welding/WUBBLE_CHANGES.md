@@ -285,6 +285,16 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    accessor). Tests: order with the other events, the size cap, the pending
    cap and room again after a drain. Not unit-tested: an unknown frame id
    (needs a live browser).
+28. **The renderer's pid on frame messages.** CEF 156 tells the browser
+   no renderer pid, and `SystemInfo.getProcessInfo` is a browser-target CDP
+   domain a page's `ExecuteDevToolsMethod` cannot reach. `app.rs`: the
+   context script's `send` adds `std::process::id()` as argument 1 of the
+   process message. `handlers.rs`: `frame_message_received` reads it
+   (`sender_pid`: 0 when absent or negative). `surface.rs`:
+   `CefSurfaceEvent::FrameMessage` gains `pid: u32`. The pid is the
+   renderer's own report, so a compromised renderer could lie about it; it
+   is used for accounting only. Tests: the queue test carries a pid through;
+   `sender_pid` (with `cef-runtime`).
 
 ## Not changed, on purpose
 

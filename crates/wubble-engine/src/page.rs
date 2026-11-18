@@ -268,6 +268,9 @@ pub struct FrameInfo {
     /// The frame's URL when the message arrived.
     pub url: String,
     pub is_main: bool,
+    /// The renderer process the frame runs in, as it reported itself (welding change 28); 0
+    /// when unknown. Several tabs may share one.
+    pub pid: u32,
 }
 
 /// What the host learns about a page beyond navigation, in order.
@@ -407,6 +410,12 @@ pub enum PageEvent {
     /// The answer of `View::probe_audible` changed: a media element of the
     /// main document plays with sound (or stopped).
     Audible(bool),
+    /// The page answered `View::set_frozen` (CDP `Page.setWebLifecycleState`): `ok` false when
+    /// Chromium refused (the page is not the active top-level page, say).
+    Frozen {
+        frozen: bool,
+        ok: bool,
+    },
     Console {
         level: LogLevel,
         message: String,

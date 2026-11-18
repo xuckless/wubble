@@ -21,6 +21,7 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+use crate::busy::{Busy, Reason};
 use crate::lifecycle::{self, Activity, Lifecycle, Pin};
 use crate::pages::InternalPage;
 use crate::sleep::{Pressure, SleepPolicy};
@@ -121,13 +122,16 @@ pub enum Command {
         tab: TabId,
         title: String,
     },
-    /// Whether the tab is busy: its page is loading or it holds a running
-    /// download (the host decides). A busy tab is not frozen or discarded
-    /// until that ends.
-    BusyChanged {
+    /// One reason the tab is busy started (`on`) or ended. A tab with any reason is not
+    /// frozen or discarded until the last one ends (`busy::Busy`).
+    Busy {
         tab: TabId,
-        busy: bool,
+        reason: Reason,
+        on: bool,
     },
+    /// Discard a hidden tab now (Task manager). Refused for a visible or busy tab, and for a
+    /// pinned one the policy keeps alive.
+    DiscardNow(TabId),
     /// The tab's renderer process died.
     RendererGone(TabId),
     /// Put `tab` (of the active Space) beside the focused page: opens a split of the two, or
@@ -652,6 +656,7 @@ impl Model {
             lifecycle: Lifecycle::new(),
             container: eff,
             opener,
+            busy: Busy::NONE,
         };
         self.tabs.insert(id, tab);
         // New tabs follow their opener, otherwise go last; pinned openers do not count.
@@ -887,6 +892,7 @@ impl Model {
                     pin: old.lifecycle.pin,
                     ..Lifecycle::new()
                 },
+                busy: Busy::NONE,
                 ..old.clone()
             },
         );
@@ -1043,6 +1049,48 @@ impl Model {
             g.tabs.swap(i, j);
         }
         vec![]
+    }
+
+    /// Adds or removes one busy reason; the lifecycle hears only when the tab turns busy or idle.
+    fn set_busy(&mut self, tab: TabId, reason: Reason, on: bool) -> Vec<Effect> {
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return vec![];
+        };
+        t.busy = t.busy.with(reason, on);
+        let activity = if t.busy.is_empty() {
+            Activity::Idle
+        } else {
+            Activity::Busy
+        };
+        if activity == t.lifecycle.activity {
+            return vec![];
+        }
+        self.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
+    }
+
+    /// A hidden, idle tab judged as if memory were critical: the policy discards it unless it is
+    /// pinned and kept alive, which is refused here rather than frozen.
+    fn discard_now(&mut self, tab: TabId) -> Vec<Effect> {
+        let Some(l) = self.tabs.get(&tab).map(|t| t.lifecycle) else {
+            return vec![];
+        };
+        let target = self.policy.target(
+            std::time::Duration::ZERO,
+            l.pin,
+            l.activity,
+            Pressure::Critical,
+        );
+        if target != Liveness::Discarded {
+            return vec![];
+        }
+        let now = self.clock;
+        self.lifecycle(
+            tab,
+            lifecycle::Event::Tick {
+                now,
+                pressure: Pressure::Critical,
+            },
+        )
     }
 
     /// Runs `event` through the tab's lifecycle and returns its effects.
@@ -1253,10 +1301,8 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
-        Command::BusyChanged { tab, busy } => {
-            let activity = if busy { Activity::Busy } else { Activity::Idle };
-            m.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
-        }
+        Command::Busy { tab, reason, on } => m.set_busy(tab, reason, on),
+        Command::DiscardNow(tab) => m.discard_now(tab),
         Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),
         Command::SplitWith(t) => m.split_with(t),
         Command::OpenBeside { url } => m.open_beside(url),
@@ -1271,7 +1317,10 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         Command::Tick { now, pressure } => {
             m.clock = now;
             m.pressure = pressure;
-            let ids: Vec<TabId> = m.tabs.keys().copied().collect();
+            // Oldest hidden first, so a critical sweep discards in that order (Firefox
+            // `TabUnloader.sys.mjs` sorts by last access).
+            let mut ids: Vec<TabId> = m.tabs.keys().copied().collect();
+            ids.sort_by_key(|t| (m.tabs[t].lifecycle.hidden_since, *t));
             ids.into_iter()
                 .flat_map(|t| m.lifecycle(t, lifecycle::Event::Tick { now, pressure }))
                 .collect()

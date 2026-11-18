@@ -1,5 +1,6 @@
 //! Tab identity and lifecycle.
 
+use crate::busy::Busy;
 use crate::lifecycle::Lifecycle;
 use crate::space::ContainerId;
 
@@ -29,4 +30,6 @@ pub struct Tab {
     pub container: ContainerId,
     /// The tab that opened this one; consulted when this tab closes, forgotten on a user tab switch.
     pub opener: Option<TabId>,
+    /// Why the tab must stay awake (the one owner; `lifecycle.activity` follows it). Not stored.
+    pub busy: Busy,
 }

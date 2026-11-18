@@ -133,6 +133,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
         Action::OpenDownloads => Plan::Model(Command::OpenInternal(InternalPage::Downloads)),
         Action::OpenPasswords => Plan::Model(Command::OpenInternal(InternalPage::Passwords)),
+        Action::OpenTasks => Plan::Model(Command::OpenInternal(InternalPage::Tasks)),
         Action::BookmarkPage => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| wubble_core::url::is_recordable(&t.url))

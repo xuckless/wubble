@@ -7,9 +7,21 @@
 use welding::{CefRuntime, CefSandboxMode};
 
 /// Runs in every frame of every renderer (welding change 26): the password
-/// autofill content script. It lives here because the helper is the renderer;
-/// the browser side is `crates/wubble/src/autofill.rs`.
-const CONTEXT_SCRIPT: &str = include_str!("autofill.js");
+/// autofill content script and the busy probes, one function expression that
+/// calls both (a block whose value is that function, so neither script's
+/// names reach the page's globals). Only autofill registers a receiver. It
+/// lives here because the helper is the renderer; the browser sides are
+/// `crates/wubble/src/host/autofill.rs` and `crates/wubble/src/host/busy.rs`.
+const CONTEXT_SCRIPT: &str = concat!(
+    "{\nconst autofill =\n",
+    include_str!("autofill.js"),
+    "\n;\nconst probes =\n",
+    include_str!("probes.js"),
+    "\n;\n(function (send, register) {\n",
+    "  try { autofill(send, register); } catch (e) {}\n",
+    "  try { probes(send); } catch (e) {}\n",
+    "});\n}\n",
+);
 
 fn main() {
     #[cfg(target_os = "macos")]

@@ -177,6 +177,9 @@ mod cef_backed {
                             if let Some(list) = message.argument_list() {
                                 let text: CefString = text.as_str().into();
                                 list.set_string(0, Some(&text));
+                                // wubble change 28: the renderer's pid, which CEF does
+                                // not expose to the browser.
+                                list.set_int(1, std::process::id() as i32);
                             }
                             frame.send_process_message(ProcessId::BROWSER, Some(&mut message));
                         }

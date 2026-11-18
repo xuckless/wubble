@@ -26,11 +26,10 @@ pub struct TabRow {
     pub in_split: bool,
 }
 
-/// What a tab's page does with sound, as its view last reported
-/// (`PageEvent::Audible`, `PageEvent::MutedChanged`). Gone with the view.
+/// Whether a tab's page is muted, as its view last reported (`PageEvent::MutedChanged`). Gone
+/// with the view. Whether it plays sound is a busy reason in the model (`Reason::Audible`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Audio {
-    pub audible: bool,
     pub muted: bool,
 }
 
@@ -72,7 +71,7 @@ pub fn view_model(model: &Model, audio: &AudioMap, blocked: &BlockedMap) -> Shel
                 id: slint_id(id.0)?,
                 title: tab_title(tab),
                 url: tab.url.clone(),
-                audible: sound.audible,
+                audible: tab.busy.contains(wubble_core::busy::Reason::Audible),
                 muted: sound.muted,
                 blocked: blocked.get(&id).copied().unwrap_or(0),
                 in_split: model.split_of(id).is_some(),
@@ -318,27 +317,26 @@ mod tests {
     fn rows_carry_their_tab_s_sound() {
         let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
         let (m, b) = new_tab(m, "https://b.test/");
-        let audio = AudioMap::from([
-            (
-                a,
-                Audio {
-                    audible: true,
-                    muted: false,
-                },
-            ),
-            (
-                b,
-                Audio {
-                    audible: false,
-                    muted: true,
-                },
-            ),
-        ]);
+        let (m, _) = apply(
+            m,
+            Command::Busy {
+                tab: a,
+                reason: wubble_core::busy::Reason::Audible,
+                on: true,
+            },
+        );
+        let audio = AudioMap::from([(b, Audio { muted: true })]);
         let v = view_model(&m, &audio, &BlockedMap::new());
         let sound: Vec<_> = v.tabs.iter().map(|r| (r.audible, r.muted)).collect();
         assert_eq!(sound, [(true, false), (false, true)]);
-        let quiet = view_model(&m, &AudioMap::new(), &BlockedMap::new());
-        assert!(quiet.tabs.iter().all(|r| !r.audible && !r.muted));
+        let quiet = view_model(
+            &Model::new(std::time::Instant::now()),
+            &audio,
+            &BlockedMap::new(),
+        );
+        assert!(quiet.tabs.is_empty());
+        let unmuted = view_model(&m, &AudioMap::new(), &BlockedMap::new());
+        assert!(unmuted.tabs.iter().all(|r| !r.muted));
     }
 
     #[test]

@@ -169,7 +169,8 @@ impl GpuContext {
     pub fn presenter(&self) -> FramePresenter {
         FramePresenter {
             ctx: HostWgpuContext::new(self.device.clone(), self.queue.clone()),
-            blit: Blitter::new(&self.device),
+            blit: Blitter::new(&self.device, BLIT_FS_WGSL, wgpu::FilterMode::Nearest),
+            shrink: Blitter::new(&self.device, SHRINK_FS_WGSL, wgpu::FilterMode::Linear),
             ring: None,
             mask: EdgeMask::new(&self.device),
         }
@@ -309,6 +310,8 @@ impl Ring {
 pub struct FramePresenter {
     ctx: HostWgpuContext,
     blit: Blitter,
+    /// The snapshot pass: the latest frame into a small texture.
+    shrink: Blitter,
     ring: Option<Ring>,
     /// The bowed-edge pass over the latest frame (`crate::mask`).
     mask: EdgeMask,
@@ -391,6 +394,41 @@ impl FramePresenter {
         Some([data[0], data[1], data[2], data[3]])
     }
 
+    /// A small copy of the latest frame, at most `max_width` wide (the aspect kept): the
+    /// snapshot a hidden or discarded tab shows (`wubble_core::snapshot`). GPU only, no
+    /// readback: one bilinear pass into a new texture. Returns the image and its size in bytes;
+    /// `None` before the first frame.
+    pub fn snapshot(&self, max_width: u32) -> Result<Option<(slint::Image, u64)>, GfxError> {
+        let Some(ring) = self.ring.as_ref() else {
+            return Ok(None);
+        };
+        let size = shrunk(ring.size, max_width);
+        let texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("wubble snapshot"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TARGET_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.shrink.run(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &ring.latest().view,
+            &view,
+        );
+        let image = slint::Image::try_from(texture).map_err(|e| GfxError::Image(e.to_string()))?;
+        let bytes = u64::from(size.width) * u64::from(size.height) * 4;
+        Ok(Some((image, bytes)))
+    }
+
     /// The latest frame with its bowed edges cut (`crate::mask`), `None` before the first frame.
     /// Needs no new frame: a bending string redraws the same one.
     pub fn mask(&mut self, job: &MaskJob) -> Result<Option<Masked>, GfxError> {
@@ -451,16 +489,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ";
 
+/// The snapshot pass's fragment stage: a plain bilinear sample. Source and target both hold
+/// display-encoded bytes (`TARGET_FORMAT`), so nothing is re-encoded; filtering encoded values
+/// is not gamma-correct, which a thumbnail does not show.
+const SHRINK_FS_WGSL: &str = r"
+@group(0) @binding(0)
+var r_color: texture_2d<f32>;
+@group(0) @binding(1)
+var r_sampler: sampler;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(r_color, r_sampler, in.tex_coords);
+}
+";
+
+/// `size` scaled down to at most `max_width` wide, the aspect kept, at least 1 x 1.
+fn shrunk(size: FrameSize, max_width: u32) -> FrameSize {
+    let width = size.width.min(max_width).max(1);
+    let height = (u64::from(size.height) * u64::from(width) / u64::from(size.width.max(1))) as u32;
+    FrameSize::new(width, height.max(1))
+}
+
+/// A fullscreen-triangle pass from one texture into another with one fragment stage.
 struct Blitter {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
 }
 
 impl Blitter {
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, fragment: &str, filter: wgpu::FilterMode) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wubble blit"),
-            source: wgpu::ShaderSource::Wgsl(format!("{FULLSCREEN_VS_WGSL}{BLIT_FS_WGSL}").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{FULLSCREEN_VS_WGSL}{fragment}").into()),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("wubble blit"),
@@ -488,8 +549,8 @@ impl Blitter {
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("wubble blit"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: filter,
+            min_filter: filter,
             ..Default::default()
         });
         Self { pipeline, sampler }
@@ -538,5 +599,26 @@ impl Blitter {
             pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshots_shrink_to_the_width_keeping_the_aspect() {
+        assert_eq!(
+            shrunk(FrameSize::new(2560, 1600), 384),
+            FrameSize::new(384, 240)
+        );
+        // Smaller than the cap: kept.
+        assert_eq!(
+            shrunk(FrameSize::new(200, 100), 384),
+            FrameSize::new(200, 100)
+        );
+        // Degenerate sizes stay at least one pixel.
+        assert_eq!(shrunk(FrameSize::new(4000, 1), 384), FrameSize::new(384, 1));
+        assert_eq!(shrunk(FrameSize::new(0, 0), 384), FrameSize::new(1, 1));
     }
 }

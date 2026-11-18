@@ -1097,7 +1097,130 @@ fn hidden_loading_tab() -> (Model, Vec<TabId>) {
 }
 
 fn loading(tab: TabId, loading: bool) -> Command {
-    Command::BusyChanged { tab, busy: loading }
+    busy(tab, Reason::Loading, loading)
+}
+
+fn busy(tab: TabId, reason: Reason, on: bool) -> Command {
+    Command::Busy { tab, reason, on }
+}
+
+#[test]
+fn two_reasons_keep_a_tab_busy_until_both_end() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run_all(m, busy(ids[0], Reason::Audible, true));
+    let (m, _) = run_all(m, busy(ids[0], Reason::Download, true));
+    let (m, fx) = run_all(m, busy(ids[0], Reason::Audible, false));
+    assert_eq!(fx, vec![]);
+    assert_eq!(m.tabs[&ids[0]].lifecycle.activity, Activity::Busy);
+    let (m, _) = tick(m, Duration::from_secs(16 * 60));
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    // The last reason ends: judged at once by the last tick, no new tick needed.
+    let (m, fx) = run_all(m, busy(ids[0], Reason::Download, false));
+    assert_eq!(
+        fx,
+        vec![
+            life(ids[0], Life::Discard),
+            life(ids[0], Life::ReleaseTexture)
+        ]
+    );
+    assert!(m.tabs[&ids[0]].busy.is_empty());
+    assert_eq!(liveness(&m, ids[0]), Liveness::Discarded);
+}
+
+#[test]
+fn a_frozen_tab_gaining_any_reason_is_unfrozen() {
+    for reason in crate::busy::REASONS.map(|(r, _, _)| r) {
+        let (m, ids) = with_tabs(2);
+        let (m, _) = tick(m, Duration::from_secs(2 * 60));
+        assert_eq!(liveness(&m, ids[0]), Liveness::Frozen);
+        let (m, fx) = run_all(m, busy(ids[0], reason, true));
+        assert_eq!(fx, vec![life(ids[0], Life::Unfreeze)], "{reason:?}");
+        assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    }
+}
+
+#[test]
+fn never_sleep_protects_like_audio() {
+    for reason in [Reason::NeverSleep, Reason::Audible] {
+        let (m, ids) = with_tabs(2);
+        let (m, _) = run_all(m, busy(ids[0], reason, true));
+        let now = m.clock + Duration::from_secs(3600);
+        let (m, fx) = run_all(
+            m,
+            Command::Tick {
+                now,
+                pressure: Pressure::Critical,
+            },
+        );
+        assert_eq!(fx, vec![], "{reason:?}");
+        assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+    }
+}
+
+#[test]
+fn discard_now_takes_only_a_hidden_idle_tab() {
+    let (m, ids) = with_tabs(3);
+    // Visible: refused.
+    let (m, fx) = run_all(m, Command::DiscardNow(ids[2]));
+    assert_eq!(fx, vec![]);
+    // Busy: refused.
+    let (m, _) = run_all(m, busy(ids[0], Reason::Capture, true));
+    let (m, fx) = run_all(m, Command::DiscardNow(ids[0]));
+    assert_eq!(fx, vec![]);
+    // Pinned and kept alive: refused, not frozen.
+    let (m, _) = run(m, Command::PinTab(ids[1]));
+    let (m, fx) = run_all(m, Command::DiscardNow(ids[1]));
+    assert_eq!(fx, vec![]);
+    let (m, _) = run(m, Command::UnpinTab(ids[1]));
+    let (m, fx) = run_all(m, Command::DiscardNow(ids[1]));
+    assert_eq!(
+        fx,
+        vec![
+            life(ids[1], Life::Discard),
+            life(ids[1], Life::ReleaseTexture)
+        ]
+    );
+    assert_eq!(liveness(&m, ids[1]), Liveness::Discarded);
+    assert_eq!(liveness(&m, ids[0]), Liveness::Background);
+}
+
+#[test]
+fn a_critical_tick_discards_the_oldest_hidden_tab_first() {
+    // Tabs are hidden newest id first: 3 (hidden at +2 s), then 2 (+1 s)... so the order of
+    // the discards must differ from the id order.
+    let (mut m, ids) = with_tabs(4);
+    for (i, &t) in ids.iter().rev().enumerate() {
+        let now = t0() + Duration::from_secs(i as u64);
+        m = run_all(
+            m,
+            Command::Tick {
+                now,
+                pressure: Pressure::None,
+            },
+        )
+        .0;
+        m = run(m, Command::ActivateTab(t)).0;
+    }
+    // ids[0] is visible now; ids[3] was hidden first, then ids[2], then ids[1].
+    let now = m.clock;
+    let (_, fx) = run_all(
+        m,
+        Command::Tick {
+            now,
+            pressure: Pressure::Critical,
+        },
+    );
+    let order: Vec<TabId> = fx
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Lifecycle {
+                tab,
+                effect: Life::Discard,
+            } => Some(*tab),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, vec![ids[3], ids[2], ids[1]]);
 }
 
 /// Regression for the tabs smoke flake: the one tick came while the hidden tab was

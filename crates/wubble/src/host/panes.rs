@@ -33,7 +33,7 @@ fn content_size(window: &AppWindow) -> (f64, f64) {
     )
 }
 
-fn px(size: FrameSize) -> Px {
+pub(super) fn px(size: FrameSize) -> Px {
     Px::new(size.width, size.height)
 }
 
@@ -478,6 +478,7 @@ impl Host {
                 });
             }
             let wanted = px(wanted);
+            self.frame_arrived(rect.tab);
             let entry = self.frames.entry(rect.tab).or_insert_with(|| PaneFrame {
                 image: image.clone(),
                 clip,

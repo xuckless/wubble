@@ -34,10 +34,11 @@ pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
     BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality, GlassScene,
-    HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll,
-    OverlayScrollbars, PasswordsAutofill, PasswordsOfferToSave, SearchEngineChoice, Setting,
-    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
-    SleepKeepPinned, ZoomDefault, text_of,
+    HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MemoryBackForwardCache,
+    MemoryMaxDecodedImageMb, MiddleClickAutoscroll, OverlayScrollbars, PasswordsAutofill,
+    PasswordsOfferToSave, ProcessRendererLimit, ProcessSiteIsolation, ProcessSpareRenderer,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter,
+    SleepFreezeAfter, SleepKeepPinned, ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

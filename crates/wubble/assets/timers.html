@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>timer 0</title>
+</head>
+<body style="background:#101820;color:#e8eef4;font:16px sans-serif">
+<p>wubble timers: the title counts <code>setInterval</code> ticks. <code>--smoke tabs</code>
+freezes one hidden copy and checks its count stops while another's goes on.</p>
+<script>
+let n = 0;
+setInterval(() => {
+  n += 1;
+  document.title = "timer " + n;
+}, 100);
+</script>
+</body>
+</html>

@@ -15,11 +15,14 @@
 //! keymap, and every action runs through [`Host::perform`].
 
 mod autofill;
+mod busy;
 mod downloads;
 mod pages;
 mod panes;
 mod settings;
+mod snapshots;
 mod surfaces;
+mod tasks;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -34,6 +37,7 @@ use slint::winit_030::winit::event::{ElementState, WindowEvent};
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
+use wubble_core::busy::Reason;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
@@ -41,7 +45,6 @@ use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::site::SitePermissions;
-use wubble_core::sleep::Pressure;
 use wubble_core::space::MAX_PANES;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::zoom::ZoomTable;
@@ -77,8 +80,8 @@ use crate::split_smoke::{self, SplitSmoke};
 use crate::surface::{FindEvent, Surfaces};
 use crate::tabs_smoke::{self, Seen, TabsSmoke};
 use crate::{
-    NAV_PAGE, SMOKE_MAX_IDLE_RUNS, SMOKE_PAGE, TAB3_PAGE, Wake, deliver, display_refresh_mhz,
-    page_url, physical, quit, with_host,
+    NAV_PAGE, SMOKE_MAX_IDLE_RUNS, SMOKE_PAGE, TAB3_PAGE, TIMERS_PAGE, Wake, deliver,
+    display_refresh_mhz, page_url, physical, quit, with_host,
 };
 
 /// How far ahead `--smoke tabs` ticks the lifecycle: past the discard delay.
@@ -102,13 +105,21 @@ pub enum Call {
         tab: TabId,
         visible: bool,
     },
+    /// Freeze or thaw the tab's page (`View::set_frozen`, CDP).
+    SetFrozen {
+        tab: TabId,
+        frozen: bool,
+    },
+    /// Keep a small picture of the tab's last frame (`host/snapshots.rs`).
+    CaptureSnapshot(TabId),
+    ReleaseSnapshot(TabId),
     ShowCommandBar,
     Nothing,
 }
 
-/// The engine work an effect stands for. Freeze has no CEF call (CEF 156
-/// has no freeze API; hiding already throttles) and snapshots have no UI
-/// yet, so those are recorded no-ops (TODO.md "Tabs in the host").
+/// The engine work an effect stands for. Freeze goes through the DevTools
+/// protocol (CEF 156 has no freeze API; `wubble_engine::cdp`); snapshots are
+/// the host's own GPU textures (`host/snapshots.rs`).
 /// An internal page (`InternalPage`, wubble://) has no view: the shell draws it, so creating
 /// or restoring its tab opens none. Only a tab already on an internal page navigates to one
 /// (the model opens it in its own tab otherwise), so there is no view to load into.
@@ -152,9 +163,12 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
                         url: t.url.clone(),
                     })
             }
-            Life::Freeze | Life::Unfreeze | Life::CaptureSnapshot | Life::ReleaseSnapshot => {
-                Call::Nothing
-            }
+            Life::Freeze | Life::Unfreeze => Call::SetFrozen {
+                tab: *tab,
+                frozen: *effect == Life::Freeze,
+            },
+            Life::CaptureSnapshot => Call::CaptureSnapshot(*tab),
+            Life::ReleaseSnapshot => Call::ReleaseSnapshot(*tab),
         },
     }
 }
@@ -353,6 +367,16 @@ pub struct Host {
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
     pace: Option<Pace>,
+    /// Probed busy reasons per frame and each tab's renderer pid (`host/busy.rs`).
+    busy: busy::BusyFrames,
+    /// The memory pressure source and its gauge, read on the lifecycle tick.
+    pressure: busy::PressureGauge,
+    /// Pictures of hidden tabs (`host/snapshots.rs`).
+    snapshots: snapshots::Snapshots,
+    /// The Task manager page's meter (`host/tasks.rs`).
+    tasks: tasks::TasksPage,
+    /// Each tab's last freeze answer (frozen, ok); `--smoke tabs` reads it.
+    frozen: BTreeMap<TabId, (bool, bool)>,
 }
 
 impl Host {
@@ -472,6 +496,11 @@ impl Host {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
             }),
+            busy: busy::BusyFrames::default(),
+            pressure: busy::PressureGauge::system(),
+            snapshots: snapshots::Snapshots::default(),
+            tasks: tasks::TasksPage::default(),
+            frozen: BTreeMap::new(),
         };
         host.replay_settings();
         host.render_downloads(window);
@@ -585,6 +614,13 @@ impl Host {
                 }
                 self.pace(PaceEvent::Wake);
             }
+            Call::SetFrozen { tab, frozen } => {
+                if let Some(view) = self.tab_view(tab) {
+                    view.set_frozen(frozen);
+                }
+            }
+            Call::CaptureSnapshot(tab) => self.capture_snapshot(tab),
+            Call::ReleaseSnapshot(tab) => self.snapshots.release(tab),
             // Later, outside the host: opening the bar calls back into it.
             Call::ShowCommandBar => {
                 let _ = self
@@ -609,6 +645,7 @@ impl Host {
         if self.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
         }
+        self.stand_in_snapshots(&window);
         self.settle_panes(&window);
         self.sync_focus(&window);
         let tabs = &self.model.tabs;
@@ -664,14 +701,15 @@ impl Host {
         self.engine.view(id)
     }
 
-    /// Tells the model whether the tab is busy: its page is loading, or it
-    /// holds a download the engine runs (which a discard would end).
+    /// Tells the model whether the tab's page is loading and whether it holds
+    /// a download the engine runs (which a discard would end).
     fn report_busy(&mut self, tab: TabId) {
         let loading = self
             .tab_view(tab)
             .is_some_and(|v| matches!(v.nav().phase, Phase::Loading { .. }));
-        let busy = loading || self.downloads.holds(tab);
-        self.dispatch(Command::BusyChanged { tab, busy });
+        let download = self.downloads.holds(tab);
+        self.set_busy(tab, Reason::Loading, loading);
+        self.set_busy(tab, Reason::Download, download);
     }
 
     /// The visible tab's view: the focused page, the one that gets keys.
@@ -938,6 +976,7 @@ impl Host {
             }
             WebEvent::RendererGone => {
                 self.apply_error(tab, ErrorEvent::Crashed);
+                self.busy_view_gone(tab);
                 self.dispatch(Command::RendererGone(tab));
             }
             WebEvent::KeyUnhandled(key) => {
@@ -1208,10 +1247,9 @@ impl Host {
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
         self.follow_frame_rate();
-        self.dispatch(Command::Tick {
-            now,
-            pressure: Pressure::None,
-        });
+        self.devtools_tick();
+        let pressure = self.read_pressure();
+        self.dispatch(Command::Tick { now, pressure });
         self.save = self.save.ticked();
         if persist::should_save(self.save) {
             self.save_now();
@@ -1249,11 +1287,12 @@ impl Host {
 
     fn seen(&self) -> Seen {
         let order = self.model.order(self.model.active_space);
-        let shown = self
-            .model
-            .visible_tab()
+        let visible = self.model.visible_tab();
+        let shown = visible
             .and_then(|t| self.views.get(&t))
             .is_some_and(|&id| self.engine.is_visible(id));
+        let painted =
+            visible.is_some_and(|t| self.frames.contains_key(&t) && !self.snapshots.standing_in(t));
         Seen {
             titles: order
                 .iter()
@@ -1268,7 +1307,18 @@ impl Host {
                 let kept = self.framed_tabs();
                 self.frames.keys().any(|t| !kept.contains(t))
             },
+            painted,
+            restored_from_snapshot: visible.is_some_and(|t| self.snapshots.replaced.contains(&t)),
+            frozen: order.iter().map(|t| self.frozen.get(t).copied()).collect(),
         }
+    }
+
+    /// Chromium answered a freeze or thaw of `tab`'s page.
+    pub(super) fn frozen_answered(&mut self, tab: TabId, frozen: bool, ok: bool) {
+        if !ok {
+            eprintln!("wubble: tab {}: freeze {frozen} refused", tab.0);
+        }
+        self.frozen.insert(tab, (frozen, ok));
     }
 
     fn tabs_smoke_step(&mut self) {
@@ -1297,6 +1347,20 @@ impl Host {
             Some(tabs_smoke::Action::Close(i)) => {
                 if let Some(tab) = nth(self, i) {
                     self.dispatch(Command::CloseTab(tab));
+                }
+            }
+            Some(tabs_smoke::Action::OpenTimers) => {
+                for _ in 0..2 {
+                    self.dispatch(new_tab(page_url(TIMERS_PAGE), None));
+                }
+                if let Some(tab) = nth(self, 0) {
+                    self.dispatch(Command::ActivateTab(tab));
+                }
+            }
+            // Straight to the engine: a lifecycle tick would freeze the control tab too.
+            Some(tabs_smoke::Action::Freeze(i, frozen)) => {
+                if let Some(view) = nth(self, i).and_then(|tab| self.tab_view(tab)) {
+                    view.set_frozen(frozen);
                 }
             }
             Some(tabs_smoke::Action::Pass) => {
@@ -1458,6 +1522,7 @@ impl Host {
             Some(InternalPage::Bookmarks) => window.get_bookmark_lines().row_count(),
             Some(InternalPage::Downloads) => window.get_downloads().row_count(),
             Some(InternalPage::Passwords) => window.get_logins().row_count(),
+            Some(InternalPage::Tasks) => window.get_tasks().row_count(),
             Some(InternalPage::Settings) | None => 0,
         };
         let seen = pages_smoke::Seen {
@@ -1475,6 +1540,7 @@ impl Host {
                 InternalPage::Bookmarks => Action::OpenBookmarks,
                 InternalPage::Downloads => Action::OpenDownloads,
                 InternalPage::Passwords => Action::OpenPasswords,
+                InternalPage::Tasks => Action::OpenTasks,
                 InternalPage::Settings => Action::OpenSettings,
             }),
             // The page's own button callback, as a click sends it: later, outside the host.
@@ -1989,6 +2055,7 @@ fn new_tab(url: String, opener: Option<TabId>) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wubble_core::sleep::Pressure;
     use wubble_core::space::{ContainerId, SpaceId};
 
     fn one_tab() -> (Model, TabId) {
@@ -2054,10 +2121,22 @@ mod tests {
                     url: "https://a.test/".into(),
                 },
             ),
-            (Life::Freeze, Call::Nothing),
-            (Life::Unfreeze, Call::Nothing),
-            (Life::CaptureSnapshot, Call::Nothing),
-            (Life::ReleaseSnapshot, Call::Nothing),
+            (
+                Life::Freeze,
+                Call::SetFrozen {
+                    tab: t,
+                    frozen: true,
+                },
+            ),
+            (
+                Life::Unfreeze,
+                Call::SetFrozen {
+                    tab: t,
+                    frozen: false,
+                },
+            ),
+            (Life::CaptureSnapshot, Call::CaptureSnapshot(t)),
+            (Life::ReleaseSnapshot, Call::ReleaseSnapshot(t)),
         ];
         for (effect, want) in cases {
             let effect = Effect::Lifecycle { tab: t, effect };
@@ -2081,7 +2160,12 @@ mod tests {
                         *v = visible;
                     }
                 }
-                Call::Load { .. } | Call::ShowCommandBar | Call::Nothing => {}
+                Call::Load { .. }
+                | Call::SetFrozen { .. }
+                | Call::CaptureSnapshot(_)
+                | Call::ReleaseSnapshot(_)
+                | Call::ShowCommandBar
+                | Call::Nothing => {}
             }
         }
     }

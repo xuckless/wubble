@@ -114,6 +114,9 @@ pub enum CefSurfaceEvent {
         frame_id: String,
         frame_url: String,
         is_main: bool,
+        /// The pid of the renderer process that sent it, as that process reported it; 0 when
+        /// unknown. wubble change (28).
+        pid: u32,
         text: String,
     },
 }
@@ -277,8 +280,8 @@ mod web_event_tests {
         ));
         assert!(matches!(
             events.poll(),
-            Some(CefSurfaceEvent::FrameMessage { frame_id, text, .. })
-                if frame_id == "f1" && text == "after"
+            Some(CefSurfaceEvent::FrameMessage { frame_id, text, pid, .. })
+                if frame_id == "f1" && text == "after" && pid == 4242
         ));
         assert!(events.poll().is_none());
     }
@@ -288,6 +291,7 @@ mod web_event_tests {
             frame_id: frame_id.into(),
             frame_url: "https://a.test/".into(),
             is_main: true,
+            pid: 4242,
             text: text.into(),
         }
     }

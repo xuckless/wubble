@@ -65,39 +65,140 @@ pub struct PageFeatures {
     /// Middle-click autoscroll (press the wheel, then move to scroll), which Chromium turns on
     /// by default only on Windows (`features::kMiddleClickAutoscroll`).
     pub middle_click_autoscroll: bool,
+    /// `settings::MEMORY_BACK_FORWARD_CACHE`.
+    pub back_forward_cache: BackForwardCache,
+    /// `settings::MEMORY_MAX_DECODED_IMAGE_MB`; 0 = Chromium's default.
+    pub max_decoded_image_mb: u32,
+    /// `settings::PROCESS_SITE_ISOLATION`.
+    pub site_isolation: bool,
+    /// `settings::PROCESS_RENDERER_LIMIT`; 0 = Chromium decides.
+    pub renderer_limit: u32,
+    /// `settings::PROCESS_SPARE_RENDERER`.
+    pub spare_renderer: bool,
 }
+
+pub use wubble_core::settings::BackForwardCache;
 
 impl Default for PageFeatures {
     fn default() -> Self {
         Self {
             overlay_scrollbars: true,
             middle_click_autoscroll: true,
+            back_forward_cache: BackForwardCache::Default,
+            max_decoded_image_mb: 0,
+            site_isolation: true,
+            renderer_limit: 0,
+            spare_renderer: true,
         }
     }
 }
 
+/// One thing a page feature asks of Chromium's command line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Knob {
+    /// Goes into the one `enable-features`.
+    Enable(&'static str),
+    /// Goes into the one `disable-features`.
+    Disable(&'static str),
+    Switch(&'static str, Option<String>),
+}
+
 impl PageFeatures {
-    /// The switches: one `enable-features` (a switch given twice keeps one value, so every
-    /// feature goes in this one) and, for autoscroll, the Blink side of the same feature,
-    /// which older builds read alone.
-    fn switches(self) -> Vec<(String, Option<String>)> {
-        let features: Vec<&str> = [
-            (self.overlay_scrollbars, "OverlayScrollbar"),
-            (self.middle_click_autoscroll, "MiddleClickAutoscroll"),
+    /// The table: each knob, whether these features ask for it, and why. What prebuilt CEF 156
+    /// honours: every switch name below is a string in libcef (checked); the feature names
+    /// `BackForwardCache` (with `cache_size`) and `SpareRendererForSitePerProcess` are not
+    /// (Chromium strips them), so those two come from Chromium's `content_features.cc` and are
+    /// unverified until observed.
+    fn knobs(self) -> Vec<(bool, Knob, &'static str)> {
+        use Knob::*;
+        let bf = self.back_forward_cache;
+        vec![
+            (
+                self.overlay_scrollbars,
+                Enable("OverlayScrollbar"),
+                "thin scrollbars over the page",
+            ),
+            (
+                self.middle_click_autoscroll,
+                Enable("MiddleClickAutoscroll"),
+                "middle-click autoscroll",
+            ),
+            (
+                self.middle_click_autoscroll,
+                Switch(
+                    "enable-blink-features",
+                    Some("MiddleClickAutoscroll".into()),
+                ),
+                "the Blink side of the same feature, which older builds read alone",
+            ),
+            (
+                bf == BackForwardCache::Small,
+                Enable("BackForwardCache:cache_size/2"),
+                "keeps at most two left pages alive per tab",
+            ),
+            (
+                bf == BackForwardCache::Off,
+                Switch("disable-back-forward-cache", None),
+                "left pages are not kept: wubble already sleeps tabs",
+            ),
+            (
+                self.max_decoded_image_mb > 0,
+                Switch(
+                    "max-decoded-image-size-mb",
+                    Some(self.max_decoded_image_mb.to_string()),
+                ),
+                "caps one decoded image (Chromium has no switch for the cache total)",
+            ),
+            (
+                !self.site_isolation,
+                Switch("disable-site-isolation-trials", None),
+                "fewer renderers; weakens the defence against Spectre-style attacks",
+            ),
+            (
+                self.renderer_limit > 0,
+                Switch(
+                    "renderer-process-limit",
+                    Some(self.renderer_limit.to_string()),
+                ),
+                "renderers are reused past the limit",
+            ),
+            (
+                !self.spare_renderer,
+                Disable("SpareRendererForSitePerProcess"),
+                "no renderer started ahead of the next navigation",
+            ),
         ]
-        .into_iter()
-        .filter_map(|(on, name)| on.then_some(name))
-        .collect();
+    }
+
+    /// The switches: one `enable-features` and one `disable-features` (a switch given twice
+    /// keeps one value, so every feature goes in these), then the plain switches in table order.
+    fn switches(self) -> Vec<(String, Option<String>)> {
+        let knobs: Vec<Knob> = self
+            .knobs()
+            .into_iter()
+            .filter_map(|(on, knob, _)| on.then_some(knob))
+            .collect();
+        let list = |pick: fn(&Knob) -> Option<&'static str>| -> Vec<&str> {
+            knobs.iter().filter_map(pick).collect()
+        };
+        let enable = list(|k| match k {
+            Knob::Enable(f) => Some(f),
+            _ => None,
+        });
+        let disable = list(|k| match k {
+            Knob::Disable(f) => Some(f),
+            _ => None,
+        });
         let mut out = vec![];
-        if !features.is_empty() {
-            out.push(("enable-features".into(), Some(features.join(","))));
+        for (name, features) in [("enable-features", enable), ("disable-features", disable)] {
+            if !features.is_empty() {
+                out.push((name.into(), Some(features.join(","))));
+            }
         }
-        if self.middle_click_autoscroll {
-            out.push((
-                "enable-blink-features".into(),
-                Some("MiddleClickAutoscroll".into()),
-            ));
-        }
+        out.extend(knobs.into_iter().filter_map(|k| match k {
+            Knob::Switch(name, value) => Some((name.to_string(), value)),
+            _ => None,
+        }));
         out
     }
 }
@@ -723,6 +824,7 @@ mod tests {
         let off = PageFeatures {
             overlay_scrollbars: false,
             middle_click_autoscroll: false,
+            ..PageFeatures::default()
         };
         assert!(off.switches().is_empty());
         let scrollbars = PageFeatures {
@@ -736,6 +838,40 @@ mod tests {
                 Some("OverlayScrollbar".to_string())
             )]
         );
+    }
+
+    #[test]
+    fn memory_and_process_rows_become_switches() {
+        let tuned = PageFeatures {
+            middle_click_autoscroll: false,
+            back_forward_cache: BackForwardCache::Small,
+            max_decoded_image_mb: 64,
+            site_isolation: false,
+            renderer_limit: 8,
+            spare_renderer: false,
+            ..PageFeatures::default()
+        };
+        let s = |name: &str, value: Option<&str>| (name.to_string(), value.map(str::to_string));
+        assert_eq!(
+            tuned.switches(),
+            [
+                s(
+                    "enable-features",
+                    Some("OverlayScrollbar,BackForwardCache:cache_size/2")
+                ),
+                s("disable-features", Some("SpareRendererForSitePerProcess")),
+                s("max-decoded-image-size-mb", Some("64")),
+                s("disable-site-isolation-trials", None),
+                s("renderer-process-limit", Some("8")),
+            ]
+        );
+        let off = PageFeatures {
+            back_forward_cache: BackForwardCache::Off,
+            overlay_scrollbars: false,
+            middle_click_autoscroll: false,
+            ..PageFeatures::default()
+        };
+        assert_eq!(off.switches(), [s("disable-back-forward-cache", None)]);
     }
 
     #[test]

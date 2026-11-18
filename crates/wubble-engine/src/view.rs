@@ -236,6 +236,8 @@ pub struct View {
     fullscreen: Fullscreen,
     muted: bool,
     audio: AudioProbe,
+    /// Freeze requests awaiting their CDP reply.
+    cdp: crate::cdp::Pending,
     zoom: Zoom,
     drag: DragSource,
     /// Asked for a page script on each main-frame commit.
@@ -304,6 +306,7 @@ impl View {
             fullscreen: Fullscreen::default(),
             muted: false,
             audio: AudioProbe::default(),
+            cdp: Default::default(),
             zoom: Zoom::default(),
             drag: DragSource::default(),
             favicons: Default::default(),
@@ -377,6 +380,24 @@ impl View {
 
     pub fn close_devtools(&mut self) {
         self.send(|host| host.close_dev_tools());
+    }
+
+    /// Freezes the page (no JS, no timers) or thaws it, through CDP `Page.setWebLifecycleState`
+    /// (`cdp.rs`). [`PageEvent::Frozen`] follows with Chromium's answer. Freezing also hides
+    /// the page; thawing does not show it ([`Self::set_visible`] does).
+    pub fn set_frozen(&mut self, frozen: bool) {
+        if !self.is_open() {
+            return;
+        }
+        let (id, message) = self.cdp.request(frozen);
+        if let Err(e) = self.producer.send_devtools_message(&message) {
+            eprintln!(
+                "wubble-engine: view {}: freeze {frozen}: {e}",
+                self.browser_id
+            );
+            self.cdp.cancel(id);
+            self.page.push(PageEvent::Frozen { frozen, ok: false });
+        }
     }
 
     pub fn has_devtools(&mut self) -> bool {
@@ -598,8 +619,17 @@ impl View {
                     frame_id,
                     frame_url,
                     is_main,
+                    pid,
                     text,
-                } => self.emit_page(frame_message(frame_id, frame_url, is_main, text), mode),
+                } => {
+                    let frame = crate::page::FrameInfo {
+                        id: frame_id,
+                        url: frame_url,
+                        is_main,
+                        pid,
+                    };
+                    self.emit_page(frame_message(frame, text), mode);
+                }
                 CefSurfaceEvent::ScriptCompleted { id, result } => {
                     let audible = result.ok().and_then(|json| json.trim().parse().ok());
                     self.apply_probe(ProbeInput::Answered {
@@ -609,6 +639,11 @@ impl View {
                 }
                 _ => {}
             }
+        }
+        while !self.cdp.is_empty()
+            && let Some(message) = self.producer.poll_devtools_message()
+        {
+            self.page.extend(self.cdp.reply(&message));
         }
         if let Some(shape) = self.producer.poll_cursor_shape() {
             self.apply_nav(NavInput::Cursor(shape.into()));
@@ -1252,13 +1287,9 @@ enum Route {
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
 /// welding's frame message as the host's event: the frame as CEF named it.
-fn frame_message(frame_id: String, frame_url: String, is_main: bool, text: String) -> PageEvent {
+fn frame_message(frame: crate::page::FrameInfo, text: String) -> PageEvent {
     PageEvent::FrameMessage {
-        frame: crate::page::FrameInfo {
-            id: frame_id,
-            url: frame_url,
-            is_main,
-        },
+        frame,
         text: wubble_core::secret::Secret::from(text),
     }
 }
@@ -1542,6 +1573,8 @@ fn new_producer(
             handle_auth_challenges: true,
             ask_download_path: true,
             request_filter,
+            // CDP for `View::set_frozen`; nothing subscribes to events, so the channel stays quiet.
+            devtools_protocol: true,
             ..welding::CefSurfaceConfig::default()
         },
     };
@@ -1858,22 +1891,21 @@ mod tests {
 
     #[test]
     fn a_frame_message_carries_cefs_frame() {
-        let event = frame_message("7-3".into(), "https://a.test/f".into(), false, "{}".into());
+        let info = crate::page::FrameInfo {
+            id: "7-3".into(),
+            url: "https://a.test/f".into(),
+            is_main: false,
+            pid: 4242,
+        };
+        let event = frame_message(info.clone(), "{}".into());
         let PageEvent::FrameMessage { frame, text } = &event else {
             panic!("{event:?}");
         };
-        assert_eq!(
-            frame,
-            &crate::page::FrameInfo {
-                id: "7-3".into(),
-                url: "https://a.test/f".into(),
-                is_main: false,
-            }
-        );
+        assert_eq!(frame, &info);
         assert_eq!(text.expose(), "{}");
         assert!(event.request().is_none());
         // The text never shows in diagnostics.
-        let secret = frame_message("1".into(), "u".into(), true, "pw-value".into());
+        let secret = frame_message(info, "pw-value".into());
         assert!(!format!("{secret:?}").contains("pw-value"));
     }
 

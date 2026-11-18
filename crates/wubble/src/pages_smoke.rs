@@ -87,8 +87,8 @@ fn expected(page: InternalPage) -> usize {
         InternalPage::History => HISTORY_LINES,
         InternalPage::Bookmarks => BOOKMARK_LINES,
         InternalPage::Downloads => DOWNLOADS,
-        // Locked: nothing listed.
-        InternalPage::Passwords | InternalPage::Settings => 0,
+        // Locked: nothing listed. The Task manager is not opened by this smoke.
+        InternalPage::Passwords | InternalPage::Settings | InternalPage::Tasks => 0,
     }
 }
 

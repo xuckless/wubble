@@ -71,6 +71,9 @@ pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
 /// The third page of `--smoke tabs`.
 pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
+/// `--smoke tabs`'s freeze check: a page whose title counts its timer's ticks.
+pub const TIMERS_PAGE: &str = include_str!("../assets/timers.html");
+
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
@@ -860,6 +863,7 @@ fn connect_surfaces(window: &AppWindow) {
     window.on_download_action(|id, action| {
         with_host(|host| host.download_action(i64::from(id), action))
     });
+    window.on_task_action(|tab, pid, action| with_host(|host| host.task_action(tab, pid, action)));
     window.on_find_edited(|q| with_host(|host| host.find_event(FindEvent::Query(q.into()))));
     window.on_find_step(|forward| {
         let event = if forward {

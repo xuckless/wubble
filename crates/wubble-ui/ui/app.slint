@@ -5,7 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
@@ -13,7 +13,7 @@ import { PermissionPrompt } from "components/permission-prompt.slint";
 import { AutofillAnswer, AutofillMenu, AutofillView } from "components/autofill-menu.slint";
 import { ErrorPanel } from "components/error-panel.slint";
 import { SettingsPage } from "components/settings.slint";
-import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage } from "components/pages.slint";
+import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage, TasksPage } from "components/pages.slint";
 import { BookmarkSheet } from "components/bookmark-sheet.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
 import { FindBar } from "components/find-bar.slint";
@@ -28,7 +28,7 @@ import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView }
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -334,6 +334,10 @@ export component AppWindow inherits Window {
     // The error panel's default button (Reload, or Go back) and its second (Proceed).
     callback error-primary();
     callback error-secondary();
+    // The Task manager's rows and totals, and its buttons: (tab id or -1, pid, what).
+    in property <[TaskItem]> tasks;
+    in property <string> tasks-total;
+    callback task-action(int, int, TaskAction);
     // The downloads list (newest first) and its buttons: (entry id, what).
     in property <[DownloadItem]> downloads;
     callback download-action(int, DownloadAction);
@@ -396,6 +400,8 @@ export component AppWindow inherits Window {
             downloads-page-ui.take-focus();
         } else if root.page == InternalPageKind.passwords {
             passwords-ui.take-focus();
+        } else if root.page == InternalPageKind.tasks {
+            tasks-ui.take-focus();
         } else {
             web-focus.focus();
         }
@@ -677,6 +683,14 @@ export component AppWindow inherits Window {
                 }
                 clear-finished => {
                     root.downloads-cleared();
+                }
+            }
+            tasks-ui := TasksPage {
+                open: root.page == InternalPageKind.tasks;
+                items: root.tasks;
+                total: root.tasks-total;
+                action(tab, pid, a) => {
+                    root.task-action(tab, pid, a);
                 }
             }
             passwords-ui := PasswordsPage {

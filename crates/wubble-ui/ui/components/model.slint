@@ -352,6 +352,29 @@ export enum InternalPageKind {
     bookmarks,
     downloads,
     passwords,
+    tasks,
+}
+
+// One row of the Task manager (wubble_core::tasks::TaskRow): a tab (`tab` >= 0) or another
+// of wubble's processes (`tab` -1). Text is formatted by the host.
+export struct TaskItem {
+    tab: int,
+    // 0: no process (a discarded tab, an internal page).
+    pid: int,
+    title: string,
+    state: string,
+    memory: string,
+    cpu: string,
+    busy: string,
+    never-sleep: bool,
+    can-discard: bool,
+    can-end: bool,
+}
+
+export enum TaskAction {
+    end,
+    discard,
+    never-sleep,
 }
 
 // One line of the history page: a day header (`header`, `label`) or a visit.

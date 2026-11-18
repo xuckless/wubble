@@ -9,6 +9,7 @@ use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
 use slint::winit_030::winit::event::Ime as WinitIme;
 use std::path::PathBuf;
 
+use wubble_core::busy::Reason;
 use wubble_core::model::Command;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
@@ -92,10 +93,8 @@ impl Host {
                 self.audio.entry(tab).or_default().muted = muted;
                 self.after_change();
             }
-            Routed::Audible(audible) => {
-                self.audio.entry(tab).or_default().audible = audible;
-                self.after_change();
-            }
+            Routed::Audible(audible) => self.set_busy(tab, Reason::Audible, audible),
+            Routed::Frozen { frozen, ok } => self.frozen_answered(tab, frozen, ok),
             Routed::ImeBounds(rect) if visible => {
                 place_candidates(window, self.focus_origin(window), rect)
             }
@@ -112,7 +111,12 @@ impl Host {
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
-            Routed::Frame { frame, text } => self.autofill_message(tab, frame, &text),
+            Routed::Frame { frame, text } => {
+                match text.expose().strip_prefix(super::busy::PROBE_PREFIX) {
+                    Some(keys) => self.probe_report(tab, &frame, keys),
+                    None => self.autofill_message(tab, frame, &text),
+                }
+            }
             Routed::Pdf { path, text } => {
                 self.downloads.finish_pdf(&path);
                 self.toast(window, &text);
@@ -321,6 +325,7 @@ impl Host {
         self.downloads_lost(tab);
         self.autofill_gone(tab);
         self.audio.remove(&tab);
+        self.busy_view_gone(tab);
         if let Some(window) = self.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
         }

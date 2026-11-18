@@ -313,6 +313,11 @@ pub enum Routed {
     Fullscreen(bool),
     Muted(bool),
     Audible(bool),
+    /// The page answered a freeze or thaw (`View::set_frozen`).
+    Frozen {
+        frozen: bool,
+        ok: bool,
+    },
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
     /// CEF gave up on these requests: every surface showing one closes.
@@ -337,8 +342,8 @@ pub enum Routed {
     Console(String),
     /// The page's icon, downloaded (`host/surfaces.rs`, `show_favicon`).
     Favicon(wubble_engine::favicon::FaviconImage),
-    /// The autofill content script in one of the page's frames
-    /// (`host/autofill.rs`).
+    /// The context script in one of the page's frames: a busy probe's report
+    /// (`host/busy.rs`) or autofill's message (`host/autofill.rs`).
     Frame {
         frame: wubble_engine::page::FrameInfo,
         text: wubble_core::secret::Secret,
@@ -385,6 +390,7 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
+        PageEvent::Frozen { frozen, ok } => Routed::Frozen { frozen, ok },
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
         PageEvent::PermissionRequested {
             id,
