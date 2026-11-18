@@ -2,11 +2,12 @@
 // chrome (src/wubble/browser/browser.css `.wb-address`, `.wb-rail-addr`, and chrome.tsx
 // `Address`, xuckless/the-wallpaper-project @ 6c840da): the Slint port has no address bar.
 // Thin glass, radius 12, no shadow, the film rim on hover; host in Ink and the rest in Haze,
-// Geist Mono 13. On the rail it is a search button.
+// Geist Mono 13. On the rail it is a search button (.wb-rail-addr, an icon button).
 
 import { Palette, Chrome, Spacing, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
-import { GlassPanel, PressableButton } from "../components.slint";
+import { GlassPanel } from "../components.slint";
+import { IconButton } from "nav-buttons.slint";
 import { GlassTier, GlassKeys } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { GlowRing } from "glow-ring.slint";
@@ -73,7 +74,7 @@ export component AddressPill inherits Rectangle {
             spacing: Spacing.s2;
             Rectangle {
                 width: Shell.address-icon;
-                Icon {
+                bubble := Icon {
                     y: (parent.height - self.height) / 2;
                     path: IconPaths.bubble;
                     size: Shell.address-icon;
@@ -103,16 +104,19 @@ export component AddressPill inherits Rectangle {
         }
     }
 
-    if root.compact: PressableButton {
+    // .wb-ib.wb-rail-addr: an icon button, 40 x 36, radius 12; the glyph at its centre
+    rail := IconButton {
+        visible: root.compact;
         x: (parent.width - self.width) / 2;
         width: Shell.rail-item;
         height: Chrome.address;
         border-radius: Shell.control-radius;
+        icon-path: IconPaths.search;
         clicked => {
             root.activated();
         }
-        Icon {
-            path: IconPaths.search;
-        }
     }
+    // The glyph's centre, in window coordinates (the alignment the tests pin).
+    out property <length> glyph-x: root.compact ? rail.glyph-x : bubble.absolute-position.x + bubble.width / 2;
+    out property <length> glyph-y: root.compact ? rail.glyph-y : bubble.absolute-position.y + bubble.height / 2;
 }

@@ -18,11 +18,14 @@ export component IconButton inherits PressableButton {
     border-radius: Shell.icon-button-radius;
     background: self.hovered && self.enabled ? Shell.icon-button-hover : transparent;
     opacity: self.enabled ? 1 : Shell.icon-button-disabled;
+    // The icon's centre, in window coordinates (the alignment the tests pin).
+    out property <length> glyph-x: icon.absolute-position.x + icon.width / 2;
+    out property <length> glyph-y: icon.absolute-position.y + icon.height / 2;
     // A plain cell that fills the button, so the fixed-size icon sits at its exact centre:
     // placed straight into PressableButton's layout the icon went to the cell's top edge and
     // the hover fill looked off-centre around it.
     Rectangle {
-        Icon {
+        icon := Icon {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             path: root.icon-path;

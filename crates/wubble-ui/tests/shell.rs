@@ -327,7 +327,239 @@ fn shell_scenarios() {
     space_capsule(&app, &driver);
     popup_input(&app);
     split_panes(&app, &driver);
+    header_and_footer(&app, &driver);
+    rail_centre_line(&app, &driver);
+    peek_panel_holds_its_contents(&app, &driver);
     content_on_whole_pixels(&app);
+}
+
+/// Springs, then Slint's own tweens (fades, the peek's slide), to rest.
+fn rest(app: &AppWindow, driver: &Shared) {
+    settle(app, driver);
+    pump(600);
+}
+
+/// Drags the seam to `raw` px right of the inset and lets go there.
+fn drag_seam_to(app: &AppWindow, driver: &Shared, raw: f32) {
+    let x = seam_x(app);
+    pointer(app, x, 300.0);
+    button(app, x, 300.0, true);
+    pointer(app, INSET as f32 + raw, 300.0);
+    frames(app, driver, 60);
+    button(app, INSET as f32 + raw, 300.0, false);
+    pointer(app, 900.0, 300.0);
+    rest(app, driver);
+}
+
+/// A part of the sidebar (left and right edge) lies inside the panel `[start, end]`.
+fn inside(what: &str, (a, b): (f32, f32), (start, end): (f32, f32)) {
+    assert!(
+        a >= start && b <= end,
+        "{what} {a}..{b} leaves the panel {start}..{end}"
+    );
+}
+
+/// How far a circle (centre, radius) lies inside a rounded rectangle; negative when it pokes out.
+fn margin_in_rounded(
+    (cx, cy, r): (f32, f32, f32),
+    (x0, y0, x1, y1): (f32, f32, f32, f32),
+    radius: f32,
+) -> f32 {
+    // the nearest corner circle's centre, or the point itself where the edge is straight
+    let qx = cx.clamp(x0 + radius, x1 - radius);
+    let qy = cy.clamp(y0 + radius, y1 - radius);
+    let straight = (cx - x0).min(x1 - cx).min(cy - y0).min(y1 - cy);
+    let d = if qx == cx || qy == cy {
+        straight
+    } else {
+        radius - ((cx - qx).powi(2) + (cy - qy).powi(2)).sqrt()
+    };
+    d - r
+}
+
+/// browser.css `.wb-light`: 12 px dots; the gap is 8, 6 on the rail (`.wb-side-rail .wb-lights`).
+const LIGHT: f32 = 12.0;
+
+/// The header holds the lights and the four nav buttons, and they never meet; the downloads button
+/// is the footer's secondary action (`.wb-side-bottom > .wb-ib`, 36 square), at its end, clear of
+/// the Space tiles. At the default width and at the minimum.
+fn header_and_footer(app: &AppWindow, driver: &Shared) {
+    use wubble_ui::DownloadItem;
+    app.set_downloads(ModelRc::from([DownloadItem::default()].as_slice()));
+    for raw in [SIDEBAR_DEFAULT as f32, SEAM::min as f32] {
+        drag_seam_to(app, driver, raw);
+        assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
+        assert_eq!(app.get_sidebar_width(), raw);
+        let e = app.get_side_edges();
+        assert!(
+            e.lights_end < e.nav,
+            "at {raw}: the lights end at {} and the nav starts at {}",
+            e.lights_end,
+            e.nav
+        );
+        assert!(
+            e.downloads_y > e.pill_y,
+            "at {raw}: downloads in the header"
+        );
+        assert_eq!(e.downloads_end, e.end - SIDE_PAD, "at {raw}");
+        assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
+        assert!(
+            e.spaces_end < e.downloads,
+            "at {raw}: tiles under downloads"
+        );
+    }
+}
+
+/// On the rail (browser.css `.wb-side-rail`: padding 6 0, everything centred) the lights, the
+/// search button and its glyph, the favourites, the rows, the new-tab row, the Space tiles and the
+/// downloads button share the rail's centre line; the glyph sits in the middle of its button; the
+/// lights fit the rail's glass and clear the window's rounded corner.
+fn rail_centre_line(app: &AppWindow, driver: &Shared) {
+    use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+    use wubble_ui::{Radius, TabItem};
+    let icon = Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::new(16, 16));
+    let tab = |id| TabItem {
+        id,
+        title: "page".into(),
+        favicon: icon.clone(),
+        ..Default::default()
+    };
+    app.set_pinned_tabs(ModelRc::from([tab(10)].as_slice()));
+    app.set_tabs(ModelRc::from([tab(11), tab(12)].as_slice()));
+    pump(1);
+    drag_seam_to(app, driver, 100.0);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Rail);
+    let rail = SEAM::rail as f32;
+    assert_eq!(app.get_sidebar_width(), rail);
+    let e = app.get_side_edges();
+    let mid = INSET as f32 + rail / 2.0;
+    for (what, a, b) in [
+        ("lights", e.lights, e.lights_end),
+        ("pill", e.pill, e.pill_end),
+        ("rows", e.rows, e.rows_end),
+        ("new tab", e.new_tab, e.new_tab_end),
+        ("spaces", e.spaces, e.spaces_end),
+        ("downloads", e.downloads, e.downloads_end),
+    ] {
+        assert_eq!((a + b) / 2.0, mid, "{what} {a}..{b} off the rail's centre");
+    }
+    assert_eq!((e.glyph_x, e.glyph_y), (mid, e.pill_y), "the search glyph");
+    // the same vertical rhythm as extended: the 30 px top row, 12 below it the 36 px button
+    assert_eq!(e.pill_y, INSET as f32 + SIDE_PAD + 30.0 + 12.0 + 18.0);
+
+    // three dots 6 apart, inside the rail's glass and the window's corner
+    assert_eq!(e.lights_end - e.lights, 3.0 * LIGHT + 2.0 * 6.0);
+    let radius = app.global::<Radius>();
+    let (w, h) = (1280.0, 800.0);
+    let glass = (
+        INSET as f32,
+        INSET as f32,
+        INSET as f32 + rail,
+        h - INSET as f32,
+    );
+    for i in 0..3 {
+        let dot = (
+            e.lights + LIGHT / 2.0 + i as f32 * (LIGHT + 6.0),
+            e.lights_y + LIGHT / 2.0,
+            LIGHT / 2.0,
+        );
+        let in_glass = margin_in_rounded(dot, glass, radius.get_lg());
+        let in_window = margin_in_rounded(dot, (0.0, 0.0, w, h), radius.get_window());
+        assert!(in_glass >= 4.0, "dot {i} {in_glass} px inside the glass");
+        assert!(in_window >= 4.0, "dot {i} {in_window} px inside the window");
+    }
+}
+
+/// The peek's panel is the sidebar's box at the saved width, and every part of the contents lies
+/// inside it with the panel's padding (`.wb-side-peek`: 10 8 10 10), whether the sidebar was a
+/// rail or extended before it hid, and also when the pointer reaches the edge while it is still
+/// closing. Leaving the peek takes everything off screen. While docked, the contents never reach
+/// past the glass (the box clips them at the live width).
+fn peek_panel_holds_its_contents(app: &AppWindow, driver: &Shared) {
+    let check = |from: &str| {
+        let e = app.get_side_edges();
+        let saved = app.get_sidebar_saved();
+        let panel = (e.start, e.end);
+        assert_eq!(panel, (INSET as f32, INSET as f32 + saved), "{from}");
+        assert_eq!(e.content_end, e.end, "{from}");
+        assert_eq!(e.pill, e.start + 10.0, "{from}");
+        assert_eq!(e.pill_end, e.end - 8.0, "{from}");
+        for (what, part) in [
+            ("lights", (e.lights, e.lights_end)),
+            ("nav", (e.nav, e.nav_end)),
+            ("pill", (e.pill, e.pill_end)),
+            ("rows", (e.rows, e.rows_end)),
+            ("new tab", (e.new_tab, e.new_tab_end)),
+            ("spaces", (e.spaces, e.spaces_end)),
+            ("downloads", (e.downloads, e.downloads_end)),
+        ] {
+            inside(&format!("{from}: {what}"), part, panel);
+        }
+    };
+    let peek_in = |x: f32| {
+        pointer(app, x, 300.0);
+        pump(100);
+        assert!(app.get_peeking());
+        pump(400);
+    };
+    let peek_out = || {
+        pointer(app, 900.0, 300.0);
+        pump(300);
+        assert!(!app.get_peeking());
+        pump(500);
+        let e = app.get_side_edges();
+        assert!(e.end <= 0.0, "the peek left contents on screen: {}", e.end);
+    };
+
+    // from the rail (the previous scenario left it there)
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Rail);
+    app.invoke_toggle_sidebar();
+    rest(app, driver);
+    peek_in(2.0);
+    check("from the rail");
+    peek_out();
+
+    // extended, then closing: the contents stay inside the glass every frame
+    app.invoke_toggle_sidebar();
+    rest(app, driver);
+    assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
+    app.invoke_toggle_sidebar();
+    for _ in 0..200 {
+        let (w, e) = (app.get_sidebar_width(), app.get_side_edges());
+        if w <= 0.5 {
+            break;
+        }
+        assert!(
+            e.end <= INSET as f32 + w + 0.01,
+            "the contents reach {} past the glass at {}",
+            e.end,
+            INSET as f32 + w
+        );
+        frames(app, driver, 1);
+    }
+    rest(app, driver);
+    peek_in(2.0);
+    check("from extended");
+    peek_out();
+
+    // the pointer reaches the edge while the sidebar is still closing: the peek panel, at once
+    app.invoke_toggle_sidebar();
+    rest(app, driver);
+    app.invoke_toggle_sidebar();
+    frames(app, driver, 2);
+    peek_in(2.0);
+    assert!(app.get_sidebar_width() > 0.5, "still closing");
+    check("while closing");
+    // it finishes closing under the panel, which stays put
+    settle(app, driver);
+    check("closed under the peek");
+    peek_out();
+
+    // back to extended for what follows
+    app.invoke_toggle_sidebar();
+    rest(app, driver);
+    app.set_downloads(ModelRc::default());
+    pump(1);
 }
 
 fn pane(id: i32, x0: f32, x1: f32) -> SplitPane {
