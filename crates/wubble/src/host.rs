@@ -1271,6 +1271,25 @@ impl Host {
                     Err(e) => self.fail(e),
                 }
             }
+            // The seam's gestures through the host's entry points the shell's `split-grab`,
+            // `split-drag` and `split-release` call (the Slint side, hit strip included, is
+            // tests/shell.rs `split_seam_drag`). Synthetic pointer events would race the real
+            // pointer: the host replays it on a cursor change.
+            Some(split_smoke::Action::Grab) => {
+                let height = window.get_content_height();
+                match self.panes.seams(height.into()).first() {
+                    Some(&(x, _)) => {
+                        let (x, y) = (x as f32, height / 2.0);
+                        self.split_grab(0, x, y);
+                        self.split_drag(x - split_smoke::DRAG, y);
+                    }
+                    None => self.fail("split: no seam to grab".into()),
+                }
+            }
+            Some(split_smoke::Action::Release) => self.split_release(),
+            Some(split_smoke::Action::Resized(left, right)) => {
+                println!("smoke: split resized panes {left}+{right}");
+            }
             Some(split_smoke::Action::Unsplit) => {
                 if let Some(tab) = self.model.visible_tab() {
                     self.dispatch(Command::Unsplit(tab));
