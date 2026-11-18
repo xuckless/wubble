@@ -137,7 +137,8 @@ pub fn kawase_halfpixel(sampled: FrameSize) -> [f32; 2] {
 /// The `saturate` colour matrix as three RGB rows (fourth column zero, for
 /// WGSL `vec4` alignment). W3C Filter Effects Module Level 1,
 /// `feColorMatrix type="saturate"`, which CSS `saturate()` also uses.
-/// Applied to linear RGB, the spec's default `color-interpolation-filters`.
+/// Applied to gamma-encoded sRGB values, as Chromium applies the CSS
+/// shorthand (the SVG primitive's linearRGB default does not apply there).
 pub fn saturation_matrix(s: f32) -> [[f32; 4]; 3] {
     [
         [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s, 0.0],
@@ -168,13 +169,14 @@ impl KawaseParams {
     }
 
     /// The uniform's bytes, field by field in declaration order.
-    pub(crate) fn to_bytes(self) -> Vec<u8> {
+    pub(crate) fn to_bytes(self) -> [u8; 64] {
         let words = [self.halfpixel[0], self.halfpixel[1], self.offset, self._pad];
-        words
-            .into_iter()
-            .chain(self.saturate.into_iter().flatten())
-            .flat_map(f32::to_ne_bytes)
-            .collect()
+        let mut bytes = [0; 64];
+        let fields = words.into_iter().chain(self.saturate.into_iter().flatten());
+        for (chunk, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(fields) {
+            *chunk = word.to_ne_bytes();
+        }
+        bytes
     }
 }
 

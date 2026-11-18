@@ -1,6 +1,6 @@
 //! Glass quality: one ordered enum and the pure governor that moves it.
-//! The caller owns the clock and the window of recent costs; nothing here
-//! reads time.
+//! The caller owns the clock and feeds one measured frame cost per call;
+//! nothing here reads time.
 
 use std::time::Duration;
 
@@ -36,38 +36,116 @@ impl Quality {
             Quality::Flat => Quality::Cached,
         }
     }
+
+    /// Over-budget frames among the last `WINDOW` that step this level down.
+    /// `Cached` renders once per `CACHED_REFRESH_CALLS` frames, so one
+    /// over-budget frame in the window is already its refresh failing.
+    const fn down_count(self) -> u32 {
+        match self {
+            Quality::Full | Quality::HalfRes => DOWN_COUNT,
+            Quality::Cached => 1,
+            // Nothing cheaper to go to.
+            Quality::Flat => u32::MAX,
+        }
+    }
 }
 
-/// Number of most recent frame costs the governor looks at.
-pub const WINDOW: usize = 8;
-/// Step down when at least this many of the window are over the down line.
-pub const DOWN_COUNT: usize = 3;
+/// Number of most recent frame costs the down rule looks at (bits of `u8`).
+pub const WINDOW: u32 = 8;
+/// `Full` and `HalfRes` step down when this many of the window are over the
+/// down line.
+pub const DOWN_COUNT: u32 = 3;
 /// The down line, as a fraction of the frame budget.
 pub const DOWN_FRACTION: f64 = 0.9;
-/// Step up only when the whole window is under this fraction of the budget.
+/// Calm frames are under this fraction of the budget.
 pub const UP_FRACTION: f64 = 0.6;
 /// Under `Cached`, one real render per this many calls.
 pub const CACHED_REFRESH_CALLS: u32 = 8;
+/// A step down within this many frames of a step up is a failed retry.
+pub const PROBE_FRAMES: u32 = 4 * WINDOW;
+/// Cap on the retry backoff: at most `WINDOW << MAX_BACKOFF` calm frames
+/// (about 9 minutes at 120 Hz) before retrying a level that failed.
+pub const MAX_BACKOFF: u32 = 16;
 
-/// The quality for the next frame, from the costs of the most recent frames
-/// (oldest first; only the last `WINDOW` count) and the frame budget
-/// (8.33 ms at 120 Hz). Steps down one level when `DOWN_COUNT` costs exceed
-/// `budget * DOWN_FRACTION`; steps up one level only on a full window that is
-/// entirely under `budget * UP_FRACTION`; otherwise holds. The gap between
-/// the two lines is the hysteresis.
-///
-/// The host clears its window whenever the quality changes, so each level is
-/// judged on its own frames.
-pub fn next_quality(current: Quality, recent: &[Duration], budget: Duration) -> Quality {
-    let window = &recent[recent.len().saturating_sub(WINDOW)..];
-    let down = budget.mul_f64(DOWN_FRACTION);
-    let up = budget.mul_f64(UP_FRACTION);
-    if window.iter().filter(|cost| **cost > down).count() >= DOWN_COUNT {
-        current.lower()
-    } else if window.len() == WINDOW && window.iter().all(|cost| *cost < up) {
-        current.higher()
-    } else {
-        current
+/// The governor's state, owned by the host and moved only by
+/// [`Governor::next`]. Remembers why it last stepped down, so a level that
+/// fails under steady load is retried after exponentially longer calm runs
+/// instead of every `WINDOW` frames.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Governor {
+    quality: Quality,
+    /// Bit `i` set: the frame `i` calls ago was over the down line.
+    /// Cleared on every change, so each level is judged on its own frames.
+    over: u8,
+    /// Consecutive calm frames at this level.
+    calm: u32,
+    /// Frames at this level.
+    frames: u32,
+    /// This level was entered by stepping up, so failing it soon is a
+    /// failed retry.
+    probing: bool,
+    /// Failed retries in a row; the up rule needs `WINDOW << backoff` calm
+    /// frames.
+    backoff: u32,
+}
+
+impl Governor {
+    pub const fn new(quality: Quality) -> Self {
+        Self {
+            quality,
+            over: 0,
+            calm: 0,
+            frames: 0,
+            probing: false,
+            backoff: 0,
+        }
+    }
+
+    pub const fn quality(&self) -> Quality {
+        self.quality
+    }
+
+    /// The state after one frame that cost `cost`, against `budget`
+    /// (8.33 ms at 120 Hz). Steps down one level when the window holds
+    /// `down_count` costs over `budget * DOWN_FRACTION`; steps up one level
+    /// after `WINDOW << backoff` consecutive costs under `budget * UP_FRACTION`;
+    /// otherwise holds. A step down within `PROBE_FRAMES` of a step up doubles
+    /// the calm run the next step up needs; a level that survives
+    /// `PROBE_FRAMES` after a step up resets it.
+    #[must_use]
+    pub fn next(self, cost: Duration, budget: Duration) -> Self {
+        let over = (self.over << 1) | u8::from(cost > budget.mul_f64(DOWN_FRACTION));
+        let calm = if cost < budget.mul_f64(UP_FRACTION) {
+            self.calm.saturating_add(1)
+        } else {
+            0
+        };
+        let frames = self.frames.saturating_add(1);
+        let changed = |quality, probing, backoff| Self {
+            probing,
+            backoff,
+            ..Self::new(quality)
+        };
+        if over.count_ones() >= self.quality.down_count() {
+            let backoff = if self.probing {
+                (self.backoff + 1).min(MAX_BACKOFF)
+            } else {
+                self.backoff
+            };
+            return changed(self.quality.lower(), false, backoff);
+        }
+        if self.quality != Quality::Full && calm >= WINDOW << self.backoff {
+            return changed(self.quality.higher(), true, self.backoff);
+        }
+        let survived = self.probing && frames >= PROBE_FRAMES;
+        Self {
+            quality: self.quality,
+            over,
+            calm,
+            frames,
+            probing: self.probing && !survived,
+            backoff: if survived { 0 } else { self.backoff },
+        }
     }
 }
 
@@ -92,6 +170,13 @@ mod tests {
     /// Between the up and the down line.
     const MIDDLE: Duration = Duration::from_millis(6);
 
+    fn feed(mut g: Governor, costs: impl IntoIterator<Item = Duration>) -> Governor {
+        for cost in costs {
+            g = g.next(cost, BUDGET);
+        }
+        g
+    }
+
     #[test]
     fn ordering_follows_cost() {
         assert!(Quality::Full < Quality::HalfRes);
@@ -107,58 +192,138 @@ mod tests {
 
     #[test]
     fn over_budget_steps_down_one_level_to_flat() {
-        let costs = [CALM, OVER, CALM, OVER, OVER];
-        let mut q = Quality::Full;
-        for expected in [
-            Quality::HalfRes,
-            Quality::Cached,
-            Quality::Flat,
-            Quality::Flat,
-        ] {
-            q = next_quality(q, &costs, BUDGET);
-            assert_eq!(q, expected);
+        let mut g = Governor::new(Quality::Full);
+        g = feed(g, [CALM, OVER, CALM, OVER]);
+        assert_eq!(g.quality(), Quality::Full);
+        g = feed(g, [OVER]);
+        assert_eq!(g.quality(), Quality::HalfRes);
+        g = feed(g, [OVER; 3]);
+        assert_eq!(g.quality(), Quality::Cached);
+        // One over-budget frame is enough at Cached: it is the refresh.
+        g = feed(g, [OVER]);
+        assert_eq!(g.quality(), Quality::Flat);
+        g = feed(g, [OVER; 20]);
+        assert_eq!(g.quality(), Quality::Flat);
+    }
+
+    #[test]
+    fn calm_run_steps_up_one_level_to_full() {
+        let mut g = Governor::new(Quality::Flat);
+        for expected in [Quality::Cached, Quality::HalfRes, Quality::Full] {
+            g = feed(g, [CALM; WINDOW as usize - 1]);
+            assert_ne!(g.quality(), expected);
+            g = feed(g, [CALM]);
+            assert_eq!(g.quality(), expected);
         }
+        g = feed(g, [CALM; 100]);
+        assert_eq!(g.quality(), Quality::Full);
     }
 
     #[test]
-    fn calm_full_window_steps_up_one_level_to_full() {
-        let costs = [CALM; WINDOW];
-        let mut q = Quality::Flat;
-        for expected in [
-            Quality::Cached,
-            Quality::HalfRes,
-            Quality::Full,
-            Quality::Full,
-        ] {
-            q = next_quality(q, &costs, BUDGET);
-            assert_eq!(q, expected);
-        }
-    }
-
-    #[test]
-    fn short_empty_mixed_and_middle_windows_hold() {
-        let hold = |costs: &[Duration]| {
-            assert_eq!(
-                next_quality(Quality::HalfRes, costs, BUDGET),
-                Quality::HalfRes
-            );
-        };
-        hold(&[]);
-        hold(&[CALM; WINDOW - 1]);
-        hold(&[CALM, OVER, CALM, CALM, OVER, CALM, CALM, CALM]);
-        hold(&[MIDDLE; WINDOW]);
-        // A cost exactly on the down line is not over it.
-        hold(&[BUDGET.mul_f64(DOWN_FRACTION); WINDOW]);
-    }
-
-    #[test]
-    fn only_the_last_window_counts() {
-        let mut costs = vec![OVER; 5];
-        costs.extend([CALM; WINDOW]);
+    fn mixed_and_middle_costs_hold() {
+        let start = Governor::new(Quality::HalfRes);
+        let held = |costs: &[Duration]| feed(start, costs.iter().copied()).quality();
+        assert_eq!(held(&[]), Quality::HalfRes);
         assert_eq!(
-            next_quality(Quality::Cached, &costs, BUDGET),
+            held(&[CALM, OVER, CALM, CALM, OVER, CALM, CALM, CALM]),
             Quality::HalfRes
         );
+        assert_eq!(held(&[MIDDLE; 100]), Quality::HalfRes);
+        // A cost exactly on the down line is not over it.
+        assert_eq!(
+            held(&[BUDGET.mul_f64(DOWN_FRACTION); 100]),
+            Quality::HalfRes
+        );
+    }
+
+    #[test]
+    fn only_the_last_window_counts_down() {
+        // Two old over-budget frames slide out before the third arrives.
+        let mut costs = vec![OVER, OVER];
+        costs.extend([MIDDLE; WINDOW as usize - 1]);
+        costs.push(OVER);
+        let g = feed(Governor::new(Quality::Full), costs);
+        assert_eq!(g.quality(), Quality::Full);
+    }
+
+    /// Runs the governor over `frames` frames whose cost `cost(quality,
+    /// rendered)` depends on the level (`rendered` is 1 on a `Cached`
+    /// refresh); returns the end state and how many frames went over budget.
+    fn run(
+        start: Quality,
+        frames: usize,
+        cost: impl Fn(Quality, u32) -> Duration,
+    ) -> (Governor, usize) {
+        let mut g = Governor::new(start);
+        let mut skipped = CACHED_REFRESH_CALLS - 1;
+        let mut over = 0;
+        for _ in 0..frames {
+            let q = g.quality();
+            let render = should_render(q, skipped);
+            skipped = if render { 0 } else { skipped + 1 };
+            let c = cost(q, u32::from(render));
+            over += usize::from(c > BUDGET);
+            g = g.next(c, BUDGET);
+        }
+        (g, over)
+    }
+
+    #[test]
+    fn steady_load_does_not_flap_between_two_levels() {
+        // Full 9 ms (over), HalfRes 4 ms (calm). Without memory this drops
+        // 3 frames in every 11; with backoff the retries thin out.
+        let frames = 100_000;
+        let (g, over) = run(Quality::Full, frames, |q, _| {
+            if q == Quality::Full {
+                OVER
+            } else {
+                Duration::from_millis(4)
+            }
+        });
+        assert_eq!(g.quality(), Quality::HalfRes);
+        // Each retry costs DOWN_COUNT frames; retries double their spacing,
+        // so there are about log2(frames / WINDOW) of them.
+        let retries = (frames as f64 / WINDOW as f64).log2().ceil() as usize + 1;
+        assert!(
+            over <= DOWN_COUNT as usize * retries,
+            "{over} over-budget frames"
+        );
+    }
+
+    #[test]
+    fn slow_cached_refresh_steps_down_and_flat_does_not_flap() {
+        // Only the Cached refresh frame is slow; HalfRes and Full are too.
+        let frames = 100_000;
+        let (g, over) = run(Quality::Cached, frames, |q, rendered| match q {
+            Quality::Flat => CALM,
+            Quality::Cached if rendered == 0 => CALM,
+            _ => OVER,
+        });
+        assert_eq!(g.quality(), Quality::Flat);
+        let retries = (frames as f64 / WINDOW as f64).log2().ceil() as usize + 1;
+        assert!(over <= retries, "{over} over-budget frames");
+    }
+
+    #[test]
+    fn a_retry_that_holds_resets_the_backoff() {
+        let mut g = Governor::new(Quality::Full);
+        // Fail Full a few times from HalfRes.
+        for _ in 0..4 {
+            g = feed(g, [OVER; DOWN_COUNT as usize]);
+            assert_eq!(g.quality(), Quality::HalfRes);
+            while g.quality() == Quality::HalfRes {
+                g = g.next(CALM, BUDGET);
+            }
+        }
+        assert_eq!(g.backoff, 3);
+        // The load is gone: Full holds past the probe and the memory clears.
+        g = feed(g, [CALM; PROBE_FRAMES as usize]);
+        assert_eq!((g.quality(), g.backoff), (Quality::Full, 0));
+        // A fresh spike then recovers after one plain calm window.
+        g = feed(g, [OVER; DOWN_COUNT as usize]);
+        assert_eq!(g.quality(), Quality::HalfRes);
+        g = feed(g, [CALM; WINDOW as usize]);
+        assert_eq!(g.quality(), Quality::Full);
     }
 
     #[test]

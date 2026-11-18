@@ -7425,7 +7425,6 @@ dependencies = [
  "slint",
  "welding",
  "wgpu",
- "wubble-ui",
 ]
 
 [[package]]

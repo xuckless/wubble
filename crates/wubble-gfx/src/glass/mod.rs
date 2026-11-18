@@ -6,8 +6,9 @@
 //! and Slint only layers tint, specular, rim and shadow on top of it.
 //!
 //! - [`Tier`]: Thin / Regular / Thick, the blur and saturate table.
-//! - [`Quality`] and [`next_quality`]: the degrade ladder
-//!   (Full -> HalfRes -> Cached -> Flat) and the pure governor that moves it.
+//! - [`Quality`] and [`Governor`]: the degrade ladder
+//!   (Full -> HalfRes -> Cached -> Flat) and the pure governor that moves it,
+//!   with a retry backoff so steady load cannot flip it between two levels.
 //! - [`GlassBackdrop`]: the GPU pass. One shared dual-Kawase down chain from
 //!   the frame, one up chain per tier in use, saturate folded into the last up
 //!   pass, outputs double-buffered per tier as `slint::Image`s.
@@ -22,17 +23,16 @@
 //! let frame = presenter.current_texture().expect("just presented");
 //! let backdrops = glass.render(frame, quality, tiers_in_use, window.scale_factor())?;
 //! // Set the `GlassBackdrops` Slint global: thin / regular / thick from
-//! // `backdrops` (an empty image where None),
+//! // `backdrops.get(tier)` (an empty image where None; empty means flat),
 //! // `scale` = backdrops.px_per_frame_px * window.scale_factor(),
-//! // `quality` = the Slint mirror of `quality`, frame-x / frame-y = where the
-//! // web frame sits in the window.
+//! // frame-x / frame-y = where the web frame sits in the window.
 //! ```
 //!
-//! The host measures the cost of each frame it renders, keeps the last
-//! [`quality::WINDOW`] costs, and once per frame sets
-//! `quality = next_quality(quality, &costs, budget)` with the 8.33 ms budget,
-//! clearing its window whenever the quality changes. Glass over a static page
-//! still needs one `render` after the shell starts showing glass.
+//! `quality` is `governor.quality()`. The host keeps one [`Governor`]
+//! (`Governor::new(Quality::Full)`), measures the cost of each frame it
+//! renders and, once per frame, sets `governor = governor.next(cost, budget)`
+//! with the 8.33 ms budget. Glass over a static page still needs one `render`
+//! after the shell starts showing glass.
 
 mod pass;
 pub mod plan;
@@ -40,7 +40,7 @@ pub mod quality;
 
 pub use pass::{Backdrops, GlassBackdrop};
 pub use plan::{Tier, TierSet};
-pub use quality::{Quality, next_quality};
+pub use quality::{Governor, Quality};
 
 #[cfg(test)]
 mod tests;

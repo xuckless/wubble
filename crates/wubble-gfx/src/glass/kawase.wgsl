@@ -9,8 +9,9 @@
 // MIT OR Apache-2.0). Changed from that port: KWin's `offset` scalar is back,
 // and fs_up applies the W3C feColorMatrix saturate rows from `params`.
 //
-// `halfpixel = 0.5 / size(sampled texture)` (KWin's convention). Sampling an
-// sRGB texture decodes to linear, so blur and saturate run in linear light.
+// `halfpixel = 0.5 / size(sampled texture)` (KWin's convention). Every view
+// is `Rgba8Unorm` over sRGB storage, so blur and saturate run on the
+// gamma-encoded values, as CSS filters do in Chromium and as KWin blurs.
 
 struct Params {
     halfpixel: vec2<f32>,

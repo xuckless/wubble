@@ -184,6 +184,10 @@ fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> {
 /// The blit target format: what Slint accepts, sRGB like CEF's output.
 pub(crate) const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
+/// `TARGET_FORMAT` without the sRGB decode: views in this format read and
+/// write the gamma-encoded values, as CSS filters compute (glass pass).
+pub(crate) const ENCODED_VIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
 /// Number of blit targets. Two, so consecutive frames are different images
 /// and setting one on the window always changes the property.
 const RING_LEN: usize = 2;
@@ -217,7 +221,8 @@ impl Ring {
                 format: TARGET_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
+                // For the glass pass, which blurs the encoded values.
+                view_formats: &[ENCODED_VIEW_FORMAT],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let image = slint::Image::try_from(texture.clone())

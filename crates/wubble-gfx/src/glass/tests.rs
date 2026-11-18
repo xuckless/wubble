@@ -1,13 +1,12 @@
-//! Shader validation without a GPU, the Rust/Slint enum mirror, and a GPU
-//! correctness check that is skipped when no adapter is found. Nothing here
-//! measures time.
+//! Shader validation without a GPU and a GPU correctness check that is
+//! skipped when no adapter is found. Nothing here measures time.
 
 use welding::wgpu;
 
 use super::plan::saturation_matrix;
 use super::*;
 use crate::GpuContext;
-use crate::import::FULLSCREEN_VS_WGSL;
+use crate::import::{ENCODED_VIEW_FORMAT, FULLSCREEN_VS_WGSL};
 
 #[test]
 fn kawase_wgsl_parses_and_validates() {
@@ -28,73 +27,14 @@ fn kawase_wgsl_parses_and_validates() {
     }
 }
 
-/// Exhaustive both ways: adding a variant on either side fails to compile.
-#[test]
-fn slint_enums_mirror_rust() {
-    use wubble_ui::{GlassQuality, GlassTier};
-    let to_ui = |q| match q {
-        Quality::Full => GlassQuality::Full,
-        Quality::HalfRes => GlassQuality::HalfRes,
-        Quality::Cached => GlassQuality::Cached,
-        Quality::Flat => GlassQuality::Flat,
-    };
-    let from_ui = |q| match q {
-        GlassQuality::Full => Quality::Full,
-        GlassQuality::HalfRes => Quality::HalfRes,
-        GlassQuality::Cached => Quality::Cached,
-        GlassQuality::Flat => Quality::Flat,
-    };
-    for q in [
-        Quality::Full,
-        Quality::HalfRes,
-        Quality::Cached,
-        Quality::Flat,
-    ] {
-        assert_eq!(from_ui(to_ui(q)), q);
-    }
-    let tier_to_ui = |t| match t {
-        Tier::Thin => GlassTier::Thin,
-        Tier::Regular => GlassTier::Regular,
-        Tier::Thick => GlassTier::Thick,
-    };
-    let tier_from_ui = |t| match t {
-        GlassTier::Thin => Tier::Thin,
-        GlassTier::Regular => Tier::Regular,
-        GlassTier::Thick => Tier::Thick,
-    };
-    for t in Tier::ALL {
-        assert_eq!(tier_from_ui(tier_to_ui(t)), t);
-    }
-}
-
-fn srgb_to_linear(c: u8) -> f32 {
-    let c = c as f32 / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(c: f32) -> u8 {
-    let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s * 255.0).round() as u8
-}
-
 /// What a flat frame of `rgb` must come out as: unchanged by the blur, then
-/// saturated as the CPU matrix says.
+/// saturated as the CPU matrix says, on the encoded values.
 fn expected(rgb: [u8; 3], tier: Tier) -> [u8; 3] {
-    let lin = rgb.map(srgb_to_linear);
+    let encoded = rgb.map(|c| c as f32 / 255.0);
     let m = saturation_matrix(tier.saturation());
-    let row = |r: usize| m[r][0] * lin[0] + m[r][1] * lin[1] + m[r][2] * lin[2];
-    [0, 1, 2].map(|r| linear_to_srgb(row(r)))
+    let row = |r: usize| m[r][0] * encoded[0] + m[r][1] * encoded[1] + m[r][2] * encoded[2];
+    [0, 1, 2].map(|r| (row(r).clamp(0.0, 1.0) * 255.0).round() as u8)
 }
-
 fn read_back(gpu: &GpuContext, texture: &wgpu::Texture) -> Vec<[u8; 4]> {
     let device = gpu.device();
     let size = texture.size();
@@ -167,7 +107,7 @@ fn gpu_flat_frame_blurs_to_itself_and_saturates_like_the_cpu() {
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
+        view_formats: &[ENCODED_VIEW_FORMAT],
     });
     let upload = |pixel: &dyn Fn(u32) -> [u8; 4]| {
         let data: Vec<u8> = (0..side * side).flat_map(|i| pixel(i % side)).collect();
@@ -224,8 +164,7 @@ fn gpu_flat_frame_blurs_to_itself_and_saturates_like_the_cpu() {
         .render(&frame, Quality::Full, thin, 1.0)
         .expect("edge");
     let texture = backdrops
-        .thin
-        .as_ref()
+        .get(Tier::Thin)
         .and_then(slint::Image::to_wgpu_30_texture);
     let pixels = read_back(&gpu, &texture.expect("thin backdrop"));
     let width = (side / 2) as usize;
@@ -236,7 +175,7 @@ fn gpu_flat_frame_blurs_to_itself_and_saturates_like_the_cpu() {
         row.windows(2).all(|w| w[0][0] <= w[1][0]),
         "not a ramp: {row:?}"
     );
-    assert!(backdrops.regular.is_none() && backdrops.thick.is_none());
+    assert!(backdrops.get(Tier::Regular).is_none() && backdrops.get(Tier::Thick).is_none());
 
     let flat = glass.render(&frame, Quality::Flat, all, 1.0).expect("flat");
     assert!(Tier::ALL.iter().all(|t| flat.get(*t).is_none()));

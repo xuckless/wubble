@@ -8,7 +8,7 @@ use wgpu::util::DeviceExt;
 use super::plan::{KawaseParams, Tier, TierSet, kawase_level_size, kawase_plan};
 use super::quality::{CACHED_REFRESH_CALLS, Quality, should_render};
 use crate::FrameSize;
-use crate::import::{FULLSCREEN_VS_WGSL, GfxError, GpuContext, TARGET_FORMAT};
+use crate::import::{ENCODED_VIEW_FORMAT, FULLSCREEN_VS_WGSL, GfxError, GpuContext, TARGET_FORMAT};
 
 const KAWASE_WGSL: &str = include_str!("kawase.wgsl");
 
@@ -17,52 +17,14 @@ const KAWASE_WGSL: &str = include_str!("kawase.wgsl");
 /// 0.25 at `HalfRes`), for the Glass component's source clip.
 #[derive(Clone, Debug, Default)]
 pub struct Backdrops {
-    pub thin: Option<slint::Image>,
-    pub regular: Option<slint::Image>,
-    pub thick: Option<slint::Image>,
+    /// Indexed by `Tier as usize`; `None` for tiers not in use.
+    images: [Option<slint::Image>; Tier::ALL.len()],
     pub px_per_frame_px: f32,
 }
 
 impl Backdrops {
     pub fn get(&self, tier: Tier) -> Option<&slint::Image> {
-        match tier {
-            Tier::Thin => self.thin.as_ref(),
-            Tier::Regular => self.regular.as_ref(),
-            Tier::Thick => self.thick.as_ref(),
-        }
-    }
-
-    fn slot(&mut self, tier: Tier) -> &mut Option<slint::Image> {
-        match tier {
-            Tier::Thin => &mut self.thin,
-            Tier::Regular => &mut self.regular,
-            Tier::Thick => &mut self.thick,
-        }
-    }
-}
-
-/// Where the up chains stop: level 1 (half size) or level 2 (quarter size,
-/// after a 1-tap first level).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Resolution {
-    Half,
-    Quarter,
-}
-
-impl Resolution {
-    fn of(quality: Quality) -> Self {
-        if quality == Quality::Full {
-            Self::Half
-        } else {
-            Self::Quarter
-        }
-    }
-
-    const fn out_level(self) -> u32 {
-        match self {
-            Self::Half => 1,
-            Self::Quarter => 2,
-        }
+        self.images[tier as usize].as_ref()
     }
 }
 
@@ -70,7 +32,9 @@ impl Resolution {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ChainKey {
     frame: FrameSize,
-    resolution: Resolution,
+    /// Where the up chains stop: level 1 (half size, `Full`) or level 2
+    /// (quarter size after a 1-tap first level, otherwise).
+    out_level: u32,
     tiers: TierSet,
     scale_factor: f32,
 }
@@ -83,9 +47,9 @@ struct Pipelines {
     sampler: wgpu::Sampler,
 }
 
-/// One fullscreen pass: a pipeline reading `bind_group` into `target`.
+/// One fullscreen pass: `pipeline` reading `bind_group` into `target`.
 struct Pass {
-    up: bool,
+    pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     target: wgpu::TextureView,
 }
@@ -93,7 +57,7 @@ struct Pass {
 /// The first down pass reads the frame, which changes every call, so only
 /// its params buffer is kept and its bind group is made per call.
 struct FirstPass {
-    copy: bool,
+    pipeline: wgpu::RenderPipeline,
     params: wgpu::Buffer,
     target: wgpu::TextureView,
 }
@@ -112,7 +76,8 @@ struct Chain {
     first: FirstPass,
     down: Vec<Pass>,
     tiers: Vec<TierChain>,
-    px_per_frame_px: f32,
+    /// What the last `encode` returned, for `Cached` calls that skip.
+    last: Backdrops,
     next: usize,
 }
 
@@ -123,8 +88,6 @@ pub struct GlassBackdrop {
     queue: wgpu::Queue,
     pipelines: Pipelines,
     chain: Option<Chain>,
-    last: Backdrops,
-    last_key: Option<ChainKey>,
     skipped: u32,
 }
 
@@ -136,8 +99,6 @@ impl GlassBackdrop {
             queue: gpu.queue().clone(),
             device,
             chain: None,
-            last: Backdrops::default(),
-            last_key: None,
             // So the first `Cached` call renders.
             skipped: CACHED_REFRESH_CALLS - 1,
         }
@@ -147,7 +108,8 @@ impl GlassBackdrop {
     /// tiers in `tiers` at `quality`. `scale_factor` is frame pixels per
     /// logical pixel (the window scale factor). `Flat` or an empty tier set
     /// returns no images and frees the textures; `Cached` returns the last
-    /// images on all but every `CACHED_REFRESH_CALLS`-th call.
+    /// images on all but every `CACHED_REFRESH_CALLS`-th call. `frame` must
+    /// allow `Rgba8Unorm` views (`FramePresenter`'s textures do).
     pub fn render(
         &mut self,
         frame: &wgpu::Texture,
@@ -157,24 +119,24 @@ impl GlassBackdrop {
     ) -> Result<Backdrops, GfxError> {
         if quality == Quality::Flat || tiers.is_empty() {
             self.chain = None;
-            self.last = Backdrops::default();
-            self.last_key = None;
             return Ok(Backdrops::default());
         }
         let size = frame.size();
         let key = ChainKey {
             frame: FrameSize::new(size.width, size.height),
-            resolution: Resolution::of(quality),
+            out_level: if quality == Quality::Full { 1 } else { 2 },
             tiers,
             scale_factor,
         };
         // A cached image of another frame size or tier set would be wrong.
-        let cache_fits = self
-            .last_key
-            .is_some_and(|k| k.frame == key.frame && k.tiers == key.tiers);
-        if !should_render(quality, self.skipped) && cache_fits {
+        if !should_render(quality, self.skipped)
+            && let Some(chain) = self
+                .chain
+                .as_ref()
+                .filter(|c| c.key.frame == key.frame && c.key.tiers == key.tiers)
+        {
             self.skipped += 1;
-            return Ok(self.last.clone());
+            return Ok(chain.last.clone());
         }
         self.skipped = 0;
         let chain = match self.chain.take() {
@@ -182,9 +144,8 @@ impl GlassBackdrop {
             _ => Chain::new(&self.device, &self.pipelines, key)?,
         };
         let chain = self.chain.insert(chain);
-        self.last = chain.encode(&self.device, &self.queue, &self.pipelines, frame);
-        self.last_key = Some(key);
-        Ok(self.last.clone())
+        chain.encode(&self.device, &self.queue, &self.pipelines, frame);
+        Ok(chain.last.clone())
     }
 }
 
@@ -245,7 +206,7 @@ impl Pipelines {
                     module: &shader,
                     entry_point: Some(fragment),
                     compilation_options: Default::default(),
-                    targets: &[Some(TARGET_FORMAT.into())],
+                    targets: &[Some(ENCODED_VIEW_FORMAT.into())],
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
@@ -307,7 +268,8 @@ fn params_buffer(device: &wgpu::Device, params: KawaseParams) -> wgpu::Buffer {
     })
 }
 
-/// A pyramid level texture. `COPY_SRC` only so tests can read outputs back.
+/// A pyramid level texture, sRGB for Slint, viewed encoded by the passes.
+/// `COPY_SRC` only so tests can read outputs back.
 fn level_texture(device: &wgpu::Device, size: FrameSize) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("wubble glass"),
@@ -323,12 +285,18 @@ fn level_texture(device: &wgpu::Device, size: FrameSize) -> wgpu::Texture {
         usage: wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
+        view_formats: &[ENCODED_VIEW_FORMAT],
     })
 }
 
+/// The view every pass reads and writes: gamma-encoded values, no sRGB
+/// decode, so blur and saturate run on encoded sRGB as CSS filters do in
+/// Chromium (and as KWin blurs, whose offsets are tuned for it).
 fn view(texture: &wgpu::Texture) -> wgpu::TextureView {
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(ENCODED_VIEW_FORMAT),
+        ..Default::default()
+    })
 }
 
 impl Chain {
@@ -339,7 +307,7 @@ impl Chain {
     /// `o`) runs up passes reading levels `n, n-1, ..., o`, each writing
     /// level `max(L - 1, o)`; the last one saturates into the output.
     fn new(device: &wgpu::Device, pipelines: &Pipelines, key: ChainKey) -> Result<Self, GfxError> {
-        let out_level = key.resolution.out_level();
+        let out_level = key.out_level;
         let plans: Vec<_> = key
             .tiers
             .iter()
@@ -358,9 +326,12 @@ impl Chain {
         let levels: Vec<wgpu::TextureView> = (1..=depth)
             .map(|k| view(&level_texture(device, size(k))))
             .collect();
-        let first_copy = key.resolution == Resolution::Quarter;
         let first = FirstPass {
-            copy: first_copy,
+            pipeline: if out_level == 1 {
+                pipelines.down.clone()
+            } else {
+                pipelines.copy.clone()
+            },
             params: params_buffer(device, KawaseParams::new(key.frame, down_offset, 1.0)),
             target: levels[0].clone(),
         };
@@ -368,7 +339,7 @@ impl Chain {
             .map(|k| {
                 let params = KawaseParams::new(size(k - 1), down_offset, 1.0);
                 Pass {
-                    up: false,
+                    pipeline: pipelines.down.clone(),
                     bind_group: pipelines.bind_group(
                         device,
                         &levels[k as usize - 2],
@@ -396,7 +367,7 @@ impl Chain {
             let passes = (out_level + 1..=n)
                 .rev()
                 .map(|l| Pass {
-                    up: true,
+                    pipeline: pipelines.up.clone(),
                     bind_group: pipelines.bind_group(
                         device,
                         source_at(l),
@@ -429,69 +400,46 @@ impl Chain {
             first,
             down,
             tiers,
-            px_per_frame_px: size(out_level).width as f32 / key.frame.width as f32,
+            last: Backdrops {
+                px_per_frame_px: size(out_level).width as f32 / key.frame.width as f32,
+                ..Backdrops::default()
+            },
             next: 0,
         })
     }
 
-    /// Records and submits every pass for `frame`; returns the fresh images.
+    /// Records and submits every pass for `frame`; `last` gets the fresh images.
     fn encode(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         pipelines: &Pipelines,
         frame: &wgpu::Texture,
-    ) -> Backdrops {
+    ) {
         let slot = self.next;
         self.next = (slot + 1) % 2;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("wubble glass"),
         });
         let first_bind = pipelines.bind_group(device, &view(frame), &self.first.params);
-        let first_pipeline = if self.first.copy {
-            &pipelines.copy
-        } else {
-            &pipelines.down
-        };
         run(
             &mut encoder,
-            first_pipeline,
+            &self.first.pipeline,
             &first_bind,
             &self.first.target,
         );
         for pass in &self.down {
-            run(
-                &mut encoder,
-                pipelines.for_pass(pass),
-                &pass.bind_group,
-                &pass.target,
-            );
+            run(&mut encoder, &pass.pipeline, &pass.bind_group, &pass.target);
         }
-        let mut backdrops = Backdrops {
-            px_per_frame_px: self.px_per_frame_px,
-            ..Backdrops::default()
-        };
         for tier in &self.tiers {
             for pass in &tier.passes {
-                run(
-                    &mut encoder,
-                    pipelines.for_pass(pass),
-                    &pass.bind_group,
-                    &pass.target,
-                );
+                run(&mut encoder, &pass.pipeline, &pass.bind_group, &pass.target);
             }
             let (target, image) = &tier.outputs[slot];
             run(&mut encoder, &pipelines.up, &tier.last, target);
-            *backdrops.slot(tier.tier) = Some(image.clone());
+            self.last.images[tier.tier as usize] = Some(image.clone());
         }
         queue.submit([encoder.finish()]);
-        backdrops
-    }
-}
-
-impl Pipelines {
-    fn for_pass(&self, pass: &Pass) -> &wgpu::RenderPipeline {
-        if pass.up { &self.up } else { &self.down }
     }
 }
 

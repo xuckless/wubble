@@ -1,9 +1,9 @@
 import { Colors, GlassStyle, Radius, Sizes } from "../tokens.slint";
-import { GlassTier, GlassQuality } from "model.slint";
+import { GlassTier } from "model.slint";
 
 // Backdrop textures from wubble-gfx (`glass::GlassBackdrop::render`), one
-// per tier in use, set by the host every web frame. Until the host sets a
-// quality other than flat, glass is the flat tier fill.
+// per tier in use, set by the host every web frame. An empty image (the
+// default, and what the host sets at Flat quality) means the flat tier fill.
 export global GlassBackdrops {
     in property <image> thin;
     in property <image> regular;
@@ -11,7 +11,6 @@ export global GlassBackdrops {
     // Backdrop pixels per logical pixel: `Backdrops::px_per_frame_px` times
     // the window scale factor (a global cannot read the scale factor).
     in property <float> scale;
-    in property <GlassQuality> quality: GlassQuality.flat;
     // Where the web frame's top-left sits in the window.
     in property <length> frame-x;
     in property <length> frame-y;
@@ -26,15 +25,21 @@ export global GlassBackdrops {
     }
 
     // Whether a panel at window position (x, y) of size (w, h) shows its
-    // backdrop: not flat, and wholly over the web frame (else flat entirely).
+    // backdrop: the tier has an image, and the panel is wholly over the web
+    // frame (else flat entirely). Compared in lengths, before any rounding.
     public pure function shows(tier: GlassTier, x: length, y: length, w: length, h: length) -> bool {
-        root.quality != GlassQuality.flat && x >= root.frame-x && y >= root.frame-y && root.to-backdrop(x - root.frame-x) + root.to-backdrop(w) <= root.image(tier).width && root.to-backdrop(y - root.frame-y) + root.to-backdrop(h) <= root.image(tier).height
+        root.image(tier).width > 0 && root.scale > 0 && x >= root.frame-x && y >= root.frame-y && x + w <= root.frame-x + root.image(tier).width * Sizes.logical-px / root.scale && y + h <= root.frame-y + root.image(tier).height * Sizes.logical-px / root.scale
     }
 }
 
-// Glass, layer by layer (pack Tokens.dc.html): blurred and saturated backdrop,
-// tier tint (+ Space colour on Regular), specular, rim, optional film rim,
-// drop shadow. Children draw on top.
+// Glass, layer by layer (pack Tokens.dc.html): drop shadow, blurred and
+// saturated backdrop, tier tint (+ Space colour on Regular), specular, rim,
+// optional film rim. Children draw on top.
+//
+// The shadow is drawn only under a backdrop: femtovg (1.19 itemrenderer.rs
+// `draw_box_shadow`) colours the shadow SourceIn over the element's own fill
+// and does not cut it out of the panel, so on a translucent flat fill it
+// would take the fill's alpha and darken the panel from inside.
 export component Glass inherits Rectangle {
     in property <length> radius: Radius.lg;
     in property <GlassTier> tier: GlassTier.regular;
@@ -43,26 +48,34 @@ export component Glass inherits Rectangle {
     // Conic soap-film ring, for hover / press / focus; the caller decides.
     in property <bool> film: false;
 
-    border-radius: root.radius;
-    // The flat fill; under a shown backdrop the same fill is repeated above it.
-    background: GlassStyle.fill(root.tier);
-    drop-shadow-offset-y: GlassStyle.shadow-y(root.tier);
-    drop-shadow-blur: GlassStyle.shadow-blur(root.tier);
-    drop-shadow-color: GlassStyle.shadow-color(root.tier);
+    property <bool> backdrop: GlassBackdrops.shows(root.tier, root.absolute-position.x, root.absolute-position.y, root.width, root.height);
+    // Panel edges from the frame origin, in backdrop pixels. Widths are end
+    // minus start, so the two roundings cannot overrun the image.
+    property <int> clip-x: GlassBackdrops.to-backdrop(root.absolute-position.x - GlassBackdrops.frame-x);
+    property <int> clip-y: GlassBackdrops.to-backdrop(root.absolute-position.y - GlassBackdrops.frame-y);
 
-    if GlassBackdrops.shows(root.tier, root.absolute-position.x, root.absolute-position.y, root.width, root.height): Rectangle {
+    border-radius: root.radius;
+    // The flat fill; under a shown backdrop it is drawn above the image instead.
+    background: root.backdrop ? transparent : GlassStyle.fill(root.tier);
+
+    if root.backdrop: Rectangle {
         width: 100%;
         height: 100%;
         border-radius: root.radius;
         clip: true;
+        // Opaque, so the shadow keeps its token alpha; the opaque image hides it.
+        background: GlassStyle.shadow-color(root.tier).with-alpha(1);
+        drop-shadow-offset-y: GlassStyle.shadow-y(root.tier);
+        drop-shadow-blur: GlassStyle.shadow-blur(root.tier);
+        drop-shadow-color: GlassStyle.shadow-color(root.tier);
         Image {
             width: 100%;
             height: 100%;
             source: GlassBackdrops.image(root.tier);
-            source-clip-x: GlassBackdrops.to-backdrop(root.absolute-position.x - GlassBackdrops.frame-x);
-            source-clip-y: GlassBackdrops.to-backdrop(root.absolute-position.y - GlassBackdrops.frame-y);
-            source-clip-width: GlassBackdrops.to-backdrop(root.width);
-            source-clip-height: GlassBackdrops.to-backdrop(root.height);
+            source-clip-x: root.clip-x;
+            source-clip-y: root.clip-y;
+            source-clip-width: GlassBackdrops.to-backdrop(root.absolute-position.x - GlassBackdrops.frame-x + root.width) - root.clip-x;
+            source-clip-height: GlassBackdrops.to-backdrop(root.absolute-position.y - GlassBackdrops.frame-y + root.height) - root.clip-y;
             image-fit: fill;
         }
         Rectangle {
