@@ -53,7 +53,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
 ## Working rules
 
 - **Copy first.** Before writing anything non-trivial, look for an existing crate or a proven implementation in another browser/project (Chromium, CEF, Firefox, Zen, Brave, Servo, Zed) and use or port it. Licence must be GPL-3.0-compatible (MIT, BSD, Apache-2.0, MPL-2.0); nothing proprietary. Copied or ported code carries a source comment and an entry in `THIRD_PARTY_NOTICES.md`.
-- **No performance-dependent tests.** Nothing in `cargo test` or CI may assert timings, fps or throughput. Performance is measured by hand on the owner's Linux machine or the macOS machine (`ssh pixl-bot`).
+- **No performance-dependent tests.** Nothing in `cargo test` or CI may assert timings, fps or throughput. Performance is measured by hand on the owner's Linux machine or the macOS machine (`ssh pixl-mac`).
 - **Sprint mode.** Build breadth first to spec, each item reviewed for correctness and simplicity; a hardening pass over the whole product comes at the end of the build-out.
 - Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 154). Do not bump one alone.
 - No CPU readback on the frame path. A fallback `OnPaint` frame is a bug to count and log.
