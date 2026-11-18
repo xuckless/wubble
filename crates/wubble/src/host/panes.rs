@@ -54,12 +54,15 @@ impl Host {
         }
     }
 
+    /// Each on whole physical pixels, as the content area is (app.slint).
     pub(super) fn pane_rects(&self, window: &AppWindow) -> Vec<PageRect> {
         let (width, _) = content_size(window);
-        match self.screen {
+        let scale = window.window().scale_factor();
+        let rects = match self.screen {
             Screen::Page { tab, .. } => vec![PageRect { tab, x: 0.0, width }],
             _ => self.panes.rects(&self.model.visible_tabs(), width),
-        }
+        };
+        rects.into_iter().map(|r| r.on_pixels(scale)).collect()
     }
 
     /// The layout of `tab`'s view: its pane's, or the whole content area for a tab not on screen.

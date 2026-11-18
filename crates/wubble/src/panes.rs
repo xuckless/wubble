@@ -30,6 +30,18 @@ pub struct PageRect {
 }
 
 impl PageRect {
+    /// The rect with both edges on whole physical pixels at `scale` (the content area's own
+    /// left edge already is), so a pane's frame is shown 1:1 while a seam rests between pixels.
+    pub fn on_pixels(self, scale: f32) -> Self {
+        let snap = |x: f64| (x * f64::from(scale)).round() / f64::from(scale);
+        let (x0, x1) = (snap(self.x), snap(self.x + self.width));
+        Self {
+            x: x0,
+            width: x1 - x0,
+            ..self
+        }
+    }
+
     /// The view's layout for this pane at `scale`: whole physical pixels, so a settled seam
     /// resizes nothing.
     pub fn layout(&self, height: f64, scale: f32) -> Layout {
@@ -204,6 +216,23 @@ mod tests {
     use super::*;
     use std::time::Instant;
     use wubble_core::model::apply;
+
+    #[test]
+    fn pane_edges_land_on_physical_pixels() {
+        let r = PageRect {
+            tab: TabId(1),
+            x: 300.3,
+            width: 299.4,
+        }
+        .on_pixels(1.5);
+        assert_eq!((r.x * 1.5, (r.x + r.width) * 1.5), (450.0, 900.0));
+        let whole = PageRect {
+            tab: TabId(1),
+            x: 0.0,
+            width: 640.0,
+        };
+        assert_eq!(whole.on_pixels(2.0), whole);
+    }
 
     fn with_tabs(n: usize) -> Model {
         (0..n).fold(Model::new(Instant::now()), |m, i| {
