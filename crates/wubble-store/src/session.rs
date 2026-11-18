@@ -1,7 +1,7 @@
 //! Session persistence: the store loads and saves `wubble_core::model::Model` directly.
 //!
 //! Not stored, because the core model has no counterpart: scroll, busy, folder collapse, openers
-//! and the id counters. Tabs come back `Discarded` (no renderer survives a restart), idle, with
+//! and the id counters. Tabs come back `Discarded` (no renderer survives a restart; the shown tab is `Active`), idle, with
 //! pin state taken from placement. Counters are derived by `Model::from_parts`.
 //!
 //! `Tab::container` is the effective container fixed at creation (Space default or per-tab
@@ -178,6 +178,14 @@ impl Store {
             }
             None => spaces[0].id,
         };
+        // The model keeps the shown tab Active; every other tab has no renderer yet.
+        let shown = spaces
+            .iter()
+            .find(|s| s.id == active_space)
+            .and_then(|s| s.active);
+        for t in tabs.iter_mut().filter(|t| Some(t.id) == shown) {
+            t.lifecycle.liveness = Liveness::Active;
+        }
         Model::from_parts(spaces, containers, tabs, active_space).map_err(Error::Corrupt)
     }
 
@@ -410,14 +418,29 @@ mod tests {
                 ..t.clone()
             })
             .collect();
+        let mut tabs: Vec<Tab> = tabs;
+        if let Some(shown) = m.visible_tab() {
+            for t in tabs.iter_mut().filter(|t| t.id == shown) {
+                t.lifecycle.liveness = Liveness::Active;
+            }
+        }
         Model::from_parts(m.spaces.clone(), m.containers.clone(), tabs, m.active_space).unwrap()
+    }
+
+    /// Model equality without the clock, which differs between any two models.
+    #[track_caller]
+    fn assert_same(a: &Model, b: &Model) {
+        assert_eq!(a.spaces, b.spaces);
+        assert_eq!(a.containers, b.containers);
+        assert_eq!(a.tabs, b.tabs);
+        assert_eq!(a.active_space, b.active_space);
     }
 
     #[test]
     fn empty_store_loads_a_new_model() {
         run(async {
             let store = Store::open_in_memory().await.unwrap();
-            assert_eq!(store.load_session().await.unwrap(), Model::new());
+            assert_same(&store.load_session().await.unwrap(), &Model::new());
         });
     }
 
@@ -436,7 +459,7 @@ mod tests {
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
             store.save_session(&m).await.unwrap();
-            assert_eq!(store.load_session().await.unwrap(), restored(&m));
+            assert_same(&store.load_session().await.unwrap(), &restored(&m));
         });
     }
 
@@ -468,7 +491,7 @@ mod tests {
             store.save_session(&rich()).await.unwrap();
             let small = new_tab(Model::new(), "https://x.test", None, None);
             store.save_session(&small).await.unwrap();
-            assert_eq!(store.load_session().await.unwrap(), restored(&small));
+            assert_same(&store.load_session().await.unwrap(), &restored(&small));
         });
     }
 
@@ -484,7 +507,7 @@ mod tests {
                 store.save_session(&bad).await,
                 Err(Error::Corrupt(_))
             ));
-            assert_eq!(store.load_session().await.unwrap(), restored(&good));
+            assert_same(&store.load_session().await.unwrap(), &restored(&good));
         });
     }
 
@@ -505,7 +528,7 @@ mod tests {
                 store.save_session(&bad).await,
                 Err(Error::Corrupt(_))
             ));
-            assert_eq!(store.load_session().await.unwrap(), restored(&m));
+            assert_same(&store.load_session().await.unwrap(), &restored(&m));
         });
     }
 
@@ -574,7 +597,7 @@ mod tests {
                 store.save_session(&m).await.unwrap();
             }
             let store = Store::open(&path).await.unwrap();
-            assert_eq!(store.load_session().await.unwrap(), restored(&m));
+            assert_same(&store.load_session().await.unwrap(), &restored(&m));
         });
     }
 
@@ -668,18 +691,20 @@ mod tests {
                     name: "Work".into(),
                 },
             ];
-            let tabs = vec![
+            let mut tabs = vec![
                 tab(10, "https://p.test", "Pinned", 0, true),
                 tab(11, "https://n.test", "Normal", 0, false),
                 tab(12, "https://f.test", "Foldered", 0, false),
                 tab(20, "https://j.test/2", "Two", 1, false),
                 tab(21, "https://j.test/1", "Override", 0, false),
             ];
+            // Space 1 is shown, so its active tab is the one live tab.
+            tabs[4].lifecycle.liveness = Liveness::Active;
             let expected = Model::from_parts(spaces, containers, tabs, SpaceId(1)).unwrap();
-            assert_eq!(store.load_session().await.unwrap(), expected);
+            assert_same(&store.load_session().await.unwrap(), &expected);
             // The migrated database also accepts a normal save.
             store.save_session(&expected).await.unwrap();
-            assert_eq!(store.load_session().await.unwrap(), expected);
+            assert_same(&store.load_session().await.unwrap(), &expected);
         });
     }
 
