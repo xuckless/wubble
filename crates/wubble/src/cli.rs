@@ -23,7 +23,7 @@ struct Cli {
     /// switch, sleep, restore and close tabs on bundled pages, then exit), `split` (two
     /// bundled pages side by side, each checked, then unsplit and exit), `page`
     /// (a bundled page's select popup, alert, context menu, find and zoom,
-    /// then exit), `block` (a bundled page's blocked requests are counted, then exit), `settings` (open and flip a setting), `pages` (open history, bookmarks, downloads and passwords on a seeded profile) or `session` (open two tabs, quit, start again and check they come back).
+    /// then exit), `block` (a bundled page's blocked requests are counted, then exit), `settings` (open and flip a setting), `pages` (open history, bookmarks, downloads and passwords on a seeded profile), `session` (open two tabs, quit, start again and check they come back) or `autofill` (fill, submit and save on a loopback sign-in page).
     /// `session-phase=1|2` is one half of `session`, run by it.
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke, conflicts_with = "measure")]
     smoke: Option<SmokeArg>,
@@ -67,6 +67,7 @@ enum SmokeArg {
     Settings,
     Pages,
     Session,
+    Autofill,
     SessionPhase(Phase),
 }
 
@@ -81,6 +82,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "settings" => Ok(SmokeArg::Settings),
         None if value == "pages" => Ok(SmokeArg::Pages),
         None if value == "session" => Ok(SmokeArg::Session),
+        None if value == "autofill" => Ok(SmokeArg::Autofill),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -89,7 +91,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
-             `pages`, `session` or `session-phase=1|2`"
+             `pages`, `session`, `autofill` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -121,6 +123,8 @@ pub enum Smoke {
     Pages,
     /// Runs both session phases on a temporary profile.
     Session,
+    /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
+    Autofill,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -205,6 +209,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
+            (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
         };
         Ok(Command::Smoke(smoke))
     }

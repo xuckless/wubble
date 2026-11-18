@@ -1,3 +1,4 @@
+mod autofill_smoke;
 mod backdrop;
 mod bar;
 mod bind;
@@ -277,6 +278,29 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Command::Smoke(Smoke::Autofill) => {
+            match with_smoke_dir(|config, dir| run(Mode::Autofill, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    autofill_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: autofill ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: autofill FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: autofill FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Session) => match smoke_session() {
             Ok(()) => {
                 println!("smoke: session ok");
@@ -502,6 +526,25 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// `--smoke autofill`: the login the key menu must offer on the smoke's page.
+fn seed_autofill_login(store: &StoreClient, port: u16) {
+    let origin = format!("http://127.0.0.1:{port}");
+    store.vault(move |vault| {
+        let Ok(origin) = wubble_vault::Origin::parse(&origin) else {
+            return;
+        };
+        let login = wubble_vault::NewLogin {
+            origin,
+            form_action_origin: None,
+            username: autofill_smoke::SEEDED_USER.into(),
+            password: zeroize::Zeroizing::new(autofill_smoke::SEEDED_PASSWORD.into()),
+        };
+        if let Err(e) = vault.save(login, 0) {
+            eprintln!("smoke: autofill: the login was not seeded: {e}");
+        }
+    });
+}
+
 /// Called after CEF has shut down (or never started), so nothing holds the directory.
 fn remove_cache(cache_dir: &Path) {
     if let Err(e) = std::fs::remove_dir_all(cache_dir)
@@ -548,6 +591,8 @@ struct Outcome {
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     pages_passed: bool,
+    /// `--smoke autofill` reached its end.
+    autofill_passed: bool,
     /// `--measure`'s report and CSV.
     measured: Option<(String, String)>,
 }
@@ -575,6 +620,8 @@ enum Mode {
     Settings,
     /// `--smoke pages`.
     Pages,
+    /// `--smoke autofill`.
+    Autofill,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -825,6 +872,8 @@ fn connect_surfaces(window: &AppWindow) {
     window.on_find_closed(|| with_host(|host| host.find_event(FindEvent::Close)));
     connect_settings(window);
     connect_pages(window);
+    window.on_autofill_menu(|i| with_host(|host| host.autofill_menu(i)));
+    window.on_autofill_answer(|i| with_host(|host| host.autofill_answer(i)));
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
@@ -896,20 +945,32 @@ fn run(
     config: Result<EngineConfig, EngineError>,
     profile: &Path,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
-    // The database loads while the GPU and CEF start.
+    // `--smoke autofill`'s pages, on a loopback port.
+    let autofill_port = matches!(mode, Mode::Autofill)
+        .then(autofill_smoke::serve)
+        .transpose()?;
     let db = Profile {
         dir: profile.into(),
     }
     .db_path();
-    // The pages smoke fills the profile first, and gives the store thread the fake keyring its
-    // vault key went into (no OS keyring prompt).
-    let (store, loaded) = if matches!(mode, Mode::Pages) {
-        let keyring = wubble_vault::FakeKeyRing::default();
-        pages_smoke::seed(&db, &keyring)?;
-        StoreClient::spawn_with(db, keyring)
-    } else {
-        StoreClient::spawn(db)
+    // The browser keeps the vault's key in the OS keyring; smokes run on
+    // throwaway profiles and never touch it. The pages smoke fills the
+    // profile first, its vault key going into the fake keyring the store
+    // thread then gets.
+    let keyring: Box<dyn wubble_vault::KeyRing + Send> = match mode {
+        Mode::Browse { .. } => Box::new(wubble_vault::OsKeyRing),
+        Mode::Pages => {
+            let keyring = wubble_vault::FakeKeyRing::default();
+            pages_smoke::seed(&db, &keyring)?;
+            Box::new(keyring)
+        }
+        _ => Box::new(wubble_vault::FakeKeyRing::default()),
     };
+    // The database loads while the GPU and CEF start.
+    let (store, loaded) = StoreClient::spawn(db, keyring);
+    if let Some(port) = autofill_port {
+        seed_autofill_login(&store, port);
+    }
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
     slint::BackendSelector::new()
@@ -936,6 +997,7 @@ fn run(
         split_smoke: None,
         settings_smoke: None,
         pages_smoke: None,
+        autofill_smoke: None,
         begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
@@ -1008,6 +1070,13 @@ fn run(
             Some(page_url(BLOCK_PAGE)),
             Checks {
                 block_smoke: Some(block_smoke::BlockSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Autofill => (
+            autofill_port.map(|port| format!("http://127.0.0.1:{port}/")),
+            Checks {
+                autofill_smoke: Some(autofill_smoke::AutofillSmoke::default()),
                 ..none
             },
         ),
@@ -1133,6 +1202,7 @@ fn run(
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,
+        autofill_passed: host.autofill_passed,
         measured,
     })
 }

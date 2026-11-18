@@ -10,6 +10,7 @@ import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
+import { AutofillAnswer, AutofillMenu, AutofillView } from "components/autofill-menu.slint";
 import { ErrorPanel } from "components/error-panel.slint";
 import { SettingsPage } from "components/settings.slint";
 import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage } from "components/pages.slint";
@@ -26,6 +27,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
+export { AutofillAnswer, AutofillView }
 export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState }
 
 export component AppWindow inherits Window {
@@ -258,6 +260,10 @@ export component AppWindow inherits Window {
     in property <PermissionView> permission;
     // (allow, remember for this site)
     callback permission-answered(bool, bool);
+    // Password autofill: the key chip, its menu and the save prompt (host/autofill.rs).
+    in property <AutofillView> autofill;
+    callback autofill-menu(int);
+    callback autofill-answer(AutofillAnswer);
     in property <ErrorView> page-error;
     // The settings page (wubble://settings), shown while the visible tab is on it; the host fills
     // it from the settings table and takes every change through these callbacks.
@@ -892,6 +898,18 @@ export component AppWindow inherits Window {
         prompt: root.permission;
         answered(allow, remember) => {
             root.permission-answered(allow, remember);
+        }
+    }
+
+    AutofillMenu {
+        x: permission-ui.x;
+        y: permission-ui.y + (root.permission.open ? permission-ui.height + Shell.prompt-gap : 0px);
+        view: root.autofill;
+        menu(i) => {
+            root.autofill-menu(i);
+        }
+        answer(a) => {
+            root.autofill-answer(a);
         }
     }
 

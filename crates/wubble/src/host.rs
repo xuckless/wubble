@@ -14,6 +14,7 @@
 //! on the store's recently-closed list. Keys become actions through the
 //! keymap, and every action runs through [`Host::perform`].
 
+mod autofill;
 mod downloads;
 mod pages;
 mod panes;
@@ -212,6 +213,7 @@ pub struct Checks {
     pub split_smoke: Option<SplitSmoke>,
     pub settings_smoke: Option<SettingsSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
+    pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
     pub begin_frames: bool,
 }
@@ -339,6 +341,10 @@ pub struct Host {
     pub page_zoom: Option<u32>,
     /// The blocked count `--smoke block` passed with.
     pub blocked_seen: Option<u32>,
+    /// `--smoke autofill` reached its end.
+    pub autofill_passed: bool,
+    /// Password autofill per tab (`host/autofill.rs`).
+    autofill: autofill::Autofill,
     /// The content blocker, whose per-view counts the tab rows show.
     blocking: Arc<Blocking>,
     /// Remembered permission decisions (one owner; stored through the store).
@@ -456,6 +462,8 @@ impl Host {
             find_focus: 0,
             page_zoom: None,
             blocked_seen: None,
+            autofill_passed: false,
+            autofill: autofill::Autofill::new(),
             blocking,
             site_permissions,
             cert_exceptions: CertExceptions::default(),
@@ -729,6 +737,7 @@ impl Host {
             self.fail(e);
         }
         self.split_smoke_step(&window);
+        self.autofill_smoke_worked();
         let framed = self
             .model
             .visible_tab()
@@ -904,12 +913,14 @@ impl Host {
                 }
             }
             WebEvent::UrlChanged(url) => {
+                self.autofill_navigated(tab, &url);
                 self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
                 self.restore_zoom(tab, &url);
                 self.dispatch(Command::UrlChanged { tab, url });
             }
             WebEvent::TitleChanged(title) => {
+                self.autofill_smoke_step(crate::autofill_smoke::Input::Title(&title));
                 if let Some(url) = self.committed.get(&tab)
                     && wubble_store::is_recordable(url)
                 {

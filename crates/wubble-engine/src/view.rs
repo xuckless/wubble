@@ -594,6 +594,12 @@ impl View {
                     windows_key_code,
                     modifiers,
                 ))),
+                CefSurfaceEvent::FrameMessage {
+                    frame_id,
+                    frame_url,
+                    is_main,
+                    text,
+                } => self.emit_page(frame_message(frame_id, frame_url, is_main, text), mode),
                 CefSurfaceEvent::ScriptCompleted { id, result } => {
                     let audible = result.ok().and_then(|json| json.trim().parse().ok());
                     self.apply_probe(ProbeInput::Answered {
@@ -719,6 +725,22 @@ impl View {
                 self.answer_download_path(id, None);
             }
             _ => {}
+        }
+    }
+
+    /// Hands `text` to the context script in the frame `frame` (a
+    /// [`PageEvent::FrameMessage`]'s frame id). False when that frame is
+    /// gone. `text` is never logged.
+    pub fn send_frame_message(&mut self, frame: &str, text: &str) -> bool {
+        match self.producer.send_frame_message(frame, text) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!(
+                    "wubble-engine: view {}: frame message not sent: {e}",
+                    self.browser_id
+                );
+                false
+            }
         }
     }
 
@@ -1229,6 +1251,18 @@ enum Route {
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
+/// welding's frame message as the host's event: the frame as CEF named it.
+fn frame_message(frame_id: String, frame_url: String, is_main: bool, text: String) -> PageEvent {
+    PageEvent::FrameMessage {
+        frame: crate::page::FrameInfo {
+            id: frame_id,
+            url: frame_url,
+            is_main,
+        },
+        text: wubble_core::secret::Secret::from(text),
+    }
+}
+
 fn route(event: NavigationEvent) -> Vec<Route> {
     use NavigationEvent as E;
     let one = |r| vec![r];
@@ -1820,6 +1854,27 @@ mod tests {
             let closes = effects.iter().filter(|e| **e == Close).count();
             assert_eq!((reports, closes), (1, 1), "{path:?}");
         }
+    }
+
+    #[test]
+    fn a_frame_message_carries_cefs_frame() {
+        let event = frame_message("7-3".into(), "https://a.test/f".into(), false, "{}".into());
+        let PageEvent::FrameMessage { frame, text } = &event else {
+            panic!("{event:?}");
+        };
+        assert_eq!(
+            frame,
+            &crate::page::FrameInfo {
+                id: "7-3".into(),
+                url: "https://a.test/f".into(),
+                is_main: false,
+            }
+        );
+        assert_eq!(text.expose(), "{}");
+        assert!(event.request().is_none());
+        // The text never shows in diagnostics.
+        let secret = frame_message("1".into(), "u".into(), true, "pw-value".into());
+        assert!(!format!("{secret:?}").contains("pw-value"));
     }
 
     fn route_one(event: NavigationEvent) -> Route {

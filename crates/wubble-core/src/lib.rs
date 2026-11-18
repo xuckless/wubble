@@ -4,6 +4,7 @@
 
 pub mod action;
 pub mod apply;
+pub mod autofill;
 pub mod bow;
 pub mod download;
 pub mod favicon;
@@ -18,6 +19,7 @@ pub mod pages;
 pub mod pump;
 pub mod scroller;
 pub mod seam;
+pub mod secret;
 pub mod session;
 pub mod settings;
 pub mod site;

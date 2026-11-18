@@ -10,7 +10,6 @@
 //! username and password"), BSD-3-Clause; strings only.
 
 use std::collections::VecDeque;
-use std::fmt;
 
 use wubble_core::site::{self, Decision, Permission, SitePermissions, Verdict};
 use wubble_engine::page::{PermissionKind, RequestId};
@@ -212,15 +211,8 @@ pub fn permission_text(r: &PermissionRequest) -> (String, Vec<&'static str>) {
 
 // ------------------------------------------------------------------- auth
 
-/// A typed password: never printed.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct Secret(pub String);
-
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Secret(..)")
-    }
-}
+/// A typed password: never printed, wiped on drop.
+pub use wubble_core::secret::Secret;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthRequest {
@@ -331,7 +323,12 @@ mod tests {
             StorageAccess,
         ];
         let mapped: Vec<Permission> = prompted.iter().filter_map(|&k| permission_of(k)).collect();
-        assert_eq!(mapped.len(), Permission::ALL.len());
+        // Every kind but the save-password decision, which no page asks for.
+        let asked = Permission::ALL
+            .iter()
+            .filter(|&&p| p != Permission::SavePasswords)
+            .count();
+        assert_eq!(mapped.len(), asked);
         for never in [
             ProtectedMediaIdentifier,
             DesktopAudioCapture,
@@ -561,7 +558,7 @@ mod tests {
             s,
             AuthEvent::Submit {
                 user: "u".into(),
-                password: Secret("p".into()),
+                password: Secret::from("p"),
             },
         );
         assert_eq!(s, Auth::None);
@@ -569,7 +566,7 @@ mod tests {
             a,
             Some(AuthAnswer {
                 id: RequestId(1),
-                credentials: Some(("u".into(), Secret("p".into())))
+                credentials: Some(("u".into(), Secret::from("p")))
             })
         );
         let (s, _) = auth(Auth::None, challenge(2));
@@ -591,7 +588,7 @@ mod tests {
     fn a_password_is_never_printed() {
         let e = AuthEvent::Submit {
             user: "u".into(),
-            password: Secret("hunter2".into()),
+            password: Secret::from("hunter2"),
         };
         assert!(!format!("{e:?}").contains("hunter2"));
     }

@@ -44,6 +44,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke page   # window drives a select popup, an alert, a context menu, find and zoom, exits; run by hand only
     cargo run -p wubble -- --smoke session   # two tabs saved, restarted and restored on a temp profile; two windows, exits; run by hand only
     cargo run -p wubble -- --smoke settings   # window opens wubble://settings, flips a setting through its toggle, reads the store back, exits; run by hand only
+    cargo run -p wubble -- --smoke autofill   # loopback sign-in page, fake keyring: fill from the key menu, submit, save prompt, vault row; exits; run by hand only
     cargo run -p wubble-engine --example block_smoke   # windowless: the request-filter hook cancels a script and runs the commit script (a stand-in filter, not wubble-blocker), exits; run by hand only
     cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)

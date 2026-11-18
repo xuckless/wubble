@@ -684,7 +684,7 @@ impl Host {
     // ----- passwords
 
     fn vault_request(&mut self, command: VaultCommand, then: Then) {
-        self.store.vault(command, move |answer| {
+        self.store.vault_command(command, move |answer| {
             let _ = slint::invoke_from_event_loop(move || {
                 with_host(|host| host.vault_answered(then, answer));
             });

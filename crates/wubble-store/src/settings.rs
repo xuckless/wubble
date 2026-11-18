@@ -168,6 +168,8 @@ settings! {
     GlassQuality: GlassSetting = defs::GLASS_QUALITY;
     /// Read before the window exists: off, the shell runs Slint-only glass.
     GlassScene: bool = defs::GLASS_SCENE;
+    PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
+    PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

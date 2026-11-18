@@ -15,9 +15,12 @@ wubble-ui.workspace = true
 slint.workspace = true
 clap.workspace = true
 wubble-store.workspace = true
-wubble-vault.workspace = true
-zeroize = "1"
 wubble-blocker.workspace = true
+wubble-vault.workspace = true
+# The autofill fill message (`host/autofill.rs`).
+serde_json.workspace = true
+# Passwords handed to the vault (`host/autofill.rs`, the passwords page); already in Cargo.lock.
+zeroize = "1"
 # Drives the store's async methods on its own thread; already in Cargo.lock
 # through wubble-store's tests.
 pollster = "0.4"

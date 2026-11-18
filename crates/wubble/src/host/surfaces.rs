@@ -112,6 +112,7 @@ impl Host {
             Routed::Download(e) => self.download_event(window, tab, e),
             Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
+            Routed::Frame { frame, text } => self.autofill_message(tab, frame, &text),
             Routed::Pdf { path, text } => {
                 self.downloads.finish_pdf(&path);
                 self.toast(window, &text);
@@ -170,7 +171,7 @@ impl Host {
             let credentials = answer
                 .credentials
                 .as_ref()
-                .map(|(user, Secret(password))| (user.as_str(), password.as_str()));
+                .map(|(user, password)| (user.as_str(), password.expose()));
             view.answer_auth(answer.id, credentials);
         }
     }
@@ -318,6 +319,7 @@ impl Host {
             self.surfaces.insert(tab, s.view_gone());
         }
         self.downloads_lost(tab);
+        self.autofill_gone(tab);
         self.audio.remove(&tab);
         if let Some(window) = self.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
@@ -375,6 +377,7 @@ impl Host {
             window.set_popup_frame(slint::Image::default());
         }
         window.set_page_fullscreen(matches!(self.screen, Screen::Page { .. }));
+        self.render_autofill(window, tab);
         self.drawn = Drawn {
             tab,
             menu: current.menu,
@@ -398,7 +401,7 @@ impl Host {
             let event = if accept {
                 AuthEvent::Submit {
                     user: text.into(),
-                    password: Secret(secret.into()),
+                    password: Secret::from(secret),
                 }
             } else {
                 AuthEvent::Cancel

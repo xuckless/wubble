@@ -259,6 +259,17 @@ pub enum EditCommand {
     SelectAll,
 }
 
+/// A frame of the page as the browser process sees it (CEF's own frame), not
+/// as the page describes itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameInfo {
+    /// CEF's frame identifier: [`crate::view::View::send_frame_message`] names it.
+    pub id: String,
+    /// The frame's URL when the message arrived.
+    pub url: String,
+    pub is_main: bool,
+}
+
 /// What the host learns about a page beyond navigation, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageEvent {
@@ -424,6 +435,13 @@ pub enum PageEvent {
         allowed: DragOps,
         x: i32,
         y: i32,
+    },
+    /// The context script (wubble-helper's `autofill.js`) in `frame` sent
+    /// `text`. It may hold form values, so it is a `Secret`: never printed.
+    /// Answer with `View::send_frame_message`.
+    FrameMessage {
+        frame: FrameInfo,
+        text: wubble_core::secret::Secret,
     },
 }
 

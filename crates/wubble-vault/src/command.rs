@@ -80,7 +80,7 @@ impl fmt::Debug for VaultAnswer {
 }
 
 /// What an unlock means for the page.
-fn status_of(outcome: UnlockOutcome) -> VaultStatus {
+pub fn status_of(outcome: UnlockOutcome) -> VaultStatus {
     match outcome {
         UnlockOutcome::Ready | UnlockOutcome::NewKey { unreadable: 0 } => VaultStatus::Unlocked,
         UnlockOutcome::NewKey { unreadable: rows } | UnlockOutcome::Unreadable { rows } => {

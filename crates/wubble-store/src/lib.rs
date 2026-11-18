@@ -35,8 +35,9 @@ pub use migrate::MIGRATIONS;
 pub use settings::{
     BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality, GlassScene,
     HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll,
-    OverlayScrollbars, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
-    SleepDiscardAfter, SleepFreezeAfter, SleepKeepPinned, ZoomDefault, text_of,
+    OverlayScrollbars, PasswordsAutofill, PasswordsOfferToSave, SearchEngineChoice, Setting,
+    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    SleepKeepPinned, ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

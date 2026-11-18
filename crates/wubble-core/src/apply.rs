@@ -43,6 +43,29 @@ impl GlassSetting {
     }
 }
 
+/// `passwords.*` (`settings::PASSWORDS_OFFER_TO_SAVE`, `settings::PASSWORDS_AUTOFILL`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasswordSettings {
+    pub offer_to_save: bool,
+    pub autofill: bool,
+}
+
+impl PasswordSettings {
+    /// The two rows' values in `stored` (defaults when absent).
+    pub fn from_stored(stored: &HashMap<String, String>) -> Self {
+        Self {
+            offer_to_save: flag(&settings::PASSWORDS_OFFER_TO_SAVE, stored),
+            autofill: flag(&settings::PASSWORDS_AUTOFILL, stored),
+        }
+    }
+}
+
+impl Default for PasswordSettings {
+    fn default() -> Self {
+        Self::from_stored(&HashMap::new())
+    }
+}
+
 /// A setting's live effect, for the host to execute.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Applied {
@@ -60,6 +83,7 @@ pub enum Applied {
     Keymap(Vec<String>),
     Sleep(SleepPolicy),
     Glass(GlassSetting),
+    Passwords(PasswordSettings),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -124,6 +148,9 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
             ))
         }
         k if k == s::GLASS_QUALITY.key => Applied::Glass(GlassSetting::from_id(v)?),
+        k if [s::PASSWORDS_OFFER_TO_SAVE.key, s::PASSWORDS_AUTOFILL.key].contains(&k) => {
+            Applied::Passwords(PasswordSettings::from_stored(stored))
+        }
         _ => return None,
     })
 }
@@ -234,6 +261,25 @@ mod tests {
         assert_eq!(
             effect_of("search.engine", &HashMap::new()),
             Some(Applied::SearchEngine(None))
+        );
+    }
+
+    #[test]
+    fn password_rows_make_one_value_on_by_default() {
+        assert_eq!(
+            PasswordSettings::default(),
+            PasswordSettings {
+                offer_to_save: true,
+                autofill: true,
+            }
+        );
+        let s = stored(&[("passwords.autofill", "0")]);
+        assert_eq!(
+            effect_of("passwords.offer_to_save", &s),
+            Some(Applied::Passwords(PasswordSettings {
+                offer_to_save: true,
+                autofill: false,
+            }))
         );
     }
 

@@ -252,6 +252,39 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `on_accelerated_paint` stamps `arrived`, retains and wraps the surface,
    copies it and stores `NativeFrame::Copied` (view and popup); new `on_paint`
    counts CPU fallback frames.
+26. **Context script in every frame.** `app.rs`: `WeldRenderProcessHandler`
+   takes `context_script: Option<&'static str>` (`WeldApp::build`'s third
+   argument; `None` everywhere but the new
+   `CefRuntime::{try_,}run_subprocess_with_script`, which wubble-helper calls
+   with its `autofill.js`). `on_context_created` evaluates the script (a
+   function expression) in the frame's new V8 context and calls it with two
+   native functions from a `wrap_v8_handler!` (`ContextNatives`): `send(text)`
+   posts a `FRAME_MESSAGE` (`"wubble.frame"`, at most
+   `MAX_FRAME_MESSAGE_BYTES`) to the browser from that frame; `register(fn)`
+   keeps `fn` and its context per frame id in a renderer thread-local.
+   Neither is put on `window`: page code has no name for them (closure
+   capture; CEF 156 has no isolated worlds and no `cef_register_extension`).
+   `on_context_released` drops the frame's entry if it is that context's;
+   a browser `FRAME_MESSAGE` in `on_process_message_received` calls the
+   registered function with the text inside its context. Pattern: cefclient
+   `client_renderer.cc` and cef-rs `wrapper/message_router.rs` (BSD-3-Clause;
+   MIT OR Apache-2.0). Not unit-tested (V8 needs a renderer); `--smoke
+   autofill` runs it.
+27. **Frame messages, browser side.** `surface.rs`: new
+   `CefSurfaceEvent::FrameMessage { frame_id, frame_url, is_main, text }`,
+   `WebEventQueue::push_frame_message` (drops text over
+   `MAX_FRAME_MESSAGE_BYTES` = 256 KiB and anything past
+   `MAX_PENDING_FRAME_MESSAGES` = 64 queued, a count not a rate), and
+   `CefSurfaceProducer::send_frame_message(frame_id, text)` (default
+   `PlatformUnsupported`). `handlers.rs`: shared `frame_message_received`
+   (the frame's id, URL and `is_main` read from CEF's `CefFrame`, never from
+   the text) and `send_frame_message` (`Browser::frame_by_identifier`, `Err`
+   when the frame is gone). The three platform clients call
+   `frame_message_received` first in `on_process_message_received`; the three
+   producers implement `send_frame_message` (Windows through its browser
+   accessor). Tests: order with the other events, the size cap, the pending
+   cap and room again after a drain. Not unit-tested: an unknown frame id
+   (needs a live browser).
 
 ## Not changed, on purpose
 

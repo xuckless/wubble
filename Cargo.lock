@@ -7883,6 +7883,7 @@ dependencies = [
  "opener",
  "pollster 0.4.0",
  "rfd",
+ "serde_json",
  "slint",
  "tempfile",
  "wubble-blocker",
@@ -7921,6 +7922,7 @@ dependencies = [
  "chrono",
  "serde_json",
  "url",
+ "zeroize",
 ]
 
 [[package]]

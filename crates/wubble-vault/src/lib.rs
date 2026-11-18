@@ -32,7 +32,7 @@ pub mod store;
 pub mod store_adapter;
 pub mod vault;
 
-pub use command::{VaultAnswer, VaultCommand};
+pub use command::{VaultAnswer, VaultCommand, status_of};
 pub use generate::{GenError, GeneratorOptions, generate};
 pub use import::{ApplyReport, Import, ImportError, ImportRow, apply, parse_csv};
 pub use keyring::{FakeKeyRing, KeyRing, OsKeyRing};
