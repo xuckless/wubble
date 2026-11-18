@@ -2,19 +2,27 @@
 //!
 //! [`Engine`] owns the CEF runtime (via `welding::CefRuntime`, which sets
 //! windowless rendering, the external message pump and `cef::shutdown` on drop).
-//! The host loop calls [`Engine::tick`] repeatedly on the thread that started
-//! the engine; every lifecycle change goes through [`state::transition`] and
-//! its effects run in one place, `Engine::execute`.
+//! CEF schedules its own pumping: [`EngineConfig::pump_scheduler`] receives
+//! each request on any thread, the host hands it to [`Engine::schedule_pump`]
+//! on the thread that started the engine and runs the one timer the engine
+//! asks for ([`PumpOutcome`]). The scheduling rules are the pure
+//! [`wubble_core::pump::transition`]; every lifecycle change goes through
+//! [`state::transition`]. Their effects run in `Engine::pump` and
+//! `Engine::execute`.
 
 pub mod state;
 
 use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use state::{Effect, Event, State};
+pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
+use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
+use crate::nav::WebEvent;
 use crate::view::{View, ViewConfig};
 
 /// Sandbox off on every platform for now (TODO.md, M1 "Sandbox enabled").
@@ -31,6 +39,11 @@ pub struct EngineConfig {
     /// Never left to CEF's shared default (`~/.config/cef_user_data`), which
     /// other CEF apps and concurrent wubble processes would also lock.
     pub cache_dir: PathBuf,
+    /// Receives CEF's pump requests (delay in ms, `<= 0` = now) on any thread;
+    /// it must only forward them to [`Engine::schedule_pump`] on the engine's
+    /// thread. `None` without a host event loop: the caller drives CEF with
+    /// [`Engine::tick`] instead.
+    pub pump_scheduler: Option<PumpScheduler>,
 }
 
 impl EngineConfig {
@@ -45,6 +58,7 @@ impl EngineConfig {
         Ok(Self {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
+            pump_scheduler: None,
         })
     }
 }
@@ -151,6 +165,7 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
         .iter()
         .map(|(name, value)| ((*name).into(), value.map(Into::into)))
         .collect();
+    cef.pump_scheduler = config.pump_scheduler.clone();
     cef
 }
 
@@ -171,16 +186,38 @@ fn nul_terminated(bytes: &'static [u8]) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ViewId(usize);
 
+/// What the host must do with its single-shot pump timer after a pump call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PumpTimer {
+    /// (Re)arm it; call [`Engine::pump_timer_fired`] when it fires.
+    Start(Duration),
+    Cancel,
+}
+
+/// The result of one pump call.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PumpOutcome {
+    /// The last timer request (a later one replaces an earlier one).
+    pub timer: Option<PumpTimer>,
+    /// CEF did work, so views may have new frames.
+    pub worked: bool,
+    /// What the views reported during that work, in order.
+    pub events: Vec<(ViewId, WebEvent)>,
+}
+
 /// The running CEF process. Drive it only from the thread that started it.
 pub struct Engine {
     /// Open views, each counted in `state` until it reports itself closed.
     /// Declared before `runtime` so views drop before CEF shuts down.
     views: Vec<(ViewId, View)>,
     next_view: usize,
+    /// CPU fallback frames of views already dropped, so the total never shrinks.
+    closed_cpu_fallback: u64,
     /// `Some` exactly while `state` is Running or ShuttingDown: an Engine only
     /// exists after CEF initialised, and `Effect::ShutdownCef` takes it.
     runtime: Option<CefRuntime>,
     state: State,
+    pump: PumpState,
 }
 
 impl Engine {
@@ -200,14 +237,29 @@ impl Engine {
         let mut engine = Self {
             views: Vec::new(),
             next_view: 0,
+            closed_cpu_fallback: 0,
             runtime: Some(runtime),
             state: State::Uninitialised,
+            pump: PumpState::default(),
         };
         engine.apply(Event::Initialised);
         Ok(engine)
     }
 
-    /// Lets CEF do its pending work. Call regularly from the host loop.
+    /// CEF asked (through [`EngineConfig::pump_scheduler`]) for work after
+    /// `delay_ms`. The host should also call it once with 0 to start pumping.
+    pub fn schedule_pump(&mut self, delay_ms: i64) -> PumpOutcome {
+        self.pump(PumpEvent::Schedule(delay_ms))
+    }
+
+    /// The timer from the last [`PumpTimer::Start`] fired.
+    pub fn pump_timer_fired(&mut self) -> PumpOutcome {
+        self.pump(PumpEvent::TimerFired)
+    }
+
+    /// Runs CEF's pending work now, for callers without an event loop
+    /// (`--smoke boot`, the shutdown drain). Timer requests are dropped: the
+    /// caller simply ticks again.
     pub fn tick(&mut self) {
         self.apply(Event::Tick);
     }
@@ -242,6 +294,50 @@ impl Engine {
             .find_map(|(view_id, view)| (*view_id == id).then_some(view))
     }
 
+    /// Asks CEF to close one view. It stays counted (and reachable through
+    /// [`Self::view`]) until CEF reports it gone on a later pump. Unknown or
+    /// already closing views are ignored.
+    pub fn close_view(&mut self, id: ViewId) {
+        if let Some(view) = self.view(id) {
+            view.close();
+        }
+    }
+
+    /// The engine still holds the view (CEF has not reported it closed).
+    pub fn has_view(&self, id: ViewId) -> bool {
+        self.views.iter().any(|(view_id, _)| *view_id == id)
+    }
+
+    /// The view is open and CEF believes it visible.
+    pub fn is_visible(&self, id: ViewId) -> bool {
+        self.views
+            .iter()
+            .any(|(view_id, view)| *view_id == id && view.is_open() && view.is_visible())
+    }
+
+    /// Views CEF has not yet reported closed, closing ones included.
+    pub fn view_count(&self) -> usize {
+        self.views.len()
+    }
+
+    /// Open views CEF believes visible.
+    pub fn visible_views(&self) -> usize {
+        self.views
+            .iter()
+            .filter(|(_, view)| view.is_open() && view.is_visible())
+            .count()
+    }
+
+    /// CPU `OnPaint` frames across every view so far, closed ones included;
+    /// `None` where welding does not count them.
+    pub fn cpu_fallback_frames(&self) -> Option<u64> {
+        self.views
+            .iter()
+            .try_fold(self.closed_cpu_fallback, |sum, (_, view)| {
+                view.cpu_fallback_frames().map(|n| sum + n)
+            })
+    }
+
     fn apply(&mut self, event: Event) {
         let (next, effects) = state::transition(self.state, event);
         self.state = next;
@@ -250,17 +346,48 @@ impl Engine {
         }
     }
 
+    /// Feeds `event` to the pump scheduler and runs its effects: work runs
+    /// here, each followed by its `WorkDone`; timer requests go to the host.
+    /// Nothing happens unless CEF is up.
+    fn pump(&mut self, event: PumpEvent) -> PumpOutcome {
+        let mut outcome = PumpOutcome::default();
+        if !self.state.pumps() {
+            return outcome;
+        }
+        let mut next = Some(event);
+        while let Some(event) = next.take() {
+            let (state, effects) = pump::transition(self.pump, event);
+            self.pump = state;
+            for effect in effects {
+                match effect {
+                    PumpEffect::StartTimer(delay) => outcome.timer = Some(PumpTimer::Start(delay)),
+                    PumpEffect::CancelTimer => outcome.timer = Some(PumpTimer::Cancel),
+                    PumpEffect::RunWork => {
+                        outcome.events.extend(self.run_work());
+                        outcome.worked = true;
+                        next = Some(PumpEvent::WorkDone);
+                    }
+                }
+            }
+        }
+        outcome
+    }
+
+    /// One `do_message_loop_work`, then the views' callbacks it produced.
+    fn run_work(&mut self) -> Vec<(ViewId, WebEvent)> {
+        if let Some(runtime) = &self.runtime {
+            runtime.do_message_loop_work();
+        }
+        self.reap_closed_views()
+    }
+
     /// The only place lifecycle effects touch CEF.
     fn execute(&mut self, effect: Effect) {
         match effect {
-            // Re-entrancy cannot happen yet: `tick` takes `&mut self` and no
-            // CEF callback reaches the Engine. Port CEF's guard
-            // (main_message_loop_external_pump.cc) with the schedule-driven pump.
+            // Synchronous pumps (tick, shutdown) have no host to hear the
+            // views' web events; they are dropped.
             Effect::PumpOnce => {
-                if let Some(runtime) = &self.runtime {
-                    runtime.do_message_loop_work();
-                }
-                self.reap_closed_views();
+                self.pump(PumpEvent::Schedule(0));
             }
             // Each closing view reports Event::BrowserClosed from a later
             // pump (`reap_closed_views`); the host's drain loop ends on Stopped.
@@ -274,13 +401,25 @@ impl Engine {
         }
     }
 
-    /// Drops views CEF has let go of and reports each one to the lifecycle.
-    fn reap_closed_views(&mut self) {
+    /// Collects the views' events, drops views CEF reported closed and
+    /// reports each one to the lifecycle.
+    fn reap_closed_views(&mut self) -> Vec<(ViewId, WebEvent)> {
+        let mut events = Vec::new();
         let before = self.views.len();
-        self.views.retain_mut(|(_, view)| !view.poll_closed());
+        let mut gone_cpu = 0;
+        self.views.retain_mut(|(id, view)| {
+            let (new, closed) = view.drain_events();
+            events.extend(new.into_iter().map(|event| (*id, event)));
+            if closed {
+                gone_cpu += view.cpu_fallback_frames().unwrap_or(0);
+            }
+            !closed
+        });
+        self.closed_cpu_fallback += gone_cpu;
         for _ in self.views.len()..before {
             self.apply(Event::BrowserClosed);
         }
+        events
     }
 }
 
@@ -292,6 +431,7 @@ mod tests {
         EngineConfig {
             exe_dir: PathBuf::from(exe_dir),
             cache_dir: PathBuf::from(cache_dir),
+            pump_scheduler: None,
         }
     }
 
@@ -354,6 +494,20 @@ mod tests {
     }
 
     #[test]
+    fn pump_scheduler_reaches_welding() {
+        assert!(
+            cef_config(&config("/opt/wubble", "/c"))
+                .pump_scheduler
+                .is_none()
+        );
+        let with = EngineConfig {
+            pump_scheduler: Some(PumpScheduler::new(|_| {})),
+            ..config("/opt/wubble", "/c")
+        };
+        assert!(cef_config(&with).pump_scheduler.is_some());
+    }
+
+    #[test]
     fn helper_missing_says_how_to_fix_it() {
         let err = EngineError::HelperMissing {
             path: PathBuf::from("/x/wubble-helper"),
@@ -369,6 +523,7 @@ mod tests {
         let err = Engine::start(EngineConfig {
             exe_dir: dir.clone(),
             cache_dir: dir,
+            pump_scheduler: None,
         })
         .err();
         assert!(matches!(err, Some(EngineError::HelperMissing { .. })));

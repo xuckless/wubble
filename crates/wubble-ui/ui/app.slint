@@ -25,6 +25,21 @@ export component AppWindow inherits Window {
     out property <length> content-width: content.width;
     out property <length> content-height: content.height;
 
+    // Input over the web content, in view-relative logical pixels. The host
+    // forwards it to the page; nothing here interprets it.
+    // The page's pointer shape: an index into `cursors`.
+    in property <int> web-cursor;
+    // The web content has keyboard focus (the host sends it keys only then).
+    out property <bool> web-focused: web-focus.has-focus;
+    callback web-pointer-moved(x: length, y: length);
+    callback web-pointer-left(x: length, y: length);
+    callback web-pointer-pressed(button: PointerEventButton, x: length, y: length);
+    callback web-pointer-released(button: PointerEventButton, x: length, y: length);
+    // The pointer grab ended without a release.
+    callback web-pointer-cancelled();
+    callback web-scrolled(x: length, y: length, delta-x: length, delta-y: length);
+    callback web-focus-changed(focused: bool);
+
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
     in property <[TabItem]> pinned-tabs <=> sidebar.pinned-tabs;
@@ -45,6 +60,8 @@ export component AppWindow inherits Window {
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
     callback address-focus-requested();
+    // Ctrl+W: close the visible tab.
+    callback close-tab-requested();
 
     public function request-new-tab() {
         bar.dispatch(CommandBarEvent.open);
@@ -55,6 +72,27 @@ export component AppWindow inherits Window {
         bar.dispatch(CommandBarEvent.open);
         root.address-focus-requested();
     }
+
+    // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
+    // out of range shows the default.
+    property <[MouseCursor]> cursors: [
+        MouseCursor.default,
+        MouseCursor.none,
+        MouseCursor.pointer,
+        MouseCursor.text,
+        MouseCursor.wait,
+        MouseCursor.progress,
+        MouseCursor.crosshair,
+        MouseCursor.move,
+        MouseCursor.not-allowed,
+        MouseCursor.help,
+        MouseCursor.grab,
+        MouseCursor.grabbing,
+        MouseCursor.ns-resize,
+        MouseCursor.ew-resize,
+        MouseCursor.nesw-resize,
+        MouseCursor.nwse-resize,
+    ];
 
     root-keys := FocusScope {
         KeyBinding {
@@ -67,6 +105,12 @@ export component AppWindow inherits Window {
             keys: @keys(Control + L);
             activated => {
                 root.request-address-focus();
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + W);
+            activated => {
+                root.close-tab-requested();
             }
         }
 
@@ -95,9 +139,42 @@ export component AppWindow inherits Window {
                     source-clip-height: root.web-frame-clip-height;
                     image-fit: fill;
                 }
+                // Over the frame and under the command bar, so the bar takes
+                // its own pointer events and the page only gets the rest.
+                web-focus := FocusScope {
+                    width: 100%;
+                    height: 100%;
+                    changed has-focus => {
+                        root.web-focus-changed(self.has-focus);
+                    }
+                    TouchArea {
+                        mouse-cursor: root.cursors[root.web-cursor];
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down {
+                                web-focus.focus();
+                                root.web-pointer-pressed(event.button, self.mouse-x, self.mouse-y);
+                            } else if event.kind == PointerEventKind.up {
+                                root.web-pointer-released(event.button, self.mouse-x, self.mouse-y);
+                            } else if event.kind == PointerEventKind.move {
+                                root.web-pointer-moved(self.mouse-x, self.mouse-y);
+                            } else {
+                                root.web-pointer-cancelled();
+                            }
+                        }
+                        scroll-event(event) => {
+                            root.web-scrolled(self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                            accept
+                        }
+                        changed has-hover => {
+                            if !self.has-hover {
+                                root.web-pointer-left(self.mouse-x, self.mouse-y);
+                            }
+                        }
+                    }
+                }
                 bar := CommandBar {
                     closed => {
-                        root-keys.focus();
+                        web-focus.focus();
                     }
                 }
             }
@@ -105,6 +182,6 @@ export component AppWindow inherits Window {
     }
 
     init => {
-        root-keys.focus();
+        web-focus.focus();
     }
 }

@@ -19,10 +19,12 @@
 //! cannot be in two places. What types cannot express is checked by [`Model::check`].
 
 use std::collections::BTreeMap;
+use std::time::Instant;
 
-use crate::lifecycle::Lifecycle;
+use crate::lifecycle::{self, Activity, Lifecycle, Pin};
+use crate::sleep::{Pressure, SleepPolicy};
 use crate::space::{Container, ContainerId, Folder, FolderId, Item, Rgb, Space, SpaceId};
-use crate::tab::{Tab, TabId};
+use crate::tab::{Liveness, Tab, TabId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -44,7 +46,9 @@ pub enum Dest {
 pub enum Command {
     /// Ctrl+T: only shows the command bar; a tab exists once something is chosen.
     OpenCommandBar,
-    /// Into the active Space. `container: None` uses the Space default.
+    /// Into the active Space and shown. With a live `opener` (a popup), into the
+    /// opener's Space right after it, shown only if the opener is the visible tab.
+    /// `container: None` uses the Space default.
     NewTab {
         url: String,
         container: Option<ContainerId>,
@@ -89,6 +93,35 @@ pub enum Command {
         tab: TabId,
         container: ContainerId,
     },
+    /// The user asked this tab to load `url`.
+    Navigate {
+        tab: TabId,
+        url: String,
+    },
+    /// The engine reports the tab's committed URL. Nothing is echoed back.
+    UrlChanged {
+        tab: TabId,
+        url: String,
+    },
+    /// The engine reports the tab's title.
+    TitleChanged {
+        tab: TabId,
+        title: String,
+    },
+    /// The engine reports whether the tab's page is loading. A loading tab is
+    /// busy: it is not frozen or discarded until the load ends.
+    LoadingChanged {
+        tab: TabId,
+        loading: bool,
+    },
+    /// The tab's renderer process died.
+    RendererGone(TabId),
+    /// Coarse lifecycle tick: hidden tabs are put to sleep by the sleep policy.
+    /// `now` also becomes the model's clock, the time later hides are stamped with.
+    Tick {
+        now: Instant,
+        pressure: Pressure,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +136,16 @@ pub enum Effect {
     /// The engine shows this tab and hides the previous one.
     ActivateTab(TabId),
     SpaceChanged(SpaceId),
+    /// Load `url` in the tab's live page.
+    Navigate {
+        tab: TabId,
+        url: String,
+    },
+    /// What the tab's lifecycle asks of the engine (`lifecycle::transition`).
+    Lifecycle {
+        tab: TabId,
+        effect: lifecycle::Effect,
+    },
 }
 
 /// One per window.
@@ -113,6 +156,9 @@ pub struct Model {
     pub containers: Vec<Container>,
     pub tabs: BTreeMap<TabId, Tab>,
     pub active_space: SpaceId,
+    /// The time hides are stamped with: set at creation and by `Command::Tick`,
+    /// so `apply` itself never reads a clock.
+    clock: Instant,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
@@ -145,6 +191,7 @@ impl Model {
                 name: "Default".into(),
             }],
             tabs: BTreeMap::new(),
+            clock: Instant::now(),
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
@@ -211,9 +258,24 @@ impl Model {
         out
     }
 
-    /// Pinned state is owned by placement alone; `Lifecycle::pin` is not written by the model.
+    /// Pinned state is owned by placement; `Lifecycle::pin` mirrors it, synced
+    /// by `move_tab`, the only way a tab enters or leaves the pinned section.
     pub fn is_pinned(&self, tab: TabId) -> bool {
         matches!(self.place_of(tab), Some((_, Place::Pinned(_))))
+    }
+
+    /// The tab on screen: the active tab of the active Space.
+    pub fn visible_tab(&self) -> Option<TabId> {
+        self.space_idx(self.active_space)
+            .and_then(|si| self.spaces[si].active)
+    }
+
+    /// Tabs whose page is alive (not discarded): each has one engine view.
+    pub fn live_tabs(&self) -> usize {
+        self.tabs
+            .values()
+            .filter(|t| t.lifecycle.liveness != Liveness::Discarded)
+            .count()
     }
 
     /// Verifies what the types cannot: the invariants every `apply` result must hold.
@@ -285,6 +347,19 @@ impl Model {
         }
         if let Some(t) = self.tabs.keys().find(|t| !placed.contains_key(t)) {
             return Err(format!("tab {t:?} in map but unplaced"));
+        }
+        let visible = self.visible_tab();
+        for t in self.tabs.values() {
+            let shown = Some(t.id) == visible;
+            if shown != (t.lifecycle.liveness == Liveness::Active) {
+                return Err(format!(
+                    "tab {:?} visible={shown} but {:?}",
+                    t.id, t.lifecycle.liveness
+                ));
+            }
+            if (t.lifecycle.pin == Pin::Pinned) != self.is_pinned(t.id) {
+                return Err(format!("tab {:?} pin out of sync", t.id));
+            }
         }
         Ok(())
     }
@@ -383,9 +458,13 @@ impl Model {
         if container.is_some_and(|c| !self.has_container(c)) {
             return vec![];
         }
-        let si = self.space_idx(self.active_space).expect("active space");
+        let opener_space = opener.and_then(|o| self.place_of(o)).map(|(s, _)| s);
+        let opener = opener.filter(|_| opener_space.is_some());
+        let si = opener_space
+            .unwrap_or_else(|| self.space_idx(self.active_space).expect("active space"));
+        // A popup from a hidden tab must not take over the screen.
+        let show = opener.is_none() || opener == self.visible_tab();
         let default = self.spaces[si].container;
-        let opener = opener.filter(|o| self.place_of(*o).is_some_and(|(s, _)| s == si));
         let id = self.fresh_tab();
         let eff = container.unwrap_or(default);
         let tab = Tab {
@@ -413,15 +492,16 @@ impl Model {
             },
         };
         self.attach(id, dest, si);
-        self.spaces[si].active = Some(id);
-        vec![
-            Effect::CreateTab {
-                tab: id,
-                url,
-                container: eff,
-            },
-            Effect::ActivateTab(id),
-        ]
+        let mut fx = vec![Effect::CreateTab {
+            tab: id,
+            url,
+            container: eff,
+        }];
+        if show {
+            self.spaces[si].active = Some(id);
+            fx.push(Effect::ActivateTab(id));
+        }
+        fx
     }
 
     fn close_tab(&mut self, tab: TabId) -> Vec<Effect> {
@@ -475,8 +555,12 @@ impl Model {
             .flatten();
         self.detach(tab);
         self.attach(tab, to, dst);
-
-        let mut fx = vec![];
+        let pin = if matches!(to, Dest::Pinned { .. }) {
+            Pin::Pinned
+        } else {
+            Pin::Unpinned
+        };
+        let mut fx = self.lifecycle(tab, lifecycle::Event::PinnedChanged(pin));
         if src != dst {
             if src_was_active {
                 self.spaces[src].active = src_next;
@@ -617,7 +701,10 @@ impl Model {
                 id: new,
                 container,
                 opener: None,
-                lifecycle: Lifecycle::new(),
+                lifecycle: Lifecycle {
+                    pin: old.lifecycle.pin,
+                    ..Lifecycle::new()
+                },
                 ..old.clone()
             },
         );
@@ -652,11 +739,71 @@ impl Model {
         }
         fx
     }
+
+    /// Runs `event` through the tab's lifecycle and returns its effects.
+    fn lifecycle(&mut self, tab: TabId, event: lifecycle::Event) -> Vec<Effect> {
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return vec![];
+        };
+        let (next, fx) = step(tab, t.lifecycle, event);
+        t.lifecycle = next;
+        fx
+    }
+
+    /// Brings every lifecycle in line with the model after a command:
+    /// tabs `gone` since `before` are closed, every tab but the visible one
+    /// is hidden and the visible one shown. Each transition is a no-op for a
+    /// tab already in that state.
+    fn settle(&mut self, before: &BTreeMap<TabId, Lifecycle>) -> Vec<Effect> {
+        let mut fx = vec![];
+        for (&tab, &state) in before {
+            if !self.tabs.contains_key(&tab) {
+                fx.extend(step(tab, state, lifecycle::Event::Closed).1);
+            }
+        }
+        let ids: Vec<TabId> = self.tabs.keys().copied().collect();
+        let visible = self.visible_tab();
+        let now = self.clock;
+        for &tab in ids.iter().filter(|&&t| Some(t) != visible) {
+            fx.extend(self.lifecycle(tab, lifecycle::Event::Hidden { now }));
+        }
+        if let Some(tab) = visible {
+            fx.extend(self.lifecycle(tab, lifecycle::Event::Shown));
+        }
+        fx
+    }
+
+    fn set_url(&mut self, tab: TabId, url: &str) -> bool {
+        match self.tabs.get_mut(&tab) {
+            Some(t) => {
+                url.clone_into(&mut t.url);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The one call into `lifecycle::transition`, under the one sleep policy.
+fn step(tab: TabId, state: Lifecycle, event: lifecycle::Event) -> (Lifecycle, Vec<Effect>) {
+    let (next, fx) = lifecycle::transition(&SleepPolicy::default(), state, event);
+    let fx = fx
+        .into_iter()
+        .map(|effect| Effect::Lifecycle { tab, effect })
+        .collect();
+    (next, fx)
 }
 
 /// The only way to change a [`Model`].
+///
+/// Tab lifecycles are settled at the end: whatever the command, the result has
+/// exactly one visible, Active tab (if any), every other tab hidden, and the
+/// lifecycle effects of getting there appended as [`Effect::Lifecycle`]
+/// (closed tabs first, then hides, then the show).
 pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
-    let fx = match command {
+    let before: BTreeMap<TabId, Lifecycle> =
+        m.tabs.iter().map(|(&id, t)| (id, t.lifecycle)).collect();
+    let mut fx = match command {
         Command::OpenCommandBar => vec![Effect::ShowCommandBar],
         Command::NewTab {
             url,
@@ -718,7 +865,41 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
         Command::DeleteContainer(c) => m.delete_container(c),
         Command::ReopenInContainer { tab, container } => m.reopen_in_container(tab, container),
+        Command::Navigate { tab, url } => {
+            if m.set_url(tab, &url) {
+                vec![Effect::Navigate { tab, url }]
+            } else {
+                vec![]
+            }
+        }
+        Command::UrlChanged { tab, url } => {
+            m.set_url(tab, &url);
+            vec![]
+        }
+        Command::TitleChanged { tab, title } => {
+            if let Some(t) = m.tabs.get_mut(&tab) {
+                t.title = title;
+            }
+            vec![]
+        }
+        Command::LoadingChanged { tab, loading } => {
+            let activity = if loading {
+                Activity::Busy
+            } else {
+                Activity::Idle
+            };
+            m.lifecycle(tab, lifecycle::Event::BusyChanged(activity))
+        }
+        Command::RendererGone(t) => m.lifecycle(t, lifecycle::Event::RendererGone),
+        Command::Tick { now, pressure } => {
+            m.clock = now;
+            let ids: Vec<TabId> = m.tabs.keys().copied().collect();
+            ids.into_iter()
+                .flat_map(|t| m.lifecycle(t, lifecycle::Event::Tick { now, pressure }))
+                .collect()
+        }
     };
+    fx.extend(m.settle(&before));
     (m, fx)
 }
 
