@@ -24,7 +24,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Texture import | `welding` 0.15.0, forked: vendored in `vendor/welding` (see "welding fork") |
 | Daily-drive features | Vertical tabs, Spaces, command bar, compact mode. Everything else in M2 comes after |
 | Sync | Deferred, no design work yet |
-| Import | Zen and Arc first; Helium where useful |
+| Import | Zen and Arc first; Helium where useful. `wubble-import` reads `places.sqlite` with `rusqlite` (bundled, `serialize`; header bytes 18/19 patched WAL to rollback since SQLite cannot deserialize a WAL image) and mozLz4 with `lz4_flex` (block only); Zen spaces/essentials/folders come from `zen-sessions.jsonlz4`, not SQLite |
 | UX source | Design canvas "Wubble", snapshot in `ux/pack/`. It is a **style guideline** (colour, glass, type, motion feel), not a layout spec: the designer did not know the full feature set, so layout and feature placement are ours to decide |
 | Glass | Wubble draws its own glass (blur + saturate + tint + specular + rim) so it looks the same on every OS; the window itself is also transparent where the OS allows |
 | Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption |
@@ -214,7 +214,11 @@ Needs ~150 GB free and several hours per full build per platform.
 - [ ] Auto-update
 - [ ] Opt-in crash reports that open a GitHub issue (scrub URLs and personal data before anything leaves the machine)
 - [ ] Default-browser registration, URL handlers
-- [ ] Import from Zen and Arc (Spaces, pinned tabs, history, bookmarks); Helium/Chromium profiles
+- [~] Import from Zen and Arc (Spaces, pinned tabs, history, bookmarks); Helium/Chromium profiles
+  - [x] `wubble-import` readers: Zen/Firefox (profiles.ini discovery, `places.sqlite`, session, `zen-sessions.jsonlz4`, containers) and Arc `StorableSidebar.json`; pure parsers, plain `Imported` output
+  - [ ] App wiring: pick a profile, map `Imported` onto the model and store (batch history)
+  - [ ] Zen legacy `zen_workspaces`/`zen_pins` tables, Arc history, Little Arc, Helium/Chromium profiles
+  - [ ] Verify Zen macOS and Arc Windows paths on real hardware
 
 ## Risks
 

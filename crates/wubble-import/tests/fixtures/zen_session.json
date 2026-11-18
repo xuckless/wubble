@@ -1,0 +1,30 @@
+{
+  "spaces": [
+    {"uuid": "{aaa}", "name": "Home", "icon": "🏠", "containerTabId": 0,
+     "theme": {"type": "gradient", "gradientColors": [{"c": [10, 20, 30], "isPrimary": true}]}},
+    {"uuid": "{bbb}", "name": "Work", "icon": "", "containerTabId": 2,
+     "theme": {"type": "gradient", "gradientColors": [{"c": "#ff8000"}]}}
+  ],
+  "folders": [
+    {"id": "f1", "name": "Outer", "workspaceId": "{aaa}", "collapsed": false},
+    {"id": "f2", "name": "Inner", "workspaceId": "{aaa}", "parentId": "f1", "collapsed": true},
+    {"id": "f3", "name": "Loop A", "workspaceId": "{bbb}", "parentId": "f4"},
+    {"id": "f4", "name": "Loop B", "workspaceId": "{bbb}", "parentId": "f3"}
+  ],
+  "groups": [],
+  "tabs": [
+    {"zenWorkspace": "{aaa}", "zenEssential": true, "pinned": true,
+     "entries": [{"url": "https://essential.example/", "title": "Essential"}], "index": 1},
+    {"zenWorkspace": "{aaa}", "pinned": true, "groupId": "f2", "userContextId": 2,
+     "zenStaticLabel": "My Pin",
+     "_zenPinnedInitialState": {"entry": {"url": "https://pin.example/", "title": "Pin"}},
+     "entries": [{"url": "https://elsewhere.example/", "title": "Elsewhere"}], "index": 1},
+    {"zenWorkspace": "{bbb}",
+     "entries": [{"url": "https://normal.example/", "title": "Normal"}], "index": 1},
+    {"zenWorkspace": "{zzz}", "entries": [{"url": "https://orphan.example/"}], "index": 1},
+    {"zenWorkspace": "{aaa}", "zenIsEmpty": true,
+     "entries": [{"url": "https://empty.example/"}], "index": 1},
+    {"zenWorkspace": "{aaa}", "zenIsGlance": true,
+     "entries": [{"url": "https://glance.example/"}], "index": 1}
+  ]
+}

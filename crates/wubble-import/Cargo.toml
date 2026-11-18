@@ -1,0 +1,19 @@
+[package]
+name = "wubble-import"
+description = "Readers for Zen/Firefox and Arc profiles: pure parsers plus profile discovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+wubble-core.workspace = true
+serde_json.workspace = true
+thiserror = "2"
+# Block decoder only: no frame format, no unsafe.
+lz4_flex = { version = "0.14.2", default-features = false, features = ["std", "safe-decode", "checked-decode"] }
+# `serialize` lets the parser open places.sqlite from bytes; `bundled` avoids a system libsqlite.
+rusqlite = { version = "0.42", features = ["bundled", "serialize"] }
+# Snapshot of a live places.sqlite (+ WAL) for discovery.
+tempfile = "3"

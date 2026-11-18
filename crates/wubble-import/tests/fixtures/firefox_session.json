@@ -1,0 +1,12 @@
+{"windows": [{
+  "groups": [{"id": "1-1", "name": "Reading", "collapsed": true, "color": "blue"}],
+  "tabs": [
+    {"pinned": true, "entries": [{"url": "https://pinned.example/", "title": "Pinned"}], "index": 1},
+    {"userContextId": 2, "index": 2, "entries": [
+      {"url": "https://work.example/a", "title": "Work A"},
+      {"url": "https://work.example/b", "title": "Work B"}]},
+    {"hidden": true, "entries": [{"url": "https://hidden.example/", "title": "Hidden"}], "index": 1},
+    {"groupId": "1-1", "entries": [{"url": "https://grouped.example/", "title": "Grouped"}], "index": 1},
+    {"entries": [{"url": "about:blank"}], "index": 1},
+    {"groupId": "9-9", "entries": [{"url": "moz-extension://x/y"}], "index": 1}
+  ]}]}
