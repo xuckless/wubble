@@ -6,7 +6,7 @@
 //!
 //! [`FramePresenter`] imports each CEF frame with welding and copies it, GPU to
 //! GPU, into a Slint-compatible target. The copy exists because Slint only
-//! accepts `Rgba8Unorm(Srgb)` textures with `TEXTURE_BINDING | RENDER_ATTACHMENT`
+//! accepts `Rgba8Unorm(Srgb)` textures (we use `Rgba8Unorm`, see `TARGET_FORMAT`) with `TEXTURE_BINDING | RENDER_ATTACHMENT`
 //! (i-slint-core `graphics/wgpu_30.rs`, `TryFrom<wgpu::Texture> for Image`),
 //! while welding/grafting import CEF's BGRA dmabuf as `Bgra8UnormSrgb` with
 //! `TEXTURE_BINDING | COPY_SRC`. `copy_texture_to_texture` cannot swizzle, so a
@@ -181,8 +181,11 @@ fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> {
     }
 }
 
-/// The blit target format: what Slint accepts, sRGB like CEF's output.
-const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// The blit target format. Slint's femtovg renderer treats texture values as
+/// display-encoded and writes them to the surface unchanged, so the target is
+/// NOT an sRGB format: an sRGB target would be decoded to linear on sampling
+/// and shown too dark (#808080 came out as #373737). The blit re-encodes.
+const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Number of blit targets. Two, so consecutive frames are different images
 /// and setting one on the window always changes the property.
@@ -306,7 +309,12 @@ var r_sampler: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(r_color, r_sampler, in.tex_coords);
+    // The source is an sRGB view, so the sample is linear; the target stores
+    // display-encoded bytes (see TARGET_FORMAT), which round-trips exactly.
+    let c = textureSample(r_color, r_sampler, in.tex_coords);
+    let lo = c.rgb * 12.92;
+    let hi = 1.055 * pow(c.rgb, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return vec4<f32>(select(hi, lo, c.rgb <= vec3<f32>(0.0031308)), c.a);
 }
 ";
 

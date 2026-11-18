@@ -1110,6 +1110,7 @@ fn check_pixels(window: &AppWindow) -> Result<pixels::Sample, String> {
         width: physical(window.get_content_width(), scale),
         height: physical(window.get_content_height(), scale),
     };
+    pixels::check_swatches(&snapshot, region)?;
     pixels::check(&snapshot, region)
 }
 
