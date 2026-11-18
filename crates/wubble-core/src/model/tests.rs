@@ -695,3 +695,68 @@ fn switching_to_an_empty_space_hides_the_previous_tab() {
     assert_eq!(m.active_space, s2);
     assert_eq!(fx, vec![Effect::SpaceChanged(s2), Effect::ShowCommandBar]);
 }
+
+fn rebuild(m: &Model) -> Result<Model, String> {
+    Model::from_parts(
+        m.spaces.clone(),
+        m.containers.clone(),
+        m.tabs.values().cloned().collect(),
+        m.active_space,
+    )
+}
+
+#[test]
+fn from_parts_of_new_is_new() {
+    assert_eq!(rebuild(&Model::new()), Ok(Model::new()));
+}
+
+#[test]
+fn from_parts_counters_continue_after_max_id() {
+    let (m, _) = with_tabs(3);
+    let (m, _) = run(
+        m,
+        Command::NewFolder {
+            space: s0(),
+            name: "F".into(),
+        },
+    );
+    let (m, _) = run(m, Command::NewContainer { name: "C".into() });
+    let (m, _) = add_space(m, D);
+    let rebuilt = rebuild(&m).unwrap();
+    assert_eq!(rebuilt, m);
+    // The same command on both yields the same ids.
+    let cmds = [
+        Command::NewFolder {
+            space: s0(),
+            name: "G".into(),
+        },
+        Command::NewContainer { name: "D".into() },
+        Command::NewTab {
+            url: "https://b.test".into(),
+            container: None,
+            opener: None,
+        },
+        Command::NewSpace {
+            name: "T".into(),
+            tint: Rgb(0, 0, 0),
+            container: D,
+        },
+    ];
+    let (mut a, mut b) = (m, rebuilt);
+    for c in cmds {
+        a = apply(a, c.clone()).0;
+        b = apply(b, c).0;
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn from_parts_rejects_invalid_parts() {
+    let (m, _) = with_tabs(1);
+    let mut tabs: Vec<Tab> = m.tabs.values().cloned().collect();
+    tabs.clear();
+    let r = Model::from_parts(m.spaces.clone(), m.containers.clone(), tabs, m.active_space);
+    assert!(r.is_err(), "placed tab missing from tabs");
+    let r = Model::from_parts(m.spaces.clone(), m.containers.clone(), vec![], SpaceId(99));
+    assert!(r.is_err(), "unknown active space");
+}

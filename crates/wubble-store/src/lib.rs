@@ -6,18 +6,21 @@
 //! (a second writer would get `Busy`). Times are unix milliseconds supplied by the caller.
 //! Passwords are out of scope.
 
+mod closed;
 mod history;
 mod migrate;
-mod model;
 mod session;
 mod settings;
 
 use std::path::Path;
 
+pub use closed::{ClosedTab, RECENTLY_CLOSED_MAX};
 pub use history::{HistoryHit, Transition, is_recordable, url_key};
 pub use migrate::MIGRATIONS;
-pub use model::*;
-pub use settings::{SEARCH_ENGINE, SUGGEST_LIVE};
+pub use settings::{
+    BlockerEnabled, BlockerExceptions, Codec, CompactMode, KeybindingOverrides, LiveSuggestions,
+    SearchEngine, SearchEngineChoice, Setting, SidebarWidth,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

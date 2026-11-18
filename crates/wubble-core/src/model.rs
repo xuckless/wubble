@@ -152,6 +152,39 @@ impl Model {
         }
     }
 
+    /// Rebuilds a model from stored parts. The id counters are not part of the parts: they are
+    /// derived as the highest id in use plus one, so new ids never collide with restored ones.
+    /// The result must pass [`Model::check`].
+    pub fn from_parts(
+        spaces: Vec<Space>,
+        containers: Vec<Container>,
+        tabs: Vec<Tab>,
+        active_space: SpaceId,
+    ) -> Result<Model, String> {
+        let next = |max: Option<u64>, floor: u64| max.map_or(floor, |m| m + 1);
+        let next_folder = spaces
+            .iter()
+            .flat_map(|s| &s.items)
+            .filter_map(|i| match i {
+                Item::Folder(f) => Some(u64::from(f.id.0)),
+                Item::Tab(_) => None,
+            })
+            .max();
+        let to_u32 = |v: u64| u32::try_from(v).map_err(|_| "id counter overflow".to_string());
+        let m = Model {
+            next_tab: next(tabs.iter().map(|t| t.id.0).max(), 1),
+            next_space: to_u32(next(spaces.iter().map(|s| u64::from(s.id.0)).max(), 1))?,
+            next_folder: to_u32(next(next_folder, 0))?,
+            next_container: to_u32(next(containers.iter().map(|c| u64::from(c.id.0)).max(), 1))?,
+            spaces,
+            containers,
+            tabs: tabs.into_iter().map(|t| (t.id, t)).collect(),
+            active_space,
+        };
+        m.check()?;
+        Ok(m)
+    }
+
     fn space_idx(&self, id: SpaceId) -> Option<usize> {
         self.spaces.iter().position(|s| s.id == id)
     }

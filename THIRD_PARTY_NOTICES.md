@@ -20,3 +20,5 @@ in through Cargo are not listed here.
 | History schema design (urls/visits columns, typed/visit counts); no code copied | `crates/wubble-store/sql/001_init.sql`, `src/history.rs` | Chromium `components/history/core/browser/url_database.cc`, `visit_database.cc` | BSD-3-Clause |
 | History/bookmarks schema design and frecency recency buckets (100/70/50/30/10); no code copied | `crates/wubble-store/sql/001_init.sql`, `src/history.rs` | Firefox Places `toolkit/components/places/nsPlacesTables.h` | MPL-2.0 |
 | Resource-type to filter-type table | `crates/wubble-blocker/src/types.rs` | brave-core `components/brave_shields/content/browser/ad_block_request_type_util.cc` (`ToAdBlockRequestType`) | MPL-2.0 |
+| Recently-closed list (newest first, oldest pruned past a maximum; the value 25 is not taken from Chromium), no code copied | `crates/wubble-store/src/closed.rs` | Chromium `components/sessions/core/tab_restore_service_helper.cc` | BSD-3-Clause |
+| Settings table of (key, type, default), no code copied | `crates/wubble-store/src/settings.rs` | Chromium pref registration (`RegisterBooleanPref(path, default)`) | BSD-3-Clause |
