@@ -13,8 +13,14 @@ use crate::zoom;
 /// The speeds offered, slowest first (0.25 to 4, as Chromium's own player menu tops out at 2).
 pub const RATES: [f64; 10] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0];
 
-/// How long the controls stay after the pointer leaves the video or a control was used.
-pub const LINGER_MS: u64 = 2_500;
+/// How long the controls stay after the pointer stops moving over the video (they were shown
+/// for as long as the pointer was over it, and 2.5 s after it left).
+pub const STILL_MS: u64 = 1_200;
+/// How long they stay after the pointer leaves the video.
+pub const LEAVE_MS: u64 = 250;
+/// After the strip tucks into its tab, hovering the tab does not open it again for this long:
+/// the pointer is still where the collapse button was.
+pub const EXPAND_GUARD_MS: u64 = 600;
 
 /// A site's remembered speed: host to rate in hundredths (`settings::VIDEO_RATES`); sites at
 /// normal speed are absent.
@@ -127,18 +133,56 @@ impl VideoState {
     }
 }
 
+/// Where the pointer is: off the video, on it, or on the controls (which hold them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Over {
+    Away,
+    Video,
+    Strip,
+}
+
 /// What the controls show.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Ui {
     Hidden,
     Shown {
-        /// The pointer is over the video (or the controls).
-        hover: bool,
-        /// When the controls go, if the pointer is not over them.
+        over: Over,
+        /// When the controls go (never while the pointer is on them or the menu is open).
         hide_at: Option<u64>,
         /// The speed menu is open.
         speeds: bool,
     },
+    /// Tucked into a tab at the page's right edge; it goes like the strip does.
+    Collapsed {
+        over: Over,
+        hide_at: Option<u64>,
+        /// Hovering the tab opens the strip from this time on.
+        armed_at: u64,
+    },
+    /// Closed by the user: hidden until the next navigation.
+    Dismissed,
+}
+
+impl Ui {
+    /// The two states look alike (a changed `hide_at` alone needs no redraw).
+    fn looks_like(self, other: Ui) -> bool {
+        match (self, other) {
+            (Ui::Shown { speeds: a, .. }, Ui::Shown { speeds: b, .. }) => a == b,
+            (Ui::Collapsed { .. }, Ui::Collapsed { .. }) => true,
+            (Ui::Hidden, Ui::Hidden) | (Ui::Dismissed, Ui::Dismissed) => true,
+            _ => false,
+        }
+    }
+}
+
+/// When the controls go, the pointer being `over` and the menu `speeds` open or not.
+fn hide_after(over: Over, speeds: bool, now: u64) -> Option<u64> {
+    match over {
+        _ if speeds => None,
+        Over::Strip => None,
+        Over::Video => Some(now + STILL_MS),
+        Over::Away => Some(now + LEAVE_MS),
+    }
 }
 
 /// The video controls of one page.
@@ -177,6 +221,17 @@ impl Overlay {
         )
     }
 
+    /// The controls are tucked into their edge tab (and shown).
+    pub fn collapsed(&self) -> bool {
+        matches!(
+            self,
+            Overlay::Video {
+                ui: Ui::Collapsed { .. },
+                ..
+            }
+        )
+    }
+
     pub fn speeds_open(&self) -> bool {
         matches!(
             self,
@@ -208,6 +263,16 @@ pub enum VideoCmd {
     Pip,
     Frame,
     Save,
+    /// Tuck the strip into its tab (remembered).
+    Collapse,
+    /// Open the strip from its tab by a click.
+    Expand,
+    /// The pointer came onto the tab: opens it once the collapse's guard has passed.
+    Peek,
+    /// Hide the strip until the next navigation.
+    Dismiss,
+    /// Hide it on this site (remembered), and until the next navigation.
+    HideSite,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -219,8 +284,12 @@ pub enum VideoInput {
         site_rate: f64,
         now: u64,
     },
-    /// The pointer moved; whether it is over the video's rectangle or the controls.
-    Pointer { over: bool, now: u64 },
+    /// The pointer moved (or left); `collapsed`: the remembered state the strip opens in.
+    Pointer {
+        over: Over,
+        now: u64,
+        collapsed: bool,
+    },
     /// The host's clock moved on (each poll).
     Tick(u64),
     /// A control was used. `can_save`: the media downloader's seam is connected.
@@ -253,6 +322,10 @@ pub enum VideoEffect {
     Pip,
     /// The media downloader's menu (the seam).
     Save,
+    /// Remember the strip folded (true) or open (false).
+    RememberCollapsed(bool),
+    /// Hide the controls on this tab's site from now on.
+    HideSite,
     /// The controls changed: draw them.
     Redraw,
 }
@@ -285,14 +358,6 @@ pub fn site_rate(table: &RateTable, url: &str) -> f64 {
 pub fn with_rate(table: RateTable, host: &str, rate: f64) -> RateTable {
     let hundredths = (clamp_rate(rate) * 100.0).round() as u32;
     zoom::next_table(table, host, hundredths, 100)
-}
-
-fn shown(hover: bool, now: u64) -> Ui {
-    Ui::Shown {
-        hover,
-        hide_at: (!hover).then_some(now + LINGER_MS),
-        speeds: false,
-    }
 }
 
 pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffect>) {
@@ -350,31 +415,41 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 rate_set,
                 ui,
             },
-            VideoInput::Pointer { over, now },
+            VideoInput::Pointer {
+                over,
+                now,
+                collapsed,
+            },
         ) => {
-            let next = match (ui, over) {
-                (Ui::Hidden, false) => Ui::Hidden,
-                (Ui::Hidden, true) => shown(true, now),
-                (Ui::Shown { speeds, .. }, true) => Ui::Shown {
-                    hover: true,
-                    hide_at: None,
+            let next = match ui {
+                Ui::Hidden if over == Over::Away => Ui::Hidden,
+                Ui::Hidden if collapsed => Ui::Collapsed {
+                    over,
+                    hide_at: hide_after(over, false, now),
+                    armed_at: now,
+                },
+                Ui::Hidden => Ui::Shown {
+                    over,
+                    hide_at: hide_after(over, false, now),
+                    speeds: false,
+                },
+                Ui::Shown { speeds, .. } => Ui::Shown {
+                    over,
+                    hide_at: hide_after(over, speeds, now),
                     speeds,
                 },
-                (
-                    Ui::Shown {
-                        hover: true,
-                        speeds,
-                        ..
-                    },
-                    false,
-                ) => Ui::Shown {
-                    hover: false,
-                    hide_at: Some(now + LINGER_MS),
-                    speeds,
+                Ui::Collapsed { armed_at, .. } => Ui::Collapsed {
+                    over,
+                    hide_at: hide_after(over, false, now),
+                    armed_at,
                 },
-                (ui @ Ui::Shown { hover: false, .. }, false) => ui,
+                Ui::Dismissed => Ui::Dismissed,
             };
-            let effects = if next == ui { vec![] } else { vec![Redraw] };
+            let effects = if next.looks_like(ui) {
+                vec![]
+            } else {
+                vec![Redraw]
+            };
             (
                 Overlay::Video {
                     video,
@@ -393,7 +468,11 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
             VideoInput::Tick(now),
         ) => {
             let next = expire(ui, now);
-            let effects = if next == ui { vec![] } else { vec![Redraw] };
+            let effects = if next.looks_like(ui) {
+                vec![]
+            } else {
+                vec![Redraw]
+            };
             (
                 Overlay::Video {
                     video,
@@ -411,14 +490,14 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
             },
             VideoInput::Command { cmd, now, can_save },
         ) => {
-            let hover = matches!(ui, Ui::Shown { hover: true, .. });
+            // A control used while nothing shows (a key, the smoke) shows the strip for a while.
             let mut ui = match ui {
-                Ui::Shown { speeds, .. } => Ui::Shown {
-                    hover,
-                    hide_at: (!hover).then_some(now + LINGER_MS),
-                    speeds,
+                Ui::Hidden => Ui::Shown {
+                    over: Over::Away,
+                    hide_at: hide_after(Over::Away, false, now),
+                    speeds: false,
                 },
-                Ui::Hidden => shown(false, now),
+                ui => ui,
             };
             let mut effects = vec![];
             match cmd {
@@ -430,6 +509,33 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                     if let Ui::Shown { speeds, .. } = &mut ui {
                         *speeds = !*speeds;
                     }
+                }
+                VideoCmd::Collapse => {
+                    if let Ui::Shown { over, .. } = ui {
+                        ui = Ui::Collapsed {
+                            over,
+                            hide_at: hide_after(over, false, now),
+                            armed_at: now + EXPAND_GUARD_MS,
+                        };
+                        effects.push(VideoEffect::RememberCollapsed(true));
+                    }
+                }
+                VideoCmd::Expand | VideoCmd::Peek => {
+                    if let Ui::Collapsed { over, armed_at, .. } = ui
+                        && (cmd == VideoCmd::Expand || now >= armed_at)
+                    {
+                        ui = Ui::Shown {
+                            over,
+                            hide_at: hide_after(over, false, now),
+                            speeds: false,
+                        };
+                        effects.push(VideoEffect::RememberCollapsed(false));
+                    }
+                }
+                VideoCmd::Dismiss => ui = Ui::Dismissed,
+                VideoCmd::HideSite => {
+                    ui = Ui::Dismissed;
+                    effects.push(VideoEffect::HideSite);
                 }
                 VideoCmd::Rate(rate) => {
                     let rate = clamp_rate(rate);
@@ -459,6 +565,15 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 VideoCmd::Save if can_save => effects.push(VideoEffect::Save),
                 VideoCmd::Save => {}
             }
+            // The menu opening holds the strip, closing it starts the clock again.
+            if let Ui::Shown {
+                over,
+                speeds,
+                hide_at,
+            } = &mut ui
+            {
+                *hide_at = hide_after(*over, *speeds, now);
+            }
             effects.push(Redraw);
             (
                 Overlay::Video {
@@ -485,6 +600,9 @@ fn current_ui(state: &Overlay) -> Ui {
 fn expire(ui: Ui, now: u64) -> Ui {
     match ui {
         Ui::Shown {
+            hide_at: Some(at), ..
+        }
+        | Ui::Collapsed {
             hide_at: Some(at), ..
         } if now >= at => Ui::Hidden,
         ui => ui,
@@ -535,52 +653,136 @@ mod tests {
         )
     }
 
+    fn point(state: Overlay, over: Over, now: u64) -> (Overlay, Vec<VideoEffect>) {
+        transition(
+            state,
+            VideoInput::Pointer {
+                over,
+                now,
+                collapsed: false,
+            },
+        )
+    }
+
+    fn tick(state: Overlay, now: u64) -> Overlay {
+        transition(state, VideoInput::Tick(now)).0
+    }
+
+    /// A video with the pointer over it at time 1000.
+    fn hovered() -> Overlay {
+        let (s, _) = snap(Overlay::default(), 1.0, 0);
+        point(s, Over::Video, 1_000).0
+    }
+
     #[test]
-    fn a_video_shows_controls_only_under_the_pointer_and_they_linger() {
+    fn a_playing_video_shows_no_controls_without_the_pointer() {
         let (s, e) = snap(Overlay::default(), 1.0, 0);
         assert!(!s.shown());
         assert_eq!(e, vec![VideoEffect::Redraw]);
-        // The same snapshot again changes nothing.
+        // The same snapshot again changes nothing; time passing neither.
         let (s, e) = snap(s, 1.0, 100);
         assert!(e.is_empty());
-        let (s, _) = transition(
-            s,
-            VideoInput::Pointer {
-                over: true,
-                now: 200,
-            },
-        );
-        assert!(s.shown());
-        // Under the pointer they never go.
-        let (s, e) = transition(s, VideoInput::Tick(100_000));
-        assert!(s.shown() && e.is_empty());
-        let (s, _) = transition(
-            s,
-            VideoInput::Pointer {
-                over: false,
-                now: 1_000,
-            },
-        );
-        let (s, _) = transition(s, VideoInput::Tick(1_000 + LINGER_MS - 1));
-        assert!(s.shown());
-        let (s, e) = transition(s, VideoInput::Tick(1_000 + LINGER_MS));
-        assert!(!s.shown());
-        assert_eq!(e, vec![VideoEffect::Redraw]);
-        // The pointer moving off a hidden overlay does nothing.
-        let (s2, e) = transition(
-            s.clone(),
-            VideoInput::Pointer {
-                over: false,
-                now: 9,
-            },
-        );
+        assert!(!tick(s.clone(), 100_000).shown());
+        // The pointer off a hidden overlay does nothing.
+        let (s2, e) = point(s.clone(), Over::Away, 9);
         assert_eq!((s2, e), (s, vec![]));
+    }
+
+    #[test]
+    fn hover_shows_and_stillness_hides_after_the_delay() {
+        let s = hovered();
+        assert!(s.shown());
+        assert!(tick(s.clone(), 1_000 + STILL_MS - 1).shown());
+        let (gone, e) = transition(s.clone(), VideoInput::Tick(1_000 + STILL_MS));
+        assert!(!gone.shown());
+        assert_eq!(e, vec![VideoEffect::Redraw]);
+        // Moving again over the video starts the wait over, and a move redraws nothing.
+        let (s, e) = point(s, Over::Video, 2_000);
+        assert!(e.is_empty());
+        assert!(tick(s.clone(), 2_000 + STILL_MS - 1).shown());
+        assert!(!tick(s, 2_000 + STILL_MS).shown());
+    }
+
+    #[test]
+    fn leaving_the_video_hides_fast() {
+        let (s, _) = point(hovered(), Over::Away, 1_500);
+        assert!(tick(s.clone(), 1_500 + LEAVE_MS - 1).shown());
+        assert!(!tick(s, 1_500 + LEAVE_MS).shown());
+        const { assert!(LEAVE_MS < STILL_MS) };
+    }
+
+    #[test]
+    fn the_pointer_on_the_strip_or_an_open_menu_holds_it() {
+        let (s, _) = point(hovered(), Over::Strip, 1_100);
+        assert!(tick(s.clone(), 1_000_000).shown());
+        // The menu holds it even with the pointer gone.
+        let (s, _) = cmd(s, VideoCmd::Speeds, 1_200);
+        let (s, _) = point(s, Over::Away, 1_300);
+        assert!(s.speeds_open() && tick(s.clone(), 1_000_000).shown());
+        // Closing the menu starts the clock.
+        let (s, _) = cmd(s, VideoCmd::Speeds, 2_000);
+        assert!(!tick(s, 2_000 + LEAVE_MS).shown());
+    }
+
+    #[test]
+    fn dismissed_stays_hidden_until_navigation() {
+        let (s, e) = cmd(hovered(), VideoCmd::Dismiss, 1_100);
+        assert!(!s.shown() && !s.collapsed());
+        assert!(e.contains(&VideoEffect::Redraw) && !e.contains(&VideoEffect::HideSite));
+        let (s, _) = point(s, Over::Video, 1_200);
+        let (s, _) = snap(s, 1.0, 1_300);
+        assert!(!s.shown() && !s.collapsed());
+        let (s, _) = transition(s, VideoInput::PageChanged);
+        let (s, _) = snap(s, 1.0, 2_000);
+        let (s, _) = point(s, Over::Video, 2_100);
+        assert!(s.shown());
+    }
+
+    #[test]
+    fn hiding_on_the_site_dismisses_and_says_so() {
+        let (s, e) = cmd(hovered(), VideoCmd::HideSite, 1_100);
+        assert!(!s.shown());
+        assert!(e.contains(&VideoEffect::HideSite));
+    }
+
+    #[test]
+    fn collapsed_shows_only_the_tab_and_expands_by_click_or_a_late_hover() {
+        let (s, e) = cmd(hovered(), VideoCmd::Collapse, 1_100);
+        assert!(s.collapsed() && !s.shown());
+        assert!(e.contains(&VideoEffect::RememberCollapsed(true)));
+        // The pointer still where the button was: hover does not reopen at once ...
+        let (still, e) = cmd(s.clone(), VideoCmd::Peek, 1_200);
+        assert!(still.collapsed() && !e.contains(&VideoEffect::RememberCollapsed(false)));
+        // ... a click does, and so does a hover after the guard.
+        let (open, e) = cmd(s.clone(), VideoCmd::Expand, 1_200);
+        assert!(open.shown() && e.contains(&VideoEffect::RememberCollapsed(false)));
+        let (open, _) = cmd(s.clone(), VideoCmd::Peek, 1_100 + EXPAND_GUARD_MS);
+        assert!(open.shown());
+        // The tab goes like the strip: leaving hides it fast.
+        let (s, _) = point(s, Over::Away, 3_000);
+        assert!(s.collapsed());
+        assert!(!tick(s, 3_000 + LEAVE_MS).collapsed());
+    }
+
+    #[test]
+    fn a_remembered_collapse_opens_the_next_hover_as_the_tab() {
+        let (s, _) = snap(Overlay::default(), 1.0, 0);
+        let (s, e) = transition(
+            s,
+            VideoInput::Pointer {
+                over: Over::Video,
+                now: 10,
+                collapsed: true,
+            },
+        );
+        assert!(s.collapsed() && !s.shown());
+        assert_eq!(e, vec![VideoEffect::Redraw]);
     }
 
     #[test]
     fn the_video_going_away_hides_everything() {
         let (s, _) = snap(Overlay::default(), 1.0, 0);
-        let (s, _) = transition(s, VideoInput::Pointer { over: true, now: 0 });
+        let (s, _) = point(s, Over::Video, 0);
         let (s, e) = transition(
             s,
             VideoInput::Snapshot {
@@ -593,7 +795,11 @@ mod tests {
         assert_eq!(e, vec![VideoEffect::Redraw]);
         // Without a video, input is ignored.
         for input in [
-            VideoInput::Pointer { over: true, now: 2 },
+            VideoInput::Pointer {
+                over: Over::Video,
+                now: 2,
+                collapsed: false,
+            },
             VideoInput::Tick(3),
             VideoInput::Command {
                 cmd: VideoCmd::Mute,
@@ -629,7 +835,7 @@ mod tests {
         // A control shows the controls for a while, as a hover would.
         let (s, _) = snap(Overlay::default(), 1.0, 0);
         let (s, _) = cmd(s, VideoCmd::Loop, 100);
-        let (s, _) = transition(s, VideoInput::Tick(100 + LINGER_MS));
+        let (s, _) = transition(s, VideoInput::Tick(100 + LEAVE_MS));
         assert!(!s.shown());
     }
 

@@ -14,7 +14,7 @@ use wubble_core::settings as defs;
 use wubble_core::sponsor::{self, ActTable, Plan, Segment, Skips};
 use wubble_core::tab::TabId;
 use wubble_core::video::{
-    self, Overlay, PageCmd, RateTable, VideoCmd, VideoEffect, VideoInput, VideoState,
+    self, Over, Overlay, PageCmd, RateTable, VideoCmd, VideoEffect, VideoInput, VideoState,
 };
 use wubble_engine::input::Point;
 use wubble_engine::page::PageEvent;
@@ -162,6 +162,10 @@ pub(super) struct Videos {
     /// The pointer over the visible page's video, and over the controls.
     over_video: bool,
     over_controls: bool,
+    /// Hosts where the controls stay hidden (`video.hidden_sites`), and whether the strip starts
+    /// folded into its tab (`video.collapsed`).
+    hidden: Vec<String>,
+    collapsed: bool,
     /// Whether each tab's main video played at its last snapshot.
     playing: BTreeMap<TabId, bool>,
     last_visible: Option<TabId>,
@@ -202,6 +206,8 @@ impl Default for Videos {
             frames: BTreeMap::new(),
             over_video: false,
             over_controls: false,
+            hidden: Vec::new(),
+            collapsed: false,
             playing: BTreeMap::new(),
             last_visible: None,
             sponsor_on: false,
@@ -268,9 +274,17 @@ fn rate_label(rate: f64) -> String {
 impl Host {
     // ----- settings
 
-    pub(super) fn set_video_settings(&mut self, controls: bool, rates: RateTable) {
+    pub(super) fn set_video_settings(
+        &mut self,
+        controls: bool,
+        rates: RateTable,
+        hidden: Vec<String>,
+        collapsed: bool,
+    ) {
         self.videos.controls = controls;
         self.videos.rates = rates;
+        self.videos.hidden = hidden;
+        self.videos.collapsed = collapsed;
         self.redraw_video();
     }
 
@@ -493,6 +507,28 @@ impl Host {
                         );
                     }
                 }
+                VideoEffect::RememberCollapsed(collapsed) => {
+                    self.write_setting(
+                        defs::VIDEO_COLLAPSED.key,
+                        if collapsed { "1" } else { "0" },
+                    );
+                }
+                VideoEffect::HideSite => {
+                    let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
+                    if let Some(host) = url.as_deref().and_then(wubble_core::zoom::host_of)
+                        && let Some(text) = wubble_core::apply::with_entry(
+                            defs::VIDEO_HIDDEN_SITES.key,
+                            &self.settings.stored,
+                            &host,
+                        )
+                    {
+                        self.write_setting(defs::VIDEO_HIDDEN_SITES.key, &text);
+                        self.toast_text(&format!(
+                            "Video controls hidden on {host}. Show them again in Settings, under \"{}\".",
+                            defs::VIDEO_HIDDEN_SITES.label
+                        ));
+                    }
+                }
                 VideoEffect::Frame => {
                     let script = format!("{KIT_REF}?{KIT_REF}.frame():null");
                     if let Some(id) = self.tab_view(tab).and_then(|v| v.eval(&script)) {
@@ -536,6 +572,11 @@ impl Host {
             "pip" => VideoCmd::Pip,
             "frame" => VideoCmd::Frame,
             "save" => VideoCmd::Save,
+            "collapse" => VideoCmd::Collapse,
+            "expand" => VideoCmd::Expand,
+            "peek" => VideoCmd::Peek,
+            "dismiss" => VideoCmd::Dismiss,
+            "hide-site" => VideoCmd::HideSite,
             _ => return,
         };
         let can_save = self.videos.save.is_some();
@@ -571,7 +612,8 @@ impl Host {
                 .and_then(Overlay::video)
                 .is_some_and(|v| v.rect.contains((f64::from(p.x) / f, f64::from(p.y) / f)))
         });
-        if over != self.videos.over_video {
+        // Every move over the video counts: the controls go a while after the last one.
+        if over || over != self.videos.over_video {
             self.videos.over_video = over;
             self.video_pointer_changed();
         }
@@ -579,9 +621,31 @@ impl Host {
 
     fn video_pointer_changed(&mut self) {
         if let Some(tab) = self.shown() {
-            let over = self.videos.over_video || self.videos.over_controls;
+            let over = match (self.videos.over_controls, self.videos.over_video) {
+                (true, _) => Over::Strip,
+                (false, true) => Over::Video,
+                (false, false) => Over::Away,
+            };
             let now = now_ms() as u64;
-            self.video_event(tab, VideoInput::Pointer { over, now });
+            let collapsed = self.videos.collapsed;
+            self.video_event(
+                tab,
+                VideoInput::Pointer {
+                    over,
+                    now,
+                    collapsed,
+                },
+            );
+        }
+    }
+
+    /// The overlay's clock between polls, so the controls go on time (`LEAVE_MS` is shorter than
+    /// a poll).
+    pub fn tick_video(&mut self) {
+        let now = now_ms() as u64;
+        let tabs: Vec<TabId> = self.videos.overlays.keys().copied().collect();
+        for tab in tabs {
+            self.video_event(tab, VideoInput::Tick(now));
         }
     }
 
@@ -669,37 +733,50 @@ impl Host {
         };
         let overlay = tab.and_then(|t| self.videos.overlays.get(&t));
         let view = match (overlay, tab) {
-            (Some(o), Some(tab)) if self.videos.controls => o.video().and_then(|v| {
-                let r = v
-                    .rect
-                    .on_window(zoom, (f64::from(x), f64::from(y)))
-                    .intersect(&pane)?;
-                let marks = self.sponsor_marks(tab, v.duration);
-                let nearest = video::nearest_rate(v.rate);
-                Some(VideoView {
-                    open: o.shown(),
-                    x: r.x as f32,
-                    y: r.y as f32,
-                    w: r.w as f32,
-                    h: r.h as f32,
-                    paused: v.paused,
-                    looped: v.looped,
-                    muted: v.muted,
-                    progress: v.progress() as f32,
-                    rate: rate_label(v.rate).into(),
-                    rate_index: video::RATES
-                        .iter()
-                        .position(|&r| r == nearest)
-                        .map_or(-1, |i| i as i32),
-                    speeds: o.speeds_open(),
-                    can_pip: self.videos.pip_window.available(),
-                    can_save: self.videos.save.is_some(),
-                    marks: slint::ModelRc::new(slint::VecModel::from(marks)),
+            (Some(o), Some(tab)) if self.videos.controls && !self.site_hides_video(tab) => {
+                o.video().and_then(|v| {
+                    let r = v
+                        .rect
+                        .on_window(zoom, (f64::from(x), f64::from(y)))
+                        .intersect(&pane)?;
+                    let marks = self.sponsor_marks(tab, v.duration);
+                    let nearest = video::nearest_rate(v.rate);
+                    Some(VideoView {
+                        open: o.shown(),
+                        collapsed: o.collapsed(),
+                        pane_right: (pane.x + pane.w) as f32,
+                        x: r.x as f32,
+                        y: r.y as f32,
+                        w: r.w as f32,
+                        h: r.h as f32,
+                        paused: v.paused,
+                        looped: v.looped,
+                        muted: v.muted,
+                        progress: v.progress() as f32,
+                        rate: rate_label(v.rate).into(),
+                        rate_index: video::RATES
+                            .iter()
+                            .position(|&r| r == nearest)
+                            .map_or(-1, |i| i as i32),
+                        speeds: o.speeds_open(),
+                        can_pip: self.videos.pip_window.available(),
+                        can_save: self.videos.save.is_some(),
+                        marks: slint::ModelRc::new(slint::VecModel::from(marks)),
+                    })
                 })
-            }),
+            }
             _ => None,
         };
         window.set_video(view.unwrap_or_default());
+    }
+
+    /// The tab's site is one the user hid the controls on.
+    fn site_hides_video(&self, tab: TabId) -> bool {
+        self.model
+            .tabs
+            .get(&tab)
+            .and_then(|t| wubble_core::zoom::host_of(&t.url))
+            .is_some_and(|host| self.videos.hidden.contains(&host))
     }
 
     // ----- SponsorBlock

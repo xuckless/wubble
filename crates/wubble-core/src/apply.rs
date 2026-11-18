@@ -142,6 +142,10 @@ pub enum Applied {
     Video {
         controls: bool,
         rates: crate::video::RateTable,
+        /// Hosts where the controls stay hidden.
+        hidden: Vec<String>,
+        /// The strip starts folded into its tab.
+        collapsed: bool,
     },
     MediaKeys(bool),
     PipOnTabSwitch(bool),
@@ -239,10 +243,21 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         }
         k if k == s::SCREENSHOT_OUTPUT.key => Applied::ScreenshotOutput(ShotOutput::from_id(v)?),
         k if k == s::HINTS_ALPHABET.key => Applied::HintsAlphabet(crate::hints::alphabet(v)),
-        k if [s::VIDEO_CONTROLS.key, s::VIDEO_RATES.key].contains(&k) => Applied::Video {
-            controls: flag(&s::VIDEO_CONTROLS, stored),
-            rates: map(&s::VIDEO_RATES, stored),
-        },
+        k if [
+            s::VIDEO_CONTROLS.key,
+            s::VIDEO_RATES.key,
+            s::VIDEO_HIDDEN_SITES.key,
+            s::VIDEO_COLLAPSED.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::Video {
+                controls: flag(&s::VIDEO_CONTROLS, stored),
+                rates: map(&s::VIDEO_RATES, stored),
+                hidden: list(&s::VIDEO_HIDDEN_SITES, stored),
+                collapsed: flag(&s::VIDEO_COLLAPSED, stored),
+            }
+        }
         k if k == s::MEDIA_KEYS.key => Applied::MediaKeys(flag(def, stored)),
         k if k == s::PIP_ON_TAB_SWITCH.key => Applied::PipOnTabSwitch(flag(def, stored)),
         k if [
@@ -537,15 +552,21 @@ mod tests {
     fn media_rows_apply_as_one_value_each() {
         let s = stored(&[
             ("video.rates", r#"{"a.test":150}"#),
+            ("video.hidden_sites", r#"["b.test"]"#),
+            ("video.collapsed", "1"),
             ("sponsor.enabled", "1"),
             ("sponsor.actions", r#"{"intro":0}"#),
         ]);
         let video = Applied::Video {
             controls: true,
             rates: crate::video::RateTable::from([("a.test".into(), 150)]),
+            hidden: vec!["b.test".into()],
+            collapsed: true,
         };
         assert_eq!(effect_of("video.controls", &s), Some(video.clone()));
-        assert_eq!(effect_of("video.rates", &s), Some(video));
+        assert_eq!(effect_of("video.rates", &s), Some(video.clone()));
+        assert_eq!(effect_of("video.hidden_sites", &s), Some(video.clone()));
+        assert_eq!(effect_of("video.collapsed", &s), Some(video));
         let sponsor = Applied::Sponsor {
             enabled: true,
             asked: false,

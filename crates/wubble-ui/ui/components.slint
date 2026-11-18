@@ -178,6 +178,8 @@ export component PressableButton inherits Rectangle {
     // wubble change: the side padding, so an icon-only button (.wb-ib, 30 square) fits
     in property <length> padding-x: Spacing.s3;
     callback clicked();
+    // wubble change: a right-button release on the button, for a second choice on one control.
+    callback secondary-clicked();
     out property <bool> pressed: touch.pressed;
     out property <bool> hovered: touch.has-hover;
 
@@ -196,6 +198,11 @@ export component PressableButton inherits Rectangle {
     touch := TouchArea {
         enabled: root.enabled;
         clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                root.secondary-clicked();
+            }
+        }
     }
 
     HorizontalLayout {

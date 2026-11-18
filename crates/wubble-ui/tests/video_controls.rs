@@ -1,0 +1,99 @@
+//! The video controls on the testing backend: the collapsed strip's tab is docked to the page
+//! pane's right edge where the strip was, and the strip's close button dismisses on a click and
+//! hides the site on a right click. One test (one platform per process).
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use i_slint_backend_testing::{
+    ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
+};
+use slint::platform::{PointerEventButton, WindowEvent};
+use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+use wubble_ui::{AppWindow, VideoView};
+
+/// `Spacing.s2`: where the strip and the tab sit below the video's top.
+const SPACE_S2: f32 = 8.0;
+
+fn view(open: bool, collapsed: bool) -> VideoView {
+    VideoView {
+        open,
+        collapsed,
+        x: 100.0,
+        y: 80.0,
+        w: 500.0,
+        h: 300.0,
+        // the pane runs on past the video
+        pane_right: 900.0,
+        rate: "1\u{d7}".into(),
+        ..VideoView::default()
+    }
+}
+
+fn element(app: &AppWindow, id: &str) -> ElementHandle {
+    ElementHandle::find_by_element_id(app, id)
+        .next()
+        .unwrap_or_else(|| panic!("no {id}"))
+}
+
+fn centre(e: &ElementHandle) -> LogicalPosition {
+    let (p, s) = (e.absolute_position(), e.size());
+    LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0)
+}
+
+fn click(app: &AppWindow, at: LogicalPosition, button: PointerEventButton) {
+    app.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: at });
+    app.window().dispatch_event(WindowEvent::PointerPressed {
+        position: at,
+        button,
+    });
+    app.window().dispatch_event(WindowEvent::PointerReleased {
+        position: at,
+        button,
+    });
+    mock_elapsed_time(Duration::from_millis(16));
+}
+
+#[test]
+fn the_tab_docks_to_the_pane_edge_and_the_close_button_dismisses() {
+    init_integration_test_with_mock_time();
+    let app = AppWindow::new().unwrap();
+    app.window().set_size(LogicalSize::new(1280.0, 800.0));
+    let commands = Rc::new(RefCell::new(vec![]));
+    let log = commands.clone();
+    app.on_video_command(move |name, _| log.borrow_mut().push(name.to_string()));
+
+    // The strip open: its close button dismisses, a right click hides the site.
+    app.set_video(view(true, false));
+    mock_elapsed_time(Duration::from_millis(400));
+    let close = element(&app, "VideoControls::close");
+    click(&app, centre(&close), PointerButton::Left);
+    click(&app, centre(&close), PointerButton::Right);
+    assert_eq!(*commands.borrow(), ["dismiss", "hide-site"]);
+    commands.borrow_mut().clear();
+
+    // Collapsed: only the tab, its right edge on the pane's, level with the strip.
+    app.set_video(view(false, true));
+    mock_elapsed_time(Duration::from_millis(600));
+    let tab = element(&app, "VideoControls::tab");
+    let strip = element(&app, "VideoControls::strip");
+    let controls = element(&app, "VideoControls::root");
+    let origin = controls.absolute_position().x - 100.0;
+    assert_eq!(
+        tab.absolute_position().x + tab.size().width,
+        origin + 900.0,
+        "docked to the pane's right edge"
+    );
+    assert_eq!(
+        tab.absolute_position().y,
+        controls.absolute_position().y + SPACE_S2
+    );
+    assert_eq!(tab.size().height, strip.size().height);
+    // A click on the tab (outside the video's own rectangle) opens the strip again.
+    click(&app, centre(&tab), PointerButton::Left);
+    assert!(commands.borrow().iter().any(|c| c == "expand"));
+}
+
+use PointerEventButton as PointerButton;
