@@ -1,7 +1,7 @@
 //! The scene's glass and Slint's content agree in every frame: a sidebar mode change, run
 //! frame by frame through `Wired::frame` (what the rendering notifier calls before Slint draws),
-//! delivers the sidebar's glass at the width Slint shows that same frame, and reaches rest on
-//! its own. Testing backend, explicit frame times, no clocks. Its own process: the platform can
+//! delivers the glass inside the sidebar (the pill, the favourites) where Slint shows it that
+//! same frame, over the window's own glass, and reaches rest on its own. Testing backend, explicit frame times, no clocks. Its own process: the platform can
 //! be installed once per process.
 
 use std::time::{Duration, Instant};
@@ -37,24 +37,13 @@ fn run_to_rest(
         if let Some(glass) = out.glass {
             *scene = glass;
         }
-        // What Slint draws this frame: the sidebar's glass up to the seam.
-        let width = app.get_sidebar_width();
-        let item = sidebar(scene, key);
-        // app-tokens.slint `Shell.sidebar-open`: the sidebar (and its glass) shows past it
-        if width > SIDEBAR_OPEN {
-            let item = item.unwrap_or_else(|| panic!("frame {frame}: no sidebar glass at {width}"));
-            // f32 layout arithmetic: a few ulps
-            assert!(
-                (item.x, item.y) == (INSET as f32, INSET as f32)
-                    && (item.width - width).abs() < 0.01,
-                "frame {frame}: the scene's glass {item:?} is not this frame's sidebar ({width})"
-            );
-        } else {
-            assert!(
-                item.is_none(),
-                "frame {frame}: glass left at width {width}: {item:?}"
-            );
-        }
+        // What Slint draws this frame: the window's glass under the sidebar and the page, in
+        // every mode (the design's one window surface; the sidebar has no panel of its own).
+        let item = sidebar(scene, key).unwrap_or_else(|| panic!("frame {frame}: no window glass"));
+        assert!(
+            (item.x, item.y, item.width, item.height) == (0.0, 0.0, 1280.0, 800.0),
+            "frame {frame}: the scene's glass {item:?} is not the window"
+        );
         check_inside(app, scene, frame);
         now += FRAME;
         if !again {
@@ -120,28 +109,27 @@ fn seam_x(w: f32) -> f32 {
     INSET as f32 + w + INSET as f32 / 2.0
 }
 
-/// One frame of a drag: the scene's sidebar and address pill glass are the ones Slint lays out.
+/// One frame of a drag: the scene's window glass stays the window, and the address pill's glass
+/// is the one Slint lays out.
 fn check_drag_frame(app: &AppWindow, scene: &[GlassItem], frame: usize) {
     let keys = app.global::<GlassKeys>();
-    let edges = app.get_side_edges();
     let side = sidebar(scene, keys.get_sidebar())
-        .unwrap_or_else(|| panic!("frame {frame}: no sidebar glass"));
-    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        .unwrap_or_else(|| panic!("frame {frame}: no window glass"));
     assert!(
-        near(side.width, edges.end - edges.start) && near(side.width, app.get_sidebar_width()),
-        "frame {frame}: the sidebar's glass {side:?} is not the sidebar {edges:?}"
+        (side.x, side.y, side.width) == (0.0, 0.0, 1280.0),
+        "frame {frame}: the window's glass {side:?} moved with the seam"
     );
     check_inside(app, scene, frame);
 }
 
-/// Every glass the scene holds lies inside the sidebar, which clips what it shows (none may
-/// reach under the page), and the address pill's is the pill Slint shows: none on the rail,
+/// Every glass the scene holds but the window's lies inside the sidebar, which clips what it
+/// shows (none may reach under the page), and the address pill's is the pill Slint shows: none on the rail,
 /// where the pill is a search button without glass (.wb-rail-addr).
 fn check_inside(app: &AppWindow, scene: &[GlassItem], frame: usize) {
     let keys = app.global::<GlassKeys>();
     let edges = app.get_side_edges();
     let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-    for item in scene {
+    for item in scene.iter().filter(|i| i.key != keys.get_sidebar()) {
         assert!(
             item.x >= edges.start - 0.01 && item.x + item.width <= edges.end + 0.01,
             "frame {frame}: glass {item:?} reaches outside the sidebar {edges:?}"

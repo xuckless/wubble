@@ -53,6 +53,7 @@ impl Kind {
 pub const NATIVE_FRAME: bool = cfg!(target_os = "macos");
 
 /// The native window's attributes; pass to `BackendSelector::with_winit_window_attributes_hook`.
+/// Linux and BSD: the app id [`APP_ID`].
 /// macOS: a full-size content view under a transparent title bar with no title and no traffic
 /// lights (the shell draws them), so only AppKit's frame behaviour remains. Elsewhere unchanged:
 /// the window is frameless (`no-frame`).
@@ -66,7 +67,43 @@ pub fn attributes(attributes: WindowAttributes) -> WindowAttributes {
             .with_fullsize_content_view(true)
             .with_titlebar_buttons_hidden(true)
     };
+    // The app id (Wayland) and WM_CLASS (X11), so the compositor pairs the window with
+    // `wubble.desktop` and its icon (assets/icons/linux, scripts/install-linux-desktop.sh).
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    let attributes = {
+        use slint::winit_030::winit::platform::{
+            wayland::WindowAttributesExtWayland, x11::WindowAttributesExtX11,
+        };
+        WindowAttributesExtX11::with_name(
+            WindowAttributesExtWayland::with_name(attributes, APP_ID, APP_ID),
+            APP_ID,
+            APP_ID,
+        )
+    };
     attributes
+}
+
+/// The Wayland app id and X11 window class: the name of `wubble.desktop` and of the icon.
+pub const APP_ID: &str = "wubble";
+
+/// Turns the OS's own window restoration off for this process, before the event loop starts.
+/// wubble restores its session itself (`persist`). macOS: AppKit's restoration ("Resume") is
+/// what shows "wubble quit unexpectedly while reopening windows" as a modal alert at launch
+/// after a crash or a killed run, and that alert holds the UI thread before the first frame (a
+/// sampled `--smoke frames` run sat in `-[NSPersistentUIRestorer
+/// promptToIgnorePersistentStateWithCrashHistory:]` until its timeout). Registered, not saved:
+/// `ApplePersistenceIgnoreState` in `NSUserDefaults`' registration domain. Elsewhere nothing.
+pub fn no_os_window_restoration() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSDictionary, NSNumber, NSString, NSUserDefaults};
+        let key = NSString::from_str("ApplePersistenceIgnoreState");
+        let yes = NSNumber::new_bool(true);
+        let defaults = NSDictionary::from_slices(&[&*key], &[yes.as_ref()]);
+        // SAFETY: the dictionary maps an `NSString` to an `NSNumber`, which is what
+        // `registerDefaults:` takes.
+        unsafe { NSUserDefaults::standardUserDefaults().registerDefaults(&defaults) };
+    }
 }
 
 /// The window's mode. Not stored: it is read from the window each time (one owner).

@@ -24,7 +24,7 @@ use wubble_core::autofill::{
 use wubble_core::secret::Secret;
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
-use wubble_engine::page::FrameInfo;
+use wubble_engine::page::{FrameChannel, FrameInfo};
 use wubble_ui::{AppWindow, AutofillAnswer, AutofillView};
 use wubble_vault::{GeneratorOptions, NewLogin, Origin, RecordId};
 use zeroize::Zeroizing;
@@ -270,7 +270,7 @@ impl Host {
         }
         let text = fill_message(origin, fields);
         if let Some(view) = self.tab_view(tab) {
-            view.send_frame_message(frame, text.expose());
+            view.send_frame_message(frame, FrameChannel::Autofill, text.expose());
         }
     }
 

@@ -73,6 +73,9 @@ Each section ends `exit 0` with its `smoke:` lines (`frames=120`: `smoke: pixels
 (full output in `/tmp/wubble-<smoke>.log`). A `panicked` line about handling an event
 while another is handled is the cue for a dispatch2 main-queue pump. `pgrep` prints nothing.
 
+Window runs over ssh, when the owner has started `~/wubble-runner/run.sh` in their GUI session: `printf "wubble-<dir>\n<timeout s>\n<args>\n" > ~/wubble-runner/queue/<fresh name>.job` runs `~/wubble-<dir>/target/debug/bundle/wubble.app/Contents/MacOS/wubble <args>` there (no environment variables: use flags; write output files to `/tmp`).
+Poll for `/tmp/wubble-runner-out/<name>.exit` (124 = timeout), read `<name>.log`; keep runs under 30 s and few (windows open on the owner's screen), and `rm -rf target/debug/bundle` before re-bundling (an in-place rewrite of the binary gets it killed, exit 137).
+
 ## Code principles
 
 1. **Declarative first.** UI is a function of state: Slint bindings over models, no imperative widget poking. Config, keybindings, policies and feature tables are data.

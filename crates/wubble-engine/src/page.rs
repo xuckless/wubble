@@ -105,6 +105,27 @@ impl EditFlags {
     }
 }
 
+/// CEF's `cef_context_menu_media_state_flags_t`: the state of the media
+/// element under the cursor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MediaFlags(pub u32);
+
+impl MediaFlags {
+    pub const PAUSED: u32 = 1 << 1;
+    pub const MUTED: u32 = 1 << 2;
+    pub const LOOP: u32 = 1 << 3;
+    pub const CAN_SAVE: u32 = 1 << 4;
+    pub const HAS_AUDIO: u32 = 1 << 5;
+    pub const CAN_TOGGLE_CONTROLS: u32 = 1 << 6;
+    pub const CONTROLS: u32 = 1 << 7;
+    pub const CAN_PICTURE_IN_PICTURE: u32 = 1 << 10;
+    pub const CAN_LOOP: u32 = 1 << 12;
+
+    pub fn has(self, flag: u32) -> bool {
+        self.0 & flag == flag
+    }
+}
+
 /// One entry of CEF's default menu. Pick by `command`; CEF runs the standard
 /// commands (back, reload, copy, paste, spelling suggestions, ...) itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,6 +183,7 @@ pub struct ContextMenu {
     pub selection_text: String,
     pub editable: bool,
     pub edit: EditFlags,
+    pub media_flags: MediaFlags,
     pub misspelled_word: String,
     pub suggestions: Vec<String>,
     pub items: Vec<MenuItem>,
@@ -259,6 +281,61 @@ pub enum EditCommand {
     SelectAll,
 }
 
+/// What a frame asks of the host's clipboard ([`PageEvent::Clipboard`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClipboardRequest {
+    /// The page put this text on the clipboard (a copy or cut).
+    Copy(String),
+    /// The selection changed: the primary selection's text.
+    Primary(String),
+    /// The page is pasting: answer with [`crate::view::View::answer_clipboard`].
+    /// `primary`: a middle click's paste, from the primary selection.
+    Paste { primary: bool },
+    /// `navigator.clipboard.readText` passed its permission check: answer with
+    /// the read's id.
+    Read(u32),
+}
+
+/// The content scripts' channels on welding's one frame message (wubble-helper
+/// `compose`: `name\ntext` both ways). The names must match the helper's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameChannel {
+    /// `autofill.js`: [`PageEvent::FrameMessage`].
+    Autofill,
+    /// `clipboard.js`: [`PageEvent::Clipboard`].
+    Clipboard,
+    /// `zoom.js`: [`PageEvent::WheelZoom`].
+    Zoom,
+}
+
+impl FrameChannel {
+    const ALL: [(FrameChannel, &'static str); 3] = [
+        (FrameChannel::Autofill, "autofill"),
+        (FrameChannel::Clipboard, "clipboard"),
+        (FrameChannel::Zoom, "zoom"),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Self::ALL
+            .iter()
+            .find(|(c, _)| *c == self)
+            .map_or("", |(_, n)| n)
+    }
+
+    /// The channel a frame message came on, and its text; `None` for a message
+    /// on no known channel.
+    pub fn split(message: &str) -> Option<(FrameChannel, &str)> {
+        let (name, text) = message.split_once('\n')?;
+        let channel = Self::ALL.iter().find(|(_, n)| *n == name)?.0;
+        Some((channel, text))
+    }
+
+    /// `text` for this channel's script.
+    pub fn join(self, text: &str) -> String {
+        format!("{}\n{text}", self.name())
+    }
+}
+
 /// A frame of the page as the browser process sees it (CEF's own frame), not
 /// as the page describes itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -273,6 +350,18 @@ pub struct FrameInfo {
 /// What the host learns about a page beyond navigation, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageEvent {
+    /// A frame's clipboard request, when the engine runs with
+    /// `EngineConfig::clipboard_bridge` (wubble-helper `clipboard.js` on
+    /// [`FrameChannel::Clipboard`]). `frame` names the frame for the answer.
+    Clipboard {
+        frame: String,
+        request: ClipboardRequest,
+    },
+    /// A Ctrl+wheel the page left alone (`zoom.js`): zoom one step in or out,
+    /// as Chromium does.
+    WheelZoom {
+        zoom_in: bool,
+    },
     /// The page's icon, downloaded by CEF: raw RGBA, at most 64x64.
     ///
     /// The host (wubble-store holds the cache; `crates/wubble` is not edited

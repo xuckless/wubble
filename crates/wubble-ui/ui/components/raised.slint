@@ -1,0 +1,69 @@
+// A raised fill: the design's selected tile and chips (browser.css .wb-tab-ind, settings.css
+// .st-nav-ind and .st-card, wubble.css .wb-thin; xuckless/the-wallpaper-project @ 21838b8): a
+// fill, a 1 px highlight along the top edge (CSS `inset 0 1px 0`), a 1 px rim all round
+// (`inset 0 0 0 1px`) and a drop shadow below it (`0 y blur`). Written for wubble: Slint has no
+// inset shadow, so the highlight is the rounded rim kept to the top corners, and the drop shadow
+// is cut to below the tile, where CSS shows it (a box-shadow never shows through its element's
+// own translucent fill). A card drawn in slices (a row each) rounds only its ends.
+
+import { Radius } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+
+export component Raised inherits Rectangle {
+    in property <color> fill;
+    in property <color> highlight: transparent;
+    in property <color> rim: transparent;
+    in property <length> shadow-y: 0px;
+    in property <length> shadow-blur: 0px;
+    in property <color> shadow: transparent;
+    in property <length> radius: Radius.sm;
+    in property <length> top-radius: root.radius;
+    in property <length> bottom-radius: root.radius;
+
+    border-top-left-radius: root.top-radius;
+    border-top-right-radius: root.top-radius;
+    border-bottom-left-radius: root.bottom-radius;
+    border-bottom-right-radius: root.bottom-radius;
+    background: root.fill;
+    border-width: root.rim == transparent ? 0px : Shell.hairline;
+    border-color: root.rim;
+
+    // the drop shadow, below the tile only
+    if root.shadow != transparent: Rectangle {
+        x: -2 * root.shadow-blur;
+        y: root.height;
+        width: root.width + 4 * root.shadow-blur;
+        height: root.shadow-y + 2 * root.shadow-blur;
+        clip: true;
+        Rectangle {
+            x: 2 * root.shadow-blur;
+            y: -root.height;
+            width: root.width;
+            height: root.height;
+            border-top-left-radius: root.top-radius;
+            border-top-right-radius: root.top-radius;
+            border-bottom-left-radius: root.bottom-radius;
+            border-bottom-right-radius: root.bottom-radius;
+            background: root.shadow;
+            drop-shadow-offset-y: root.shadow-y;
+            drop-shadow-blur: root.shadow-blur;
+            drop-shadow-color: root.shadow;
+        }
+    }
+    // the top highlight: the rim, kept to the top edge and the upper half of the corners
+    if root.highlight != transparent: Rectangle {
+        y: 0px;
+        height: max(Shell.hairline, root.top-radius / 2);
+        clip: true;
+        Rectangle {
+            y: 0px;
+            width: root.width;
+            height: root.height;
+            border-top-left-radius: root.top-radius;
+            border-top-right-radius: root.top-radius;
+            border-width: Shell.hairline;
+            border-color: root.highlight;
+        }
+    }
+    @children
+}

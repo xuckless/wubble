@@ -1,6 +1,6 @@
 // wubble: a seam string's bowed edge as a displacement table (wubble_core::bow::EdgeTable, packed
-// by lib.rs `EdgeU::pack`), shared by the sidebar glass (scene glass.wgsl) and the page's edge
-// (mask.wgsl), so both follow the same string. Prepended to those two shaders only.
+// by lib.rs `EdgeU::pack`), read by the page's edge (mask.wgsl), so it follows the drawn string.
+// Prepended to that shader only.
 
 const EDGE_VEC4S: u32 = 64u; // lib.rs EDGE_SAMPLES / 4 (the uniform mirror test checks it)
 

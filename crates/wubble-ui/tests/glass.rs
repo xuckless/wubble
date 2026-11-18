@@ -59,26 +59,31 @@ fn glass_panels_report_their_items() {
     assert!(!item(&seen, address).present);
     assert!(seen.borrow().values().all(|i| !i.present));
 
-    // With it: the sidebar's Regular glass up to the seam and the pill's Thin glass.
+    // With it: the window's Regular glass (the sidebar is that glass, the design's one window
+    // surface), tinted with the Space colour, and the pill's Thin glass.
     layer.set_scene_active(true);
     pump(1);
     let side = item(&seen, sidebar);
+    let size = app.window().size().to_logical(app.window().scale_factor());
     assert!(side.present);
-    assert_eq!((side.x, side.y), (INSET as f32, INSET as f32));
-    assert_eq!(side.width, app.get_sidebar_width());
+    assert_eq!((side.x, side.y), (0.0, 0.0));
+    assert_eq!((side.width, side.height), (size.width, size.height));
+    assert_eq!(side.radius, app.get_window_radius());
     assert_eq!(side.tier, GlassTier::Regular);
+    assert_ne!(side.tint.alpha(), 0, "the Space colour");
     let pill = item(&seen, address);
     assert!(pill.present);
     assert_eq!(pill.tier, GlassTier::Thin);
-    assert!(pill.x > side.x && pill.y > side.y && pill.width > 100.0);
+    assert!(pill.x > INSET as f32 && pill.y > INSET as f32 && pill.width > 100.0);
 
-    // The seam narrows the sidebar: its item follows.
+    // The seam narrows the sidebar: the window's glass stays, the pill follows.
     app.set_sidebar_width(220.0);
     // the contents follow (the driver's contents spring, at rest): laid out wider, they would
     // sit centred past the sidebar's left edge, and their glass would be cut there
     app.set_sidebar_contents(220.0);
     pump(1);
-    assert_eq!(item(&seen, sidebar).width, 220.0);
+    assert_eq!(item(&seen, sidebar).width, size.width);
+    assert!(item(&seen, address).width < pill.width);
 
     // A pinned tab is a favourite tile, keyed by its tab id.
     let tab = TabItem {
@@ -133,7 +138,10 @@ fn glass_panels_report_their_items() {
     let gone = item(&seen, address);
     assert!(!gone.present);
     assert!(gone.x < 0.0, "moved with the zone: x {}", gone.x);
-    assert!(!item(&seen, sidebar).present);
+    assert!(
+        item(&seen, sidebar).present,
+        "the window's glass stays with the sidebar hidden"
+    );
     app.set_peek(true);
     pump(1000);
     // The floating peek panel pads 10 on the left where the sidebar pads 6 (browser.css
@@ -142,9 +150,15 @@ fn glass_panels_report_their_items() {
         near(item(&seen, address).x, pill.x + 4.0),
         "back with the peek"
     );
-    // The scene draws no beam over the peek, so the pill's loading shows as the Slint sheen.
-    app.set_address_loading(true);
-    pump(200);
+    // The scene draws no beam over the peek, so the pill's beam is the Slint one.
+    let lit = wubble_ui::BeamShape {
+        head: 0.5,
+        length: 0.35,
+        strength: 1.0,
+        hue: 0.0,
+    };
+    app.set_address_beam(lit);
+    pump(1);
     assert!(app.get_address_sheen() > 0.99, "sheen over the peek");
 
     // Back over the scene, which draws the pill and its beam: no sheen on top.
@@ -153,7 +167,7 @@ fn glass_panels_report_their_items() {
     app.set_sidebar_width(252.0);
     pump(1);
     assert_eq!(app.get_address_sheen(), 0.0, "no sheen over the scene");
-    app.set_address_loading(false);
+    app.set_address_beam(Default::default());
 
     // The scene off again: everything absent.
     layer.set_scene_active(false);

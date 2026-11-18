@@ -119,8 +119,8 @@ fn settings_page_scenarios() {
     let queries = Rc::new(RefCell::new(vec![]));
     let q = queries.clone();
     app.on_settings_query_changed(move |text| q.borrow_mut().push(text.to_string()));
-    let search = ElementHandle::find_by_element_id(&app, "Field::input")
-        .next()
+    let search = ElementHandle::find_by_accessible_label(&app, "Search settings")
+        .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::TextInput))
         .unwrap();
     search.set_accessible_value("block");
     pump();

@@ -599,20 +599,19 @@ pub(crate) use metal::copy_metal_to_owned;
 
 /// wubble change: copies an imported, callback-scoped CEF frame into a
 /// weld-owned texture and waits for the copy, so CEF may reuse its pooled
-/// buffer once `OnAcceleratedPaint` returns. Shared by the Linux DMABUF and
-/// macOS IOSurface paths.
+/// buffer once `OnAcceleratedPaint` returns. The Linux DMABUF path; macOS
+/// copies on a Metal queue of its own (`metal::copy_metal_to_owned`).
 ///
 /// The copy is created as `source.format.add_srgb_suffix()`: CEF's bytes are
-/// display-encoded, and the host samples the copy through an sRGB view. On
-/// Linux the import is already sRGB (no-op); macOS imports `Bgra8Unorm`, and
-/// `copy_texture_to_texture` allows formats that differ only in the suffix.
+/// display-encoded, and the host samples the copy through an sRGB view. The
+/// Linux import is already sRGB (no-op); the macOS copy does the same.
 ///
 /// Ported from cef-rs `cef/src/osr_texture_import/common.rs`
 /// (`texture::copy_to_owned`, `texture::wait_for_copy`; cef-rs #498),
 /// MIT OR Apache-2.0. Returns a [`CopiedFrame`] timed from `arrived` (the
 /// callback's entry) and `started` (before the import), with the wait
 /// measured on its own.
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+#[cfg(target_os = "linux")]
 fn copy_to_owned(
     source: ImportedTexture,
     ctx: &HostWgpuContext,

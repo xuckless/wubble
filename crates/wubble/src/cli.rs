@@ -52,6 +52,10 @@ struct Cli {
     /// Where downloads go instead of the OS downloads folder.
     #[arg(long, value_name = "DIR", conflicts_with = "smoke")]
     downloads: Option<PathBuf>,
+    /// Hand run only: write the window as a PNG when the smoke ends (`settings` also seeds
+    /// three Spaces and a few tabs at the design's 1360x880, to compare with the design).
+    #[arg(long, value_name = "PNG", requires = "smoke")]
+    shot: Option<PathBuf>,
 }
 
 /// The `--smoke` value alone; `--url` is joined in by `Command::try_from`.
@@ -63,6 +67,7 @@ enum SmokeArg {
     Tabs,
     Split,
     Page,
+    Parity,
     Block,
     Settings,
     Pages,
@@ -78,6 +83,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
         None if value == "page" => Ok(SmokeArg::Page),
+        None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
         None if value == "settings" => Ok(SmokeArg::Settings),
         None if value == "pages" => Ok(SmokeArg::Pages),
@@ -90,8 +96,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
-             `pages`, `session`, `autofill` or `session-phase=1|2`"
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
+             `settings`, `pages`, `session`, `autofill` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -115,6 +121,8 @@ pub enum Smoke {
     Split,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
+    /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
+    Parity,
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
     /// Open wubble://settings, flip a setting through its toggle, read the store back.
@@ -205,6 +213,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
+            (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
@@ -216,12 +225,24 @@ impl TryFrom<Cli> for Command {
 }
 
 /// Parses `args` (including the program name), or returns clap's error.
+#[cfg(test)]
 pub fn parse<I, T>(args: I) -> Result<Command, clap::Error>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    Cli::try_parse_from(args).and_then(Command::try_from)
+    parse_with_shot(args).map(|(command, _)| command)
+}
+
+/// [`parse`], and `--shot`'s file.
+pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, Option<PathBuf>), clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let mut cli = Cli::try_parse_from(args)?;
+    let shot = cli.shot.take();
+    Command::try_from(cli).map(|command| (command, shot))
 }
 
 #[cfg(test)]
@@ -295,6 +316,10 @@ mod tests {
             Some(Command::Smoke(Smoke::Page))
         );
         assert!(parse(["wubble", "--smoke", "page", "--url", "about:blank"]).is_err());
+        assert_eq!(
+            parse(["wubble", "--smoke", "parity"]).ok(),
+            Some(Command::Smoke(Smoke::Parity))
+        );
     }
 
     #[test]
@@ -314,6 +339,15 @@ mod tests {
         );
         assert!(parse(["wubble", "--smoke", "settings", "--url", "about:blank"]).is_err());
         assert!(parse(["wubble", "--smoke", "settings", "--profile", "/tmp/p"]).is_err());
+    }
+
+    #[test]
+    fn a_shot_needs_a_smoke() {
+        let (command, shot) =
+            parse_with_shot(["wubble", "--smoke", "settings", "--shot", "/tmp/s.png"]).unwrap();
+        assert_eq!(command, Command::Smoke(Smoke::Settings));
+        assert_eq!(shot, Some(PathBuf::from("/tmp/s.png")));
+        assert!(parse(["wubble", "--shot", "/tmp/s.png"]).is_err());
     }
 
     #[test]

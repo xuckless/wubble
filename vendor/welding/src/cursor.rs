@@ -28,6 +28,29 @@ impl LatestCursor {
     }
 }
 
+/// wubble change (32): CEF's autoscroll cursors.
+#[cfg(feature = "cef-runtime")]
+fn panning(type_: cef::CursorType) -> Option<crate::surface::Panning> {
+    use crate::surface::Panning as P;
+    use cef::CursorType as C;
+    [
+        (C::MIDDLEPANNING, P::Middle),
+        (C::MIDDLE_PANNING_VERTICAL, P::MiddleVertical),
+        (C::MIDDLE_PANNING_HORIZONTAL, P::MiddleHorizontal),
+        (C::NORTHPANNING, P::North),
+        (C::NORTHEASTPANNING, P::NorthEast),
+        (C::EASTPANNING, P::East),
+        (C::SOUTHEASTPANNING, P::SouthEast),
+        (C::SOUTHPANNING, P::South),
+        (C::SOUTHWESTPANNING, P::SouthWest),
+        (C::WESTPANNING, P::West),
+        (C::NORTHWESTPANNING, P::NorthWest),
+    ]
+    .into_iter()
+    .find(|(c, _)| *c == type_)
+    .map(|(_, p)| p)
+}
+
 /// Map CEF's cursor type onto the shared vocabulary.
 ///
 /// The two names that matter are crossed, which is exactly the sort of thing
@@ -54,7 +77,10 @@ pub(crate) fn from_cef(type_: cef::CursorType) -> CursorShape {
         CursorShape::Progress
     } else if type_ == C::HELP {
         CursorShape::Help
-    } else if type_ == C::MOVE || type_ == C::MIDDLEPANNING {
+    } else if let Some(panning) = panning(type_) {
+        // wubble change (32): autoscroll's cursors, by name.
+        CursorShape::Panning(panning)
+    } else if type_ == C::MOVE {
         CursorShape::Move
     } else if type_ == C::NOTALLOWED || type_ == C::NODROP || type_ == C::DND_NONE {
         CursorShape::NotAllowed

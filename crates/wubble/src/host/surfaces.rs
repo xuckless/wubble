@@ -9,17 +9,19 @@ use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
 use slint::winit_030::winit::event::Ime as WinitIme;
 use std::path::PathBuf;
 
+use wubble_core::action::Action;
 use wubble_core::model::Command;
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
-use wubble_engine::page::{PageEvent, Rect, RequestId};
+use wubble_engine::page::{ClipboardRequest, PageEvent, Rect, RequestId};
 use wubble_ui::{
     AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
 };
 
-use super::{Host, new_tab, now_ms};
+use super::{Host, new_tab, now_ms, with_host};
 use crate::chooser::{self, DialogSpec};
+use crate::clipboard::Buffer;
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
 use crate::page_error::{self, ErrorEffect, ErrorEvent, PageError};
@@ -68,13 +70,19 @@ impl Host {
                     .map_or(NavFlags::default(), |v| NavFlags {
                         back: v.nav().page.can_go_back,
                         forward: v.nav().page.can_go_forward,
+                        search: None,
                     });
+                let nav = NavFlags {
+                    search: self.search_engine.map(|e| e.info().name),
+                    ..nav
+                };
                 self.apply_menu(tab, MenuEvent::Requested { id, menu, nav });
             }
             Routed::Menu(e) => {
                 self.apply_menu(tab, e);
             }
             Routed::Find(e) => self.apply_find(tab, e),
+            Routed::Drag { data, allowed } => self.drag_started(tab, data, allowed),
             Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
             Routed::Fullscreen(true) if visible => {
                 self.apply_screen(window, ScreenEvent::PageEntered(tab));
@@ -110,17 +118,35 @@ impl Host {
             Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
             Routed::Error(e) => self.apply_error(tab, e),
             Routed::Download(e) => self.download_event(window, tab, e),
-            Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
+            Routed::Console(line) => {
+                if std::env::var_os("WUBBLE_PARITY_TRACE").is_some() {
+                    eprintln!("console: {line}");
+                }
+                log::debug!(target: "wubble::console", "{line}")
+            }
             Routed::Favicon(icon) => self.show_favicon(tab, icon),
             Routed::Frame { frame, text } => self.autofill_message(tab, frame, &text),
             Routed::Pdf { path, text } => {
                 self.downloads.finish_pdf(&path);
                 self.toast(window, &text);
             }
-            Routed::ImeBounds(_) | Routed::Ignore => {}
+            Routed::Clipboard { frame, request } => {
+                self.clipboard_request(window, tab, frame, request)
+            }
+            // The page under the wheel is the visible one's; only that one zooms, as
+            // the zoom keys do.
+            Routed::WheelZoom { zoom_in } if self.model.visible_tab() == Some(tab) => {
+                self.perform(if zoom_in {
+                    Action::ZoomIn
+                } else {
+                    Action::ZoomOut
+                })
+            }
+            Routed::WheelZoom { .. } | Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);
-        // After the event took effect, so the smoke acts on the open surface.
+        // After the event took effect, so the smokes act on the open surface.
+        self.parity_menu(tab);
         if let Some(event) = seen {
             let view = self.pane_layout(window, tab).size;
             self.page_smoke_step(crate::page_smoke::Input::Page(&event, view));
@@ -255,6 +281,22 @@ impl Host {
                     self.dispatch(new_tab(url, Some(tab)));
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
+                MenuEffect::Run(MenuCommand::SaveAs(url)) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.start_download(&url);
+                    }
+                }
+                MenuEffect::Run(MenuCommand::Search(text)) => self.search_for(tab, text),
+                MenuEffect::Run(MenuCommand::Inspect { x, y }) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.inspect(Some((x, y)));
+                    }
+                }
+                MenuEffect::Run(MenuCommand::Media { op, x, y }) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.run_script(&menu::media_script(op, x, y));
+                    }
+                }
                 MenuEffect::Run(MenuCommand::SplitWith(t)) => self.dispatch(Command::SplitWith(t)),
                 MenuEffect::Run(MenuCommand::Unsplit(t)) => self.dispatch(Command::Unsplit(t)),
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
@@ -264,6 +306,25 @@ impl Host {
             }
         }
         answered
+    }
+
+    /// The menu's "Search … for": a new tab on the chosen engine's results, or
+    /// with no engine chosen yet, the command bar holding the text, where one
+    /// is picked.
+    fn search_for(&mut self, tab: TabId, text: String) {
+        let query = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        match self.search_engine {
+            Some(engine) => {
+                let url = wubble_core::omnibox::fill(engine.info().search, &query);
+                self.dispatch(new_tab(url, Some(tab)));
+            }
+            None => {
+                let _ = self.window.upgrade_in_event_loop(move |window| {
+                    window.invoke_request_new_tab();
+                    with_host(|host| host.open_bar(&window, crate::bar::BarMode::NewTab, query));
+                });
+            }
+        }
     }
 
     pub(super) fn apply_find(&mut self, tab: TabId, event: FindEvent) {
@@ -568,9 +629,55 @@ impl Host {
         window.set_toast_serial(self.toast_serial);
     }
 
-    pub(super) fn copy(&self, text: &str) {
-        if let Some(window) = self.window.upgrade() {
+    /// Puts `text` on the system clipboard: through the window's Wayland connection, else
+    /// through Slint.
+    pub(super) fn copy(&mut self, text: &str) {
+        if let Some(window) = self.window.upgrade()
+            && !self
+                .clipboard
+                .store(window.window(), Buffer::Clipboard, text)
+        {
             window.invoke_copy_text(text.into());
+        }
+    }
+
+    /// A frame's clipboard request (wubble-helper `clipboard.js`): copies go to the system
+    /// clipboard, pastes come from it, or from the primary selection after a middle click.
+    fn clipboard_request(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        frame: String,
+        request: ClipboardRequest,
+    ) {
+        let load = |host: &mut Self, buffer| {
+            host.clipboard
+                .load(window.window(), buffer)
+                .unwrap_or_default()
+        };
+        match request {
+            ClipboardRequest::Copy(text) => self.copy(&text),
+            ClipboardRequest::Primary(text) => {
+                self.clipboard
+                    .store(window.window(), Buffer::Primary, &text);
+            }
+            ClipboardRequest::Paste { primary } => {
+                let buffer = if primary {
+                    Buffer::Primary
+                } else {
+                    Buffer::Clipboard
+                };
+                let text = load(self, buffer);
+                if let Some(view) = self.tab_view(tab) {
+                    view.answer_clipboard(&frame, &text, None);
+                }
+            }
+            ClipboardRequest::Read(id) => {
+                let text = load(self, Buffer::Clipboard);
+                if let Some(view) = self.tab_view(tab) {
+                    view.answer_clipboard(&frame, &text, Some(id));
+                }
+            }
         }
     }
 }

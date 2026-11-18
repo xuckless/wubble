@@ -35,6 +35,19 @@ dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Console messages at debug level; no logger is installed by default (MIT OR Apache-2.0).
 log = "0.4"
+# `--shot`'s PNG (hand run only); already in Cargo.lock through image.
+png = "0.18"
+
+# CEF's pump requests through the main dispatch queue (`ui_loop.rs`); already in Cargo.lock
+# through winit's AppKit backend (Zlib OR Apache-2.0 OR MIT).
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The system clipboard and primary selection on the window's Wayland connection, for the
+# pages' clipboard (`clipboard.rs`); the crate Slint's winit backend uses, already in
+# Cargo.lock (MIT).
+smithay-clipboard = "0.7"
 
 [dev-dependencies]
 tempfile = "3"

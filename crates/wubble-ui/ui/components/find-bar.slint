@@ -31,11 +31,13 @@ export component FindBar inherits Rectangle {
         }
     }
 
-    visible: root.open;
+    // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
+    // the panel has faded.
+    visible: root.open || panel.opacity > 0;
     width: Shell.find-width;
     height: Shell.find-height;
 
-    GlassPanel {
+    panel := GlassPanel {
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
         over-content: true;
@@ -43,8 +45,8 @@ export component FindBar inherits Rectangle {
         transform-scale: root.open ? 1 : Motion.dropdownFrom;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: Shell.menu-in;
-            easing: Motion.easeOut;
+            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
         TouchArea { }
 
@@ -57,7 +59,8 @@ export component FindBar inherits Rectangle {
                 vertical-alignment: center;
                 single-line: true;
                 color: Palette.ink;
-                selection-background-color: Palette.rim;
+                selection-background-color: Shell.selection-fill;
+                selection-foreground-color: Shell.selection-ink;
                 font-family: Fonts.ui;
                 font-size: Type.body.size;
                 edited => {

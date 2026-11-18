@@ -6,16 +6,19 @@ mod block_smoke;
 mod blocking;
 mod chooser;
 mod cli;
+mod clipboard;
 mod host;
 mod ime;
 mod input;
 mod measure;
 mod menu;
 mod nav_smoke;
+mod page_drag;
 mod page_error;
 mod page_smoke;
 mod pages_smoke;
 mod panes;
+mod parity;
 mod perform;
 mod persist;
 mod pixels;
@@ -25,9 +28,11 @@ mod screen;
 mod session_smoke;
 mod settings_smoke;
 mod shell;
+mod shot;
 mod split_smoke;
 mod surface;
 mod tabs_smoke;
+mod ui_loop;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -47,7 +52,7 @@ use slint::winit_030::{EventResult, WinitWindowAccessor};
 use split_smoke::SplitSmoke;
 use tabs_smoke::TabsSmoke;
 use wubble_core::seam::Seam;
-use wubble_engine::app::{self, Engine, EngineConfig, EngineError, PumpScheduler};
+use wubble_engine::app::{self, Engine, EngineConfig, EngineError, ProfileKind, PumpScheduler};
 use wubble_engine::input::Point;
 use wubble_engine::view::Layout;
 use wubble_gfx::pacing::FrameStats;
@@ -73,6 +78,7 @@ pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
+pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
 
 /// `--smoke tabs`'s pages, in tab order.
@@ -87,8 +93,11 @@ const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
 const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
-    let command = match cli::parse(std::env::args_os()) {
-        Ok(command) => command,
+    let command = match cli::parse_with_shot(std::env::args_os()) {
+        Ok((command, shot)) => {
+            shot::request(shot);
+            command
+        }
         Err(e) => e.exit(),
     };
     match command {
@@ -204,6 +213,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: page FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Parity) => {
+            match with_smoke_dir(|config, dir| run(Mode::Parity, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    parity_passed: Some(gaps),
+                    ..
+                }) => {
+                    println!("smoke: parity ok; known gaps: {}", gaps.join(", "));
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: parity FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: parity FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -340,27 +372,21 @@ fn main() -> ExitCode {
             let mode = Mode::Measure {
                 scenario: m.scenario,
                 begin_frames: m.begin_frames,
+                out: m.out,
             };
             match with_smoke_dir(|config, dir| run(mode, config, dir)) {
                 Ok(Outcome {
                     failure: None,
-                    measured: Some((report, csv)),
+                    measured: Some(Ok(())),
+                    ..
+                }) => ExitCode::SUCCESS,
+                Ok(Outcome {
+                    failure: None,
+                    measured: Some(Err(e)),
                     ..
                 }) => {
-                    println!("{report}");
-                    match m.out {
-                        Some(path) => match measure::write_csv(&path, &csv) {
-                            Ok(()) => {
-                                println!("measure: samples written to {}", path.display());
-                                ExitCode::SUCCESS
-                            }
-                            Err(e) => {
-                                eprintln!("measure: cannot write {}: {e}", path.display());
-                                ExitCode::FAILURE
-                            }
-                        },
-                        None => ExitCode::SUCCESS,
-                    }
+                    eprintln!("measure: {e}");
+                    ExitCode::FAILURE
                 }
                 Ok(Outcome {
                     failure: Some(e), ..
@@ -417,8 +443,11 @@ fn install_shell_driver(
         window,
         seam,
         move |window, now, items| {
+            measure::render_began(now);
             if let Ok(mut glass) = glass.try_borrow_mut() {
+                let at = Instant::now();
                 glass.frame(window, now, items);
+                measure::stage(measure::Metric::Scene, at);
             }
             // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
             // Inside rendering the host may be busy (a pump renders); then this frame skips
@@ -498,6 +527,7 @@ fn with_smoke_dir<T>(
     let profile = Profile { dir: dir.clone() };
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
+        profile: ProfileKind::Throwaway,
         ..config
     });
     let result = f(config, &dir);
@@ -588,13 +618,16 @@ struct Outcome {
     blocked_seen: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
+    /// `--smoke parity` passed every item but the known gaps, which failed as expected.
+    parity_passed: Option<Vec<&'static str>>,
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     pages_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
-    /// `--measure`'s report and CSV.
-    measured: Option<(String, String)>,
+    /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
+    /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
+    measured: Option<Result<(), String>>,
 }
 
 /// What the window is for.
@@ -614,6 +647,8 @@ enum Mode {
     Split,
     /// `--smoke page`.
     Page,
+    /// `--smoke parity`.
+    Parity,
     /// `--smoke block`.
     Block,
     /// `--smoke settings`.
@@ -625,10 +660,12 @@ enum Mode {
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
-    /// CEF paced by external begin frames if `begin_frames`.
+    /// CEF paced by external begin frames if `begin_frames`; the samples
+    /// also go to `out` as CSV.
     Measure {
         scenario: measure::Scenario,
         begin_frames: bool,
+        out: Option<PathBuf>,
     },
 }
 
@@ -673,18 +710,24 @@ fn panes_frame(window: &AppWindow, now: Instant) -> bool {
 
 /// Hands a pump request to the host.
 pub fn deliver(wake: Wake) {
+    let at = Instant::now();
     with_host(|host| host.pump(wake));
+    measure::pumped(at);
 }
 
-/// CEF's pump requests, from any thread, onto the Slint loop. After the loop
-/// has ended they are dropped: the shutdown drain pumps by itself.
+/// CEF's pump requests, from any thread, onto the UI thread ([`ui_loop`]). After the loop
+/// has ended they find no host and are dropped: the shutdown drain pumps by itself.
 fn pump_scheduler() -> PumpScheduler {
+    use ui_loop::Post as _;
     PumpScheduler::new(|delay_ms| {
-        let _ = slint::invoke_from_event_loop(move || deliver(Wake::Schedule(delay_ms)));
+        ui_loop::Current::post(move || deliver(Wake::Schedule(delay_ms)));
     })
 }
 
 pub fn quit() {
+    if shot::defer(quit) {
+        return;
+    }
     // Fails only when no event loop runs, and the pump runs inside it.
     let _ = slint::quit_event_loop();
 }
@@ -767,7 +810,13 @@ fn connect_input(window: &AppWindow) {
     });
     window.window().on_winit_window_event(|_, event| {
         let mut result = EventResult::Propagate;
-        with_host(|host| result = host.window_event(event));
+        with_host(|host| {
+            result = if host.parity_owns_input(event) {
+                EventResult::PreventDefault
+            } else {
+                host.window_event(event)
+            }
+        });
         result
     });
 }
@@ -973,6 +1022,7 @@ fn run(
     }
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
+    wubble_ui::window::no_os_window_restoration();
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("femtovg-wgpu".into())
@@ -993,6 +1043,7 @@ fn run(
         tabs_smoke: None,
         session_smoke: None,
         page_smoke: None,
+        parity: None,
         block_smoke: None,
         split_smoke: None,
         settings_smoke: None,
@@ -1003,6 +1054,10 @@ fn run(
     let browsing = matches!(mode, Mode::Browse { .. });
     let smoke_block = matches!(mode, Mode::Block);
     let measuring = matches!(mode, Mode::Measure { .. });
+    let measure_out = match &mode {
+        Mode::Measure { out, .. } => out.clone(),
+        _ => None,
+    };
     // Smokes download into their throwaway profile.
     let downloads = match &mode {
         Mode::Browse { downloads, .. } => downloads.clone(),
@@ -1052,6 +1107,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Parity => (
+            Some(page_url(PARITY_PAGE)),
+            Checks {
+                parity: Some(Default::default()),
+                ..none
+            },
+        ),
         Mode::Settings => (
             Some(bundled()),
             Checks {
@@ -1090,6 +1152,7 @@ fn run(
         Mode::Measure {
             scenario,
             begin_frames,
+            ..
         } => (
             Some(page_url(scenario.page())),
             Checks {
@@ -1116,6 +1179,7 @@ fn run(
         pump_scheduler: Some(pump_scheduler()),
         content_filter: Some(blocking.clone()),
         features: loaded.settings.page_features(),
+        clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         ..config?
     })?;
     if smoke_block {
@@ -1126,6 +1190,7 @@ fn run(
     }
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
+    shot::attach(&window);
     let glass = Rc::new(RefCell::new(backdrop::choose(
         &gpu,
         &window,
@@ -1182,7 +1247,16 @@ fn run(
     drop(measure_timer);
     let measured = measuring
         .then(|| measure::finish(&gpu.describe()))
-        .flatten();
+        .flatten()
+        .map(|(report, csv)| {
+            println!("{report}");
+            let Some(path) = measure_out else {
+                return Ok(());
+            };
+            measure::write_csv(&path, &csv)
+                .map(|()| println!("measure: samples written to {}", path.display()))
+                .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        });
     drop(lifecycle);
     drop(audible);
     drop(window);
@@ -1197,6 +1271,7 @@ fn run(
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
+        parity_passed: host.parity_passed,
         settings_passed: host.settings_passed,
         pages_passed: host.pages_passed,
         session_passed: host.session_passed,

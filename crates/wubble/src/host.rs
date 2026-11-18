@@ -15,9 +15,12 @@
 //! keymap, and every action runs through [`Host::perform`].
 
 mod autofill;
+mod autoscroll;
 mod downloads;
+mod drag;
 mod pages;
 mod panes;
+mod parity;
 mod settings;
 mod surfaces;
 
@@ -46,7 +49,7 @@ use wubble_core::space::MAX_PANES;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
-use wubble_engine::input::{KeyId, Point};
+use wubble_engine::input::{KeyId, KeyInput, Point};
 use wubble_engine::nav::{Cursor, Phase, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
@@ -209,6 +212,8 @@ pub struct Checks {
     pub tabs_smoke: Option<TabsSmoke>,
     pub session_smoke: Option<SessionSmoke>,
     pub page_smoke: Option<PageSmoke>,
+    /// `--smoke parity` (`host/parity.rs`).
+    pub parity: Option<parity::ParityRun>,
     pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
     pub settings_smoke: Option<SettingsSmoke>,
@@ -292,6 +297,8 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    /// `--smoke parity` passed: the known gaps that failed as expected.
+    pub parity_passed: Option<Vec<&'static str>>,
     pub settings_passed: bool,
     pub pages_passed: bool,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
@@ -304,6 +311,11 @@ pub struct Host {
     /// Session changes not yet saved.
     save: SaveState,
     /// `None` until the first-run choice.
+    /// A page's drag inside the window, and the pointer it last went to
+    /// (relative to the drag's page).
+    autoscroll: autoscroll::AutoscrollPointer,
+    page_drag: crate::page_drag::PageDrag,
+    drag_point: Point,
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
     /// Which commit is a typed visit.
@@ -353,6 +365,8 @@ pub struct Host {
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
     pace: Option<Pace>,
+    /// The system clipboard, for the pages' copies and pastes and the shell's copies.
+    clipboard: crate::clipboard::Clipboard,
 }
 
 impl Host {
@@ -434,6 +448,7 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            parity_passed: None,
             settings_passed: false,
             pages_passed: false,
             settings_read: None,
@@ -443,6 +458,9 @@ impl Host {
             page_first: PendingKeys::default(),
             store,
             save: SaveState::default(),
+            autoscroll: Default::default(),
+            page_drag: Default::default(),
+            drag_point: Point { x: 0.0, y: 0.0 },
             search_engine: None,
             live_suggestions: false,
             typed_nav: TypedNav::default(),
@@ -472,8 +490,17 @@ impl Host {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
             }),
+            clipboard: Default::default(),
         };
         host.replay_settings();
+        if host.checks.check_pixels {
+            // The glass check is a correctness check of the scene's full rendering: the governor
+            // would otherwise pick the level from how fast this machine runs (and at `Flat` the
+            // glass is legitimately one flat colour).
+            host.glass
+                .borrow_mut()
+                .set_setting(wubble_core::apply::GlassSetting::Full);
+        }
         host.render_downloads(window);
         host.session_icon_setup();
         match open {
@@ -549,6 +576,10 @@ impl Host {
                 match self.engine.open_view(config) {
                     Ok(id) => {
                         self.views.insert(tab, id);
+                        // Page drags run inside the window (`page_drag`).
+                        if let Some(view) = self.engine.view(id) {
+                            view.set_drag_source(true);
+                        }
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -608,6 +639,11 @@ impl Host {
         self.frames.retain(|tab, _| kept.contains(tab));
         if self.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
+            for tab in self.shown_tabs() {
+                if let Some(view) = self.tab_view(tab) {
+                    view.reset_cursor();
+                }
+            }
         }
         self.settle_panes(&window);
         self.sync_focus(&window);
@@ -620,8 +656,17 @@ impl Host {
             &self.favicons,
         );
         self.render_surfaces(&window);
-        let page = self.view().map(|view| view.nav().page.clone());
-        crate::bind::render_history(&window, page.as_ref());
+        let nav = self.view().map(|view| {
+            (
+                view.nav().page.clone(),
+                matches!(view.nav().phase, Phase::Loading { .. }),
+            )
+        });
+        crate::bind::render_history(
+            &window,
+            nav.as_ref().map(|n| &n.0),
+            nav.as_ref().is_some_and(|n| n.1),
+        );
         self.render_pages();
     }
 
@@ -757,6 +802,7 @@ impl Host {
                 view_width,
             });
         }
+        self.parity_step(crate::parity::Input::Worked);
         if self.checks.quit_after.is_some() {
             self.idle_runs += 1;
             if self.idle_runs > SMOKE_MAX_IDLE_RUNS {
@@ -813,10 +859,12 @@ impl Host {
             .record_accelerated(self.last_present.map(|last| now - last));
         self.last_present = Some(now);
         self.idle_runs = 0;
+        // Once: a frame the loop shows before the quit takes effect (on macOS the pump runs
+        // outside winit's handler, so one more can arrive) is not checked again.
         if self
             .checks
             .quit_after
-            .is_some_and(|n| self.stats.accelerated >= n)
+            .is_some_and(|n| self.stats.accelerated == n)
         {
             if let Some(tab) = self.model.visible_tab()
                 && let Some(frame) = self.frames.get(&tab)
@@ -848,7 +896,9 @@ impl Host {
     }
 
     /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame.
+    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame. The
+    /// smoke pins the glass at `Full` (`Host::new`), so the verdict never depends on the
+    /// quality governor; the line says the level it checked.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
         if !self.glass.borrow().is_scene() {
             println!("smoke: glass fallback");
@@ -861,9 +911,11 @@ impl Host {
             .get(key)
             .cloned()
             .ok_or("the sidebar's glass never reached the scene")?;
-        // The band below the tab list and above the Space switcher: glass, no text.
+        // The window's glass under the sidebar, left of the page card: the band below the tab
+        // list and above the Space switcher, glass and no text.
         let scale = window.window().scale_factor();
-        let (x, w) = (side.x + side.radius, side.width - 2.0 * side.radius);
+        let x = side.x + side.radius;
+        let w = window.get_content_x() - side.radius - x;
         let (y, h) = (side.y + side.height * 0.45, side.height * 0.25);
         let region = pixels::Region {
             x: physical(x, scale),
@@ -879,7 +931,14 @@ impl Host {
             .readback()
             .ok_or("the scene has no frame")?;
         let diff = pixels::check_shows_scene(shot, &scene, region)?;
-        println!("smoke: glass ok distinct={} diff={diff}", sample.distinct);
+        println!(
+            "smoke: glass ok quality={} distinct={} diff={diff}",
+            self.glass
+                .borrow()
+                .quality()
+                .map_or("n/a".into(), |q| format!("{q:?}")),
+            sample.distinct
+        );
         Ok(())
     }
 
@@ -891,6 +950,7 @@ impl Host {
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
+        self.parity_web(&event);
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -898,6 +958,7 @@ impl Host {
                     return;
                 }
                 window.set_web_cursor(cursor as i32);
+                self.autoscroll_input(window, wubble_core::autoscroll::Input::Cursor(cursor.pan()));
                 // Slint applies a TouchArea's cursor only while it handles a
                 // mouse event (i-slint-core 1.19 `window.rs`, after
                 // `process_mouse_input`), and CEF reports the shape after
@@ -928,7 +989,11 @@ impl Host {
                 }
                 self.dispatch(Command::TitleChanged { tab, title });
             }
-            WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
+            WebEvent::PopupRequested { url, background } => self.dispatch(if background {
+                Command::NewBackgroundTab { url, opener: tab }
+            } else {
+                new_tab(url, Some(tab))
+            }),
             WebEvent::LoadStarted => self.apply_error(tab, ErrorEvent::LoadStarted),
             WebEvent::LoadingChanged { loading, .. } => {
                 if !loading {
@@ -976,7 +1041,7 @@ impl Host {
         }
     }
 
-    fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
+    pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
         self.bar.mode = mode;
         window.set_command_query(query.as_str().into());
         self.bar_query(window, &query);
@@ -1107,6 +1172,11 @@ impl Host {
                 }
             }
             Plan::Copy(text) => self.copy(&text),
+            Plan::DevTools => {
+                if let Some(view) = self.model.visible_tab().and_then(|t| self.tab_view(t)) {
+                    view.inspect(None);
+                }
+            }
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::OpenBeside => self.open_beside(),
             // Later, outside the host: opening the bar calls back into it.
@@ -1415,7 +1485,15 @@ impl Host {
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
-            Some(settings_smoke::Action::Open) => self.perform(Action::OpenSettings),
+            Some(settings_smoke::Action::Open) => {
+                if crate::shot::requested() {
+                    let host = std::cell::RefCell::new(&mut *self);
+                    crate::shot::seed(&mut |c| host.borrow_mut().dispatch(c), || {
+                        host.borrow().model.clone()
+                    });
+                }
+                self.perform(Action::OpenSettings)
+            }
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
                 // which it calls back into. The read is queued after the write it causes.
@@ -1702,6 +1780,7 @@ impl Host {
         let Some(window) = self.window.upgrade() else {
             return EventResult::Propagate;
         };
+        self.clipboard.open(window.window());
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
@@ -1709,18 +1788,28 @@ impl Host {
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
                 self.glass.borrow_mut().pointer_move(position.x, position.y);
             }
+            WindowEvent::HoveredFile(_)
+            | WindowEvent::DroppedFile(_)
+            | WindowEvent::HoveredFileCancelled => self.file_drop(&window, event),
             WindowEvent::CursorLeft { .. } => {
                 self.input.pointer = None;
                 self.glass.borrow_mut().pointer_leave();
             }
-            // A left press anywhere sends a wave through the scene (the page gets it too). Raw,
-            // so the side buttons navigate over the shell too, without a wave.
+            // A left press on the shell sends a wave through the scene: through the glass under
+            // it, else through the liquid. Not over the page, which covers the scene (the
+            // design's web view never ripples the backdrop). Raw, so the side buttons navigate
+            // over the shell too, without a wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
-                if input::taps_backdrop(*button) {
+                if input::taps_backdrop(*button)
+                    && !self
+                        .input
+                        .pointer
+                        .is_some_and(|p| input::over_content(&window, p))
+                {
                     self.glass.borrow_mut().tap();
                 }
                 if let Some(action) = input::button_action(*button) {
@@ -1736,18 +1825,6 @@ impl Host {
                     return EventResult::PreventDefault;
                 }
             }
-            // Esc leaves page fullscreen before anything else sees it.
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } if event.state == ElementState::Pressed
-                && event.logical_key == Key::Named(NamedKey::Escape)
-                && matches!(self.screen, Screen::Page { .. }) =>
-            {
-                self.apply_screen(&window, ScreenEvent::Escape);
-                return EventResult::PreventDefault;
-            }
             // Synthetic presses (keys already held when the window gained
             // focus, X11) never reach the page.
             WindowEvent::KeyboardInput {
@@ -1756,65 +1833,85 @@ impl Host {
                 ..
             } => {
                 let key = self.input.key_input(event);
-                // The keybinding editor's recorder takes keys before any shortcut does.
-                if key.pressed
-                    && self.capture_key(input::chord_of(
-                        &key.unmodified,
-                        key.modifiers.keys,
-                        key.text.as_deref(),
-                    ))
-                {
-                    return EventResult::PreventDefault;
-                }
-                let focus = if window.get_web_focused() {
-                    KeyFocus::Page
-                } else if window.get_command_bar_state() != CommandBarState::Closed {
-                    KeyFocus::Field
-                } else {
-                    KeyFocus::Shell
-                };
-                // Actions run on the press; releases follow the focus.
-                let binding = key
-                    .pressed
-                    .then(|| {
-                        input::chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref())
-                    })
-                    .flatten()
-                    .and_then(|chord| self.keymap.action_for(chord));
-                let binding = if matches!(self.screen, Screen::Page { .. }) {
-                    input::page_fullscreen_binding(binding)
-                } else {
-                    binding
-                };
-                let route = input::key_route(focus, binding, input::is_modifier(&key.unmodified));
-                if matches!(
-                    route,
-                    KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
-                ) {
-                    self.pace(PaceEvent::Wake);
-                    if let Some(view) = self.view() {
-                        view.key(&key);
-                    }
-                }
-                match route {
-                    KeyRoute::Perform(action) => {
-                        self.perform(action);
-                        return EventResult::PreventDefault;
-                    }
-                    // Runs on the view's `KeyUnhandled`, if the page sends it.
-                    KeyRoute::PageFirst(action) => {
-                        if let Some(id) = KeyId::of(&key) {
-                            self.page_first.push(id, action);
-                        }
-                        return EventResult::PreventDefault;
-                    }
-                    KeyRoute::Page => return EventResult::PreventDefault,
-                    KeyRoute::PageAndShell | KeyRoute::Shell => {}
-                }
+                return self.key(&window, &key);
             }
             _ => {}
         }
         EventResult::Propagate
+    }
+
+    /// One key from the keyboard (a raw winit key event, or `--smoke parity`'s): where it goes
+    /// is `input::key_route`'s decision.
+    pub(crate) fn key(&mut self, window: &AppWindow, key: &KeyInput) -> EventResult {
+        // Esc ends a page drag with nothing dropped, as in Chromium.
+        if key.pressed && key.unmodified == Key::Named(NamedKey::Escape) && self.drag_cancelled() {
+            return EventResult::PreventDefault;
+        }
+        // Esc leaves page fullscreen before anything else sees it.
+        if key.pressed
+            && key.unmodified == Key::Named(NamedKey::Escape)
+            && matches!(self.screen, Screen::Page { .. })
+        {
+            self.apply_screen(window, ScreenEvent::Escape);
+            return EventResult::PreventDefault;
+        }
+        // The keybinding editor's recorder takes keys before any shortcut does.
+        if key.pressed
+            && self.capture_key(input::chord_of(
+                &key.unmodified,
+                key.modifiers.keys,
+                key.text.as_deref(),
+            ))
+        {
+            return EventResult::PreventDefault;
+        }
+        let focus = if window.get_web_focused() {
+            KeyFocus::Page
+        } else if window.get_command_bar_state() != CommandBarState::Closed {
+            KeyFocus::Field
+        } else {
+            KeyFocus::Shell
+        };
+        // Actions run on the press; releases follow the focus.
+        let binding = key
+            .pressed
+            .then(|| input::chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref()))
+            .flatten()
+            .and_then(|chord| self.keymap.action_for(chord));
+        let binding = if matches!(self.screen, Screen::Page { .. }) {
+            input::page_fullscreen_binding(binding)
+        } else {
+            binding
+        };
+        let route = input::key_route(focus, binding, input::is_modifier(&key.unmodified));
+        if matches!(
+            route,
+            KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
+        ) {
+            self.pace(PaceEvent::Wake);
+            if let Some(view) = self.view() {
+                view.key(key);
+            }
+            // A key down the page sees ends its autoscroll.
+            if key.pressed {
+                self.autoscroll_input(window, wubble_core::autoscroll::Input::Pressed);
+            }
+        }
+        match route {
+            KeyRoute::Perform(action) => {
+                self.perform(action);
+                EventResult::PreventDefault
+            }
+            // Runs on the view's `KeyUnhandled`, if the page sends it.
+            KeyRoute::PageFirst(action) => {
+                if let Some(id) = KeyId::of(key) {
+                    self.page_first.push(id, action);
+                }
+                EventResult::PreventDefault
+            }
+            KeyRoute::Page => EventResult::PreventDefault,
+            KeyRoute::PageAndShell | KeyRoute::Shell => EventResult::Propagate,
+        }
     }
 
     /// Tells every view the frame rate if the window is now on a display
@@ -1879,6 +1976,12 @@ impl Host {
     }
 
     pub fn pointer_moved(&mut self, pane: i32, point: Point) {
+        if self.drag_pointer(point, false) {
+            return;
+        }
+        if let (Some(window), Some(tab)) = (self.window.upgrade(), crate::shell::tab_id(pane)) {
+            self.autoscroll_pointer(&window, tab, point);
+        }
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
         self.pace(PaceEvent::Wake);
         if let Some(view) = self.pane_view(pane) {
@@ -1906,6 +2009,12 @@ impl Host {
         let Some(button) = input::mouse_button(button) else {
             return;
         };
+        if !pressed && self.drag_pointer(point, true) {
+            return;
+        }
+        if pressed && let Some(window) = self.window.upgrade() {
+            self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
+        }
         if pressed
             && let Some(tab) = crate::shell::tab_id(pane)
             && self.model.visible_tab() != Some(tab)

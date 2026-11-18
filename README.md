@@ -13,6 +13,8 @@
 
 </div>
 
+wubble is an open-source web browser for Linux and macOS, written in Rust. It has vertical tabs, Spaces, split view and a built-in content blocker, and it is built on Chromium (CEF) with a [Slint](https://slint.dev) shell drawn on the GPU with [wgpu](https://wgpu.rs).
+
 > **Early.** wubble opens pages, keeps tabs and renders well on Linux, but it is not a daily browser yet. There are no releases; you build it from source.
 
 ## Build

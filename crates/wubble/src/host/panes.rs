@@ -180,7 +180,8 @@ impl Host {
         let bowed = self.mask_panes(window);
         self.render_panes(window);
         self.measure_shell(window, bowed);
-        let moving = strings || stretching;
+        let autoscrolling = self.autoscroll_frame(window, now);
+        let moving = strings || stretching || autoscrolling;
         if !moving {
             self.panes_last = None;
         }
@@ -468,9 +469,11 @@ impl Host {
             let measured = (Some(rect.tab) == focused)
                 .then(|| measure::Frame::of(&frame, layout.frame_size()));
             let slot = self.slot_for(rect.tab);
+            let blit = Instant::now();
             let image = self.presenters[slot]
                 .present(frame)
                 .map_err(|e| e.to_string())?;
+            measure::stage(measure::Metric::Blit, blit);
             if let Some(measured) = measured {
                 let presenter = &self.presenters[slot];
                 measure::taken(measured, || {
@@ -533,7 +536,7 @@ impl Host {
             };
             // The first (or only) pane shows the bundled page: its swatches' exact colours.
             if last.is_none() {
-                pixels::check_swatches(shot, region)
+                pixels::check_swatches(shot, region, scale)
                     .map_err(|e| format!("pane of tab {}: {e}", r.tab.0))?;
             }
             let sample =
