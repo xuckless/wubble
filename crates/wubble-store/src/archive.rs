@@ -41,8 +41,8 @@ fn read(r: &turso::Row) -> Result<ArchivedTab> {
 }
 
 impl Store {
-    /// Adds a tab to the Archive. `tab.id` is ignored: the store assigns it.
-    pub async fn push_archive(&mut self, tab: &ArchivedTab) -> Result<()> {
+    /// Adds a tab to the Archive and returns its id. `tab.id` is ignored: the store assigns it.
+    pub async fn push_archive(&mut self, tab: &ArchivedTab) -> Result<i64> {
         self.conn
             .execute(
                 "INSERT INTO archive(archived_at, last_active, space_id, container_id, url, title) \
@@ -57,7 +57,7 @@ impl Store {
                 ),
             )
             .await?;
-        Ok(())
+        Ok(self.conn.last_insert_rowid())
     }
 
     /// One page: entries strictly before the `(archived_at, id)` cursor of the last row shown

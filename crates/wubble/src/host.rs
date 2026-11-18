@@ -1572,20 +1572,21 @@ impl Host {
                 last_active_ms: t.last_active_ms,
                 archived_at_ms: now,
             };
-            self.store.push_archive(entry, move |stored| {
+            self.store.push_archive(entry, move |row| {
                 let _ = slint::invoke_from_event_loop(move || {
-                    with_host(|host| host.archived(tab, stored));
+                    with_host(|host| host.archived(tab, row));
                 });
             });
         }
     }
 
-    /// The store answered for `tab`: close it if it is filed and still unvisited.
-    fn archived(&mut self, tab: TabId, stored: bool) {
-        if !stored {
+    /// The store answered for `tab` with its archive row: close the tab if it is filed and
+    /// still unvisited, else drop the row so the tab is not listed twice.
+    fn archived(&mut self, tab: TabId, row: Option<i64>) {
+        let Some(row) = row else {
             self.archiving.remove(&tab);
             return;
-        }
+        };
         // unvisited since it was filed (its stamp is unchanged) and still closable
         let unvisited = self.archiving.get(&tab).is_some_and(|stamp| {
             self.model
@@ -1595,6 +1596,8 @@ impl Host {
         }) && !self.model.visible_tabs().contains(&tab);
         if unvisited {
             self.dispatch(Command::CloseTab(tab));
+        } else {
+            self.store.delete_archive(row);
         }
         self.archiving.remove(&tab);
         if self.shown_page() == Some(InternalPage::Archive) {

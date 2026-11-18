@@ -264,8 +264,8 @@ enum Request {
     },
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
-    /// Files a tab in the Archive; replies whether the store kept it (only then may the tab close).
-    PushArchive(ArchivedTab, Reply<bool>),
+    /// Files a tab in the Archive; replies with its archive id when the store kept it (only then may the tab close).
+    PushArchive(ArchivedTab, Reply<Option<i64>>),
     /// One page of the archive page's rows, shaped as history rows (`visit_id` is the archive id).
     ListArchive {
         query: String,
@@ -460,7 +460,7 @@ impl StoreClient {
     }
 
     /// `reply` runs on the store thread: whether the tab is safely filed.
-    pub fn push_archive(&self, tab: ArchivedTab, reply: impl FnOnce(bool) + Send + 'static) {
+    pub fn push_archive(&self, tab: ArchivedTab, reply: impl FnOnce(Option<i64>) + Send + 'static) {
         self.send(Request::PushArchive(tab, Box::new(reply)));
     }
 
@@ -910,7 +910,7 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
         }
         Request::PushArchive(tab, reply) => {
             let pushed = store.push_archive(&tab).await;
-            reply(pushed.is_ok());
+            reply(pushed.as_ref().ok().copied());
             pushed?;
         }
         Request::ListArchive {

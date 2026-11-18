@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::model::Model;
 use crate::routing::host_key;
-use crate::space::{Item, Space, SpaceId};
+use crate::space::{ContainerId, Item, Space, SpaceId};
 use crate::tab::{Tab, TabId};
-use crate::url::url_key;
+use crate::url::{is_recordable, url_key};
 
 /// Fewest unpinned top-level tabs of one site that make a folder.
 pub const MIN_GROUP: usize = 2;
@@ -23,16 +23,11 @@ pub struct Group {
     pub tabs: Vec<TabId>,
 }
 
-fn is_web(url: &str) -> bool {
-    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
-    lower.starts_with("http://") || lower.starts_with("https://")
-}
-
 /// The site a web page belongs to: the registrable domain (`a.b.example.co.uk` is
 /// `example.co.uk`), else the host (`localhost`, an IP address). `None` for pages without
 /// a host and for internal pages.
 pub fn site_of(url: &str) -> Option<String> {
-    if !is_web(url) {
+    if !is_recordable(url) {
         return None;
     }
     let host = host_key(url)?;
@@ -80,16 +75,20 @@ pub fn has_folder(space: &Space, name: &str) -> bool {
 /// closed.
 pub fn duplicates(model: &Model, space: SpaceId) -> Vec<TabId> {
     let visible = model.visible_tabs();
-    let mut by_key: HashMap<String, Vec<TabId>> = HashMap::new();
+    let mut by_key: HashMap<(ContainerId, String), Vec<TabId>> = HashMap::new();
     let mut order = vec![];
     for t in model.order(space) {
         let Some(tab) = model.tabs.get(&t) else {
             continue;
         };
-        if !is_web(&tab.url) || model.windowed(t).is_some() {
+        if !is_recordable(&tab.url) || model.windowed(t).is_some() {
             continue;
         }
-        let key = url_key(tab.url.split('#').next().unwrap_or(&tab.url));
+        // containers have separate cookie jars: the same page in two is two sessions
+        let key = (
+            tab.container,
+            url_key(tab.url.split('#').next().unwrap_or(&tab.url)),
+        );
         let group = by_key.entry(key.clone()).or_default();
         if group.is_empty() {
             order.push(key);
@@ -234,5 +233,13 @@ mod tests {
         let (m3, _) = apply(m2, Command::PinTab(ids[2]));
         let (m3, _) = apply(m3, Command::PinTab(ids[0]));
         assert_eq!(duplicates(&m3, SpaceId(0)), vec![ids[1], ids[3]]);
+    }
+
+    #[test]
+    fn duplicates_in_other_containers_are_kept() {
+        let (mut m, ids) = model(&["https://c.test/", "https://c.test/", "https://c.test/"]);
+        m.tabs.get_mut(&ids[1]).unwrap().container = ContainerId(1);
+        // ids[2] is visible; ids[0] shares its container, ids[1] does not
+        assert_eq!(duplicates(&m, SpaceId(0)), vec![ids[0]]);
     }
 }
