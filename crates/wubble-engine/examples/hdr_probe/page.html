@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>hdr probe</title>
+<style>
+  html, body { margin: 0; background: #000; }
+  .sw { position: absolute; width: 40px; height: 40px; top: 10px; }
+  #img { position: absolute; left: 10px; top: 70px; width: 288px; height: 96px; image-rendering: pixelated; }
+  #vid { position: absolute; left: 10px; top: 180px; width: 160px; height: 90px; }
+  #cv  { position: absolute; left: 310px; top: 10px; width: 40px; height: 40px; }
+</style>
+<!-- swatch centres (40x40 at y 10): x = 30, 80, 130, 180, 230, 280 -->
+<div class="sw" style="left:10px;  background: color(rec2100-pq 0.581 0.581 0.581)"></div>
+<div class="sw" style="left:60px;  background: color(rec2100-pq 0.752 0.752 0.752)"></div>
+<div class="sw" style="left:110px; background: color(rec2100-pq 0.903 0.903 0.903)"></div>
+<div class="sw" style="left:160px; background: color(srgb-linear 4 4 4)"></div>
+<div class="sw" style="left:210px; background: color(srgb 1 1 1)"></div>
+<div class="sw" style="left:260px; background: color(srgb 0.5 0.5 0.5)"></div>
+<div class="sw" style="left:350px; top:70px;  background: color(rec2020 0 1 0)"></div>
+<div class="sw" style="left:350px; top:120px; background: color(display-p3 1 0 0)"></div>
+<canvas id="cv" width="40" height="40"></canvas>
+<img id="img" src="pq-hdr.avif">
+<video id="vid" src="pq-hdr.mp4" muted loop autoplay playsinline></video>
+<!-- 8-bit control for the 10-bit clip above: same PQ greys and tags; the 10-bit one renders black (TODO.md) -->
+<video id="pq8" src="pq-hdr-8bit.mp4" muted loop autoplay playsinline style="position:absolute;left:10px;top:280px;width:160px;height:90px"></video>
+<video id="sdr" src="sdr.mp4" muted loop autoplay playsinline style="position:absolute;left:200px;top:180px;width:160px;height:90px"></video>
+<script>
+const out = {};
+const q = (m) => matchMedia(m).matches;
+out.dpr = devicePixelRatio;
+out.colorDepth = screen.colorDepth;
+out.dynamicRangeHigh = q('(dynamic-range: high)');
+out.videoDynamicRangeHigh = q('(video-dynamic-range: high)');
+out.gamutP3 = q('(color-gamut: p3)');
+out.gamutRec2020 = q('(color-gamut: rec2020)');
+out.cssRec2100pq = CSS.supports('color', 'color(rec2100-pq 0.5 0.5 0.5)');
+out.cssDynamicRangeLimit = CSS.supports('dynamic-range-limit', 'standard');
+out.hasConfigureHDR = typeof HTMLCanvasElement.prototype.configureHighDynamicRange;
+out.webgpu = typeof navigator.gpu;
+out.avifDecodeSupportedType = (() => { const v = document.createElement('video');
+  return {av1: v.canPlayType('video/mp4; codecs="av01.0.04M.10.0.110.09.16.09.0"'),
+          hevc: v.canPlayType('video/mp4; codecs="hev1.2.4.L120.B0"')}; })();
+try {
+  const c = document.getElementById('cv').getContext('2d', {colorSpace: 'rec2100-pq', pixelFormat: 'float16'});
+  out.canvasAttrs = c ? JSON.stringify(c.getContextAttributes()) : 'null';
+  if (c) { c.fillStyle = 'color(rec2100-pq 0.752 0.752 0.752)'; c.fillRect(0, 0, 40, 40); }
+} catch (e) { out.canvasAttrs = 'error ' + e; }
+const img = document.getElementById('img');
+const vid = document.getElementById('vid');
+Promise.all([
+  img.decode().then(() => `ok ${img.naturalWidth}x${img.naturalHeight}`, (e) => 'fail ' + e),
+  new Promise((r) => { vid.addEventListener('playing', () => r(`playing ${vid.videoWidth}x${vid.videoHeight}`), {once: true});
+                       vid.addEventListener('error', () => r('error ' + (vid.error && vid.error.message)), {once: true});
+                       setTimeout(() => r('timeout'), 8000); }),
+]).then(([a, v]) => {
+  out.avif = a; out.video = v;
+  console.log('HDRPROBE ' + JSON.stringify(out));
+  console.log('HDRPROBE done');
+});
+</script>

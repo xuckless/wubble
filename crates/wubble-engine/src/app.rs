@@ -299,6 +299,23 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     cef
 }
 
+/// Extra Chromium switches for experiments, from `WUBBLE_PROBE_SWITCHES`
+/// (`name=value;name;...`; unset is empty, so the shipped command line does not
+/// change). They come last, so one overrides a table entry of the same name
+/// (`enable-features` replaces the table's value, it does not extend it).
+/// Used by the HDR probe (`examples/hdr_probe.rs`) to try colour-profile and
+/// HDR feature switches without a rebuild.
+fn probe_switches(spec: Option<&str>) -> Vec<(String, Option<String>)> {
+    spec.unwrap_or_default()
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .map(|s| match s.split_once('=') {
+            Some((name, value)) => (name.to_string(), Some(value.to_string())),
+            None => (s.to_string(), None),
+        })
+        .collect()
+}
+
 /// The CEF version wubble is built against (the bundled libcef comes from the
 /// same `cef-dll-sys` release).
 pub fn version() -> &'static str {
@@ -383,7 +400,12 @@ pub struct Engine {
 impl Engine {
     /// Initialises CEF. Call once per process, on the UI thread.
     pub fn start(config: EngineConfig) -> Result<Self, EngineError> {
-        let cef = cef_config(&config);
+        let mut cef = cef_config(&config);
+        // Read here, not in `cef_config`, so that stays pure and its tests
+        // do not depend on the caller's environment.
+        cef.command_line_switches.extend(probe_switches(
+            std::env::var("WUBBLE_PROBE_SWITCHES").ok().as_deref(),
+        ));
         if let Some(helper) = cef
             .browser_subprocess_path
             .as_ref()
@@ -713,6 +735,18 @@ mod tests {
                 "enable-features".to_string(),
                 Some("OverlayScrollbar".to_string())
             )]
+        );
+    }
+
+    #[test]
+    fn probe_switches_parse_name_value_pairs() {
+        assert!(probe_switches(None).is_empty());
+        assert_eq!(
+            probe_switches(Some("force-color-profile=hdr10;;disable-gpu-vsync")),
+            vec![
+                ("force-color-profile".to_string(), Some("hdr10".to_string())),
+                ("disable-gpu-vsync".to_string(), None),
+            ]
         );
     }
 
