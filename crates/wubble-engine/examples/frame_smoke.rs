@@ -11,10 +11,11 @@
 //!     cargo run -p wubble-bundle -- --exe target/debug/examples/frame_smoke
 //!     target/debug/bundle/wubble.app/Contents/MacOS/wubble
 //!
-//! Prints `frame smoke: ok` when every swatch has its colour and no frame
-//! took the CPU `OnPaint` fallback (`cpu_fallback=0`). The readback is the
-//! check, never on the frame path. Needs no window, so it works over ssh.
-//! The deadline only bounds a hang; nothing here measures speed.
+//! Prints `frame smoke: ok` when every swatch of the bundled smoke page has
+//! its colour and no frame took the CPU `OnPaint` fallback (`cpu_fallback=0`).
+//! The readback is the check, never on the frame path. Needs no window, so it works over ssh.
+//! The deadline only bounds a hang (of the page or of CEF's shutdown);
+//! nothing here measures speed.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -22,24 +23,10 @@ use std::time::{Duration, Instant};
 
 use wubble_engine::app::{Engine, EngineConfig};
 use wubble_engine::view::{Layout, ViewConfig};
-use wubble_gfx::{FrameSize, GpuContext};
+use wubble_gfx::{FrameSize, GpuContext, swatch};
 
-const PAGE: &str = r#"<!doctype html><body style="margin:0;background:#fff">
-<div style="position:absolute;left:0;top:0;width:50px;height:50px;background:#ff0000"></div>
-<div style="position:absolute;left:50px;top:0;width:50px;height:50px;background:#00ff00"></div>
-<div style="position:absolute;left:100px;top:0;width:50px;height:50px;background:#0000ff"></div>
-<div style="position:absolute;left:150px;top:0;width:50px;height:50px;background:#808080"></div>
-</body>"#;
-
-/// Where each swatch is read and the display-encoded colour it must have.
-/// The grey catches a double sRGB encode (it reads 188 then).
-const SWATCHES: [((u32, u32), [u8; 4]); 5] = [
-    ((25, 25), [255, 0, 0, 255]),
-    ((75, 25), [0, 255, 0, 255]),
-    ((125, 25), [0, 0, 255, 255]),
-    ((175, 25), [128, 128, 128, 255]),
-    ((300, 200), [255, 255, 255, 255]),
-];
+/// The bundled smoke page, whose swatches `wubble_gfx::swatch` checks.
+const PAGE: &str = include_str!("../../wubble/assets/smoke.html");
 
 /// How long a hang may last before the smoke gives up.
 const DEADLINE: Duration = Duration::from_secs(60);
@@ -62,7 +49,7 @@ fn main() -> ExitCode {
 
 fn run(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let page = dir.join("swatches.html");
+    let page = dir.join("smoke.html");
     std::fs::write(&page, PAGE).map_err(|e| e.to_string())?;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -100,7 +87,7 @@ fn run(dir: &Path) -> Result<(), String> {
 
     let outcome = (|| {
         let start = Instant::now();
-        let mut last = Vec::new();
+        let mut last = Err("no frame".to_string());
         while start.elapsed() < DEADLINE {
             engine.tick();
             std::thread::sleep(Duration::from_millis(2));
@@ -109,16 +96,9 @@ fn run(dir: &Path) -> Result<(), String> {
                 continue;
             };
             presenter.present(frame).map_err(|e| e.to_string())?;
-            last = SWATCHES
-                .iter()
-                .map(|&((x, y), _)| presenter.probe(x, y))
-                .collect();
             // The first frames may be blank while the page loads.
-            if SWATCHES
-                .iter()
-                .zip(&last)
-                .all(|((_, want), got)| *got == Some(*want))
-            {
+            last = swatch::check(|x, y| presenter.probe(x, y).map(|[r, g, b, _]| [r, g, b]));
+            if last.is_ok() {
                 let fallback = view.cpu_fallback_frames();
                 println!("frame smoke: swatches ok cpu_fallback={fallback:?}");
                 return match fallback {
@@ -127,11 +107,19 @@ fn run(dir: &Path) -> Result<(), String> {
                 };
             }
         }
-        Err(format!("swatches never matched; last read {last:?}"))
+        Err(format!("swatches never matched: {}", last.unwrap_err()))
     })();
     engine.request_shutdown();
+    let stop = Instant::now();
     while !engine.is_stopped() {
+        if stop.elapsed() >= DEADLINE {
+            // Dropping a half-stopped CEF may block too: leave it to the
+            // process exit, so the smoke always ends.
+            std::mem::forget(engine);
+            return Err(format!("CEF did not shut down ({outcome:?})"));
+        }
         engine.tick();
+        std::thread::sleep(Duration::from_millis(2));
     }
     outcome
 }

@@ -123,11 +123,17 @@ trait Platform {
     /// Per-user data directory, given an environment lookup.
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
 
-    /// Where the CEF binaries are, given the main executable's directory.
-    fn framework_dir(exe_dir: &Path) -> PathBuf;
+    /// Where the CEF binaries are, given the main executable's directory:
+    /// next to it by default.
+    fn framework_dir(exe_dir: &Path) -> PathBuf {
+        exe_dir.to_path_buf()
+    }
 
-    /// The CEF subprocess executable, or `None` when CEF finds it itself.
-    fn helper_path(exe_dir: &Path) -> Option<PathBuf>;
+    /// The CEF subprocess executable, or `None` when CEF finds it itself:
+    /// next to the main one by default.
+    fn helper_path(exe_dir: &Path) -> Option<PathBuf> {
+        Some(exe_dir.join(format!("wubble-helper{}", std::env::consts::EXE_SUFFIX)))
+    }
 
     /// Chromium switches every wubble process gets on this OS, after
     /// [`CHROMIUM_SWITCHES`].
@@ -169,15 +175,6 @@ impl Platform for Linux {
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         xdg_data_dir(env)
     }
-
-    /// `libcef.so` and its resources sit next to the binary.
-    fn framework_dir(exe_dir: &Path) -> PathBuf {
-        exe_dir.to_path_buf()
-    }
-
-    fn helper_path(exe_dir: &Path) -> Option<PathBuf> {
-        Some(exe_dir.join("wubble-helper"))
-    }
 }
 
 /// macOS runs from `wubble.app/Contents/MacOS` (built by `wubble-bundle`).
@@ -204,8 +201,9 @@ impl Platform for MacOs {
     }
 }
 
-/// Windows: no windowless views yet (see `view.rs`), but CEF boots.
-#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+/// Windows: no windowless views yet (see `view.rs`), but CEF boots; CEF
+/// and the helper sit next to the binary (the trait's defaults).
+#[cfg_attr(not(windows), allow(dead_code))]
 struct Windows;
 
 impl Platform for Windows {
@@ -213,14 +211,6 @@ impl Platform for Windows {
 
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         windows_data_dir(env)
-    }
-
-    fn framework_dir(exe_dir: &Path) -> PathBuf {
-        exe_dir.to_path_buf()
-    }
-
-    fn helper_path(exe_dir: &Path) -> Option<PathBuf> {
-        Some(exe_dir.join("wubble-helper.exe"))
     }
 }
 
@@ -591,17 +581,16 @@ mod tests {
     }
 
     #[test]
-    fn linux_and_windows_keep_cef_and_helper_next_to_the_binary() {
+    fn linux_keeps_cef_and_helper_next_to_the_binary() {
         let exe_dir = Path::new("/opt/wubble");
         assert_eq!(Linux::framework_dir(exe_dir), exe_dir);
-        assert_eq!(
-            Linux::helper_path(exe_dir),
-            Some(PathBuf::from("/opt/wubble/wubble-helper"))
-        );
-        assert_eq!(Windows::framework_dir(exe_dir), exe_dir);
-        assert_eq!(
-            Windows::helper_path(exe_dir),
-            Some(exe_dir.join("wubble-helper.exe"))
+        let helper = Linux::helper_path(exe_dir).expect("helper set");
+        assert_eq!(helper.parent(), Some(exe_dir));
+        assert!(
+            helper
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("wubble-helper"))
         );
     }
 
