@@ -186,7 +186,7 @@ mod tests {
             .await
             .unwrap();
             migrate(&mut conn, MIGRATIONS).await.unwrap();
-            assert_eq!(schema_version(&conn).await.unwrap(), 12);
+            assert_eq!(schema_version(&conn).await.unwrap(), latest(MIGRATIONS));
             for (sql, want) in [
                 (
                     "SELECT count(*) FROM tabs WHERE url = 'https://a.test/' AND last_active = 0",
