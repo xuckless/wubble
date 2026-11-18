@@ -212,6 +212,35 @@ pub const SLEEP_KEEP_PINNED: SettingDef = SettingDef {
     section: Section::Performance,
     restart: false,
 };
+/// Sites whose tabs are never put to sleep (a host covers its subdomains).
+pub const SLEEP_NEVER_SITES: SettingDef = SettingDef {
+    key: "sleep.never_sites",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Never put these sites to sleep",
+    section: Section::Performance,
+    restart: false,
+};
+/// How long a tab may go unvisited before it moves to the Archive (`archive::ArchiveAfter`).
+pub const ARCHIVE_AFTER: SettingDef = SettingDef {
+    key: "archive.after",
+    kind: SettingKind::Choice(&crate::archive::ARCHIVE_WORDS),
+    default: "24h",
+    label: "Archive tabs not visited for",
+    section: Section::General,
+    restart: false,
+};
+/// Where links open: one rule per entry, `host -> Space` or `host -> Space, Container`
+/// (`routing::Rule`). Applies to links from other apps and "Open Link in New Tab"; typing in
+/// the command bar, pop-ups and background tabs are not routed.
+pub const ROUTING_RULES: SettingDef = SettingDef {
+    key: "routing.rules",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Open sites in a Space or container (site -> Space, Container)",
+    section: Section::General,
+    restart: false,
+};
 /// Which glass levels the scene's governor may use (`apply::GlassSetting`).
 pub const GLASS_QUALITY: SettingDef = SettingDef {
     key: "glass.quality",
@@ -286,6 +315,9 @@ pub const ALL: &[&SettingDef] = &[
     &SLEEP_FREEZE_AFTER,
     &SLEEP_DISCARD_AFTER,
     &SLEEP_KEEP_PINNED,
+    &SLEEP_NEVER_SITES,
+    &ARCHIVE_AFTER,
+    &ROUTING_RULES,
     &GLASS_QUALITY,
     &GLASS_SCENE,
     &PASSWORDS_OFFER_TO_SAVE,

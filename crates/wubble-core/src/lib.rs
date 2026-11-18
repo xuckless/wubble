@@ -4,10 +4,12 @@
 
 pub mod action;
 pub mod apply;
+pub mod archive;
 pub mod autofill;
 pub mod bow;
 pub mod download;
 pub mod favicon;
+pub mod hovercard;
 pub mod import;
 pub mod keys;
 pub mod lifecycle;
@@ -18,6 +20,7 @@ pub mod omnibox;
 pub mod pages;
 pub mod popup;
 pub mod pump;
+pub mod routing;
 pub mod scroller;
 pub mod seam;
 pub mod secret;
@@ -32,6 +35,7 @@ pub mod suggest;
 pub mod tab;
 pub mod tabdrag;
 pub mod tabs;
+pub mod tidy;
 pub mod url;
 pub mod window;
 pub mod zoom;

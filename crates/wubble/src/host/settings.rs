@@ -108,6 +108,13 @@ impl Host {
                     self.dispatch(Command::SetSleepPolicy(policy));
                 }
             }
+            Applied::NeverSleepSites(sites) => {
+                if sites != self.model.never_sites() {
+                    self.dispatch(Command::SetNeverSleepSites(sites));
+                }
+            }
+            Applied::ArchiveAfter(after) => self.archive_after = after,
+            Applied::RoutingRules(rules) => self.routing_rules = rules,
             Applied::Glass(setting) => self.w.glass.borrow_mut().set_setting(setting),
             Applied::Passwords(settings) => self.autofill.set_settings(settings),
             Applied::RestartOnly => {}

@@ -86,6 +86,8 @@ pub struct Space {
     pub active: Option<TabId>,
     /// Pages shown side by side; shown while `active` is one of them, remembered otherwise.
     pub split: Option<SplitGroup>,
+    /// Tabs of this Space are never put to sleep.
+    pub never_sleep: bool,
 }
 
 /// Most pages side by side (the design's `SPLIT.maxPanes`).

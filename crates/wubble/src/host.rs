@@ -25,7 +25,7 @@ mod window;
 
 pub(crate) use window::WindowHost;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -36,6 +36,7 @@ use slint::winit_030::winit::event::{ElementState, MouseButton, WindowEvent};
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
+use wubble_core::archive::{self, ArchiveAfter};
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
@@ -44,6 +45,7 @@ use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
 use wubble_core::pages::InternalPage;
 use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::sleep::Pressure;
+use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::window::WindowId;
 use wubble_core::zoom::ZoomTable;
@@ -52,7 +54,7 @@ use wubble_engine::input::{KeyId, Point};
 use wubble_engine::nav::{Cursor, Phase, PopupRequest, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
-use wubble_store::{ClosedTab, Transition};
+use wubble_store::{ArchivedTab, ClosedTab, Transition};
 use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
@@ -141,6 +143,7 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
         Effect::WindowClosed(w) => Call::CloseWindow(*w),
         Effect::FocusWindow(w) => Call::FocusWindow(*w),
         Effect::LastWindowClosed => Call::Quit,
+        Effect::Tidied { .. } => Call::Nothing,
         Effect::Lifecycle { tab, effect } => match effect {
             Life::Show => Call::SetVisible {
                 tab: *tab,
@@ -360,6 +363,16 @@ pub struct Host {
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
     pace: Option<Pace>,
+    /// Auto-archive: how long a tab may go unvisited (`archive.after`).
+    archive_after: ArchiveAfter,
+    /// Tabs being filed in the Archive: they close once the store has them, and do not go on
+    /// the recently-closed list as well.
+    /// The tab's `last_active_ms` when it was filed: a tab visited meanwhile stays open.
+    archiving: HashMap<TabId, i64>,
+    /// The `routing.rules` entries as stored (`routing::resolve` reads them).
+    routing_rules: Vec<String>,
+    /// The layout before the last tidy, to undo it with: one slot.
+    tidy_undo: Option<(SpaceId, Vec<Item>)>,
 }
 
 impl Host {
@@ -474,6 +487,10 @@ impl Host {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
             }),
+            archive_after: ArchiveAfter::Off,
+            archiving: HashMap::new(),
+            routing_rules: vec![],
+            tidy_undo: None,
         };
         host.replay_settings();
         if let Some(window) = host.w.window.upgrade() {
@@ -481,7 +498,7 @@ impl Host {
         }
         host.session_icon_setup();
         match open {
-            Some(url) => host.dispatch(new_tab(url, None)),
+            Some(url) => host.open_routed(url, None),
             None => host.after_change(),
         }
         host
@@ -649,6 +666,9 @@ impl Host {
         };
         let mut follow = vec![];
         while let Some(effect) = self.pending.pop_front() {
+            if let Effect::Tidied { space, before } = &effect {
+                self.tidied(*space, before.clone());
+            }
             let c = call(&effect, &self.model);
             follow.extend(self.execute(c, frame_rate));
         }
@@ -1212,7 +1232,9 @@ impl Host {
     pub(crate) fn open_external(&mut self, message: crate::instance::Message) {
         match message {
             crate::instance::Message::Open(url) => {
-                self.dispatch(Command::OpenLittle { url, space: None })
+                let space =
+                    wubble_core::routing::resolve(&self.model, &self.routing_rules, &url).space;
+                self.dispatch(Command::OpenLittle { url, space })
             }
             crate::instance::Message::Focus => self.raise_window(self.model.focused()),
         }
@@ -1400,13 +1422,19 @@ impl Host {
             Plan::ReopenClosed => self.store.pop_closed(|closed| {
                 if let Some(closed) = closed {
                     let _ = slint::invoke_from_event_loop(move || {
-                        with_host(|host| host.reopen(closed));
+                        with_host(|host| host.reopen_closed(closed));
                     });
                 }
             }),
             Plan::ToggleSidebar => {
                 if let Some(window) = self.w.window.upgrade() {
                     window.invoke_toggle_sidebar();
+                }
+            }
+            Plan::UndoTidy => self.undo_tidy(),
+            Plan::CloseTabs(tabs) => {
+                for tab in tabs {
+                    self.dispatch(Command::CloseTab(tab));
                 }
             }
             Plan::Quit => quit(),
@@ -1421,18 +1449,140 @@ impl Host {
 
     /// A tab off the recently-closed list, in the active Space (its own may
     /// be gone), in its container if that still exists.
-    fn reopen(&mut self, closed: ClosedTab) {
-        let container = self
-            .model
-            .containers
-            .iter()
-            .any(|c| c.id == closed.container)
-            .then_some(closed.container);
+    fn reopen_closed(&mut self, closed: ClosedTab) {
+        self.reopen(closed.url, None, Some(closed.container));
+    }
+
+    /// Opens `url` again, the one way a tab comes back: in `space` if it still exists (the view
+    /// moves there), else the active one; in `container` if that still exists.
+    pub(super) fn reopen(
+        &mut self,
+        url: String,
+        space: Option<SpaceId>,
+        container: Option<ContainerId>,
+    ) {
+        self.open_in(url, space, container, None);
+    }
+
+    fn open_in(
+        &mut self,
+        url: String,
+        space: Option<SpaceId>,
+        container: Option<ContainerId>,
+        opener: Option<TabId>,
+    ) {
+        let container = container.filter(|c| self.model.containers.iter().any(|k| k.id == *c));
+        let space = space
+            .filter(|s| self.model.spaces.iter().any(|k| k.id == *s))
+            .filter(|s| *s != self.model.active_space());
+        if let Some(space) = space {
+            self.dispatch(Command::SwitchSpace(space));
+        }
+        // a tab that opens in another Space is not that page's child
+        let opener = opener.filter(|_| space.is_none());
         self.dispatch(Command::NewTab {
-            url: closed.url,
+            url,
             container,
-            opener: None,
+            opener,
         });
+    }
+
+    /// A link the user opened in a new tab (or one from the command line): where the routing
+    /// rules say, else beside `opener` in the active Space. Typed addresses, pop-ups,
+    /// background tabs and same-tab navigation are not routed.
+    pub(super) fn open_routed(&mut self, url: String, opener: Option<TabId>) {
+        let routed = wubble_core::routing::resolve(&self.model, &self.routing_rules, &url);
+        self.open_in(url, routed.space, routed.container, opener);
+    }
+
+    // ----- tidy
+
+    /// The tidy just ran: keep its undo and say what it did.
+    fn tidied(&mut self, space: SpaceId, before: Vec<Item>) {
+        let after = self
+            .model
+            .spaces
+            .iter()
+            .find(|s| s.id == space)
+            .map(|s| s.items.as_slice())
+            .unwrap_or_default();
+        let (tabs, folders) = tidy_summary(&before, after);
+        self.tidy_undo = Some((space, before));
+        if let Some(window) = self.w.window.upgrade() {
+            let text = format!(
+                "Grouped {tabs} tab{} into {folders} folder{}. Undo from the command bar",
+                if tabs == 1 { "" } else { "s" },
+                if folders == 1 { "" } else { "s" },
+            );
+            self.toast(&window, &text);
+        }
+    }
+
+    fn undo_tidy(&mut self) {
+        let Some((space, items)) = self.tidy_undo.take() else {
+            if let Some(window) = self.w.window.upgrade() {
+                self.toast(&window, "Nothing to undo");
+            }
+            return;
+        };
+        self.dispatch(Command::SetLayout { space, items });
+    }
+
+    // ----- archive
+
+    /// Files the tabs that went unvisited too long in the Archive and closes them, each once
+    /// the store has it (a failed write keeps the tab).
+    fn archive_tick(&mut self, now: i64) {
+        let audible: HashSet<TabId> = self
+            .audio
+            .iter()
+            .filter(|(_, a)| a.audible)
+            .map(|(t, _)| *t)
+            .collect();
+        for tab in archive::due(&self.model, self.archive_after, now, &audible) {
+            let Some(t) = self.model.tabs.get(&tab) else {
+                continue;
+            };
+            if self.archiving.insert(tab, t.last_active_ms).is_some() {
+                continue;
+            }
+            let entry = ArchivedTab {
+                id: 0,
+                url: t.url.clone(),
+                title: t.title.clone(),
+                container: t.container,
+                space: self.model.location(tab).map(|(space, _)| space),
+                last_active_ms: t.last_active_ms,
+                archived_at_ms: now,
+            };
+            self.store.push_archive(entry, move |stored| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.archived(tab, stored));
+                });
+            });
+        }
+    }
+
+    /// The store answered for `tab`: close it if it is filed and still unvisited.
+    fn archived(&mut self, tab: TabId, stored: bool) {
+        if !stored {
+            self.archiving.remove(&tab);
+            return;
+        }
+        // unvisited since it was filed (its stamp is unchanged) and still closable
+        let unvisited = self.archiving.get(&tab).is_some_and(|stamp| {
+            self.model
+                .tabs
+                .get(&tab)
+                .is_some_and(|t| t.last_active_ms == *stamp)
+        }) && !self.model.visible_tabs().contains(&tab);
+        if unvisited {
+            self.dispatch(Command::CloseTab(tab));
+        }
+        self.archiving.remove(&tab);
+        if self.shown_page() == Some(InternalPage::Archive) {
+            self.archive_refetch();
+        }
     }
 
     // ----- persistence
@@ -1441,6 +1591,9 @@ impl Host {
     fn remember_closed(&mut self, tab: TabId) {
         self.committed.remove(&tab);
         self.typed_nav.ended(tab);
+        if self.archiving.contains_key(&tab) {
+            return; // filed in the Archive instead
+        }
         let Some(t) = self.model.tabs.get(&tab) else {
             return;
         };
@@ -1490,10 +1643,13 @@ impl Host {
     /// The coarse lifecycle tick; also the save policy's idle clock.
     pub fn tick(&mut self, now: Instant) {
         self.follow_frame_rate();
+        let wall_ms = now_ms();
         self.dispatch(Command::Tick {
             now,
+            wall_ms,
             pressure: Pressure::None,
         });
+        self.archive_tick(wall_ms);
         self.save = self.save.ticked();
         if persist::should_save(self.save) {
             self.save_now();
@@ -1867,6 +2023,7 @@ impl Host {
             Some(InternalPage::Bookmarks) => window.get_bookmark_lines().row_count(),
             Some(InternalPage::Downloads) => window.get_downloads().row_count(),
             Some(InternalPage::Passwords) => window.get_logins().row_count(),
+            Some(InternalPage::Archive) => window.get_archive_lines().row_count(),
             Some(InternalPage::Settings) | None => 0,
         };
         let seen = pages_smoke::Seen {
@@ -1884,6 +2041,7 @@ impl Host {
                 InternalPage::Bookmarks => Action::OpenBookmarks,
                 InternalPage::Downloads => Action::OpenDownloads,
                 InternalPage::Passwords => Action::OpenPasswords,
+                InternalPage::Archive => Action::OpenArchive,
                 InternalPage::Settings => Action::OpenSettings,
             }),
             // The page's own button callback, as a click sends it: later, outside the host.
@@ -2442,6 +2600,25 @@ fn snapshot(window: &AppWindow) -> Result<Snapshot, String> {
         .map_err(|e| format!("cannot snapshot the window: {e}"))
 }
 
+/// How many tabs a tidy moved into folders, and into how many folders: the tabs of `after`'s
+/// folders that were top-level tabs in `before`.
+fn tidy_summary(before: &[Item], after: &[Item]) -> (usize, usize) {
+    let moved = |tabs: &[TabId]| {
+        tabs.iter()
+            .filter(|t| before.iter().any(|i| matches!(i, Item::Tab(b) if b == *t)))
+            .count()
+    };
+    let (mut tabs, mut folders) = (0, 0);
+    for item in after {
+        if let Item::Folder(f) = item {
+            let n = moved(&f.tabs);
+            tabs += n;
+            folders += usize::from(n > 0);
+        }
+    }
+    (tabs, folders)
+}
+
 fn new_tab(url: String, opener: Option<TabId>) -> Command {
     Command::NewTab {
         url,
@@ -2576,6 +2753,7 @@ mod tests {
         let mut views = BTreeMap::new();
         let later = |mins: u64| Command::Tick {
             now: clock + Duration::from_secs(mins * 60),
+            wall_ms: 0,
             pressure: Pressure::None,
         };
         let script = [

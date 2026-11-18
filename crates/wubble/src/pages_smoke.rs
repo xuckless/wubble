@@ -1,14 +1,15 @@
 //! `--smoke pages`: on a profile seeded before the window opens (three visits on three days, a
-//! folder and a link, two downloads, two saved logins under a fake keyring), open each native
+//! folder and a link, two downloads, two archived tabs on two days, two saved logins under a fake keyring), open each native
 //! page through its action and check its rows are drawn from the stored data: history, bookmarks,
-//! downloads, then passwords, which shows nothing until its Unlock callback is sent. No page adds
+//! downloads, the archive, then passwords, which shows nothing until its Unlock callback is sent. No page adds
 //! a view. Every wait is "until the host sees X", bounded by a count of CEF work runs.
 
 use std::path::Path;
 
 use wubble_core::download::{DownloadEntry, DownloadState};
 use wubble_core::pages::InternalPage;
-use wubble_store::{BookmarkId, Store, Transition};
+use wubble_core::space::ContainerId;
+use wubble_store::{ArchivedTab, BookmarkId, Store, Transition};
 use wubble_vault::{FakeKeyRing, NewLogin, Origin, StoreLogins, Vault};
 use zeroize::Zeroizing;
 
@@ -20,13 +21,16 @@ use crate::persist::profile_name;
 pub const HISTORY_LINES: usize = 6;
 pub const BOOKMARK_LINES: usize = 2;
 pub const DOWNLOADS: usize = 2;
+/// Two archived tabs on two days: a header and a row each.
+pub const ARCHIVE_LINES: usize = 4;
 pub const LOGINS: usize = 2;
 
 /// The pages in the order the smoke opens them.
-const ORDER: [InternalPage; 4] = [
+const ORDER: [InternalPage; 5] = [
     InternalPage::History,
     InternalPage::Bookmarks,
     InternalPage::Downloads,
+    InternalPage::Archive,
     InternalPage::Passwords,
 ];
 
@@ -87,6 +91,7 @@ fn expected(page: InternalPage) -> usize {
         InternalPage::History => HISTORY_LINES,
         InternalPage::Bookmarks => BOOKMARK_LINES,
         InternalPage::Downloads => DOWNLOADS,
+        InternalPage::Archive => ARCHIVE_LINES,
         // Locked: nothing listed.
         InternalPage::Passwords | InternalPage::Settings => 0,
     }
@@ -192,6 +197,25 @@ pub fn seed(db: &Path, keyring: &FakeKeyRing) -> Result<(), Box<dyn std::error::
                 })
                 .await?;
         }
+        for (i, (url, title)) in [
+            ("https://old.test/", "Old"),
+            ("https://older.test/", "Older"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .push_archive(&ArchivedTab {
+                    id: 0,
+                    url: url.into(),
+                    title: title.into(),
+                    container: ContainerId::DEFAULT,
+                    space: None,
+                    last_active_ms: now - 10 * DAY_MS,
+                    archived_at_ms: now - 2 * DAY_MS * i as i64 - DAY_MS,
+                })
+                .await?;
+        }
         Ok::<_, wubble_store::Error>(())
     })?;
     let mut vault = Vault::new(keyring.clone(), StoreLogins::new(store), &profile_name(db));
@@ -241,6 +265,8 @@ mod tests {
         let (s, a) = next(s, &on(InternalPage::Bookmarks, BOOKMARK_LINES));
         assert_eq!(a, Some(Action::Open(InternalPage::Downloads)));
         let (s, a) = next(s, &on(InternalPage::Downloads, DOWNLOADS));
+        assert_eq!(a, Some(Action::Open(InternalPage::Archive)));
+        let (s, a) = next(s, &on(InternalPage::Archive, ARCHIVE_LINES));
         assert_eq!(a, Some(Action::Open(InternalPage::Passwords)));
         let (s, a) = next(s, &on(InternalPage::Passwords, 0));
         assert_eq!(a, Some(Action::Unlock));
@@ -266,7 +292,7 @@ mod tests {
         };
         assert!(matches!(next(s, &more).1, Some(Action::Fail(_))));
         let s = PagesSmoke {
-            stage: Stage::Showing(3),
+            stage: Stage::Showing(4),
             views: 1,
             runs: 0,
         };
@@ -297,6 +323,8 @@ mod tests {
         let store = pollster::block_on(Store::open(&db)).unwrap();
         let visits = pollster::block_on(store.list_visits(10, None, "")).unwrap();
         assert_eq!(visits.len(), 3);
+        let archived = pollster::block_on(store.list_archive(10, None, "")).unwrap();
+        assert_eq!(archived.len(), 2);
         assert_eq!(pollster::block_on(store.all_bookmarks()).unwrap().len(), 3);
         assert_eq!(
             pollster::block_on(store.downloads(10)).unwrap().len(),

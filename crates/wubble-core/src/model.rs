@@ -21,14 +21,16 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use crate::lifecycle::{self, Activity, Lifecycle, Pin};
+use crate::lifecycle::{self, Activity, Keep, Lifecycle, Pin};
 use crate::pages::InternalPage;
+use crate::routing::host_in;
 use crate::sleep::{Pressure, SleepPolicy};
 use crate::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
     SplitGroup, even,
 };
 use crate::tab::{Liveness, Tab, TabId};
+use crate::tidy;
 use crate::window::{Geometry, Window, WindowId, WindowTarget};
 
 mod windows;
@@ -203,10 +205,31 @@ pub enum Command {
     },
     /// Hidden tabs are judged by this policy from the next tick on.
     SetSleepPolicy(SleepPolicy),
+    /// Tabs of this Space are never put to sleep (or are again).
+    SetSpaceNeverSleep {
+        space: SpaceId,
+        on: bool,
+    },
+    /// Tabs on these sites (a host covers its subdomains) are never put to sleep.
+    SetNeverSleepSites(Vec<String>),
+    /// Groups the Space's unpinned top-level tabs into one folder per site (`tidy::plan_groups`).
+    /// [`Effect::Tidied`] carries the layout before, for [`Command::SetLayout`] to undo it.
+    TidyTabs {
+        space: SpaceId,
+    },
+    /// Puts the Space's unpinned tabs back in `items` (a layout `Effect::Tidied` gave): tabs and
+    /// folders that are gone are dropped, tabs it does not mention (opened since) follow at the
+    /// end, and a folder left empty is dropped.
+    SetLayout {
+        space: SpaceId,
+        items: Vec<Item>,
+    },
     /// Coarse lifecycle tick: hidden tabs are put to sleep by the sleep policy.
-    /// `now` also becomes the model's clock, the time later hides are stamped with.
+    /// `now` also becomes the model's clock, the time later hides are stamped with; `wall_ms`
+    /// (unix milliseconds, 0 when unknown) is the wall clock that stamps `Tab::last_active_ms`.
     Tick {
         now: Instant,
+        wall_ms: i64,
         pressure: Pressure,
     },
 }
@@ -241,6 +264,11 @@ pub enum Effect {
     FocusWindow(WindowId),
     /// The user closed the last Main window: quit.
     LastWindowClosed,
+    /// Tidy grouped tabs of this Space; `before` is the layout to undo it with.
+    Tidied {
+        space: SpaceId,
+        before: Vec<Item>,
+    },
 }
 
 /// One per app: every window's tabs and Spaces.
@@ -259,8 +287,13 @@ pub struct Model {
     /// The memory pressure of the last `Command::Tick`. With `clock` it lets a
     /// hidden tab that becomes eligible for sleep between ticks be judged at once.
     pressure: Pressure,
+    /// The wall clock (unix milliseconds) of the last tick; 0 until the first one. Hides are
+    /// stamped with it ([`Tab::last_active_ms`]).
+    wall_ms: i64,
     /// When hidden tabs go to sleep (the settings' sleep rows).
     policy: SleepPolicy,
+    /// Sites whose tabs never sleep (the `sleep.never_sites` row).
+    never_sites: Vec<String>,
     next_tab: u64,
     next_space: u32,
     next_folder: u32,
@@ -284,6 +317,7 @@ impl Model {
             items: vec![],
             active: None,
             split: None,
+            never_sleep: false,
         };
         Self {
             windows: vec![Window::main(WindowId(0), space.id)],
@@ -295,7 +329,9 @@ impl Model {
             tabs: BTreeMap::new(),
             clock: now,
             pressure: Pressure::None,
+            wall_ms: 0,
             policy: SleepPolicy::default(),
+            never_sites: vec![],
             next_tab: 1,
             next_space: 1,
             next_folder: 0,
@@ -307,6 +343,11 @@ impl Model {
     /// The sleep policy hidden tabs are judged by.
     pub fn policy(&self) -> SleepPolicy {
         self.policy
+    }
+
+    /// The sites whose tabs never sleep.
+    pub fn never_sites(&self) -> &[String] {
+        &self.never_sites
     }
 
     /// The model's clock: the time it was started with or last ticked to.
@@ -346,7 +387,9 @@ impl Model {
             windows,
             clock: now,
             pressure: Pressure::None,
+            wall_ms: 0,
             policy: SleepPolicy::default(),
+            never_sites: vec![],
         };
         m.check()?;
         Ok(m)
@@ -763,6 +806,7 @@ impl Model {
             lifecycle: Lifecycle::new(),
             container: eff,
             opener,
+            last_active_ms: 0,
         };
         self.tabs.insert(id, tab);
         // New tabs follow their opener, otherwise go last; pinned openers do not count.
@@ -1196,12 +1240,38 @@ impl Model {
         let visible = self.visible_tabs();
         let now = self.clock;
         for &tab in ids.iter().filter(|t| !visible.contains(t)) {
+            // a tab that was on screen and is not now: its last visit is this moment
+            if before
+                .get(&tab)
+                .is_some_and(|l| l.liveness == Liveness::Active)
+            {
+                self.tabs.get_mut(&tab).expect("listed").last_active_ms = self.wall_ms;
+            }
             fx.extend(self.lifecycle(tab, lifecycle::Event::Hidden { now }));
         }
         for tab in visible {
             fx.extend(self.lifecycle(tab, lifecycle::Event::Shown));
         }
         fx
+    }
+
+    /// Brings every tab's [`Keep`] in line with the never-sleep Spaces and sites: a tab is
+    /// kept awake when its Space is on the list or its address is on a listed site.
+    fn sync_keep(&mut self) -> Vec<Effect> {
+        let mut want = vec![];
+        for si in 0..self.spaces.len() {
+            let space_on = self.spaces[si].never_sleep;
+            for t in self.order_idx(si) {
+                let on = space_on
+                    || (!self.never_sites.is_empty()
+                        && host_in(&self.never_sites, &self.tabs[&t].url));
+                want.push((t, if on { Keep::Awake } else { Keep::Normal }));
+            }
+        }
+        want.retain(|(t, keep)| self.tabs[t].lifecycle.keep != *keep);
+        want.into_iter()
+            .flat_map(|(t, keep)| self.lifecycle(t, lifecycle::Event::KeepChanged(keep)))
+            .collect()
     }
 
     /// Judges again, by the last tick's time and pressure, every tab that the
@@ -1217,6 +1287,7 @@ impl Model {
                     let now = t.lifecycle;
                     (was.activity == Activity::Busy && now.activity == Activity::Idle)
                         || (was.pin == Pin::Pinned && now.pin == Pin::Unpinned)
+                        || (was.keep == Keep::Awake && now.keep == Keep::Normal)
                 })
             })
             .map(|(&id, _)| id)
@@ -1229,6 +1300,105 @@ impl Model {
             .into_iter()
             .flat_map(|tab| self.lifecycle(tab, tick))
             .collect()
+    }
+
+    fn tidy_tabs(&mut self, space: SpaceId) -> Vec<Effect> {
+        let Some(si) = self.space_idx(space) else {
+            return vec![];
+        };
+        let groups = tidy::plan_groups(&self.spaces[si], &self.tabs);
+        if groups.is_empty() {
+            return vec![];
+        }
+        let before = self.spaces[si].items.clone();
+        for g in groups {
+            let existing = self.spaces[si]
+                .items
+                .iter()
+                .position(|i| matches!(i, Item::Folder(f) if f.name.eq_ignore_ascii_case(&g.name)));
+            let items = &mut self.spaces[si].items;
+            match existing {
+                Some(fi) => {
+                    items.retain(|i| !matches!(i, Item::Tab(t) if g.tabs.contains(t)));
+                    // retain moved the folder only if a tab stood before it
+                    let fi = items
+                        .iter()
+                        .position(|i| matches!(i, Item::Folder(f) if f.name.eq_ignore_ascii_case(&g.name)))
+                        .unwrap_or(fi);
+                    if let Item::Folder(f) = &mut items[fi] {
+                        f.tabs.extend(&g.tabs);
+                    }
+                }
+                None => {
+                    let id = FolderId(self.next_folder);
+                    self.next_folder += 1;
+                    let at = items
+                        .iter()
+                        .position(|i| matches!(i, Item::Tab(t) if *t == g.tabs[0]))
+                        .expect("planned tab is top-level");
+                    items[at] = Item::Folder(Folder {
+                        id,
+                        name: g.name.clone(),
+                        tabs: g.tabs.clone(),
+                    });
+                    items.retain(|i| !matches!(i, Item::Tab(t) if g.tabs[1..].contains(t)));
+                }
+            }
+        }
+        vec![Effect::Tidied { space, before }]
+    }
+
+    fn set_layout(&mut self, space: SpaceId, items: Vec<Item>) -> Vec<Effect> {
+        let Some(si) = self.space_idx(space) else {
+            return vec![];
+        };
+        let current = std::mem::take(&mut self.spaces[si].items);
+        let mut allowed = vec![];
+        for item in &current {
+            match item {
+                Item::Tab(t) => allowed.push(*t),
+                Item::Folder(f) => allowed.extend(&f.tabs),
+            }
+        }
+        let mut seen: Vec<TabId> = vec![];
+        let mut out: Vec<Item> = vec![];
+        let take = |tabs: &[TabId], seen: &mut Vec<TabId>| -> Vec<TabId> {
+            let kept: Vec<TabId> = tabs
+                .iter()
+                .copied()
+                .filter(|t| allowed.contains(t) && !seen.contains(t))
+                .collect();
+            seen.extend(&kept);
+            kept
+        };
+        // the wanted layout first, then what it does not mention, in the current order
+        for item in items.iter().chain(&current) {
+            match item {
+                Item::Tab(t) => {
+                    if !take(&[*t], &mut seen).is_empty() {
+                        out.push(Item::Tab(*t));
+                    }
+                }
+                Item::Folder(f) => {
+                    if out
+                        .iter()
+                        .any(|o| matches!(o, Item::Folder(o) if o.id == f.id))
+                    {
+                        continue;
+                    }
+                    let tabs = take(&f.tabs, &mut seen);
+                    if !tabs.is_empty() || f.tabs.is_empty() {
+                        out.push(Item::Folder(Folder {
+                            id: f.id,
+                            name: f.name.clone(),
+                            tabs,
+                        }));
+                    }
+                }
+            }
+        }
+        self.spaces[si].items = out;
+        vec![]
     }
 
     /// Whether the tab shows an internal page (no web view; never a split pane).
@@ -1402,9 +1572,35 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             m.policy = policy;
             vec![]
         }
-        Command::Tick { now, pressure } => {
+        Command::SetSpaceNeverSleep { space, on } => {
+            if let Some(si) = m.space_idx(space) {
+                m.spaces[si].never_sleep = on;
+            }
+            vec![]
+        }
+        Command::SetNeverSleepSites(sites) => {
+            m.never_sites = sites;
+            vec![]
+        }
+        Command::TidyTabs { space } => m.tidy_tabs(space),
+        Command::SetLayout { space, items } => m.set_layout(space, items),
+        Command::Tick {
+            now,
+            wall_ms,
+            pressure,
+        } => {
             m.clock = now;
             m.pressure = pressure;
+            m.wall_ms = wall_ms;
+            if wall_ms > 0 {
+                // tabs of unknown last visit (restored before this field existed) start now
+                let visible = m.visible_tabs();
+                for t in m.tabs.values_mut() {
+                    if t.last_active_ms == 0 && !visible.contains(&t.id) {
+                        t.last_active_ms = wall_ms;
+                    }
+                }
+            }
             let ids: Vec<TabId> = m.tabs.keys().copied().collect();
             ids.into_iter()
                 .flat_map(|t| m.lifecycle(t, lifecycle::Event::Tick { now, pressure }))
@@ -1413,6 +1609,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
     };
     fx.extend(m.prune_windows());
     fx.extend(m.settle(&before));
+    fx.extend(m.sync_keep());
     fx.extend(m.rejudge(&before));
     (m, fx)
 }

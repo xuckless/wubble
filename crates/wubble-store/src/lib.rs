@@ -10,6 +10,7 @@
 //! password vault adapts its storage trait to the plain byte-row functions in `logins.rs`;
 //! both drive the futures with whatever executor they have (`pollster::block_on` is enough).
 
+mod archive;
 mod bookmarks;
 mod check;
 mod closed;
@@ -25,6 +26,7 @@ mod settings;
 
 use std::path::Path;
 
+pub use archive::ArchivedTab;
 pub use bookmarks::{BookmarkId, BookmarkKind, BookmarkNode};
 pub use closed::{ClosedTab, RECENTLY_CLOSED_MAX};
 pub use favicon::Favicon;
@@ -33,11 +35,11 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality, GlassScene,
-    HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll,
-    OverlayScrollbars, PasswordsAutofill, PasswordsOfferToSave, SearchEngineChoice, Setting,
-    SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
-    SleepKeepPinned, ZoomDefault, text_of,
+    ArchiveAfterSetting, BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, GlassQuality,
+    GlassScene, HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MiddleClickAutoscroll,
+    OverlayScrollbars, PasswordsAutofill, PasswordsOfferToSave, RoutingRules, SearchEngineChoice,
+    Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
+    SleepKeepPinned, SleepNeverSites, ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

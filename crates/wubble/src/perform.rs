@@ -58,6 +58,10 @@ pub enum Plan {
     BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
     OpenBeside,
+    /// Put the tabs back as the host kept them before the last tidy.
+    UndoTidy,
+    /// Close these tabs (each goes on the recently-closed list).
+    CloseTabs(Vec<TabId>),
     Quit,
     /// Possible in general, but not now (no tab to act on, say).
     Nothing,
@@ -134,6 +138,19 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
         Action::OpenDownloads => Plan::Model(Command::OpenInternal(InternalPage::Downloads)),
         Action::OpenPasswords => Plan::Model(Command::OpenInternal(InternalPage::Passwords)),
+        Action::OpenArchive => Plan::Model(Command::OpenInternal(InternalPage::Archive)),
+        Action::TidyTabs => Plan::Model(Command::TidyTabs {
+            space: model.active_space(),
+        }),
+        Action::UndoTidyTabs => Plan::UndoTidy,
+        Action::CloseDuplicateTabs => {
+            let dupes = wubble_core::tidy::duplicates(model, model.active_space());
+            if dupes.is_empty() {
+                Plan::Nothing
+            } else {
+                Plan::CloseTabs(dupes)
+            }
+        }
         Action::BookmarkPage => visible
             .and_then(|t| model.tabs.get(&t))
             .filter(|t| wubble_core::url::is_recordable(&t.url))
@@ -305,6 +322,36 @@ mod tests {
         );
         let empty = Model::new(std::time::Instant::now());
         assert_eq!(plan(Action::MoveTabToNewWindow, &empty), Plan::Nothing);
+    }
+
+    #[test]
+    fn archive_and_tidy_actions() {
+        let m = with_tabs(1);
+        assert_eq!(
+            plan(Action::OpenArchive, &m),
+            Plan::Model(Command::OpenInternal(InternalPage::Archive))
+        );
+        assert_eq!(
+            plan(Action::TidyTabs, &m),
+            Plan::Model(Command::TidyTabs {
+                space: m.active_space()
+            })
+        );
+        assert_eq!(plan(Action::UndoTidyTabs, &m), Plan::UndoTidy);
+        assert_eq!(plan(Action::CloseDuplicateTabs, &m), Plan::Nothing);
+        let (m, _) = apply(
+            m,
+            Command::NewTab {
+                url: "https://0.test/".into(),
+                container: None,
+                opener: None,
+            },
+        );
+        assert_eq!(
+            plan(Action::CloseDuplicateTabs, &m),
+            Plan::CloseTabs(vec![TabId(1)]),
+            "the visible one stays"
+        );
     }
 
     #[test]

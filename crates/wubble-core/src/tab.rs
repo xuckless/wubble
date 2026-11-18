@@ -29,4 +29,7 @@ pub struct Tab {
     pub container: ContainerId,
     /// The tab that opened this one; consulted when this tab closes, forgotten on a user tab switch.
     pub opener: Option<TabId>,
+    /// Unix milliseconds of the last time the tab was on screen; 0 until known. Stamped by the
+    /// model when the tab is hidden, kept in the session, read by the auto-archive rule.
+    pub last_active_ms: i64,
 }

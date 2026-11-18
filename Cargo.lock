@@ -7952,6 +7952,7 @@ name = "wubble-core"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "psl",
  "serde_json",
  "url",
  "zeroize",

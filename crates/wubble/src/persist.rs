@@ -39,8 +39,8 @@ use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, HistoryDeleted,
-    Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
+    ArchivedTab, BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon,
+    HistoryDeleted, Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 use wubble_vault::keyring::KeyRingError;
 use wubble_vault::{
@@ -96,6 +96,7 @@ pub fn changes_session(command: &Command) -> bool {
             | Command::BusyChanged { .. }
             | Command::OpenCommandBar
             | Command::SetSleepPolicy(_)
+            | Command::SetNeverSleepSites(_)
     )
 }
 
@@ -263,6 +264,18 @@ enum Request {
     },
     PushClosed(ClosedTab),
     PopClosed(Reply<Option<ClosedTab>>),
+    /// Files a tab in the Archive; replies whether the store kept it (only then may the tab close).
+    PushArchive(ArchivedTab, Reply<bool>),
+    /// One page of the archive page's rows, shaped as history rows (`visit_id` is the archive id).
+    ListArchive {
+        query: String,
+        before: Option<(i64, i64)>,
+        limit: usize,
+        reply: Reply<VisitsPage>,
+    },
+    /// Removes an archived tab and replies with it (restore).
+    TakeArchive(i64, Reply<Option<ArchivedTab>>),
+    DeleteArchive(i64),
     /// One settings row, validated by the client (`apply::accepts`) and again by the store.
     SetSetting {
         key: &'static str,
@@ -444,6 +457,36 @@ impl StoreClient {
     /// `reply` runs on the store thread.
     pub fn pop_closed(&self, reply: impl FnOnce(Option<ClosedTab>) + Send + 'static) {
         self.send(Request::PopClosed(Box::new(reply)));
+    }
+
+    /// `reply` runs on the store thread: whether the tab is safely filed.
+    pub fn push_archive(&self, tab: ArchivedTab, reply: impl FnOnce(bool) + Send + 'static) {
+        self.send(Request::PushArchive(tab, Box::new(reply)));
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn archived(
+        &self,
+        query: &str,
+        before: Option<(i64, i64)>,
+        limit: usize,
+        reply: impl FnOnce(VisitsPage) + Send + 'static,
+    ) {
+        self.send(Request::ListArchive {
+            query: query.into(),
+            before,
+            limit,
+            reply: Box::new(reply),
+        });
+    }
+
+    /// `reply` runs on the store thread.
+    pub fn take_archive(&self, id: i64, reply: impl FnOnce(Option<ArchivedTab>) + Send + 'static) {
+        self.send(Request::TakeArchive(id, Box::new(reply)));
+    }
+
+    pub fn delete_archive(&self, id: i64) {
+        self.send(Request::DeleteArchive(id));
     }
 
     /// Writes one settings row; the one write path of every setting the host changes. A key
@@ -865,6 +908,47 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 }
             }
         }
+        Request::PushArchive(tab, reply) => {
+            let pushed = store.push_archive(&tab).await;
+            reply(pushed.is_ok());
+            pushed?;
+        }
+        Request::ListArchive {
+            query,
+            before,
+            limit,
+            reply,
+        } => {
+            let rows = store.list_archive(limit, before, &query).await;
+            let page = match &rows {
+                Ok(rows) => {
+                    let urls: Vec<&str> = rows.iter().map(|r| r.url.as_str()).collect();
+                    VisitsPage {
+                        icons: store.favicons_for(&urls).await.unwrap_or_default(),
+                        rows: rows
+                            .iter()
+                            .map(|r| HistoryRow {
+                                url: r.url.clone(),
+                                title: r.title.clone(),
+                                visit_ms: r.archived_at_ms,
+                                visit_id: r.id,
+                            })
+                            .collect(),
+                    }
+                }
+                Err(_) => VisitsPage::default(),
+            };
+            reply(page);
+            rows?;
+        }
+        Request::TakeArchive(id, reply) => match store.take_archive(id).await {
+            Ok(tab) => reply(tab),
+            Err(e) => {
+                reply(None);
+                return Err(e);
+            }
+        },
+        Request::DeleteArchive(id) => store.delete_archive(id).await?,
         Request::SetSetting { key, value } => store.set_text(key, &value).await?,
         Request::ReadSettings(reply) => match store.all_settings().await {
             Ok(rows) => reply(rows),
@@ -1019,6 +1103,7 @@ mod tests {
         let quiet = [
             Command::Tick {
                 now: Instant::now(),
+                wall_ms: 0,
                 pressure: Pressure::None,
             },
             Command::BusyChanged { tab: t, busy: true },

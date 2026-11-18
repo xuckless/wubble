@@ -692,7 +692,14 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
         20 => {
             let pressure = [Pressure::None, Pressure::Moderate, Pressure::Critical][r.below(3)];
             let now = m.clock + Duration::from_secs(r.below(2000) as u64);
-            return (Command::Tick { now, pressure }, false);
+            return (
+                Command::Tick {
+                    now,
+                    wall_ms: 0,
+                    pressure,
+                },
+                false,
+            );
         }
         _ => tab(r)
             .zip(container(r))
@@ -803,6 +810,7 @@ fn tick(m: Model, after: Duration) -> (Model, Vec<Effect>) {
     run_all(
         m,
         Command::Tick {
+            wall_ms: 0,
             now,
             pressure: Pressure::None,
         },
@@ -1048,6 +1056,7 @@ fn hides_after_a_tick_use_the_ticked_clock() {
     let (m, _) = run_all(
         m,
         Command::Tick {
+            wall_ms: 0,
             now: later,
             pressure: Pressure::None,
         },
@@ -1135,6 +1144,7 @@ fn critical_pressure_of_the_last_tick_discards_a_tab_that_stops_loading() {
     let (m, _) = run_all(
         m,
         Command::Tick {
+            wall_ms: 0,
             now,
             pressure: Pressure::Critical,
         },
@@ -1617,6 +1627,7 @@ fn activating_outside_the_split_hides_every_pane_and_back_shows_them() {
     let (m, _) = run(
         m,
         Command::Tick {
+            wall_ms: 0,
             now,
             pressure: Pressure::Critical,
         },
@@ -1635,6 +1646,7 @@ fn activating_outside_the_split_hides_every_pane_and_back_shows_them() {
     let (m, _) = run(
         m,
         Command::Tick {
+            wall_ms: 0,
             now,
             pressure: Pressure::Critical,
         },
@@ -2000,6 +2012,7 @@ fn every_window_keeps_its_tabs_awake() {
     let (m, _) = run(
         m,
         Command::Tick {
+            wall_ms: 0,
             now: t0() + std::time::Duration::from_secs(3600),
             pressure: Pressure::None,
         },
@@ -2285,4 +2298,257 @@ fn a_background_tab_follows_its_opener_unshown() {
         "other openers stay"
     );
     assert_eq!(m.order(s0())[1], bg, "right after its opener");
+}
+
+// ----- never sleep, wall-clock stamps, tidy
+
+use crate::lifecycle::Keep;
+
+fn tab_at(m: Model, url: &str) -> (Model, TabId) {
+    let (m, fx) = run(
+        m,
+        Command::NewTab {
+            url: url.into(),
+            container: None,
+            opener: None,
+        },
+    );
+    let Effect::CreateTab { tab, .. } = fx[0] else {
+        panic!("no CreateTab: {fx:?}")
+    };
+    (m, tab)
+}
+
+fn tick_wall(m: Model, after: Duration, wall_ms: i64) -> Model {
+    let now = m.clock + after;
+    run_all(
+        m,
+        Command::Tick {
+            now,
+            wall_ms,
+            pressure: Pressure::None,
+        },
+    )
+    .0
+}
+
+#[test]
+fn hiding_a_tab_stamps_the_wall_clock_and_a_first_tick_stamps_unknown_ones() {
+    let m = Model::new(t0());
+    let (m, a) = tab_at(m, "https://a.test/");
+    let m = tick_wall(m, Duration::ZERO, 1_000);
+    assert_eq!(m.tabs[&a].last_active_ms, 0, "a visible tab is not stamped");
+    let (m, b) = tab_at(m, "https://b.test/"); // hides a at wall 1000
+    assert_eq!(m.tabs[&a].last_active_ms, 1_000);
+    assert_eq!(m.tabs[&b].last_active_ms, 0);
+    let m = tick_wall(m, Duration::from_secs(5), 9_000);
+    assert_eq!(m.tabs[&a].last_active_ms, 1_000, "a known stamp stays");
+    assert_eq!(
+        m.tabs[&b].last_active_ms, 0,
+        "the visible tab stays unknown"
+    );
+
+    // restored tabs (stamp 0, hidden) start their clock at the first tick
+    let restored = Model::from_parts(
+        m.spaces.clone(),
+        m.containers.clone(),
+        m.tabs
+            .values()
+            .map(|t| Tab {
+                last_active_ms: 0,
+                ..t.clone()
+            })
+            .collect(),
+        m.windows.clone(),
+        t0(),
+    )
+    .unwrap();
+    let m = tick_wall(restored, Duration::ZERO, 50_000);
+    assert_eq!(m.tabs[&a].last_active_ms, 50_000);
+    let m = tick_wall(m, Duration::ZERO, 0);
+    assert_eq!(
+        m.tabs[&a].last_active_ms, 50_000,
+        "an unknown wall clock stamps nothing"
+    );
+}
+
+/// Two tabs, the first hidden; the Space's tabs sleep after the default policy's 15 minutes.
+fn hidden_pair() -> (Model, TabId, TabId) {
+    let (m, ids) = with_tabs(2);
+    (m, ids[0], ids[1])
+}
+
+#[test]
+fn a_never_sleep_space_keeps_its_hidden_tab_awake_until_switched_off() {
+    let (m, a, _) = hidden_pair();
+    let (m, _) = run(
+        m,
+        Command::SetSpaceNeverSleep {
+            space: s0(),
+            on: true,
+        },
+    );
+    assert_eq!(m.tabs[&a].lifecycle.keep, Keep::Awake);
+    let (m, _) = tick(m, Duration::from_secs(3600));
+    assert_eq!(liveness(&m, a), Liveness::Background);
+    let (m, fx) = run_all(
+        m,
+        Command::SetSpaceNeverSleep {
+            space: s0(),
+            on: false,
+        },
+    );
+    assert_eq!(m.tabs[&a].lifecycle.keep, Keep::Normal);
+    assert_eq!(
+        liveness(&m, a),
+        Liveness::Discarded,
+        "overdue: asleep at once"
+    );
+    assert!(lifecycle_effects(&fx).contains(&life(a, Life::Discard)));
+}
+
+#[test]
+fn never_sleep_sites_cover_subdomains_and_follow_the_url() {
+    let m = Model::new(t0());
+    let (m, a) = tab_at(m, "https://docs.example.com/x");
+    let (m, b) = tab_at(m, "https://other.test/");
+    let (m, _) = run(m, Command::SetNeverSleepSites(vec!["example.com".into()]));
+    assert_eq!(m.tabs[&a].lifecycle.keep, Keep::Awake);
+    assert_eq!(m.tabs[&b].lifecycle.keep, Keep::Normal);
+    let (m, _) = tick(m, Duration::from_secs(3600));
+    assert_eq!(liveness(&m, a), Liveness::Background);
+    // navigating away ends the exemption
+    let (m, _) = run(
+        m,
+        Command::UrlChanged {
+            tab: a,
+            url: "https://elsewhere.test/".into(),
+        },
+    );
+    assert_eq!(liveness(&m, a), Liveness::Discarded);
+}
+
+#[test]
+fn a_frozen_tab_turned_awake_is_unfrozen() {
+    let (m, a, _) = hidden_pair();
+    let (m, _) = tick(m, Duration::from_secs(120));
+    assert_eq!(liveness(&m, a), Liveness::Frozen);
+    let (m, fx) = run_all(m, Command::SetNeverSleepSites(vec!["a.test".into()]));
+    assert_eq!(liveness(&m, a), Liveness::Background);
+    assert_eq!(lifecycle_effects(&fx), vec![life(a, Life::Unfreeze)]);
+}
+
+fn layout(m: &Model) -> Vec<Item> {
+    m.spaces[0].items.clone()
+}
+
+fn names(m: &Model) -> Vec<(String, Vec<TabId>)> {
+    m.spaces[0]
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Folder(f) => Some((f.name.clone(), f.tabs.clone())),
+            Item::Tab(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn tidy_groups_by_site_and_set_layout_undoes_it() {
+    let mut m = Model::new(t0());
+    let mut ids = vec![];
+    for url in [
+        "https://a.example.com/1",
+        "https://solo.test/",
+        "https://b.example.com/2",
+        "https://other.org/",
+        "https://example.com/3",
+        "https://other.org/2",
+    ] {
+        let (m2, t) = tab_at(m, url);
+        m = m2;
+        ids.push(t);
+    }
+    let (m, _) = run(m, Command::PinTab(ids[3]));
+    let before = layout(&m);
+    let (tidied, fx) = run(m.clone(), Command::TidyTabs { space: s0() });
+    assert_eq!(
+        fx,
+        vec![Effect::Tidied {
+            space: s0(),
+            before: before.clone()
+        }]
+    );
+    // other.org has one unpinned tab left (the other is pinned): not grouped
+    assert_eq!(
+        names(&tidied),
+        vec![("example.com".to_string(), vec![ids[0], ids[2], ids[4]])]
+    );
+    // the folder stands where the site's first tab stood
+    assert!(matches!(tidied.spaces[0].items[0], Item::Folder(_)));
+    let (undone, fx) = run(
+        tidied,
+        Command::SetLayout {
+            space: s0(),
+            items: before,
+        },
+    );
+    assert_eq!(fx, vec![]);
+    // everything but the folder id counter, which never goes back
+    assert_eq!((&undone.spaces, &undone.tabs), (&m.spaces, &m.tabs));
+}
+
+#[test]
+fn tidy_reuses_a_folder_of_the_same_name_and_does_nothing_when_there_is_nothing() {
+    let m = Model::new(t0());
+    let (m, a) = tab_at(m, "https://x.test/1");
+    let (m, b) = tab_at(m, "https://www.x.test/2");
+    let (m, _) = run(
+        m,
+        Command::NewFolder {
+            space: s0(),
+            name: "X.Test".into(),
+        },
+    );
+    let (m, fx) = run(m, Command::TidyTabs { space: s0() });
+    assert!(matches!(fx[..], [Effect::Tidied { .. }]));
+    assert_eq!(names(&m), vec![("X.Test".to_string(), vec![a, b])]);
+    assert_eq!(m.spaces[0].items.len(), 1);
+    let (m2, fx) = run(m.clone(), Command::TidyTabs { space: s0() });
+    assert_eq!((m2, fx), (m, vec![]));
+}
+
+#[test]
+fn set_layout_stays_valid_after_a_close_or_a_new_tab() {
+    let m = Model::new(t0());
+    let (m, a) = tab_at(m, "https://x.test/1");
+    let (m, b) = tab_at(m, "https://x.test/2");
+    let (m, c) = tab_at(m, "https://y.test/");
+    let (m, fx) = run(m, Command::TidyTabs { space: s0() });
+    let Effect::Tidied { before, .. } = fx[0].clone() else {
+        panic!()
+    };
+    let (m, _) = run(m, Command::CloseTab(a));
+    let (m, d) = tab_at(m, "https://z.test/");
+    let (m, _) = run(
+        m,
+        Command::SetLayout {
+            space: s0(),
+            items: before,
+        },
+    );
+    m.check().unwrap();
+    assert_eq!(
+        layout(&m),
+        vec![Item::Tab(b), Item::Tab(c), Item::Tab(d)],
+        "the closed tab is gone, the new one follows, the emptied folder is dropped"
+    );
+    let (unchanged, _) = run(
+        m.clone(),
+        Command::SetLayout {
+            space: SpaceId(99),
+            items: vec![],
+        },
+    );
+    assert_eq!(unchanged, m);
 }

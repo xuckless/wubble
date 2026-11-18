@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::lifecycle::{Activity, Pin};
+use crate::lifecycle::{Activity, Keep, Pin};
 use crate::tab::Liveness;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,9 +52,12 @@ impl SleepPolicy {
         hidden: Duration,
         pin: Pin,
         activity: Activity,
+        keep: Keep,
         pressure: Pressure,
     ) -> Liveness {
-        if activity == Activity::Busy {
+        // `Keep::Awake` is checked like `Busy`, before any pressure rule: the user's "never
+        // sleep" beats the memory pressure.
+        if activity == Activity::Busy || keep == Keep::Awake {
             return Liveness::Background;
         }
         let discardable = !(pin == Pin::Pinned && self.keep_pinned_alive);
@@ -74,7 +77,13 @@ mod tests {
     use super::*;
 
     fn target(secs: u64, pin: Pin, activity: Activity, pressure: Pressure) -> Liveness {
-        SleepPolicy::default().target(Duration::from_secs(secs), pin, activity, pressure)
+        SleepPolicy::default().target(
+            Duration::from_secs(secs),
+            pin,
+            activity,
+            Keep::Normal,
+            pressure,
+        )
     }
 
     #[test]
@@ -112,5 +121,22 @@ mod tests {
             target(1, Pin::Unpinned, Activity::Idle, Pressure::Critical),
             Liveness::Discarded
         );
+    }
+
+    #[test]
+    fn awake_beats_every_pressure() {
+        let p = SleepPolicy::default();
+        for pressure in [Pressure::None, Pressure::Moderate, Pressure::Critical] {
+            for pin in [Pin::Unpinned, Pin::Pinned] {
+                let t = p.target(
+                    Duration::from_secs(99_999),
+                    pin,
+                    Activity::Idle,
+                    Keep::Awake,
+                    pressure,
+                );
+                assert_eq!(t, Liveness::Background);
+            }
+        }
     }
 }

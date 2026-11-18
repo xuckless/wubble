@@ -15,6 +15,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (9, include_str!("../sql/009_logins_vault_shape.sql")),
     (10, include_str!("../sql/010_space_icons.sql")),
     (11, include_str!("../sql/011_windows.sql")),
+    (12, include_str!("../sql/012_archive.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -92,6 +93,7 @@ mod tests {
                 "favicons",
                 "favicon_origins",
                 "windows",
+                "archive",
             ] {
                 let mut rows = conn
                     .query(
@@ -159,6 +161,40 @@ mod tests {
                 ("SELECT count(*) FROM site_permissions", 0),
                 ("SELECT count(*) FROM downloads", 0),
                 ("SELECT count(*) FROM split_panes", 0),
+                ("SELECT count(*) FROM archive", 0),
+                ("SELECT count(*) FROM tabs WHERE last_active = 0", 1),
+                ("SELECT count(*) FROM spaces WHERE never_sleep = 0", 1),
+            ] {
+                assert_eq!(count(&conn, sql).await, want, "{sql}");
+            }
+        });
+    }
+
+    #[test]
+    fn a_v11_database_with_data_gets_the_archive_columns() {
+        pollster::block_on(async {
+            let mut conn = mem().await;
+            migrate(&mut conn, &MIGRATIONS[..11]).await.unwrap();
+            conn.execute_batch(
+                "INSERT INTO containers(id, name, position) VALUES (0, 'Default', 0);
+                 INSERT INTO spaces(id, name, position, container_id) VALUES (0, 'Home', 0, 0);
+                 INSERT INTO tabs(id, space_id, container_id, position, url)
+                     VALUES (1, 0, 0, 0, 'https://a.test/');",
+            )
+            .await
+            .unwrap();
+            migrate(&mut conn, MIGRATIONS).await.unwrap();
+            assert_eq!(schema_version(&conn).await.unwrap(), 12);
+            for (sql, want) in [
+                (
+                    "SELECT count(*) FROM tabs WHERE url = 'https://a.test/' AND last_active = 0",
+                    1,
+                ),
+                (
+                    "SELECT count(*) FROM spaces WHERE name = 'Home' AND never_sleep = 0",
+                    1,
+                ),
+                ("SELECT count(*) FROM archive", 0),
             ] {
                 assert_eq!(count(&conn, sql).await, want, "{sql}");
             }

@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
+use crate::archive::ArchiveAfter;
 use crate::omnibox::SearchEngine;
+use crate::routing::Rule;
 use crate::seam::SidebarMode;
 use crate::settings::{self, SettingDef};
 use crate::sleep::SleepPolicy;
@@ -82,6 +84,10 @@ pub enum Applied {
     /// The stored keybinding overrides (`keys::overrides_from_entries`).
     Keymap(Vec<String>),
     Sleep(SleepPolicy),
+    NeverSleepSites(Vec<String>),
+    ArchiveAfter(ArchiveAfter),
+    /// The stored link-routing rules, as typed (`routing::Rule::parse`).
+    RoutingRules(Vec<String>),
     Glass(GlassSetting),
     Passwords(PasswordSettings),
     /// Read only when the app starts: the page says a restart is needed.
@@ -147,6 +153,9 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
                 flag(&s::SLEEP_KEEP_PINNED, stored),
             ))
         }
+        k if k == s::SLEEP_NEVER_SITES.key => Applied::NeverSleepSites(list(def, stored)),
+        k if k == s::ARCHIVE_AFTER.key => Applied::ArchiveAfter(ArchiveAfter::from_id(v)?),
+        k if k == s::ROUTING_RULES.key => Applied::RoutingRules(list(def, stored)),
         k if k == s::GLASS_QUALITY.key => Applied::Glass(GlassSetting::from_id(v)?),
         k if [s::PASSWORDS_OFFER_TO_SAVE.key, s::PASSWORDS_AUTOFILL.key].contains(&k) => {
             Applied::Passwords(PasswordSettings::from_stored(stored))
@@ -190,7 +199,9 @@ pub fn with_entry(key: &str, stored: &HashMap<String, String>, entry: &str) -> O
     let def = settings::find(key).filter(|d| d.kind == settings::SettingKind::List)?;
     let mut items = list(def, stored);
     let entry = entry.trim();
-    if !entry.is_empty() && !items.iter().any(|i| i == entry) {
+    // a malformed rule is refused rather than stored and silently ignored
+    let valid = key != settings::ROUTING_RULES.key || Rule::parse(entry).is_some();
+    if !entry.is_empty() && valid && !items.iter().any(|i| i == entry) {
         items.push(entry.to_owned());
     }
     serde_json::to_string(&items).ok()
@@ -334,6 +345,40 @@ mod tests {
         );
         assert_eq!(with_entry("zoom.sites", &s, "x"), None);
         assert_eq!(without_entry("blocker.enabled", &s, "x"), None);
+    }
+
+    #[test]
+    fn the_new_rows_apply_and_a_malformed_rule_is_refused() {
+        let empty = HashMap::new();
+        assert_eq!(
+            effect_of("archive.after", &empty),
+            Some(Applied::ArchiveAfter(ArchiveAfter::Hours24))
+        );
+        assert_eq!(
+            effect_of("archive.after", &stored(&[("archive.after", "off")])),
+            Some(Applied::ArchiveAfter(ArchiveAfter::Off))
+        );
+        assert_eq!(
+            effect_of(
+                "sleep.never_sites",
+                &stored(&[("sleep.never_sites", r#"["a.test"]"#)])
+            ),
+            Some(Applied::NeverSleepSites(vec!["a.test".into()]))
+        );
+        assert_eq!(
+            effect_of("routing.rules", &empty),
+            Some(Applied::RoutingRules(vec![]))
+        );
+        let ok = with_entry("routing.rules", &empty, "a.test -> Work").unwrap();
+        assert_eq!(ok, r#"["a.test -> Work"]"#);
+        assert_eq!(
+            with_entry("routing.rules", &empty, "a.test"),
+            Some("[]".into())
+        );
+        assert_eq!(
+            with_entry("routing.rules", &empty, "a.test -> "),
+            Some("[]".into())
+        );
     }
 
     #[test]

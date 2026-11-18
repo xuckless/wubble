@@ -308,6 +308,14 @@ export component AppWindow inherits Window {
     callback history-query-changed(string);
     callback history-deleted(string);
     callback history-more();
+    // The archive page: the same lines, restored or deleted by id.
+    in property <[HistoryLineItem]> archive-lines;
+    in property <bool> archive-searching;
+    in property <bool> archive-has-more;
+    callback archive-query-changed(string);
+    callback archive-restored(int);
+    callback archive-deleted(int);
+    callback archive-more();
     // (the clear range's index: last hour, last 24 hours, all)
     callback history-cleared(int);
     // A row of the history or bookmarks page opened (here, or in a new tab).
@@ -413,6 +421,8 @@ export component AppWindow inherits Window {
             settings-ui.take-focus();
         } else if root.page == InternalPageKind.history {
             history-ui.take-focus();
+        } else if root.page == InternalPageKind.archive {
+            archive-ui.take-focus();
         } else if root.page == InternalPageKind.bookmarks {
             bookmarks-ui.take-focus();
         } else if root.page == InternalPageKind.downloads {
@@ -647,13 +657,13 @@ export component AppWindow inherits Window {
                 query-changed(q) => {
                     root.history-query-changed(q);
                 }
-                opened(u) => {
+                opened(u, k) => {
                     root.page-opened(u);
                 }
-                opened-new-tab(u) => {
+                opened-new-tab(u, k) => {
                     root.page-opened-new-tab(u);
                 }
-                deleted(u) => {
+                deleted(u, k) => {
                     root.history-deleted(u);
                 }
                 more => {
@@ -661,6 +671,33 @@ export component AppWindow inherits Window {
                 }
                 cleared(range) => {
                     root.history-cleared(range);
+                }
+            }
+            // Click restores the tab (and takes it off the list); middle-click opens it and keeps it.
+            archive-ui := HistoryPage {
+                open: root.page == InternalPageKind.archive;
+                title: "Archive";
+                placeholder: "Search archived tabs";
+                empty-text: "Nothing archived yet. Tabs you have not visited for a while end up here.";
+                empty-search-text: "No archived tab matches";
+                clearable: false;
+                lines: root.archive-lines;
+                searching: root.archive-searching;
+                has-more: root.archive-has-more;
+                query-changed(q) => {
+                    root.archive-query-changed(q);
+                }
+                opened(u, k) => {
+                    root.archive-restored(k);
+                }
+                opened-new-tab(u, k) => {
+                    root.page-opened-new-tab(u);
+                }
+                deleted(u, k) => {
+                    root.archive-deleted(k);
+                }
+                more => {
+                    root.archive-more();
                 }
             }
             bookmarks-ui := BookmarksPage {

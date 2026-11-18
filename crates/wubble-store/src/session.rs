@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use wubble_core::lifecycle::{Activity, Lifecycle, Pin};
+use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, MAX_PANES, Rgb, Space, SpaceIcon, SpaceId,
@@ -63,7 +63,7 @@ impl Store {
         let mut space_at: HashMap<SpaceId, usize> = HashMap::new();
         let mut rows = c
             .query(
-                "SELECT id, name, tint, container_id, active_tab_id, icon FROM spaces \
+                "SELECT id, name, tint, container_id, active_tab_id, icon, never_sleep FROM spaces \
                  ORDER BY position",
                 (),
             )
@@ -87,6 +87,7 @@ impl Store {
                     .map(|v| narrow(v, "tab id").map(|v: u64| TabId(v)))
                     .transpose()?,
                 split: None,
+                never_sleep: r.get::<i64>(6)? != 0,
             });
         }
         if spaces.is_empty() {
@@ -122,7 +123,7 @@ impl Store {
         let mut tabs = vec![];
         let mut rows = c
             .query(
-                "SELECT id, space_id, container_id, folder_id, pinned, position, url, title \
+                "SELECT id, space_id, container_id, folder_id, pinned, position, url, title, last_active \
                  FROM tabs ORDER BY space_id, pinned DESC, position",
                 (),
             )
@@ -159,10 +160,12 @@ impl Store {
                     liveness: Liveness::Discarded,
                     pin: if pinned { Pin::Pinned } else { Pin::Unpinned },
                     activity: Activity::Idle,
+                    keep: Keep::Normal,
                     hidden_since: None,
                 },
                 container: ContainerId(narrow(r.get(2)?, "container id")?),
                 opener: None,
+                last_active_ms: r.get(8)?,
             });
         }
         for (space, mut items) in spaces.iter_mut().zip(top) {
@@ -385,8 +388,8 @@ async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -
 async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO spaces(id, name, position, tint, container_id, active_tab_id, icon, never_sleep) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .await?;
     for (i, s) in m.spaces.iter().enumerate() {
@@ -402,6 +405,7 @@ async fn write_spaces(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Re
             s.container.0,
             active,
             s.icon.id(),
+            i64::from(s.never_sleep),
         ))
         .await?;
     }
@@ -426,8 +430,8 @@ async fn write_folders(tx: &turso::transaction::Transaction<'_>, m: &Model) -> R
 async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
     let mut st = tx
         .prepare(
-            "INSERT INTO tabs(id, space_id, container_id, folder_id, pinned, position, url, title) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO tabs(id, space_id, container_id, folder_id, pinned, position, url, title, last_active) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .await?;
     let mut put = async |t: TabId, space: SpaceId, folder: Option<FolderId>, pinned, pos: usize| {
@@ -441,6 +445,7 @@ async fn write_tabs(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Resu
             pos as i64,
             tab.url.as_str(),
             tab.title.as_str(),
+            tab.last_active_ms,
         ))
         .await?;
         Ok::<(), Error>(())
@@ -591,6 +596,22 @@ mod tests {
                 tint: Rgb(4, 5, 6),
             },
         );
+        // hidden tabs of unknown last visit are stamped by the first tick
+        m = ap(
+            m,
+            Command::Tick {
+                now: now(),
+                wall_ms: 5_000,
+                pressure: wubble_core::sleep::Pressure::None,
+            },
+        );
+        m = ap(
+            m,
+            Command::SetSpaceNeverSleep {
+                space: SpaceId(2),
+                on: true,
+            },
+        );
         m.check().unwrap();
         m
     }
@@ -609,6 +630,7 @@ mod tests {
                         Pin::Unpinned
                     },
                     activity: Activity::Idle,
+                    keep: Keep::Normal,
                     hidden_since: None,
                 },
                 opener: None,
@@ -744,6 +766,8 @@ mod tests {
             assert_eq!(m.tabs[&TabId(4)].container, ContainerId(1));
             assert!(matches!(m.spaces[0].items[1], Item::Folder(_)));
             assert!(matches!(&m.spaces[0].items[3], Item::Folder(f) if f.tabs.is_empty()));
+            assert!(m.spaces[2].never_sleep && !m.spaces[0].never_sleep);
+            assert!(m.tabs.values().any(|t| t.last_active_ms == 5_000));
             store.save_session(&m).await.unwrap();
             assert_same(&store.load_session(now()).await.unwrap(), &restored(&m));
         });
@@ -937,10 +961,12 @@ mod tests {
                     liveness: Liveness::Discarded,
                     pin: if pinned { Pin::Pinned } else { Pin::Unpinned },
                     activity: Activity::Idle,
+                    keep: Keep::Normal,
                     hidden_since: None,
                 },
                 container: ContainerId(container),
                 opener: None,
+                last_active_ms: 0,
             };
             let spaces = vec![
                 Space {
@@ -961,6 +987,7 @@ mod tests {
                     ],
                     active: Some(TabId(10)), // backfilled: first tab, pinned first
                     split: None,
+                    never_sleep: false,
                 },
                 Space {
                     id: SpaceId(1),
@@ -972,6 +999,7 @@ mod tests {
                     items: vec![Item::Tab(TabId(20)), Item::Tab(TabId(21))],
                     active: Some(TabId(21)), // the saved active tab
                     split: None,
+                    never_sleep: false,
                 },
             ];
             let containers = vec![
@@ -1146,7 +1174,9 @@ mod tests {
             // v6 has no icon column: migration 10 gives each Space its icon by position.
             for (i, s) in m.spaces.iter_mut().enumerate() {
                 s.icon = SpaceIcon::nth(i);
+                s.never_sleep = false; // no such column before v12
             }
+            m.tabs.values_mut().for_each(|t| t.last_active_ms = 0);
             let tx = store.conn.transaction().await.unwrap();
             // the v6 writers, without the split table or the icon
             write_containers(&tx, &m).await.unwrap();
@@ -1167,7 +1197,14 @@ mod tests {
                 .unwrap();
             }
             write_folders(&tx, &m).await.unwrap();
+            // v6 has no last_active column: the v12 writer, with the column added for it
+            tx.execute_batch("ALTER TABLE tabs ADD COLUMN last_active INTEGER NOT NULL DEFAULT 0")
+                .await
+                .unwrap();
             write_tabs(&tx, &m).await.unwrap();
+            tx.execute_batch("ALTER TABLE tabs DROP COLUMN last_active")
+                .await
+                .unwrap();
             tx.execute("INSERT INTO session(id, active_space_id) VALUES (1, 1)", ())
                 .await
                 .unwrap();

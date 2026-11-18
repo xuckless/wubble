@@ -827,6 +827,10 @@ mod tests {
             Action::ToggleMute,
             Action::OpenPasswords,
             Action::MoveTabToNewWindow,
+            Action::OpenArchive,
+            Action::TidyTabs,
+            Action::UndoTidyTabs,
+            Action::CloseDuplicateTabs,
         ];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);

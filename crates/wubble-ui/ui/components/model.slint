@@ -352,11 +352,14 @@ export enum InternalPageKind {
     bookmarks,
     downloads,
     passwords,
+    archive,
 }
 
 // One line of the history page: a day header (`header`, `label`) or a visit.
 export struct HistoryLineItem {
     header: bool,
+    // The visit's or archived tab's id (rows are deleted by address in history, by id in the archive).
+    key: int,
     label: string,
     title: string,
     url: string,

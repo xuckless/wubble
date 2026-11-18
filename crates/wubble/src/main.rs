@@ -1072,6 +1072,10 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_history_deleted(move |url| with_host_in(win, |host| host.history_deleted(&url)));
     window.on_history_more(move || with_host_in(win, Host::history_more));
     window.on_history_cleared(move |range| with_host_in(win, |host| host.history_cleared(range)));
+    window.on_archive_query_changed(move |q| with_host_in(win, |host| host.archive_query(&q)));
+    window.on_archive_deleted(move |id| with_host_in(win, |host| host.archive_deleted(id)));
+    window.on_archive_restored(move |id| with_host_in(win, |host| host.archive_restored(id)));
+    window.on_archive_more(move || with_host_in(win, Host::archive_more));
     window.on_page_opened(move |url| with_host_in(win, |host| host.page_opened(&url)));
     window.on_page_opened_new_tab(move |url| {
         with_host_in(win, |host| host.page_opened_new_tab(&url))

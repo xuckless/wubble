@@ -17,7 +17,7 @@ use std::pin::Pin;
 
 use turso::Connection;
 use wubble_core::import::{BookmarkNode as Imp, Imported, Placement, Source};
-use wubble_core::lifecycle::{Activity, Lifecycle, Pin as TabPin};
+use wubble_core::lifecycle::{Activity, Keep, Lifecycle, Pin as TabPin};
 use wubble_core::model::Model;
 use wubble_core::space::{
     Container, ContainerId, Folder, FolderId, Item, Space, SpaceIcon, SpaceId,
@@ -185,6 +185,7 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
             items: vec![],
             active: None,
             split: None,
+            never_sleep: false,
         };
         next_space += 1;
         new_spaces.push(Some((key, space)));
@@ -276,10 +277,12 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
                     TabPin::Unpinned
                 },
                 activity: Activity::Idle,
+                keep: Keep::Normal,
                 hidden_since: None,
             },
             container: container_of(t.container),
             opener: None,
+            last_active_ms: 0,
         });
         match (pinned, folder) {
             (true, _) => space.pinned.push(id),

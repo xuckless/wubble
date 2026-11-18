@@ -143,6 +143,7 @@ impl Model {
             items: vec![],
             active: None,
             split: None,
+            never_sleep: false,
         });
         id
     }

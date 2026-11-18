@@ -31,12 +31,22 @@ pub enum Activity {
     Busy,
 }
 
+/// Whether the user asked this tab to stay awake: its Space or its site is on a never-sleep
+/// list. Derived by the model, never set by hand. Like [`Activity::Busy`] it holds a hidden tab
+/// at Background, and it beats memory pressure: the user's "never" is not the system's call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keep {
+    Normal,
+    Awake,
+}
+
 /// The single owner of a tab's liveness, pin and busy state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Lifecycle {
     pub liveness: Liveness,
     pub pin: Pin,
     pub activity: Activity,
+    pub keep: Keep,
     /// When the tab was hidden. Set while Background or Frozen, `None` otherwise.
     pub hidden_since: Option<Instant>,
 }
@@ -48,6 +58,7 @@ impl Lifecycle {
             liveness: Liveness::Active,
             pin: Pin::Unpinned,
             activity: Activity::Idle,
+            keep: Keep::Normal,
             hidden_since: None,
         }
     }
@@ -72,6 +83,7 @@ pub enum Event {
     },
     BusyChanged(Activity),
     PinnedChanged(Pin),
+    KeepChanged(Keep),
     /// The renderer process crashed or was killed. A visible tab is reloaded at
     /// once; a hidden one becomes Discarded and is restored when shown.
     RendererGone,
@@ -134,7 +146,7 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
             let hidden = now.saturating_duration_since(since);
             match (
                 s.liveness,
-                policy.target(hidden, s.pin, s.activity, pressure),
+                policy.target(hidden, s.pin, s.activity, s.keep, pressure),
             ) {
                 (Background, Frozen) => (
                     Lifecycle {
@@ -157,6 +169,15 @@ pub fn transition(policy: &SleepPolicy, s: Lifecycle, e: Event) -> (Lifecycle, V
             },
             vec![Unfreeze],
         ),
+        (Frozen, Event::KeepChanged(Keep::Awake)) => (
+            Lifecycle {
+                liveness: Background,
+                keep: Keep::Awake,
+                ..s
+            },
+            vec![Unfreeze],
+        ),
+        (_, Event::KeepChanged(keep)) => (Lifecycle { keep, ..s }, vec![]),
         (_, Event::BusyChanged(activity)) => (Lifecycle { activity, ..s }, vec![]),
         (_, Event::PinnedChanged(pin)) => (Lifecycle { pin, ..s }, vec![]),
 
@@ -200,6 +221,7 @@ mod tests {
             liveness,
             pin,
             activity,
+            keep: Keep::Normal,
             hidden_since: hidden.then(base),
         }
     }
@@ -227,6 +249,7 @@ mod tests {
         let idle_ev = Event::BusyChanged(Activity::Idle);
         let pin = Event::PinnedChanged(Pin::Pinned);
         let hidden = Event::Hidden { now: base() };
+        let awake = Event::KeepChanged(Keep::Awake);
         let none = Pressure::None;
         let crit = Pressure::Critical;
 
@@ -329,6 +352,16 @@ mod tests {
             ("bg pin", idle(Background), pin, Background, vec![]),
             ("frozen pin", idle(Frozen), pin, Frozen, vec![]),
             ("disc pin", idle(Discarded), pin, Discarded, vec![]),
+            ("active awake", idle(Active), awake, Active, vec![]),
+            ("bg awake", idle(Background), awake, Background, vec![]),
+            (
+                "frozen awake",
+                idle(Frozen),
+                awake,
+                Background,
+                vec![Unfreeze],
+            ),
+            ("disc awake", idle(Discarded), awake, Discarded, vec![]),
             (
                 "active gone",
                 idle(Active),

@@ -70,6 +70,11 @@ pub enum Command {
     AllowPopups(String),
     /// The Little window's page becomes a tab of this Space; the window closes.
     PromoteLittle(WindowId, SpaceId),
+    /// A Space's tabs never sleep (`true`), or may sleep again.
+    SpaceNeverSleep(SpaceId, bool),
+    /// The site joins the never-sleep list, or the listed entry leaves it (it is on the list
+    /// exactly when the entry is already there).
+    ToggleNeverSleepSite(String),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -294,6 +299,68 @@ pub fn tab_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         });
     }
     out.extend(window_entries(model, tab));
+    out.push(Entry {
+        label: String::new(),
+        command: Command::Separator,
+        enabled: false,
+    });
+    out.extend(sleep_entries(model, tab));
+    out
+}
+
+/// The tab row's never-sleep switches: its Space, and its site (when it has one). A site that
+/// is on the list only through a parent entry (`example.com` for `docs.example.com`) offers to
+/// take that entry off.
+pub fn sleep_entries(model: &Model, tab: TabId) -> Vec<Entry> {
+    let entry = |label: String, command| Entry {
+        label,
+        command,
+        enabled: true,
+    };
+    let mut out = vec![];
+    if let Some(space) = model
+        .location(tab)
+        .and_then(|(s, _)| model.spaces.iter().find(|k| k.id == s))
+    {
+        out.push(if space.never_sleep {
+            entry(
+                "Let Tabs in This Space Sleep".into(),
+                Command::SpaceNeverSleep(space.id, false),
+            )
+        } else {
+            entry(
+                "Never Sleep Tabs in This Space".into(),
+                Command::SpaceNeverSleep(space.id, true),
+            )
+        });
+    }
+    if let Some(host) = model
+        .tabs
+        .get(&tab)
+        .and_then(|t| wubble_core::routing::host_key(&t.url))
+        .filter(|_| {
+            // a web page: internal pages have no site to keep awake
+            model
+                .tabs
+                .get(&tab)
+                .is_some_and(|t| !model.is_internal(t.id))
+        })
+    {
+        let listed = model
+            .never_sites()
+            .iter()
+            .find(|s| wubble_core::routing::host_in(&[s.as_str()], &host));
+        out.push(match listed {
+            Some(site) => entry(
+                format!("Let {site} Sleep"),
+                Command::ToggleNeverSleepSite(site.clone()),
+            ),
+            None => entry(
+                format!("Never Sleep {host}"),
+                Command::ToggleNeverSleepSite(host),
+            ),
+        });
+    }
     out
 }
 
@@ -918,9 +985,55 @@ mod tests {
         );
         // the window showing its Space is not offered; the other one is
         assert_eq!(rows(&m, 1), [new(1), to_first]);
-        // the tab menu ends with them, after a separator
+        // the tab menu's window rows come after a separator, before the sleep rows
         let all = tab_entries(&m, TabId(1));
-        assert_eq!(all.last().map(|e| &e.command), Some(&rows(&m, 1)[1].1));
+        let at = all.len() - sleep_entries(&m, TabId(1)).len() - 2;
+        assert_eq!(all[at].command, rows(&m, 1)[1].1);
+    }
+
+    #[test]
+    fn the_tab_menu_offers_never_sleep_for_the_space_and_the_site() {
+        use wubble_core::model::{Command as Cmd, apply};
+        let m = tabs(1);
+        let rows = |m: &Model| -> Vec<(String, Command)> {
+            sleep_entries(m, TabId(1))
+                .into_iter()
+                .map(|e| (e.label, e.command))
+                .collect()
+        };
+        let space = m.spaces[0].id;
+        let host = wubble_core::routing::host_key(&m.tabs[&TabId(1)].url).unwrap();
+        assert_eq!(
+            rows(&m),
+            [
+                (
+                    "Never Sleep Tabs in This Space".to_string(),
+                    Command::SpaceNeverSleep(space, true)
+                ),
+                (
+                    format!("Never Sleep {host}"),
+                    Command::ToggleNeverSleepSite(host.clone())
+                ),
+            ]
+        );
+        let (m, _) = apply(m, Cmd::SetSpaceNeverSleep { space, on: true });
+        let (m, _) = apply(m, Cmd::SetNeverSleepSites(vec![host.clone()]));
+        assert_eq!(
+            rows(&m),
+            [
+                (
+                    "Let Tabs in This Space Sleep".to_string(),
+                    Command::SpaceNeverSleep(space, false)
+                ),
+                (
+                    format!("Let {host} Sleep"),
+                    Command::ToggleNeverSleepSite(host.clone())
+                ),
+            ]
+        );
+        // the tab menu carries them last
+        let all = tab_entries(&m, TabId(1));
+        assert_eq!(all.last().map(|e| &e.command), Some(&rows(&m)[1].1));
     }
 
     #[test]

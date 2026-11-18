@@ -19,7 +19,7 @@ use wubble_ui::{
     AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
 };
 
-use super::{Host, new_tab, now_ms};
+use super::{Host, now_ms};
 use crate::chooser::{self, DialogSpec};
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
@@ -264,7 +264,7 @@ impl Host {
                     }
                 }
                 MenuEffect::Run(MenuCommand::OpenInNewTab(url)) => {
-                    self.dispatch(new_tab(url, Some(tab)));
+                    self.open_routed(url, Some(tab));
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
                 MenuEffect::Run(MenuCommand::SplitWith(t)) => self.dispatch(Command::SplitWith(t)),
@@ -272,6 +272,12 @@ impl Host {
                 MenuEffect::Run(MenuCommand::OpenBeside) => self.open_beside(),
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
+                MenuEffect::Run(MenuCommand::SpaceNeverSleep(space, on)) => {
+                    self.dispatch(Command::SetSpaceNeverSleep { space, on });
+                }
+                MenuEffect::Run(MenuCommand::ToggleNeverSleepSite(site)) => {
+                    self.toggle_never_sleep_site(&site);
+                }
                 MenuEffect::Run(MenuCommand::MoveToWindow(t, to)) => {
                     self.dispatch(Command::MoveTabToWindow { tab: t, to });
                 }
