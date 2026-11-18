@@ -5,21 +5,8 @@
 //! Live suggestions send keystrokes to the search engine, so they are off
 //! unless the user turns them on.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchEngine {
-    Google,
-    DuckDuckGo,
-}
-
-impl SearchEngine {
-    /// Endpoint returning OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
-    fn suggest_endpoint(self) -> &'static str {
-        match self {
-            Self::Google => "https://suggestqueries.google.com/complete/search?client=firefox&q=",
-            Self::DuckDuckGo => "https://duckduckgo.com/ac/?type=list&q=",
-        }
-    }
-}
+pub use crate::omnibox::SearchEngine;
+use crate::omnibox::suggest_url;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LiveSuggestions {
@@ -43,6 +30,14 @@ pub enum Source {
     Remote { url: String },
 }
 
+/// Anything that could be a (partial) address stays on this machine, even
+/// when `classify` would still call it a search (`192.168.0`, `http://`).
+fn looks_like_address(q: &str) -> bool {
+    q.contains(['.', '/', '@'])
+        || q.contains("://")
+        || q.to_ascii_lowercase().starts_with("localhost")
+}
+
 /// Sources to consult for `query`, in display order.
 pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
     let query = query.trim();
@@ -51,17 +46,11 @@ pub fn sources(query: &str, settings: &SuggestSettings) -> Vec<Source> {
     }
     let mut out = vec![Source::Local];
     if settings.live == LiveSuggestions::On && !looks_like_address(query) {
-        let mut url = String::from(settings.engine.suggest_endpoint());
-        crate::url::percent_encode_into(query, &mut url);
-        out.push(Source::Remote { url });
+        out.push(Source::Remote {
+            url: suggest_url(settings.engine, query),
+        });
     }
     out
-}
-
-/// Addresses being typed are never sent to a search engine.
-fn looks_like_address(query: &str) -> bool {
-    !query.contains(char::is_whitespace)
-        && (query.contains("://") || query.contains('.') || query.starts_with("localhost"))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -119,6 +108,11 @@ mod tests {
             "github.com/foo",
             "https://bank.example/login",
             "localhost:3000",
+            "192.168.0",
+            "http://",
+            "foo/bar",
+            "foo.",
+            "user@host.com",
         ] {
             assert_eq!(
                 sources(q, &settings(LiveSuggestions::On)),
