@@ -1,6 +1,7 @@
 //! Tab identity and lifecycle.
 
 use crate::lifecycle::Lifecycle;
+use crate::space::ContainerId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(pub u64);
@@ -18,10 +19,14 @@ pub enum Liveness {
     Discarded,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
     pub id: TabId,
     pub url: String,
     pub title: String,
     pub lifecycle: Lifecycle,
+    /// Overrides the Space's default container. Never equal to it (see `Model::check`).
+    pub container: Option<ContainerId>,
+    /// The tab that opened this one; consulted when this tab closes, forgotten on a user tab switch.
+    pub opener: Option<TabId>,
 }
