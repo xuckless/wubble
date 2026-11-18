@@ -533,7 +533,7 @@ impl Host {
             };
             // The first (or only) pane shows the bundled page: its swatches' exact colours.
             if last.is_none() {
-                pixels::check_swatches(shot, region)
+                pixels::check_swatches(shot, region, scale)
                     .map_err(|e| format!("pane of tab {}: {e}", r.tab.0))?;
             }
             let sample =

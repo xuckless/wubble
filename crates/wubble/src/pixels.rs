@@ -141,16 +141,20 @@ pub fn check_shows_scene(
 }
 
 /// The bundled smoke page's swatches show their exact colours (see
-/// [`wubble_gfx::swatch`]); `region` is where the page sits in the snapshot.
+/// [`wubble_gfx::swatch`]); `region` is where the page sits in the snapshot,
+/// in physical pixels, and `scale` turns the swatches' page pixels into those
+/// (at scale 2 the green swatch's centre is 256 px in, not 128).
 pub fn check_swatches(
     snapshot: &SharedPixelBuffer<Rgba8Pixel>,
     region: Region,
+    scale: f32,
 ) -> Result<(), String> {
     let width = snapshot.width() as usize;
     let pixels = snapshot.as_slice();
+    let physical = |page: u32| (page as f32 * scale).round() as u32;
     wubble_gfx::swatch::check(|x, y| {
         pixels
-            .get((region.y + y) as usize * width + (region.x + x) as usize)
+            .get((region.y + physical(y)) as usize * width + (region.x + physical(x)) as usize)
             .map(|p| [p.r, p.g, p.b])
     })
 }
