@@ -485,27 +485,25 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
             limit,
             reply,
         } => {
-            let hits = store.query_history(&prefix, now_ms, limit).await;
-            let icons = match &hits {
-                Ok(hits) => {
-                    let urls: Vec<&str> = hits.iter().map(|h| h.url.as_str()).collect();
-                    store.favicons_for(&urls).await
+            let mut failure = None;
+            let entries = store
+                .query_history(&prefix, now_ms, limit)
+                .await
+                .unwrap_or_else(|e| {
+                    failure = Some(e);
+                    Vec::new()
+                });
+            let urls: Vec<&str> = entries.iter().map(|h| h.url.as_str()).collect();
+            let icons = match store.favicons_for(&urls).await {
+                Ok(icons) => icons,
+                Err(e) => {
+                    failure = failure.or(Some(e));
+                    HashMap::new()
                 }
-                Err(_) => Ok(HashMap::new()),
             };
-            match (hits, icons) {
-                (Ok(entries), Ok(icons)) => reply(Hits { entries, icons }),
-                (Ok(entries), Err(e)) => {
-                    reply(Hits {
-                        entries,
-                        icons: HashMap::new(),
-                    });
-                    return Err(e);
-                }
-                (Err(e), _) => {
-                    reply(Hits::default());
-                    return Err(e);
-                }
+            reply(Hits { entries, icons });
+            if let Some(e) = failure {
+                return Err(e);
             }
         }
         Request::PutFavicon {

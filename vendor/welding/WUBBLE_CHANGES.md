@@ -217,8 +217,8 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    sets `rect` and `available_rect`, new `root_screen_rect`, `screen_point`
    reports the window point (device px; DIP on macOS). New
    `CefSurfaceProducer::set_screen_area` (default `PlatformUnsupported`; the
-   three producers store the area, then `notify_screen_info_changed` and
-   `was_resized`, only when it changed). Ported from cefclient
+   three producers store the area, then `notify_screen_info_changed`, only
+   when it changed; no `was_resized`, the size is unchanged). Ported from cefclient
    `osr_window_win.cc` in its `real_screen_bounds` mode (BSD-3-Clause), with the
    host window standing in for the screen so no global window position is
    needed (Wayland has none). Without an area nothing changes. Tests: the

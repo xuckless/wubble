@@ -566,14 +566,18 @@ impl Host {
         crate::bind::render_history(&window, page.as_ref());
     }
 
+    /// The blocker's count for `tab`, if it has a view.
+    fn blocked_of(&mut self, tab: TabId) -> Option<u32> {
+        let id = *self.views.get(&tab)?;
+        let browser = self.engine.view(id)?.browser_id();
+        Some(self.blocking.blocked(browser))
+    }
+
     /// The blocker's count for each tab with a view.
     fn blocked_counts(&mut self) -> crate::shell::BlockedMap {
-        let ids: Vec<_> = self.views.iter().map(|(&tab, &id)| (tab, id)).collect();
-        ids.into_iter()
-            .filter_map(|(tab, id)| {
-                let browser = self.engine.view(id)?.browser_id();
-                Some((tab, self.blocking.blocked(browser)))
-            })
+        let tabs: Vec<_> = self.views.keys().copied().collect();
+        tabs.into_iter()
+            .filter_map(|tab| Some((tab, self.blocked_of(tab)?)))
             .collect()
     }
 
@@ -989,11 +993,6 @@ impl Host {
                 let Some(view) = self.tab_view(tab) else {
                     return;
                 };
-                // Print needs the host's downloads folder, not just the view.
-                if op == ViewOp::Print {
-                    self.print(tab);
-                    return;
-                }
                 match op {
                     ViewOp::Reload => view.reload(),
                     ViewOp::HardReload => view.hard_reload(),
@@ -1007,11 +1006,15 @@ impl Host {
                         let muted = view.is_muted();
                         view.set_muted(!muted);
                     }
-                    ViewOp::Print => {}
                 }
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
                     let percent = view.zoom_percent();
                     self.user_zoomed(tab, percent);
+                }
+            }
+            Plan::Print => {
+                if let Some(tab) = self.model.visible_tab() {
+                    self.print(tab);
                 }
             }
             Plan::Find(event) => self.find_event(event),
@@ -1279,11 +1282,8 @@ impl Host {
     }
 
     fn visible_blocked(&mut self) -> u32 {
-        let id = self.model.visible_tab().and_then(|t| self.views.get(&t));
-        let browser = id
-            .copied()
-            .and_then(|id| self.engine.view(id)?.browser_id().into());
-        browser.map_or(0, |b| self.blocking.blocked(b))
+        let tab = self.model.visible_tab();
+        tab.and_then(|t| self.blocked_of(t)).unwrap_or(0)
     }
 
     fn block_smoke_step(&mut self, input: block_smoke::Input) {

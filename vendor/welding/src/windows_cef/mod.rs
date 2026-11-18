@@ -687,7 +687,8 @@ impl CefSurfaceProducer for WindowsCefProducer {
             // screen rectangles only when told.
             if let Some(host) = self.browser().and_then(|browser| browser.host()) {
                 host.notify_screen_info_changed();
-                host.was_resized();
+                // wubble change: no was_resized(), the size is unchanged (a moving view would
+                // otherwise repaint every frame).
             }
             return Ok(());
         }

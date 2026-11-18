@@ -172,7 +172,12 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
             if let Some(area) = new.area.filter(|_| new.area != current.area) {
                 effects.push(SetScreenArea(area));
             }
-            (Resizing { wanted: new }, effects)
+            // Moving the view without resizing it needs no frame at a new size: it stays Live.
+            let resized = new.size != current.size || new.scale != current.scale;
+            match state {
+                Live { .. } if !resized => (Live { layout: new }, effects),
+                _ => (Resizing { wanted: new }, effects),
+            }
         }
         // Frames at a stale size are still shown (at their own size, top left) rather than
         // dropped, so a resize never flashes an empty view.
@@ -341,10 +346,12 @@ impl View {
     /// Prints the page to a PDF file (Chromium's default page size and
     /// margins). Completion arrives as [`PageEvent::PdfPrinted`]. The system
     /// print dialog is not offered: it needs an embedder print handler.
-    pub fn print_to_pdf(&mut self, path: &Path) {
-        if let Err(e) = self.producer.print_to_pdf(path) {
-            eprintln!("wubble-engine: view {}: print to PDF: {e}", self.browser_id);
-        }
+    pub fn print_to_pdf(&mut self, path: &Path) -> Result<(), String> {
+        self.producer.print_to_pdf(path).map_err(|e| {
+            let error = format!("view {}: print to PDF: {e}", self.browser_id);
+            eprintln!("wubble-engine: {error}");
+            error
+        })
     }
 
     /// Opens DevTools in its own native window (a non-windowless `WindowInfo`;
@@ -1610,10 +1617,10 @@ mod tests {
             }
             // A new area is announced; layouts without one never are.
             (Live { .. }, Layout(l)) if l == placed(SMALL, 1.0, AREA) => {
-                (Resizing { wanted: l }, vec![SetScreenArea(AREA)])
+                (Live { layout: l }, vec![SetScreenArea(AREA)])
             }
             (Live { .. }, Layout(l)) if l == placed(SMALL, 1.0, OTHER_AREA) => {
-                (Resizing { wanted: l }, vec![SetScreenArea(OTHER_AREA)])
+                (Live { layout: l }, vec![SetScreenArea(OTHER_AREA)])
             }
             (Resizing { .. }, Layout(l)) if l == placed(SMALL, 1.0, AREA) => (
                 Resizing { wanted: l },
@@ -1681,6 +1688,14 @@ mod tests {
         // A layout that does not say where the view is keeps what CEF has.
         let (_, effects) = run(state, &[Layout(layout(SMALL, 1.0))]);
         assert_eq!(effects, vec![]);
+    }
+
+    #[test]
+    fn moving_the_view_does_not_leave_live() {
+        let (state, _) = run(live(), &[Layout(placed(SMALL, 1.0, AREA))]);
+        assert!(matches!(state, Live { .. }));
+        let (state, _) = run(state, &[Layout(placed(BIG, 1.0, AREA))]);
+        assert!(matches!(state, Resizing { .. }));
     }
 
     #[test]
