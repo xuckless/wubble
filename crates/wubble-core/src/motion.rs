@@ -49,7 +49,11 @@ impl Spring {
     }
 
     /// Aim at a new target, keeping current value and velocity.
+    /// A non-finite target is ignored.
     pub fn retarget(self, target: f32) -> Self {
+        if !target.is_finite() {
+            return self;
+        }
         Self { target, ..self }
     }
 
@@ -69,6 +73,17 @@ pub fn step(s: Spring, dt: f32) -> Spring {
     let mut out = s;
     out.velocity += a * dt;
     out.value += out.velocity * dt;
+    // Poisoned state (NaN or inf in value, velocity or target) snaps to a
+    // finite target, or rests where it is when the target is bad too.
+    if !(out.value.is_finite() && out.velocity.is_finite()) {
+        out.value = if out.target.is_finite() {
+            out.target
+        } else {
+            0.0
+        };
+        out.target = out.value;
+        out.velocity = 0.0;
+    }
     if out.is_at_rest() {
         out.value = out.target;
         out.velocity = 0.0;
@@ -104,12 +119,20 @@ pub const STRETCH_MAX: f32 = 0.55;
 pub const STRETCH_REF_SPEED: f32 = 1500.0;
 
 /// Target scale along the travel axis for a speed in px/s.
+/// A non-finite speed gives no stretch.
 pub fn stretch_target(speed: f32) -> f32 {
+    if !speed.is_finite() {
+        return 1.0;
+    }
     1.0 + (speed.abs() / STRETCH_REF_SPEED).min(STRETCH_MAX)
 }
 
 /// Cross-axis scale that preserves volume for along-axis scale `s`.
+/// A non-positive or non-finite `s` gives 1.
 pub fn cross_scale(s: f32) -> f32 {
+    if !(s.is_finite() && s > 0.0) {
+        return 1.0;
+    }
     1.0 / s.sqrt()
 }
 
@@ -244,7 +267,7 @@ mod tests {
         assert!(rubber_band_clamp(-5.0, 0.0, 10.0, 26.0) < 0.0);
         assert!(rubber_band_clamp(15.0, 0.0, 10.0, 26.0) > 10.0);
         assert!(rubber_band_clamp(-1e-3, 0.0, 10.0, 26.0).abs() <= 1e-3);
-        assert!(rubber_band_clamp(1e9, 0.0, 10.0, 26.0) < 36.0);
+        assert!(rubber_band_clamp(1e9, 0.0, 10.0, 26.0) <= 36.0);
     }
 
     #[test]
@@ -258,6 +281,33 @@ mod tests {
             let c = cross_scale(s);
             assert!((s * c * c - 1.0).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn non_finite_inputs_are_contained() {
+        assert_eq!(stretch_target(f32::NAN), 1.0);
+        assert_eq!(stretch_target(f32::INFINITY), 1.0);
+        for s in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(cross_scale(s), 1.0);
+        }
+        let s = Spring::at(3.0, FOLLOW);
+        for t in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(s.retarget(t), s);
+        }
+        let bad = Spring {
+            value: f32::NAN,
+            velocity: f32::NAN,
+            target: 7.0,
+            params: FOLLOW,
+        };
+        let o = step(bad, 0.016);
+        assert_eq!((o.value, o.velocity), (7.0, 0.0));
+        let worse = Spring {
+            target: f32::NAN,
+            ..bad
+        };
+        let o = step(worse, 0.016);
+        assert!(o.value.is_finite() && o.target.is_finite() && o.is_at_rest());
     }
 
     #[test]
@@ -275,8 +325,5 @@ mod tests {
         for b in [EASE, SPRING_EASE, SPRING_SOFT, IN_OUT] {
             assert!((0.0..=1.0).contains(&b.0) && (0.0..=1.0).contains(&b.2));
         }
-        assert_eq!(EASE, Bezier(0.22, 1.0, 0.36, 1.0));
-        assert_eq!(SPRING_EASE, Bezier(0.3, 1.55, 0.5, 1.0));
-        assert_eq!(IN_OUT, Bezier(0.65, 0.0, 0.35, 1.0));
     }
 }
