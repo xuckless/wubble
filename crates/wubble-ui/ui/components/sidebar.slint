@@ -21,6 +21,9 @@ import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
 import { NewTabRow } from "new-tab-row.slint";
 import { WindowLights } from "window-lights.slint";
+import { NavButtons } from "nav-buttons.slint";
+import { MoveArea } from "window-frame.slint";
+import { Wobble } from "wobble.slint";
 
 export component Sidebar inherits Rectangle {
     in property <string> address-host;
@@ -70,6 +73,13 @@ export component Sidebar inherits Rectangle {
     callback window-close-requested();
     callback window-minimise-requested();
     callback window-toggle-fullscreen-requested();
+    callback window-move-requested();
+    callback window-maximise-requested();
+    // The visible page's history, for the header's back and forward.
+    in property <bool> can-go-back: false;
+    in property <bool> can-go-forward: false;
+    // A header button: the id of the wubble `Action` it runs.
+    callback action(string);
     callback address-activated();
     callback space-switched(int);    // space id
     callback scroll-wheel(length);
@@ -87,9 +97,15 @@ export component Sidebar inherits Rectangle {
     clip: true;
 
     // Under everything: the glass the controls do not claim moves the window (the design's
-    // `wb-side-top` drag, wider). Slint's WindowMoveArea starts the compositor's move.
-    WindowMoveArea {
+    // `wb-side-top` drag, wider), and a double-click on it maximises.
+    MoveArea {
         enabled: root.window-movable;
+        begin-move => {
+            root.window-move-requested();
+        }
+        toggle-maximise => {
+            root.window-maximise-requested();
+        }
     }
 
     VerticalLayout {
@@ -111,6 +127,17 @@ export component Sidebar inherits Rectangle {
                 }
                 toggle-fullscreen-requested => {
                     root.window-toggle-fullscreen-requested();
+                }
+            }
+            // .wb-nav: right-aligned, pulled 4 px past the padding (.wb-side-top margin-right -4)
+            if !root.compact: NavButtons {
+                x: parent.width - self.preferred-width + Shell.nav-pull;
+                y: 0px;
+                height: parent.height;
+                can-go-back: root.can-go-back;
+                can-go-forward: root.can-go-forward;
+                action(id) => {
+                    root.action(id);
                 }
             }
         }
@@ -281,7 +308,9 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                for space[i] in root.spaces: Rectangle {
+                for space[i] in root.spaces: tile := Rectangle {
+                    // tabs.tsx SpaceSwitcher: each click wobbles the icon once more
+                    property <bool> hit: false;
                     x: root.compact ? 0px : i * switcher.pitch;
                     y: root.compact ? i * switcher.pitch : 0px;
                     width: Shell.space-tile;
@@ -295,19 +324,25 @@ export component Sidebar inherits Rectangle {
                     }
                     ta := TouchArea {
                         clicked => {
+                            tile.hit = !tile.hit;
                             root.space-switched(space.id);
                         }
                     }
                     // the model has no icon per Space yet: the three drawn icons in turn
-                    SpaceIcon {
+                    Wobble {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
                         width: Shell.space-glyph;
                         height: Shell.space-glyph;
-                        // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
-                        stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                        kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
-                        tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                        hit: tile.hit;
+                        SpaceIcon {
+                            width: parent.width;
+                            height: parent.height;
+                            // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
+                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
+                            kind: mod(i, 3) == 0 ? "personal" : mod(i, 3) == 1 ? "work" : "study";
+                            tint: space.id == root.active-space-id ? space.tint : ta.has-hover ? Palette.ink : Palette.haze;
+                        }
                     }
                 }
             }

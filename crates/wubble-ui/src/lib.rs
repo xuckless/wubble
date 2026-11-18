@@ -5,6 +5,26 @@ slint::include_modules!();
 pub mod driver;
 pub mod window;
 
+use slint::{Model, VecModel};
+
+/// Make `model` hold `rows`, in place: changed rows are rewritten, rows past the old end are
+/// added and rows past the new end removed. A Slint `for` keeps an instance per row it did not
+/// see removed, so a row's own state (hover, the press, a TouchArea's grab mid-drag, its tweens)
+/// survives a re-render; replacing the whole model would rebuild every row.
+pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    let keep = model.row_count().min(rows.len());
+    for _ in rows.len()..model.row_count() {
+        model.remove(model.row_count() - 1);
+    }
+    for (i, row) in rows.into_iter().enumerate() {
+        if i >= keep {
+            model.push(row);
+        } else if model.row_data(i).as_ref() != Some(&row) {
+            model.set_row_data(i, row);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -34,6 +54,17 @@ mod tests {
 
     fn settle() {
         mock_elapsed_time(Duration::from_millis(500));
+    }
+
+    #[test]
+    fn sync_rewrites_only_what_changed() {
+        let m = VecModel::from(vec![1, 2, 3]);
+        sync(&m, vec![1, 5, 3, 4]);
+        assert_eq!(m.iter().collect::<Vec<_>>(), [1, 5, 3, 4]);
+        sync(&m, vec![7]);
+        assert_eq!(m.iter().collect::<Vec<_>>(), [7]);
+        sync(&m, vec![]);
+        assert_eq!(m.row_count(), 0);
     }
 
     /// The testing platform can be installed once per process, so every

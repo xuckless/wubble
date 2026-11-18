@@ -461,6 +461,11 @@ fn connect_shell(window: &AppWindow) {
         }
     });
     window.on_command_result_chosen(|index| with_host(|host| host.bar_chosen(index)));
+    // The sidebar's buttons name their action; it runs like its shortcut.
+    window.on_shell_action(|id| match wubble_core::action::Action::from_id(&id) {
+        Some(action) => with_host(|host| host.perform(action)),
+        None => eprintln!("wubble: the shell asked for an unknown action {id:?}"),
+    });
 }
 
 /// Opens the window on the session stored in `profile` (one web view, the
