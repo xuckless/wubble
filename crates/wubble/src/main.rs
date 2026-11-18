@@ -4,6 +4,7 @@ mod cli;
 mod host;
 mod input;
 mod nav_smoke;
+mod pixels;
 mod shell;
 mod tabs_smoke;
 
@@ -287,14 +288,18 @@ pub fn slint_int(pixels: u32) -> i32 {
 /// The content rectangle in physical pixels and the window's scale factor.
 pub fn content_layout(window: &AppWindow) -> Layout {
     let scale = window.window().scale_factor();
-    let physical = |logical: f32| (logical * scale).round().max(0.0) as u32;
     Layout {
         size: FrameSize::new(
-            physical(window.get_content_width()),
-            physical(window.get_content_height()),
+            physical(window.get_content_width(), scale),
+            physical(window.get_content_height(), scale),
         ),
         scale,
     }
+}
+
+/// A logical length in whole physical pixels.
+pub fn physical(logical: f32, scale: f32) -> u32 {
+    (logical * scale).round().max(0.0) as u32
 }
 
 /// A bundled page as a `data:` URL, so nothing is fetched.
@@ -395,19 +400,25 @@ fn run(
     let bundled = || page_url(SMOKE_PAGE);
     let none = Checks {
         quit_after: None,
+        check_pixels: false,
         nav_smoke: None,
         tabs_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
     let (url, checks) = match mode {
         Mode::Browse { url } => (url.unwrap_or_else(bundled), none),
-        Mode::Frames { frames, url } => (
-            url.unwrap_or_else(bundled),
-            Checks {
-                quit_after: Some(frames),
-                ..none
-            },
-        ),
+        Mode::Frames { frames, url } => {
+            // Only the bundled page has known colours to check against.
+            let check_pixels = url.is_none();
+            (
+                url.unwrap_or_else(bundled),
+                Checks {
+                    quit_after: Some(frames),
+                    check_pixels,
+                    ..none
+                },
+            )
+        }
         Mode::Nav => (
             bundled(),
             Checks {

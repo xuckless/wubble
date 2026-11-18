@@ -29,10 +29,11 @@ use wubble_ui::AppWindow;
 use crate::bar::{self, BarMode, BarRow};
 use crate::input::{self, InputState, KeyRoute};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
+use crate::pixels;
 use crate::tabs_smoke::{self, Seen, TabsSmoke};
 use crate::{
     NAV_PAGE, SMOKE_MAX_IDLE_RUNS, TAB3_PAGE, Wake, content_layout, deliver, display_refresh_mhz,
-    page_url, quit, slint_int,
+    page_url, physical, quit, slint_int,
 };
 
 /// How far ahead `--smoke tabs` ticks the lifecycle: past the discard delay.
@@ -113,6 +114,9 @@ struct Bar {
 pub struct Checks {
     /// Accelerated frames after which the loop quits (`--smoke frames`).
     pub quit_after: Option<u64>,
+    /// Snapshot the window before quitting and require the content area to
+    /// show the page. Only for the bundled page: its colours are known.
+    pub check_pixels: bool,
     pub nav_smoke: Option<NavSmoke>,
     pub tabs_smoke: Option<TabsSmoke>,
 }
@@ -383,7 +387,8 @@ impl Host {
         let Some(frame) = view.take_frame() else {
             return Ok(());
         };
-        let clip = frame.size().cropped_to(layout.size);
+        let frame_size = frame.size();
+        let clip = frame_size.cropped_to(layout.size);
         let image = self.presenter.present(frame).map_err(|e| e.to_string())?;
         window.set_web_frame(image);
         self.presented = self.model.visible_tab();
@@ -399,6 +404,23 @@ impl Host {
             .quit_after
             .is_some_and(|n| self.stats.accelerated >= n)
         {
+            eprintln!(
+                "smoke: content {}x{} @{} frame {}x{} clip {}x{}",
+                layout.size.width,
+                layout.size.height,
+                layout.scale,
+                frame_size.width,
+                frame_size.height,
+                clip.width,
+                clip.height
+            );
+            if self.checks.check_pixels {
+                let sample = check_pixels(window)?;
+                println!(
+                    "smoke: pixels ok distinct={} mean_luma={}",
+                    sample.distinct, sample.mean_luma
+                );
+            }
             quit();
         }
         Ok(())
@@ -707,6 +729,22 @@ impl Host {
         }
         quit();
     }
+}
+
+/// Snapshots the window and checks that the content rectangle shows the page.
+fn check_pixels(window: &AppWindow) -> Result<pixels::Sample, String> {
+    let snapshot = window
+        .window()
+        .take_snapshot()
+        .map_err(|e| format!("cannot snapshot the window: {e}"))?;
+    let scale = window.window().scale_factor();
+    let region = pixels::Region {
+        x: physical(window.get_content_x(), scale),
+        y: physical(window.get_content_y(), scale),
+        width: physical(window.get_content_width(), scale),
+        height: physical(window.get_content_height(), scale),
+    };
+    pixels::check(&snapshot, region)
 }
 
 fn new_tab(url: String, opener: Option<TabId>) -> Command {

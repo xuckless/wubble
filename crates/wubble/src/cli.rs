@@ -12,8 +12,8 @@ struct Cli {
     #[arg(value_name = "URL", conflicts_with = "smoke")]
     page: Option<String>,
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
-    /// stops, no window), `frames=N` (show N zero-copy frames, then exit),
-    /// `nav` (navigate between two bundled pages, then exit) or `tabs` (open,
+    /// stops, no window), `frames=N` (show N zero-copy frames, then exit; on
+    /// the bundled page, also check the window shows it), `nav` (navigate between two bundled pages, then exit) or `tabs` (open,
     /// switch, sleep, restore and close tabs on bundled pages, then exit).
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke)]
     smoke: Option<SmokeArg>,

@@ -22,8 +22,13 @@ its "Decided" table before proposing architecture.
 workspace members: keep its upstream style, mark each change `wubble change`
 and list it in `vendor/welding/WUBBLE_CHANGES.md`; test with `cargo test -p welding`.
 
-`ux/pack/` is a read-only snapshot of the design canvas. It is a style guideline
-(colour, glass, type, motion), not a layout spec.
+UX source of truth: the owner's design repo, cloned at
+`~/Dev/wubble-wt/ref/the-wallpaper-project/src/wubble` (see `ux/README.md`). Match it, and
+copy from its `slint/` port (tokens, physics, components, wgpu renderer) before writing UI
+code. `ux/pack/` is an older, superseded snapshot.
+The owner keeps adding widgets and behaviours to that repo: it is the bucket UI work is
+adopted from. `git pull` the clone before UI work, look there first, and write a widget
+from scratch only when the bucket has nothing for it (then say so in your report).
 
 ## Commands
 
