@@ -2,3 +2,4 @@
 /vendor/cef
 *.log
 .env
+/target-run
