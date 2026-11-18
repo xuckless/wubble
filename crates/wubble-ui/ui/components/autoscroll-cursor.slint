@@ -65,7 +65,7 @@ export component AutoscrollCursor inherits Rectangle {
         height: self.width;
         transform-rotation: root.heading;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        Path {
+        arrow := Path {
             x: (parent.width - root.arrow-width) / 2;
             y: parent.height / 2 - root.arrow-length / 2;
             width: root.arrow-width;

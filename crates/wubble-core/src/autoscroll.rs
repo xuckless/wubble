@@ -147,6 +147,31 @@ pub fn scroll_speed(state: Autoscroll, pointer: At, zoom: f64) -> f64 {
     v.x.hypot(v.y)
 }
 
+/// How much longer the arrow gets at full speed: 1 + this (the design's stretch maximum).
+pub const STRETCH_MAX: f64 = 0.35;
+/// The pointer's distance from the anchor (CSS px) at which the arrow is stretched fully.
+pub const STRETCH_FULL_DISTANCE: f64 = 300.0;
+
+/// The arrow's length factor for a scroll `speed` (px/s): 1 at rest, up to
+/// `1 + STRETCH_MAX` at the speed the curve reaches [`STRETCH_FULL_DISTANCE`] from
+/// the anchor. The curve is inverted (speed to the distance that makes it), so the
+/// arrow grows evenly with the pointer's pull, not with the steep speed (the
+/// design's own stretch reads 1500 px/s as full, which a slow scroll never shows).
+/// It is the target the stretch spring follows.
+pub fn stretch_target(speed: f64) -> f64 {
+    let full = MULTIPLIER * STRETCH_FULL_DISTANCE.powf(EXPONENT);
+    let fraction = (speed.max(0.0) / full).powf(1.0 / EXPONENT).min(1.0);
+    1.0 + STRETCH_MAX * fraction
+}
+
+/// Clockwise degrees from pointing down toward where the page scrolls, for the
+/// pointer `offset` (CSS px) from the anchor: the speed's own direction, so
+/// diagonals turn smoothly. None inside the dead zone.
+pub fn heading(offset: At) -> Option<f32> {
+    let v = speed(offset);
+    (v.x != 0.0 || v.y != 0.0).then(|| (-v.x).atan2(v.y).to_degrees() as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,5 +262,35 @@ mod tests {
         assert_eq!(Direction::N.degrees(), 180.0);
         assert_eq!(Direction::W.degrees(), 90.0);
         assert_eq!(Direction::E.degrees(), 270.0);
+    }
+
+    #[test]
+    fn stretch_target_rests_at_one_grows_and_saturates() {
+        assert_eq!(stretch_target(0.0), 1.0);
+        let at = |d: f64| stretch_target(speed(At { x: 0.0, y: d }).y);
+        let mut last = 1.0;
+        for d in (20..=300).step_by(20) {
+            let t = at(f64::from(d));
+            assert!(t > last, "{d}: {t} <= {last}");
+            last = t;
+        }
+        // 100 px from the anchor (about 200 px/s) already shows a third of the stretch;
+        // the design's px/s scale would have given 1.03 there.
+        assert!(at(100.0) > 1.1, "{}", at(100.0));
+        assert!((at(300.0) - (1.0 + STRETCH_MAX)).abs() < 1e-9);
+        assert_eq!(at(900.0), 1.0 + STRETCH_MAX);
+    }
+
+    #[test]
+    fn the_heading_follows_the_pointer_smoothly() {
+        let h = |x: f64, y: f64| heading(At { x, y }).unwrap();
+        assert!((h(0.0, 100.0) - 0.0).abs() < 1e-4);
+        assert!((h(-100.0, 0.0) - 90.0).abs() < 1e-4);
+        assert!((h(100.0, 0.0) + 90.0).abs() < 1e-4);
+        assert!((h(0.0, -100.0).abs() - 180.0).abs() < 1e-4);
+        // a diagonal that is not one of the eight
+        let d = h(60.0, 100.0);
+        assert!(d < 0.0 && d > -45.0, "{d}");
+        assert_eq!(heading(At { x: 5.0, y: -5.0 }), None);
     }
 }

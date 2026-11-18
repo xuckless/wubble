@@ -564,6 +564,10 @@ impl Host {
                 );
                 is(down, format!("autoscroll {state:?}"))
             }
+            HostCheck::AutoscrollStretched => {
+                let stretch = window.get_autoscroll_stretch();
+                is(stretch > 1.05, format!("autoscroll stretch {stretch}"))
+            }
             HostCheck::Drag(want) => {
                 let dragging = !self.drag_idle();
                 is(dragging == want, format!("page drag running: {dragging}"))
