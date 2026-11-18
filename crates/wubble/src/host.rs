@@ -19,6 +19,7 @@ mod downloads;
 mod drag;
 mod pages;
 mod panes;
+mod preview;
 mod settings;
 mod surfaces;
 mod window;
@@ -106,6 +107,8 @@ pub enum Call {
         visible: bool,
     },
     ShowCommandBar,
+    /// Keep a small copy of the tab's last frame (the hover preview's thumbnail).
+    Capture(TabId),
     /// Open, close or raise the platform window of a model window.
     OpenWindow(WindowId),
     CloseWindow(WindowId),
@@ -166,9 +169,9 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
                         url: t.url.clone(),
                     })
             }
-            Life::Freeze | Life::Unfreeze | Life::CaptureSnapshot | Life::ReleaseSnapshot => {
-                Call::Nothing
-            }
+            Life::CaptureSnapshot => Call::Capture(*tab),
+            // Thumbnails go with their tab (`dispatch` forgets closed tabs).
+            Life::Freeze | Life::Unfreeze | Life::ReleaseSnapshot => Call::Nothing,
         },
     }
 }
@@ -373,6 +376,8 @@ pub struct Host {
     routing_rules: Vec<String>,
     /// The layout before the last tidy, to undo it with: one slot.
     tidy_undo: Option<(SpaceId, Vec<Item>)>,
+    /// The tab hover preview and the thumbnails it shows.
+    preview: preview::Preview,
 }
 
 impl Host {
@@ -491,6 +496,7 @@ impl Host {
             archiving: HashMap::new(),
             routing_rules: vec![],
             tidy_undo: None,
+            preview: preview::Preview::new(),
         };
         host.replay_settings();
         if let Some(window) = host.w.window.upgrade() {
@@ -631,6 +637,15 @@ impl Host {
         if let Command::CloseTab(tab) = command {
             self.remember_closed(tab);
         }
+        if matches!(
+            command,
+            Command::ActivateTab(_)
+                | Command::CloseTab(_)
+                | Command::SwitchSpace(_)
+                | Command::MoveTab { .. }
+        ) {
+            self.hover_dismiss();
+        }
         let mut queue = VecDeque::from([command]);
         while let Some(command) = queue.pop_front() {
             // `apply` takes the model by value; a fresh one holds its place meanwhile.
@@ -645,6 +660,7 @@ impl Host {
         let tabs = &self.model.tabs;
         self.surfaces.retain(|tab, _| tabs.contains_key(tab));
         self.held_popups.retain(|tab, _| tabs.contains_key(tab));
+        self.preview.forget_except(|tab| tabs.contains_key(tab));
         self.after_change();
         if persist::should_save(self.save) {
             self.save_now();
@@ -742,6 +758,7 @@ impl Host {
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
             }
+            Call::Capture(tab) => self.capture_thumbnail(tab),
             Call::Quit => quit(),
             Call::OpenWindow(id) => self.open_window(id),
             Call::CloseWindow(id) => self.close_window(id),
@@ -2710,7 +2727,7 @@ mod tests {
             ),
             (Life::Freeze, Call::Nothing),
             (Life::Unfreeze, Call::Nothing),
-            (Life::CaptureSnapshot, Call::Nothing),
+            (Life::CaptureSnapshot, Call::Capture(t)),
             (Life::ReleaseSnapshot, Call::Nothing),
         ];
         for (effect, want) in cases {
@@ -2737,6 +2754,7 @@ mod tests {
                 }
                 Call::Load { .. }
                 | Call::ShowCommandBar
+                | Call::Capture(_)
                 | Call::OpenWindow(_)
                 | Call::CloseWindow(_)
                 | Call::FocusWindow(_)

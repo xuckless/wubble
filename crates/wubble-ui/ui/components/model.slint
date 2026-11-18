@@ -355,6 +355,15 @@ export enum InternalPageKind {
     archive,
 }
 
+// The tab hover preview card (`PreviewCard`): what it says and where its row is (window px).
+export struct PreviewView {
+    shown: bool,
+    title: string,
+    address: string,
+    thumb: image,
+    y: length,
+}
+
 // One line of the history page: a day header (`header`, `label`) or a visit.
 export struct HistoryLineItem {
     header: bool,

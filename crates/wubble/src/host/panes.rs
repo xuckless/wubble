@@ -618,6 +618,7 @@ impl Host {
     /// A tab row's right click at `x, y` (window, logical): its split entries, as the shell's
     /// menu on the focused page.
     pub fn tab_context(&mut self, id: i32, x: f32, y: f32) {
+        self.hover_dismiss();
         let (Some(tab), Some(focused)) = (crate::shell::tab_id(id), self.shown()) else {
             return;
         };

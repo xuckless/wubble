@@ -156,6 +156,8 @@ export component Sidebar inherits Rectangle {
     callback tab-closed(int);        // tab id
     callback tab-mute-toggled(int);  // tab id: the speaker glyph
     callback tab-context(int, length, length);  // tab id, pointer in window px: right click
+    // tab id, whether the pointer is on its row, and the row's top in window px (hover preview)
+    callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
     callback window-close-requested();
@@ -413,6 +415,9 @@ export component Sidebar inherits Rectangle {
                                     }
                                     context(x, y) => {
                                         root.tab-context(tab.id, x, y);
+                                    }
+                                    hovered(on, y) => {
+                                        root.tab-hovered(tab.id, on, y);
                                     }
                                 }
                             }

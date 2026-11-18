@@ -12,6 +12,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 |---|---|
 | Theme | Dark only, as the design repo decides ("Dark only; light mode comes later"). The tokens are the port's `tokens.slint` verbatim (Palette, Spaces, Radius, Spacing, Chrome, Glass, Fonts, Type, Motion); the light values invented earlier are deleted. Values the port has no token for come from the design repo's CSS (`browser.css`) and live in `app-tokens.slint` |
 | Slint ids | Slint has only `int` (i32), so `TabItem.id` / `SpaceItem.id` are `int`; the wiring item converts from core `u64`/`u32` with `try_from`, never truncating silently |
+| Auto-archive, routing, tidy, never sleep | The Archive list lives in the store (like recently closed: SQL search and paging), the model keeps only `Tab::last_active_ms` (unix ms, stamped on hide, 0 = unknown until the first tick) and `Command::Tick { wall_ms }`; `archive::due` is pure. A tab closes only after the store confirmed its row. Routing rules and never-sleep sites are List settings; `routing::host_in` is the one host matcher. `Keep { Normal, Awake }` is derived by the model, never set by hand. The preview card has no bucket widget (the design has no tooltip), so it is written on `GlassPanel` with the owner's UR tooltip numbers |
 | Key routing | Each default binding has a `Route` column: `Shell` (shell always takes it: NewTab, CloseTab, ReopenClosedTab, NewWindow, Next/PrevTab, Quit, Fullscreen, spaces, sidebar; the Chromium `kReservedCommandIds` / Firefox `reserved` set plus wubble-only actions) or `PageFirst` (page gets the key, the shell acts only if unhandled, via CEF `OnKeyEvent`; everything else, incl. Zen's Mod+Alt+S compact mode). Overrides take the action's default route. In page fullscreen only Fullscreen stays `Shell` |
 | Licence | GPL-3.0-only (matches Slint's GPL option; Chromium/CEF are BSD and compatible) |
 | Platforms | Daily-drive targets: Linux (lead, Wayland) and macOS, both built locally. Windows is built and tested on CI runners only and may trail by a milestone |
@@ -223,7 +224,7 @@ After daily-drive
 - [ ] Process model tuning: site isolation level, renderer process limit, spare renderer
 - [ ] Release GPU textures of hidden views; cap decoded-image and back/forward caches
 - [ ] Benchmark vs Zen and Chrome: 10 / 50 / 200 tabs, cold and after 1 h idle
-- [ ] Per-site and per-space overrides ("never sleep")
+- [x] Per-site and per-space overrides ("never sleep"): `lifecycle::Keep` derived by the model from `Space::never_sleep` and the `sleep.never_sites` list (`routing::host_in`), held at Background like Busy and beyond memory pressure; switches in the tab row's menu. Not yet a switch on the Space's card in Settings
 
 ## M4 — DevTools and built-ins
 
@@ -248,11 +249,11 @@ After daily-drive
 
 ## M5 — Arc-style features
 
-- [ ] Auto-archive of stale tabs; archive browser
-- [ ] Link routing rules (which space/profile opens which site)
+- [x] Auto-archive of stale tabs; archive browser: `archive::due` (pure, wall clock passed in) on the 5 s tick, `archive.after` setting (off / 12 h / 24 h / 7 d / 30 d), `Tab::last_active_ms` stamped when a tab is hidden, store table `archive` (migration 12), `wubble://archive` page (the history page component twice: search, restore, delete). Restoring a tab loads its URL afresh; folder place is not kept
+- [x] Link routing rules (which space/profile opens which site): `routing.rules` List setting (`host -> Space, Container`, wildcard `*.host`, exact beats wildcard, earlier rule wins ties), `routing::resolve`; applied to links from other apps (Little window in the Space), "Open Link in New Tab" and the command-line URL. Not routed: typed addresses, pop-ups, background tabs, same-tab navigation. Rules name Spaces by name, so a rename leaves its rules unresolved (skipped). No rules editor page yet: entries are typed on the Settings page
 - [x] Little window for links opened from other apps: one browser per profile (`instance.rs`, a local socket in the profile); a later start's URL opens in a Little window whose page menu has "Open as Tab" and "Open in <Space>". Open: buttons of its own on the window (the design has none; the page's right-click menu is the way out for now); registering wubble as the URL handler (packaging)
 - [ ] Boosts: per-site CSS/JS/colour tweaks
-- [ ] Hover previews, tab tidy/auto-group
+- [x] Hover previews, tab tidy/auto-group: `hovercard` machine (Firefox's 500 ms / 300 ms / 100 ms), `PreviewCard` on thick glass with the tab's last frame (`FramePresenter::thumbnail`, GPU only, taken when the tab hides, at most 48 kept); actions Tidy Tabs by Site (folders by registrable domain, `psl`), Undo Tidy Tabs (one slot), Close Duplicate Tabs (undo is Reopen Closed Tab). Hover and thumbnails unverified by hand: no smoke moves the pointer
 - [ ] Picture-in-picture on tab switch
 - [ ] Sync (deferred)
 

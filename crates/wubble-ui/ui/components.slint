@@ -290,6 +290,9 @@ export component TabRow inherits Rectangle {
     // wubble change: the left button's press in window px (0 down, 3 cancel), for a drag that
     // leaves the list (wubble_core::tabdrag); the host follows the pointer from the window.
     callback track(int, length, length);
+    // wubble change: the pointer enters or leaves the row; the row's top in window px (the
+    // tab hover preview).
+    callback hovered(bool, length);
 
     height: Chrome.row;
     border-radius: Radius.sm;
@@ -302,6 +305,7 @@ export component TabRow inherits Rectangle {
     animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
 
     touch := TouchArea {
+        changed has-hover => { root.hovered(self.has-hover, root.absolute-position.y); }
         pointer-event(e) => {
             if (e.button == PointerEventButton.middle && e.kind == PointerEventKind.down) { root.close(); return; } // middle click closes
             // wubble change: right click opens the tab's menu

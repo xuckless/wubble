@@ -169,7 +169,8 @@ impl GpuContext {
     pub fn presenter(&self) -> FramePresenter {
         FramePresenter {
             ctx: HostWgpuContext::new(self.device.clone(), self.queue.clone()),
-            blit: Blitter::new(&self.device),
+            blit: Blitter::new(&self.device, BLIT_FS_WGSL, wgpu::FilterMode::Nearest),
+            shrink: Blitter::new(&self.device, SHRINK_FS_WGSL, wgpu::FilterMode::Linear),
             ring: None,
             mask: EdgeMask::new(&self.device),
         }
@@ -309,6 +310,8 @@ impl Ring {
 pub struct FramePresenter {
     ctx: HostWgpuContext,
     blit: Blitter,
+    /// The plain linear copy `thumbnail` shrinks the latest frame with.
+    shrink: Blitter,
     ring: Option<Ring>,
     /// The bowed-edge pass over the latest frame (`crate::mask`).
     mask: EdgeMask,
@@ -334,6 +337,41 @@ impl FramePresenter {
             &target.view,
         );
         Ok(target.image.clone())
+    }
+
+    /// A copy of the frame `present` returned last, at most `max_width` wide with its aspect
+    /// kept, in a texture of its own: unlike the ring's images it is never overwritten, so it
+    /// can stand for the page after the view hides or sleeps (the tab preview card). GPU to GPU,
+    /// no readback. `None` before the first frame.
+    pub fn thumbnail(&self, max_width: u32) -> Result<Option<slint::Image>, GfxError> {
+        let Some(ring) = self.ring.as_ref() else {
+            return Ok(None);
+        };
+        let size = thumbnail_size(ring.size, max_width);
+        let texture = self.ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("wubble tab thumbnail"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TARGET_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.shrink.run(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &ring.latest().view,
+            &view,
+        );
+        slint::Image::try_from(texture)
+            .map(Some)
+            .map_err(|e| GfxError::Image(e.to_string()))
     }
 
     /// The RGBA pixel at (`x`, `y`) (physical, clamped to the frame) of the
@@ -451,16 +489,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 ";
 
+/// The size of a frame of `size` shrunk to at most `max_width`, never grown, at least 1 px.
+fn thumbnail_size(size: FrameSize, max_width: u32) -> FrameSize {
+    let width = size.width.clamp(1, max_width.max(1));
+    let height = (u64::from(size.height) * u64::from(width) / u64::from(size.width.max(1))).max(1);
+    FrameSize::new(width, height as u32)
+}
+
+/// A plain copy, fragment stage: the source is a ring target, which already holds display-
+/// encoded values, so it is sampled and written as it is (the blit above encodes an sRGB view).
+const SHRINK_FS_WGSL: &str = r"
+@group(0) @binding(0)
+var r_color: texture_2d<f32>;
+@group(0) @binding(1)
+var r_sampler: sampler;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(r_color, r_sampler, in.tex_coords);
+}
+";
+
 struct Blitter {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
 }
 
 impl Blitter {
-    fn new(device: &wgpu::Device) -> Self {
+    fn new(device: &wgpu::Device, fragment: &str, filter: wgpu::FilterMode) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("wubble blit"),
-            source: wgpu::ShaderSource::Wgsl(format!("{FULLSCREEN_VS_WGSL}{BLIT_FS_WGSL}").into()),
+            source: wgpu::ShaderSource::Wgsl(format!("{FULLSCREEN_VS_WGSL}{fragment}").into()),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("wubble blit"),
@@ -488,8 +547,8 @@ impl Blitter {
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("wubble blit"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: filter,
+            min_filter: filter,
             ..Default::default()
         });
         Self { pipeline, sampler }
@@ -538,5 +597,36 @@ impl Blitter {
             pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_thumbnail_shader_validates() {
+        let src = format!("{FULLSCREEN_VS_WGSL}{SHRINK_FS_WGSL}");
+        let module = naga::front::wgsl::parse_str(&src)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        assert!(module.entry_points.iter().any(|p| p.name == "fs_main"));
+    }
+
+    #[test]
+    fn thumbnails_keep_the_aspect_and_never_grow() {
+        let at = |w, h, max| {
+            let s = thumbnail_size(FrameSize::new(w, h), max);
+            (s.width, s.height)
+        };
+        assert_eq!(at(1920, 1080, 320), (320, 180));
+        assert_eq!(at(200, 100, 320), (200, 100));
+        assert_eq!(at(3000, 1, 320), (320, 1));
+        assert_eq!(at(1, 1, 0), (1, 1));
     }
 }

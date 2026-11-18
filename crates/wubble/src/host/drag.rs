@@ -25,6 +25,7 @@ const DOWN: i32 = 0;
 impl Host {
     /// The left button on a tab row: down or cancel, in window px.
     pub fn tab_track(&mut self, id: i32, kind: i32, x: f32, y: f32) {
+        self.hover_dismiss();
         let input = match kind {
             DOWN => match crate::shell::tab_id(id) {
                 Some(tab) => {
