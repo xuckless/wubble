@@ -1,5 +1,6 @@
 //! `--smoke windows`: two tabs on the bundled page in one window, a second window, one tab
-//! moved into it, both windows' pixels checked, the second window closed. After each step the
+//! moved into it, both windows' pixels checked, the second window closed; then a link from
+//! another app in a Little window, made a tab of the Space. After each step the
 //! model, the engine and the windows must agree. Every wait is "until the host sees X", bounded
 //! by a count of CEF work runs, never by time.
 
@@ -43,6 +44,10 @@ pub enum Stage {
     Moved,
     /// The second window closed, waiting for its tab to be hidden.
     Closed,
+    /// A link from another app, waiting for its Little window to show it.
+    Little,
+    /// The Little window's page made a tab, waiting for the window to go.
+    Promoted,
     Done,
 }
 
@@ -70,6 +75,10 @@ pub enum Action {
     MoveTab,
     /// Check both windows' pixels, then close the second window.
     CheckAndClose,
+    /// The bundled page as if another app opened it.
+    OpenLittle,
+    /// The Little window's page into the active Space.
+    Promote,
     Pass,
     Fail(String),
 }
@@ -85,7 +94,9 @@ pub fn next(s: WindowsSmoke, seen: &Seen) -> (WindowsSmoke, Option<Action>) {
             Some((Stage::Moved, Action::MoveTab))
         }
         Stage::Moved if seen.settled(2, 2) => Some((Stage::Closed, Action::CheckAndClose)),
-        Stage::Closed if seen.settled(1, 1) => Some((Stage::Done, Action::Pass)),
+        Stage::Closed if seen.settled(1, 1) => Some((Stage::Little, Action::OpenLittle)),
+        Stage::Little if seen.settled(2, 2) => Some((Stage::Promoted, Action::Promote)),
+        Stage::Promoted if seen.settled(1, 1) => Some((Stage::Done, Action::Pass)),
         _ => None,
     };
     match step {
@@ -136,6 +147,10 @@ mod tests {
         assert_eq!(a, None, "the moved tab is not shown yet");
         let (s, a) = next(s, &seen(2, 2));
         assert_eq!(a, Some(Action::CheckAndClose));
+        let (s, a) = next(s, &seen(1, 1));
+        assert_eq!(a, Some(Action::OpenLittle));
+        let (s, a) = next(s, &seen(2, 2));
+        assert_eq!(a, Some(Action::Promote));
         let (s, a) = next(s, &seen(1, 1));
         assert_eq!((s.stage, a), (Stage::Done, Some(Action::Pass)));
     }

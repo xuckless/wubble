@@ -70,7 +70,18 @@ impl Host {
                         back: v.nav().page.can_go_back,
                         forward: v.nav().page.can_go_forward,
                     });
-                self.apply_menu(tab, MenuEvent::Requested { id, menu, nav });
+                let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
+                    crate::menu::window_page_entries(&self.model, w)
+                });
+                self.apply_menu(
+                    tab,
+                    MenuEvent::Requested {
+                        id,
+                        menu,
+                        nav,
+                        extra,
+                    },
+                );
             }
             Routed::Menu(e) => {
                 self.apply_menu(tab, e);
@@ -265,6 +276,9 @@ impl Host {
                     self.dispatch(Command::MoveTabToWindow { tab: t, to });
                 }
                 MenuEffect::Run(MenuCommand::OpenBlockedPopups) => self.open_held_popups(tab),
+                MenuEffect::Run(MenuCommand::PromoteLittle(window, space)) => {
+                    self.dispatch(Command::PromoteLittle { window, space });
+                }
                 MenuEffect::Run(MenuCommand::AllowPopups(site)) => {
                     self.site_permissions
                         .set(&site, Permission::Popups, Decision::Allow);

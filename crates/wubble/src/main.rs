@@ -9,6 +9,7 @@ mod cli;
 mod host;
 mod ime;
 mod input;
+mod instance;
 mod measure;
 mod menu;
 mod nav_smoke;
@@ -507,12 +508,31 @@ fn browse(
     downloads: Option<PathBuf>,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
+    // One browser per profile, decided before anything opens the store or starts CEF.
+    std::fs::create_dir_all(&profile.dir)?;
+    let socket = instance::socket_path(&profile.dir, &instance::runtime_dir());
+    let message = url
+        .clone()
+        .map_or(instance::Message::Focus, instance::Message::Open);
+    let listener = match instance::claim(&socket, &message) {
+        Ok(instance::Claim::Forwarded) => return Ok(Outcome::default()),
+        Ok(instance::Claim::Primary(listener)) => Some(listener),
+        Err(e) => {
+            eprintln!("wubble: running without the single-instance socket: {e}");
+            None
+        }
+    };
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
         ..config
     });
     let downloads = profile::downloads_dir(downloads);
-    run(Mode::Browse { url, downloads }, config, &profile.dir)
+    let mode = Mode::Browse {
+        url,
+        downloads,
+        listener,
+    };
+    run(mode, config, &profile.dir)
 }
 
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
@@ -600,6 +620,7 @@ fn smoke_boot(config: Result<EngineConfig, EngineError>) -> Result<(), Box<dyn s
 }
 
 /// How a windowed run ended.
+#[derive(Default)]
 struct Outcome {
     stats: FrameStats,
     /// Why the loop was quit early, if it was.
@@ -633,6 +654,8 @@ enum Mode {
     Browse {
         url: Option<String>,
         downloads: Option<PathBuf>,
+        /// Later starts on the same profile (`instance.rs`).
+        listener: Option<interprocess::local_socket::Listener>,
     },
     /// Quit after `frames` accelerated frames of `url` (bundled page if `None`).
     Frames { frames: u64, url: Option<String> },
@@ -1083,10 +1106,14 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
 }
 
 fn run(
-    mode: Mode,
+    mut mode: Mode,
     config: Result<EngineConfig, EngineError>,
     profile: &Path,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
+    let listener = match &mut mode {
+        Mode::Browse { listener, .. } => listener.take(),
+        _ => None,
+    };
     // `--smoke autofill`'s pages, on a loopback port.
     let autofill_port = matches!(mode, Mode::Autofill)
         .then(autofill_smoke::serve)
@@ -1286,6 +1313,13 @@ fn run(
         engine, first, factory, loaded, store, url, checks, downloads, blocking,
     );
     HOST.set(Some(host));
+    if let Some(listener) = listener {
+        instance::listen(listener, |message| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| host.open_external(message))
+            });
+        });
+    }
     // Smokes drive the lifecycle themselves, never by wall-clock time.
     let lifecycle = slint::Timer::default();
     let audible = slint::Timer::default();

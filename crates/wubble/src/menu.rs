@@ -22,8 +22,9 @@
 use wubble_core::action::Action;
 use wubble_core::model::Model;
 use wubble_core::space::MAX_PANES;
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
-use wubble_core::window::{WindowKind, WindowTarget};
+use wubble_core::window::{WindowId, WindowKind, WindowTarget};
 use wubble_engine::page::{ContextMenu, MediaKind, RequestId};
 
 /// CEF's `cef_menu_id_t` values the menu uses.
@@ -68,6 +69,8 @@ pub enum Command {
     OpenBlockedPopups,
     /// Let the site open pop-ups from now on (`Permission::Popups`), and open the held ones.
     AllowPopups(String),
+    /// The Little window's page becomes a tab of this Space; the window closes.
+    PromoteLittle(WindowId, SpaceId),
     /// A divider between groups; never chosen.
     Separator,
 }
@@ -320,6 +323,51 @@ pub fn window_entries(model: &Model, tab: TabId) -> Vec<Entry> {
         .collect()
 }
 
+/// The page menu's rows of a Little window ("Open as Tab" into the active Space, "Open in
+/// <Space>" for the others) or a Popup window ("Open as Tab" in the Main window); none for a
+/// Main window. A Little or Popup window has no sidebar, so this menu is its way out.
+pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
+    let Some(w) = model.window(window) else {
+        return vec![];
+    };
+    let entry = |label: String, command| Entry {
+        label,
+        command,
+        enabled: true,
+    };
+    let active = model.active_space();
+    match (w.kind, w.tab()) {
+        (WindowKind::Little, Some(_)) => std::iter::once(entry(
+            "Open as Tab".into(),
+            Command::PromoteLittle(window, active),
+        ))
+        .chain(model.spaces.iter().filter(|s| s.id != active).map(|s| {
+            entry(
+                format!("Open in {}", s.name),
+                Command::PromoteLittle(window, s.id),
+            )
+        }))
+        .collect(),
+        (WindowKind::Popup, Some(tab)) => {
+            let main = model
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.kind == WindowKind::Main)
+                .map(|w| w.id);
+            main.map(|m| {
+                entry(
+                    "Open as Tab".into(),
+                    Command::MoveToWindow(tab, WindowTarget::Existing(m)),
+                )
+            })
+            .into_iter()
+            .collect()
+        }
+        _ => vec![],
+    }
+}
+
 /// The address pill's pop-up menu: open what the page asked for, or allow the site.
 pub fn popup_entries(count: usize, site: Option<&str>) -> Vec<Entry> {
     let mut out = vec![Entry {
@@ -426,6 +474,8 @@ pub enum MenuEvent {
         id: RequestId,
         menu: Box<ContextMenu>,
         nav: NavFlags,
+        /// The window's own rows, after the page's (a Little or Popup window's way out).
+        extra: Vec<Entry>,
     },
     /// The shell opens its own menu.
     ShellRequested { at: (i32, i32), entries: Vec<Entry> },
@@ -453,13 +503,29 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
     use MenuEvent::*;
     let dismiss = |id| MenuEffect::Answer { id, command: None };
     match (state, event) {
-        (state, Requested { id, menu, nav }) => {
+        (
+            state,
+            Requested {
+                id,
+                menu,
+                nav,
+                extra,
+            },
+        ) => {
             // CEF holds one menu at a time; a newer one replaces the old.
             let mut effects = match state {
                 Menu::Open { id: old, .. } => vec![dismiss(old)],
                 Menu::Closed | Menu::Shell { .. } => vec![],
             };
-            let entries = entries(&menu, nav);
+            let mut entries = entries(&menu, nav);
+            if !entries.is_empty() && !extra.is_empty() {
+                entries.push(Entry {
+                    label: String::new(),
+                    command: Command::Separator,
+                    enabled: false,
+                });
+            }
+            entries.extend(extra);
             if entries.is_empty() {
                 effects.push(dismiss(id));
                 return (Menu::Closed, effects);
@@ -562,6 +628,7 @@ mod tests {
             id: RequestId(id),
             menu: Box::new(menu),
             nav: NavFlags::default(),
+            extra: vec![],
         }
     }
 
@@ -867,6 +934,63 @@ mod tests {
         // the tab menu ends with them, after a separator
         let all = tab_entries(&m, TabId(1));
         assert_eq!(all.last().map(|e| &e.command), Some(&rows(&m, 1)[1].1));
+    }
+
+    #[test]
+    fn little_and_popup_windows_offer_a_way_out() {
+        use wubble_core::model::{Command as Cmd, apply};
+        use wubble_core::space::{ContainerId, Rgb};
+        let (m, _) = apply(
+            tabs(1),
+            Cmd::NewSpace {
+                name: "Work".into(),
+                tint: Rgb(0, 0, 0),
+                container: ContainerId::DEFAULT,
+            },
+        );
+        assert!(
+            window_page_entries(&m, WindowId(0)).is_empty(),
+            "a Main window"
+        );
+        let (m, _) = apply(
+            m,
+            Cmd::OpenLittle {
+                url: "https://l.test".into(),
+                space: None,
+            },
+        );
+        let little = m.focused();
+        let rows: Vec<(String, Command)> = window_page_entries(&m, little)
+            .into_iter()
+            .map(|e| (e.label, e.command))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "Open as Tab".to_string(),
+                    Command::PromoteLittle(little, m.spaces[0].id)
+                ),
+                (
+                    "Open in Work".to_string(),
+                    Command::PromoteLittle(little, m.spaces[1].id)
+                ),
+            ]
+        );
+        let (m, _) = apply(
+            m,
+            Cmd::OpenPopupWindow {
+                url: "https://p.test".into(),
+                opener: TabId(1),
+                size: None,
+            },
+        );
+        let popup = m.focused();
+        let tab = m.window(popup).unwrap().tab().unwrap();
+        assert_eq!(
+            window_page_entries(&m, popup)[0].command,
+            Command::MoveToWindow(tab, WindowTarget::Existing(WindowId(0)))
+        );
     }
 
     #[test]

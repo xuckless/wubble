@@ -374,6 +374,7 @@ pub fn route(event: PageEvent) -> Routed {
             id,
             menu,
             nav: menu::NavFlags::default(),
+            extra: vec![],
         }),
         PageEvent::ContextMenuDismissed => Routed::Menu(MenuEvent::Reset),
         PageEvent::FindResult {
@@ -900,6 +901,7 @@ mod tests {
                 id: RequestId(2),
                 menu: Box::default(),
                 nav: menu::NavFlags::default(),
+                extra: vec![],
             },
         );
         let (find_open, _) = find(FindBar::default(), FindEvent::Open);

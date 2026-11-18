@@ -1172,6 +1172,17 @@ impl Host {
         wubble_core::site::origin_of(url)
     }
 
+    /// A later start on this profile: its URL in a Little window, or the browser brought
+    /// forward.
+    pub(crate) fn open_external(&mut self, message: crate::instance::Message) {
+        match message {
+            crate::instance::Message::Open(url) => {
+                self.dispatch(Command::OpenLittle { url, space: None })
+            }
+            crate::instance::Message::Focus => self.raise_window(self.model.focused()),
+        }
+    }
+
     /// The pill's pop-up badge, at the badge.
     pub(crate) fn popups_menu_requested(&mut self, x: f32, y: f32) {
         let (Some(window), Some(tab)) = (self.w.window.upgrade(), self.shown()) else {
@@ -1588,6 +1599,21 @@ impl Host {
                 self.enter_focused();
                 if let Some(second) = second {
                     self.dispatch(Command::CloseWindow(second));
+                }
+            }
+            Some(Action::OpenLittle) => {
+                self.open_external(crate::instance::Message::Open(page_url(SMOKE_PAGE)));
+            }
+            Some(Action::Promote) => {
+                let little = self
+                    .model
+                    .windows
+                    .iter()
+                    .find(|w| w.kind == wubble_core::window::WindowKind::Little)
+                    .map(|w| w.id);
+                if let Some(window) = little {
+                    let space = self.model.active_space();
+                    self.dispatch(Command::PromoteLittle { window, space });
                 }
             }
             Some(Action::Pass) => {
