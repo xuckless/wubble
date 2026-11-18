@@ -15,6 +15,7 @@
 //! importer takes ownership of the duped fds on success; otherwise the image's
 //! owned descriptor buffer table closes them.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dpi::PhysicalSize;
@@ -56,6 +57,8 @@ struct WeldRenderHandlerInner {
     ime: Arc<crate::ime::LatestComposition>,
     events: Arc<WebEventQueue>,
     metrics: Arc<Mutex<crate::view::ViewMetrics>>,
+    /// CPU `OnPaint` frames seen (wubble change, see `WUBBLE_CHANGES.md`).
+    cpu_paints: Arc<AtomicU64>,
 }
 
 // ── cef-runtime: render handler + client ─────────────────────────────────────
@@ -105,6 +108,7 @@ pub struct LinuxCefProducer {
     next_snapshot_id: i32,
     events: Arc<WebEventQueue>,
     size: PhysicalSize<u32>,
+    cpu_paints: Arc<AtomicU64>,
 }
 
 // needless_return: cfg-dispatch bodies end in `return X;` because a cfg-gated
@@ -132,6 +136,7 @@ impl LinuxCefProducer {
             let auth = Arc::new(crate::auth::AuthChallenges::default());
             auth.set_enabled(config.surface.handle_auth_challenges);
             let scripts = Arc::new(crate::app::PendingScripts::new(events.clone()));
+            let cpu_paints = Arc::new(AtomicU64::new(0));
 
             let inner = WeldRenderHandlerInner {
                 frame_slot: frame_slot.clone(),
@@ -141,6 +146,7 @@ impl LinuxCefProducer {
                 ime: ime.clone(),
                 events: events.clone(),
                 metrics: metrics.clone(),
+                cpu_paints: cpu_paints.clone(),
             };
             let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
             let load_handler = cef_backed::WeldLoadHandler::build(inner.clone());
@@ -189,11 +195,12 @@ impl LinuxCefProducer {
                 // itself at `windowless_frame_rate`. Setting it to 1 would
                 // require the host to call SendExternalBeginFrame on every
                 // tick (e.g. to genlock with the host renderer's vsync).
-                external_begin_frame_enabled: 0,
+                // wubble change: chosen by the host.
+                external_begin_frame_enabled: config.surface.external_begin_frame.into(),
                 ..Default::default()
             };
             let browser_settings = cef::BrowserSettings {
-                windowless_frame_rate: 60,
+                windowless_frame_rate: config.surface.cef_windowless_frame_rate(),
                 background_color: config.surface.cef_background_color(),
                 ..Default::default()
             };
@@ -239,6 +246,7 @@ impl LinuxCefProducer {
                 next_snapshot_id: 1,
                 events,
                 size: initial_size,
+                cpu_paints,
             });
         }
 
@@ -360,6 +368,10 @@ impl LinuxCefProducer {
 // needless_return: cfg-dispatch bodies end in `return X;` so the scaffold block can follow.
 #[allow(unreachable_code, unused_variables, clippy::needless_return)]
 impl CefSurfaceProducer for LinuxCefProducer {
+    fn cpu_paint_count(&self) -> Option<u64> {
+        Some(self.cpu_paints.load(Ordering::Relaxed))
+    }
+
     fn surface_mode(&self) -> CefSurfaceMode {
         CefSurfaceMode::AcceleratedPaint
     }

@@ -126,7 +126,7 @@ pub use native_frame::{
 pub use permissions::{PermissionId, PermissionKind};
 #[cfg(all(feature = "cef-runtime", target_os = "windows"))]
 pub use runtime::CefWindowsSandboxContext;
-pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode};
+pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode, PumpScheduler};
 pub use surface::{
     BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
     CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuTarget, Cookie, CursorShape,

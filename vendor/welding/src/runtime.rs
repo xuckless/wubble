@@ -5,8 +5,32 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::error::WeldError;
+
+/// Called by CEF's `OnScheduleMessagePumpWork` (wubble change, see
+/// `WUBBLE_CHANGES.md`): CEF asks for a `do_message_loop_work` call on the
+/// thread that initialised it, after `delay_ms` (`<= 0` means as soon as
+/// possible; a positive delay replaces any call still pending).
+///
+/// CEF calls it from any thread, so it must only hand the request over to the
+/// host loop and never call back into CEF itself. Never called on Windows,
+/// where CEF runs its own message-loop thread.
+#[derive(Clone)]
+pub struct PumpScheduler(pub(crate) Arc<dyn Fn(i64) + Send + Sync>);
+
+impl PumpScheduler {
+    pub fn new(schedule: impl Fn(i64) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(schedule))
+    }
+}
+
+impl std::fmt::Debug for PumpScheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PumpScheduler")
+    }
+}
 
 // ── Shared config / log-severity (always available) ──────────────────────────
 
@@ -78,6 +102,11 @@ pub struct CefRuntimeConfig {
     pub single_process: bool,
 
     pub log_severity: CefLogSeverity,
+
+    /// Schedules the external message pump from CEF's
+    /// `OnScheduleMessagePumpWork`. `None` = the host polls
+    /// [`CefRuntime::do_message_loop_work`] on its own timer.
+    pub pump_scheduler: Option<PumpScheduler>,
 }
 
 impl CefRuntimeConfig {
@@ -92,6 +121,7 @@ impl CefRuntimeConfig {
             cache_path: None,
             single_process: false,
             log_severity: CefLogSeverity::Default,
+            pump_scheduler: None,
         }
     }
 }
@@ -203,7 +233,7 @@ mod cef_backed {
             let args = cef::MainArgs {
                 instance: self.instance,
             };
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()));
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None);
             let code =
                 cef::execute_process(Some(&args), Some(&mut app), self.sandbox_info.as_ptr());
             if code >= 0 { Ok(Some(code)) } else { Ok(None) }
@@ -221,9 +251,10 @@ mod cef_backed {
             let args = cef::MainArgs {
                 instance: self.instance,
             };
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(
-                config.command_line_switches.clone(),
-            ));
+            let mut app = crate::app::WeldApp::build(
+                std::sync::Arc::new(config.command_line_switches.clone()),
+                config.pump_scheduler.clone(),
+            );
             let settings = build_settings(&config);
             let code = cef::initialize(
                 Some(&args),
@@ -255,7 +286,7 @@ mod cef_backed {
             let args = Args::new();
             // The same app both roles need: its render-process handler is what
             // makes script evaluation possible in the renderer.
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()));
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None);
             let code = cef::execute_process(
                 Some(args.as_main_args()),
                 Some(&mut app),
@@ -278,7 +309,7 @@ mod cef_backed {
             pin_cef_api_version();
             #[cfg(target_os = "macos")]
             let _sandbox = MacSandbox::initialize(args.as_main_args(), sandbox)?;
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()));
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None);
             Ok(cef::execute_process(
                 Some(args.as_main_args()),
                 Some(&mut app),
@@ -305,9 +336,10 @@ mod cef_backed {
             maybe_load_library(&config.cef_path)?;
             pin_cef_api_version();
             let args = Args::new();
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(
-                config.command_line_switches.clone(),
-            ));
+            let mut app = crate::app::WeldApp::build(
+                std::sync::Arc::new(config.command_line_switches.clone()),
+                config.pump_scheduler.clone(),
+            );
             let settings = build_settings(&config);
             let code = cef::initialize(
                 Some(args.as_main_args()),
@@ -599,3 +631,24 @@ mod stub {
 
 #[cfg(not(feature = "cef-runtime"))]
 pub use stub::CefRuntime;
+
+#[cfg(test)]
+mod pump_scheduler_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    /// wubble change: the config stays `Clone + Debug` with a callback in it,
+    /// and a clone calls the same closure.
+    #[test]
+    fn pump_scheduler_is_debug_and_clones_share_the_callback() {
+        let last = Arc::new(AtomicI64::new(0));
+        let seen = Arc::clone(&last);
+        let mut config = CefRuntimeConfig::new("/cef", CefSandboxMode::UnsandboxedTrustedContent);
+        assert!(config.pump_scheduler.is_none());
+        config.pump_scheduler = Some(PumpScheduler::new(move |ms| seen.store(ms, Ordering::SeqCst)));
+        let copy = config.clone();
+        assert!(format!("{copy:?}").contains("PumpScheduler"));
+        (copy.pump_scheduler.expect("cloned").0)(33);
+        assert_eq!(last.load(Ordering::SeqCst), 33);
+    }
+}

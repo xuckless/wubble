@@ -59,6 +59,22 @@ cef::wrap_render_handler! {
             0
         }
 
+        // wubble change: with `shared_texture_enabled` CEF calls OnPaint only
+        // when it cannot hand over a shared texture, so every call is a CPU
+        // fallback frame (popups included). Counted, never read or shown.
+        fn on_paint(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            type_: cef::PaintElementType,
+            _dirty_rects: Option<&[cef::Rect]>,
+            _buffer: *const u8,
+            width: ::std::os::raw::c_int,
+            height: ::std::os::raw::c_int,
+        ) {
+            let n = self.handler.cpu_paints.fetch_add(1, Ordering::Relaxed) + 1;
+            log::debug!("on_paint (CPU fallback #{n}): {type_:?} {width}x{height}");
+        }
+
         fn on_accelerated_paint(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -391,6 +407,8 @@ cef::wrap_life_span_handler! {
             log::debug!("CEF on_before_close");
             self.scripts.fail_all("browser closed");
             self.cookies.fail_active("browser closed");
+            // wubble change: tell the host, so it need not poll for the close.
+            self.events.push(CefSurfaceEvent::BrowserClosed);
         }
     }
 }

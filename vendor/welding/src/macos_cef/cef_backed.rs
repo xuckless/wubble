@@ -367,6 +367,8 @@ cef::wrap_life_span_handler! {
             log::debug!("CEF on_before_close");
             self.scripts.fail_all("browser closed");
             self.cookies.fail_active("browser closed");
+            // wubble change: tell the host, so it need not poll for the close.
+            self.events.push(CefSurfaceEvent::BrowserClosed);
         }
     }
 }

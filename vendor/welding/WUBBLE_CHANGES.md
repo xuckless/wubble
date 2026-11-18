@@ -15,4 +15,48 @@ and re-apply each change below.
 
 ## Changes
 
-None yet.
+Every change is marked `wubble change` in the source.
+
+1. **Message-pump schedule hook.** `runtime.rs`: new `PumpScheduler`
+   (an `Arc<dyn Fn(i64) + Send + Sync>` with a manual `Debug`, re-exported
+   from `lib.rs`) and `CefRuntimeConfig::pump_scheduler` (default `None`).
+   `app.rs`: new `WeldBrowserProcessHandler` whose
+   `on_schedule_message_pump_work` calls the scheduler; `WeldApp` returns it
+   from `browser_process_handler`; `WeldApp::build` takes the scheduler (the
+   browser-process `initialize` paths pass the config's, subprocess entry
+   points pass `None`). Lets the host schedule `do_message_loop_work` instead
+   of polling it.
+2. **Browser-closed event.** `surface.rs`: new `CefSurfaceEvent::BrowserClosed`.
+   Pushed from `WeldLifeSpanHandler::on_before_close` on Linux, macOS and
+   Windows (`*/cef_backed.rs`). Lets the host stop polling
+   `browser_host_get_browser_by_identifier` for a close.
+3. **CPU fallback count.** `linux_cef/cef_backed.rs`: `WeldRenderHandler`
+   gains `on_paint`, which only counts (an `AtomicU64` in
+   `WeldRenderHandlerInner`, `linux_cef/mod.rs`) and logs at debug level; the
+   bitmap is never read. `surface.rs`: `CefSurfaceProducer::cpu_paint_count`
+   (default `None`); `LinuxCefProducer` returns `Some(count)`. macOS and
+   Windows still return `None`.
+4. **Frame timing config.** `surface.rs`: `CefSurfaceConfig::windowless_frame_rate`
+   (default 60) and `CefSurfaceConfig::external_begin_frame` (default false),
+   the values welding hardcoded before; wired into `BrowserSettings` and
+   `WindowInfo` in `linux_cef/mod.rs`, `macos_cef/mod.rs`, `windows_cef/mod.rs`.
+5. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
+   (`frame_timing_defaults_match_upstream`, `BrowserClosed` added to
+   `mixed_callbacks_keep_observation_order`).
+
+## Not changed, on purpose
+
+- **No `Browser` accessor.** wubble already reaches the browser host through
+  `cef::browser_host_get_browser_by_identifier(producer.browser_id())`, and
+  `CefSurfaceProducer` already has input, navigation and `set_visible`.
+- **Texture import format/usage (the per-frame blit in wubble-gfx stays).**
+  Slint 1.19's `Image::try_from(wgpu::Texture)` takes only `Rgba8Unorm` /
+  `Rgba8UnormSrgb` with `TEXTURE_BINDING | RENDER_ATTACHMENT`
+  (i-slint-core 1.19.0 `graphics/wgpu_30.rs`). CEF's dmabuf is BGRA: importing
+  it as RGBA swaps red and blue, and Slint allows no swizzled view. The
+  `VkImage` is created by `grafting` with `SAMPLED | TRANSFER_SRC` only
+  (grafting 0.6 `vulkan_dmabuf.rs`); adding colour-attachment usage to an
+  imported DRM-modifier image needs a grafting fork and is valid only for
+  modifiers whose format features include it, which is driver dependent.
+  Revisit if Slint accepts `Bgra8` or a swizzled view.
+- `grafting` is not vendored.

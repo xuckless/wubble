@@ -94,6 +94,9 @@ pub enum CefSurfaceEvent {
         id: WebRequestId,
         result: Result<Vec<Cookie>, String>,
     },
+    /// CEF has destroyed the browser (`OnBeforeClose`); no further callbacks
+    /// follow for it. wubble change, see `WUBBLE_CHANGES.md`.
+    BrowserClosed,
 }
 
 /// Shared callback queue used by every platform producer.
@@ -132,6 +135,7 @@ mod web_event_tests {
         events.push(CefSurfaceEvent::Navigation(NavigationEvent::TitleChanged {
             title: "last".into(),
         }));
+        events.push(CefSurfaceEvent::BrowserClosed);
 
         assert!(matches!(
             events.poll(),
@@ -147,6 +151,7 @@ mod web_event_tests {
             Some(CefSurfaceEvent::Navigation(NavigationEvent::TitleChanged { title }))
                 if title == "last"
         ));
+        assert!(matches!(events.poll(), Some(CefSurfaceEvent::BrowserClosed)));
         assert!(events.poll().is_none());
     }
 
@@ -492,6 +497,14 @@ mod capability_tests {
         config.background_color = None;
         assert_eq!(config.cef_background_color(), 0);
     }
+
+    /// wubble change: the defaults keep welding 0.15's hardcoded behaviour.
+    #[test]
+    fn frame_timing_defaults_match_upstream() {
+        let config = CefSurfaceConfig::default();
+        assert_eq!(config.windowless_frame_rate, 60);
+        assert!(!config.external_begin_frame);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,6 +679,14 @@ pub struct CefSurfaceConfig {
     /// Follow the window at runtime with
     /// [`CefSurfaceProducer::set_scale_factor`].
     pub scale_factor: f32,
+    /// CEF `windowless_frame_rate`: how often CEF paints on its own timer.
+    /// Ignored by CEF while [`Self::external_begin_frame`] is on.
+    /// wubble change, see `WUBBLE_CHANGES.md`.
+    pub windowless_frame_rate: u32,
+    /// CEF `external_begin_frame_enabled`: when true CEF paints only when the
+    /// host calls `SendExternalBeginFrame` (e.g. once per host vsync).
+    /// wubble change, see `WUBBLE_CHANGES.md`.
+    pub external_begin_frame: bool,
 }
 
 impl Default for CefSurfaceConfig {
@@ -681,6 +702,8 @@ impl Default for CefSurfaceConfig {
             handle_auth_challenges: false,
             download_dir: None,
             scale_factor: 1.0,
+            windowless_frame_rate: 60,
+            external_begin_frame: false,
         }
     }
 }
@@ -701,6 +724,12 @@ impl CefSurfaceConfig {
             },
             None => 0,
         }
+    }
+
+    /// [`Self::windowless_frame_rate`] as CEF's `int` (wubble change).
+    #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
+    pub(crate) fn cef_windowless_frame_rate(&self) -> i32 {
+        i32::try_from(self.windowless_frame_rate).unwrap_or(i32::MAX)
     }
 }
 
@@ -763,6 +792,13 @@ pub trait CefSurfaceProducer {
         Err(WeldError::PlatformUnsupported(
             "visibility is not wired for this producer",
         ))
+    }
+
+    /// CPU `OnPaint` frames CEF delivered instead of a shared texture, since
+    /// the producer was created. `None` when this producer does not count them
+    /// (never a made-up 0). wubble change, see `WUBBLE_CHANGES.md`.
+    fn cpu_paint_count(&self) -> Option<u64> {
+        None
     }
 
     /// The cursor shape the page is asking for, if it changed since the last

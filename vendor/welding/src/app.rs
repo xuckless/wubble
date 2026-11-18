@@ -180,15 +180,33 @@ mod cef_backed {
         }
     }
 
+    // wubble change: forwards the external-pump schedule to the host.
+    cef::wrap_browser_process_handler! {
+        pub(crate) struct WeldBrowserProcessHandler {
+            scheduler: crate::runtime::PumpScheduler,
+        }
+
+        impl BrowserProcessHandler {
+            fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+                (self.scheduler.0)(delay_ms);
+            }
+        }
+    }
+
     cef::wrap_app! {
         pub(crate) struct WeldApp {
             switches: Arc<Vec<(String, Option<String>)>>,
             render_process_handler: cef::RenderProcessHandler,
+            browser_process_handler: Option<cef::BrowserProcessHandler>,
         }
 
         impl App {
             fn render_process_handler(&self) -> Option<cef::RenderProcessHandler> {
                 Some(self.render_process_handler.clone())
+            }
+
+            fn browser_process_handler(&self) -> Option<cef::BrowserProcessHandler> {
+                self.browser_process_handler.clone()
             }
 
             fn on_before_command_line_processing(
@@ -215,8 +233,16 @@ mod cef_backed {
     }
 
     impl WeldApp {
-        pub(crate) fn build(switches: Arc<Vec<(String, Option<String>)>>) -> cef::App {
-            Self::new(switches, WeldRenderProcessHandler::new())
+        /// `scheduler` is `Some` only in the browser process.
+        pub(crate) fn build(
+            switches: Arc<Vec<(String, Option<String>)>>,
+            scheduler: Option<crate::runtime::PumpScheduler>,
+        ) -> cef::App {
+            Self::new(
+                switches,
+                WeldRenderProcessHandler::new(),
+                scheduler.map(WeldBrowserProcessHandler::new),
+            )
         }
     }
 }

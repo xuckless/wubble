@@ -297,6 +297,8 @@ cef::wrap_life_span_handler! {
             *self.state.browser.lock().unwrap() = None;
             self.state.browser_id.store(0, Ordering::Release);
             self.state.closed.store(true, Ordering::Release);
+            // wubble change: tell the host, so it need not poll for the close.
+            self.events.push(CefSurfaceEvent::BrowserClosed);
         }
     }
 }

@@ -260,11 +260,12 @@ impl WindowsCefProducer {
                 shared_texture_enabled: 1,
                 // CEF self-drives paints at `windowless_frame_rate`. Setting
                 // this to 1 requires the host to call SendExternalBeginFrame.
-                external_begin_frame_enabled: 0,
+                // wubble change: chosen by the host.
+                external_begin_frame_enabled: config.surface.external_begin_frame.into(),
                 ..Default::default()
             };
             let browser_settings = cef::BrowserSettings {
-                windowless_frame_rate: 60,
+                windowless_frame_rate: config.surface.cef_windowless_frame_rate(),
                 background_color: config.surface.cef_background_color(),
                 ..Default::default()
             };
