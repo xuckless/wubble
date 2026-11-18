@@ -5,16 +5,17 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel } from "components.slint";
-import { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier } from "components/model.slint";
 import { GlassBackdrops } from "components/backdrops.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
+import { WindowEdges } from "components/window-frame.slint";
 
 import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, GlassBackdrops, Chrome, Radius }
+export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, WindowEdge, GlassBackdrops, Chrome, Radius }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -22,7 +23,10 @@ export component AppWindow inherits Window {
     preferred-height: Shell.window-height;
     min-width: Chrome.windowMinW;
     min-height: Chrome.windowMinH;
-    background: Palette.abyss;
+    // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
+    // colour, rounded where the platform can show transparent corners.
+    no-frame: true;
+    background: transparent;
     default-font-family: Fonts.ui;
     default-font-size: Type.body.size;
 
@@ -56,6 +60,21 @@ export component AppWindow inherits Window {
     callback web-pointer-cancelled();
     callback web-scrolled(x: length, y: length, delta-x: length, delta-y: length);
     callback web-focus-changed(focused: bool);
+
+    // Window frame. Intents only; wubble_ui::window acts on them.
+    callback window-close-requested <=> sidebar.window-close-requested;
+    callback window-minimise-requested <=> sidebar.window-minimise-requested;
+    callback window-toggle-fullscreen-requested <=> sidebar.window-toggle-fullscreen-requested;
+    callback window-begin-resize(WindowEdge);
+    // The platform can show a transparent window background (window.rs `Platform`).
+    in property <bool> rounded-corners: false;
+    // Square when full screen or maximised, or when the platform cannot show the corners.
+    out property <length> window-radius: root.rounded-corners && !root.full-screen && !root.maximized ? Radius.window : 0px;
+    out property <bool> window-resizable: !root.full-screen && !root.maximized;
+    in property <bool> address-loading <=> sidebar.address-loading;
+    // The loading sheen's opacity (0 at rest).
+    out property <float> address-sheen <=> sidebar.address-sheen;
+    out property <int> command-shown-rows <=> bar.shown-rows;
 
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
@@ -131,6 +150,8 @@ export component AppWindow inherits Window {
     // A row was dragged to a new slot: (tab id, its new index in `tabs`).
     callback tab-moved(int, int);
     out property <CommandBarState> command-bar-state <=> bar.state;
+    // Where the bar grows from (window coordinates); set when it opens.
+    in-out property <Origin> command-origin <=> bar.origin;
     in property <[CommandResult]> command-results <=> bar.results;
     in-out property <string> command-query <=> bar.query;
     callback command-query-changed <=> bar.query-changed;
@@ -144,6 +165,7 @@ export component AppWindow inherits Window {
     callback close-tab-requested();
 
     public function request-new-tab() {
+        root.command-origin = sidebar.new-tab-origin;
         bar.dispatch(CommandBarEvent.open);
         root.new-tab-requested();
     }
@@ -154,6 +176,7 @@ export component AppWindow inherits Window {
     }
 
     public function request-address-focus() {
+        root.command-origin = sidebar.address-origin;
         bar.dispatch(CommandBarEvent.open);
         root.address-focus-requested();
     }
@@ -196,6 +219,15 @@ export component AppWindow inherits Window {
         MouseCursor.nesw-resize,
         MouseCursor.nwse-resize,
     ];
+
+    ground := Rectangle {
+        background: Palette.abyss;
+        border-radius: root.window-radius;
+    }
+    // The design's `wb-frame-drag`: the gutters and any glass without a control move the window.
+    WindowMoveArea {
+        enabled: !root.full-screen;
+    }
 
     root-keys := FocusScope {
         KeyBinding {
@@ -284,8 +316,9 @@ export component AppWindow inherits Window {
 
         // The strip a hidden sidebar peeks from (.wb-peek-edge).
         edge := TouchArea {
-            x: 0px;
-            width: Chrome.peekEdge + Chrome.inset;
+            // Right of the window's west resize strip, which takes the pointer there.
+            x: Shell.edge-width;
+            width: Chrome.peekEdge + Chrome.inset - Shell.edge-width;
             height: parent.height;
             enabled: root.sidebar-mode == SidebarMode.hidden;
         }
@@ -332,6 +365,7 @@ export component AppWindow inherits Window {
                 height: parent.height - 2 * Chrome.inset;
                 opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
                 compact: root.hidden-at-rest ? false : root.sidebar-rail;
+                window-movable: !root.full-screen;
                 new-tab-requested => {
                     root.request-new-tab();
                 }
@@ -364,6 +398,14 @@ export component AppWindow inherits Window {
             double-clicked => {
                 root.seam-double-clicked();
             }
+        }
+    }
+
+    // Above everything: the resize zones of the frameless window.
+    WindowEdges {
+        resizable: root.window-resizable;
+        begin(edge) => {
+            root.window-begin-resize(edge);
         }
     }
 

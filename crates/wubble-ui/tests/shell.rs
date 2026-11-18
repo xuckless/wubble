@@ -117,7 +117,7 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert!(!app.get_peeking());
 
     // Into the edge strip: it peeks 60 ms later.
-    pointer(app, 3.0, 300.0);
+    pointer(app, 10.0, 300.0);
     pump(30);
     assert!(!app.get_peeking());
     pump(40);
@@ -136,7 +136,7 @@ fn peek(app: &AppWindow, driver: &Shared) {
 
     // A peek never outlives the hidden mode (once the sidebar has slid away from the edge).
     pump(400);
-    pointer(app, 3.0, 300.0);
+    pointer(app, 10.0, 300.0);
     pump(100);
     assert!(app.get_peeking());
     app.invoke_toggle_sidebar();

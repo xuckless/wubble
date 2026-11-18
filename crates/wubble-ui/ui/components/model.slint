@@ -56,3 +56,22 @@ export enum GlassTier {
     regular,
     thick,
 }
+
+// The eight resize zones of the window frame (design desktop.tsx `edgeDown`); Rust maps each to
+// the compositor's resize direction.
+export enum WindowEdge {
+    n,
+    s,
+    e,
+    w,
+    ne,
+    nw,
+    se,
+    sw,
+}
+
+// A point in window coordinates (Slint has no point type).
+export struct Origin {
+    x: length,
+    y: length,
+}

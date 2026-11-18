@@ -1,7 +1,7 @@
 // One command bar result. Styled after the design repo's web command bar
 // (src/wubble/browser/browser.css `.wb-cmd-row`, `.wb-cmd-icon`, `.wb-cmd-hint`,
 // xuckless/the-wallpaper-project @ 6c840da): 44 high, radius 12, a drawn icon in Mist, the
-// label, the hint in Haze. The selected row is shown by fill only. Rows enter through the
+// label, the hint in Haze. The selection fill is the bar's one sliding highlight; the row only tints its icon. Rows enter through the
 // port's OverlapLayer, 30 ms apart.
 
 import { Palette, Spacing, Fonts, Type, Motion } from "../tokens.slint";
@@ -47,11 +47,6 @@ export component CommandRow inherits Rectangle {
             width: root.width;
             height: root.height;
             border-radius: Shell.control-radius;
-            background: root.active ? Shell.command-selected : transparent;
-            animate background {
-                duration: Motion.pressRelease;
-                easing: Motion.easeOut;
-            }
             transform-origin: { x: self.width / 2, y: self.height / 2 };
             transform-scale: ta.pressed ? Motion.pressScale : 1;
             animate transform-scale {

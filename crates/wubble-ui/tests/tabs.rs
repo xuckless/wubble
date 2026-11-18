@@ -18,8 +18,9 @@ use wubble_ui::{AppWindow, TabItem};
 
 const DT: f32 = 0.016;
 /// Top of the first row with no pinned tabs and no Spaces: the inset (8), the
-/// sidebar padding (6), the address pill (36) and the group gap (12).
-const LIST_TOP: f32 = 8.0 + 6.0 + 36.0 + 12.0;
+/// sidebar padding (6), the window-controls row (30), the address pill (36) and a group gap (12)
+/// under each.
+const LIST_TOP: f32 = 8.0 + 6.0 + 30.0 + 12.0 + 36.0 + 12.0;
 /// A point on a row's title, clear of its close button.
 const ROW_X: f32 = 100.0;
 

@@ -1,7 +1,7 @@
 import { Palette, Motion, Radius, Spacing, Fonts } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { GlassPanel } from "../components.slint";
-import { CommandBarEvent, CommandBarState, CommandResult, GlassTier } from "model.slint";
+import { CommandBarEvent, CommandBarState, CommandResult, GlassTier, Origin } from "model.slint";
 import { CommandRow } from "command-row.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -9,11 +9,16 @@ import { ScrollView } from "std-widgets.slint";
 // `state` has one writer, `dispatch`; everything else reads it.
 // Look and motion from the design repo's web command bar (src/wubble/browser/browser.css
 // `.wb-cmd*`, `.wb-scrim`, xuckless/the-wallpaper-project @ 6c840da): thick glass over the page,
-// radius 20, 72 from the top; it drops in 7 px over the overlap timings.
+// radius 20, 72 from the top; the panel scales in from the point that opened it (`origin`) over
+// the dropdown timings (command.tsx `CMD`: 220 ms in, 176 ms out, from 0.95), the scrim fades on
+// its own, the rows enter on the Overlap stagger and one highlight slides between them.
 export component CommandBar inherits Rectangle {
     in property <[CommandResult]> results;
     in-out property <string> query <=> input.text;
     out property <CommandBarState> state: CommandBarState.closed;
+    // Where the bar was invoked from, in window coordinates; the panel grows from there. The
+    // default (0, 0) means the top centre of the panel.
+    in property <Origin> origin: { x: 0px, y: 0px };
 
     callback query-changed(string);
     callback result-chosen(int);
@@ -27,6 +32,8 @@ export component CommandBar inherits Rectangle {
     property <int> current: max(0, min(root.selected, root.count - 1));
     property <length> row-pitch: Shell.command-row-height;
     property <int> visible-rows: min(root.count, Shell.command-max-rows);
+    // How many rows the list shows at once (the rest scroll).
+    out property <int> shown-rows: root.visible-rows;
 
     pure function next(s: CommandBarState, e: CommandBarEvent) -> CommandBarState {
         if (e == CommandBarEvent.open) {
@@ -77,28 +84,7 @@ export component CommandBar inherits Rectangle {
 
     visible: root.state != CommandBarState.closed;
 
-    states [
-        shown when root.state == CommandBarState.open: {
-            opacity: 1;
-            panel.y: Shell.command-bar-top;
-            in {
-                animate opacity, panel.y {
-                    duration: Motion.overlapIn;
-                    easing: Motion.easeOut;
-                }
-            }
-            out {
-                animate opacity, panel.y {
-                    duration: Motion.overlapOut;
-                    easing: Motion.easeInOut;
-                }
-            }
-        }
-        hidden when root.state != CommandBarState.open: {
-            opacity: 0;
-            panel.y: Shell.command-bar-top - Motion.overlapShift;
-        }
-    ]
+    property <bool> open: root.state == CommandBarState.open;
 
     changed state => {
         if (self.state == CommandBarState.open) {
@@ -113,7 +99,7 @@ export component CommandBar inherits Rectangle {
     }
 
     Timer {
-        interval: Motion.overlapOut;
+        interval: Motion.dropdownOut;
         running: root.state == CommandBarState.closing;
         triggered => {
             root.dispatch(CommandBarEvent.settle);
@@ -129,6 +115,11 @@ export component CommandBar inherits Rectangle {
     }
     Rectangle {
         background: Shell.scrim;
+        opacity: root.open ? 1 : 0;
+        animate opacity {
+            duration: root.open ? Shell.scrim-in : Shell.scrim-out;
+            easing: Motion.easeOut;
+        }
     }
 
     panel := GlassPanel {
@@ -138,6 +129,19 @@ export component CommandBar inherits Rectangle {
         tier: GlassTier.thick;
         radius: Radius.lg;
         over-content: true;
+        y: Shell.command-bar-top;
+        // Scale and fade from the invoking point (command.tsx: transform-origin = cmd.from - rect).
+        property <bool> from-origin: root.origin.x != 0px || root.origin.y != 0px;
+        transform-origin: {
+            x: self.from-origin ? max(0px, min(self.width, root.origin.x - root.absolute-position.x - self.x)) : self.width / 2,
+            y: self.from-origin ? max(0px, min(self.height, root.origin.y - root.absolute-position.y - self.y)) : 0px,
+        };
+        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        opacity: root.open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+        }
         // Swallow clicks so they do not reach the scrim.
         TouchArea { }
 
@@ -152,6 +156,8 @@ export component CommandBar inherits Rectangle {
                 height: Shell.command-input-height;
                 input := TextInput {
                     x: Spacing.s3;
+                    height: parent.height;
+                    vertical-alignment: center;
                     width: parent.width - Spacing.s3 - Spacing.s1;
                     font-family: Fonts.ui;
                     font-size: Shell.command-input-font;
@@ -197,15 +203,37 @@ export component CommandBar inherits Rectangle {
             list := ScrollView {
                 height: root.visible-rows * root.row-pitch;
                 visible: root.count > 0;
-                VerticalLayout {
-                    alignment: start;
-                    for r[i] in root.results: CommandRow {
-                        item: r;
-                        index: i;
-                        shown: root.state == CommandBarState.open;
-                        active: i == root.current;
-                        activated => {
-                            root.choose(i);
+                Rectangle {
+                    width: list.visible-width;
+                    height: root.count * root.row-pitch;
+                    // The one selection highlight (.wb-cmd-sel): slides to the current row.
+                    Rectangle {
+                        x: 0px;
+                        y: root.current * root.row-pitch;
+                        width: parent.width;
+                        height: root.row-pitch;
+                        border-radius: Shell.control-radius;
+                        background: Shell.command-selected;
+                        opacity: root.count > 0 ? 1 : 0;
+                        animate y {
+                            duration: Shell.command-sel-ms;
+                            easing: Motion.easeOut;
+                        }
+                        animate opacity {
+                            duration: Shell.command-sel-fade;
+                            easing: Motion.easeOut;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: start;
+                        for r[i] in root.results: CommandRow {
+                            item: r;
+                            index: i;
+                            shown: root.state == CommandBarState.open;
+                            active: i == root.current;
+                            activated => {
+                                root.choose(i);
+                            }
                         }
                     }
                 }

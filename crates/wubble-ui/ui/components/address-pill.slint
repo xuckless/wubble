@@ -14,6 +14,23 @@ export component AddressPill inherits Rectangle {
     in property <string> host;
     in property <string> path;
     in property <bool> compact: false;
+    // A page is loading. The design's border beam (chrome.tsx `Address`) is drawn by the gfx
+    // lane's shader; this is its Slint fallback: a sheen that sweeps the pill every 1.5 s and
+    // fades over 1.5 s once loading ends.
+    in property <bool> loading: false;
+    // Beam strength: up in 120 ms, down over 1500 ms; the sheen shows its square (lingering tail).
+    property <float> strength: root.loading ? 1 : 0;
+    animate strength {
+        duration: root.loading ? Shell.beam-in : Shell.beam-ms;
+        easing: Motion.easeOut;
+    }
+    property <float> phase: root.loading ? 1 : 0;
+    animate phase {
+        duration: Shell.beam-ms;
+        easing: Motion.easeOut;
+        iteration-count: -1;
+    }
+    out property <float> sheen: root.strength * root.strength;
     callback activated();
 
     height: Chrome.address;
@@ -37,6 +54,17 @@ export component AddressPill inherits Rectangle {
             mouse-cursor: text;
             clicked => {
                 root.activated();
+            }
+        }
+
+        Rectangle {
+            border-radius: Shell.control-radius;
+            clip: true;
+            opacity: root.sheen;
+            Rectangle {
+                width: parent.width * 0.35;
+                x: -self.width + (parent.width + self.width) * root.phase;
+                background: @linear-gradient(100deg, transparent 0%, Shell.beam-sheen 50%, transparent 100%);
             }
         }
 
