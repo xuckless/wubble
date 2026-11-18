@@ -18,6 +18,9 @@ export component FavGrid inherits Rectangle {
     in property <bool> compact: false;
     // The scene draws the tiles' glass.
     in property <bool> over-wgpu: false;
+    // The window x range the sidebar shows: the tiles' glass is cut to it (GlassPanel `clip-start`).
+    in property <length> glass-clip-start: -Shell.no-clip;
+    in property <length> glass-clip-end: Shell.no-clip;
     callback activated(int);
 
     property <int> cols: root.compact ? 1 : Shell.fav-columns;
@@ -37,6 +40,8 @@ export component FavGrid inherits Rectangle {
         height: root.tile-h;
         key: GlassKeys.favourites + tab.id;
         over-wgpu: root.over-wgpu;
+        clip-start: root.glass-clip-start;
+        clip-end: root.glass-clip-end;
         tier: GlassTier.thin;
         radius: Shell.control-radius;
         hover: ta.has-hover;

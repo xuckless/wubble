@@ -220,6 +220,8 @@ export component Sidebar inherits Rectangle {
                 // than the rail
                 min-width: 0px;
                 over-wgpu: root.glass-over-wgpu;
+                glass-clip-start: root.absolute-position.x;
+                glass-clip-end: root.absolute-position.x + root.width;
                 loading: root.address-loading;
                 host: root.address-host;
                 path: root.address-path;
@@ -237,6 +239,8 @@ export component Sidebar inherits Rectangle {
                 active-tab-id: root.active-tab-id;
                 compact: root.compact;
                 over-wgpu: root.glass-over-wgpu;
+                glass-clip-start: root.absolute-position.x;
+                glass-clip-end: root.absolute-position.x + root.width;
                 activated(id) => {
                     root.tab-activated(id);
                 }
