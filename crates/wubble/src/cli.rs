@@ -34,6 +34,10 @@ struct Cli {
     /// How long `--measure` runs.
     #[arg(long, value_name = "N", requires = "measure", default_value_t = DEFAULT_SECONDS)]
     seconds: NonZeroU32,
+    /// `--measure` with CEF paced by external begin frames, one per Slint
+    /// render, instead of CEF's own timer.
+    #[arg(long, requires = "measure")]
+    begin_frames: bool,
     /// Also write `--measure`'s samples as CSV to this file.
     #[arg(long, value_name = "PATH", requires = "measure")]
     out: Option<PathBuf>,
@@ -121,6 +125,7 @@ pub struct Measure {
     pub scenario: Scenario,
     pub seconds: NonZeroU32,
     pub out: Option<PathBuf>,
+    pub begin_frames: bool,
 }
 
 impl TryFrom<Cli> for Command {
@@ -134,6 +139,7 @@ impl TryFrom<Cli> for Command {
                 scenario,
                 seconds: cli.seconds,
                 out: cli.out,
+                begin_frames: cli.begin_frames,
             }));
         }
         let smoke = match (cli.smoke, cli.url, cli.profile) {
@@ -330,6 +336,7 @@ mod tests {
             scenario,
             seconds: NonZeroU32::new(seconds).expect("test uses seconds > 0"),
             out: out.map(PathBuf::from),
+            begin_frames: false,
         }))
     }
 
@@ -360,6 +367,15 @@ mod tests {
             .ok(),
             measure(Scenario::Typing, 3, Some("/tmp/m.csv"))
         );
+        assert_eq!(
+            parse(["wubble", "--measure", "video", "--begin-frames"]).ok(),
+            Some(Command::Measure(Measure {
+                scenario: Scenario::Video,
+                seconds: DEFAULT_SECONDS,
+                out: None,
+                begin_frames: true,
+            }))
+        );
     }
 
     #[test]
@@ -375,6 +391,7 @@ mod tests {
             &["--measure", "scroll", "--url", "about:blank"],
             &["--seconds", "3"],
             &["--out", "/tmp/m.csv"],
+            &["--begin-frames"],
         ] {
             let args = std::iter::once("wubble").chain(bad.iter().copied());
             assert!(parse(args).is_err(), "{bad:?}");

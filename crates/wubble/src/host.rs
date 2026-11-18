@@ -32,7 +32,7 @@ use wubble_engine::input::{KeyId, Point};
 use wubble_engine::nav::{Cursor, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
-use wubble_gfx::pacing::{self, FrameStats};
+use wubble_gfx::pacing::{self, BeginFrames, FrameStats, PaceEffect, PaceEvent};
 use wubble_store::{ClosedTab, Transition};
 use wubble_ui::{AppWindow, CommandBarState, SidebarMode};
 
@@ -160,6 +160,14 @@ pub struct Checks {
     pub nav_smoke: Option<NavSmoke>,
     pub tabs_smoke: Option<TabsSmoke>,
     pub session_smoke: Option<SessionSmoke>,
+    /// Views paint on external begin frames from [`Host::pace`].
+    pub begin_frames: bool,
+}
+
+/// The external begin-frame driver's state and its timer.
+struct Pace {
+    state: BeginFrames,
+    timer: slint::Timer,
 }
 
 /// Everything the pump drives. Owned by `HOST` in `main.rs`.
@@ -206,6 +214,7 @@ pub struct Host {
     committed: BTreeMap<TabId, String>,
     /// Why the loop was quit early, if it was.
     pub failure: Option<String>,
+    pace: Option<Pace>,
 }
 
 impl Host {
@@ -225,6 +234,7 @@ impl Host {
         let Loaded { model, settings } = loaded;
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
+        let begin_frames = checks.begin_frames;
         let mut host = Self {
             engine,
             window: window.as_weak(),
@@ -260,6 +270,10 @@ impl Host {
             typed_nav: TypedNav::default(),
             committed,
             failure: None,
+            pace: begin_frames.then(|| Pace {
+                state: BeginFrames::Off,
+                timer: slint::Timer::default(),
+            }),
         };
         match open {
             Some(url) => host.dispatch(new_tab(url, None)),
@@ -318,11 +332,13 @@ impl Host {
                     url,
                     layout: content_layout(&window),
                     frame_rate,
+                    begin_frames: self.pace.is_some(),
                     gpu: self.presenter.context().clone(),
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {
                         self.views.insert(tab, id);
+                        self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
                         eprintln!("wubble: tab {}: {e}; closing it", tab.0);
@@ -344,6 +360,7 @@ impl Host {
                 if let Some(view) = self.tab_view(tab) {
                     view.set_visible(visible);
                 }
+                self.pace(PaceEvent::Wake);
             }
             // Later, outside the host: opening the bar calls back into it.
             Call::ShowCommandBar => {
@@ -380,7 +397,7 @@ impl Host {
     }
 
     /// The visible tab's view, the only one that gets frames and input.
-    pub(crate) fn view(&mut self) -> Option<&mut View> {
+    fn view(&mut self) -> Option<&mut View> {
         self.tab_view(self.model.visible_tab()?)
     }
 
@@ -480,6 +497,7 @@ impl Host {
         let Some(frame) = view.take_frame() else {
             return Ok(());
         };
+        self.pace(PaceEvent::FrameArrived);
         let frame_size = frame.size();
         let clip = frame_size.cropped_to(layout.size);
         let measured = measure::Frame::of(&frame, layout.frame_size());
@@ -1011,7 +1029,7 @@ impl Host {
                 if matches!(
                     route,
                     KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
-                ) && let Some(view) = self.view()
+                ) && let Some(view) = self.input_view()
                 {
                     view.key(&key);
                 }
@@ -1036,26 +1054,74 @@ impl Host {
         EventResult::Propagate
     }
 
-    /// Tells the visible view the content area's current layout.
+    /// Tells the visible view the content area's current layout, and every
+    /// view the frame rate if the window is on a display with another one.
     fn follow_layout(&mut self) {
-        if let Some(window) = self.window.upgrade() {
-            let layout = content_layout(&window);
-            if let Some(view) = self.view() {
-                view.set_layout(layout);
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        let layout = content_layout(&window);
+        if let Some(view) = self.input_view() {
+            view.set_layout(layout);
+        }
+        let rate = window
+            .window()
+            .with_winit_window(display_refresh_mhz)
+            .map(pacing::frame_rate_for);
+        if let (Some(current), Some(rate)) = (self.frame_rate, rate)
+            && rate != current
+        {
+            self.frame_rate = Some(rate);
+            for id in self.views.values().copied().collect::<Vec<_>>() {
+                if let Some(view) = self.engine.view(id) {
+                    view.set_frame_rate(rate);
+                }
+            }
+        }
+    }
+
+    /// The visible view, for input: input wakes the begin-frame driver.
+    pub(crate) fn input_view(&mut self) -> Option<&mut View> {
+        self.pace(PaceEvent::Wake);
+        self.view()
+    }
+
+    /// Steps the begin-frame driver, if this run uses external begin frames.
+    pub fn pace(&mut self, event: PaceEvent) {
+        let Some(pace) = self.pace.as_mut() else {
+            return;
+        };
+        let period = Duration::from_secs_f64(1.0 / f64::from(self.frame_rate.unwrap_or(1)));
+        let (state, effects) = pacing::transition(pace.state, event, period);
+        pace.state = state;
+        for effect in effects {
+            match effect {
+                PaceEffect::Send => {
+                    if let Some(view) = self.view() {
+                        view.send_begin_frame();
+                    }
+                }
+                PaceEffect::ArmTimer(delay) => {
+                    if let Some(pace) = &self.pace {
+                        pace.timer.start(slint::TimerMode::SingleShot, delay, || {
+                            with_host(|host| host.pace(PaceEvent::Timer))
+                        });
+                    }
+                }
             }
         }
     }
 
     pub fn pointer_moved(&mut self, point: Point) {
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.view() {
+        if let Some(view) = self.input_view() {
             view.mouse_move(point, &modifiers, now);
         }
     }
 
     pub fn pointer_left(&mut self, point: Point) {
         let (modifiers, now) = (self.input.modifiers(), self.input.now());
-        if let Some(view) = self.view() {
+        if let Some(view) = self.input_view() {
             view.mouse_leave(point, &modifiers, now);
         }
     }
@@ -1072,7 +1138,7 @@ impl Host {
         for button in sent {
             self.input.buttons = self.input.buttons.with(button, pressed);
             let (modifiers, now) = (self.input.modifiers(), self.input.now());
-            if let Some(view) = self.view() {
+            if let Some(view) = self.input_view() {
                 view.mouse_button(button, pressed, point, &modifiers, now);
             }
         }
@@ -1087,7 +1153,7 @@ impl Host {
 
     pub fn scrolled(&mut self, point: Point, dx: f32, dy: f32) {
         let modifiers = self.input.modifiers();
-        if let Some(view) = self.view() {
+        if let Some(view) = self.input_view() {
             view.wheel(point, dx, dy, &modifiers);
         }
     }

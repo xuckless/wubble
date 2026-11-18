@@ -629,7 +629,7 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
 /// One key press and release, or one click, sent through the same `View`
 /// calls real input uses; stamped just before sending.
 fn inject(host: &mut Host, kind: InputKind) {
-    let Some(view) = host.view() else {
+    let Some(view) = host.input_view() else {
         return;
     };
     let at = Instant::now();

@@ -165,7 +165,11 @@ fn main() -> ExitCode {
         }
         Command::Measure(m) => {
             measure::begin(m.scenario, m.seconds.get());
-            match with_smoke_dir(|config, dir| run(Mode::Measure(m.scenario), config, dir)) {
+            let mode = Mode::Measure {
+                scenario: m.scenario,
+                begin_frames: m.begin_frames,
+            };
+            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
                 Ok(Outcome {
                     failure: None,
                     measured: Some((report, csv)),
@@ -230,7 +234,13 @@ fn main() -> ExitCode {
 
 /// Starts the spring-driven shell: sidebar seam, compact mode, Space indicator.
 fn install_shell_driver(window: &AppWindow) -> Result<(), Box<dyn std::error::Error>> {
-    wubble_ui::driver::install(window, measure::rendered)?;
+    wubble_ui::driver::install(window, || {
+        measure::rendered();
+        // Queued: the render may run while the host is busy (snapshots).
+        let _ = slint::invoke_from_event_loop(|| {
+            with_host(|host| host.pace(wubble_gfx::pacing::PaceEvent::Vsync))
+        });
+    })?;
     Ok(())
 }
 
@@ -342,8 +352,12 @@ enum Mode {
     Tabs,
     /// One phase of `--smoke session`.
     Session(Phase),
-    /// `--measure`: the scenario's bundled page, measured until it ends.
-    Measure(measure::Scenario),
+    /// `--measure`: the scenario's bundled page, measured until it ends;
+    /// CEF paced by external begin frames if `begin_frames`.
+    Measure {
+        scenario: measure::Scenario,
+        begin_frames: bool,
+    },
 }
 
 /// A pump request for the host, from CEF or from the host's own timer.
@@ -539,9 +553,10 @@ fn run(
         nav_smoke: None,
         tabs_smoke: None,
         session_smoke: None,
+        begin_frames: false,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
-    let measuring = matches!(mode, Mode::Measure(_));
+    let measuring = matches!(mode, Mode::Measure { .. });
     // `url` is opened in a new tab; without one a fresh profile gets the
     // bundled page and a restored session opens nothing new.
     let (url, checks) = match mode {
@@ -579,7 +594,16 @@ fn run(
                 ..none
             },
         ),
-        Mode::Measure(scenario) => (Some(page_url(scenario.page())), none),
+        Mode::Measure {
+            scenario,
+            begin_frames,
+        } => (
+            Some(page_url(scenario.page())),
+            Checks {
+                begin_frames,
+                ..none
+            },
+        ),
     };
     // The first pump runs once the loop does; from there CEF schedules every
     // pump itself.

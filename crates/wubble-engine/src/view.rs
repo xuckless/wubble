@@ -160,6 +160,9 @@ pub struct ViewConfig {
     pub layout: Layout,
     /// CEF `windowless_frame_rate`; see `wubble_gfx::pacing::frame_rate_for`.
     pub frame_rate: u32,
+    /// CEF paints only on [`View::send_begin_frame`] (external begin
+    /// frames) instead of on its own timer at `frame_rate`.
+    pub begin_frames: bool,
     /// The device frames are shown on. On Linux welding copies each frame
     /// onto it inside CEF's paint callback, before CEF reuses the buffer.
     pub gpu: HostWgpuContext,
@@ -215,7 +218,13 @@ pub enum DragPhase {
 impl View {
     pub(crate) fn open(runtime: &CefRuntime, config: ViewConfig) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let producer = new_producer(runtime, config.url, layout, config.frame_rate, &config.gpu)?;
+        let producer = new_producer(
+            runtime,
+            config.url,
+            layout,
+            (config.frame_rate, config.begin_frames),
+            &config.gpu,
+        )?;
         let browser_id = producer.browser_id();
         Ok(Self {
             producer,
@@ -397,6 +406,18 @@ impl View {
             self.state,
             ViewState::Live { .. } | ViewState::Resizing { .. }
         )
+    }
+
+    /// Asks CEF for one frame (`SendExternalBeginFrame`); only for a view
+    /// opened with `begin_frames`.
+    pub fn send_begin_frame(&mut self) {
+        self.send(|host| host.send_external_begin_frame());
+    }
+
+    /// CEF's frame-rate ceiling (`SetWindowlessFrameRate`), for a window
+    /// that moved to a display with another refresh rate.
+    pub fn set_frame_rate(&mut self, frame_rate: u32) {
+        self.send(|host| host.set_windowless_frame_rate(frame_rate as i32));
     }
 
     /// Follows the host's content rectangle; unchanged layouts cost nothing.
@@ -1278,7 +1299,7 @@ fn new_producer(
     runtime: &CefRuntime,
     url: String,
     layout: Layout,
-    frame_rate: u32,
+    (frame_rate, begin_frames): (u32, bool),
     gpu: &HostWgpuContext,
 ) -> Result<PlatformCefProducer, EngineError> {
     let config = welding::PlatformCefConfig {
@@ -1287,6 +1308,7 @@ fn new_producer(
             initial_size: dpi_size(layout.size),
             scale_factor: layout.scale,
             windowless_frame_rate: frame_rate,
+            external_begin_frame: begin_frames,
             // Every request is held for the engine, which answers it with
             // the host's answer or (RequestMode::DefaultNow) its default.
             handle_permission_requests: true,
@@ -1313,7 +1335,7 @@ fn new_producer(
     _runtime: &CefRuntime,
     _url: String,
     _layout: Layout,
-    _frame_rate: u32,
+    _pacing: (u32, bool),
     _gpu: &HostWgpuContext,
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
