@@ -65,6 +65,25 @@ fn seam_x(app: &AppWindow) -> f32 {
     INSET as f32 + app.get_sidebar_width() + INSET as f32 / 2.0
 }
 
+/// browser.css: `.wb-side` pads 6 inside the 8 px inset, `.wb-side-top` and every row pad 10
+/// more; the header's buttons run 4 px past the padding; the peek panel pads 10 8 10 10.
+const SIDE_PAD: f32 = 6.0;
+const SIDE_GRID: f32 = 10.0;
+const NAV_PULL: f32 = 4.0;
+
+/// The header, the pill and the rows share one inset on both sides.
+fn column_alignment(app: &AppWindow) {
+    let e = app.get_side_edges();
+    let left = INSET as f32 + SIDE_PAD;
+    let right = INSET as f32 + app.get_sidebar_width() - SIDE_PAD;
+    assert_eq!(e.pill, left);
+    assert_eq!(e.rows, left);
+    assert_eq!(e.new_tab, left);
+    assert_eq!(e.lights, left + SIDE_GRID);
+    assert_eq!(e.pill_end, right);
+    assert_eq!(e.nav_end, right + NAV_PULL);
+}
+
 fn three_modes(app: &AppWindow, driver: &Shared) {
     settle(app, driver);
     assert_eq!(app.get_sidebar_mode(), SidebarMode::Extended);
@@ -110,6 +129,11 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert!(app.get_peeking());
     // The slide (340 ms), then over a child row: still peeking.
     pump(400);
+    // The glowing border is on while peeking, off otherwise; the panel pads 10 8 10 10.
+    assert_eq!(app.get_peek_glow(), 1.0);
+    let e = app.get_side_edges();
+    assert_eq!(e.pill, INSET as f32 + 10.0);
+    assert_eq!(e.pill_end, INSET as f32 + SIDEBAR_DEFAULT as f32 - 8.0);
     pointer(app, 100.0, 80.0);
     pump(400);
     assert!(app.get_peeking());
@@ -119,6 +143,8 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert!(app.get_peeking());
     pump(100);
     assert!(!app.get_peeking());
+    pump(400);
+    assert_eq!(app.get_peek_glow(), 0.0);
 
     // Pushed against the window's edge, over the west resize strip: it peeks too.
     pump(400);
@@ -246,6 +272,9 @@ fn shell_scenarios() {
     app.show().unwrap();
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
     let driver = driver::connect(&app);
+    settle(&app, &driver);
+    assert_eq!(app.get_peek_glow(), 0.0);
+    column_alignment(&app);
     three_modes(&app, &driver);
     peek(&app, &driver);
     seam_drag(&app, &driver);

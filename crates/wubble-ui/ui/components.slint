@@ -73,7 +73,7 @@ export component GlassPanel inherits Rectangle {
     property <float> shadow-alpha: root.tier == GlassTier.thin ? 0.35 : root.tier == GlassTier.regular ? 0.45 : 0.55;
 
     border-radius: root.radius;
-    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Glass.thickOverContent : root.t.fill;
+    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;   // wubble change: Shell, not Glass.thickOverContent (.72): without the blur, text needs more body
     drop-shadow-offset-y: root.over-wgpu ? 0px : root.t.shadowY;
     drop-shadow-blur: root.over-wgpu ? 0px : root.t.shadowBlur;
     drop-shadow-color: root.over-wgpu ? transparent : rgba(0, 0, 0, root.shadow-alpha);

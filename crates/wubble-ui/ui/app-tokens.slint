@@ -39,6 +39,15 @@ export global Shell {
     // chrome.tsx Address border beam: 1500 ms, brightens in 120 ms
     out property <duration> beam-ms: 1500ms;
     out property <duration> beam-in: 120ms;
+    // the ring's width: GlassPanel's film rim (1.5)
+    out property <length> glow-width: 1.5px;
+    // browser.css .wb-side-peek: padding 10 8 10 10 (the extended sidebar's is side-pad, 6)
+    out property <length> peek-pad-start: 10px;
+    out property <length> peek-pad-end: 8px;
+    out property <length> peek-pad-y: 10px;
+    // Stand-in for the backdrop blur (.wb-thick: blur 44) while the wgpu pass is not under the
+    // panel: thick glass over the page at .94, so the page cannot be read through the text.
+    out property <color> thick-unblurred-fill: rgba(28, 31, 40, 0.94);
     out property <length> window-width: 1280px;
     out property <length> window-height: 800px;
 

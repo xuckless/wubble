@@ -5,17 +5,18 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges } from "components/model.slint";
 import { GlassBackdrops } from "components/backdrops.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { Sidebar } from "components/sidebar.slint";
+import { GlowRing } from "components/glow-ring.slint";
 import { WindowEdges, MoveArea } from "components/window-frame.slint";
 
 import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, WindowEdge, GlassBackdrops, Chrome, Radius }
+export { TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, WindowEdge, GlassBackdrops, Chrome, Radius }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -193,6 +194,13 @@ export component AppWindow inherits Window {
     // off it for a while. Presentation only: `peek` never outlives the hidden mode.
     in-out property <bool> peek: false;
     out property <bool> peeking: root.peek && root.sidebar-mode == SidebarMode.hidden;
+    // The peek panel's glowing border (GlowRing, as the address pill's): steady while peeking.
+    out property <float> peek-glow: root.peeking ? 1 : 0;
+    animate peek-glow {
+        duration: Shell.peek-slide;
+        easing: Motion.easeOut;
+    }
+    out property <SideEdges> side-edges <=> sidebar.edges;
     changed sidebar-mode => {
         if (root.sidebar-mode != SidebarMode.hidden) {
             root.peek = false;
@@ -351,6 +359,11 @@ export component AppWindow inherits Window {
                 over-content: true;
                 visible: root.hidden-at-rest;
                 opacity: root.peek-alpha;
+                GlowRing {
+                    radius: Radius.lg;
+                    strength: root.peek-glow;
+                    sweep: false;
+                }
             }
 
             sidebar := Sidebar {
@@ -360,6 +373,7 @@ export component AppWindow inherits Window {
                 height: parent.height - 2 * Chrome.inset;
                 opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
                 compact: root.hidden-at-rest ? false : root.sidebar-rail;
+                floating: root.hidden-at-rest;
                 window-movable: !root.full-screen;
                 window-move-requested => {
                     root.window-begin-move();
