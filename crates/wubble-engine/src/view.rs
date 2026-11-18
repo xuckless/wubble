@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cef::{ImplBrowser, ImplBrowserHost, ImplFrame};
@@ -31,6 +32,7 @@ use wubble_gfx::{FrameSize, NativeFrame};
 use crate::app::{EngineError, RequestMode};
 use crate::download::{self, Download, DownloadEffect, DownloadInput};
 use crate::drag::{self, DragSource, DragSourceInput};
+use crate::filter::ContentFilter;
 use crate::find::{self, Find, FindEffect, FindInput};
 use crate::input::{
     self, CefKey, ClickTracker, KeyId, KeyInput, Modifiers, MouseButton, Point, WheelRemainder,
@@ -202,6 +204,10 @@ pub struct View {
     audio: AudioProbe,
     zoom: Zoom,
     drag: DragSource,
+    /// Asked for a page script on each main-frame commit.
+    filter: Option<Arc<dyn ContentFilter>>,
+    /// Icon downloads CEF finished, moved to `page` by [`Self::drain_events`].
+    favicons: crate::favicon::Sink,
 }
 
 /// The second frame stream: the popup widget's newest frame and where to
@@ -222,13 +228,26 @@ pub enum DragPhase {
 }
 
 impl View {
-    pub(crate) fn open(runtime: &CefRuntime, config: ViewConfig) -> Result<Self, EngineError> {
+    pub(crate) fn open(
+        runtime: &CefRuntime,
+        config: ViewConfig,
+        filter: Option<Arc<dyn ContentFilter>>,
+    ) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let producer = new_producer(runtime, config.url, layout, config.frame_rate, &config.gpu)?;
+        let request_filter = filter.clone().map(crate::filter::request_filter);
+        let producer = new_producer(
+            runtime,
+            config.url,
+            layout,
+            config.frame_rate,
+            &config.gpu,
+            request_filter,
+        )?;
         let browser_id = producer.browser_id();
         Ok(Self {
             producer,
             browser_id,
+            filter,
             state: ViewState::Live { layout },
             visible: true,
             nav: NavState::default(),
@@ -246,7 +265,14 @@ impl View {
             audio: AudioProbe::default(),
             zoom: Zoom::default(),
             drag: DragSource::default(),
+            favicons: Default::default(),
         })
+    }
+
+    /// CEF's identifier for this view, as [`crate::filter::RequestInfo::browser_id`]
+    /// reports it.
+    pub fn browser_id(&self) -> i32 {
+        self.browser_id
     }
 
     /// Navigation as the host last heard of it.
@@ -275,6 +301,45 @@ impl View {
     /// Reloads without the cache (CEF `ReloadIgnoreCache`).
     pub fn hard_reload(&mut self) {
         self.apply_nav(NavInput::HardReload);
+    }
+
+    /// Prints the page to a PDF file (Chromium's default page size and
+    /// margins). Completion arrives as [`PageEvent::PdfPrinted`]. The system
+    /// print dialog is not offered: it needs an embedder print handler.
+    pub fn print_to_pdf(&mut self, path: &Path) {
+        if let Err(e) = self.producer.print_to_pdf(path) {
+            eprintln!("wubble-engine: view {}: print to PDF: {e}", self.browser_id);
+        }
+    }
+
+    /// Opens DevTools in its own native window (a non-windowless `WindowInfo`;
+    /// DevTools is the allowed non-Slint exception). Focuses it if open.
+    /// Linux only until it is verified on macOS and Windows (a default
+    /// `WindowInfo` on a windowless browser may need a parent there): elsewhere
+    /// it logs and does nothing.
+    pub fn open_devtools(&mut self) {
+        if !cfg!(target_os = "linux") {
+            eprintln!("wubble-engine: DevTools is not verified on this platform yet");
+            return;
+        }
+        self.send(|host| {
+            host.show_dev_tools(
+                Some(&cef::WindowInfo::default()),
+                None,
+                Some(&cef::BrowserSettings::default()),
+                None,
+            )
+        });
+    }
+
+    pub fn close_devtools(&mut self) {
+        self.send(|host| host.close_dev_tools());
+    }
+
+    pub fn has_devtools(&mut self) -> bool {
+        let mut open = false;
+        self.send(|host| open = host.has_dev_tools() != 0);
+        open
     }
 
     /// Ignored unless loading.
@@ -485,6 +550,9 @@ impl View {
         let (next, event) = popup::transition(self.popup, placement);
         self.popup = next;
         self.page.extend(event);
+        let icons = std::mem::take(&mut *self.favicons.lock().unwrap_or_else(|e| e.into_inner()));
+        self.page
+            .extend(icons.into_iter().map(PageEvent::FaviconImage));
         if let Some(composition) = self.producer.poll_ime_composition() {
             self.page.push(crate::ime::bounds(composition));
         }
@@ -535,6 +603,21 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
+            Route::PageCommitted(url) => self.inject_page_script(&url),
+        }
+    }
+
+    /// Runs the content filter's script for the page that just committed
+    /// (cosmetic filtering), in the main frame.
+    fn inject_page_script(&mut self, url: &str) {
+        let Some(script) = self.filter.as_ref().and_then(|f| f.page_script(url)) else {
+            return;
+        };
+        if let Err(e) = self.producer.execute_script(&script, url) {
+            eprintln!(
+                "wubble-engine: view {}: page script not run: {e}",
+                self.browser_id
+            );
         }
     }
 
@@ -1021,6 +1104,11 @@ impl View {
                 Ok(())
             }
             NavEffect::Stop => self.producer.stop(),
+            NavEffect::FetchFavicon(url) => {
+                let sink = self.favicons.clone();
+                self.send(|host| crate::favicon::fetch(host, url, &sink));
+                Ok(())
+            }
             NavEffect::Repaint => self.producer.request_repaint(),
         };
         if let Err(e) = result {
@@ -1077,6 +1165,9 @@ enum Route {
     ObserveZoom,
     /// The renderer process ended.
     Crashed,
+    /// The main frame committed a load of this URL (welding reports
+    /// `LoadStart` for the main frame only).
+    PageCommitted(String),
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1086,6 +1177,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
     match event {
         E::AddressChanged { url } => vec![Route::Nav(NavInput::Address(url)), Route::ObserveZoom],
         E::TitleChanged { title } => one(Route::Nav(NavInput::Title(title))),
+        E::LoadStart { url } => one(Route::PageCommitted(url)),
         E::LoadingStateChanged {
             loading,
             can_go_back,
@@ -1215,6 +1307,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             url,
             code: error_code,
         })),
+        E::PdfPrintFinished { path, ok } => one(Route::Page(PageEvent::PdfPrinted { path, ok })),
         E::RequestsDismissed { ids } => one(Route::Page(PageEvent::RequestsDismissed(
             ids.into_iter().map(RequestId).collect(),
         ))),
@@ -1342,6 +1435,7 @@ fn new_producer(
     layout: Layout,
     frame_rate: u32,
     gpu: &HostWgpuContext,
+    request_filter: Option<welding::RequestFilter>,
 ) -> Result<PlatformCefProducer, EngineError> {
     let config = welding::PlatformCefConfig {
         surface: welding::CefSurfaceConfig {
@@ -1354,6 +1448,7 @@ fn new_producer(
             handle_permission_requests: true,
             handle_auth_challenges: true,
             ask_download_path: true,
+            request_filter,
             ..welding::CefSurfaceConfig::default()
         },
     };
@@ -1377,6 +1472,7 @@ fn new_producer(
     _layout: Layout,
     _frame_rate: u32,
     _gpu: &HostWgpuContext,
+    _request_filter: Option<welding::RequestFilter>,
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
         "windowless views are not supported on Windows yet".into(),
@@ -1608,6 +1704,31 @@ mod tests {
     }
 
     #[test]
+    fn pdf_completion_routes_to_a_page_event() {
+        assert_eq!(
+            route_one(NavigationEvent::PdfPrintFinished {
+                path: "/tmp/a.pdf".into(),
+                ok: true
+            }),
+            Route::Page(PageEvent::PdfPrinted {
+                path: "/tmp/a.pdf".into(),
+                ok: true
+            })
+        );
+    }
+
+    #[test]
+    fn favicon_images_are_not_requests() {
+        let icon = PageEvent::FaviconImage(crate::favicon::FaviconImage {
+            url: "u".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![0; 4],
+        });
+        assert_eq!(icon.request(), None);
+    }
+
+    #[test]
     fn requests_route_to_page_events_with_their_ids() {
         assert_eq!(
             route_one(NavigationEvent::JsDialogRequested {
@@ -1737,6 +1858,25 @@ mod tests {
         assert_eq!(menu.suggestions, vec!["the".to_string()]);
         assert_eq!(menu.items.len(), 1);
         assert_eq!(menu.items[0].command, 114);
+    }
+
+    /// The cosmetic-filter hook: a main-frame commit asks for the page
+    /// script, the end of the load does not.
+    #[test]
+    fn a_main_frame_commit_routes_to_the_page_script() {
+        assert_eq!(
+            route_one(NavigationEvent::LoadStart {
+                url: "https://site.test/".into()
+            }),
+            Route::PageCommitted("https://site.test/".into())
+        );
+        assert!(
+            route(NavigationEvent::LoadEnd {
+                url: "https://site.test/".into(),
+                http_status: 200,
+            })
+            .is_empty()
+        );
     }
 
     #[test]

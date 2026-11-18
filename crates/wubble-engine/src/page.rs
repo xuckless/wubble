@@ -262,6 +262,30 @@ pub enum EditCommand {
 /// What the host learns about a page beyond navigation, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageEvent {
+    /// The page's icon, downloaded by CEF: raw RGBA, at most 64x64.
+    ///
+    /// The host (wubble-store holds the cache; `crates/wubble` is not edited
+    /// here):
+    ///
+    /// ```ignore
+    /// PageEvent::FaviconImage(img) => {
+    ///     // Show: slint::Image from
+    ///     //   SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&img.rgba, img.width, img.height)
+    ///     // Persist, only if the view's `nav().page.favicon == img.url` (drops a
+    ///     // late image of the previous page), on the store thread:
+    ///     //   store.put_favicon(&page_url, &Favicon { icon_url: img.url, width: img.width,
+    ///     //       height: img.height, rgba: img.rgba }, now_ms).await?;
+    /// }
+    /// // Restored/discarded tabs and command-bar rows, one query:
+    /// //   let icons = store.favicons_for(&urls).await?;  // HashMap<page url, Favicon>
+    /// // At startup: store.prune_favicons(4 << 20).await?;
+    /// ```
+    FaviconImage(crate::favicon::FaviconImage),
+    /// `View::print_to_pdf` finished; `ok` is false when no file was written.
+    PdfPrinted {
+        path: PathBuf,
+        ok: bool,
+    },
     /// A `<select>` dropdown, date picker or autofill list opened. Its frames
     /// come from `View::take_popup_frame`; draw them at `rect` as a layer
     /// above the view (it may extend outside the view).

@@ -164,6 +164,8 @@ pub enum NavEffect {
     Reload,
     HardReload,
     Stop,
+    /// Download the icon image at this URL (`favicon.rs`).
+    FetchFavicon(String),
     /// Nudge CEF to paint: a replacement renderer paints nothing until asked
     /// (welding `request_repaint`).
     Repaint,
@@ -199,12 +201,19 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             },
             vec![Emit(WebEvent::TitleChanged(title))],
         ),
-        NavInput::Favicon(url) if url != page.favicon => (
+        // The icon is fetched on every report, not only on a change: a failed
+        // download, or a new page that declares the same icon URL, must still
+        // reach the host. Only the URL event is deduplicated.
+        NavInput::Favicon(url) => (
             Page {
                 favicon: url.clone(),
-                ..page
+                ..page.clone()
             },
-            vec![Emit(WebEvent::FaviconChanged(url))],
+            (url != page.favicon)
+                .then(|| Emit(WebEvent::FaviconChanged(url.clone())))
+                .into_iter()
+                .chain((!url.is_empty()).then_some(NavEffect::FetchFavicon(url)))
+                .collect(),
         ),
         NavInput::Cursor(cursor) if cursor != page.cursor => (
             Page { cursor, ..page },
@@ -493,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn favicon_and_cursor_are_deduplicated() {
+    fn favicon_event_and_cursor_are_deduplicated_but_the_icon_refetches() {
         let (_, effects) = run(
             NavState::default(),
             vec![
@@ -508,9 +517,27 @@ mod tests {
             effects,
             vec![
                 E::Emit(WebEvent::FaviconChanged("https://a/i.ico".into())),
+                E::FetchFavicon("https://a/i.ico".into()),
+                E::FetchFavicon("https://a/i.ico".into()),
                 E::Emit(WebEvent::CursorChanged(Cursor::Pointer)),
                 E::Emit(WebEvent::CursorChanged(Cursor::Default)),
             ]
+        );
+    }
+
+    #[test]
+    fn an_empty_favicon_url_fetches_nothing() {
+        let state = NavState {
+            page: Page {
+                favicon: "https://a/i.ico".into(),
+                ..Page::default()
+            },
+            ..NavState::default()
+        };
+        let (_, effects) = transition(state, I::Favicon(String::new()));
+        assert_eq!(
+            effects,
+            vec![E::Emit(WebEvent::FaviconChanged(String::new()))]
         );
     }
 

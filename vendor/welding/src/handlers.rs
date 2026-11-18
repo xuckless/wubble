@@ -38,7 +38,10 @@ use crate::downloads::{DownloadControl, DownloadOp};
 use crate::error::WeldError;
 use crate::held::{Answer, Held, RequestId};
 use crate::permissions::{Pending, PermissionKind};
-use crate::surface::{CefSurfaceConfig, CefSurfaceEvent, MenuSource, NavigationEvent, WebEventQueue};
+use crate::surface::{
+    CefSurfaceConfig, CefSurfaceEvent, MenuSource, NavigationEvent, RequestAction, RequestFilter,
+    ResourceRequest, WebEventQueue,
+};
 
 fn push(events: &WebEventQueue, event: NavigationEvent) {
     events.push(CefSurfaceEvent::Navigation(event));
@@ -433,9 +436,16 @@ impl SharedHandlers {
         requests: Arc<Requests>,
         scripts: Arc<crate::app::PendingScripts>,
         metrics: Arc<Mutex<crate::view::ViewMetrics>>,
+        // wubble change: checks each request before it is sent.
+        request_filter: Option<RequestFilter>,
     ) -> Self {
         Self {
-            request: WeldRequestHandler::new(events.clone(), requests.clone(), scripts),
+            request: WeldRequestHandler::new(
+                events.clone(),
+                requests.clone(),
+                scripts,
+                request_filter,
+            ),
             download: WeldDownloadHandler::new(events.clone(), requests.clone()),
             permission: WeldPermissionHandler::new(events.clone(), requests.clone()),
             context_menu: WeldContextMenuHandler::new(events.clone(), requests.clone(), metrics),
@@ -452,9 +462,32 @@ cef::wrap_request_handler! {
         events: Arc<WebEventQueue>,
         requests: Arc<Requests>,
         scripts: Arc<crate::app::PendingScripts>,
+        request_filter: Option<RequestFilter>,
     }
 
     impl RequestHandler {
+        // wubble change: a resource-request handler only when the host set
+        // a filter, so without one CEF's default handling is untouched.
+        // Shape from cefclient `ClientHandler::GetResourceRequestHandler`
+        // (chromiumembedded/cef, BSD-3-Clause); no code copied.
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut cef::Request>,
+            is_navigation: ::std::os::raw::c_int,
+            _is_download: ::std::os::raw::c_int,
+            request_initiator: Option<&cef::CefString>,
+            _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
+        ) -> Option<cef::ResourceRequestHandler> {
+            let filter = self.request_filter.clone()?;
+            Some(WeldResourceRequestHandler::new(
+                filter,
+                opt_string(request_initiator),
+                is_navigation != 0,
+            ))
+        }
+
         fn auth_credentials(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -531,6 +564,100 @@ cef::wrap_request_handler! {
                 error_string,
             });
             self.scripts.fail_all("renderer process terminated");
+        }
+    }
+}
+
+// ── Resource-request handler (wubble change) ──────────────────────────────
+
+/// wubble change: the top-level page a request belongs to. A main-frame
+/// request is its own top page. Otherwise the main frame's URL, unless the
+/// request's own first party (`site_for_cookies`: scheme + registrable
+/// domain) names another site: on the IO thread the browser-side frame URL
+/// can still be the previous page's right after a cross-document commit,
+/// while the request carries the page it was made for (Brave uses the
+/// request's top-frame origin for the same reason). The main frame's URL is
+/// kept when it agrees, since it has the full host a per-site switch needs.
+/// Last comes the initiator (no browser for service-worker requests).
+fn top_url(
+    url: &str,
+    main_frame: bool,
+    main_frame_url: Option<String>,
+    first_party: &str,
+    initiator: &str,
+) -> String {
+    if main_frame {
+        return url.to_owned();
+    }
+    let first_party = (!first_party.is_empty()).then_some(first_party);
+    match (main_frame_url.filter(|u| !u.is_empty()), first_party) {
+        (Some(main), Some(site)) if !in_site(url_host(&main), url_host(site)) => site.to_owned(),
+        (Some(main), _) => main,
+        (None, Some(site)) => site.to_owned(),
+        (None, None) => initiator.to_owned(),
+    }
+}
+
+/// wubble change: the host of an absolute URL (no userinfo handling: CEF's
+/// frame and first-party URLs carry none).
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', ':', '?', '#']).next().unwrap_or_default()
+}
+
+/// wubble change: whether `host` is `site` or one of its subdomains.
+fn in_site(host: &str, site: &str) -> bool {
+    let (host, site) = (host.to_ascii_lowercase(), site.to_ascii_lowercase());
+    host == site || host.strip_suffix(site.as_str()).is_some_and(|h| h.ends_with('.'))
+}
+
+cef::wrap_resource_request_handler! {
+    struct WeldResourceRequestHandler {
+        filter: RequestFilter,
+        initiator: String,
+        is_navigation: bool,
+    }
+
+    impl ResourceRequestHandler {
+        // Called on the IO thread; the only place CEF lets the request be
+        // changed (a changed URL is a redirect).
+        fn on_before_resource_load(
+            &self,
+            browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            _callback: Option<&mut cef::Callback>,
+        ) -> cef::ReturnValue {
+            let Some(request) = request else { return cef::ReturnValue::CONTINUE };
+            let url = cef_string(request.url());
+            let resource_type = request.resource_type();
+            let main_frame = resource_type == cef::ResourceType::MAIN_FRAME;
+            let main_frame_url = browser
+                .as_ref()
+                .and_then(|b| b.main_frame())
+                .map(|f| cef_string(f.url()));
+            let checked = ResourceRequest {
+                top_url: top_url(
+                    &url,
+                    main_frame,
+                    main_frame_url,
+                    &cef_string(request.first_party_for_cookies()),
+                    &self.initiator,
+                ),
+                url,
+                initiator: self.initiator.clone(),
+                resource_type: resource_type.get_raw(),
+                is_navigation: self.is_navigation,
+                browser_id: browser.map_or(0, |b| b.identifier()),
+            };
+            match self.filter.check(&checked) {
+                RequestAction::Allow => cef::ReturnValue::CONTINUE,
+                RequestAction::Cancel => cef::ReturnValue::CANCEL,
+                RequestAction::Redirect(to) => {
+                    request.set_url(Some(&cef::CefString::from(to.as_str())));
+                    cef::ReturnValue::CONTINUE
+                }
+            }
         }
     }
 }
@@ -939,5 +1066,34 @@ cef::wrap_dialog_handler! {
             }
             1
         }
+    }
+}
+
+// wubble change: the request filter's top-page rule.
+#[cfg(test)]
+mod request_filter_tests {
+    use super::top_url;
+
+    #[test]
+    fn top_url_prefers_the_request_then_main_frame_then_initiator() {
+        let main = Some("https://page.test/".to_owned());
+        assert_eq!(top_url("https://new.test/", true, main.clone(), "https://x.test/", "https://i.test"), "https://new.test/");
+        assert_eq!(top_url("https://cdn.test/a.js", false, main.clone(), "", "https://i.test"), "https://page.test/");
+        assert_eq!(top_url("https://cdn.test/a.js", false, Some(String::new()), "", "https://i.test"), "https://i.test");
+        assert_eq!(top_url("https://cdn.test/a.js", false, None, "", ""), "");
+        assert_eq!(top_url("https://cdn.test/a.js", false, None, "https://page.test/", "https://i.test"), "https://page.test/");
+    }
+
+    #[test]
+    fn top_url_trusts_the_request_first_party_over_a_stale_main_frame() {
+        // The frame still reads the previous page A while B's requests run.
+        let stale = Some("https://a.test/old".to_owned());
+        assert_eq!(top_url("https://ads.test/x.js", false, stale, "https://b.test/", ""), "https://b.test/");
+        // Agreeing site: the frame URL keeps its full host (per-site switch).
+        let main = Some("https://WWW.b.test:8443/page".to_owned());
+        assert_eq!(top_url("https://ads.test/x.js", false, main.clone(), "https://b.test/", ""), "https://WWW.b.test:8443/page");
+        // A suffix that is not a subdomain is another site.
+        let main = Some("https://notb.test/".to_owned());
+        assert_eq!(top_url("https://ads.test/x.js", false, main, "https://b.test/", ""), "https://b.test/");
     }
 }

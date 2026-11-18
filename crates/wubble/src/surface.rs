@@ -425,6 +425,8 @@ pub fn route(event: PageEvent) -> Routed {
             line,
         } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
         PageEvent::DragStarted { .. } => Routed::Ignore,
+        // Nothing in the shell prints yet.
+        PageEvent::FaviconImage(_) | PageEvent::PdfPrinted { .. } => Routed::Ignore,
     }
 }
 

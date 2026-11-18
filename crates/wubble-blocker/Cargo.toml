@@ -13,3 +13,6 @@ adblock = { version = "0.13", default-features = false, features = ["embedded-do
 serde_json.workspace = true
 thiserror = "2"
 url = "2"
+# Fetches filter lists, only when `blocker.lists_auto_update` is on; already in
+# Cargo.lock through cef-dll-sys.
+ureq = "3"

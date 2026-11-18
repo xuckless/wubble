@@ -1,6 +1,7 @@
 mod backdrop;
 mod bar;
 mod bind;
+mod blocking;
 mod chooser;
 mod cli;
 mod host;
@@ -740,8 +741,10 @@ fn run(
     // The first pump runs once the loop does; from there CEF schedules every
     // pump itself.
     slint::invoke_from_event_loop(|| deliver(Wake::Schedule(0)))?;
+    let blocking = blocking::Blocking::new();
     let engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
+        content_filter: Some(blocking.clone()),
         ..config?
     })?;
     // A database that cannot be opened or loaded is left alone: the
@@ -753,6 +756,7 @@ fn run(
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
     });
+    blocking.start(profile, &loaded.settings.blocker);
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
     let glass = Rc::new(RefCell::new(backdrop::choose(&gpu, &window)));

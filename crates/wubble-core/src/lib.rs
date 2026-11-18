@@ -4,6 +4,7 @@
 
 pub mod action;
 pub mod download;
+pub mod favicon;
 pub mod import;
 pub mod keys;
 pub mod lifecycle;

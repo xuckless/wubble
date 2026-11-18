@@ -25,9 +25,12 @@ use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_core::zoom::ZoomTable;
 use wubble_store::{
-    ClosedTab, KeybindingOverrides, LiveSuggestions, SearchEngineChoice, Setting,
-    SidebarModeSetting, SidebarWidth, SiteZoom, Store, Transition,
+    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, KeybindingOverrides,
+    LiveSuggestions, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, Store,
+    Transition,
 };
+
+use crate::blocking::BlockerSettings;
 
 /// Session changes after which the session is saved at once.
 pub const SAVE_AFTER_CHANGES: u32 = 20;
@@ -130,6 +133,7 @@ pub struct Settings {
     pub keybinding_overrides: Vec<String>,
     /// Per-site zoom (`wubble_core::zoom`).
     pub site_zoom: ZoomTable,
+    pub blocker: BlockerSettings,
 }
 
 impl Default for Settings {
@@ -143,6 +147,7 @@ impl Default for Settings {
             },
             keybinding_overrides: KeybindingOverrides::default(),
             site_zoom: SiteZoom::default(),
+            blocker: BlockerSettings::default(),
         }
     }
 }
@@ -393,6 +398,11 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
         },
         keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
         site_zoom: store.setting::<SiteZoom>().await?,
+        blocker: BlockerSettings {
+            enabled: store.setting::<BlockerEnabled>().await?,
+            exceptions: store.setting::<BlockerExceptions>().await?,
+            lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
+        },
     };
     let site_permissions = store.site_permissions().await?.into_iter().collect();
     // No download of the last run is alive any more.

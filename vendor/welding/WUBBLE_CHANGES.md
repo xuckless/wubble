@@ -182,6 +182,27 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    Linux, macOS and Windows (`*/cef_backed.rs`) returns it from
    `keyboard_handler`. welding had no keyboard handler; the host needs it to
    run a page-first shortcut only when the page leaves the key alone.
+21. **Request filter.** `surface.rs`: new `ResourceRequest` (URL, top-level
+   page URL, initiator, CEF's raw `cef_resource_type_t`, navigation flag,
+   browser id), `RequestAction { Allow, Cancel, Redirect(url) }` and
+   `RequestFilter` (an `Arc<dyn Fn + Send + Sync>` with a manual `Debug`,
+   `check` catches a panic and allows when panics unwind; under
+   `panic = "abort"` a panic aborts, so filters must be panic-free), re-exported from `lib.rs`, and
+   `CefSurfaceConfig::request_filter` (default `None`). `handlers.rs`:
+   `WeldRequestHandler::resource_request_handler` returns a new
+   `WeldResourceRequestHandler` only when a filter is set (otherwise `NULL`,
+   CEF's default handling, as before); its `on_before_resource_load` (IO
+   thread) builds the request (top page = the request URL for a main-frame
+   request, else the main frame's URL unless the request's
+   `first_party_for_cookies` names another site (the frame URL can be stale
+   right after a commit), else that first party, else the initiator), runs the filter
+   and maps `Cancel` to `RV_CANCEL` and `Redirect` to `set_url` + `RV_CONTINUE`.
+   `SharedHandlers::build` takes the filter; the Linux, macOS and Windows
+   producers pass `config.surface.request_filter`. Shape from cefclient
+   `ClientHandler::GetResourceRequestHandler` (BSD-3-Clause), no code copied.
+   Lets the host block or rewrite requests (wubble's content blocker).
+   Tests: default `None`, `Debug`, panic allows (unwinding builds), the top-page rule
+   including a stale main-frame URL.
 
 ## Not changed, on purpose
 

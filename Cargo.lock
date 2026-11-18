@@ -7884,6 +7884,7 @@ dependencies = [
  "rfd",
  "slint",
  "tempfile",
+ "wubble-blocker",
  "wubble-core",
  "wubble-engine",
  "wubble-gfx",
@@ -7898,6 +7899,7 @@ dependencies = [
  "adblock",
  "serde_json",
  "thiserror 2.0.21",
+ "ureq",
  "url",
 ]
 

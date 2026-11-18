@@ -15,6 +15,7 @@ wubble-ui.workspace = true
 slint.workspace = true
 clap.workspace = true
 wubble-store.workspace = true
+wubble-blocker.workspace = true
 # Drives the store's async methods on its own thread; already in Cargo.lock
 # through wubble-store's tests.
 pollster = "0.4"

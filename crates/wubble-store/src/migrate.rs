@@ -11,6 +11,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (5, include_str!("../sql/005_site_permissions.sql")),
     (6, include_str!("../sql/006_downloads.sql")),
     (7, include_str!("../sql/007_splits.sql")),
+    (8, include_str!("../sql/008_favicons.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -85,6 +86,8 @@ mod tests {
                 "import_marks",
                 "site_permissions",
                 "downloads",
+                "favicons",
+                "favicon_origins",
             ] {
                 let mut rows = conn
                     .query(

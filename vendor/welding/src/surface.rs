@@ -4,7 +4,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
-use std::{collections::VecDeque, sync::Mutex};
+use std::{collections::VecDeque, sync::{Arc, Mutex}};
 
 use dpi::PhysicalSize;
 
@@ -685,6 +685,61 @@ pub struct ImeComposition {
     pub selection_end: u32,
 }
 
+/// wubble change, see `WUBBLE_CHANGES.md`: one network request CEF is about
+/// to send, as [`RequestFilter`] sees it. Built on CEF's IO thread.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ResourceRequest {
+    pub url: String,
+    /// The top-level page the request belongs to: the request's own URL for
+    /// a main-frame navigation, else the main frame's URL, else the
+    /// initiator. Empty when CEF names none of them.
+    pub top_url: String,
+    /// The origin that initiated the request, as CEF reports it (may be empty).
+    pub initiator: String,
+    /// CEF's raw `cef_resource_type_t`, mapped by the host.
+    pub resource_type: u32,
+    pub is_navigation: bool,
+    /// CEF's browser identifier, 0 when the request has no browser
+    /// (service workers).
+    pub browser_id: i32,
+}
+
+/// wubble change: what to do with a [`ResourceRequest`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequestAction {
+    Allow,
+    Cancel,
+    /// Load this URL instead (CEF treats a changed URL as a redirect).
+    Redirect(String),
+}
+
+/// wubble change: decides every request before it is sent. Called on CEF's
+/// IO thread, so it must not wait on the host's UI thread. It should not
+/// panic: see [`RequestFilter::check`].
+#[derive(Clone)]
+pub struct RequestFilter(pub(crate) Arc<dyn Fn(&ResourceRequest) -> RequestAction + Send + Sync>);
+
+impl RequestFilter {
+    pub fn new(filter: impl Fn(&ResourceRequest) -> RequestAction + Send + Sync + 'static) -> Self {
+        Self(Arc::new(filter))
+    }
+
+    /// Runs the filter. With unwinding, a panic is caught and allows the
+    /// request, so it never unwinds into CEF. Under `panic = "abort"`
+    /// (wubble's release profile) nothing is caught and a panic aborts the
+    /// process, so the filter itself has to be panic-free.
+    pub fn check(&self, request: &ResourceRequest) -> RequestAction {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.0)(request)))
+            .unwrap_or(RequestAction::Allow)
+    }
+}
+
+impl std::fmt::Debug for RequestFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RequestFilter")
+    }
+}
+
 /// Configuration for a single CEF browser surface.
 pub struct CefSurfaceConfig {
     pub initial_url: String,
@@ -774,6 +829,10 @@ pub struct CefSurfaceConfig {
     /// host calls `SendExternalBeginFrame` (e.g. once per host vsync).
     /// wubble change, see `WUBBLE_CHANGES.md`.
     pub external_begin_frame: bool,
+    /// Checks every sub-resource and navigation request before CEF sends
+    /// it. `None`, the default, installs no resource-request handler.
+    /// wubble change, see `WUBBLE_CHANGES.md`.
+    pub request_filter: Option<RequestFilter>,
 }
 
 impl Default for CefSurfaceConfig {
@@ -792,6 +851,7 @@ impl Default for CefSurfaceConfig {
             scale_factor: 1.0,
             windowless_frame_rate: 60,
             external_begin_frame: false,
+            request_filter: None,
         }
     }
 }
@@ -2235,6 +2295,24 @@ mod request_vocabulary_tests {
         assert_eq!(context_menu_media(1), ContextMenuMedia::Image);
         assert_eq!(context_menu_media(6), ContextMenuMedia::Plugin);
         assert_eq!(context_menu_media(99), ContextMenuMedia::None);
+    }
+
+    // wubble change: the request filter.
+    #[test]
+    fn no_request_filter_by_default() {
+        assert!(CefSurfaceConfig::default().request_filter.is_none());
+        assert_eq!(format!("{:?}", RequestFilter::new(|_| RequestAction::Allow)), "RequestFilter");
+    }
+
+    #[test]
+    fn a_panicking_request_filter_allows() {
+        let request = ResourceRequest { url: "https://a.test/".into(), ..Default::default() };
+        let cancel = RequestFilter::new(|r| {
+            if r.url.contains("a.test") { RequestAction::Cancel } else { RequestAction::Allow }
+        });
+        assert_eq!(cancel.check(&request), RequestAction::Cancel);
+        let panics = RequestFilter::new(|_| panic!("filter bug"));
+        assert_eq!(panics.check(&request), RequestAction::Allow);
     }
 }
 
