@@ -54,6 +54,14 @@ export global Spacing {
 
 export global Sizes {
     out property <length> sidebar-width: 260px;
+    out property <length> sidebar-min: 200px;
+    out property <length> sidebar-max: 360px;
+    // Width of the draggable seam handle, and of the hover strip that reveals a hidden sidebar.
+    out property <length> seam-grab: 12px;
+    out property <length> edge-zone: 6px;
+    out property <length> peek-shadow: 24px;
+    // Distance between Space dots.
+    out property <length> space-pitch: space-dot + Spacing.s3;
     out property <length> row-height: 36px;
     out property <length> pinned-tile: 48px;
     out property <length> address-height: 40px;
@@ -98,4 +106,7 @@ export global Motion {
     out property <duration> overlap-in: 240ms;
     out property <duration> overlap-out: 190ms;
     out property <duration> stagger: 30ms;
+    // Press feedback on buttons and rows (pack Tokens.dc.html: 0.97 over 200 ms).
+    out property <duration> press: 200ms;
+    out property <float> press-scale: 0.97;
 }

@@ -10,6 +10,8 @@ export component RowBase inherits Rectangle {
     border-radius: Radius.sm;
     background: root.active ? Colors.hover-fill : transparent;
     animate background { duration: Motion.fast; }
+    transform-scale: ta.pressed ? Motion.press-scale : 1;
+    animate transform-scale { duration: Motion.press; easing: ease-out; }
 
     states [
         pressed when ta.pressed: {

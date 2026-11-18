@@ -6,6 +6,7 @@ pub mod lifecycle;
 pub mod model;
 pub mod motion;
 pub mod session;
+pub mod shell;
 pub mod sleep;
 pub mod space;
 pub mod suggest;

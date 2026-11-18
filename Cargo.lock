@@ -7453,6 +7453,7 @@ dependencies = [
  "i-slint-backend-testing",
  "slint",
  "slint-build",
+ "wubble-core",
 ]
 
 [[package]]

@@ -42,6 +42,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Search | First-run choice between Google and DuckDuckGo. Suggestions are local (tabs/history/bookmarks); live engine suggestions exist behind a flag, off by default, and never send typed addresses |
 | Network on its own | No telemetry. Crash reports are opt-in and open a GitHub issue; designed at ship time (M7) |
 | Tab sleeping | Freeze after 1 min hidden, discard after 15 min, discard immediately under critical memory pressure. Pinned tabs freeze but never discard. Busy tabs (audio, capture) are left alone |
+| Shell animation | One rendering notifier, owned by `wubble_ui::driver`, steps the `wubble_core::shell` spring bank once per rendered frame and requests a redraw only while a spring moves. Press feedback (0.97, 200 ms) is a Slint `animate` in `RowBase`, not a spring. Compact-mode lifecycle is a pure core transition mirrored into a Slint enum; Slint `states` only restyle |
 | CEF sandbox | Off on Linux for now: welding `CefSandboxMode::UnsandboxedTrustedContent` (`no_sandbox=1`) in both `wubble-engine` (`SANDBOX`) and `wubble-helper`. The constant is duplicated on purpose (the helper must stay tiny and cannot depend on `wubble-engine`, which pulls in wgpu); the sandbox item must change both. Turned on by the M1 item "Sandbox enabled on all platforms" |
 | CEF cache directory | Always wubble's own `root_cache_path`, never CEF's shared default `~/.config/cef_user_data` (its process-singleton lock made concurrent runs fail or crash). Browser: `$XDG_DATA_HOME/wubble/cef`, else `~/.local/share/wubble/cef` (Linux, via the `Platform` trait; macOS/Windows not yet). `--smoke boot`: a fresh per-process temp directory, removed on exit, so concurrent smokes never share the lock. Second-instance handling (handing a relaunch to the running browser) is not built yet |
 | CEF message pump (interim) | A repeating 8 ms `slint::Timer` calls `Engine::tick` (`do_message_loop_work`), with CEF's `external_message_pump` on. Not schedule-driven (`OnScheduleMessagePumpWork`) because welding's `CefRuntime` owns the CEF `App` and exposes no browser-process handler, and the welding producers need that runtime. The same polled pump is what welding's README and the cef-rs `osr` example use. Replaced by compositor-driven ticks in "Frame pacing" |
@@ -133,7 +134,7 @@ Daily-drive set
 - [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; glass, results wiring and actions remain)
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
 - [ ] Suggestion fetch effect (run `Source::Remote` requests, debounce, cancel stale) and the settings toggle for the flag
-- [ ] Compact mode: sidebar/toolbar hide and reveal; the stretchy seam ("Room to play") for sidebar width
+- [x] Compact mode: sidebar hide and reveal; straight resizable seam ("Room to play", rubber band + spring). Bending string, wobble and stretch still open
 - [ ] URL pill (Thin glass): host in Ink, rest in Haze
 - [ ] Web view inset: radius 14, 8 px gap from glass
 - [x] Turso schema + migrations (`wubble-store`): session, history, bookmarks table, settings
