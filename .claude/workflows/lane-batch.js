@@ -3,7 +3,7 @@ export const meta = {
   description: 'wubble batch: (research) -> implement -> correctness + simplicity review -> refix, per item in lane worktrees, then merge lanes into one integration branch and run the full check round',
   whenToUse: 'A batch of independent roadmap items. Pass args {batch, integration_branch, base, lanes, items}; see AGENTS.md "Orchestrating a batch".',
   phases: [
-    { title: 'Research', detail: 'only for items with research: true; verifies APIs and writes a plan' },
+    { title: 'Research', detail: 'copy first: find code to reuse from other browsers/projects, verify APIs, write a plan' },
     { title: 'Implement', detail: 'per lane worktree, items in sequence' },
     { title: 'Review', detail: 'two lenses per item: correctness/bugs and simplicity' },
     { title: 'Refix', detail: 'apply confirmed findings, re-test, commit' },
@@ -28,8 +28,8 @@ export const meta = {
 // `hard` gets Opus medium for implement, refix and the correctness review. Any stage can be
 // overridden per item: models: { research, implement, refix, review_correctness, review_simplicity },
 // each { model, effort } (e.g. { model: 'haiku', effort: 'low' } for mechanical items).
-// Research runs only when the item sets research: true (unknown APIs, spikes); otherwise the
-// spec is the plan.
+// Research runs for every item unless it sets research: false. Research is COPY FIRST: find
+// existing code in other browsers/projects to copy or port before designing anything new.
 // A lane stops at the first item that ends 'blocked': later items in a lane build on earlier ones.
 
 const A = args || {}
@@ -49,6 +49,8 @@ Hard rules:
 - No network requests by wubble itself unless the spec says so. Dependencies: add only what the spec needs; slint / wgpu / welding / cef versions are pinned together, do not bump them.
 - Crate boundaries: only wubble-engine names CEF types; only wubble-gfx touches native texture handles; wubble-core has no CEF, wgpu or Slint.
 - Commits: plain \`git commit\` with the repo's configured identity, short imperative subject, NO trailers (no Co-Authored-By, no links). Never git stash, never push, never touch other branches.
+- Copy first: where the research note names code to copy or port, do that rather than writing your own. Every copied or ported piece gets a source comment (project, path, licence) and an entry in THIRD_PARTY_NOTICES.md at the repo root.
+- No test may depend on machine speed: no timing thresholds, fps assertions or benchmarks in `cargo test` or CI. Performance is measured by hand on the owner's Linux box or the macOS box, never asserted.
 - If something cannot work as specified, stop and report status 'blocked' with evidence (error text, API docs, source lines). Do not fake a result or silently substitute a different approach.
 `
 
@@ -109,8 +111,8 @@ const REFIX_SCHEMA = {
 }
 
 const LENSES = [
-  { key: 'correctness', stage: 'review_correctness', text: 'CORRECTNESS / BUG lens: try hard to break it. Logic errors and off-by-ones; state transitions that are missing, unreachable or wrong; unsafe and FFI misuse (CEF reference counts, raw handles, leaked file descriptors, panics crossing an FFI boundary); thread affinity (CEF UI thread vs the Slint event loop) and lifetime of anything shared between them; resize, zero-size, HiDPI and shutdown-order edge cases; error paths that are swallowed; numeric edge cases (NaN, huge dt, overflow); behaviour that contradicts the spec or a decision in TODO.md; tests that pass for the wrong reason or assert nothing; code that cannot compile on macOS or Windows because it is not cfg-gated.' },
-  { key: 'simplicity', stage: 'review_simplicity', text: 'SIMPLICITY lens: is this the least code that meets the spec? Overengineering, premature abstraction, speculative options nobody asked for, dead code, needless dependencies, a simpler equivalent. Check AGENTS.md "Code principles" one by one: imperative UI where a Slint binding would do (1); an implicit state machine, i.e. behaviour depending on several booleans/Options or on callback order instead of one enum plus a pure transition function (2); effects executed inside core logic instead of returned as values (3); the same state owned in two places (4); duplicated code or duplicated knowledge such as a constant, token or table repeated (5). Also crate-boundary violations and comments that restate the code.' },
+  { key: 'correctness', stage: 'review_correctness', text: 'CORRECTNESS / BUG lens: try hard to break it. Logic errors and off-by-ones; state transitions that are missing, unreachable or wrong; unsafe and FFI misuse (CEF reference counts, raw handles, leaked file descriptors, panics crossing an FFI boundary); thread affinity (CEF UI thread vs the Slint event loop) and lifetime of anything shared between them; resize, zero-size, HiDPI and shutdown-order edge cases; error paths that are swallowed; numeric edge cases (NaN, huge dt, overflow); behaviour that contradicts the spec or a decision in TODO.md; tests that pass for the wrong reason or assert nothing; tests that depend on machine speed or timing; code that cannot compile on macOS or Windows because it is not cfg-gated.' },
+  { key: 'simplicity', stage: 'review_simplicity', text: 'SIMPLICITY lens: is this the least code that meets the spec? Overengineering, premature abstraction, speculative options nobody asked for, dead code, needless dependencies, a simpler equivalent. Check AGENTS.md "Code principles" one by one: imperative UI where a Slint binding would do (1); an implicit state machine, i.e. behaviour depending on several booleans/Options or on callback order instead of one enum plus a pure transition function (2); effects executed inside core logic instead of returned as values (3); the same state owned in two places (4); duplicated code or duplicated knowledge such as a constant, token or table repeated (5). Also: hand-written code where the research note named something to copy or an existing crate does it; copied code missing attribution or a THIRD_PARTY_NOTICES.md entry; crate-boundary violations; comments that restate the code.' },
 ]
 
 const tier = (it) => ({ model: it.hard ? 'opus' : 'sonnet', effort: 'medium' })
@@ -130,8 +132,8 @@ const SPEC_AS_NOTE = { note_path: '(none: the spec is the plan)', plan: 'Follow 
 
 async function research(lane, id) {
   const it = A.items[id]
-  if (!it.research) return SPEC_AS_NOTE
-  return agent(`${COMMON}\nLane worktree (read-only for you; do not edit code): ${lane.wt}\n\nRESEARCH: ${it.title}\nSpec: ${it.spec}\n\nVerify every assumption in the spec against real sources: the crate sources under ~/.cargo/registry/src (exact types, functions, feature flags), docs.rs, upstream repos and examples (WebSearch/WebFetch allowed). Quote the signatures you will rely on. Decide the simplest correct design, the tests, and the risks. Write the note to ${NOTES}/${id}.md (sections: Verified facts (with sources), Design, Simplicity check, Risks, Tests, Out of scope). If the spec is impossible as written, say so in scope_change with evidence.`,
+  if (it.research === false) return SPEC_AS_NOTE
+  return agent(`${COMMON}\nLane worktree (read-only for you; do not edit code): ${lane.wt}\n\nRESEARCH: ${it.title}\nSpec: ${it.spec}\n\nCOPY FIRST. Before designing anything, find existing code that already does this and can be copied or ported: Chromium and CEF (cefclient/cefsimple, BSD), Firefox and Zen (MPL-2.0), Brave (MPL-2.0), Servo, the cef-rs and welding/grafting examples, Slint examples, Zed, and any well-used crate. Licence must be compatible with GPL-3.0-only (MIT, BSD, Apache-2.0, MPL-2.0, GPL-3.0 are fine; no proprietary or source-available code, and nothing from Arc). Prefer, in order: use a crate as a dependency; copy/port a proven implementation with attribution; write new code only for what is left. For each thing to copy give the exact source (repo URL, path, function, commit or version) and its licence. Then verify every assumption in the spec against real sources: the crate sources under ~/.cargo/registry/src (exact types, functions, feature flags), docs.rs, upstream repos and examples (WebSearch/WebFetch allowed). Quote the signatures you will rely on. Decide the simplest correct design, the tests, and the risks. Write the note to ${NOTES}/${id}.md (sections: Copy sources (what, where, licence), Verified facts (with sources), Design, Simplicity check, Risks, Tests, Out of scope). If the spec is impossible as written, say so in scope_change with evidence.`,
     { label: `research:${id}`, phase: 'Research', schema: RESEARCH_SCHEMA, ...STAGE(it).research })
 }
 

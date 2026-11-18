@@ -37,6 +37,9 @@ its "Decided" table before proposing architecture.
 
 ## Working rules
 
+- **Copy first.** Before writing anything non-trivial, look for an existing crate or a proven implementation in another browser/project (Chromium, CEF, Firefox, Zen, Brave, Servo, Zed) and use or port it. Licence must be GPL-3.0-compatible (MIT, BSD, Apache-2.0, MPL-2.0); nothing proprietary. Copied or ported code carries a source comment and an entry in `THIRD_PARTY_NOTICES.md`.
+- **No performance-dependent tests.** Nothing in `cargo test` or CI may assert timings, fps or throughput. Performance is measured by hand on the owner's Linux machine or the macOS machine (`ssh pixl-bot`).
+- **Sprint mode.** Build breadth first to spec, each item reviewed for correctness and simplicity; a hardening pass over the whole product comes at the end of the build-out.
 - Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 154). Do not bump one alone.
 - No CPU readback on the frame path. A fallback `OnPaint` frame is a bug to count and log.
 - 120 Hz budget: 8.33 ms per frame. Glass quality degrades before animation drops a frame.
@@ -56,5 +59,5 @@ the lanes into one integration branch and runs the full check round.
 - A lane is a git worktree under `~/Dev/wubble-wt/` on its own branch; items in a lane run in order, lanes run in parallel. Put items that touch the same files in the same lane.
 - The lead creates the integration branch and the lane worktrees, launches the workflow, then reviews the integration diff before merging to `main` and pushing.
 - Each stage uses the cheapest model that can do it: Sonnet medium by default, Opus medium for items marked `hard`, per-stage overrides (including Haiku) via the item's `models`.
-- Research is opt-in per item (`research: true`) for spikes and unknown APIs.
+- Research runs for every item unless it sets `research: false`, and is copy-first: it looks for code to reuse before designing anything.
 - All lanes share `CARGO_TARGET_DIR=~/Dev/wubble/target`, so builds queue instead of competing.
