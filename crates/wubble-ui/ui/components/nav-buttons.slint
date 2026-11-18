@@ -29,11 +29,9 @@ export component IconButton inherits PressableButton {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             path: root.icon-path;
-            tint: root.hovered && root.enabled ? Palette.ink : Palette.mist;
-            animate tint {
-                duration: Shell.icon-button-ms;
-                easing: Motion.easeOut;
-            }
+            // ink at rest: the design's `.wb button { color: inherit }` outranks `.wb-ib`'s mist,
+            // so its buttons render in the page's ink (notes/ref-settings.png)
+            tint: Palette.ink;
         }
     }
 }

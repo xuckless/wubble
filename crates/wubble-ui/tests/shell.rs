@@ -386,10 +386,10 @@ fn margin_in_rounded(
 /// browser.css `.wb-light`: 12 px dots; the gap is 8, 6 on the rail (`.wb-side-rail .wb-lights`).
 const LIGHT: f32 = 12.0;
 
-/// The header holds the lights and the four nav buttons, and they never meet; the downloads button
-/// is the footer's secondary action (`.wb-side-bottom > .wb-ib`, 36 square), next to the settings
-/// button at its end (2 apart, the tiles' gap), clear of the Space tiles. At the default width
-/// and at the minimum.
+/// The header holds the lights and the four nav buttons, and they never meet; the footer's buttons
+/// (`.wb-side-bottom > .wb-ib`, 36 square) sit side by side at its end, downloads, dev tools
+/// (the design's Source) and settings last, clear of the Space tiles. At the default width and
+/// at the minimum.
 fn header_and_footer(app: &AppWindow, driver: &Shared) {
     use wubble_ui::DownloadItem;
     app.set_downloads(ModelRc::from([DownloadItem::default()].as_slice()));
@@ -410,7 +410,14 @@ fn header_and_footer(app: &AppWindow, driver: &Shared) {
         );
         assert_eq!(e.settings_end, e.end - SIDE_PAD, "at {raw}");
         assert_eq!(e.settings_end - e.settings, 36.0, "at {raw}");
-        assert_eq!(e.downloads_end, e.settings - 2.0, "at {raw}");
+        // the dev tools button (the design's Source) between them, all three side by side;
+        // at the minimum there is no room for it beside downloads, and it gives way
+        let tools = if raw == SIDEBAR_DEFAULT as f32 {
+            36.0
+        } else {
+            0.0
+        };
+        assert_eq!(e.downloads_end, e.settings - tools, "at {raw}");
         assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
         assert!(
             e.spaces_end < e.downloads,
@@ -942,12 +949,6 @@ fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
     assert!(app.get_seam_bowed());
     let table: Vec<f32> = app.get_seam_edge().iter().collect();
     assert!(table.len() > 1);
-    let step = app.get_seam_edge_step();
-    let edge = wubble_core::bow::EdgeTable {
-        y0: 0.0,
-        step: step.into(),
-        offset: table.clone(),
-    };
     pump(1);
     let held = app.get_side_edges();
     let pill = held.pill - rest.pill;
@@ -957,27 +958,10 @@ fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
         lights < pill,
         "the header rides less, nearer the end: {lights} {pill}"
     );
-    // the Slint-only outline reaches the sidebar's width plus the bend at the grab height
-    let outline = app.get_sidebar_outline();
-    assert!(!outline.is_empty());
-    // every command of the path takes x y pairs: the x values are the even ones
-    let numbers: Vec<f32> = outline
-        .split(|c: char| c.is_ascii_alphabetic() || c == ' ')
-        .filter_map(|n| n.parse().ok())
-        .collect();
-    let xs: Vec<f32> = numbers.iter().step_by(2).copied().collect();
-    let reach = xs.iter().copied().fold(f32::MIN, f32::max);
-    let bend = edge.max_abs() as f32;
-    assert!(
-        (reach - (app.get_sidebar_width() + bend)).abs() < 0.05,
-        "outline reaches {reach}, width {} + bend {bend}",
-        app.get_sidebar_width()
-    );
     button(app, x + 60.0, y, false);
     settle(app, driver);
     pump(1);
     assert_eq!(app.get_seam_edge().row_count(), 0);
-    assert!(app.get_sidebar_outline().is_empty());
     assert_eq!(app.get_side_edges().pill, rest.pill);
     pointer(app, 900.0, 300.0);
 

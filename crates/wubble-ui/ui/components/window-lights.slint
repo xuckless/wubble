@@ -1,7 +1,9 @@
 // The window controls: close, minimise, full screen. Ported from the design repo's
 // src/wubble/browser/chrome.tsx `Lights` and browser.css `.wb-light` (owner's own code,
 // xuckless/the-wallpaper-project @ 6c840da): 12 px circles, gap 8 (6 on the rail), 18 % white at
-// rest, coral / amber / mint with a glyph while the group is hovered, pressed squashed .8 x 1.15.
+// rest, coral / amber / mint while the group is hovered, pressed squashed .8 x 1.15. The glyph
+// shows at rest in ink, as the owner's screenshot of @ 21838b8 has it (notes/ref-settings.png:
+// ink glyphs in the 18 % dots), and turns dark over the colour.
 // The component only reports intent; wubble_ui::window acts on it.
 
 import { Palette, Motion } from "../tokens.slint";
@@ -37,9 +39,8 @@ component Light inherits Rectangle {
         path: root.icon-path;
         size: Shell.light-glyph;
         weight: root.icon-weight;
-        tint: Shell.light-glyph-ink;
-        opacity: root.group-hover ? 1 : 0;
-        animate opacity {
+        tint: root.group-hover ? Shell.light-glyph-ink : Palette.ink;
+        animate tint {
             duration: Shell.light-glyph-ms;
             easing: Motion.easeOut;
         }

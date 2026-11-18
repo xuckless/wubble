@@ -28,11 +28,10 @@ use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
 use wubble_core::beam::{self, Beam};
-use wubble_core::bow::{BOWED, Curve, EdgeTable};
+use wubble_core::bow::{BOWED, EdgeTable};
 use wubble_core::motion::{DT_CAP, OVERLAP_IN, overlap_in};
 use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
-use wubble_core::split::{Bow, string_rect_of};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
@@ -319,20 +318,9 @@ impl Driver {
         } else {
             window.set_seam_path(Default::default());
         }
-        // The sidebar's sections ride the string (design browser/chrome.tsx `[data-ride]`); its
-        // glass edge and the page's edge follow it (scene, page mask: the host reads the table).
+        // The sidebar's sections ride the string (design browser/chrome.tsx `[data-ride]`) and
+        // the page's edge follows it (the page mask: the host reads the table).
         window.set_seam_edge_step(edge.step as f32);
-        // Slint-only glass draws the sidebar's bowed outline (the scene bows its own glass).
-        window.set_sidebar_outline(if edge.is_straight() || w < 0.5 {
-            Default::default()
-        } else {
-            let bow = Bow {
-                bend: self.seam.bend.x,
-                gy: self.seam.gy - INSET,
-            };
-            let radius = f64::from(window.global::<Radius>().get_lg());
-            string_rect_of(Curve::Seam, 0.0, w, lh, radius, None, Some(bow)).into()
-        });
         sync(&self.edge, edge.offset);
 
         // the tab list's scroller (scroller.rs)
@@ -708,6 +696,14 @@ fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
         run(&d, &w, |s, _| {
             let now = s.now_ms();
             s.page_scroll.thumb_up(now);
+            None
+        })
+    });
+    let (d, w) = hook();
+    page.on_to(move |y| {
+        run(&d, &w, |s, _| {
+            let now = s.now_ms();
+            s.page_scroll.to(f64::from(y), now);
             None
         })
     });

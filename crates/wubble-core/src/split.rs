@@ -83,20 +83,7 @@ fn edge_up(curve: Curve, x: f64, b: f64, bot: f64, g: f64, top: f64) -> String {
 /// A rounded rect from x0 to x1 (height h, corner radius r) whose left and/or right edge is a
 /// bowed string. Positive bend bows right. Same string as `stringRect` in split.ts.
 pub fn string_rect(x0: f64, x1: f64, h: f64, r: f64, l: Option<Bow>, rt: Option<Bow>) -> String {
-    string_rect_of(Curve::Split, x0, x1, h, r, l, rt)
-}
-
-/// wubble change: [`string_rect`] with either design string (the sidebar glass's outline bows
-/// along the sidebar seam's).
-pub fn string_rect_of(
-    curve: Curve,
-    x0: f64,
-    x1: f64,
-    h: f64,
-    r: f64,
-    l: Option<Bow>,
-    rt: Option<Bow>,
-) -> String {
+    let curve = Curve::Split;
     let (top, bot) = (r, h - r);
     let g = |b: Option<Bow>| clamp(b.map(|b| b.gy).unwrap_or(h / 2.0), top + 4.0, bot - 4.0);
     let rr = 0f64.max(r.min((x1 - x0) / 2.0));

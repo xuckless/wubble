@@ -22,4 +22,6 @@ export global PageScroll {
     callback thumb-up();
     // back to the top at once (a new query, another page)
     callback reset();
+    // glide to a y inside the page (scroller.tsx `to`: a settings section picked in its list)
+    callback to(length);
 }

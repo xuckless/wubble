@@ -161,7 +161,12 @@ pub fn to_rect(item: &GlassItem) -> GlassRect {
         pressed: item.pressed,
         hover: item.hover,
         focus: item.focus,
-        bow: item.bow,
+        // transparent: no tint (the scene's black)
+        tint: if item.tint.alpha() == 0 {
+            [0.0; 3]
+        } else {
+            [item.tint.red(), item.tint.green(), item.tint.blue()].map(|c| f32::from(c) / 255.0)
+        },
     }
 }
 
@@ -242,16 +247,6 @@ impl Glass {
         if let Some(items) = glass {
             s.set_items(window, items);
         }
-        // the sidebar glass's right edge follows the seam's string (the driver's table)
-        use slint::Model as _;
-        let offset: Vec<f32> = window.get_seam_edge().iter().collect();
-        s.renderer
-            .scene
-            .set_bow((offset.len() > 1).then(|| wubble_gfx::Edge {
-                y0: 0.0,
-                step: window.get_seam_edge_step(),
-                offset: &offset,
-            }));
         let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint
@@ -377,7 +372,7 @@ mod tests {
             pressed: true,
             hover: false,
             focus: true,
-            bow: true,
+            tint: Default::default(),
             present: true,
         };
         assert_eq!(
@@ -389,9 +384,15 @@ mod tests {
                 pressed: true,
                 hover: false,
                 focus: true,
-                bow: true,
+                tint: [0.0; 3],
             }
         );
+        // a Space colour is mixed in (0..1); transparent is none
+        let tinted = GlassItem {
+            tint: slint::Color::from_rgb_u8(255, 0, 51),
+            ..item
+        };
+        assert_eq!(to_rect(&tinted).tint, [1.0, 0.0, 0.2]);
     }
 
     #[test]

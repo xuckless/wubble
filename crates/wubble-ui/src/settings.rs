@@ -102,14 +102,17 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
     item
 }
 
-/// The page's flat row list: each section's rows in order, the first naming the section.
+/// The page's flat row list: each section's rows in order, the first naming the section; every
+/// row carries its section's place on the page (the nav's row).
 pub fn setting_items(sections: &[SectionView]) -> Vec<SettingItem> {
     sections
         .iter()
-        .flat_map(|s| {
+        .enumerate()
+        .flat_map(|(index, s)| {
             let n = s.rows.len();
             s.rows.iter().enumerate().map(move |(i, row)| SettingItem {
                 section: if i == 0 { section_title(s.section) } else { "" }.into(),
+                section_index: index as i32,
                 first: i == 0,
                 last: i + 1 == n,
                 ..setting_item(row)

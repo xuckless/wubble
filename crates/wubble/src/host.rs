@@ -882,9 +882,11 @@ impl Host {
             .get(key)
             .cloned()
             .ok_or("the sidebar's glass never reached the scene")?;
-        // The band below the tab list and above the Space switcher: glass, no text.
+        // The window's glass under the sidebar, left of the page card: the band below the tab
+        // list and above the Space switcher, glass and no text.
         let scale = window.window().scale_factor();
-        let (x, w) = (side.x + side.radius, side.width - 2.0 * side.radius);
+        let x = side.x + side.radius;
+        let w = window.get_content_x() - side.radius - x;
         let (y, h) = (side.y + side.height * 0.45, side.height * 0.25);
         let region = pixels::Region {
             x: physical(x, scale),
@@ -1443,7 +1445,15 @@ impl Host {
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
         match action {
-            Some(settings_smoke::Action::Open) => self.perform(Action::OpenSettings),
+            Some(settings_smoke::Action::Open) => {
+                if crate::shot::requested() {
+                    let host = std::cell::RefCell::new(&mut *self);
+                    crate::shot::seed(&mut |c| host.borrow_mut().dispatch(c), || {
+                        host.borrow().model.clone()
+                    });
+                }
+                self.perform(Action::OpenSettings)
+            }
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
                 // which it calls back into. The read is queued after the write it causes.

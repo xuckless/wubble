@@ -162,8 +162,6 @@ export component AppWindow inherits Window {
     // glass edge and the page's edge follow it.
     in property <[length]> seam-edge;
     in property <length> seam-edge-step;
-    // The sidebar glass's bowed outline for Slint-only glass (string_rect_of), "" when straight.
-    in property <string> sidebar-outline;
     // A pane shows its frame cut along a bowed string (SplitPane.edge): the content area neither
     // clips nor fills, so the bulge shows. The host sets it with the panes.
     in property <bool> edge-bowed: false;
@@ -508,6 +506,24 @@ export component AppWindow inherits Window {
         background: Palette.abyss;
         border-radius: root.window-radius;
     }
+    // The active Space's colour: the window's glass, the split ring and the settings' controls.
+    property <color> space-accent: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : Palette.sky;
+    // The window's own glass (design desktop.tsx: one Regular surface the window's size, radius
+    // `radius.window`, shadow 1). The sidebar has no panel of its own: it is this glass, and the
+    // page card sits on it `Chrome.inset` from the window's top, right and bottom and from the
+    // sidebar (browser.css .wb-side / .wb-main: inset 8). Drawn by the scene under GlassKeys.sidebar,
+    // the key the scene's sidebar glass had; without the scene the plain ground shows.
+    GlassPanel {
+        key: GlassKeys.sidebar;
+        width: 100%;
+        height: 100%;
+        tier: GlassTier.regular;
+        radius: root.window-radius;
+        tint: root.space-accent;
+        over-wgpu: GlassLayer.scene-active;
+        visible: GlassLayer.scene-active;
+        present: !root.page-fullscreen;
+    }
     // The design's `wb-frame-drag`: the gutters and any glass without a control move the window.
     MoveArea {
         enabled: !root.full-screen;
@@ -560,7 +576,7 @@ export component AppWindow inherits Window {
                         panes: root.panes;
                         seams: root.seams;
                         ring: root.focus-ring;
-                        accent: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : Palette.sky;
+                        accent: root.space-accent;
                         radius: root.page-fullscreen ? 0px : Radius.md;
                         cursor: root.cursors[root.web-cursor];
                         pointer-pressed(pane, button, x, y) => {
@@ -633,6 +649,7 @@ export component AppWindow inherits Window {
             // The settings page fills the content area of its tab (no web view under it).
             settings-ui := SettingsPage {
                 open: root.settings-open;
+                accent: root.space-accent;
             }
             history-ui := HistoryPage {
                 open: root.page == InternalPageKind.history;
@@ -779,25 +796,6 @@ export component AppWindow inherits Window {
             y: 0px;
             width: Chrome.inset + sidebar.width;
             height: parent.height;
-
-            // The sidebar's Regular glass, drawn by the scene up to the seam; its right edge bows
-            // with the seam's string. Slint-only glass has no sidebar panel at rest (the plain
-            // ground shows), as before the scene; while the string bends it draws the bowed
-            // outline, so the edge still reads as rubber.
-            GlassPanel {
-                key: GlassKeys.sidebar;
-                x: sidebar.x;
-                y: sidebar.y;
-                width: root.sidebar-width;
-                height: sidebar.height;
-                tier: GlassTier.regular;
-                radius: Radius.lg;
-                over-wgpu: GlassLayer.scene-active;
-                follows-seam: true;
-                outline: root.hidden-at-rest ? "" : root.sidebar-outline;
-                visible: GlassLayer.scene-active || self.outline != "";
-                present: !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open && !root.page-fullscreen;
-            }
 
             // the peek's own glass (.wb-side-peek: thick, radius 20)
             GlassPanel {

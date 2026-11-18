@@ -25,6 +25,7 @@ mod screen;
 mod session_smoke;
 mod settings_smoke;
 mod shell;
+mod shot;
 mod split_smoke;
 mod surface;
 mod tabs_smoke;
@@ -88,8 +89,11 @@ const LIFECYCLE_TICK: Duration = Duration::from_secs(5);
 const AUDIBLE_PROBE_EVERY: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
-    let command = match cli::parse(std::env::args_os()) {
-        Ok(command) => command,
+    let command = match cli::parse_with_shot(std::env::args_os()) {
+        Ok((command, shot)) => {
+            shot::request(shot);
+            command
+        }
         Err(e) => e.exit(),
     };
     match command {
@@ -690,6 +694,9 @@ fn pump_scheduler() -> PumpScheduler {
 }
 
 pub fn quit() {
+    if shot::defer(quit) {
+        return;
+    }
     // Fails only when no event loop runs, and the pump runs inside it.
     let _ = slint::quit_event_loop();
 }
@@ -1137,6 +1144,7 @@ fn run(
     }
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let window = AppWindow::new()?;
+    shot::attach(&window);
     let glass = Rc::new(RefCell::new(backdrop::choose(
         &gpu,
         &window,

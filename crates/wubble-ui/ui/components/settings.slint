@@ -1,25 +1,39 @@
 // The settings page (wubble://settings): native Slint in the content area, generated from the
 // one settings table (wubble_core::settings, through pages::settings_page). Each row picks its
-// control by `row.control`, so a new setting is a table row and no UI code.
+// control by `row.control`, and the section list beside the rows comes from the rows' sections,
+// so a new setting is a table row and no UI code.
 //
-// Controls: the design repo has the toggle, slider and segmented control only as its web touch
-// kit (`src/wubble/pages/touch.css` .tp-tg, .tp-sl, .tp-seg, and `touch-kit.tsx` Segmented,
-// xuckless/the-wallpaper-project @ 6c840da, owner's code); they are drawn here to those
-// metrics and colours. Their springs (the liquid indicator, the rubber-banded knob) are not
-// ported: Slint `animate` moves them, as the check box does. Written from scratch, because the
-// bucket has nothing for them: the stepper, the text field, the list editor, the section
-// header, the chord recorder row, the swatch row and the page itself. Reused: the port's
-// GlassPanel, PressableButton, SpaceIcon and WubbleScroller, wubble's IconButton and Icon.
+// Look and layout: the design repo's settings page, `src/wubble/pages/settings.css` and
+// `settings.tsx` (xuckless/the-wallpaper-project @ 21838b8, owner's code): a pinned column (the
+// title, a search capsule, the section list whose indicator tracks the section you read) beside
+// the sections, each a display-font heading over a card of rows (label, note, control). The
+// controls are the design's touch kit at the settings row's size (`pages/touch.css` .tp-tg-sm,
+// .tp-seg in .st-seg, .tp-sl in .st-slider) and the swatches with their ring (.st-swatches).
+// Their springs (the liquid indicator, the rubber-banded knob, the travelling ring) are not
+// ported: Slint `animate` moves them. Written for wubble, the design having none: the stepper,
+// the list editor and the chord recorder row. Reused: the port's PressableButton, SpaceIcon and
+// WubbleScroller, wubble's IconButton, Icon and Raised.
 
-import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
+import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
-import { GlassPanel, PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
+import { PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
+import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView } from "model.slint";
 import { PageScroll } from "page-scroll.slint";
-import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, GlassTier } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
+import { Raised } from "raised.slint";
 
-// .tp-tg at half size: the accent fill when on, the track when off; the knob slides.
+// .wb-thin: the body of the page's chips (the search, a field, the toggle, the segmented track)
+export component Chip inherits Raised {
+    fill: Glass.thin.fill;
+    highlight: Glass.rimTop;
+    rim: Glass.rimAll;
+    shadow-y: Glass.thin.shadowY;
+    shadow-blur: Glass.thin.shadowBlur;
+    shadow: Shell.thin-shadow;
+}
+
+// .tp-tg-sm: the accent fades in over the chip when on; the knob slides and turns ink.
 export component Toggle inherits Rectangle {
     in property <bool> on;
     in property <color> accent: Palette.sky;
@@ -27,25 +41,32 @@ export component Toggle inherits Rectangle {
 
     width: Shell.toggle-width;
     height: Shell.toggle-height;
-    border-radius: self.height / 2;
-    background: root.on ? root.accent : Shell.track;
-    animate background {
-        duration: Shell.control-ms;
-        easing: Motion.easeOut;
-    }
     accessible-role: switch;
     accessible-checked: root.on;
     accessible-action-default => {
         root.toggled();
     }
 
+    Chip {
+        radius: root.height / 2;
+    }
     Rectangle {
+        border-radius: root.height / 2;
+        background: root.accent;
+        opacity: root.on ? 1 : 0;
+        animate opacity {
+            duration: Shell.control-ms;
+            easing: Motion.easeOut;
+        }
+    }
+    Raised {
         x: root.on ? root.width - self.width - Shell.toggle-inset : Shell.toggle-inset;
         y: Shell.toggle-inset;
         width: Shell.toggle-knob;
         height: Shell.toggle-knob;
-        border-radius: self.width / 2;
-        background: root.on ? Palette.ink : Palette.mist;
+        radius: self.width / 2;
+        fill: root.on ? Palette.ink : Palette.mist;
+        highlight: Shell.knob-highlight;
         drop-shadow-blur: Shell.toggle-shadow-blur;
         drop-shadow-offset-y: Shell.toggle-shadow-y;
         drop-shadow-color: Shell.toggle-shadow;
@@ -59,76 +80,81 @@ export component Toggle inherits Rectangle {
         }
     }
     TouchArea {
+        mouse-cursor: pointer;
         clicked => {
             root.toggled();
         }
     }
 }
 
-// .tp-seg: a track with one segment per word; the ink indicator sits under the chosen one.
+// .tp-seg in .st-seg: a chip with one segment per word, each as wide as its label; the chosen
+// one is the ink tile with the dark label.
 export component Segmented inherits Rectangle {
     in property <[string]> labels;
     in property <int> selected: -1;
     callback chosen(int);
 
-    width: root.labels.length * Shell.seg-width + 2 * Shell.seg-pad;
+    width: row.preferred-width;
     height: Shell.seg-height + 2 * Shell.seg-pad;
-    border-radius: Shell.seg-radius;
-    background: Shell.track;
 
-    Rectangle {
-        x: Shell.seg-pad + max(0, root.selected) * Shell.seg-width;
-        y: Shell.seg-pad;
-        width: Shell.seg-width;
-        height: Shell.seg-height;
-        border-radius: Shell.seg-inner-radius;
-        background: Palette.ink;
-        drop-shadow-blur: Shell.seg-shadow-blur;
-        drop-shadow-offset-y: Shell.seg-shadow-y;
-        drop-shadow-color: Shell.seg-shadow;
-        opacity: root.selected >= 0 ? 1 : 0;
-        animate x {
-            duration: Shell.control-ms;
-            easing: Motion.easeSpring;
-        }
+    Chip {
+        radius: Shell.seg-radius;
     }
-    for label[i] in root.labels: Rectangle {
-        x: Shell.seg-pad + i * Shell.seg-width;
-        y: Shell.seg-pad;
-        width: Shell.seg-width;
-        height: Shell.seg-height;
-        accessible-role: button;
-        accessible-label: label;
-        accessible-action-default => {
-            root.chosen(i);
-        }
-        ta := TouchArea {
-            clicked => {
+    row := HorizontalLayout {
+        padding: Shell.seg-pad;
+        for label[i] in root.labels: Rectangle {
+            accessible-role: button;
+            accessible-label: label;
+            accessible-action-default => {
                 root.chosen(i);
             }
-        }
-        Text {
-            text: label;
-            color: i == root.selected ? Palette.abyss : ta.has-hover ? Palette.ink : Palette.mist;
-            font-family: Fonts.ui;
-            font-size: Shell.seg-label;
-            font-weight: 500;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            animate color {
-                duration: Shell.seg-label-ms;
-                easing: Motion.easeOut;
+            Rectangle {
+                border-radius: Shell.seg-inner-radius;
+                background: Palette.ink;
+                drop-shadow-blur: Shell.seg-shadow-blur;
+                drop-shadow-offset-y: Shell.seg-shadow-y;
+                drop-shadow-color: Shell.seg-shadow;
+                opacity: i == root.selected ? 1 : 0;
+                animate opacity {
+                    duration: Shell.control-ms;
+                    easing: Motion.easeOut;
+                }
+            }
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.chosen(i);
+                }
+            }
+            HorizontalLayout {
+                padding-left: Shell.seg-label-pad;
+                padding-right: Shell.seg-label-pad;
+                Text {
+                    text: label;
+                    color: i == root.selected ? Palette.abyss : ta.has-hover ? Palette.ink : Palette.mist;
+                    font-family: Fonts.ui;
+                    font-size: Shell.seg-label;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    animate color {
+                        duration: Shell.seg-label-ms;
+                        easing: Motion.easeOut;
+                    }
+                }
             }
         }
     }
 }
 
-// A one-line text field on the track colour; with `icon-path`, the icon leads (the search box).
+// A one-line text field on a chip; with `icon-path`, the icon leads. `capsule` is the search
+// (.st-search: 40 high, radius 20, the clear button at its end while it has text).
 export component Field inherits Rectangle {
     in-out property <string> text <=> input.text;
     in property <string> placeholder;
     in property <string> icon-path: "";
     in property <bool> numeric: false;
+    in property <bool> capsule: false;
     // Masked text (a password).
     in property <bool> secret: false;
     callback edited(string);
@@ -139,43 +165,49 @@ export component Field inherits Rectangle {
         input.focus();
     }
 
-    height: Shell.field-height;
-    border-radius: Radius.sm;
-    background: input.has-focus ? Palette.shell : Shell.track;
+    height: root.capsule ? Shell.search-height : Shell.field-height;
 
-    property <length> lead: root.icon-path == "" ? Spacing.s3 : Spacing.s3 + Spacing.s4 + Spacing.s2;
+    Chip {
+        radius: root.capsule ? root.height / 2 : Radius.sm;
+    }
+
+    property <length> start: root.capsule ? Shell.search-pad-start : Spacing.s3;
+    property <length> end: root.capsule ? Shell.search-pad-end : Spacing.s3;
+    property <length> lead: root.icon-path == "" ? root.start : root.start + Shell.icon + Spacing.s2;
+    property <length> trail: root.capsule && input.text != "" ? Shell.search-clear + Spacing.s2 : 0px;
+    property <length> font: root.capsule ? Shell.search-font : Type.body.size;
     if root.icon-path != "": Icon {
-        x: Spacing.s3;
+        x: root.start;
         y: (parent.height - self.height) / 2;
-        size: Spacing.s4;
         path: root.icon-path;
-        tint: Palette.haze;
+        tint: Palette.mist;
     }
     Text {
         x: root.lead;
-        width: parent.width - self.x - Spacing.s3;
+        width: parent.width - self.x - root.end;
         height: parent.height;
         visible: input.text == "";
         text: root.placeholder;
         color: Palette.haze;
         font-family: Fonts.ui;
-        font-size: Type.body.size;
+        font-size: root.font;
         vertical-alignment: center;
         horizontal-alignment: root.numeric ? right : left;
         overflow: elide;
     }
     input := TextInput {
         x: root.lead;
-        width: parent.width - self.x - Spacing.s3;
+        width: parent.width - self.x - root.end - root.trail;
         height: parent.height;
         color: Palette.ink;
         selection-background-color: Shell.selection-fill;
         selection-foreground-color: Shell.selection-ink;
         font-family: Fonts.ui;
-        font-size: Type.body.size;
+        font-size: root.font;
         vertical-alignment: center;
         horizontal-alignment: root.numeric ? right : left;
         single-line: true;
+        accessible-label: root.placeholder;
         input-type: root.secret ? InputType.password : root.numeric ? InputType.decimal : InputType.text;
         edited => {
             root.edited(self.text);
@@ -185,10 +217,38 @@ export component Field inherits Rectangle {
         }
         key-pressed(event) => {
             if event.text == Key.Escape {
+                if root.capsule && self.text != "" {
+                    self.text = "";
+                    root.edited("");
+                    return accept;
+                }
                 root.escaped();
                 return accept;
             }
             return reject;
+        }
+    }
+    // .st-clear
+    if root.capsule && input.text != "": clear := Rectangle {
+        x: parent.width - self.width - root.end;
+        y: (parent.height - self.height) / 2;
+        width: Shell.search-clear;
+        height: Shell.search-clear;
+        border-radius: self.width / 2;
+        background: Shell.search-clear-fill;
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            path: IconPaths.close;
+            size: Shell.search-clear-icon;
+            tint: Palette.ink;
+        }
+        TouchArea {
+            clicked => {
+                input.text = "";
+                root.edited("");
+                input.focus();
+            }
         }
     }
 }
@@ -224,6 +284,7 @@ export component Stepper inherits HorizontalLayout {
     IconButton {
         icon-path: IconPaths.plus;
         enabled: root.value < root.max;
+        y: (parent.height - self.height) / 2;
         clicked => {
             root.set(Math.min(root.max, root.value + root.step));
         }
@@ -233,8 +294,9 @@ export component Stepper inherits HorizontalLayout {
     }
 }
 
-// .tp-sl: the rail, the accent fill and the knob; the value is set on release.
-export component Slider inherits Rectangle {
+// .tp-sl in .st-slider: the value above the rail's end, the rail, the accent fill and the knob;
+// the value is set on release.
+export component Slider inherits VerticalLayout {
     in property <float> value;
     in property <float> min;
     in property <float> max: 1;
@@ -242,59 +304,110 @@ export component Slider inherits Rectangle {
     callback set(float);
 
     width: Shell.slider-width;
-    height: Shell.slider-height;
     property <float> span: Math.max(0.0001, root.max - root.min);
     property <float> held: (root.min + Math.clamp(ta.mouse-x / root.width, 0, 1) * root.span);
     property <float> shown: ta.pressed ? root.held : root.value;
     property <float> t: Math.clamp((root.shown - root.min) / root.span, 0, 1);
 
-    Rectangle {
-        y: (parent.height - self.height) / 2;
-        height: Shell.slider-rail;
-        border-radius: self.height / 2;
-        background: Shell.track;
+    // .tp-sl-label output, pulled 6 into the slider (.st-slider .tp-sl-label margin-bottom -6)
+    Text {
+        height: self.preferred-height - Shell.slider-value-into;
+        text: Math.round(root.shown * 100) / 100;
+        color: Palette.ink;
+        font-family: Fonts.ui;
+        font-size: Shell.slider-value-font;
+        font-weight: 500;
+        horizontal-alignment: right;
+        vertical-alignment: top;
     }
     Rectangle {
-        x: 0px;
-        y: (parent.height - self.height) / 2;
-        width: root.t * root.width;
-        height: Shell.slider-rail;
-        border-radius: self.height / 2;
-        background: root.accent;
-    }
-    Rectangle {
-        x: root.t * (root.width - self.width);
-        y: (parent.height - self.height) / 2;
-        width: Shell.slider-knob;
-        height: Shell.slider-knob;
-        border-radius: self.width / 2;
-        background: Palette.ink;
-        // the held knob swells to 1.1 (touch.tsx SLIDER.holdScale)
-        transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: ta.pressed ? 1.1 : 1;
-        animate transform-scale {
-            duration: Motion.overlapIn;
-            easing: Motion.easeSpring;
+        height: Shell.slider-height;
+        Raised {
+            y: (parent.height - self.height) / 2;
+            height: Shell.slider-rail;
+            radius: self.height / 2;
+            fill: Shell.track;
+            highlight: Shell.rail-highlight;
         }
-        drop-shadow-blur: Shell.slider-shadow-blur;
-        drop-shadow-offset-y: Shell.slider-shadow-y;
-        drop-shadow-color: Shell.slider-shadow;
-    }
-    ta := TouchArea {
-        mouse-cursor: self.pressed ? grabbing : grab;
-        pointer-event(e) => {
-            if e.kind == PointerEventKind.up {
-                root.set(root.held);
+        Rectangle {
+            x: 0px;
+            y: (parent.height - self.height) / 2;
+            width: root.t * parent.width;
+            height: Shell.slider-rail;
+            border-radius: self.height / 2;
+            background: root.accent;
+        }
+        Rectangle {
+            x: root.t * (parent.width - self.width);
+            y: (parent.height - self.height) / 2;
+            width: Shell.slider-knob;
+            height: Shell.slider-knob;
+            border-radius: self.width / 2;
+            background: Palette.ink;
+            // the held knob swells to 1.1 (touch.tsx SLIDER.holdScale)
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            transform-scale: ta.pressed ? 1.1 : 1;
+            animate transform-scale {
+                duration: Motion.overlapIn;
+                easing: Motion.easeSpring;
+            }
+            drop-shadow-blur: Shell.slider-shadow-blur;
+            drop-shadow-offset-y: Shell.slider-shadow-y;
+            drop-shadow-color: Shell.slider-shadow;
+        }
+        ta := TouchArea {
+            mouse-cursor: self.pressed ? grabbing : grab;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.up {
+                    root.set(root.held);
+                }
             }
         }
     }
 }
 
-// A small text button: a row's Reset, a list's Remove.
-export component TextButton inherits PressableButton {
-    height: Shell.icon-button;
-    border-radius: Shell.icon-button-radius;
-    background: self.hovered ? Shell.icon-button-hover : transparent;
+// .st-reset: a quiet text button (a row's Reset, a list's Remove), ink on a faint fill on hover.
+export component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    out property <bool> hovered: ta.has-hover;
+
+    height: Shell.reset-height;
+    min-width: label.preferred-width + 2 * Shell.reset-pad;
+    border-radius: Shell.reset-radius;
+    background: ta.has-hover && root.enabled ? Shell.reset-hover : transparent;
+    opacity: root.enabled ? 1 : Shell.icon-button-disabled;
+    animate background {
+        duration: Shell.icon-button-ms;
+        easing: Motion.easeOut;
+    }
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: ta.pressed ? Motion.pressScale : 1;
+    animate transform-scale {
+        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
+        easing: Motion.easeOut;
+    }
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+    label := Text {
+        text: root.text;
+        color: ta.has-hover && root.enabled ? Palette.ink : Palette.mist;
+        font-family: Fonts.ui;
+        font-size: Shell.reset-font;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
 }
 
 // Entries of a list or map setting, each removable; `can-add` adds a field for a new one.
@@ -311,7 +424,7 @@ export component EntryList inherits VerticalLayout {
         text: root.empty;
         color: Palette.haze;
         font-family: Fonts.ui;
-        font-size: Type.label.size;
+        font-size: Shell.row-note;
     }
     for entry in root.entries: HorizontalLayout {
         spacing: Spacing.s2;
@@ -320,7 +433,7 @@ export component EntryList inherits VerticalLayout {
             text: entry.label;
             color: Palette.mist;
             font-family: Fonts.ui;
-            font-size: Type.body.size;
+            font-size: Shell.row-note;
             vertical-alignment: center;
             overflow: elide;
         }
@@ -342,136 +455,214 @@ export component EntryList inherits VerticalLayout {
     }
 }
 
-// A section's title over its card.
+// .st-sec-head h2: a section's title, in the display face.
 export component SectionHeader inherits Text {
-    color: Palette.mist;
-    font-family: Fonts.ui;
-    font-size: Type.heading.size;
-    font-weight: Type.heading.weight;
+    color: Palette.ink;
+    font-family: Fonts.display;
+    font-size: Shell.section-title;
+    font-weight: 600;
+    vertical-alignment: center;
 }
 
-// A section's rows on a faint card.
-export component Card inherits Rectangle {
-    border-radius: Radius.md;
-    background: Shell.settings-card;
+// .st-sec-head: the title's line over a section's card.
+component SectionHead inherits HorizontalLayout {
+    in property <string> text;
+    height: Shell.section-head;
+    padding-left: Shell.section-head-in;
+    padding-right: Shell.section-head-end;
+    SectionHeader {
+        text: root.text;
+    }
+}
+
+// .st-card: a section's rows on a faint raised card.
+export component Card inherits Raised {
+    // room round content that is not rows (rows pad themselves: .st-row padding 11 14)
+    in property <length> content-pad: 0px;
+    radius: Radius.lg;
+    fill: Shell.settings-card;
+    highlight: Shell.card-highlight;
     VerticalLayout {
-        padding-left: Spacing.s4;
-        padding-right: Spacing.s4;
-        padding-top: Spacing.s2;
-        padding-bottom: Spacing.s2;
+        padding-left: Shell.card-pad + root.content-pad;
+        padding-right: Shell.card-pad + root.content-pad;
+        padding-top: Shell.card-pad;
+        padding-bottom: Shell.card-pad;
         spacing: 0px;
         @children
     }
 }
 
-// A label on the left, a note under it, the control on the right.
+// .st-row: a label with its note under it on the left, the controls on the right.
 export component Line inherits HorizontalLayout {
     in property <string> label;
     in property <string> note;
-    in property <color> note-color: Palette.haze;
+    in property <color> note-color: Palette.mist;
 
     min-height: Shell.settings-row;
-    spacing: Spacing.s3;
+    padding-left: Shell.row-pad-x;
+    padding-right: Shell.row-pad-x;
+    padding-top: Shell.row-pad-y;
+    padding-bottom: Shell.row-pad-y;
+    spacing: Shell.row-gap;
     VerticalLayout {
         horizontal-stretch: 1;
         alignment: center;
+        spacing: Shell.row-note-above;
+        // each line at the page's line height (wubble.css body: 1.45), as the CSS lays it out
         Text {
             text: root.label;
+            min-height: Shell.row-title * Type.body.lineHeight;
             color: Palette.ink;
             font-family: Fonts.ui;
-            font-size: Type.body.size;
+            font-size: Shell.row-title;
+            font-weight: 500;
+            vertical-alignment: center;
             wrap: word-wrap;
         }
         if root.note != "": Text {
             text: root.note;
+            min-height: Shell.row-note * Type.body.lineHeight;
             color: root.note-color;
             font-family: Fonts.ui;
-            font-size: Type.label.size;
+            font-size: Shell.row-note;
+            vertical-alignment: center;
             wrap: word-wrap;
         }
     }
     HorizontalLayout {
         alignment: end;
-        spacing: Spacing.s2;
+        spacing: Spacing.s3;
         @children
     }
 }
 
-// One generated row: the control follows `row.control`.
-export component SettingRow inherits VerticalLayout {
+// One generated row: the control follows `row.control`. A toggle row is a target as a whole
+// (.st-row.tap: white 4 % on hover, a click anywhere flips it).
+export component SettingRow inherits Rectangle {
     in property <SettingItem> setting;
+    in property <color> accent: Palette.sky;
     callback changed(string, string);
     callback reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
 
-    padding-bottom: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map ? Spacing.s2 : 0px;
-    Line {
-        label: root.setting.label;
-        note: root.setting.restart ? "Applies after a restart" : "";
-        note-color: Palette.amber;
-        if root.setting.changed: VerticalLayout {
-            alignment: center;
-            TextButton {
-                text: "Reset";
-                clicked => {
-                    root.reset(root.setting.key);
+    property <bool> tap: root.setting.control == SettingControl.toggle;
+    property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map;
+    border-radius: Radius.md;
+    background: root.tap && row-ta.has-hover ? Shell.row-tap-hover : transparent;
+    animate background {
+        duration: Shell.icon-button-ms;
+        easing: Motion.easeOut;
+    }
+    row-ta := TouchArea {
+        enabled: root.tap;
+        clicked => {
+            root.changed(root.setting.key, root.setting.on ? "0" : "1");
+        }
+    }
+    VerticalLayout {
+        padding-bottom: root.listed ? Shell.row-pad-y : 0px;
+        Line {
+            label: root.setting.label;
+            note: root.setting.restart ? "Applies after a restart" : "";
+            note-color: Palette.amber;
+            if root.setting.changed: VerticalLayout {
+                alignment: center;
+                TextButton {
+                    text: "Reset";
+                    clicked => {
+                        root.reset(root.setting.key);
+                    }
+                }
+            }
+            if root.setting.control == SettingControl.toggle: VerticalLayout {
+                alignment: center;
+                toggle := Toggle {
+                    on: root.setting.on;
+                    accent: root.accent;
+                    toggled => {
+                        root.changed(root.setting.key, root.setting.on ? "0" : "1");
+                    }
+                }
+            }
+            if root.setting.control == SettingControl.segmented: VerticalLayout {
+                alignment: center;
+                segmented := Segmented {
+                    labels: root.setting.labels;
+                    selected: root.setting.selected;
+                    chosen(i) => {
+                        root.changed(root.setting.key, root.setting.words[i]);
+                    }
+                }
+            }
+            if root.setting.control == SettingControl.stepper: VerticalLayout {
+                alignment: center;
+                stepper := Stepper {
+                    value: root.setting.number;
+                    min: root.setting.min;
+                    max: root.setting.max;
+                    step: root.setting.step;
+                    set(v) => {
+                        root.changed(root.setting.key, Math.round(v));
+                    }
+                }
+            }
+            if root.setting.control == SettingControl.slider: VerticalLayout {
+                alignment: center;
+                slider := Slider {
+                    value: root.setting.number;
+                    min: root.setting.min;
+                    max: root.setting.max;
+                    accent: root.accent;
+                    set(v) => {
+                        root.changed(root.setting.key, v);
+                    }
                 }
             }
         }
-        if root.setting.control == SettingControl.toggle: VerticalLayout {
-            alignment: center;
-            toggle := Toggle {
-                on: root.setting.on;
-                toggled => {
-                    root.changed(root.setting.key, root.setting.on ? "0" : "1");
+        if root.listed: HorizontalLayout {
+            padding-left: Shell.row-pad-x;
+            padding-right: Shell.row-pad-x;
+            entries := EntryList {
+                entries: root.setting.entries;
+                can-add: root.setting.control == SettingControl.list;
+                placeholder: "Add";
+                removed(k) => {
+                    root.entry-removed(root.setting.key, k);
                 }
-            }
-        }
-        if root.setting.control == SettingControl.segmented: VerticalLayout {
-            alignment: center;
-            segmented := Segmented {
-                labels: root.setting.labels;
-                selected: root.setting.selected;
-                chosen(i) => {
-                    root.changed(root.setting.key, root.setting.words[i]);
-                }
-            }
-        }
-        if root.setting.control == SettingControl.stepper: VerticalLayout {
-            alignment: center;
-            stepper := Stepper {
-                value: root.setting.number;
-                min: root.setting.min;
-                max: root.setting.max;
-                step: root.setting.step;
-                set(v) => {
-                    root.changed(root.setting.key, Math.round(v));
-                }
-            }
-        }
-        if root.setting.control == SettingControl.slider: VerticalLayout {
-            alignment: center;
-            slider := Slider {
-                value: root.setting.number;
-                min: root.setting.min;
-                max: root.setting.max;
-                set(v) => {
-                    root.changed(root.setting.key, v);
+                added(t) => {
+                    root.entry-added(root.setting.key, t);
                 }
             }
         }
     }
-    if root.setting.control == SettingControl.list || root.setting.control == SettingControl.map: entries := EntryList {
-        entries: root.setting.entries;
-        can-add: root.setting.control == SettingControl.list;
-        placeholder: "Add";
-        removed(k) => {
-            root.entry-removed(root.setting.key, k);
-        }
-        added(t) => {
-            root.entry-added(root.setting.key, t);
-        }
+}
+
+// .st-page kbd: a chord as a key cap.
+component Kbd inherits Raised {
+    in property <string> text;
+    in property <bool> armed;
+    height: Shell.kbd;
+    min-width: max(Shell.kbd, cap.preferred-width + 2 * Shell.kbd-pad);
+    radius: Shell.kbd-radius;
+    fill: root.armed ? Shell.track : Shell.kbd-fill;
+    highlight: Shell.kbd-highlight;
+    // inset 0 -1px 0: the cap's lower lip
+    Rectangle {
+        y: parent.height - Shell.hairline;
+        x: Shell.kbd-radius / 2;
+        width: parent.width - Shell.kbd-radius;
+        height: Shell.hairline;
+        background: Shell.kbd-shade;
+    }
+    cap := Text {
+        text: root.text;
+        color: Palette.ink;
+        font-family: Fonts.ui;
+        font-size: Shell.kbd-font;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 
@@ -518,27 +709,230 @@ component BindingRow inherits Line {
     }
     VerticalLayout {
         alignment: center;
-        chord := PressableButton {
-            height: Shell.icon-button;
-            border-radius: Shell.icon-button-radius;
-            background: root.armed ? Palette.rim : self.hovered ? Palette.shell : Shell.track;
+        chord := Kbd {
             text: root.armed ? "Press a shortcut" : root.item.chord == "" ? "None" : root.item.chord;
+            armed: root.armed;
             accessible-role: button;
             accessible-label: root.item.label;
             accessible-action-default => {
                 root.record(root.item.action);
             }
-            clicked => {
-                root.record(root.item.action);
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.record(root.item.action);
+                }
             }
         }
     }
 }
 
-// The full-content settings page, over the page area like the error panel.
-// The frame every native page shares: thick glass over the content area, one scroller, a
-// centred column `Shell.settings-width` wide with the page's title and search box on top and the
-// page's rows (`@children`) under them. `open` shows it; `query-changed` is the search box.
+// .st-swatches: the colours as dots; the chosen one ringed in ink.
+component Swatches inherits HorizontalLayout {
+    in property <[color]> colours;
+    in property <color> value;
+    callback chosen(color);
+    spacing: Shell.swatch-gap;
+    for c in root.colours: Rectangle {
+        width: Shell.swatch-target;
+        height: Shell.swatch-target;
+        border-radius: self.width / 2;
+        border-width: c == root.value ? Shell.swatch-ring : 0px;
+        border-color: Palette.ink;
+        sw-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.chosen(c);
+            }
+        }
+        Raised {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Shell.swatch;
+            height: Shell.swatch;
+            radius: self.width / 2;
+            fill: c;
+            highlight: Shell.swatch-highlight;
+            drop-shadow-offset-y: Shell.swatch-shadow-y;
+            drop-shadow-blur: Shell.swatch-shadow-blur;
+            drop-shadow-color: Shell.swatch-shadow;
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            transform-scale: sw-ta.has-hover ? Shell.swatch-hover : 1;
+            animate transform-scale {
+                duration: Shell.control-ms;
+                easing: Motion.easeOut;
+            }
+        }
+    }
+}
+
+// .st-nav-btn: a section in the list; the current one ink, its icon in the Space colour.
+component NavRow inherits Rectangle {
+    in property <string> title;
+    in property <string> icon-path;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <color> accent;
+    callback picked();
+
+    height: Shell.nav-row;
+    opacity: root.enabled ? 1 : Shell.nav-disabled;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: ta.pressed ? Motion.pressScale : 1;
+    animate transform-scale {
+        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
+        easing: Motion.easeOut;
+    }
+    accessible-role: tab;
+    accessible-label: root.title;
+    accessible-action-default => {
+        root.picked();
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked();
+        }
+    }
+    HorizontalLayout {
+        padding-left: Shell.nav-pad;
+        padding-right: Shell.nav-pad;
+        spacing: Shell.nav-icon-gap;
+        Rectangle {
+            width: Shell.icon;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: root.icon-path;
+                tint: root.on ? root.accent : root.on || ta.has-hover ? Palette.ink : Palette.mist;
+                animate tint {
+                    duration: Shell.control-ms;
+                    easing: Motion.easeOut;
+                }
+            }
+        }
+        Text {
+            text: root.title;
+            color: root.on || ta.has-hover ? Palette.ink : Palette.mist;
+            font-family: Fonts.ui;
+            font-size: Shell.nav-font;
+            vertical-alignment: center;
+            overflow: elide;
+            animate color {
+                duration: Shell.icon-button-ms;
+                easing: Motion.easeOut;
+            }
+        }
+    }
+}
+
+// A section's start on the page: it reports when its top passes the tracking line (the nav's
+// current section is the last one past it) and scrolls the page to itself when picked.
+component Section inherits VerticalLayout {
+    in property <int> index;
+    in property <bool> start: true;
+    // the top in the page's content coordinates, and the page's scroll
+    in property <length> top;
+    in property <length> scroll;
+    in property <int> goto-serial;
+    in property <int> goto-index;
+    callback passed(int, bool);
+    callback jump(length);
+    property <bool> past: root.start && root.top <= root.scroll + Shell.settings-spy;
+    changed past => {
+        root.passed(root.index, self.past);
+    }
+    changed goto-serial => {
+        if root.start && root.goto-index == root.index {
+            root.jump(root.top);
+        }
+    }
+}
+
+// The scroller every native page shares: the page's colour on the design's scroll physics
+// (the PageScroll global, stepped by the driver). The open page reports its sizes there and
+// takes its input from here; `wheeled` is any scroll by hand (wheel, touch, thumb).
+component PageScroller inherits Rectangle {
+    in property <bool> open;
+    // where the content is (rubber-banded past the ends), and how far it can go
+    out property <length> scroll: root.open ? PageScroll.y : 0px;
+    out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
+    callback wheeled();
+    background: Palette.web;
+    public function wheel(d: length) {
+        PageScroll.wheel(d);
+        root.wheeled();
+    }
+    // glide to `y` (scroller.tsx `to`)
+    public function to(y: length) {
+        PageScroll.to(y);
+    }
+    // back to the top at once
+    public function reset() {
+        PageScroll.reset();
+    }
+    changed open => {
+        if root.open {
+            PageScroll.reset();
+            root.report();
+        }
+    }
+    function report() {
+        if root.open {
+            PageScroll.viewport = scroller.viewport-height;
+            PageScroll.content = scroller.content-height;
+        }
+    }
+    scroller := WubbleScroller {
+        content-y: root.scroll;
+        thumb-visible: root.open && PageScroll.thumb-visible;
+        thumb-height: PageScroll.thumb-height;
+        thumb-top: PageScroll.thumb-top;
+        changed viewport-height => {
+            root.report();
+        }
+        changed content-height => {
+            root.report();
+        }
+        wheel(d) => {
+            root.wheel(d);
+        }
+        touch-down(y) => {
+            PageScroll.touch-down(y);
+            root.wheeled();
+        }
+        touch-move(y) => {
+            PageScroll.touch-move(y);
+        }
+        touch-up => {
+            PageScroll.touch-up();
+        }
+        thumb-down(y) => {
+            PageScroll.thumb-down(y);
+            root.wheeled();
+        }
+        thumb-move(y) => {
+            PageScroll.thumb-move(y);
+        }
+        thumb-up => {
+            PageScroll.thumb-up();
+        }
+        @children
+    }
+}
+
+// The page's title in the display face (.st-pin h1).
+component PageTitle inherits Text {
+    color: Palette.ink;
+    font-family: Fonts.display;
+    font-size: Shell.settings-title;
+    font-weight: 600;
+    vertical-alignment: center;
+}
+
+// The frame the other native pages share: the page's colour, one scroller, a centred column
+// `Shell.settings-width` wide with the page's title and search capsule on top and the page's
+// rows (`@children`) under them. `open` shows it; `query-changed` is the search box.
 export component PageFrame inherits Rectangle {
     in property <bool> open;
     in property <string> title;
@@ -552,100 +946,62 @@ export component PageFrame inherits Rectangle {
     }
     // Back to the top: a new query or a page switch starts there.
     public function scroll-to-top() {
-        PageScroll.reset();
-    }
-    // The open frame scrolls on the design's physics (PageScroll, the driver's scroller).
-    changed open => {
-        if root.open {
-            PageScroll.reset();
-            root.report();
-        }
-    }
-    function report() {
-        if root.open {
-            PageScroll.viewport = scroller.viewport-height;
-            PageScroll.content = scroller.content-height;
-        }
+        page.reset();
     }
 
     visible: root.open;
 
-    GlassPanel {
-        tier: GlassTier.thick;
-        radius: 0px;
-        over-content: true;
+    page := PageScroller {
+        open: root.open;
+        HorizontalLayout {
+            alignment: center;
+            padding-top: Shell.settings-top;
+            padding-bottom: Shell.settings-bottom;
+            VerticalLayout {
+                width: min(Shell.settings-width, root.width - 2 * Shell.settings-pad-max);
+                spacing: 0px;
 
-        scroller := WubbleScroller {
-            content-y: root.open ? PageScroll.y : 0px;
-            thumb-visible: root.open && PageScroll.thumb-visible;
-            thumb-height: PageScroll.thumb-height;
-            thumb-top: PageScroll.thumb-top;
-            changed viewport-height => {
-                root.report();
-            }
-            changed content-height => {
-                root.report();
-            }
-            wheel(d) => {
-                PageScroll.wheel(d);
-            }
-            touch-down(y) => {
-                PageScroll.touch-down(y);
-            }
-            touch-move(y) => {
-                PageScroll.touch-move(y);
-            }
-            touch-up => {
-                PageScroll.touch-up();
-            }
-            thumb-down(y) => {
-                PageScroll.thumb-down(y);
-            }
-            thumb-move(y) => {
-                PageScroll.thumb-move(y);
-            }
-            thumb-up => {
-                PageScroll.thumb-up();
-            }
-
-            HorizontalLayout {
-                alignment: center;
-                padding-top: Spacing.s8;
-                padding-bottom: Spacing.s12;
-                VerticalLayout {
-                    width: min(Shell.settings-width, root.width - 2 * Spacing.s6);
-                    spacing: 0px;
-
-                    HorizontalLayout {
-                        spacing: Spacing.s4;
-                        Text {
-                            text: root.title;
-                            color: Palette.ink;
-                            font-family: Fonts.ui;
-                            font-size: Type.title.size;
-                            font-weight: Type.title.weight;
-                            vertical-alignment: center;
-                        }
-                        search := Field {
-                            horizontal-stretch: 1;
-                            visible: root.searchable;
-                            max-width: root.searchable ? Shell.settings-width : 0px;
-                            icon-path: IconPaths.search;
-                            placeholder: root.placeholder;
-                            edited(q) => {
-                                PageScroll.reset();
-                                root.query-changed(q);
-                            }
+                HorizontalLayout {
+                    spacing: Spacing.s6;
+                    padding-bottom: Shell.settings-title-below;
+                    PageTitle {
+                        text: root.title;
+                    }
+                    search := Field {
+                        horizontal-stretch: 1;
+                        capsule: true;
+                        visible: root.searchable;
+                        max-width: root.searchable ? Shell.settings-width : 0px;
+                        icon-path: IconPaths.search;
+                        placeholder: root.placeholder;
+                        edited(q) => {
+                            page.reset();
+                            root.query-changed(q);
                         }
                     }
-                    @children
                 }
+                @children
             }
         }
     }
 }
 
-export component SettingsPage inherits PageFrame {
+// A section's icon in the list (settings.tsx SECTIONS), by the section's title.
+global SectionIcons {
+    public pure function of(title: string) -> string {
+        if title == "General" { return IconPaths.globe; }
+        if title == "Privacy" { return IconPaths.shield; }
+        if title == "Appearance" { return IconPaths.palette; }
+        if title == "Performance" { return IconPaths.gauge; }
+        return IconPaths.globe;
+    }
+}
+
+// The settings page: the pinned column beside the sections (.st-grid).
+export component SettingsPage inherits Rectangle {
+    in property <bool> open;
+    // the Space colour: toggles, the slider's fill, the current section's icon
+    in property <color> accent: Palette.sky;
     // the generated rows, flat: each section's first row names it
     in property <[SettingItem]> rows;
     in property <[BindingItem]> bindings;
@@ -655,8 +1011,9 @@ export component SettingsPage inherits PageFrame {
     in property <[EntryItem]> site-zoom;
     in property <[EntryItem]> site-permissions;
     in property <AboutView> about;
-    // the search box is blank: the sections that are not settings rows show too
+    // the search box has text: only the matching rows show, the other sections are left out
     in property <bool> searching;
+    callback query-changed(string);
     callback setting-changed(string, string);
     callback setting-reset(string);
     callback entry-removed(string, string);
@@ -671,201 +1028,462 @@ export component SettingsPage inherits PageFrame {
     callback site-zoom-removed(string);
     callback site-permission-removed(string);
 
-    // The Space colours: the design's film colours (tokens.slint Palette).
-    property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.coral, Palette.amber];
-    property <[string]> icons: ["personal", "work", "study"];
+    public function take-focus() {
+        search.take-focus();
+    }
+    public function scroll-to-top() {
+        page.reset();
+        root.tracked = 0;
+    }
+
+    visible: root.open;
+
+    // The Space colours, in the design's order (settings.tsx SWATCHES).
+    property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.amber, Palette.coral];
+    // a click on a Space's tile picks the next of the three icons
+    pure function next-icon(icon: string) -> string {
+        return icon == "personal" ? "work" : icon == "work" ? "study" : "personal";
+    }
     property <bool> notices-open: false;
 
-    title: "Settings";
-    placeholder: "Search settings";
+    // .st-grid, centred, at most `settings-max` wide with its padding inside
+    property <length> pad-x: max(Shell.settings-pad-min, min(Shell.settings-pad-max, root.width * Shell.settings-pad-share));
+    property <length> grid-x: (root.width - min(Shell.settings-max, root.width)) / 2 + root.pad-x;
+    property <length> grid-w: min(Shell.settings-max, root.width) - 2 * root.pad-x;
+    property <length> main-x: root.grid-x + Shell.settings-side + Shell.settings-gap;
+    property <length> main-top: Shell.settings-top + Shell.section-top;
 
-    // A flat list (rows keep their instance across a re-render); each section's
-    // first row carries its header, the rows draw the section's card.
-    for row in root.rows: setting-row := VerticalLayout {
-        spacing: Spacing.s2;
-        padding-top: row.first ? Spacing.s6 : 0px;
-        if row.section != "": SectionHeader {
-            text: row.section;
+    // The sections: the table's (`section-index` 0..n), then shortcuts, Spaces, sites, about.
+    property <int> table: root.rows.length > 0 ? root.rows[root.rows.length - 1].section-index + 1 : 0;
+    property <int> shortcuts: root.table;
+    property <int> spaces-at: root.table + 1;
+    property <int> sites-at: root.table + 2;
+    property <int> about-at: root.table + 3;
+    property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
+    // the section the reader is in: the last one past the tracking line, the last at the end,
+    // or the one picked in the list until the page is scrolled by hand
+    property <int> tracked: 0;
+    property <int> picked: -1;
+    property <int> goto-index: -1;
+    property <int> goto-serial: 0;
+    property <bool> at-end: page.room > 0px && page.scroll >= page.room - Shell.settings-end-slack;
+    out property <int> current: root.picked >= 0 ? root.picked : root.at-end ? root.last : root.tracked;
+    property <length> pitch: Shell.nav-row + Shell.nav-row-gap;
+
+    function pick(index: int) {
+        root.picked = index;
+        root.goto-index = index;
+        root.goto-serial += 1;
+    }
+    function passed(index: int, past: bool) {
+        root.tracked = past ? max(root.tracked, index) : max(0, min(root.tracked, index - 1));
+    }
+    function jump(top: length) {
+        page.to(top - Shell.settings-pin);
+    }
+
+    page := PageScroller {
+        open: root.open;
+        wheeled => {
+            root.picked = -1;
         }
-        Rectangle {
-            background: Shell.settings-card;
-            border-top-left-radius: row.first ? Radius.md : 0px;
-            border-top-right-radius: row.first ? Radius.md : 0px;
-            border-bottom-left-radius: row.last ? Radius.md : 0px;
-            border-bottom-right-radius: row.last ? Radius.md : 0px;
+        HorizontalLayout {
+            padding-left: root.main-x;
+            padding-right: root.width - root.grid-x - root.grid-w;
+            padding-top: root.main-top;
+            padding-bottom: Shell.settings-bottom;
+
             VerticalLayout {
-                padding-left: Spacing.s4;
-                padding-right: Spacing.s4;
-                padding-top: row.first ? Spacing.s2 : 0px;
-                padding-bottom: row.last ? Spacing.s2 : 0px;
-                SettingRow {
-                    setting: row;
-                    changed(k, v) => {
-                        root.setting-changed(k, v);
-                    }
-                    reset(k) => {
-                        root.setting-reset(k);
-                    }
-                    entry-removed(k, e) => {
-                        root.entry-removed(k, e);
-                    }
-                    entry-added(k, e) => {
-                        root.entry-added(k, e);
-                    }
-                }
-            }
-        }
-    }
+                spacing: 0px;
 
-    if root.bindings.length > 0: VerticalLayout {
-        spacing: Spacing.s2;
-        padding-top: Spacing.s6;
-        SectionHeader {
-            text: "Keyboard shortcuts";
-        }
-        Card {
-            for b in root.bindings: BindingRow {
-                item: b;
-                capture: root.capture;
-                record(a) => {
-                    root.binding-record(a);
-                }
-                reset(a) => {
-                    root.binding-reset(a);
-                }
-                confirm => {
-                    root.capture-confirm();
-                }
-                cancel => {
-                    root.capture-cancel();
-                }
-            }
-        }
-    }
-
-    if !root.searching: VerticalLayout {
-        spacing: Spacing.s2;
-        padding-top: Spacing.s6;
-        SectionHeader {
-            text: "Spaces";
-        }
-        Card {
-            for space in root.spaces: VerticalLayout {
-                padding-top: Spacing.s2;
-                padding-bottom: Spacing.s2;
-                spacing: Spacing.s2;
-                HorizontalLayout {
-                    spacing: Spacing.s2;
-                    Field {
-                        horizontal-stretch: 1;
-                        text: space.name;
-                        placeholder: "Name";
-                        accepted(t) => {
-                            root.space-renamed(space.id, t);
+                // A flat list (rows keep their instance across a re-render); each section's
+                // first row carries its heading, each row draws its slice of the section's card.
+                for row in root.rows: setting-row := Section {
+                    index: row.section-index;
+                    start: row.first;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    padding-bottom: row.last ? Shell.section-below : 0px;
+                    if row.first: VerticalLayout {
+                        padding-bottom: Shell.section-head-below;
+                        SectionHead {
+                            text: row.section;
                         }
                     }
-                    for icon in root.icons: Rectangle {
-                        width: Shell.icon-button;
-                        height: Shell.icon-button;
-                        border-radius: Shell.icon-button-radius;
-                        background: icon == space.icon ? Shell.track : icon-ta.has-hover ? Shell.icon-button-hover : transparent;
-                        icon-ta := TouchArea {
-                            clicked => {
-                                root.space-icon-chosen(space.id, icon);
-                            }
-                        }
-                        SpaceIcon {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            width: Shell.space-glyph;
-                            height: Shell.space-glyph;
-                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                            kind: icon;
-                            tint: icon == space.icon ? space.tint : Palette.haze;
-                        }
-                    }
-                }
-                HorizontalLayout {
-                    spacing: Spacing.s2;
-                    alignment: start;
-                    for swatch in root.swatches: Rectangle {
-                        width: Shell.swatch;
-                        height: Shell.swatch;
-                        border-radius: self.width / 2;
-                        background: swatch;
-                        border-width: swatch == space.tint ? Shell.swatch-ring : 0px;
-                        border-color: Palette.ink;
-                        TouchArea {
-                            clicked => {
-                                root.space-tinted(space.id, swatch);
+                    Raised {
+                        fill: Shell.settings-card;
+                        highlight: row.first ? Shell.card-highlight : transparent;
+                        top-radius: row.first ? Radius.lg : 0px;
+                        bottom-radius: row.last ? Radius.lg : 0px;
+                        VerticalLayout {
+                            padding-left: Shell.card-pad;
+                            padding-right: Shell.card-pad;
+                            padding-top: row.first ? Shell.card-pad : 0px;
+                            padding-bottom: row.last ? Shell.card-pad : 0px;
+                            SettingRow {
+                                setting: row;
+                                accent: root.accent;
+                                changed(k, v) => {
+                                    root.setting-changed(k, v);
+                                }
+                                reset(k) => {
+                                    root.setting-reset(k);
+                                }
+                                entry-removed(k, e) => {
+                                    root.entry-removed(k, e);
+                                }
+                                entry-added(k, e) => {
+                                    root.entry-added(k, e);
+                                }
                             }
                         }
                     }
                 }
+
+                if root.bindings.length > 0: Section {
+                    index: root.shortcuts;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    padding-bottom: Shell.section-below;
+                    spacing: Shell.section-head-below;
+                    SectionHead {
+                        text: "Keyboard shortcuts";
+                    }
+                    Card {
+                        for b in root.bindings: BindingRow {
+                            item: b;
+                            capture: root.capture;
+                            record(a) => {
+                                root.binding-record(a);
+                            }
+                            reset(a) => {
+                                root.binding-reset(a);
+                            }
+                            confirm => {
+                                root.capture-confirm();
+                            }
+                            cancel => {
+                                root.capture-cancel();
+                            }
+                        }
+                    }
+                }
+
+                if !root.searching: Section {
+                    index: root.spaces-at;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    padding-bottom: Shell.section-below;
+                    spacing: Shell.section-head-below;
+                    SectionHead {
+                        text: "Spaces";
+                    }
+                    Card {
+                        // a Space's row: its icon on a tile (a click picks the next icon), its
+                        // name (typed, Enter renames), its colours
+                        for space in root.spaces: HorizontalLayout {
+                            min-height: Shell.settings-row;
+                            padding-left: Shell.row-pad-x;
+                            padding-right: Shell.row-pad-x;
+                            padding-top: Shell.row-pad-y;
+                            padding-bottom: Shell.row-pad-y;
+                            spacing: Shell.row-gap;
+                            VerticalLayout {
+                                alignment: center;
+                                lead := Rectangle {
+                                    width: Shell.lead;
+                                    height: Shell.lead;
+                                    border-radius: Shell.control-radius;
+                                    background: Shell.lead-fill;
+                                    accessible-role: button;
+                                    accessible-label: space.name + " icon";
+                                    accessible-action-default => {
+                                        root.space-icon-chosen(space.id, root.next-icon(space.icon));
+                                    }
+                                    lead-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.space-icon-chosen(space.id, root.next-icon(space.icon));
+                                        }
+                                    }
+                                    SpaceIcon {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        width: Shell.lead-icon;
+                                        height: Shell.lead-icon;
+                                        stroke-width: Shell.lead-icon * Shell.icon-stroke / Shell.icon-grid;
+                                        kind: space.icon;
+                                        tint: space.tint;
+                                    }
+                                }
+                            }
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: Shell.row-note-above;
+                                TextInput {
+                                    text: space.name;
+                                    min-height: Shell.row-title * Type.body.lineHeight;
+                                    vertical-alignment: center;
+                                    color: Palette.ink;
+                                    font-family: Fonts.ui;
+                                    font-size: Shell.row-title;
+                                    font-weight: 500;
+                                    single-line: true;
+                                    accepted => {
+                                        root.space-renamed(space.id, self.text);
+                                    }
+                                }
+                                Text {
+                                    text: "Its colour tints the window's glass and the backdrop.";
+                                    min-height: Shell.row-note * Type.body.lineHeight;
+                                    vertical-alignment: center;
+                                    color: Palette.mist;
+                                    font-family: Fonts.ui;
+                                    font-size: Shell.row-note;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Swatches {
+                                    colours: root.swatches;
+                                    value: space.tint;
+                                    chosen(c) => {
+                                        root.space-tinted(space.id, c);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !root.searching: Section {
+                    index: root.sites-at;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    padding-bottom: Shell.section-below;
+                    spacing: Shell.section-head-below;
+                    SectionHead {
+                        text: "Sites";
+                    }
+                    Card {
+                        Line {
+                            label: "Zoom levels";
+                        }
+                        HorizontalLayout {
+                            padding-left: Shell.row-pad-x;
+                            padding-right: Shell.row-pad-x;
+                            padding-bottom: Shell.row-pad-y;
+                            EntryList {
+                                entries: root.site-zoom;
+                                empty: "No site has its own zoom";
+                                removed(k) => {
+                                    root.site-zoom-removed(k);
+                                }
+                            }
+                        }
+                        Line {
+                            label: "Permissions";
+                        }
+                        HorizontalLayout {
+                            padding-left: Shell.row-pad-x;
+                            padding-right: Shell.row-pad-x;
+                            padding-bottom: Shell.row-pad-y;
+                            EntryList {
+                                entries: root.site-permissions;
+                                empty: "No site has a remembered permission";
+                                removed(k) => {
+                                    root.site-permission-removed(k);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !root.searching: Section {
+                    index: root.about-at;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    spacing: Shell.section-head-below;
+                    SectionHead {
+                        text: "About";
+                    }
+                    Card {
+                        Line {
+                            label: "wubble " + root.about.version;
+                            note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+                        }
+                        Line {
+                            label: "Licence";
+                            note: root.about.licence;
+                            VerticalLayout {
+                                alignment: center;
+                                TextButton {
+                                    text: root.notices-open ? "Hide notices" : "Third-party notices";
+                                    clicked => {
+                                        root.notices-open = !root.notices-open;
+                                    }
+                                }
+                            }
+                        }
+                        if root.notices-open: HorizontalLayout {
+                            padding-left: Shell.row-pad-x;
+                            padding-right: Shell.row-pad-x;
+                            padding-bottom: Shell.row-pad-y;
+                            Text {
+                                text: root.about.notices;
+                                color: Palette.mist;
+                                font-family: Fonts.mono;
+                                font-size: Type.label.size;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    if !root.searching: VerticalLayout {
-        spacing: Spacing.s2;
-        padding-top: Spacing.s6;
-        SectionHeader {
-            text: "Sites";
+    // .st-pin: the title, the search, the count and the section list, held 24 below the top
+    // once the page scrolls; the wheel over it scrolls the page.
+    side := TouchArea {
+        x: root.grid-x;
+        y: max(Shell.settings-pin, Shell.settings-top - page.scroll);
+        width: Shell.settings-side;
+        height: pin.preferred-height;
+        scroll-event(e) => {
+            page.wheel(-e.delta-y);
+            accept
         }
-        Card {
-            Line {
-                label: "Zoom levels";
-            }
-            EntryList {
-                entries: root.site-zoom;
-                empty: "No site has its own zoom";
-                removed(k) => {
-                    root.site-zoom-removed(k);
+        pin := VerticalLayout {
+            spacing: 0px;
+            alignment: start;
+            HorizontalLayout {
+                padding-left: Shell.settings-title-in;
+                padding-bottom: Shell.settings-title-below;
+                PageTitle {
+                    text: "Settings";
                 }
             }
-            Line {
-                label: "Permissions";
-            }
-            EntryList {
-                entries: root.site-permissions;
-                empty: "No site has a remembered permission";
-                removed(k) => {
-                    root.site-permission-removed(k);
+            search := Field {
+                capsule: true;
+                icon-path: IconPaths.search;
+                placeholder: "Search settings";
+                edited(q) => {
+                    page.reset();
+                    root.tracked = 0;
+                    root.picked = -1;
+                    root.query-changed(q);
                 }
             }
-        }
-    }
-
-    if !root.searching: VerticalLayout {
-        spacing: Spacing.s2;
-        padding-top: Spacing.s6;
-        SectionHeader {
-            text: "About";
-        }
-        Card {
-            Line {
-                label: "wubble " + root.about.version;
-                note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+            // .st-count: how many rows the search leaves
+            HorizontalLayout {
+                padding-top: Shell.count-above;
+                padding-bottom: Shell.count-below;
+                padding-left: Shell.count-in;
+                Text {
+                    height: Shell.count-height;
+                    text: !root.searching ? "" : root.rows.length + root.bindings.length == 0 ? "No matches" : root.rows.length + root.bindings.length == 1 ? "1 setting" : (root.rows.length + root.bindings.length) + " settings";
+                    color: Palette.mist;
+                    font-family: Fonts.ui;
+                    font-size: Shell.count-font;
+                    vertical-alignment: center;
+                }
             }
-            Line {
-                label: "Licence";
-                note: root.about.licence;
+            // .st-nav: the table's sections (one per first row), then the page's own
+            nav := Rectangle {
+                height: (root.about-at + 1) * root.pitch - Shell.nav-row-gap;
+                // .st-nav-ind
+                Raised {
+                    y: root.current * root.pitch;
+                    height: Shell.nav-row;
+                    radius: Shell.control-radius;
+                    fill: Shell.nav-fill;
+                    highlight: Shell.nav-highlight;
+                    animate y {
+                        duration: Shell.control-ms;
+                        easing: Motion.easeOut;
+                    }
+                }
                 VerticalLayout {
-                    alignment: center;
-                    TextButton {
-                        text: root.notices-open ? "Hide notices" : "Third-party notices";
-                        clicked => {
-                            root.notices-open = !root.notices-open;
+                    alignment: start;
+                    for row in root.rows: Rectangle {
+                        height: row.first ? root.pitch : 0px;
+                        visible: row.first;
+                        NavRow {
+                            y: 0px;
+                            height: Shell.nav-row;
+                            title: row.section;
+                            icon-path: SectionIcons.of(row.section);
+                            on: root.current == row.section-index;
+                            accent: root.accent;
+                            picked => {
+                                root.pick(row.section-index);
+                            }
+                        }
+                    }
+                    for extra[i] in [
+                        { title: "Keyboard shortcuts", icon: IconPaths.keyboard, shown: root.bindings.length > 0 },
+                        { title: "Spaces", icon: IconPaths.stack, shown: !root.searching },
+                        { title: "Sites", icon: IconPaths.lock, shown: !root.searching },
+                        { title: "About", icon: IconPaths.bubble, shown: !root.searching },
+                    ]: Rectangle {
+                        height: root.pitch;
+                        NavRow {
+                            y: 0px;
+                            height: Shell.nav-row;
+                            title: extra.title;
+                            icon-path: extra.icon;
+                            enabled: extra.shown;
+                            on: root.current == root.table + i;
+                            accent: root.accent;
+                            picked => {
+                                root.pick(root.table + i);
+                            }
                         }
                     }
                 }
-            }
-            if root.notices-open: Text {
-                text: root.about.notices;
-                color: Palette.mist;
-                font-family: Fonts.mono;
-                font-size: Type.label.size;
-                wrap: word-wrap;
             }
         }
     }

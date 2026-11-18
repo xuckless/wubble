@@ -90,24 +90,29 @@ export component AddressPill inherits Rectangle {
                     tint: Palette.mint;
                 }
             }
-            Text {
-                text: root.host;
-                color: Palette.ink;
-                font-family: Fonts.mono;
-                font-size: Type.address.size;
-                font-weight: Type.address.weight;
-                vertical-alignment: center;
-                overflow: elide;
-            }
-            Text {
-                text: root.path;
+            // host and path run on, one string in two colours (.wb-address-text span)
+            HorizontalLayout {
                 horizontal-stretch: 1;
-                color: Palette.haze;
-                font-family: Fonts.mono;
-                font-size: Type.address.size;
-                font-weight: Type.address.weight;
-                vertical-alignment: center;
-                overflow: elide;
+                spacing: 0px;
+                Text {
+                    text: root.host;
+                    color: Palette.ink;
+                    font-family: Fonts.mono;
+                    font-size: Type.address.size;
+                    font-weight: Type.address.weight;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.path;
+                    horizontal-stretch: 1;
+                    color: Palette.haze;
+                    font-family: Fonts.mono;
+                    font-size: Type.address.size;
+                    font-weight: Type.address.weight;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
             }
             // Above the whole-pill TouchArea, so a click here is not an address click.
             if root.blocker-visible: badge := Rectangle {

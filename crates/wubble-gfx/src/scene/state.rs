@@ -112,8 +112,9 @@ pub struct GlassRect {
     pub pressed: bool,
     pub hover: bool,
     pub focus: bool,
-    /// wubble: its right edge follows the bowed seam ([`Scene::set_bow`]); the sidebar's glass.
-    pub bow: bool,
+    /// wubble: RGB 0..1 mixed into the glass at 10% (`GlassSurface::tint`); black = none. The
+    /// window's glass carries the Space colour (design desktop.tsx `glass.tint = accent`).
+    pub tint: [f32; 3],
 }
 
 /// Where the border beam runs: a rounded rect, logical px (the address bar).
@@ -146,8 +147,6 @@ pub struct GlassSurface {
     pub beam: Option<Beam>,
     /// 1 = full glass; 0 = effects only (beam, glow) for surfaces drawn over live content
     pub material: f64,
-    /// wubble: the right edge follows the scene's bow ([`Scene::set_bow`])
-    pub bow: bool,
 }
 
 impl Default for GlassSurface {
@@ -167,7 +166,6 @@ impl Default for GlassSurface {
             waves: vec![],
             beam: None,
             material: 1.0,
-            bow: false,
         }
     }
 }
@@ -195,7 +193,7 @@ pub fn surface_of(g: &GlassRect) -> GlassSurface {
         tier: g.tier.shader_value(),
         film: if touched { 1.0 } else { 0.0 },
         shadow: 0.6,
-        bow: g.bow,
+        tint: g.tint,
         ..Default::default()
     }
 }
@@ -351,10 +349,6 @@ pub struct Scene {
     pub(super) opts: SceneOptions,
     ops: Vec<FluidOp>,
     rng: Rng,
-    /// wubble: the bowed seam the flagged glass's right edge follows, packed for the shader
-    /// (`crate::EdgeU`), and its largest displacement.
-    pub(super) bow: crate::EdgeU,
-    pub(super) bow_reach: f32,
 }
 
 impl Scene {
@@ -393,17 +387,7 @@ impl Scene {
             opts: o,
             ops: vec![],
             rng: Rng::new(seed),
-            bow: crate::EdgeU::pack(None),
-            bow_reach: 0.0,
         }
-    }
-
-    /// wubble: the seam's bowed string (window heights, logical px), which the right edge of
-    /// every glass rect flagged `bow` follows; `None` when it is straight. The sidebar's glass
-    /// bulges and pinches with the string instead of staying a rigid box under it.
-    pub fn set_bow(&mut self, edge: Option<crate::Edge>) {
-        self.bow_reach = edge.map_or(0.0, |e| e.offset.iter().fold(0.0f32, |m, o| m.max(o.abs())));
-        self.bow = crate::EdgeU::pack(edge);
     }
 
     /// The Space's dye colours; the liquid crossfades to them in about 600 ms.
@@ -675,13 +659,13 @@ mod tests {
 
     fn rect(x: f32, y: f32, w: f32, h: f32) -> GlassRect {
         GlassRect {
-            bow: false,
             rect: Rect::new(x, y, w, h),
             radius: 12.0,
             tier: Tier::Regular,
             pressed: false,
             hover: false,
             focus: false,
+            tint: [0.0; 3],
         }
     }
 
