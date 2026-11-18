@@ -132,8 +132,9 @@ export struct MenuView {
     entries: [MenuEntry],
 }
 
-// A JS dialog as a sheet. `cancel` empty: no cancel button (an alert). `serial` changes for
-// every new dialog, so the sheet resets its input.
+// A JS dialog or the HTTP sign-in as a sheet. `cancel` empty: no cancel button (an alert).
+// `secret`: a second, masked field (the sign-in's password; `input` is then the user name).
+// `serial` changes for every new dialog, so the sheet resets its fields.
 export struct DialogView {
     open: bool,
     title: string,
@@ -141,8 +142,53 @@ export struct DialogView {
     accept: string,
     cancel: string,
     prompt: bool,
+    secret: bool,
     input: string,
     serial: int,
+}
+
+// The permission prompt under the address pill: "<site> wants to", one line per kind. `serial`
+// changes for every new request, so the prompt resets its "remember" toggle.
+export struct PermissionView {
+    open: bool,
+    title: string,
+    lines: [string],
+    serial: int,
+}
+
+// The error panel over the page (wubble page_error.rs): a failed load, a refused certificate or
+// a crashed page. `secondary` empty: no second button. `cert`: the certificate panel.
+export struct ErrorView {
+    open: bool,
+    title: string,
+    summary: string,
+    detail: string,
+    primary: string,
+    secondary: string,
+    cert: bool,
+}
+
+// One row of the downloads popover (wubble host/downloads.rs). `progress` 0 to 1, below 0 when
+// the size is unknown; the `can-*` flags say which buttons the state allows.
+export struct DownloadItem {
+    id: int,
+    name: string,
+    detail: string,
+    progress: float,
+    active: bool,
+    can-pause: bool,
+    can-resume: bool,
+    can-retry: bool,
+    done: bool,
+}
+
+export enum DownloadAction {
+    pause,
+    resume,
+    cancel,
+    retry,
+    remove,
+    reveal,
 }
 
 // The find bar. `focus-serial` changes when the bar should take the keyboard (Mod+F).

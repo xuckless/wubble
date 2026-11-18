@@ -125,7 +125,10 @@ mod tests {
         // the scrim keeps the page from the pointer.
         let answers = Rc::new(std::cell::RefCell::new(vec![]));
         let a = answers.clone();
-        app.on_dialog_answered(move |accept, text| a.borrow_mut().push((accept, text.to_string())));
+        app.on_dialog_answered(move |accept, text, secret| {
+            a.borrow_mut()
+                .push((accept, text.to_string(), secret.to_string()))
+        });
         let dialog = |prompt: bool, serial: i32| DialogView {
             open: true,
             title: "a.test says".into(),
@@ -133,6 +136,7 @@ mod tests {
             accept: "OK".into(),
             cancel: "Cancel".into(),
             prompt,
+            secret: false,
             input: "seed".into(),
             serial,
         };
@@ -152,15 +156,66 @@ mod tests {
         // The prompt's field holds the keyboard with the seed selected.
         press(app, "x");
         press(app, Key::Return);
+        // Sign-in: Enter in the user name moves to the password, Enter there signs in.
+        app.set_dialog(DialogView {
+            secret: true,
+            input: "".into(),
+            ..dialog(true, 3)
+        });
+        settle();
+        press(app, "u");
+        press(app, Key::Return);
+        press(app, "p");
+        press(app, Key::Return);
+        let s = String::new;
         assert_eq!(
             *answers.borrow(),
             vec![
-                (true, String::new()),
-                (false, String::new()),
-                (true, "x".to_string())
+                (true, s(), s()),
+                (false, s(), s()),
+                (true, "x".to_string(), s()),
+                (true, "u".to_string(), "p".to_string())
             ]
         );
         app.set_dialog(DialogView::default());
+        settle();
+        assert!(app.get_web_focused());
+
+        // ── Error panel: takes the keyboard, Enter is the primary button.
+        let primaries = Rc::new(Cell::new(0));
+        app.on_error_primary(count(&primaries));
+        app.set_page_error(ErrorView {
+            open: true,
+            title: "Your connection is not private".into(),
+            primary: "Go back".into(),
+            secondary: "Proceed to a.test (unsafe)".into(),
+            cert: true,
+            ..Default::default()
+        });
+        settle();
+        assert!(!app.get_web_focused());
+        press(app, Key::Return);
+        assert_eq!(primaries.get(), 1);
+        app.set_page_error(ErrorView::default());
+        settle();
+        assert!(app.get_web_focused());
+
+        // ── Permission prompt: Escape blocks without remembering.
+        let permits = Rc::new(std::cell::RefCell::new(vec![]));
+        let p = permits.clone();
+        app.on_permission_answered(move |allow, remember| p.borrow_mut().push((allow, remember)));
+        app.set_permission(PermissionView {
+            open: true,
+            title: "a.test wants to".into(),
+            lines: ModelRc::new(slint::VecModel::from(vec![SharedString::from(
+                "Use your camera",
+            )])),
+            serial: 4,
+        });
+        settle();
+        press(app, Key::Escape);
+        assert_eq!(*permits.borrow(), vec![(false, false)]);
+        app.set_permission(PermissionView::default());
         settle();
         assert!(app.get_web_focused());
 

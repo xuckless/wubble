@@ -1,17 +1,20 @@
 mod backdrop;
 mod bar;
 mod bind;
+mod chooser;
 mod cli;
 mod host;
 mod ime;
 mod input;
 mod menu;
 mod nav_smoke;
+mod page_error;
 mod page_smoke;
 mod perform;
 mod persist;
 mod pixels;
 mod profile;
+mod prompt;
 mod screen;
 mod session_smoke;
 mod shell;
@@ -79,7 +82,11 @@ fn main() -> ExitCode {
         Err(e) => e.exit(),
     };
     match command {
-        Command::Run { url, profile } => match browse(url, profile) {
+        Command::Run {
+            url,
+            profile,
+            downloads,
+        } => match browse(url, profile, downloads) {
             Ok(Outcome { failure: None, .. }) => ExitCode::SUCCESS,
             Ok(Outcome {
                 failure: Some(e), ..
@@ -263,13 +270,15 @@ fn drain(engine: &mut Engine) {
 fn browse(
     url: Option<String>,
     profile: Option<PathBuf>,
+    downloads: Option<PathBuf>,
 ) -> Result<Outcome, Box<dyn std::error::Error>> {
     let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
         ..config
     });
-    run(Mode::Browse { url }, config, &profile.dir)
+    let downloads = profile::downloads_dir(downloads);
+    run(Mode::Browse { url, downloads }, config, &profile.dir)
 }
 
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
@@ -346,8 +355,11 @@ struct Outcome {
 
 /// What the window is for.
 enum Mode {
-    /// `url`, or the bundled page if `None`.
-    Browse { url: Option<String> },
+    /// `url`, or the bundled page if `None`; downloads go to `downloads`.
+    Browse {
+        url: Option<String>,
+        downloads: Option<PathBuf>,
+    },
     /// Quit after `frames` accelerated frames of `url` (bundled page if `None`).
     Frames { frames: u64, url: Option<String> },
     /// `--smoke nav`.
@@ -542,7 +554,17 @@ fn connect_surfaces(window: &AppWindow) {
             host.menu_dismissed();
         })
     });
-    window.on_dialog_answered(|accept, text| with_host(|host| host.dialog_answered(accept, &text)));
+    window.on_dialog_answered(|accept, text, secret| {
+        with_host(|host| host.dialog_answered(accept, &text, &secret))
+    });
+    window.on_permission_answered(|allow, remember| {
+        with_host(|host| host.permission_answered(allow, remember))
+    });
+    window.on_error_primary(|| with_host(Host::error_primary));
+    window.on_error_secondary(|| with_host(Host::error_secondary));
+    window.on_download_action(|id, action| {
+        with_host(|host| host.download_action(i64::from(id), action))
+    });
     window.on_find_edited(|q| with_host(|host| host.find_event(FindEvent::Query(q.into()))));
     window.on_find_step(|forward| {
         let event = if forward {
@@ -593,10 +615,15 @@ fn run(
         page_smoke: None,
     };
     let browsing = matches!(mode, Mode::Browse { .. });
+    // Smokes download into their throwaway profile.
+    let downloads = match &mode {
+        Mode::Browse { downloads, .. } => downloads.clone(),
+        _ => Some(profile.join("downloads")),
+    };
     // `url` is opened in a new tab; without one a fresh profile gets the
     // bundled page and a restored session opens nothing new.
     let (url, checks) = match mode {
-        Mode::Browse { url } => (url, none),
+        Mode::Browse { url, .. } => (url, none),
         Mode::Frames { frames, url } => {
             // Only the bundled page has known colours to check against.
             let check_pixels = url.is_none();
@@ -672,6 +699,7 @@ fn run(
         store,
         url,
         checks,
+        downloads,
     );
     HOST.set(Some(host));
     // Smokes drive the lifecycle themselves, never by wall-clock time.

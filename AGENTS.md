@@ -44,6 +44,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke session   # two tabs saved, restarted and restored on a temp profile; two windows, exits; run by hand only
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
+    cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
 
 ## Code principles
 

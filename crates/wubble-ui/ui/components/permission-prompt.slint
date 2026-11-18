@@ -1,0 +1,155 @@
+import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, PressableButton } from "../components.slint";
+import { GlassTier, PermissionView } from "model.slint";
+
+// A site asks for a permission: "<site> wants to", one line per kind, a "Remember for this site"
+// toggle, Block and Allow. Placed by the parent under the address pill, where Chromium puts its
+// bubble; not modal (the page stays usable, as Chromium's bubble is). Written from scratch: the
+// design repo has no permission prompt. Looks and timings are the context menu's and the dialog
+// sheet's (Ultra Reactivate `.ur-o-surface` / `.ur-o-dialog`, overlays.css): thick glass over
+// content, radius 14, buttons 42 high; it drops in at .95 over 200 ms ease-out from its top left.
+// Enter allows, Escape blocks (not remembered). `answered` is the intent; the host answers the
+// engine (and stores a remembered decision).
+export component PermissionPrompt inherits Rectangle {
+    in property <PermissionView> prompt;
+    // (allow, remember)
+    callback answered(bool, bool);
+
+    property <bool> open: root.prompt.open;
+    property <bool> remember: false;
+
+    public function take-focus() {
+        keys.focus();
+    }
+
+    // A new request starts with the toggle off.
+    property <int> serial: root.prompt.serial;
+    changed serial => {
+        root.remember = false;
+    }
+
+    width: Shell.prompt-width;
+    height: body.preferred-height;
+    visible: root.open;
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.answered(false, false);
+                return accept;
+            }
+            if event.text == Key.Return {
+                root.answered(true, root.remember);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: Shell.menu-radius;
+        over-content: true;
+        transform-origin: { x: 0px, y: 0px };
+        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        opacity: root.open ? 1 : 0;
+        animate transform-scale, opacity {
+            duration: root.open ? Shell.menu-in : Shell.menu-out;
+            easing: root.open ? Motion.easeOut : Motion.easeIn;
+        }
+        TouchArea { }
+
+        body := VerticalLayout {
+            padding: Spacing.s4;
+            spacing: Spacing.s2;
+            Text {
+                text: root.prompt.title;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Type.heading.size;
+                font-weight: Type.heading.weight;
+                overflow: elide;
+            }
+            for line in root.prompt.lines: Text {
+                text: line;
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                wrap: word-wrap;
+            }
+            // The toggle: a check box and its label, one target.
+            Rectangle {
+                height: Spacing.s4 + Spacing.s2;
+                TouchArea {
+                    clicked => {
+                        root.remember = !root.remember;
+                    }
+                }
+                Rectangle {
+                    x: 0px;
+                    width: Spacing.s4;
+                    height: Spacing.s4;
+                    border-radius: Radius.xs / 2;
+                    border-width: Shell.check-rim;
+                    border-color: root.remember ? Palette.mint : Palette.haze;
+                    background: root.remember ? Palette.mint : transparent;
+                    animate background, border-color {
+                        duration: Shell.menu-hover-ms;
+                        easing: Motion.easeOut;
+                    }
+                    if root.remember: Path {
+                        width: 100%;
+                        height: 100%;
+                        viewbox-width: 16;
+                        viewbox-height: 16;
+                        commands: "M4 8.5l3 3 5-6";
+                        stroke: Palette.abyss;
+                        stroke-width: Shell.check-tick;
+                        stroke-line-cap: round;
+                        stroke-line-join: round;
+                        fill: transparent;
+                    }
+                }
+                Text {
+                    x: Spacing.s4 + Spacing.s2;
+                    width: parent.width - self.x;
+                    text: "Remember for this site";
+                    color: Palette.mist;
+                    font-family: Fonts.ui;
+                    font-size: Type.label.size;
+                    font-weight: Type.label.weight;
+                    vertical-alignment: center;
+                }
+            }
+            Rectangle {
+                height: Spacing.s1;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: Spacing.s2;
+                PressableButton {
+                    text: "Block";
+                    height: Shell.sheet-button;
+                    padding-x: Shell.sheet-button-pad;
+                    border-radius: Shell.sheet-button-radius;
+                    clicked => {
+                        root.answered(false, root.remember);
+                    }
+                }
+                PressableButton {
+                    text: "Allow";
+                    height: Shell.sheet-button;
+                    padding-x: Shell.sheet-button-pad;
+                    border-radius: Shell.sheet-button-radius;
+                    background: self.hovered ? Palette.rim : Palette.shell;
+                    clicked => {
+                        root.answered(true, root.remember);
+                    }
+                }
+            }
+        }
+    }
+}

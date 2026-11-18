@@ -664,6 +664,13 @@ impl View {
         self.apply_download(id, DownloadInput::Cancel, RequestMode::AskHost);
     }
 
+    /// Downloads `url` as a new download (CEF `BrowserHost::StartDownload`);
+    /// it arrives as a fresh `DownloadRequested`. A retry starts over.
+    pub fn start_download(&mut self, url: &str) {
+        let url = cef::CefString::from(url);
+        self.send(|host| host.start_download(Some(&url)));
+    }
+
     fn apply_download(&mut self, id: DownloadId, input: DownloadInput, mode: RequestMode) {
         let (next, effects) = download::transition(self.downloads.get(&id).copied(), id, input);
         match next {

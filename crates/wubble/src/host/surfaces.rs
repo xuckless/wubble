@@ -1,21 +1,28 @@
 //! The host's half of the page's own UI: page events in, through the pure
-//! machines (`surface.rs`, `menu.rs`, `screen.rs`, `ime.rs`), effects out
-//! to the engine and the shell. The visible tab's surfaces are drawn by
+//! machines (`surface.rs`, `menu.rs`, `screen.rs`, `ime.rs`, `prompt.rs`,
+//! `page_error.rs`), effects out to the engine and the shell. The visible tab's surfaces are drawn by
 //! [`Host::render_surfaces`], the only writer of those Slint properties.
 
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
 use slint::winit_030::winit::event::Ime as WinitIme;
+use std::path::PathBuf;
+
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
 use wubble_engine::app::ViewId;
-use wubble_engine::page::{PageEvent, Rect};
-use wubble_ui::{AppWindow, DialogView, FindView, MenuEntry, MenuView, PopupView};
+use wubble_engine::page::{PageEvent, Rect, RequestId};
+use wubble_ui::{
+    AppWindow, DialogView, ErrorView, FindView, MenuEntry, MenuView, PermissionView, PopupView,
+};
 
-use super::{Host, new_tab};
+use super::{Host, new_tab, now_ms};
+use crate::chooser::{self, DialogSpec};
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
+use crate::page_error::{self, ErrorEffect, ErrorEvent, PageError};
+use crate::prompt::{self, Auth, AuthEvent, PermissionEvent, PermissionPrompt, Secret};
 use crate::screen::{self, Screen, ScreenEffect, ScreenEvent};
 use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, Routed};
 
@@ -26,6 +33,7 @@ use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, 
 pub(super) struct Drawn {
     tab: Option<TabId>,
     menu: Menu,
+    permission: PermissionPrompt,
 }
 
 impl Host {
@@ -76,11 +84,18 @@ impl Host {
                 self.after_change();
             }
             Routed::ImeBounds(rect) if visible => place_candidates(window, rect),
-            Routed::Decline(request) => {
-                if let Some(v) = self.tab_view(tab) {
-                    v.decline(&request);
-                }
+            Routed::Dismissed(ids) => {
+                self.apply_dialog(tab, DialogEvent::Dismissed(ids.clone()));
+                self.apply_permission(tab, PermissionEvent::Dismissed(ids.clone()));
+                self.apply_auth(tab, AuthEvent::Dismissed(ids));
             }
+            Routed::Permission(e) => self.apply_permission(tab, e),
+            Routed::Auth(e) => self.apply_auth(tab, e),
+            Routed::Chooser { id, spec } => self.run_chooser(window, tab, id, spec),
+            Routed::Cert { id, url, code } => self.certificate(tab, id, url, code),
+            Routed::Error(e) => self.apply_error(tab, e),
+            Routed::Download(e) => self.download_event(window, tab, e),
+            Routed::Console(line) => log::debug!(target: "wubble::console", "{line}"),
             Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);
@@ -98,6 +113,96 @@ impl Host {
         let answer = answer?;
         let view = self.tab_view(tab)?;
         Some(view.answer_dialog(answer.id, answer.accept, &answer.text))
+    }
+
+    /// Runs one permission event: remembered decisions are stored, every
+    /// answer goes to the engine.
+    pub(super) fn apply_permission(&mut self, tab: TabId, event: PermissionEvent) {
+        let s = self.surfaces.entry(tab).or_default();
+        let (next, answers) = prompt::permission(
+            std::mem::take(&mut s.permission),
+            event,
+            &self.site_permissions,
+        );
+        s.permission = next;
+        for answer in answers {
+            if let Some((site, kinds, decision)) = &answer.remember {
+                for &kind in kinds {
+                    self.site_permissions.set(site, kind, *decision);
+                    self.store
+                        .set_site_permission(site, kind, *decision, now_ms());
+                }
+            }
+            if let Some(view) = self.tab_view(tab) {
+                view.answer_permission(answer.id, &answer.granted);
+            }
+        }
+    }
+
+    pub(super) fn apply_auth(&mut self, tab: TabId, event: AuthEvent) {
+        let s = self.surfaces.entry(tab).or_default();
+        let (next, answer) = prompt::auth(std::mem::take(&mut s.auth), event);
+        s.auth = next;
+        if let Some(answer) = answer
+            && let Some(view) = self.tab_view(tab)
+        {
+            let credentials = answer
+                .credentials
+                .as_ref()
+                .map(|(user, Secret(password))| (user.as_str(), password.as_str()));
+            view.answer_auth(answer.id, credentials);
+        }
+    }
+
+    /// A certificate error: proceeds at once past one the user allowed this
+    /// session; otherwise refuses it and shows the panel.
+    fn certificate(&mut self, tab: TabId, id: RequestId, url: String, code: i32) {
+        let proceed = zoom::host_of(&url).is_some_and(|h| self.cert_exceptions.allowed(&h, code));
+        if let Some(view) = self.tab_view(tab) {
+            view.answer_certificate(id, proceed);
+        }
+        if !proceed {
+            self.apply_error(tab, ErrorEvent::CertRefused { url, code });
+        }
+    }
+
+    pub(super) fn apply_error(&mut self, tab: TabId, event: ErrorEvent) {
+        let s = self.surfaces.entry(tab).or_default();
+        let (next, effects) = page_error::transition(std::mem::take(&mut s.error), event);
+        s.error = next;
+        for effect in effects {
+            if let ErrorEffect::AllowAndLoad { host, code, .. } = &effect {
+                self.cert_exceptions.allow(host, *code);
+            }
+            let Some(view) = self.tab_view(tab) else {
+                continue;
+            };
+            match effect {
+                ErrorEffect::Reload => view.reload(),
+                ErrorEffect::Back => view.back(),
+                ErrorEffect::Blank => view.load("about:blank"),
+                ErrorEffect::AllowAndLoad { url, .. } => view.load(&url),
+            }
+        }
+    }
+
+    /// Shows the OS file dialog; its answer comes back on the event loop.
+    fn run_chooser(&mut self, window: &AppWindow, tab: TabId, id: RequestId, spec: DialogSpec) {
+        let dialog = chooser::dialog(&spec, Some(window.window()));
+        let task = slint::spawn_local(async move {
+            let picked = chooser::pick(spec, dialog).await;
+            crate::with_host(|host| host.chooser_answered(tab, id, picked));
+        });
+        if let Err(e) = task {
+            eprintln!("wubble: cannot show the file dialog: {e}");
+            self.chooser_answered(tab, id, None);
+        }
+    }
+
+    fn chooser_answered(&mut self, tab: TabId, id: RequestId, picked: Option<Vec<PathBuf>>) {
+        if let Some(view) = self.tab_view(tab) {
+            view.answer_file_chooser(id, picked.as_deref());
+        }
     }
 
     /// Runs one menu event; how many answers reached the engine.
@@ -177,6 +282,7 @@ impl Host {
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }
+        self.downloads_lost(tab);
         self.audio.remove(&tab);
         if let Some(window) = self.window.upgrade() {
             self.apply_screen(&window, ScreenEvent::PageLeft(tab));
@@ -219,7 +325,15 @@ impl Host {
             let scale = window.window().scale_factor();
             window.set_menu(menu_view(&current.menu, scale));
         }
-        window.set_dialog(dialog_view(&current.dialog));
+        if self.drawn.tab != tab || self.drawn.permission != current.permission {
+            window.set_permission(permission_view(&current.permission));
+        }
+        // The sign-in sheet blocks the load; a JS dialog waits behind it.
+        window.set_dialog(match &current.auth {
+            Auth::Open(r) => auth_view(r),
+            Auth::None => dialog_view(&current.dialog),
+        });
+        window.set_page_error(error_view(&current.error));
         window.set_find(find_view(&current.find, self.find_focus));
         window.set_popup(popup_view(window, current.popup));
         if current.popup.is_none() {
@@ -229,22 +343,72 @@ impl Host {
         self.drawn = Drawn {
             tab,
             menu: current.menu,
+            permission: current.permission,
         };
     }
 
     // ----- intents from the shell (the visible tab's surfaces)
 
-    pub fn dialog_answered(&mut self, accept: bool, text: &str) {
+    /// The sheet's answer: the sign-in sheet's when one shows (`text` is
+    /// the user name), else the JS dialog's.
+    pub fn dialog_answered(&mut self, accept: bool, text: &str, secret: &str) {
         let Some(tab) = self.model.visible_tab() else {
             return;
         };
-        let event = if accept {
-            DialogEvent::Accept(text.into())
+        let signing_in = matches!(
+            self.surfaces.get(&tab).map(|s| &s.auth),
+            Some(Auth::Open(_))
+        );
+        if signing_in {
+            let event = if accept {
+                AuthEvent::Submit {
+                    user: text.into(),
+                    password: Secret(secret.into()),
+                }
+            } else {
+                AuthEvent::Cancel
+            };
+            self.apply_auth(tab, event);
         } else {
-            DialogEvent::Cancel
-        };
-        self.apply_dialog(tab, event);
+            let event = if accept {
+                DialogEvent::Accept(text.into())
+            } else {
+                DialogEvent::Cancel
+            };
+            self.apply_dialog(tab, event);
+        }
         self.redraw_surfaces();
+    }
+
+    pub fn permission_answered(&mut self, allow: bool, remember: bool) {
+        if let Some(tab) = self.model.visible_tab() {
+            self.apply_permission(tab, PermissionEvent::Answer { allow, remember });
+            self.redraw_surfaces();
+        }
+    }
+
+    /// The error panel's default button: Go back on a certificate panel,
+    /// else Reload.
+    pub fn error_primary(&mut self) {
+        let Some(tab) = self.model.visible_tab() else {
+            return;
+        };
+        let event = match self.surfaces.get(&tab).map(|s| &s.error) {
+            Some(PageError::Cert { .. }) => ErrorEvent::GoBack {
+                can_go_back: self.tab_view(tab).is_some_and(|v| v.nav().page.can_go_back),
+            },
+            _ => ErrorEvent::Reload,
+        };
+        self.apply_error(tab, event);
+        self.redraw_surfaces();
+    }
+
+    /// Proceed past a certificate error.
+    pub fn error_secondary(&mut self) {
+        if let Some(tab) = self.model.visible_tab() {
+            self.apply_error(tab, ErrorEvent::Proceed);
+            self.redraw_surfaces();
+        }
     }
 
     pub fn menu_chosen(&mut self, index: usize) {
@@ -388,7 +552,7 @@ fn place_candidates(window: &AppWindow, rect: Rect) {
         .with_winit_window(|w| w.set_ime_cursor_area(at, size));
 }
 
-fn model<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
+pub(super) fn model<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
     slint::ModelRc::from(std::rc::Rc::new(slint::VecModel::from(items)))
 }
 
@@ -425,11 +589,58 @@ fn dialog_view(dialog: &Dialog) -> DialogView {
                 accept: text.accept.into(),
                 cancel: text.cancel.into(),
                 prompt: text.prompt,
+                secret: false,
                 input: d.default_text.as_str().into(),
                 // Unique per request, so a new dialog resets the sheet.
                 serial: i32::try_from(d.id.0).unwrap_or(i32::MAX),
             }
         }
+    }
+}
+
+fn auth_view(r: &prompt::AuthRequest) -> DialogView {
+    let (title, message) = prompt::auth_text(r);
+    DialogView {
+        open: true,
+        title: title.into(),
+        message: message.into(),
+        accept: "Sign in".into(),
+        cancel: "Cancel".into(),
+        prompt: true,
+        secret: true,
+        input: Default::default(),
+        serial: i32::try_from(r.id.0).unwrap_or(i32::MAX),
+    }
+}
+
+fn permission_view(p: &PermissionPrompt) -> PermissionView {
+    match p {
+        PermissionPrompt::None => PermissionView::default(),
+        PermissionPrompt::Open(r) => {
+            let (title, lines) = prompt::permission_text(r);
+            PermissionView {
+                open: true,
+                title: title.into(),
+                lines: model(lines.into_iter().map(Into::into).collect()),
+                // Unique per request, so a new prompt resets the toggle.
+                serial: i32::try_from(r.id.0).unwrap_or(i32::MAX),
+            }
+        }
+    }
+}
+
+fn error_view(e: &PageError) -> ErrorView {
+    match page_error::error_text(e) {
+        None => ErrorView::default(),
+        Some(t) => ErrorView {
+            open: true,
+            title: t.title.into(),
+            summary: t.summary.into(),
+            detail: t.detail.into(),
+            primary: t.primary.into(),
+            secondary: t.secondary.into(),
+            cert: t.cert,
+        },
     }
 }
 

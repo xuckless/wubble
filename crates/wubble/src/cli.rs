@@ -27,6 +27,9 @@ struct Cli {
     /// Profile directory (database and CEF cache) instead of the per-user one.
     #[arg(long, value_name = "DIR")]
     profile: Option<PathBuf>,
+    /// Where downloads go instead of the OS downloads folder.
+    #[arg(long, value_name = "DIR", conflicts_with = "smoke")]
+    downloads: Option<PathBuf>,
 }
 
 /// The `--smoke` value alone; `--url` is joined in by `Command::try_from`.
@@ -99,6 +102,8 @@ pub enum Command {
         url: Option<String>,
         /// `--profile`, else the per-user profile.
         profile: Option<PathBuf>,
+        /// `--downloads`, else the OS downloads folder.
+        downloads: Option<PathBuf>,
     },
     Smoke(Smoke),
 }
@@ -113,6 +118,7 @@ impl TryFrom<Cli> for Command {
                 return Ok(Command::Run {
                     url: cli.page.as_deref().map(wubble_core::url::from_cli_arg),
                     profile,
+                    downloads: cli.downloads,
                 });
             }
             (Some(SmokeArg::SessionPhase(phase)), None, Some(profile)) => {
@@ -165,6 +171,7 @@ mod tests {
         Some(Command::Run {
             url: url.map(String::from),
             profile: None,
+            downloads: None,
         })
     }
 
@@ -265,6 +272,7 @@ mod tests {
             Some(Command::Run {
                 url: Some("https://example.com".into()),
                 profile: Some("/tmp/p".into()),
+                downloads: None,
             })
         );
         for smoke in ["boot", "nav", "tabs", "page", "frames=3", "session"] {
@@ -305,6 +313,19 @@ mod tests {
             );
         }
         assert!(parse(["wubble", "--smoke", "session", "--url", "about:blank"]).is_err());
+    }
+
+    #[test]
+    fn downloads_folder_for_the_browser_only() {
+        assert_eq!(
+            parse(["wubble", "--downloads", "/tmp/d"]).ok(),
+            Some(Command::Run {
+                url: None,
+                profile: None,
+                downloads: Some("/tmp/d".into()),
+            })
+        );
+        assert!(parse(["wubble", "--smoke", "page", "--downloads", "/tmp/d"]).is_err());
     }
 
     #[test]

@@ -156,4 +156,18 @@ export global Shell {
     out property <length> find-height: 44px;
     // The speaker glyph in a tab row (hand drawn on the 24 grid: the bucket has none).
     out property <length> speaker: 22px;
+    // The permission prompt: an .ur-o-surface under the address pill (Chromium's bubble place),
+    // 8 below it, 320 wide; the downloads popover: the same surface, 360 wide, rows 60 high with
+    // a 3 px progress track; the error panel's column is 440 wide.
+    out property <length> prompt-width: 320px;
+    out property <length> prompt-gap: 8px;
+    out property <length> downloads-width: 360px;
+    out property <length> download-row: 60px;
+    out property <length> download-track: 3px;
+    out property <int> download-max-rows: 6;
+    out property <length> error-width: 440px;
+    out property <length> error-icon: 40px;
+    // The prompt's "remember" check box: a 1 px rim, a 1.6 px tick.
+    out property <length> check-rim: 1px;
+    out property <length> check-tick: 1.6px;
 }

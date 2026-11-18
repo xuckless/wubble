@@ -1,0 +1,117 @@
+import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { GlassPanel, PressableButton } from "../components.slint";
+import { ErrorView, GlassTier } from "model.slint";
+import { Icon, IconPaths } from "icon.slint";
+
+// The error panel over the page: a failed load ("This site can't be reached", Reload), a refused
+// certificate ("Your connection is not private", Go back, and Proceed only where allowed) or a
+// crashed page (Reload). Fills its parent (the content area) on thick glass, so the page under it
+// gets no input; a centred column like Chromium's error and interstitial pages. Written from
+// scratch: the design repo has no error page. Type and buttons are the dialog sheet's (Ultra
+// Reactivate `.ur-o-dialog`); the lock and reload glyphs are the design's icons (icons.tsx).
+// Enter is the primary button (Go back on a certificate panel: proceeding is never the default).
+export component ErrorPanel inherits Rectangle {
+    in property <ErrorView> error;
+    callback primary();
+    callback secondary();
+
+    property <bool> open: root.error.open;
+
+    public function take-focus() {
+        keys.focus();
+    }
+
+    visible: root.open;
+
+    TouchArea {
+        scroll-event(e) => {
+            accept
+        }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Return {
+                root.primary();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    GlassPanel {
+        tier: GlassTier.thick;
+        radius: 0px;
+        over-content: true;
+        opacity: root.open ? 1 : 0;
+        animate opacity {
+            duration: Shell.sheet-in;
+            easing: Motion.easeOut;
+        }
+
+        column := VerticalLayout {
+            x: (parent.width - self.width) / 2;
+            y: max(Spacing.s6, (parent.height - self.preferred-height) / 3);
+            width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
+            height: self.preferred-height;
+            spacing: Spacing.s3;
+            Icon {
+                path: root.error.cert ? IconPaths.lock : IconPaths.globe;
+                size: Shell.error-icon;
+                tint: root.error.cert ? Palette.coral : Palette.mist;
+            }
+            Text {
+                text: root.error.title;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Type.title.size;
+                font-weight: Type.title.weight;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.error.summary;
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Shell.sheet-body;
+                wrap: word-wrap;
+            }
+            Text {
+                visible: self.text != "";
+                text: root.error.detail;
+                color: Palette.haze;
+                font-family: Fonts.mono;
+                font-size: Type.label.size;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                height: Spacing.s3;
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: Spacing.s2;
+                PressableButton {
+                    text: root.error.primary;
+                    height: Shell.sheet-button;
+                    padding-x: Shell.sheet-button-pad;
+                    border-radius: Shell.sheet-button-radius;
+                    background: self.hovered ? Palette.rim : Palette.shell;
+                    clicked => {
+                        root.primary();
+                    }
+                }
+                if root.error.secondary != "": PressableButton {
+                    text: root.error.secondary;
+                    height: Shell.sheet-button;
+                    padding-x: Shell.sheet-button-pad;
+                    border-radius: Shell.sheet-button-radius;
+                    clicked => {
+                        root.secondary();
+                    }
+                }
+            }
+        }
+    }
+}

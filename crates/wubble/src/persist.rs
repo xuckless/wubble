@@ -17,9 +17,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
+use wubble_core::download::{self, DownloadEntry};
 use wubble_core::model::{Command, Model};
 use wubble_core::omnibox::{self, HistoryEntry};
 use wubble_core::seam::SidebarMode;
+use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_core::zoom::ZoomTable;
 use wubble_store::{
@@ -145,11 +147,17 @@ impl Default for Settings {
     }
 }
 
+/// Download entries read at start (newest first).
+pub const DOWNLOADS_KEPT: usize = 50;
+
 /// What the store thread hands over at start.
 #[derive(Debug)]
 pub struct Loaded {
     pub model: Model,
     pub settings: Settings,
+    pub site_permissions: SitePermissions,
+    /// Newest first; what was unfinished in the last run has failed.
+    pub downloads: Vec<DownloadEntry>,
 }
 
 impl Default for Loaded {
@@ -157,6 +165,8 @@ impl Default for Loaded {
         Self {
             model: Model::new(std::time::Instant::now()),
             settings: Settings::default(),
+            site_permissions: SitePermissions::default(),
+            downloads: vec![],
         }
     }
 }
@@ -188,6 +198,15 @@ enum Request {
     PopClosed(Reply<Option<ClosedTab>>),
     SetEngine(omnibox::SearchEngine),
     SetSiteZoom(ZoomTable),
+    SetSitePermission {
+        origin: String,
+        kind: Permission,
+        decision: Decision,
+        at_ms: i64,
+    },
+    AddDownload(DownloadEntry),
+    UpdateDownload(DownloadEntry),
+    RemoveDownload(i64),
 }
 
 /// The host's handle on the store thread. If the database could not be
@@ -287,6 +306,33 @@ impl StoreClient {
         self.send(Request::SetSiteZoom(table));
     }
 
+    pub fn set_site_permission(
+        &self,
+        origin: &str,
+        kind: Permission,
+        decision: Decision,
+        at_ms: i64,
+    ) {
+        self.send(Request::SetSitePermission {
+            origin: origin.into(),
+            kind,
+            decision,
+            at_ms,
+        });
+    }
+
+    pub fn add_download(&self, entry: &DownloadEntry) {
+        self.send(Request::AddDownload(entry.clone()));
+    }
+
+    pub fn update_download(&self, entry: &DownloadEntry) {
+        self.send(Request::UpdateDownload(entry.clone()));
+    }
+
+    pub fn remove_download(&self, id: i64) {
+        self.send(Request::RemoveDownload(id));
+    }
+
     /// Lets the thread finish what is queued, close the database and end.
     /// Blocks until it has; a thread that already ended returns at once.
     pub fn shutdown(self) {
@@ -336,7 +382,7 @@ fn latest_save_only(batch: Vec<Request>) -> impl Iterator<Item = Request> {
 }
 
 async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
-    let store = Store::open(path).await?;
+    let mut store = Store::open(path).await?;
     let model = store.load_session(std::time::Instant::now()).await?;
     let settings = Settings {
         engine: store.setting::<SearchEngineChoice>().await?,
@@ -348,7 +394,22 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
         keybinding_overrides: store.setting::<KeybindingOverrides>().await?,
         site_zoom: store.setting::<SiteZoom>().await?,
     };
-    Ok((store, Loaded { model, settings }))
+    let site_permissions = store.site_permissions().await?.into_iter().collect();
+    // No download of the last run is alive any more.
+    let stored = store.downloads(DOWNLOADS_KEPT).await?;
+    let downloads = download::lost_all(stored.clone());
+    for (old, new) in stored.iter().zip(&downloads) {
+        if old != new {
+            store.update_download(new).await?;
+        }
+    }
+    let loaded = Loaded {
+        model,
+        settings,
+        site_permissions,
+        downloads,
+    };
+    Ok((store, loaded))
 }
 
 async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()> {
@@ -399,6 +460,19 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
                 .await?;
         }
         Request::SetSiteZoom(table) => store.set_setting::<SiteZoom>(table).await?,
+        Request::SetSitePermission {
+            origin,
+            kind,
+            decision,
+            at_ms,
+        } => {
+            store
+                .set_site_permission(&origin, kind, decision, at_ms)
+                .await?;
+        }
+        Request::AddDownload(entry) => store.add_download(&entry).await?,
+        Request::UpdateDownload(entry) => store.update_download(&entry).await?,
+        Request::RemoveDownload(id) => store.remove_download(id).await?,
     }
     Ok(())
 }
@@ -612,6 +686,18 @@ mod tests {
         client.record_visit("https://a.test/", "", 5, Transition::Typed);
         client.update_title("https://a.test/", "A");
         client.push_closed(closed("https://gone.test/"));
+        client.set_site_permission("https://a.test", Permission::Camera, Decision::Allow, 5);
+        let running = DownloadEntry {
+            id: 1,
+            url: "https://a.test/f.zip".into(),
+            name: "f.zip".into(),
+            path: "/d/f.zip".into(),
+            received: 3,
+            total: Some(9),
+            state: download::DownloadState::Running,
+            started_ms: 5,
+        };
+        client.add_download(&running);
         let (hits_tx, hits_rx) = mpsc::channel();
         client.query_history("a.t", 10, 5, move |hits| {
             hits_tx.send(hits).unwrap();
@@ -642,6 +728,20 @@ mod tests {
         assert_eq!(loaded.settings.engine, Some(omnibox::SearchEngine::Google));
         assert_eq!(loaded.settings.ui, ui);
         assert_eq!(loaded.settings.site_zoom, zoom);
+        assert_eq!(
+            loaded
+                .site_permissions
+                .get("https://a.test", Permission::Camera),
+            Some(Decision::Allow)
+        );
+        // The download did not survive the restart: it is listed as failed.
+        assert_eq!(
+            loaded.downloads,
+            vec![DownloadEntry {
+                state: download::DownloadState::Failed(download::LOST.into()),
+                ..running
+            }]
+        );
         let (pop_tx, pop_rx) = mpsc::channel();
         client.pop_closed(move |tab| pop_tx.send(tab).unwrap());
         assert_eq!(pop_rx.recv().unwrap(), Some(closed("https://gone.test/")));

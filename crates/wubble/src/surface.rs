@@ -1,6 +1,8 @@
 //! The page's own prompts, drawn by the shell: JS dialogs ([`Dialog`]) and
 //! the find bar ([`FindBar`]), each one enum with a pure transition, plus
-//! [`route`], which says which surface a [`PageEvent`] is for. The host
+//! [`route`], which says which surface a [`PageEvent`] is for (the
+//! permission prompt and sign-in sheet are in `prompt.rs`, the error panel
+//! in `page_error.rs`, the file chooser in `chooser.rs`). The host
 //! keeps one [`Surfaces`] per tab and draws only the visible tab's, so a
 //! dialog is tab-modal: switching tabs leaves it waiting, and it shows again
 //! on return.
@@ -14,7 +16,12 @@
 
 use wubble_engine::page::{JsDialogKind, PageEvent, Rect, RequestId};
 
+use crate::chooser::{self, DialogSpec};
 use crate::menu::{self, Menu, MenuEvent};
+use crate::page_error::{self, ErrorEvent, PageError};
+use crate::prompt::{
+    self, Auth, AuthEvent, AuthRequest, PermissionEvent, PermissionPrompt, PermissionRequest,
+};
 
 // ---------------------------------------------------------------- dialogs
 
@@ -261,6 +268,9 @@ pub struct Surfaces {
     pub find: FindBar,
     /// The popup widget's rectangle, physical pixels relative to the view.
     pub popup: Option<Rect>,
+    pub permission: PermissionPrompt,
+    pub auth: Auth,
+    pub error: PageError,
 }
 
 impl Surfaces {
@@ -271,12 +281,23 @@ impl Surfaces {
         let (dialog, answer) = dialog(self.dialog, DialogEvent::ViewGone);
         let (menu, menu_fx) = menu::transition(self.menu, MenuEvent::ViewGone);
         let (find, find_fx) = find(self.find, FindEvent::ViewGone);
+        let (permission, granted) = prompt::permission(
+            self.permission,
+            PermissionEvent::ViewGone,
+            &Default::default(),
+        );
+        let (auth, auth_answer) = prompt::auth(self.auth, AuthEvent::ViewGone);
+        let (error, error_fx) = page_error::transition(self.error, ErrorEvent::ViewGone);
         debug_assert!(answer.is_none() && menu_fx.is_empty() && find_fx.is_empty());
+        debug_assert!(granted.is_empty() && auth_answer.is_none() && error_fx.is_empty());
         Surfaces {
             dialog,
             menu,
             find,
             popup: None,
+            permission,
+            auth,
+            error,
         }
     }
 }
@@ -294,9 +315,26 @@ pub enum Routed {
     Audible(bool),
     /// IME composition bounds, physical pixels relative to the view.
     ImeBounds(Rect),
-    /// A request the shell has no prompt for yet: answer its default now
-    /// (`View::decline`).
-    Decline(PageEvent),
+    /// CEF gave up on these requests: every surface showing one closes.
+    Dismissed(Vec<RequestId>),
+    Permission(PermissionEvent),
+    Auth(AuthEvent),
+    /// Ask the OS for files, then answer `id`.
+    Chooser {
+        id: RequestId,
+        spec: DialogSpec,
+    },
+    /// A certificate error waiting for `id`'s answer.
+    Cert {
+        id: RequestId,
+        url: String,
+        code: i32,
+    },
+    Error(ErrorEvent),
+    /// A download request, or news of one (`host/downloads.rs`).
+    Download(PageEvent),
+    /// A console line, for the debug log.
+    Console(String),
     Ignore,
 }
 
@@ -318,7 +356,7 @@ pub fn route(event: PageEvent) -> Routed {
             default_text,
         })),
         PageEvent::DialogsReset => Routed::Dialog(DialogEvent::Reset),
-        PageEvent::RequestsDismissed(ids) => Routed::Dialog(DialogEvent::Dismissed(ids)),
+        PageEvent::RequestsDismissed(ids) => Routed::Dismissed(ids),
         PageEvent::ContextMenuRequested { id, menu } => Routed::Menu(MenuEvent::Requested {
             id,
             menu,
@@ -335,22 +373,58 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
-        // Part 2 draws these; until then each gets its default at once.
-        e @ (PageEvent::PermissionRequested { .. }
-        | PageEvent::FileChooserRequested { .. }
-        | PageEvent::AuthRequested { .. }
-        | PageEvent::CertificateError { .. }
-        | PageEvent::DownloadRequested { .. }) => Routed::Decline(e),
-        PageEvent::DownloadStarted { .. }
+        PageEvent::PermissionRequested {
+            id,
+            origin,
+            permissions,
+        } => Routed::Permission(PermissionEvent::Requested(PermissionRequest {
+            id,
+            origin,
+            kinds: permissions,
+        })),
+        PageEvent::AuthRequested {
+            id,
+            host,
+            port,
+            realm,
+            proxy,
+            ..
+        } => Routed::Auth(AuthEvent::Requested(AuthRequest {
+            id,
+            host,
+            port,
+            realm,
+            proxy,
+        })),
+        PageEvent::FileChooserRequested {
+            id,
+            mode,
+            title,
+            default_path,
+            accept,
+        } => Routed::Chooser {
+            id,
+            spec: chooser::dialog_spec(mode, &title, &default_path, &accept),
+        },
+        PageEvent::CertificateError { id, url, code } => Routed::Cert { id, url, code },
+        PageEvent::LoadFailed { url, code, .. } => {
+            Routed::Error(ErrorEvent::LoadFailed { url, code })
+        }
+        e @ (PageEvent::DownloadRequested { .. }
+        | PageEvent::DownloadStarted { .. }
         | PageEvent::DownloadProgress { .. }
         | PageEvent::DownloadPaused(_)
         | PageEvent::DownloadResumed(_)
         | PageEvent::DownloadFinished { .. }
         | PageEvent::DownloadFailed { .. }
-        | PageEvent::DownloadCancelled(_)
-        | PageEvent::Console { .. }
-        | PageEvent::LoadFailed { .. }
-        | PageEvent::DragStarted { .. } => Routed::Ignore,
+        | PageEvent::DownloadCancelled(_)) => Routed::Download(e),
+        PageEvent::Console {
+            level,
+            message,
+            source,
+            line,
+        } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
+        PageEvent::DragStarted { .. } => Routed::Ignore,
     }
 }
 
@@ -613,7 +687,7 @@ mod tests {
         );
         assert_eq!(
             route(PageEvent::RequestsDismissed(vec![RequestId(3)])),
-            Routed::Dialog(DialogEvent::Dismissed(vec![RequestId(3)]))
+            Routed::Dismissed(vec![RequestId(3)])
         );
         assert_eq!(
             route(PageEvent::ContextMenuDismissed),
@@ -649,10 +723,39 @@ mod tests {
         );
         let cert = PageEvent::CertificateError {
             id: RequestId(1),
-            url: String::new(),
+            url: "https://a.test/".into(),
             code: -200,
         };
-        assert_eq!(route(cert.clone()), Routed::Decline(cert));
+        assert_eq!(
+            route(cert),
+            Routed::Cert {
+                id: RequestId(1),
+                url: "https://a.test/".into(),
+                code: -200
+            }
+        );
+        assert_eq!(
+            route(PageEvent::LoadFailed {
+                url: "https://a.test/".into(),
+                code: -105,
+                text: "x".into()
+            }),
+            Routed::Error(ErrorEvent::LoadFailed {
+                url: "https://a.test/".into(),
+                code: -105
+            })
+        );
+        assert_eq!(
+            route(PageEvent::Console {
+                level: wubble_engine::page::LogLevel::Warning,
+                message: "m".into(),
+                source: "s.js".into(),
+                line: 3
+            }),
+            Routed::Console("Warning s.js:3: m".into())
+        );
+        let paused = PageEvent::DownloadPaused(wubble_engine::page::DownloadId(2));
+        assert_eq!(route(paused.clone()), Routed::Download(paused));
         assert!(matches!(
             route(PageEvent::ContextMenuRequested {
                 id: RequestId(4),
@@ -678,9 +781,9 @@ mod tests {
         ));
     }
 
-    /// Every request the shell has no prompt for is declined, so none waits.
+    /// Every request reaches something that answers it, so none waits.
     #[test]
-    fn every_request_has_a_surface_or_is_declined() {
+    fn every_request_has_a_surface() {
         let requests = [
             PageEvent::PermissionRequested {
                 id: RequestId(1),
@@ -703,10 +806,33 @@ mod tests {
                 suggested_name: String::new(),
                 total: None,
             },
+            PageEvent::FileChooserRequested {
+                id: RequestId(1),
+                mode: wubble_engine::page::FileChooserMode::Open,
+                title: String::new(),
+                default_path: Default::default(),
+                accept: vec![],
+            },
+            PageEvent::CertificateError {
+                id: RequestId(1),
+                url: String::new(),
+                code: -202,
+            },
         ];
         for e in requests {
             assert!(e.request().is_some());
-            assert_eq!(route(e.clone()), Routed::Decline(e.clone()), "{e:?}");
+            let routed = route(e.clone());
+            assert!(
+                matches!(
+                    routed,
+                    Routed::Permission(PermissionEvent::Requested(_))
+                        | Routed::Auth(AuthEvent::Requested(_))
+                        | Routed::Download(PageEvent::DownloadRequested { .. })
+                        | Routed::Chooser { .. }
+                        | Routed::Cert { .. }
+                ),
+                "{e:?} -> {routed:?}"
+            );
         }
     }
 
@@ -730,6 +856,19 @@ mod tests {
             menu: menu_open,
             find: find_open,
             popup: Some(Rect::default()),
+            permission: PermissionPrompt::Open(PermissionRequest {
+                id: RequestId(3),
+                origin: "https://a.test".into(),
+                kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
+            }),
+            auth: Auth::Open(AuthRequest {
+                id: RequestId(4),
+                host: "a.test".into(),
+                port: 443,
+                realm: String::new(),
+                proxy: false,
+            }),
+            error: PageError::Crashed,
         };
         assert!(matches!(s.menu, Menu::Open { .. }));
         let gone = s.view_gone();

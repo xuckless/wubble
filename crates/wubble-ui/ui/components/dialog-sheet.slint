@@ -11,9 +11,12 @@ import { DialogView, GlassTier } from "model.slint";
 // actions right-aligned 8 apart, buttons 42 high with radius 11; it grows in over 300 ms. On
 // thick glass over content (GlassPanel), anchored to the top of the page like a sheet.
 // Enter accepts, Escape cancels. `answered` is the intent; the host answers the engine.
+// wubble: the same sheet signs in to a site (HTTP auth): `secret` adds a masked password field
+// under the user name, both labelled.
 export component DialogSheet inherits Rectangle {
     in property <DialogView> dialog;
-    callback answered(bool, string);
+    // (accept, the text field, the password field)
+    callback answered(bool, string, string);
 
     property <bool> open: root.dialog.open;
 
@@ -27,11 +30,13 @@ export component DialogSheet inherits Rectangle {
     }
 
     function confirm() {
-        root.answered(true, root.dialog.prompt ? input.text : "");
+        root.answered(true, root.dialog.prompt ? input.text : "", root.dialog.secret ? secret-field.text : "");
+        secret-field.text = "";
     }
 
     function cancel() {
-        root.answered(false, "");
+        secret-field.text = "";
+        root.answered(false, "", "");
     }
 
     // A new dialog (here or on the tab switched to) starts from the page's proposed text and
@@ -39,6 +44,7 @@ export component DialogSheet inherits Rectangle {
     property <int> serial: root.dialog.serial;
     changed serial => {
         input.text = root.dialog.input;
+        secret-field.text = "";
         if root.dialog.open {
             root.take-focus();
         }
@@ -108,6 +114,15 @@ export component DialogSheet inherits Rectangle {
                 font-size: Shell.sheet-body;
                 wrap: word-wrap;
             }
+            Text {
+                visible: root.dialog.secret;
+                height: root.dialog.secret ? self.preferred-height : 0px;
+                text: "Username";
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.label.size;
+                font-weight: Type.label.weight;
+            }
             Rectangle {
                 visible: root.dialog.prompt;
                 height: root.dialog.prompt ? Shell.sheet-input : 0px;
@@ -119,6 +134,47 @@ export component DialogSheet inherits Rectangle {
                     height: parent.height;
                     vertical-alignment: center;
                     single-line: true;
+                    color: Palette.ink;
+                    selection-background-color: Palette.rim;
+                    font-family: Fonts.ui;
+                    font-size: Type.body.size;
+                    accepted => {
+                        if root.dialog.secret {
+                            secret-field.focus();
+                        } else {
+                            root.confirm();
+                        }
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            root.cancel();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            Text {
+                visible: root.dialog.secret;
+                height: root.dialog.secret ? self.preferred-height : 0px;
+                text: "Password";
+                color: Palette.mist;
+                font-family: Fonts.ui;
+                font-size: Type.label.size;
+                font-weight: Type.label.weight;
+            }
+            Rectangle {
+                visible: root.dialog.secret;
+                height: root.dialog.secret ? Shell.sheet-input : 0px;
+                border-radius: Shell.sheet-button-radius;
+                background: Palette.shell;
+                secret-field := TextInput {
+                    x: Spacing.s3;
+                    width: parent.width - 2 * Spacing.s3;
+                    height: parent.height;
+                    vertical-alignment: center;
+                    single-line: true;
+                    input-type: password;
                     color: Palette.ink;
                     selection-background-color: Palette.rim;
                     font-family: Fonts.ui;

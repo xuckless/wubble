@@ -13,10 +13,12 @@
 //! on the store's recently-closed list. Keys become actions through the
 //! keymap, and every action runs through [`Host::perform`].
 
+mod downloads;
 mod surfaces;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -29,7 +31,9 @@ use wubble_core::action::Action;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
+use wubble_core::neterror::CertExceptions;
 use wubble_core::omnibox::{self, HistoryEntry, SearchEngine, Target};
+use wubble_core::site::SitePermissions;
 use wubble_core::sleep::Pressure;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::zoom::ZoomTable;
@@ -48,6 +52,7 @@ use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::ime::Ime;
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
+use crate::page_error::ErrorEvent;
 use crate::page_smoke::{self, PageSmoke};
 use crate::perform::{self, Plan, ViewOp};
 use crate::persist::{self, Loaded, SaveState, StoreClient, TypedNav, UiState};
@@ -243,6 +248,11 @@ pub struct Host {
     find_focus: i32,
     /// The zoom `--smoke page` passed with.
     pub page_zoom: Option<u32>,
+    /// Remembered permission decisions (one owner; stored through the store).
+    site_permissions: SitePermissions,
+    /// Certificate errors the user proceeded past, for this run only.
+    cert_exceptions: CertExceptions,
+    downloads: downloads::Downloads,
 }
 
 impl Host {
@@ -261,13 +271,18 @@ impl Host {
         store: StoreClient,
         open: Option<String>,
         checks: Checks,
+        downloads_dir: Option<PathBuf>,
     ) -> Self {
-        let Loaded { model, settings } = loaded;
+        let Loaded {
+            model,
+            settings,
+            site_permissions,
+            downloads,
+        } = loaded;
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
         let [presenter, popup_presenter] = presenters;
-        // The shell draws the page's dialogs and menus now (and declines
-        // what it has no prompt for yet, `surface::route`).
+        // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         engine.set_request_mode(RequestMode::AskHost);
         let site_zoom = settings.site_zoom.clone();
@@ -318,7 +333,11 @@ impl Host {
             toast_serial: 0,
             find_focus: 0,
             page_zoom: None,
+            site_permissions,
+            cert_exceptions: CertExceptions::default(),
+            downloads: downloads::Downloads::new(downloads_dir, downloads),
         };
+        host.render_downloads(window);
         match open {
             Some(url) => host.dispatch(new_tab(url, None)),
             None => host.after_change(),
@@ -667,6 +686,7 @@ impl Host {
                 }
             }
             WebEvent::UrlChanged(url) => {
+                self.apply_error(tab, ErrorEvent::Committed(url.clone()));
                 self.record_visit(tab, &url);
                 self.restore_zoom(tab, &url);
                 self.dispatch(Command::UrlChanged { tab, url });
@@ -681,12 +701,17 @@ impl Host {
             }
             WebEvent::PopupRequested { url } => self.dispatch(new_tab(url, Some(tab))),
             WebEvent::LoadingChanged { loading, .. } => {
-                if !loading {
+                if loading {
+                    self.apply_error(tab, ErrorEvent::LoadStarted);
+                } else {
                     self.typed_nav.ended(tab);
                 }
                 self.dispatch(Command::LoadingChanged { tab, loading });
             }
-            WebEvent::RendererGone => self.dispatch(Command::RendererGone(tab)),
+            WebEvent::RendererGone => {
+                self.apply_error(tab, ErrorEvent::Crashed);
+                self.dispatch(Command::RendererGone(tab));
+            }
             WebEvent::KeyUnhandled(key) => {
                 if Some(tab) == self.model.visible_tab()
                     && let Some(action) = self.page_first.unhandled(key)
@@ -933,6 +958,7 @@ impl Host {
     /// Orderly shutdown: the final save, then the store thread finishes and
     /// closes the database. `ui` was read before the window went away.
     pub fn shutdown(&mut self, ui: UiState) {
+        self.save_download_progress();
         self.store.save(&self.model, ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();
     }
@@ -947,6 +973,7 @@ impl Host {
         if persist::should_save(self.save) {
             self.save_now();
         }
+        self.save_download_progress();
     }
 
     // ----- smokes
@@ -1051,7 +1078,7 @@ impl Host {
             match action {
                 page_smoke::Action::Click(at) => click(self, PointerEventButton::Left, at),
                 page_smoke::Action::RightClick(at) => click(self, PointerEventButton::Right, at),
-                page_smoke::Action::AcceptDialog => self.dialog_answered(true, ""),
+                page_smoke::Action::AcceptDialog => self.dialog_answered(true, "", ""),
                 page_smoke::Action::DismissMenu => {
                     if !self.menu_dismissed() {
                         self.fail("the context menu was not answered exactly once".into());
