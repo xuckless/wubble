@@ -1,6 +1,7 @@
 //! Tab identity and lifecycle.
 
-use std::time::Instant;
+use crate::lifecycle::Lifecycle;
+use crate::space::ContainerId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TabId(pub u64);
@@ -18,14 +19,14 @@ pub enum Liveness {
     Discarded,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
     pub id: TabId,
     pub url: String,
     pub title: String,
-    pub liveness: Liveness,
-    pub pinned: bool,
-    /// Playing audio, capturing media, holding a connection the user cares about, etc.
-    pub busy: bool,
-    pub last_visible: Instant,
+    pub lifecycle: Lifecycle,
+    /// The context the page runs in, fixed at creation from the override or the Space default.
+    pub container: ContainerId,
+    /// The tab that opened this one; consulted when this tab closes, forgotten on a user tab switch.
+    pub opener: Option<TabId>,
 }

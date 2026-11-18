@@ -31,6 +31,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an o
 | Glass under load | Glass degrades automatically (lower-res blur → cached backdrop → flat tint); animation never drops frames for it |
 | Storage | wubble's own Turso database (the Rust SQLite rewrite, `turso` crate) with a declared schema and migrations: Spaces, tabs, session, history, bookmarks, passwords. Chromium keeps only cookies/cache per container |
 | Containers | Each Space has a default container; a tab can be reopened in another, and Spaces may share one |
+| Deleting a Space | Closes its tabs (as Zen does); the UI confirms first. The last Space cannot be deleted |
+| Ctrl+T in the model | `Command::OpenCommandBar` returns only `Effect::ShowCommandBar`; the tab exists once `NewTab` is sent after a choice |
 | Content blocker | Brave's `adblock-rust` (network + cosmetic, uBlock/EasyList lists), on by default, per-site toggle |
 | No-blur desktops | Opaque Abyss ground with Space tint (GNOME etc.); in-window glass unaffected |
 | Search | First-run choice between Google and DuckDuckGo. Suggestions are local (tabs/history/bookmarks); live engine suggestions exist behind a flag, off by default, and never send typed addresses |
@@ -117,11 +119,12 @@ Foundations
 - [ ] Glass component, three tiers: Thin (blur 16), Regular (blur 30 + Space tint 10%), Thick (blur 44 + film rim)
 - [ ] Glass quality governor: measures frame time and steps blur quality down/up; exposed as explicit levels, not ad-hoc flags
 - [ ] Film rim (conic soap-film ring) on hover, press, drag and focus only
-- [ ] Motion library in Rust: follow spring, stretch spring (volume-preserving), rubber band, press 0.97, squash, wobble, Overlap in/out with stagger
+- [x] Motion library in Rust (springs, rubber band, stretch, easing constants in wubble-core::motion; press/squash/wobble/Overlap compose these): follow spring, stretch spring (volume-preserving), rubber band, press 0.97, squash, wobble, Overlap in/out with stagger
 - [ ] App icons exported per platform from the Icons board
 
 Daily-drive set
 - [ ] Vertical sidebar on Regular glass: tab rows 36 px, pinned section, "Today" group, new-tab row
+- [x] Spaces, containers and tab-tree model with one pure `apply(model, command)` (`wubble_core::model`) with tests
 - [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container
 - [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
@@ -142,7 +145,8 @@ After daily-drive
 ## M3 — Memory and sleeping
 
 - [x] Sleep policy as a pure function (`wubble_core::sleep`) with tests
-- [ ] Apply liveness: hide → freeze → discard → restore, with snapshot texture for discarded tabs
+- [x] Tab lifecycle state machine (`wubble_core::lifecycle`) with tests
+- [ ] Apply liveness effects in the engine: hide → freeze → discard → restore, with snapshot texture for discarded tabs
 - [ ] "Busy" detection: audio, capture, WebRTC, downloads, unsaved form input
 - [ ] Memory pressure source per OS (Linux PSI, Windows memory notifications, macOS dispatch source)
 - [ ] Per-tab memory/CPU accounting and a task manager view

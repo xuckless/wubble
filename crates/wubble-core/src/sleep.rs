@@ -3,9 +3,10 @@
 //! Pure function of tab state + time + memory pressure, so it can be tested
 //! and tuned without a browser running.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use crate::tab::{Liveness, Tab};
+use crate::lifecycle::{Activity, Pin};
+use crate::tab::Liveness;
 
 #[derive(Debug, Clone)]
 pub struct SleepPolicy {
@@ -34,13 +35,18 @@ pub enum Pressure {
 }
 
 impl SleepPolicy {
-    /// Target liveness for a tab that is not currently visible.
-    pub fn target(&self, tab: &Tab, now: Instant, pressure: Pressure) -> Liveness {
-        if tab.busy {
+    /// Target liveness for a tab that has been hidden for `hidden`.
+    pub fn target(
+        &self,
+        hidden: Duration,
+        pin: Pin,
+        activity: Activity,
+        pressure: Pressure,
+    ) -> Liveness {
+        if activity == Activity::Busy {
             return Liveness::Background;
         }
-        let hidden = now.saturating_duration_since(tab.last_visible);
-        let discardable = !(tab.pinned && self.keep_pinned_alive);
+        let discardable = !(pin == Pin::Pinned && self.keep_pinned_alive);
 
         if discardable && (pressure == Pressure::Critical || hidden >= self.discard_after) {
             Liveness::Discarded
@@ -55,61 +61,35 @@ impl SleepPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tab::TabId;
 
-    fn tab(hidden_secs: u64, now: Instant) -> Tab {
-        Tab {
-            id: TabId(1),
-            url: String::new(),
-            title: String::new(),
-            liveness: Liveness::Background,
-            pinned: false,
-            busy: false,
-            last_visible: now - Duration::from_secs(hidden_secs),
-        }
+    fn target(secs: u64, pin: Pin, activity: Activity, pressure: Pressure) -> Liveness {
+        SleepPolicy::default().target(Duration::from_secs(secs), pin, activity, pressure)
     }
 
     #[test]
     fn escalates_with_time() {
-        let now = Instant::now() + Duration::from_secs(10_000);
-        let p = SleepPolicy::default();
-        assert_eq!(
-            p.target(&tab(5, now), now, Pressure::None),
-            Liveness::Background
-        );
-        assert_eq!(
-            p.target(&tab(120, now), now, Pressure::None),
-            Liveness::Frozen
-        );
-        assert_eq!(
-            p.target(&tab(3600, now), now, Pressure::None),
-            Liveness::Discarded
-        );
+        let t = |s| target(s, Pin::Unpinned, Activity::Idle, Pressure::None);
+        assert_eq!(t(5), Liveness::Background);
+        assert_eq!(t(120), Liveness::Frozen);
+        assert_eq!(t(3600), Liveness::Discarded);
     }
 
     #[test]
     fn busy_and_pinned_are_protected() {
-        let now = Instant::now() + Duration::from_secs(10_000);
-        let p = SleepPolicy::default();
-
-        let mut busy = tab(3600, now);
-        busy.busy = true;
         assert_eq!(
-            p.target(&busy, now, Pressure::Critical),
+            target(3600, Pin::Unpinned, Activity::Busy, Pressure::Critical),
             Liveness::Background
         );
-
-        let mut pinned = tab(3600, now);
-        pinned.pinned = true;
-        assert_eq!(p.target(&pinned, now, Pressure::Critical), Liveness::Frozen);
+        assert_eq!(
+            target(3600, Pin::Pinned, Activity::Idle, Pressure::Critical),
+            Liveness::Frozen
+        );
     }
 
     #[test]
     fn critical_pressure_discards_immediately() {
-        let now = Instant::now() + Duration::from_secs(10_000);
-        let p = SleepPolicy::default();
         assert_eq!(
-            p.target(&tab(1, now), now, Pressure::Critical),
+            target(1, Pin::Unpinned, Activity::Idle, Pressure::Critical),
             Liveness::Discarded
         );
     }
