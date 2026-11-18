@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
-use slint::winit_030::winit::event::WindowEvent;
+use slint::winit_030::winit::event::{ElementState, WindowEvent};
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use wubble_core::action::Action;
 use wubble_core::keys::{Keymap, Platform};
@@ -970,6 +970,16 @@ impl Host {
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
             }
             WindowEvent::CursorLeft { .. } => self.input.pointer = None,
+            // Raw, so the side buttons navigate over the shell too.
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button,
+                ..
+            } => {
+                if let Some(action) = input::button_action(*button) {
+                    self.perform(action);
+                }
+            }
             WindowEvent::Focused(focused) => {
                 self.input.window_focused = *focused;
                 self.sync_focus(&window);

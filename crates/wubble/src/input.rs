@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use slint::platform::PointerEventButton;
-use slint::winit_030::winit::event::KeyEvent;
+use slint::winit_030::winit::event::{KeyEvent, MouseButton as WinitButton};
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 use slint::winit_030::winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
@@ -89,11 +89,17 @@ pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bo
 /// The keymap's chord for a key (without modifiers applied), the held
 /// modifiers and the text it typed. Super is `cmd`: on macOS that is Cmd,
 /// elsewhere the keymap binds nothing to it. Keys the keymap cannot name are
-/// `None`, and so is Ctrl+Alt with printable text: that is AltGr (Windows
-/// reports it as Ctrl+Alt), which types a character, as Chromium treats it.
+/// `None`, and so is Ctrl+Alt typing a character other than the key's own:
+/// that is AltGr (Windows reports it as Ctrl+Alt), as Chromium treats it.
 pub fn chord_of(unmodified: &Key, mods: ModifiersState, text: Option<&str>) -> Option<Chord> {
+    // Text other than the key's own: on Linux winit's `text` ignores Ctrl, so
+    // a real Ctrl+Alt+Z types "z", the key itself, and stays a chord.
+    let own = match unmodified {
+        Key::Character(key) => text.is_some_and(|t| t.to_lowercase() == key.to_lowercase()),
+        _ => false,
+    };
     let printable = text.is_some_and(|t| !t.is_empty() && !t.chars().any(char::is_control));
-    if mods.control_key() && mods.alt_key() && printable {
+    if mods.control_key() && mods.alt_key() && printable && !own {
         return None;
     }
     let key = match unmodified {
@@ -224,6 +230,16 @@ pub fn mouse_button(button: PointerEventButton) -> Option<MouseButton> {
         PointerEventButton::Left => Some(MouseButton::Left),
         PointerEventButton::Middle => Some(MouseButton::Middle),
         PointerEventButton::Right => Some(MouseButton::Right),
+        _ => None,
+    }
+}
+
+/// The mouse's side buttons are navigation, over the page and the shell
+/// alike. Only the press acts.
+pub fn button_action(button: WinitButton) -> Option<Action> {
+    match button {
+        WinitButton::Back => Some(Action::Back),
+        WinitButton::Forward => Some(Action::Forward),
         _ => None,
     }
 }
@@ -434,8 +450,14 @@ mod tests {
         let ctrl_alt = ModifiersState::CONTROL | ModifiersState::ALT;
         // Polish AltGr+Z types 'ż'; Windows reports Ctrl+Alt.
         assert_eq!(chord_of(&ch("z"), ctrl_alt, Some("ż")), None);
-        // A real Ctrl+Alt chord types nothing (or a control character).
+        // A real Ctrl+Alt chord types nothing (or a control character), or,
+        // on Linux, where winit's text ignores Ctrl, the key itself.
         assert_eq!(chord_of(&ch("z"), ctrl_alt, None), chord("Ctrl+Alt+Z"));
+        assert_eq!(chord_of(&ch("z"), ctrl_alt, Some("z")), chord("Ctrl+Alt+Z"));
+        assert_eq!(
+            chord_of(&ch("z"), ctrl_alt | ModifiersState::SHIFT, Some("Z")),
+            chord("Ctrl+Alt+Shift+Z")
+        );
         assert_eq!(
             chord_of(&ch("z"), ctrl_alt, Some("\u{1a}")),
             chord("Ctrl+Alt+Z")
@@ -546,6 +568,15 @@ mod tests {
             PointerEventButton::Other,
         ] {
             assert_eq!(mouse_button(other), None);
+        }
+    }
+
+    #[test]
+    fn side_buttons_navigate() {
+        assert_eq!(button_action(WinitButton::Back), Some(Action::Back));
+        assert_eq!(button_action(WinitButton::Forward), Some(Action::Forward));
+        for other in [WinitButton::Left, WinitButton::Middle, WinitButton::Right] {
+            assert_eq!(button_action(other), None);
         }
     }
 
