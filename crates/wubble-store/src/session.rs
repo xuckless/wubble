@@ -197,22 +197,32 @@ impl Store {
     pub async fn save_session(&mut self, model: &Model) -> Result<()> {
         model.check().map_err(Error::Corrupt)?;
         let tx = self.conn.transaction().await?;
-        // Children first; foreign keys are enforced per statement.
-        for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
-            tx.execute(format!("DELETE FROM {table}"), ()).await?;
-        }
-        write_containers(&tx, model).await?;
-        write_spaces(&tx, model).await?;
-        write_folders(&tx, model).await?;
-        write_tabs(&tx, model).await?;
-        tx.execute(
-            "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
-            (model.active_space.0,),
-        )
-        .await?;
+        write_model(&tx, model).await?;
         tx.commit().await?;
         Ok(())
     }
+}
+
+/// Delete the whole stored session and write `model` in its place, inside `tx`. The caller has
+/// run `Model::check`. Shared by `save_session` and `apply_import`.
+pub(crate) async fn write_model(
+    tx: &turso::transaction::Transaction<'_>,
+    model: &Model,
+) -> Result<()> {
+    // Children first; foreign keys are enforced per statement.
+    for table in ["tabs", "tab_folders", "spaces", "containers", "session"] {
+        tx.execute(format!("DELETE FROM {table}"), ()).await?;
+    }
+    write_containers(tx, model).await?;
+    write_spaces(tx, model).await?;
+    write_folders(tx, model).await?;
+    write_tabs(tx, model).await?;
+    tx.execute(
+        "INSERT INTO session(id, active_space_id) VALUES (1, ?1)",
+        (model.active_space.0,),
+    )
+    .await?;
+    Ok(())
 }
 
 async fn write_containers(tx: &turso::transaction::Transaction<'_>, m: &Model) -> Result<()> {
@@ -628,7 +638,10 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&store.conn).await.unwrap(), 2);
+            assert_eq!(
+                migrate::schema_version(&store.conn).await.unwrap(),
+                migrate::latest(MIGRATIONS)
+            );
 
             for dropped in [
                 "SELECT liveness FROM tabs",

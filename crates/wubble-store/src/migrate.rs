@@ -6,6 +6,7 @@ use crate::{Error, Result};
 pub const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../sql/001_init.sql")),
     (2, include_str!("../sql/002_core_model.sql")),
+    (3, include_str!("../sql/003_logins_imports.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -76,6 +77,8 @@ mod tests {
                 "bookmarks",
                 "settings",
                 "recently_closed",
+                "logins",
+                "import_marks",
             ] {
                 let mut rows = conn
                     .query(
