@@ -1,4 +1,5 @@
 mod cli;
+mod pixels;
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -165,6 +166,9 @@ struct Host {
     idle_ticks: u32,
     /// Accelerated frames after which the loop quits (`--smoke frames`).
     quit_after: Option<u64>,
+    /// Snapshot the window before quitting and require the content area to
+    /// show the page. Only for the bundled page: its colours are known.
+    check_pixels: bool,
     /// Why the loop was quit early, if it was.
     failure: Option<String>,
 }
@@ -214,7 +218,8 @@ impl Host {
         let Some(frame) = view.take_frame() else {
             return Ok(());
         };
-        let clip = frame.size().cropped_to(layout.size);
+        let frame_size = frame.size();
+        let clip = frame_size.cropped_to(layout.size);
         let image = self.presenter.present(frame).map_err(|e| e.to_string())?;
         window.set_web_frame(image);
         window.set_web_frame_clip_width(slint_int(clip.width));
@@ -225,6 +230,23 @@ impl Host {
         self.last_present = Some(now);
         self.idle_ticks = 0;
         if self.quit_after.is_some_and(|n| self.stats.accelerated >= n) {
+            eprintln!(
+                "smoke: content {}x{} @{} frame {}x{} clip {}x{}",
+                layout.size.width,
+                layout.size.height,
+                layout.scale,
+                frame_size.width,
+                frame_size.height,
+                clip.width,
+                clip.height
+            );
+            if self.check_pixels {
+                let sample = check_pixels(window)?;
+                println!(
+                    "smoke: pixels ok distinct={} mean_luma={}",
+                    sample.distinct, sample.mean_luma
+                );
+            }
             quit();
         }
         Ok(())
@@ -266,14 +288,34 @@ fn slint_int(pixels: u32) -> i32 {
 /// The content rectangle in physical pixels and the window's scale factor.
 fn content_layout(window: &AppWindow) -> Layout {
     let scale = window.window().scale_factor();
-    let physical = |logical: f32| (logical * scale).round().max(0.0) as u32;
     Layout {
         size: FrameSize::new(
-            physical(window.get_content_width()),
-            physical(window.get_content_height()),
+            physical(window.get_content_width(), scale),
+            physical(window.get_content_height(), scale),
         ),
         scale,
     }
+}
+
+/// Snapshots the window and checks that the content rectangle shows the page.
+fn check_pixels(window: &AppWindow) -> Result<pixels::Sample, String> {
+    let snapshot = window
+        .window()
+        .take_snapshot()
+        .map_err(|e| format!("cannot snapshot the window: {e}"))?;
+    let scale = window.window().scale_factor();
+    let region = pixels::Region {
+        x: physical(window.get_content_x(), scale),
+        y: physical(window.get_content_y(), scale),
+        width: physical(window.get_content_width(), scale),
+        height: physical(window.get_content_height(), scale),
+    };
+    pixels::check(&snapshot, region)
+}
+
+/// A logical length in whole physical pixels.
+fn physical(logical: f32, scale: f32) -> u32 {
+    (logical * scale).round().max(0.0) as u32
 }
 
 /// The bundled test page as a `data:` URL, so nothing is fetched.
@@ -302,9 +344,12 @@ fn run(
     // builds), which aborts the process. Keep one handle until exit instead.
     std::mem::forget(gpu.clone());
 
-    let (url, quit_after) = match mode {
-        Mode::Browse => (smoke_page_url(), None),
-        Mode::Smoke { frames, url } => (url.unwrap_or_else(smoke_page_url), Some(frames)),
+    let (url, quit_after, check_pixels) = match mode {
+        Mode::Browse => (smoke_page_url(), None, false),
+        Mode::Smoke { frames, url } => {
+            let bundled = url.is_none();
+            (url.unwrap_or_else(smoke_page_url), Some(frames), bundled)
+        }
     };
     let engine = Engine::start(config?)?;
     let host = Rc::new(RefCell::new(Host {
@@ -315,6 +360,7 @@ fn run(
         last_present: None,
         idle_ticks: 0,
         quit_after,
+        check_pixels,
         failure: None,
     }));
     let window = AppWindow::new()?;

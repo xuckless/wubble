@@ -24,6 +24,10 @@ export component AppWindow inherits Window {
     // the browser from these and the window's scale factor.
     out property <length> content-width: content.width;
     out property <length> content-height: content.height;
+    // Its top left in the window (its layout fills the window from 0,0); the
+    // frames smoke samples the snapshot there.
+    out property <length> content-x: content.x;
+    out property <length> content-y: content.y;
 
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;

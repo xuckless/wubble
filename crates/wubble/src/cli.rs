@@ -8,7 +8,8 @@ use clap::{CommandFactory, Parser, error::ErrorKind};
 #[command(name = "wubble", about = "The wubble browser.")]
 struct Cli {
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
-    /// stops, no window) or `frames=N` (show N zero-copy frames, then exit).
+    /// stops, no window) or `frames=N` (show N zero-copy frames, then exit;
+    /// on the bundled page, also check the window shows it).
     #[arg(long, value_name = "CHECK", value_parser = parse_smoke)]
     smoke: Option<SmokeArg>,
     /// Page for `--smoke frames=N` instead of the bundled test page.
