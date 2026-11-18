@@ -16,6 +16,7 @@
 
 mod downloads;
 mod panes;
+mod parity;
 mod surfaces;
 
 use std::cell::RefCell;
@@ -42,7 +43,7 @@ use wubble_core::space::MAX_PANES;
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
-use wubble_engine::input::{KeyId, Point};
+use wubble_engine::input::{KeyId, KeyInput, Point};
 use wubble_engine::nav::{Cursor, Phase, WebEvent};
 use wubble_engine::view::{View, ViewConfig};
 use wubble_gfx::FramePresenter;
@@ -194,6 +195,8 @@ pub struct Checks {
     pub tabs_smoke: Option<TabsSmoke>,
     pub session_smoke: Option<SessionSmoke>,
     pub page_smoke: Option<PageSmoke>,
+    /// `--smoke parity` (`host/parity.rs`).
+    pub parity: Option<parity::ParityRun>,
     pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
     /// Views paint on external begin frames from [`Host::pace`].
@@ -262,6 +265,7 @@ pub struct Host {
     /// `--smoke session`: whether the store returned the icon the first run filed.
     session_icon: Option<bool>,
     pub split_passed: bool,
+    pub parity_passed: bool,
     pub(crate) input: InputState,
     keymap: Keymap,
     /// Page-first actions waiting to hear the page left their key alone.
@@ -309,6 +313,8 @@ pub struct Host {
     cert_exceptions: CertExceptions,
     downloads: downloads::Downloads,
     pace: Option<Pace>,
+    /// The system clipboard, for the pages' copies and pastes and the shell's copies.
+    clipboard: crate::clipboard::Clipboard,
 }
 
 impl Host {
@@ -391,6 +397,7 @@ impl Host {
             session_passed: false,
             session_icon: None,
             split_passed: false,
+            parity_passed: false,
             input: InputState::default(),
             keymap: input::keymap(Platform::current(), &settings.keybinding_overrides),
             page_first: PendingKeys::default(),
@@ -420,6 +427,7 @@ impl Host {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
             }),
+            clipboard: Default::default(),
         };
         host.render_downloads(window);
         host.session_icon_setup();
@@ -681,6 +689,7 @@ impl Host {
                 view_width,
             });
         }
+        self.parity_step(crate::parity::Input::Worked);
         if self.checks.quit_after.is_some() {
             self.idle_runs += 1;
             if self.idle_runs > SMOKE_MAX_IDLE_RUNS {
@@ -815,6 +824,7 @@ impl Host {
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
+        self.parity_web(&event);
         match event {
             WebEvent::CursorChanged(cursor) => {
                 // A page beside the focused one shows its cursor too: the pointer is over it.
@@ -898,7 +908,7 @@ impl Host {
         }
     }
 
-    fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
+    pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
         self.bar.mode = mode;
         window.set_command_query(query.as_str().into());
         self.bar_query(window, &query);
@@ -1028,6 +1038,11 @@ impl Host {
                 }
             }
             Plan::Copy(text) => self.copy(&text),
+            Plan::DevTools => {
+                if let Some(view) = self.model.visible_tab().and_then(|t| self.tab_view(t)) {
+                    view.inspect(None);
+                }
+            }
             Plan::OpenBeside => self.open_beside(),
             // Later, outside the host: opening the bar calls back into it.
             Plan::FocusAddress => {
@@ -1514,6 +1529,7 @@ impl Host {
         let Some(window) = self.window.upgrade() else {
             return EventResult::Propagate;
         };
+        self.clipboard.open(window.window());
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
@@ -1548,18 +1564,6 @@ impl Host {
                     return EventResult::PreventDefault;
                 }
             }
-            // Esc leaves page fullscreen before anything else sees it.
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic: false,
-                ..
-            } if event.state == ElementState::Pressed
-                && event.logical_key == Key::Named(NamedKey::Escape)
-                && matches!(self.screen, Screen::Page { .. }) =>
-            {
-                self.apply_screen(&window, ScreenEvent::Escape);
-                return EventResult::PreventDefault;
-            }
             // Synthetic presses (keys already held when the window gained
             // focus, X11) never reach the page.
             WindowEvent::KeyboardInput {
@@ -1568,55 +1572,67 @@ impl Host {
                 ..
             } => {
                 let key = self.input.key_input(event);
-                let focus = if window.get_web_focused() {
-                    KeyFocus::Page
-                } else if window.get_command_bar_state() != CommandBarState::Closed {
-                    KeyFocus::Field
-                } else {
-                    KeyFocus::Shell
-                };
-                // Actions run on the press; releases follow the focus.
-                let binding = key
-                    .pressed
-                    .then(|| {
-                        input::chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref())
-                    })
-                    .flatten()
-                    .and_then(|chord| self.keymap.action_for(chord));
-                let binding = if matches!(self.screen, Screen::Page { .. }) {
-                    input::page_fullscreen_binding(binding)
-                } else {
-                    binding
-                };
-                let route = input::key_route(focus, binding, input::is_modifier(&key.unmodified));
-                if matches!(
-                    route,
-                    KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
-                ) {
-                    self.pace(PaceEvent::Wake);
-                    if let Some(view) = self.view() {
-                        view.key(&key);
-                    }
-                }
-                match route {
-                    KeyRoute::Perform(action) => {
-                        self.perform(action);
-                        return EventResult::PreventDefault;
-                    }
-                    // Runs on the view's `KeyUnhandled`, if the page sends it.
-                    KeyRoute::PageFirst(action) => {
-                        if let Some(id) = KeyId::of(&key) {
-                            self.page_first.push(id, action);
-                        }
-                        return EventResult::PreventDefault;
-                    }
-                    KeyRoute::Page => return EventResult::PreventDefault,
-                    KeyRoute::PageAndShell | KeyRoute::Shell => {}
-                }
+                return self.key(&window, &key);
             }
             _ => {}
         }
         EventResult::Propagate
+    }
+
+    /// One key from the keyboard (a raw winit key event, or `--smoke parity`'s): where it goes
+    /// is `input::key_route`'s decision.
+    pub(crate) fn key(&mut self, window: &AppWindow, key: &KeyInput) -> EventResult {
+        // Esc leaves page fullscreen before anything else sees it.
+        if key.pressed
+            && key.unmodified == Key::Named(NamedKey::Escape)
+            && matches!(self.screen, Screen::Page { .. })
+        {
+            self.apply_screen(window, ScreenEvent::Escape);
+            return EventResult::PreventDefault;
+        }
+        let focus = if window.get_web_focused() {
+            KeyFocus::Page
+        } else if window.get_command_bar_state() != CommandBarState::Closed {
+            KeyFocus::Field
+        } else {
+            KeyFocus::Shell
+        };
+        // Actions run on the press; releases follow the focus.
+        let binding = key
+            .pressed
+            .then(|| input::chord_of(&key.unmodified, key.modifiers.keys, key.text.as_deref()))
+            .flatten()
+            .and_then(|chord| self.keymap.action_for(chord));
+        let binding = if matches!(self.screen, Screen::Page { .. }) {
+            input::page_fullscreen_binding(binding)
+        } else {
+            binding
+        };
+        let route = input::key_route(focus, binding, input::is_modifier(&key.unmodified));
+        if matches!(
+            route,
+            KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
+        ) {
+            self.pace(PaceEvent::Wake);
+            if let Some(view) = self.view() {
+                view.key(key);
+            }
+        }
+        match route {
+            KeyRoute::Perform(action) => {
+                self.perform(action);
+                EventResult::PreventDefault
+            }
+            // Runs on the view's `KeyUnhandled`, if the page sends it.
+            KeyRoute::PageFirst(action) => {
+                if let Some(id) = KeyId::of(key) {
+                    self.page_first.push(id, action);
+                }
+                EventResult::PreventDefault
+            }
+            KeyRoute::Page => EventResult::PreventDefault,
+            KeyRoute::PageAndShell | KeyRoute::Shell => EventResult::Propagate,
+        }
     }
 
     /// Tells every view the frame rate if the window is now on a display

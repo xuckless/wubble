@@ -50,6 +50,10 @@ pub struct EngineConfig {
     /// Checks every request each view sends and injects cosmetic filters
     /// ([`crate::filter`]). `None`: nothing is filtered.
     pub content_filter: Option<Arc<dyn ContentFilter>>,
+    /// Carry the pages' clipboard through the host ([`PageEvent::Clipboard`]):
+    /// for a windowless Chromium on Wayland, whose own clipboard cannot reach the
+    /// system's (welding `clipboard_bridge`).
+    pub clipboard_bridge: bool,
 }
 
 impl EngineConfig {
@@ -66,6 +70,7 @@ impl EngineConfig {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
             pump_scheduler: None,
+            clipboard_bridge: false,
             content_filter: None,
         })
     }
@@ -258,6 +263,9 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
         .map(|(name, value)| ((*name).into(), value.map(Into::into)))
         .collect();
     cef.pump_scheduler = config.pump_scheduler.clone();
+    if config.clipboard_bridge {
+        cef.child_process_switches = vec![welding::clipboard_bridge::SWITCH.into()];
+    }
     cef
 }
 
@@ -569,6 +577,7 @@ mod tests {
             cache_dir: PathBuf::from(cache_dir),
             pump_scheduler: None,
             content_filter: None,
+            clipboard_bridge: false,
         }
     }
 
@@ -728,6 +737,7 @@ mod tests {
             cache_dir: dir,
             pump_scheduler: None,
             content_filter: None,
+            clipboard_bridge: false,
         })
         .err();
         assert!(matches!(err, Some(EngineError::HelperMissing { .. })));

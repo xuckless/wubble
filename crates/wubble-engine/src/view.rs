@@ -40,8 +40,8 @@ use crate::input::{
 use crate::media::{self, AudioProbe, Fullscreen, FullscreenInput, MediaEffect, ProbeInput};
 use crate::nav::{self, NavEffect, NavInput, NavState, WebEvent};
 use crate::page::{
-    ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags, LogLevel, PageEvent,
-    PermissionKind, Rect, RequestId,
+    ClipboardRequest, ContextMenu, DownloadId, DragData, DragOps, EditCommand, EditFlags, LogLevel,
+    MediaFlags, PageEvent, PermissionKind, Rect, RequestId,
 };
 use crate::popup::{self, PopupWidget};
 use crate::zoom::{self, Zoom};
@@ -327,11 +327,13 @@ impl View {
 
     /// Ignored when there is nothing to go back to.
     pub fn back(&mut self) {
+        self.sync_history();
         self.apply_nav(NavInput::Back);
     }
 
     /// Ignored when there is nothing to go forward to.
     pub fn forward(&mut self) {
+        self.sync_history();
         self.apply_nav(NavInput::Forward);
     }
 
@@ -588,6 +590,21 @@ impl View {
                     windows_key_code,
                     modifiers,
                 ))),
+                CefSurfaceEvent::Clipboard { kind, text, frame } => {
+                    let request = match kind.as_str() {
+                        "copy" => ClipboardRequest::Copy(text),
+                        "primary" => ClipboardRequest::Primary(text),
+                        "paste" => ClipboardRequest::Paste {
+                            primary: text == "primary",
+                        },
+                        "read" => match text.parse() {
+                            Ok(id) => ClipboardRequest::Read(id),
+                            Err(_) => continue,
+                        },
+                        _ => continue,
+                    };
+                    self.page.push(PageEvent::Clipboard { frame, request });
+                }
                 CefSurfaceEvent::ScriptCompleted { id, result } => {
                     let audible = result.ok().and_then(|json| json.trim().parse().ok());
                     self.apply_probe(ProbeInput::Answered {
@@ -629,10 +646,14 @@ impl View {
                 });
             }
             Route::Nav(input) => {
-                if matches!(input, NavInput::Address(_)) {
+                let address = matches!(input, NavInput::Address(_));
+                if address {
                     self.apply_probe(ProbeInput::Navigated);
                 }
                 self.apply_nav(input);
+                if address {
+                    self.sync_history();
+                }
             }
             Route::Page(event) => {
                 if let PageEvent::LoadFailed { url, code, text } = &event {
@@ -1000,6 +1021,44 @@ impl View {
         }
     }
 
+    /// Answers a frame's clipboard request ([`PageEvent::Clipboard`]): the text to
+    /// paste, or a read's result.
+    pub fn answer_clipboard(&mut self, frame: &str, text: &str, read: Option<u32>) {
+        self.send(|host| {
+            if let Some(browser) = host.browser()
+                && !welding::clipboard_bridge::answer_frame(&browser, frame, text, read)
+            {
+                eprintln!("wubble-engine: the frame that asked for the clipboard is gone");
+            }
+        });
+    }
+
+    /// Opens DevTools in a window of CEF's own; with `at` (physical px,
+    /// view-relative), inspecting the element there as Chromium's "Inspect" does.
+    pub fn inspect(&mut self, at: Option<(i32, i32)>) {
+        let scale = self.producer.scale_factor().max(f32::EPSILON);
+        let at = at.map(|(x, y)| cef::Point {
+            x: (x as f32 / scale).round() as i32,
+            y: (y as f32 / scale).round() as i32,
+        });
+        let window = cef::WindowInfo::default();
+        let settings = cef::BrowserSettings::default();
+        self.send(|host| host.show_dev_tools(Some(&window), None, Some(&settings), at.as_ref()));
+    }
+
+    /// Runs `script` in the page's main frame; nothing comes back but what the
+    /// page itself does (its title, say). For smokes.
+    pub fn run_script(&mut self, script: &str) {
+        if self.is_open()
+            && let Err(e) = self.producer.execute_script(script, "about:wubble-smoke")
+        {
+            eprintln!(
+                "wubble-engine: view {}: script not run: {e}",
+                self.browser_id
+            );
+        }
+    }
+
     // ── Editing, IME, drags, popup frames.
 
     /// Runs an edit command on the focused frame.
@@ -1129,6 +1188,21 @@ impl View {
             frame: NativeFrame::from(frame),
             rect: rect.into(),
         })
+    }
+
+    /// Reads the history flags back from CEF. A same-document navigation (a
+    /// fragment, `history.pushState`) changes them without a loading-state
+    /// callback, so Back would otherwise be refused after one.
+    fn sync_history(&mut self) {
+        let Some(browser) = cef::browser_host_get_browser_by_identifier(self.browser_id) else {
+            return;
+        };
+        let loading = matches!(self.nav.phase, nav::Phase::Loading { .. });
+        self.apply_nav(NavInput::Loading {
+            loading,
+            can_go_back: browser.can_go_back() != 0,
+            can_go_forward: browser.can_go_forward() != 0,
+        });
     }
 
     fn apply_nav(&mut self, input: NavInput) {
@@ -1303,6 +1377,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             has_image_contents,
             editable,
             edit_flags,
+            media_flags,
             misspelled_word,
             suggestions,
             items,
@@ -1321,6 +1396,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
                 selection_text,
                 editable: editable || targets.contains(&welding::ContextMenuTarget::Editable),
                 edit: EditFlags(edit_flags),
+                media_flags: MediaFlags(media_flags),
                 misspelled_word,
                 suggestions,
                 items: items.into_iter().map(Into::into).collect(),
@@ -1959,6 +2035,7 @@ mod tests {
             has_image_contents: true,
             editable: false,
             edit_flags: EditFlags::CAN_PASTE,
+            media_flags: 0,
             misspelled_word: "teh".into(),
             suggestions: vec!["the".into()],
             items: vec![welding::MenuItem {

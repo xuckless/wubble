@@ -382,6 +382,18 @@ cef::wrap_client! {
                 }
                 return 1;
             }
+            // wubble change: a frame's clipboard request (`clipboard_bridge`).
+            if name == crate::clipboard_bridge::REQUEST {
+                let frame = _frame.map(|f| cef::CefString::from(&f.identifier()).to_string()).unwrap_or_default();
+                if let Some(args) = msg.argument_list() {
+                    self.events.push(CefSurfaceEvent::Clipboard {
+                        kind: cef::CefString::from(&args.string(0)).to_string(),
+                        text: cef::CefString::from(&args.string(1)).to_string(),
+                        frame,
+                    });
+                }
+                return 1;
+            }
             if name != "weld.message" { return 0; }
             if let Some(args) = msg.argument_list() {
                 let text = cef::CefString::from(&args.string(0)).to_string();

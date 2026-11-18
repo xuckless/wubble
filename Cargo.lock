@@ -7883,6 +7883,7 @@ dependencies = [
  "pollster 0.4.0",
  "rfd",
  "slint",
+ "smithay-clipboard",
  "tempfile",
  "wubble-blocker",
  "wubble-core",

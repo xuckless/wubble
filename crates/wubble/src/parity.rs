@@ -1,0 +1,1578 @@
+//! `--smoke parity`: the ordinary web-page interactions a Chromium window
+//! gives for free, checked one by one through the host's real input paths on
+//! the bundled `parity.html`. The checklist is one table, [`ITEMS`]: a name,
+//! how to drive it ([`Step`]s) and what must be true afterwards ([`Expect`]s).
+//! [`next`] is the pure driver; `host/parity.rs` executes its [`Action`]s.
+//!
+//! The page answers through its title: every script the smoke runs ends in
+//! `parity:<serial>:ok` or `parity:<serial>:fail:<what it saw>`. Inputs and
+//! scripts travel to the renderer on different channels, so a check that is
+//! not yet true is asked again after a few runs of CEF work, up to
+//! [`MAX_POLLS`] times. Everything is bounded by counts of CEF work runs,
+//! never by time.
+//!
+//! Keys are built here as winit would report them on a US layout
+//! ([`key_inputs`]): the host routes them exactly as raw winit key events
+//! (`Host::key`), only the winit `KeyEvent` itself cannot be built outside
+//! winit.
+
+use slint::winit_030::winit::keyboard::{
+    Key as WinitKey, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey,
+};
+use wubble_core::keys::{Chord, Key};
+use wubble_engine::input::{Buttons, KeyInput, Modifiers, Point};
+
+/// Runs of CEF work one wait may take before its item fails.
+pub const MAX_WAIT_RUNS: u32 = 400;
+/// Times a check is asked before its item fails.
+pub const MAX_POLLS: u32 = 12;
+/// Runs of CEF work between two asks of the same check.
+pub const POLL_GAP: u32 = 6;
+
+/// Where `parity.html` puts things (view-relative logical px).
+pub mod at {
+    use wubble_engine::input::Point;
+    const fn p(x: f32, y: f32) -> Point {
+        Point { x, y }
+    }
+    /// `at` moved to `x`.
+    pub const fn x(at: Point, x: f32) -> Point {
+        Point { x, y: at.y }
+    }
+    pub const INP: Point = p(140.0, 34.0);
+    pub const INP2: Point = p(140.0, 74.0);
+    pub const CE: Point = p(140.0, 200.0);
+    /// On "alpha" of `alpha beta gamma` (16 px monospace from x 20).
+    pub const WORD: Point = p(40.0, 250.0);
+    /// On "gamma".
+    pub const GAMMA: Point = p(170.0, 250.0);
+    pub const LINK: Point = p(35.0, 299.0);
+    pub const IMG: Point = p(40.0, 350.0);
+    pub const VIDEO: Point = p(160.0, 360.0);
+    pub const DRAG: Point = p(360.0, 40.0);
+    pub const DROP: Point = p(400.0, 140.0);
+    pub const FILEZONE: Point = p(400.0, 270.0);
+    pub const COPY_BUTTON: Point = p(570.0, 35.0);
+    pub const DOWNLOAD: Point = p(540.0, 89.0);
+    pub const BLANK_LINK: Point = p(535.0, 129.0);
+    pub const MAIL: Point = p(535.0, 169.0);
+    pub const OPEN_BUTTON: Point = p(570.0, 255.0);
+    pub const TIP: Point = p(570.0, 305.0);
+    pub const BLANK: Point = p(700.0, 420.0);
+    /// Left of the view: over the sidebar.
+    pub const SIDEBAR: Point = p(-120.0, 200.0);
+}
+
+/// Held modifiers for a pointer step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+pub const NONE: Mods = Mods {
+    ctrl: false,
+    shift: false,
+    alt: false,
+};
+pub const CTRL: Mods = Mods { ctrl: true, ..NONE };
+pub const SHIFT: Mods = Mods {
+    shift: true,
+    ..NONE
+};
+
+impl Mods {
+    pub fn state(self) -> ModifiersState {
+        let mut s = ModifiersState::empty();
+        s.set(ModifiersState::CONTROL, self.ctrl);
+        s.set(ModifiersState::SHIFT, self.shift);
+        s.set(ModifiersState::ALT, self.alt);
+        s
+    }
+}
+
+/// Which pointer button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Left,
+    Middle,
+    Right,
+}
+
+/// What the host does for the smoke that is not page input.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HostOp {
+    /// Close the command bar as its Escape does.
+    CloseBar,
+    /// Close the find bar as its Escape does.
+    CloseFind,
+    /// Put this text on the system clipboard (`wl-copy`), so a stale value never passes.
+    SetClipboard(&'static str),
+    /// A file from the OS dragged over the page and dropped at the point (winit's
+    /// `HoveredFile` and `DroppedFile`).
+    DropFile(Point),
+    /// Back to the parity page's tab, closing every other tab.
+    OnlyFirstTab,
+    ZoomReset,
+}
+
+/// How an item is driven, in order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Step {
+    /// A script in the page (`parity.*`); waits for its answer.
+    Js(&'static str),
+    Click(Button, Mods, Point),
+    /// Two or three left clicks at one point.
+    Clicks(u8, Point),
+    Press(Point),
+    MoveTo(Point),
+    Release(Point),
+    /// Space-separated chords as `wubble_core::keys::Chord` parses them.
+    Keys(&'static str),
+    /// Text typed key by key (US layout).
+    Type(&'static str),
+    Wheel(Mods, Point, f32, f32),
+    /// Waits for the page's context menu and chooses the entry with this label.
+    Choose(&'static str),
+    /// Waits for the page's context menu, requires these labels in this order
+    /// (others may sit between them), and dismisses it.
+    MenuHas(&'static [&'static str]),
+    Host(HostOp),
+    /// Only the parity page's tab, at 100 %, on the parity page; waits for it to load if it
+    /// had to be loaded again.
+    Restore,
+    /// Lets this many runs of CEF work pass.
+    Settle(u32),
+}
+
+/// What the host can tell about itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostCheck {
+    /// The system clipboard holds this text (`wl-paste`).
+    Clipboard(&'static str),
+    /// The system clipboard offers an image.
+    ClipboardImage,
+    /// The primary selection holds this text (`wl-paste --primary`).
+    Primary(&'static str),
+    BarOpen(bool),
+    FindOpen(bool),
+    /// The visible page's zoom is above (true) or at (false) 100 %.
+    Zoomed(bool),
+    /// Tabs in the active Space.
+    Tabs(usize),
+    /// The visible tab is the n-th (0-based) of the active Space.
+    Visible(usize),
+    /// Downloads and prints this item started, at least.
+    Downloads(usize),
+    Tooltip(&'static str),
+    Status(&'static str),
+    /// The web content's cursor, by `wubble_engine::nav::Cursor` index.
+    Cursor(i32),
+    /// The last link handed to the OS starts with this.
+    External(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Expect {
+    /// A page expression: `true`, or what it saw instead.
+    Js(&'static str),
+    Host(HostCheck),
+}
+
+#[derive(Clone, Copy)]
+pub struct Item {
+    pub name: &'static str,
+    pub steps: &'static [Step],
+    pub expect: &'static [Expect],
+}
+
+use Button::{Left, Middle, Right};
+use Expect::{Host as H, Js as J};
+use HostCheck as C;
+use Step::*;
+
+/// Clears what earlier items left: other tabs, zoom, a page navigated away from (reloaded),
+/// then the page's records, focus, selection and scroll.
+const RESET: [Step; 2] = [Restore, Js("parity.reset()")];
+
+macro_rules! item {
+    ($name:literal, [$($step:expr),* $(,)?], [$($expect:expr),* $(,)?]) => {
+        Item { name: $name, steps: &[RESET[0], RESET[1], $($step),*], expect: &[$($expect),*] }
+    };
+}
+
+/// The checklist, A (keyboard) to F (page features), in the order they run.
+pub const ITEMS: &[Item] = &[
+    // A. Keyboard in the page.
+    item!(
+        "A.type-input",
+        [Click(Left, NONE, at::INP), Type("Hello, World!")],
+        [J("eq($('inp').value, 'Hello, World!')")]
+    ),
+    item!(
+        "A.backspace-delete",
+        [
+            Js("parity.field('inp', 'abcd')"),
+            Keys("BackSpace Home Delete")
+        ],
+        [J("eq($('inp').value, 'bc')")]
+    ),
+    item!(
+        "A.enter-textarea",
+        [Js("parity.field('ta', 'one')"), Keys("Enter"), Type("two")],
+        [J("eq($('ta').value, 'one\\ntwo')")]
+    ),
+    item!(
+        "A.tab-traversal",
+        [Js("parity.field('inp', '')"), Keys("Tab")],
+        [J("eq(document.activeElement.id, 'inp2')")]
+    ),
+    item!(
+        "A.shift-tab",
+        [Js("parity.field('inp2', '')"), Keys("Shift+Tab")],
+        [J("eq(document.activeElement.id, 'inp')")]
+    ),
+    item!(
+        "A.arrows-home-end",
+        [
+            Js("parity.field('inp', 'abc')"),
+            Keys("Home"),
+            Type("X"),
+            Keys("End Left"),
+            Type("Y")
+        ],
+        [J("eq($('inp').value, 'XabYc')")]
+    ),
+    item!(
+        "A.pagedown-scrolls",
+        [Click(Left, NONE, at::BLANK), Keys("PageDown")],
+        [J("scrollY > 100 || 'scrollY ' + scrollY")]
+    ),
+    item!(
+        "A.space-scrolls",
+        [Click(Left, NONE, at::BLANK), Keys("Space")],
+        [J("scrollY > 100 || 'scrollY ' + scrollY")]
+    ),
+    item!(
+        "A.select-all",
+        [
+            Js("parity.field('inp', 'old text')"),
+            Keys("Ctrl+A"),
+            Type("z")
+        ],
+        [J("eq($('inp').value, 'z')")]
+    ),
+    item!(
+        "A.copy-paste-keys",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Js("parity.field('inp', 'copyme')"),
+            Keys("Ctrl+A Ctrl+C"),
+            Settle(10),
+            Js("parity.field('inp2', '')"),
+            Keys("Ctrl+V")
+        ],
+        [
+            J("eq($('inp2').value, 'copyme')"),
+            H(C::Clipboard("copyme"))
+        ]
+    ),
+    item!(
+        "A.cut-keys",
+        [
+            Js("parity.field('inp', 'cutme')"),
+            Keys("Ctrl+A Ctrl+X"),
+            Settle(10),
+            Js("parity.field('inp2', '')"),
+            Keys("Ctrl+V")
+        ],
+        [J("eq($('inp').value + '|' + $('inp2').value, '|cutme')")]
+    ),
+    item!(
+        "A.undo-redo",
+        [Js("parity.field('inp', '')"), Type("ab"), Keys("Ctrl+Z")],
+        [J("eq($('inp').value, '')")]
+    ),
+    item!(
+        "A.redo-shift-z",
+        [
+            Js("parity.field('inp', '')"),
+            Type("ab"),
+            Keys("Ctrl+Z Ctrl+Shift+Z")
+        ],
+        [J("eq($('inp').value, 'ab')")]
+    ),
+    item!(
+        "A.redo-y",
+        [
+            Js("parity.field('inp', '')"),
+            Type("ab"),
+            Keys("Ctrl+Z Ctrl+Y")
+        ],
+        [J("eq($('inp').value, 'ab')")]
+    ),
+    item!(
+        "A.word-moves",
+        [
+            Js("parity.field('inp', 'one two')"),
+            Keys("Ctrl+Left"),
+            Type("X"),
+            Keys("Ctrl+Right"),
+            Type("Y")
+        ],
+        [J("eq($('inp').value, 'one XtwoY')")]
+    ),
+    item!(
+        "A.shift-select",
+        [
+            Js("parity.field('inp', 'abcd')"),
+            Keys("Shift+Left Shift+Left"),
+            Type("Z")
+        ],
+        [J("eq($('inp').value, 'abZ')")]
+    ),
+    item!(
+        "A.ctrl-backspace",
+        [Js("parity.field('inp', 'one two')"), Keys("Ctrl+BackSpace")],
+        [J("eq($('inp').value, 'one ')")]
+    ),
+    item!(
+        "A.contenteditable",
+        [Click(Left, NONE, at::CE), Type("Edit me")],
+        [J("eq($('ce').textContent, 'Edit me')")]
+    ),
+    item!(
+        "A.page-owns-ctrl-f",
+        [
+            Click(Left, NONE, at::BLANK),
+            Js("seen.grab = true"),
+            Keys("Ctrl+F"),
+            Settle(20)
+        ],
+        [
+            J("seen.keys.includes('grabbed') || seen.keys.join()"),
+            H(C::FindOpen(false))
+        ]
+    ),
+    item!(
+        "A.ctrl-f-find",
+        [Click(Left, NONE, at::BLANK), Keys("Ctrl+F")],
+        [H(C::FindOpen(true))]
+    ),
+    item!(
+        "A.ctrl-t-bar",
+        [
+            Host(HostOp::CloseFind),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+T")
+        ],
+        [H(C::BarOpen(true))]
+    ),
+    item!(
+        "A.ctrl-l-bar",
+        [
+            Host(HostOp::CloseBar),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L")
+        ],
+        [H(C::BarOpen(true))]
+    ),
+    item!(
+        "A.zoom-keys",
+        [
+            Host(HostOp::CloseBar),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+=")
+        ],
+        [H(C::Zoomed(true))]
+    ),
+    item!(
+        "A.zoom-reset",
+        [Click(Left, NONE, at::BLANK), Keys("Ctrl+0")],
+        [H(C::Zoomed(false))]
+    ),
+    item!(
+        "A.alt-left-back",
+        [
+            Js("history.pushState(null, '', '#one')"),
+            Js("history.pushState(null, '', '#two')"),
+            Click(Left, NONE, at::BLANK),
+            Keys("Alt+Left")
+        ],
+        [J("eq(location.hash, '#one')")]
+    ),
+    item!(
+        "A.alt-right-forward",
+        [Click(Left, NONE, at::BLANK), Keys("Alt+Right")],
+        [J("eq(location.hash, '#two')")]
+    ),
+    item!(
+        "A.ctrl-p-print",
+        [Click(Left, NONE, at::BLANK), Keys("Ctrl+P")],
+        [H(C::Downloads(1))]
+    ),
+    // B. Clipboard through the context menu, and the page's own copy.
+    item!(
+        "B.menu-copy-selection",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Js("parity.select(0, 5)"),
+            Click(Right, NONE, at::WORD),
+            Choose("Copy")
+        ],
+        [H(C::Clipboard("alpha"))]
+    ),
+    item!(
+        "B.menu-paste",
+        [
+            Host(HostOp::SetClipboard("pasted")),
+            Js("parity.field('inp', '')"),
+            Click(Right, NONE, at::INP),
+            Choose("Paste")
+        ],
+        [J("eq($('inp').value, 'pasted')")]
+    ),
+    item!(
+        "B.menu-cut",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Js("parity.field('inp', 'menucut')"),
+            Js("$('inp').select()"),
+            Click(Right, NONE, at::INP),
+            Choose("Cut")
+        ],
+        [J("eq($('inp').value, '')"), H(C::Clipboard("menucut"))]
+    ),
+    item!(
+        "B.menu-select-all",
+        [
+            Js("parity.field('inp', 'all of it')"),
+            Click(Right, NONE, at::INP),
+            Choose("Select All"),
+            Type("q")
+        ],
+        [J("eq($('inp').value, 'q')")]
+    ),
+    item!(
+        "B.menu-undo",
+        [
+            Js("parity.field('inp', '')"),
+            Type("xy"),
+            Click(Right, NONE, at::INP),
+            Choose("Undo")
+        ],
+        [J("eq($('inp').value, '')")]
+    ),
+    item!(
+        "B.menu-paste-plain",
+        [
+            Host(HostOp::SetClipboard("plain")),
+            Js("parity.field('ce', '')"),
+            Click(Right, NONE, at::CE),
+            Choose("Paste as Plain Text")
+        ],
+        [J("eq($('ce').textContent, 'plain')")]
+    ),
+    item!(
+        "B.copy-link-address",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Click(Right, NONE, at::LINK),
+            Choose("Copy Link Address")
+        ],
+        [H(C::Clipboard("https://example.invalid/linked"))]
+    ),
+    item!(
+        "B.copy-image",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Click(Right, NONE, at::IMG),
+            Choose("Copy Image")
+        ],
+        [H(C::ClipboardImage)]
+    ),
+    item!(
+        "B.page-execcommand-copy",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Click(Left, NONE, at::COPY_BUTTON)
+        ],
+        [H(C::Clipboard("from execCommand"))]
+    ),
+    item!(
+        "B.primary-selection",
+        [
+            Js("parity.field('inp', 'primary text')"),
+            Keys("Ctrl+A"),
+            Settle(10)
+        ],
+        [H(C::Primary("primary text"))]
+    ),
+    item!(
+        "B.middle-click-paste",
+        [
+            Js("parity.field('inp2', '')"),
+            Js("parity.field('inp', 'middle')"),
+            Keys("Ctrl+A"),
+            Settle(10),
+            Click(Middle, NONE, at::INP2)
+        ],
+        [J("eq($('inp2').value, 'middle')")]
+    ),
+    // C. Context menu entries, as Chromium lists them.
+    item!(
+        "C.menu-link",
+        [
+            Click(Right, NONE, at::LINK),
+            MenuHas(&[
+                "Open Link in New Tab",
+                "Save Link As\u{2026}",
+                "Copy Link Address"
+            ])
+        ],
+        []
+    ),
+    item!(
+        "C.menu-image",
+        [
+            Click(Right, NONE, at::IMG),
+            MenuHas(&[
+                "Open Image in New Tab",
+                "Save Image As\u{2026}",
+                "Copy Image",
+                "Copy Image Address"
+            ])
+        ],
+        []
+    ),
+    item!(
+        "C.menu-selection",
+        [
+            Js("parity.select(6, 10)"),
+            Click(Right, NONE, at::x(at::GAMMA, 110.0)),
+            MenuHas(&[
+                "Copy",
+                "Search the Web for \u{201c}beta\u{201d}",
+                "Print\u{2026}"
+            ])
+        ],
+        []
+    ),
+    item!(
+        "C.menu-editable",
+        [
+            Js("parity.field('inp', 'x')"),
+            Click(Right, NONE, at::INP),
+            MenuHas(&[
+                "Undo",
+                "Redo",
+                "Cut",
+                "Copy",
+                "Paste",
+                "Paste as Plain Text",
+                "Select All"
+            ])
+        ],
+        []
+    ),
+    item!(
+        "C.menu-page",
+        [
+            Click(Right, NONE, at::BLANK),
+            MenuHas(&[
+                "Back",
+                "Forward",
+                "Reload",
+                "Save Page As\u{2026}",
+                "Print\u{2026}",
+                "View Page Source",
+                "Inspect"
+            ])
+        ],
+        []
+    ),
+    item!(
+        "C.menu-video",
+        [
+            Click(Right, NONE, at::VIDEO),
+            MenuHas(&["Loop", "Show Controls"])
+        ],
+        []
+    ),
+    item!(
+        "C.save-link-downloads",
+        [
+            Click(Right, NONE, at::DOWNLOAD),
+            Choose("Save Link As\u{2026}"),
+            Settle(20)
+        ],
+        [H(C::Downloads(1))]
+    ),
+    // D. Drag and drop.
+    item!(
+        "D.html5-drag",
+        [
+            Press(at::DRAG),
+            MoveTo(at::x(at::DRAG, 375.0)),
+            Settle(20),
+            MoveTo(at::x(at::DROP, 380.0)),
+            MoveTo(at::DROP),
+            Settle(10),
+            Release(at::DROP)
+        ],
+        [J("eq(seen.drops.join(), 'payload')")]
+    ),
+    item!(
+        "D.text-drag-to-input",
+        [
+            Js("parity.field('inp2', '')"),
+            Js("parity.select(0, 5)"),
+            Press(at::WORD),
+            MoveTo(at::x(at::WORD, 50.0)),
+            Settle(20),
+            MoveTo(at::x(at::INP2, 100.0)),
+            MoveTo(at::INP2),
+            Settle(10),
+            Release(at::INP2)
+        ],
+        [J("eq($('inp2').value, 'alpha')")]
+    ),
+    item!(
+        "D.link-to-sidebar",
+        [
+            Press(at::LINK),
+            MoveTo(at::x(at::LINK, 60.0)),
+            Settle(20),
+            MoveTo(at::x(at::SIDEBAR, -20.0)),
+            MoveTo(at::SIDEBAR),
+            Settle(10),
+            Release(at::SIDEBAR),
+            Settle(20)
+        ],
+        [H(C::Tabs(2))]
+    ),
+    item!(
+        "D.os-file-drop",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Host(HostOp::DropFile(at::FILEZONE))
+        ],
+        [J("eq(seen.files.join(), 'parity-drop.txt')")]
+    ),
+    // E. Mouse.
+    item!(
+        "E.double-click-word",
+        [Clicks(2, at::WORD)],
+        [J("eq(getSelection().toString(), 'alpha')")]
+    ),
+    item!(
+        "E.triple-click-line",
+        [Clicks(3, at::WORD)],
+        [J(
+            "eq(getSelection().toString().trim(), 'alpha beta gamma')"
+        )]
+    ),
+    item!(
+        "E.shift-click-extends",
+        [Clicks(2, at::WORD), Click(Left, SHIFT, at::GAMMA)],
+        [J(
+            "getSelection().toString().startsWith('alpha beta g') || getSelection().toString()"
+        )]
+    ),
+    item!(
+        "E.ctrl-click-background-tab",
+        [Click(Left, CTRL, at::LINK), Settle(20)],
+        [
+            H(C::Tabs(2)),
+            H(C::Visible(0)),
+            J("eq(location.href.startsWith('data:'), true)")
+        ]
+    ),
+    item!(
+        "E.middle-click-background-tab",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Click(Middle, NONE, at::LINK),
+            Settle(20)
+        ],
+        [H(C::Tabs(2)), H(C::Visible(0))]
+    ),
+    item!(
+        "E.shift-wheel-horizontal",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Wheel(SHIFT, at::BLANK, 0.0, -120.0),
+            Settle(10)
+        ],
+        [J("scrollX > 0 || 'scrollX ' + scrollX")]
+    ),
+    item!(
+        "E.ctrl-wheel-zoom",
+        [Wheel(CTRL, at::BLANK, 0.0, 120.0), Settle(10)],
+        [H(C::Zoomed(true))]
+    ),
+    item!(
+        "E.hover-cursor",
+        [Host(HostOp::ZoomReset), MoveTo(at::BLANK), MoveTo(at::LINK)],
+        [H(C::Cursor(2))]
+    ),
+    item!(
+        "E.link-status",
+        [MoveTo(at::BLANK), MoveTo(at::LINK)],
+        [H(C::Status("https://example.invalid/linked"))]
+    ),
+    item!(
+        "E.title-tooltip",
+        [MoveTo(at::BLANK), MoveTo(at::TIP), Settle(30)],
+        [H(C::Tooltip("tip text"))]
+    ),
+    // F. Page features that need the embedder.
+    item!(
+        "F.a-download",
+        [Click(Left, NONE, at::DOWNLOAD), Settle(20)],
+        [H(C::Downloads(1))]
+    ),
+    item!(
+        "F.target-blank",
+        [Click(Left, NONE, at::BLANK_LINK), Settle(20)],
+        [H(C::Tabs(2))]
+    ),
+    item!(
+        "F.window-open",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Click(Left, NONE, at::OPEN_BUTTON),
+            Settle(20)
+        ],
+        [H(C::Tabs(2))]
+    ),
+    item!(
+        "F.mailto-to-os",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Click(Left, NONE, at::MAIL),
+            Settle(20)
+        ],
+        [H(C::External("mailto:nobody@example.invalid"))]
+    ),
+];
+
+// ----------------------------------------------------------------- keys
+
+/// The physical key, its evdev code and what it types on a US layout,
+/// unshifted and shifted (`None`: no text).
+/// A key on a US layout: its code, evdev scan code, logical key, and the
+/// characters it types unshifted and shifted (none for a named key).
+type UsKey = (KeyCode, u32, WinitKey, Option<(char, char)>);
+
+fn us_key(key: Key) -> Option<UsKey> {
+    use KeyCode as K;
+    let named = |n| WinitKey::Named(n);
+    let ch = |c: char| WinitKey::Character(c.to_string().into());
+    const LETTERS: [(KeyCode, u32); 26] = [
+        (K::KeyA, 30),
+        (K::KeyB, 48),
+        (K::KeyC, 46),
+        (K::KeyD, 32),
+        (K::KeyE, 18),
+        (K::KeyF, 33),
+        (K::KeyG, 34),
+        (K::KeyH, 35),
+        (K::KeyI, 23),
+        (K::KeyJ, 36),
+        (K::KeyK, 37),
+        (K::KeyL, 38),
+        (K::KeyM, 50),
+        (K::KeyN, 49),
+        (K::KeyO, 24),
+        (K::KeyP, 25),
+        (K::KeyQ, 16),
+        (K::KeyR, 19),
+        (K::KeyS, 31),
+        (K::KeyT, 20),
+        (K::KeyU, 22),
+        (K::KeyV, 47),
+        (K::KeyW, 17),
+        (K::KeyX, 45),
+        (K::KeyY, 21),
+        (K::KeyZ, 44),
+    ];
+    const DIGITS: [(KeyCode, u32, char); 10] = [
+        (K::Digit0, 11, ')'),
+        (K::Digit1, 2, '!'),
+        (K::Digit2, 3, '@'),
+        (K::Digit3, 4, '#'),
+        (K::Digit4, 5, '$'),
+        (K::Digit5, 6, '%'),
+        (K::Digit6, 7, '^'),
+        (K::Digit7, 8, '&'),
+        (K::Digit8, 9, '*'),
+        (K::Digit9, 10, '('),
+    ];
+    const PUNCT: [(KeyCode, u32, char, char); 11] = [
+        (K::Minus, 12, '-', '_'),
+        (K::Equal, 13, '=', '+'),
+        (K::BracketLeft, 26, '[', '{'),
+        (K::BracketRight, 27, ']', '}'),
+        (K::Semicolon, 39, ';', ':'),
+        (K::Quote, 40, '\'', '"'),
+        (K::Backquote, 41, '`', '~'),
+        (K::Backslash, 43, '\\', '|'),
+        (K::Comma, 51, ',', '<'),
+        (K::Period, 52, '.', '>'),
+        (K::Slash, 53, '/', '?'),
+    ];
+    Some(match key {
+        Key::Char(c @ 'a'..='z') => {
+            let (code, scan) = LETTERS[(c as u8 - b'a') as usize];
+            (code, scan, ch(c), Some((c, c.to_ascii_uppercase())))
+        }
+        Key::Char(c @ '0'..='9') => {
+            let (code, scan, shifted) = DIGITS[(c as u8 - b'0') as usize];
+            (code, scan, ch(c), Some((c, shifted)))
+        }
+        // A digit's shifted symbol (`!` is Shift+1), or punctuation.
+        Key::Char(c) => match DIGITS.iter().find(|d| d.2 == c) {
+            Some(&(code, scan, shifted)) => {
+                let plain = char::from(b'0' + DIGITS.iter().position(|d| d.2 == c)? as u8);
+                (code, scan, ch(plain), Some((plain, shifted)))
+            }
+            None => {
+                let &(code, scan, plain, shifted) = PUNCT.iter().find(|p| p.2 == c || p.3 == c)?;
+                (code, scan, ch(plain), Some((plain, shifted)))
+            }
+        },
+        Key::Space => (K::Space, 57, ch(' '), Some((' ', ' '))),
+        Key::Enter => (K::Enter, 28, named(NamedKey::Enter), Some(('\r', '\r'))),
+        Key::Tab => (K::Tab, 15, named(NamedKey::Tab), Some(('\t', '\t'))),
+        Key::Escape => (K::Escape, 1, named(NamedKey::Escape), None),
+        Key::Backspace => (K::Backspace, 14, named(NamedKey::Backspace), None),
+        Key::Delete => (K::Delete, 111, named(NamedKey::Delete), None),
+        Key::Left => (K::ArrowLeft, 105, named(NamedKey::ArrowLeft), None),
+        Key::Right => (K::ArrowRight, 106, named(NamedKey::ArrowRight), None),
+        Key::Up => (K::ArrowUp, 103, named(NamedKey::ArrowUp), None),
+        Key::Down => (K::ArrowDown, 108, named(NamedKey::ArrowDown), None),
+        Key::Home => (K::Home, 102, named(NamedKey::Home), None),
+        Key::End => (K::End, 107, named(NamedKey::End), None),
+        Key::PageUp => (K::PageUp, 104, named(NamedKey::PageUp), None),
+        Key::PageDown => (K::PageDown, 109, named(NamedKey::PageDown), None),
+        Key::F(n @ 1..=10) => {
+            const F: [KeyCode; 10] = [
+                K::F1,
+                K::F2,
+                K::F3,
+                K::F4,
+                K::F5,
+                K::F6,
+                K::F7,
+                K::F8,
+                K::F9,
+                K::F10,
+            ];
+            const N: [NamedKey; 10] = [
+                NamedKey::F1,
+                NamedKey::F2,
+                NamedKey::F3,
+                NamedKey::F4,
+                NamedKey::F5,
+                NamedKey::F6,
+                NamedKey::F7,
+                NamedKey::F8,
+                NamedKey::F9,
+                NamedKey::F10,
+            ];
+            let i = usize::from(n - 1);
+            (F[i], 59 + u32::from(n - 1), named(N[i]), None)
+        }
+        Key::F(_) => return None,
+    })
+}
+
+/// The modifier keys a chord holds, in press order: code, evdev code, key, state bit.
+const MODIFIER_KEYS: [(KeyCode, u32, NamedKey, ModifiersState); 3] = [
+    (
+        KeyCode::ControlLeft,
+        29,
+        NamedKey::Control,
+        ModifiersState::CONTROL,
+    ),
+    (KeyCode::AltLeft, 56, NamedKey::Alt, ModifiersState::ALT),
+    (
+        KeyCode::ShiftLeft,
+        42,
+        NamedKey::Shift,
+        ModifiersState::SHIFT,
+    ),
+];
+
+fn input(
+    pressed: bool,
+    code: KeyCode,
+    scan: u32,
+    unmodified: WinitKey,
+    text: Option<String>,
+    location: KeyLocation,
+    keys: ModifiersState,
+) -> KeyInput {
+    KeyInput {
+        pressed,
+        repeat: false,
+        physical: PhysicalKey::Code(code),
+        scancode: Some(scan),
+        unmodified,
+        text,
+        location,
+        modifiers: Modifiers {
+            keys,
+            buttons: Buttons::default(),
+        },
+    }
+}
+
+/// The key events of one chord as winit reports them on Linux with a US layout:
+/// each modifier pressed (the state includes it from its own press on, as
+/// Chromium's X11 and Wayland events do), the key pressed and released, the
+/// modifiers released. winit's Linux `text` ignores Ctrl (Ctrl+C types "c").
+pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
+    let (code, scan, unmodified, chars) = us_key(chord.key)?;
+    let held = [chord.ctrl, chord.alt, chord.shift];
+    let mut state = ModifiersState::empty();
+    let mut out = vec![];
+    for (on, &(code, scan, named, bit)) in held.iter().zip(&MODIFIER_KEYS) {
+        if *on {
+            state |= bit;
+            out.push(input(
+                true,
+                code,
+                scan,
+                WinitKey::Named(named),
+                None,
+                KeyLocation::Left,
+                state,
+            ));
+        }
+    }
+    let text = chars.map(|(plain, shifted)| if chord.shift { shifted } else { plain }.to_string());
+    out.push(input(
+        true,
+        code,
+        scan,
+        unmodified.clone(),
+        text,
+        KeyLocation::Standard,
+        state,
+    ));
+    out.push(input(
+        false,
+        code,
+        scan,
+        unmodified,
+        None,
+        KeyLocation::Standard,
+        state,
+    ));
+    for (on, &(code, scan, named, bit)) in held.iter().zip(&MODIFIER_KEYS).rev() {
+        if *on {
+            state.remove(bit);
+            out.push(input(
+                false,
+                code,
+                scan,
+                WinitKey::Named(named),
+                None,
+                KeyLocation::Left,
+                state,
+            ));
+        }
+    }
+    Some(out)
+}
+
+/// The chords that type `text` on a US layout.
+pub fn typed(text: &str) -> Option<Vec<Chord>> {
+    text.chars()
+        .map(|c| {
+            let (_, _, _, chars) = us_key(if c == ' ' {
+                Key::Space
+            } else {
+                Key::Char(c.to_ascii_lowercase())
+            })?;
+            let (plain, shifted) = chars?;
+            let shift = c != plain && c == shifted;
+            let key = if c == ' ' {
+                Key::Space
+            } else {
+                Key::Char(plain)
+            };
+            Some(Chord {
+                ctrl: false,
+                alt: false,
+                shift,
+                cmd: false,
+                key,
+            })
+        })
+        .collect()
+}
+
+/// `Keys` steps name keys as `Chord::parse` does, with `BackSpace` for Backspace too.
+pub fn chords(spec: &str) -> Option<Vec<Chord>> {
+    spec.split_whitespace()
+        .map(|c| Chord::parse(&c.replace("BackSpace", "Backspace")).ok())
+        .collect()
+}
+
+// ---------------------------------------------------------------- driver
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Wait {
+    /// The step's script answer, by serial.
+    Answer(u32),
+    /// The page's context menu.
+    Menu,
+    /// Runs of CEF work left.
+    Runs(u32),
+    /// The check's answer, by serial.
+    Check(u32),
+    /// Runs before the check is asked again.
+    Gap(u32),
+    /// The page loaded (`Step::Restore`).
+    Load,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Parity {
+    /// The page is loading.
+    #[default]
+    Load,
+    At {
+        item: usize,
+        /// Index into the item's steps, then (past them) its expects.
+        step: usize,
+        wait: Option<Wait>,
+        /// Runs of CEF work spent waiting.
+        runs: u32,
+        polls: u32,
+        /// What the last ask of a check saw.
+        last: String,
+    },
+    Done,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Input<'a> {
+    /// CEF did a run of work.
+    Worked,
+    /// The page finished loading.
+    Loaded,
+    Title(&'a str),
+    /// The page's context menu is open with these entries (label, enabled).
+    Menu(&'a [(String, bool)]),
+    /// The answer to the last `Action::Check`.
+    Checked(Result<(), String>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Action {
+    /// Run `parity.run(serial, ...)` / `parity.check(...)` in the page.
+    Script(String),
+    Step(Step),
+    /// Choose entry `i` of the open menu.
+    Choose(usize),
+    DismissMenu,
+    /// Ask the host; it answers with `Input::Checked` at once.
+    Check(HostCheck),
+    /// One item finished.
+    Report {
+        name: &'static str,
+        result: Result<(), String>,
+    },
+    /// Every item ran.
+    Finish,
+}
+
+fn serial(item: usize, step: usize, polls: u32) -> u32 {
+    (item as u32) * 10_000 + (step as u32) * 100 + polls
+}
+
+/// The answer in a title `parity:<serial>:...`, if it is that serial's.
+fn answer(title: &str, want: u32) -> Option<Result<(), String>> {
+    let rest = title.strip_prefix("parity:")?;
+    let (serial, verdict) = rest.split_once(':')?;
+    if serial.parse::<u32>().ok()? != want {
+        return None;
+    }
+    Some(match verdict {
+        "ok" => Ok(()),
+        other => Err(other.strip_prefix("fail:").unwrap_or(other).to_owned()),
+    })
+}
+
+/// Requires `want` to appear in `labels` in order.
+pub fn menu_lists(labels: &[(String, bool)], want: &[&str]) -> Result<(), String> {
+    let mut it = labels.iter();
+    for w in want {
+        if !it.any(|(l, _)| l == w) {
+            let all: Vec<&str> = labels
+                .iter()
+                .map(|(l, _)| l.as_str())
+                .filter(|l| !l.is_empty())
+                .collect();
+            return Err(format!("no {w:?} (in order) in {all:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// The items whose names contain one of `filter`'s comma-separated parts (all without one):
+/// `WUBBLE_PARITY=B.,D.html` runs a few by hand.
+pub fn selected(filter: Option<&str>) -> Vec<Item> {
+    ITEMS
+        .iter()
+        .filter(|i| filter.is_none_or(|f| f.split(',').any(|part| i.name.contains(part))))
+        .copied()
+        .collect()
+}
+
+pub fn next_in(items: &[Item], state: Parity, input: Input) -> (Parity, Vec<Action>) {
+    match (state, input) {
+        (Parity::Load, Input::Loaded) => advance(items, 0, 0, vec![]),
+        (
+            Parity::At {
+                item,
+                step,
+                wait,
+                runs,
+                polls,
+                last,
+            },
+            input,
+        ) => on_wait(items, item, step, wait, runs, polls, last, input),
+        (state, _) => (state, vec![]),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn on_wait(
+    items: &[Item],
+    item: usize,
+    step: usize,
+    wait: Option<Wait>,
+    runs: u32,
+    polls: u32,
+    last: String,
+    input: Input,
+) -> (Parity, Vec<Action>) {
+    let same = |wait, runs, last| Parity::At {
+        item,
+        step,
+        wait,
+        runs,
+        polls,
+        last,
+    };
+    let fail = |why: String| finish_item(items, item, Err(why));
+    let steps = items[item].steps.len();
+    match (wait, input) {
+        (Some(Wait::Load), Input::Loaded) => advance(items, item, step + 1, vec![]),
+        (Some(Wait::Runs(n)), Input::Worked) if n <= 1 => advance(items, item, step + 1, vec![]),
+        (Some(Wait::Runs(n)), Input::Worked) => (same(Some(Wait::Runs(n - 1)), runs, last), vec![]),
+        (Some(Wait::Gap(n)), Input::Worked) if n <= 1 => ask(items, item, step, polls + 1),
+        (Some(Wait::Gap(n)), Input::Worked) => (same(Some(Wait::Gap(n - 1)), runs, last), vec![]),
+        (Some(w @ (Wait::Answer(_) | Wait::Menu | Wait::Check(_) | Wait::Load)), Input::Worked) => {
+            if runs + 1 >= MAX_WAIT_RUNS {
+                let what = match w {
+                    Wait::Menu => "no context menu".to_owned(),
+                    Wait::Load => "the page did not load again".to_owned(),
+                    _ if last.is_empty() => "the page never answered".to_owned(),
+                    _ => last,
+                };
+                let (s, mut a) = fail(what);
+                if w == Wait::Menu {
+                    a.insert(0, Action::DismissMenu);
+                }
+                (s, a)
+            } else {
+                (same(Some(w), runs + 1, last), vec![])
+            }
+        }
+        (Some(Wait::Answer(want)), Input::Title(title)) => match answer(title, want) {
+            Some(Ok(())) => advance(items, item, step + 1, vec![]),
+            Some(Err(why)) => fail(format!("setup failed: {why}")),
+            None => (same(Some(Wait::Answer(want)), runs, last), vec![]),
+        },
+        (Some(Wait::Check(want)), Input::Title(title)) => match answer(title, want) {
+            Some(result) => checked(items, item, step, polls, result),
+            None => (same(Some(Wait::Check(want)), runs, last), vec![]),
+        },
+        (Some(Wait::Menu), Input::Menu(entries)) => match items[item].steps[step] {
+            Step::Choose(label) => match entries.iter().position(|(l, on)| l == label && *on) {
+                Some(i) => advance(items, item, step + 1, vec![Action::Choose(i)]),
+                None => {
+                    let (s, mut a) = fail(
+                        menu_lists(entries, &[label])
+                            .err()
+                            .unwrap_or_else(|| format!("{label:?} is disabled")),
+                    );
+                    a.insert(0, Action::DismissMenu);
+                    (s, a)
+                }
+            },
+            Step::MenuHas(want) => match menu_lists(entries, want) {
+                Ok(()) => advance(items, item, step + 1, vec![Action::DismissMenu]),
+                Err(why) => {
+                    let (s, mut a) = fail(why);
+                    a.insert(0, Action::DismissMenu);
+                    (s, a)
+                }
+            },
+            _ => (same(Some(Wait::Menu), runs, last), vec![]),
+        },
+        (None, Input::Checked(result)) if step >= steps => {
+            checked(items, item, step, polls, result)
+        }
+        (wait, _) => (same(wait, runs, last), vec![]),
+    }
+}
+
+/// A check answered: next expect, or ask again after a gap, or fail.
+fn checked(
+    items: &[Item],
+    item: usize,
+    step: usize,
+    polls: u32,
+    result: Result<(), String>,
+) -> (Parity, Vec<Action>) {
+    match result {
+        Ok(()) => advance(items, item, step + 1, vec![]),
+        Err(why) if polls + 1 >= MAX_POLLS => finish_item(items, item, Err(why)),
+        Err(why) => (
+            Parity::At {
+                item,
+                step,
+                wait: Some(Wait::Gap(POLL_GAP)),
+                runs: 0,
+                polls,
+                last: why,
+            },
+            vec![],
+        ),
+    }
+}
+
+/// Asks expect `step - steps` of `item` (poll `polls`).
+fn ask(items: &[Item], item: usize, step: usize, polls: u32) -> (Parity, Vec<Action>) {
+    let at = |wait| Parity::At {
+        item,
+        step,
+        wait,
+        runs: 0,
+        polls,
+        last: String::new(),
+    };
+    match items[item].expect[step - items[item].steps.len()] {
+        Expect::Js(expr) => {
+            let serial = serial(item, step, polls);
+            (
+                at(Some(Wait::Check(serial))),
+                vec![Action::Script(format!(
+                    "parity.check({serial}, () => ({expr}))"
+                ))],
+            )
+        }
+        // The host answers at once with `Input::Checked`.
+        Expect::Host(check) => (at(None), vec![Action::Check(check)]),
+    }
+}
+
+/// Runs the steps of `item` from `step` that need no wait, up to the next wait.
+fn advance(
+    items: &[Item],
+    item: usize,
+    mut step: usize,
+    mut actions: Vec<Action>,
+) -> (Parity, Vec<Action>) {
+    let Some(it) = items.get(item) else {
+        actions.push(Action::Finish);
+        return (Parity::Done, actions);
+    };
+    let at = |step, wait| Parity::At {
+        item,
+        step,
+        wait: Some(wait),
+        runs: 0,
+        polls: 0,
+        last: String::new(),
+    };
+    while let Some(&s) = it.steps.get(step) {
+        match s {
+            Step::Js(script) => {
+                let serial = serial(item, step, 0);
+                actions.push(Action::Script(format!(
+                    "parity.run({serial}, () => {{ {script}; }})"
+                )));
+                return (at(step, Wait::Answer(serial)), actions);
+            }
+            Step::Choose(_) | Step::MenuHas(_) => return (at(step, Wait::Menu), actions),
+            Step::Settle(n) => return (at(step, Wait::Runs(n.max(1))), actions),
+            // The host answers with `Input::Loaded`, at once when nothing had to load.
+            Step::Restore => {
+                actions.push(Action::Step(Step::Restore));
+                return (at(step, Wait::Load), actions);
+            }
+            other => actions.push(Action::Step(other)),
+        }
+        step += 1;
+    }
+    if step - it.steps.len() < it.expect.len() {
+        let (state, more) = ask(items, item, step, 0);
+        actions.extend(more);
+        (state, actions)
+    } else {
+        let (state, more) = finish_item(items, item, Ok(()));
+        actions.extend(more);
+        (state, actions)
+    }
+}
+
+/// Reports `item` and starts the next one.
+fn finish_item(items: &[Item], item: usize, result: Result<(), String>) -> (Parity, Vec<Action>) {
+    let report = Action::Report {
+        name: items[item].name,
+        result,
+    };
+    advance(items, item + 1, 0, vec![report])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_item_s_keys_and_text_can_be_typed() {
+        for item in ITEMS {
+            for step in item.steps {
+                match step {
+                    Step::Keys(spec) => {
+                        let chords =
+                            chords(spec).unwrap_or_else(|| panic!("{}: {spec}", item.name));
+                        for c in chords {
+                            assert!(key_inputs(c).is_some(), "{}: {c}", item.name);
+                        }
+                    }
+                    Step::Type(text) => {
+                        assert!(typed(text).is_some(), "{}: {text}", item.name)
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn item_names_are_unique() {
+        let mut names: Vec<_> = ITEMS.iter().map(|i| i.name).collect();
+        let n = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), n);
+    }
+
+    #[test]
+    fn ctrl_shift_z_presses_modifiers_around_the_key() {
+        let events = key_inputs(Chord::parse("Ctrl+Shift+Z").unwrap()).unwrap();
+        let shape: Vec<_> = events
+            .iter()
+            .map(|e| (e.pressed, e.physical, e.text.clone(), e.modifiers.keys))
+            .collect();
+        let cs = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        assert_eq!(
+            shape,
+            [
+                (
+                    true,
+                    PhysicalKey::Code(KeyCode::ControlLeft),
+                    None,
+                    ModifiersState::CONTROL
+                ),
+                (true, PhysicalKey::Code(KeyCode::ShiftLeft), None, cs),
+                (true, PhysicalKey::Code(KeyCode::KeyZ), Some("Z".into()), cs),
+                (false, PhysicalKey::Code(KeyCode::KeyZ), None, cs),
+                (
+                    false,
+                    PhysicalKey::Code(KeyCode::ShiftLeft),
+                    None,
+                    ModifiersState::CONTROL
+                ),
+                (
+                    false,
+                    PhysicalKey::Code(KeyCode::ControlLeft),
+                    None,
+                    ModifiersState::empty()
+                ),
+            ]
+        );
+        assert_eq!(events[2].scancode, Some(44));
+    }
+
+    #[test]
+    fn typing_shifts_only_shifted_characters() {
+        let chords = typed("Hi!").unwrap();
+        assert_eq!(
+            chords.iter().map(|c| (c.shift, c.key)).collect::<Vec<_>>(),
+            [
+                (true, Key::Char('h')),
+                (false, Key::Char('i')),
+                (true, Key::Char('1'))
+            ]
+        );
+        assert!(typed("é").is_none());
+    }
+
+    const TWO: &[Item] = &[
+        Item {
+            name: "one",
+            steps: &[Step::Js("x()"), Step::Click(Left, NONE, at::INP)],
+            expect: &[Expect::Js("ok()"), Expect::Host(HostCheck::Tabs(1))],
+        },
+        Item {
+            name: "two",
+            steps: &[Step::Click(Right, NONE, at::LINK), Step::Choose("Copy")],
+            expect: &[],
+        },
+    ];
+
+    fn run(inputs: Vec<Input>) -> (Parity, Vec<Action>) {
+        inputs
+            .into_iter()
+            .fold((Parity::Load, vec![]), |(s, mut all), i| {
+                let (s, a) = next_in(TWO, s, i);
+                all.extend(a);
+                (s, all)
+            })
+    }
+
+    #[test]
+    fn items_run_their_steps_then_poll_their_checks() {
+        let s0 = serial(0, 0, 0);
+        let c0 = serial(0, 2, 0);
+        let c1 = serial(0, 2, 1);
+        let t = |s: u32, v: &str| format!("parity:{s}:{v}");
+        let (a, b, c, d) = (t(s0, "ok"), t(c0, "fail:not yet"), t(c1, "ok"), t(c1, "ok"));
+        let menu = vec![("Cut".to_string(), true), ("Copy".to_string(), true)];
+        let mut inputs = vec![Input::Loaded, Input::Title(&a), Input::Title(&b)];
+        inputs.extend(std::iter::repeat_n(Input::Worked, POLL_GAP as usize));
+        inputs.extend([
+            Input::Title(&c),
+            Input::Title(&d), // a late duplicate changes nothing
+            Input::Checked(Err("one tab short".into())),
+        ]);
+        let (s, actions) = run(inputs);
+        assert!(
+            matches!(
+                s,
+                Parity::At {
+                    item: 0,
+                    wait: Some(Wait::Gap(_)),
+                    ..
+                }
+            ),
+            "{s:?}"
+        );
+        let mut inputs = vec![];
+        inputs.extend(std::iter::repeat_n(Input::Worked, POLL_GAP as usize));
+        let (s, more) = inputs.into_iter().fold((s, vec![]), |(s, mut all), i| {
+            let (s, a) = next_in(TWO, s, i);
+            all.extend(a);
+            (s, all)
+        });
+        assert_eq!(more, [Action::Check(HostCheck::Tabs(1))]);
+        let (s, more) = next_in(TWO, s, Input::Checked(Ok(())));
+        assert_eq!(
+            more,
+            [
+                Action::Report {
+                    name: "one",
+                    result: Ok(())
+                },
+                Action::Step(Step::Click(Right, NONE, at::LINK)),
+            ]
+        );
+        let (s, more) = next_in(TWO, s, Input::Menu(&menu));
+        assert_eq!(s, Parity::Done);
+        assert_eq!(
+            more,
+            [
+                Action::Choose(1),
+                Action::Report {
+                    name: "two",
+                    result: Ok(())
+                },
+                Action::Finish
+            ]
+        );
+        assert_eq!(
+            actions[..3],
+            [
+                Action::Script(format!("parity.run({s0}, () => {{ x(); }})")),
+                Action::Step(Step::Click(Left, NONE, at::INP)),
+                Action::Script(format!("parity.check({c0}, () => (ok()))")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_menu_entry_fails_the_item_and_dismisses() {
+        let s = Parity::At {
+            item: 1,
+            step: 1,
+            wait: Some(Wait::Menu),
+            runs: 0,
+            polls: 0,
+            last: String::new(),
+        };
+        let menu = vec![("Cut".to_string(), true)];
+        let (s, actions) = next_in(TWO, s, Input::Menu(&menu));
+        assert_eq!(s, Parity::Done);
+        assert_eq!(actions[0], Action::DismissMenu);
+        assert!(
+            matches!(&actions[1], Action::Report { name: "two", result: Err(e) } if e.contains("Copy"))
+        );
+    }
+
+    #[test]
+    fn a_silent_page_fails_after_the_bound() {
+        let mut s = next_in(TWO, Parity::Load, Input::Loaded).0;
+        let mut all = vec![];
+        for _ in 0..MAX_WAIT_RUNS {
+            let (n, a) = next_in(TWO, s, Input::Worked);
+            s = n;
+            all.extend(a);
+        }
+        assert!(
+            matches!(&all[0], Action::Report { name: "one", result: Err(e) } if e.contains("never"))
+        );
+    }
+
+    #[test]
+    fn menu_order_is_checked() {
+        let menu: Vec<(String, bool)> = ["A", "B", "C"]
+            .iter()
+            .map(|s| (s.to_string(), true))
+            .collect();
+        assert!(menu_lists(&menu, &["A", "C"]).is_ok());
+        assert!(menu_lists(&menu, &["C", "A"]).is_err());
+    }
+
+    #[test]
+    fn the_page_has_what_the_table_points_at() {
+        let page = include_str!("../assets/parity.html");
+        for id in [
+            "inp", "inp2", "ta", "ce", "para", "link", "img", "video", "drag", "drop", "filezone",
+            "copybtn", "dl", "blank", "mail", "open", "tip",
+        ] {
+            assert!(page.contains(&format!("id=\"{id}\"")), "{id}");
+        }
+    }
+}

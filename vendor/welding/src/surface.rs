@@ -105,6 +105,14 @@ pub enum CefSurfaceEvent {
         windows_key_code: i32,
         modifiers: u32,
     },
+    /// A frame's clipboard request through [`crate::clipboard_bridge`]: `kind`
+    /// is `copy`, `primary`, `paste` or `read`; `frame` is the frame's
+    /// identifier, for the answer. wubble change, see `WUBBLE_CHANGES.md`.
+    Clipboard {
+        kind: String,
+        text: String,
+        frame: String,
+    },
 }
 
 /// The strings of a list CEF passed to a callback, which still owns it.
@@ -1829,6 +1837,9 @@ pub enum NavigationEvent {
         /// wubble change: CEF's `cef_context_menu_edit_state_flags_t`
         /// (can undo, redo, cut, copy, paste, delete, select all, ...).
         edit_flags: u32,
+        /// wubble change: CEF's `cef_context_menu_media_state_flags_t` for the
+        /// media element clicked on (paused, muted, loop, controls, ...).
+        media_flags: u32,
         /// wubble change: the misspelled word under the cursor, if any, and
         /// the spellchecker's suggestions for it.
         misspelled_word: String,

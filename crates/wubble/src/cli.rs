@@ -63,6 +63,7 @@ enum SmokeArg {
     Tabs,
     Split,
     Page,
+    Parity,
     Block,
     Session,
     SessionPhase(Phase),
@@ -75,6 +76,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
         None if value == "page" => Ok(SmokeArg::Page),
+        None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
         None if value == "session" => Ok(SmokeArg::Session),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
@@ -84,7 +86,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `session` or \
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, `session` or \
              `session-phase=1|2`"
                 .into(),
         ),
@@ -109,6 +111,8 @@ pub enum Smoke {
     Split,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
+    /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
+    Parity,
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
     /// Runs both session phases on a temporary profile.
@@ -193,6 +197,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
+            (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
         };
@@ -280,6 +285,10 @@ mod tests {
             Some(Command::Smoke(Smoke::Page))
         );
         assert!(parse(["wubble", "--smoke", "page", "--url", "about:blank"]).is_err());
+        assert_eq!(
+            parse(["wubble", "--smoke", "parity"]).ok(),
+            Some(Command::Smoke(Smoke::Parity))
+        );
     }
 
     #[test]

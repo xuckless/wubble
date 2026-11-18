@@ -35,11 +35,25 @@ pub mod cef_id {
     pub const CUT: i32 = 112;
     pub const COPY: i32 = 113;
     pub const PASTE: i32 = 114;
+    pub const PASTE_MATCH_STYLE: i32 = 115;
     pub const DELETE: i32 = 116;
     pub const SELECT_ALL: i32 = 117;
     /// The first spelling suggestion; CEF numbers up to five from here.
     pub const SPELLCHECK_SUGGESTION_0: i32 = 200;
     pub const SPELLCHECK_SUGGESTION_LAST: i32 = 204;
+}
+
+/// What a media entry does to the element under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaOp {
+    /// Play if paused, else pause.
+    PlayPause,
+    /// Toggle muted.
+    Mute,
+    /// Toggle looping.
+    Loop,
+    /// Toggle the element's own controls.
+    Controls,
 }
 
 /// What choosing an entry does.
@@ -51,6 +65,14 @@ pub enum Command {
     OpenInNewTab(String),
     /// Put the text on the clipboard.
     CopyText(String),
+    /// Download the URL with the page's cookies, asking where to save it.
+    SaveAs(String),
+    /// Search the default engine for the text.
+    Search(String),
+    /// Open DevTools on the element at this point (physical px, view-relative).
+    Inspect { x: i32, y: i32 },
+    /// Act on the media element at this point (physical px, view-relative).
+    Media { op: MediaOp, x: i32, y: i32 },
     /// Put the tab beside the focused page (split view).
     SplitWith(TabId),
     /// Take the tab out of its split.
@@ -70,11 +92,13 @@ pub struct Entry {
     pub enabled: bool,
 }
 
-/// What the page's navigation allows (from the view's `NavState`).
+/// What the menu needs besides the click: the page's navigation (from the
+/// view's `NavState`) and the search engine's name, if one is chosen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavFlags {
     pub back: bool,
     pub forward: bool,
+    pub search: Option<&'static str>,
 }
 
 /// The context a row's predicates read.
@@ -90,6 +114,19 @@ impl Ctx<'_> {
     fn image(&self) -> bool {
         self.menu.media == MediaKind::Image && !self.menu.media_url.is_empty()
     }
+    /// A video or audio element.
+    fn media(&self) -> bool {
+        matches!(self.menu.media, MediaKind::Video | MediaKind::Audio)
+    }
+    fn media_url(&self) -> bool {
+        self.media() && !self.menu.media_url.is_empty()
+    }
+    fn media_has(&self, flag: u32) -> bool {
+        self.menu.media_flags.has(flag)
+    }
+    fn video(&self) -> bool {
+        self.menu.media == MediaKind::Video
+    }
     fn editable(&self) -> bool {
         self.menu.editable
     }
@@ -98,18 +135,65 @@ impl Ctx<'_> {
     }
     /// Nothing more specific was hit: the page's own entries.
     fn page(&self) -> bool {
-        !self.link() && !self.image() && !self.editable() && !self.selection()
+        !self.link() && !self.image() && !self.media() && !self.editable() && !self.selection()
     }
     fn edit(&self, flag: u32) -> bool {
         self.menu.edit.allows(flag)
     }
+    fn at(&self) -> (i32, i32) {
+        (self.menu.x, self.menu.y)
+    }
+    fn media_op(&self, op: MediaOp) -> Command {
+        let (x, y) = self.at();
+        Command::Media { op, x, y }
+    }
+    /// "Video" or "Audio", for the media entries' labels.
+    fn kind(&self) -> &'static str {
+        if self.video() { "Video" } else { "Audio" }
+    }
+}
+
+/// Chromium's `kMaxSelectionTextLength` for the search entry's label is 50
+/// characters; longer selections end in an ellipsis.
+const SEARCH_LABEL_CHARS: usize = 50;
+
+/// `Search <engine> for “<selection>”`, the selection shortened and on one line.
+pub fn search_label(engine: Option<&str>, text: &str) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let short: String = flat.chars().take(SEARCH_LABEL_CHARS).collect();
+    let more = if flat.chars().count() > SEARCH_LABEL_CHARS {
+        "\u{2026}"
+    } else {
+        ""
+    };
+    format!(
+        "Search {} for \u{201c}{short}{more}\u{201d}",
+        engine.unwrap_or("the Web")
+    )
+}
+
+/// The script that does `op` to the video or audio element at `x, y`
+/// (physical px, view-relative). CEF has no media-player API, so this is
+/// Chromium's `MediaPlayerAction` done from the page's side; physical px are
+/// CSS px times `devicePixelRatio` (the device scale times the zoom).
+pub fn media_script(op: MediaOp, x: i32, y: i32) -> String {
+    let act = match op {
+        MediaOp::PlayPause => "m.paused ? m.play() : m.pause()",
+        MediaOp::Mute => "m.muted = !m.muted",
+        MediaOp::Loop => "m.loop = !m.loop",
+        MediaOp::Controls => "m.controls = !m.controls",
+    };
+    format!(
+        "(() => {{ const e = document.elementFromPoint({x} / devicePixelRatio, {y} / devicePixelRatio); \
+         const m = e && e.closest('video, audio'); if (m) {{ {act}; }} }})()"
+    )
 }
 
 /// One row of the table. `group` separates entries: a divider goes between
 /// two shown groups.
 struct Row {
     group: u8,
-    label: &'static str,
+    label: fn(&Ctx) -> String,
     show: fn(&Ctx) -> bool,
     enabled: fn(&Ctx) -> bool,
     command: fn(&Ctx) -> Command,
@@ -120,108 +204,204 @@ const fn always(_: &Ctx) -> bool {
 }
 
 use wubble_engine::page::EditFlags as F;
+use wubble_engine::page::MediaFlags as M;
 
-/// Every fixed entry, in menu order. Spelling suggestions go first and come
-/// from the request itself.
+/// A row with a fixed label.
+macro_rules! row {
+    ($group:literal, $label:literal, $show:expr, $enabled:expr, $command:expr) => {
+        Row {
+            group: $group,
+            label: |_| $label.into(),
+            show: $show,
+            enabled: $enabled,
+            command: $command,
+        }
+    };
+}
+
+/// Every fixed entry, in menu order (Chromium's `AppendLinkItems`,
+/// `AppendImageItems`, `AppendMediaItems`, `AppendEditableItems`,
+/// `AppendCopyItem`, `AppendSearchProvider`, `AppendPageItems`,
+/// `AppendDeveloperItems`). Spelling suggestions go first and come from the
+/// request itself. Left out, with the reason in TODO.md: "Open Link in New
+/// Window" (one window), "Copy Image" (the clipboard carries text only),
+/// "Picture in Picture" (CEF's windowless views have no PiP window).
 const ROWS: &[Row] = &[
+    row!(1, "Open Link in New Tab", |c| c.link(), always, |c| {
+        Command::OpenInNewTab(c.menu.link_url.clone())
+    }),
+    row!(1, "Save Link As\u{2026}", |c| c.link(), always, |c| {
+        Command::SaveAs(c.menu.link_url.clone())
+    }),
+    row!(1, "Copy Link Address", |c| c.link(), always, |c| {
+        Command::CopyText(c.menu.link_url.clone())
+    }),
+    row!(2, "Open Image in New Tab", |c| c.image(), always, |c| {
+        Command::OpenInNewTab(c.menu.media_url.clone())
+    }),
+    row!(2, "Save Image As\u{2026}", |c| c.image(), always, |c| {
+        Command::SaveAs(c.menu.media_url.clone())
+    }),
+    row!(2, "Copy Image Address", |c| c.image(), always, |c| {
+        Command::CopyText(c.menu.media_url.clone())
+    }),
     Row {
-        group: 1,
-        label: "Open Link in New Tab",
-        show: |c| c.link(),
+        group: 3,
+        label: |c| {
+            if c.media_has(M::PAUSED) {
+                "Play"
+            } else {
+                "Pause"
+            }
+            .into()
+        },
+        show: |c| c.media(),
         enabled: always,
-        command: |c| Command::OpenInNewTab(c.menu.link_url.clone()),
+        command: |c| c.media_op(MediaOp::PlayPause),
     },
     Row {
-        group: 1,
-        label: "Copy Link Address",
-        show: |c| c.link(),
+        group: 3,
+        label: |c| {
+            if c.media_has(M::MUTED) {
+                "Unmute"
+            } else {
+                "Mute"
+            }
+            .into()
+        },
+        show: |c| c.media() && c.media_has(M::HAS_AUDIO),
         enabled: always,
-        command: |c| Command::CopyText(c.menu.link_url.clone()),
+        command: |c| c.media_op(MediaOp::Mute),
     },
     Row {
-        group: 2,
-        label: "Open Image in New Tab",
-        show: |c| c.image(),
+        group: 3,
+        label: |c| {
+            if c.media_has(M::LOOP) {
+                "Stop Looping"
+            } else {
+                "Loop"
+            }
+            .into()
+        },
+        show: |c| c.media(),
+        enabled: always,
+        command: |c| c.media_op(MediaOp::Loop),
+    },
+    Row {
+        group: 3,
+        label: |c| {
+            if c.media_has(M::CONTROLS) {
+                "Hide Controls"
+            } else {
+                "Show Controls"
+            }
+            .into()
+        },
+        show: |c| c.media(),
+        enabled: |c| c.media_has(M::CAN_TOGGLE_CONTROLS),
+        command: |c| c.media_op(MediaOp::Controls),
+    },
+    Row {
+        group: 4,
+        label: |c| format!("Open {} in New Tab", c.kind()),
+        show: |c| c.media_url(),
         enabled: always,
         command: |c| Command::OpenInNewTab(c.menu.media_url.clone()),
     },
     Row {
-        group: 2,
-        label: "Copy Image Address",
-        show: |c| c.image(),
+        group: 4,
+        label: |c| format!("Save {} As\u{2026}", c.kind()),
+        show: |c| c.media_url(),
+        enabled: |c| c.media_has(M::CAN_SAVE),
+        command: |c| Command::SaveAs(c.menu.media_url.clone()),
+    },
+    Row {
+        group: 4,
+        label: |c| format!("Copy {} Address", c.kind()),
+        show: |c| c.media_url(),
         enabled: always,
         command: |c| Command::CopyText(c.menu.media_url.clone()),
     },
+    row!(5, "Undo", |c| c.editable(), |c| c.edit(F::CAN_UNDO), |_| {
+        Command::Engine(cef_id::UNDO)
+    }),
+    row!(5, "Redo", |c| c.editable(), |c| c.edit(F::CAN_REDO), |_| {
+        Command::Engine(cef_id::REDO)
+    }),
+    row!(6, "Cut", |c| c.editable(), |c| c.edit(F::CAN_CUT), |_| {
+        Command::Engine(cef_id::CUT)
+    }),
+    row!(
+        6,
+        "Copy",
+        |c| c.editable() || c.selection(),
+        |c| c.selection() || c.edit(F::CAN_COPY),
+        |_| { Command::Engine(cef_id::COPY) }
+    ),
+    row!(
+        6,
+        "Paste",
+        |c| c.editable(),
+        |c| c.edit(F::CAN_PASTE),
+        |_| { Command::Engine(cef_id::PASTE) }
+    ),
+    row!(
+        6,
+        "Paste as Plain Text",
+        |c| c.editable(),
+        |c| c.edit(F::CAN_PASTE),
+        |_| { Command::Engine(cef_id::PASTE_MATCH_STYLE) }
+    ),
+    row!(
+        6,
+        "Delete",
+        |c| c.editable(),
+        |c| c.edit(F::CAN_DELETE),
+        |_| { Command::Engine(cef_id::DELETE) }
+    ),
+    row!(
+        6,
+        "Select All",
+        |c| c.editable(),
+        |c| c.edit(F::CAN_SELECT_ALL),
+        |_| { Command::Engine(cef_id::SELECT_ALL) }
+    ),
     Row {
-        group: 3,
-        label: "Undo",
-        show: |c| c.editable(),
-        enabled: |c| c.edit(F::CAN_UNDO),
-        command: |_| Command::Engine(cef_id::UNDO),
-    },
-    Row {
-        group: 3,
-        label: "Redo",
-        show: |c| c.editable(),
-        enabled: |c| c.edit(F::CAN_REDO),
-        command: |_| Command::Engine(cef_id::REDO),
-    },
-    Row {
-        group: 4,
-        label: "Cut",
-        show: |c| c.editable(),
-        enabled: |c| c.edit(F::CAN_CUT),
-        command: |_| Command::Engine(cef_id::CUT),
-    },
-    Row {
-        group: 4,
-        label: "Copy",
-        show: |c| c.editable() || c.selection(),
-        enabled: |c| c.selection() || c.edit(F::CAN_COPY),
-        command: |_| Command::Engine(cef_id::COPY),
-    },
-    Row {
-        group: 4,
-        label: "Paste",
-        show: |c| c.editable(),
-        enabled: |c| c.edit(F::CAN_PASTE),
-        command: |_| Command::Engine(cef_id::PASTE),
-    },
-    Row {
-        group: 4,
-        label: "Delete",
-        show: |c| c.editable(),
-        enabled: |c| c.edit(F::CAN_DELETE),
-        command: |_| Command::Engine(cef_id::DELETE),
-    },
-    Row {
-        group: 4,
-        label: "Select All",
-        show: |c| c.editable(),
-        enabled: |c| c.edit(F::CAN_SELECT_ALL),
-        command: |_| Command::Engine(cef_id::SELECT_ALL),
-    },
-    Row {
-        group: 5,
-        label: "Back",
-        show: |c| c.page(),
-        enabled: |c| c.nav.back,
-        command: |_| Command::Engine(cef_id::BACK),
-    },
-    Row {
-        group: 5,
-        label: "Forward",
-        show: |c| c.page(),
-        enabled: |c| c.nav.forward,
-        command: |_| Command::Engine(cef_id::FORWARD),
-    },
-    Row {
-        group: 5,
-        label: "Reload",
-        show: |c| c.page(),
+        group: 7,
+        label: |c| search_label(c.nav.search, &c.menu.selection_text),
+        show: |c| !c.menu.selection_text.trim().is_empty(),
         enabled: always,
-        command: |_| Command::Engine(cef_id::RELOAD),
+        command: |c| Command::Search(c.menu.selection_text.clone()),
     },
+    row!(7, "Print\u{2026}", |c| c.selection(), always, |_| {
+        Command::Perform(Action::Print)
+    }),
+    row!(
+        8,
+        "Back",
+        |c| c.page(),
+        |c| c.nav.back,
+        |_| Command::Engine(cef_id::BACK)
+    ),
+    row!(8, "Forward", |c| c.page(), |c| c.nav.forward, |_| {
+        Command::Engine(cef_id::FORWARD)
+    }),
+    row!(8, "Reload", |c| c.page(), always, |_| Command::Engine(
+        cef_id::RELOAD
+    )),
+    row!(9, "Save Page As\u{2026}", |c| c.page(), always, |c| {
+        Command::SaveAs(c.menu.page_url.clone())
+    }),
+    row!(9, "Print\u{2026}", |c| c.page(), always, |_| {
+        Command::Perform(Action::Print)
+    }),
+    row!(10, "View Page Source", |c| c.page(), always, |_| {
+        Command::Perform(Action::ViewSource)
+    }),
+    row!(10, "Inspect", always, always, |c| {
+        let (x, y) = c.at();
+        Command::Inspect { x, y }
+    }),
 ];
 
 /// The entries for one right-click, dividers included.
@@ -247,7 +427,7 @@ pub fn entries(menu: &ContextMenu, nav: NavFlags) -> Vec<Entry> {
         (
             r.group,
             Entry {
-                label: r.label.into(),
+                label: (r.label)(&ctx),
                 command: (r.command)(&ctx),
                 enabled: (r.enabled)(&ctx),
             },
@@ -425,7 +605,7 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wubble_engine::page::EditFlags;
+    use wubble_engine::page::{EditFlags, MediaFlags};
 
     fn labels(entries: &[Entry]) -> Vec<&str> {
         entries
@@ -466,28 +646,55 @@ mod tests {
         let nav = NavFlags {
             back: true,
             forward: false,
+            search: None,
         };
         let e = entries(&page(), nav);
-        assert_eq!(labels(&e), ["Back", "Forward", "Reload"]);
         assert_eq!(
-            e.iter().map(|e| e.enabled).collect::<Vec<_>>(),
+            labels(&e),
+            [
+                "Back",
+                "Forward",
+                "Reload",
+                "-",
+                "Save Page As\u{2026}",
+                "Print\u{2026}",
+                "-",
+                "View Page Source",
+                "Inspect"
+            ]
+        );
+        assert_eq!(
+            e.iter().take(3).map(|e| e.enabled).collect::<Vec<_>>(),
             [true, false, true]
         );
+        assert_eq!(e[4].command, Command::SaveAs("https://a.test/".into()));
+        assert_eq!(e[7].command, Command::Perform(Action::ViewSource));
         assert_eq!(e[0].command, Command::Engine(cef_id::BACK));
     }
 
     #[test]
     fn a_link_offers_new_tab_and_copy() {
         let e = entries(&link(), NavFlags::default());
-        assert_eq!(labels(&e), ["Open Link in New Tab", "Copy Link Address"]);
+        assert_eq!(
+            labels(&e),
+            [
+                "Open Link in New Tab",
+                "Save Link As\u{2026}",
+                "Copy Link Address",
+                "-",
+                "Inspect"
+            ]
+        );
         assert_eq!(
             e[0].command,
             Command::OpenInNewTab("https://a.test/next".into())
         );
+        assert_eq!(e[1].command, Command::SaveAs("https://a.test/next".into()));
         assert_eq!(
-            e[1].command,
+            e[2].command,
             Command::CopyText("https://a.test/next".into())
         );
+        assert_eq!(e[4].command, Command::Inspect { x: 10, y: 20 });
     }
 
     #[test]
@@ -503,10 +710,14 @@ mod tests {
             labels(&e),
             [
                 "Open Link in New Tab",
+                "Save Link As\u{2026}",
                 "Copy Link Address",
                 "-",
                 "Open Image in New Tab",
-                "Copy Image Address"
+                "Save Image As\u{2026}",
+                "Copy Image Address",
+                "-",
+                "Inspect"
             ]
         );
     }
@@ -518,8 +729,27 @@ mod tests {
             ..page()
         };
         let e = entries(&m, NavFlags::default());
-        assert_eq!(labels(&e), ["Copy"]);
+        assert_eq!(
+            labels(&e),
+            [
+                "Copy",
+                "-",
+                "Search the Web for \u{201c}hello\u{201d}",
+                "Print\u{2026}",
+                "-",
+                "Inspect"
+            ]
+        );
         assert!(e[0].enabled);
+        assert_eq!(e[2].command, Command::Search("hello".into()));
+        let named = NavFlags {
+            search: Some("DuckDuckGo"),
+            ..NavFlags::default()
+        };
+        assert_eq!(
+            entries(&m, named)[2].label,
+            "Search DuckDuckGo for \u{201c}hello\u{201d}"
+        );
     }
 
     #[test]
@@ -549,10 +779,16 @@ mod tests {
                     "Cut",
                     "Copy",
                     "Paste",
+                    "Paste as Plain Text",
                     "Delete",
-                    "Select All"
+                    "Select All",
+                    "-",
+                    "Inspect"
                 ]
             );
+            let plain = e.iter().find(|e| e.label == "Paste as Plain Text").unwrap();
+            assert_eq!(plain.enabled, bits & EditFlags::CAN_PASTE != 0);
+            assert_eq!(plain.command, Command::Engine(cef_id::PASTE_MATCH_STYLE));
             for (label, flag) in all {
                 let entry = e.iter().find(|e| e.label == label).unwrap();
                 assert_eq!(entry.enabled, bits & flag != 0, "{label} with {bits:#b}");
@@ -581,6 +817,80 @@ mod tests {
             ..m
         };
         assert_eq!(labels(&entries(&m, NavFlags::default()))[0], "Undo");
+    }
+
+    #[test]
+    fn the_search_label_is_one_short_line() {
+        assert_eq!(
+            search_label(None, "  two\n words "),
+            "Search the Web for \u{201c}two words\u{201d}"
+        );
+        let long = "x".repeat(60);
+        let label = search_label(Some("Google"), &long);
+        assert!(label.ends_with("\u{2026}\u{201d}"), "{label}");
+        assert_eq!(
+            label.chars().filter(|&c| c == 'x').count(),
+            SEARCH_LABEL_CHARS
+        );
+    }
+
+    #[test]
+    fn media_entries_follow_the_element_state() {
+        let video = |flags| ContextMenu {
+            media: MediaKind::Video,
+            media_url: "https://a.test/v.webm".into(),
+            media_flags: MediaFlags(flags),
+            x: 7,
+            y: 9,
+            ..page()
+        };
+        let e = entries(
+            &video(MediaFlags::PAUSED | MediaFlags::CAN_TOGGLE_CONTROLS),
+            NavFlags::default(),
+        );
+        assert_eq!(
+            labels(&e),
+            [
+                "Play",
+                "Loop",
+                "Show Controls",
+                "-",
+                "Open Video in New Tab",
+                "Save Video As\u{2026}",
+                "Copy Video Address",
+                "-",
+                "Inspect"
+            ]
+        );
+        assert_eq!(
+            e[0].command,
+            Command::Media {
+                op: MediaOp::PlayPause,
+                x: 7,
+                y: 9
+            }
+        );
+        assert!(e[2].enabled);
+        // Saving needs CAN_SAVE.
+        assert!(!e[5].enabled);
+        let all =
+            MediaFlags::HAS_AUDIO | MediaFlags::MUTED | MediaFlags::LOOP | MediaFlags::CONTROLS;
+        let e = entries(&video(all), NavFlags::default());
+        assert_eq!(
+            labels(&e)[..4],
+            ["Pause", "Unmute", "Stop Looping", "Hide Controls"]
+        );
+        assert!(!e[3].enabled);
+    }
+
+    #[test]
+    fn media_scripts_act_on_the_element_under_the_point() {
+        let s = media_script(MediaOp::Loop, 30, 40);
+        assert!(
+            s.contains("elementFromPoint(30 / devicePixelRatio, 40 / devicePixelRatio)"),
+            "{s}"
+        );
+        assert!(s.contains("m.loop = !m.loop"), "{s}");
     }
 
     #[test]

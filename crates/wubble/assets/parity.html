@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble parity</title>
+<style>
+/* `--smoke parity` (parity.rs) clicks these by position: keep them in step
+   with the constants there. Logical px from the view's top left. */
+body { margin: 0; background: #101820; color: #e8eef4; font: 16px sans-serif; }
+#spacer { position: absolute; left: 0; top: 0; width: 3000px; height: 3000px; }
+.at { position: absolute; box-sizing: border-box; }
+input, textarea, [contenteditable] { font: 16px monospace; }
+#inp { left: 20px; top: 20px; width: 240px; height: 28px; }
+#inp2 { left: 20px; top: 60px; width: 240px; height: 28px; }
+#ta { left: 20px; top: 100px; width: 240px; height: 60px; }
+#ce { left: 20px; top: 180px; width: 240px; height: 40px; border: 1px solid #567; }
+#para { left: 20px; top: 240px; margin: 0; font: 16px monospace; white-space: nowrap; }
+#link { left: 20px; top: 290px; }
+#img { left: 20px; top: 330px; width: 40px; height: 40px; }
+#video { left: 100px; top: 330px; width: 120px; height: 60px; background: #333; }
+#drag { left: 320px; top: 20px; width: 80px; height: 40px; background: #456; }
+#drop { left: 320px; top: 100px; width: 160px; height: 80px; background: #354; }
+#file { left: 320px; top: 200px; width: 200px; }
+#filezone { left: 320px; top: 240px; width: 160px; height: 60px; background: #534; }
+#copybtn { left: 520px; top: 20px; width: 100px; height: 30px; }
+#dl { left: 520px; top: 80px; }
+#blank { left: 520px; top: 120px; }
+#mail { left: 520px; top: 160px; }
+#blankwin { left: 520px; top: 200px; }
+#open { left: 520px; top: 240px; width: 100px; height: 30px; }
+#tip { left: 520px; top: 290px; width: 100px; height: 30px; background: #445; }
+</style>
+</head>
+<body>
+<div id="spacer"></div>
+<input id="inp" class="at">
+<input id="inp2" class="at">
+<textarea id="ta" class="at"></textarea>
+<div id="ce" class="at" contenteditable="true"></div>
+<p id="para" class="at">alpha beta gamma</p>
+<a id="link" class="at" href="https://example.invalid/linked">a link</a>
+<img id="img" class="at" alt="img" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4YWODFTEMLQkAZZlQAVIPr1MAAAAASUVORK5CYII=">
+<video id="video" class="at" src="data:video/webm,"></video>
+<div id="drag" class="at" draggable="true">drag me</div>
+<div id="drop" class="at">drop here</div>
+<input id="file" class="at" type="file" multiple>
+<div id="filezone" class="at">files here</div>
+<button id="copybtn" class="at">copy</button>
+<a id="dl" class="at" download="parity.txt" href="data:text/plain,parity%20download">download</a>
+<a id="blank" class="at" target="_blank" href="https://example.invalid/blank">blank</a>
+<a id="mail" class="at" href="mailto:nobody@example.invalid">mail</a>
+<a id="blankwin" class="at" href="https://example.invalid/b">b</a>
+<button id="open" class="at">window.open</button>
+<div id="tip" class="at" title="tip text">tooltip</div>
+<script>
+const $ = (id) => document.getElementById(id);
+// What the page saw, for the smoke's checks.
+const seen = { keys: [], drops: [], files: [], dragstart: 0, grab: false };
+const parity = {
+  // Each answer is a new title: `parity:<serial>:ok` or `parity:<serial>:fail:<why>`.
+  answer(serial, r) {
+    document.title = `parity:${serial}:` + (r === true ? 'ok' : 'fail:' + String(r).slice(0, 200));
+  },
+  check(serial, f) {
+    let r;
+    try { r = f(); } catch (e) { r = 'threw ' + e; }
+    parity.answer(serial, r);
+  },
+  run(serial, f) {
+    try { f(); parity.answer(serial, true); } catch (e) { parity.answer(serial, 'threw ' + e); }
+  },
+  // A field emptied and focused, with `text` in it and the caret at its end.
+  field(id, text) {
+    const el = $(id);
+    el.focus();
+    if (el.isContentEditable) { el.textContent = text; } else { el.value = text; }
+    const end = text.length;
+    if (el.isContentEditable) {
+      const r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+      getSelection().removeAllRanges(); getSelection().addRange(r);
+    } else { el.setSelectionRange(end, end); }
+  },
+  // Plain text selected in the paragraph (`from`..`to`).
+  select(from, to) {
+    document.activeElement && document.activeElement.blur();
+    const t = $('para').firstChild;
+    const r = document.createRange(); r.setStart(t, from); r.setEnd(t, to);
+    getSelection().removeAllRanges(); getSelection().addRange(r);
+  },
+  reset() {
+    seen.keys = []; seen.drops = []; seen.files = []; seen.dragstart = 0; seen.grab = false;
+    getSelection().removeAllRanges();
+    document.activeElement && document.activeElement.blur();
+    scrollTo(0, 0);
+  },
+};
+// Got `a`, wanted `b`: true, or what was seen.
+const eq = (a, b) => a === b || `got ${JSON.stringify(a)} want ${JSON.stringify(b)}`;
+addEventListener('mousedown', (e) => { seen.down = `${e.target.id || e.target.tagName}@${e.clientX},${e.clientY}/${e.button}/${e.detail}`; }, true);
+addEventListener('keydown', (e) => {
+  seen.keys.push((e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + e.key + '/' + e.code);
+  // A page that owns Ctrl+F (a web app's own search) when asked to.
+  if (seen.grab && e.ctrlKey && e.key === 'f') { e.preventDefault(); seen.keys.push('grabbed'); }
+});
+$('drag').addEventListener('dragstart', (e) => { seen.dragstart++; e.dataTransfer.setData('text/plain', 'payload'); });
+$('drop').addEventListener('dragover', (e) => e.preventDefault());
+$('drop').addEventListener('drop', (e) => { e.preventDefault(); seen.drops.push(e.dataTransfer.getData('text/plain')); });
+$('filezone').addEventListener('dragover', (e) => e.preventDefault());
+$('filezone').addEventListener('drop', (e) => { e.preventDefault(); seen.files = [...e.dataTransfer.files].map((f) => f.name); });
+$('copybtn').addEventListener('click', () => {
+  const t = document.createElement('textarea'); t.value = 'from execCommand'; document.body.append(t);
+  t.select(); document.execCommand('copy'); t.remove();
+});
+$('open').addEventListener('click', () => window.open('https://example.invalid/opened'));
+window.name = String(Number(window.name || 0) + 1); // loads of this page, across reloads
+</script>
+</body>
+</html>

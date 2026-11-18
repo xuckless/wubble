@@ -107,6 +107,12 @@ pub struct CefRuntimeConfig {
     /// `OnScheduleMessagePumpWork`. `None` = the host polls
     /// [`CefRuntime::do_message_loop_work`] on its own timer.
     pub pump_scheduler: Option<PumpScheduler>,
+
+    /// wubble change: bare switches added to every child process's command
+    /// line (CEF `OnBeforeChildProcessLaunch`), such as
+    /// [`crate::clipboard_bridge::SWITCH`]. Chromium hands only switches it
+    /// knows on to renderers, so these cannot go in `command_line_switches`.
+    pub child_process_switches: Vec<String>,
 }
 
 impl CefRuntimeConfig {
@@ -122,6 +128,7 @@ impl CefRuntimeConfig {
             single_process: false,
             log_severity: CefLogSeverity::Default,
             pump_scheduler: None,
+            child_process_switches: Vec::new(),
         }
     }
 }
@@ -251,9 +258,10 @@ mod cef_backed {
             let args = cef::MainArgs {
                 instance: self.instance,
             };
-            let mut app = crate::app::WeldApp::build(
+            let mut app = crate::app::WeldApp::build_with(
                 std::sync::Arc::new(config.command_line_switches.clone()),
                 config.pump_scheduler.clone(),
+                std::sync::Arc::new(config.child_process_switches.clone()),
             );
             let settings = build_settings(&config);
             let code = cef::initialize(
@@ -336,9 +344,10 @@ mod cef_backed {
             maybe_load_library(&config.cef_path)?;
             pin_cef_api_version();
             let args = Args::new();
-            let mut app = crate::app::WeldApp::build(
+            let mut app = crate::app::WeldApp::build_with(
                 std::sync::Arc::new(config.command_line_switches.clone()),
                 config.pump_scheduler.clone(),
+                std::sync::Arc::new(config.child_process_switches.clone()),
             );
             let settings = build_settings(&config);
             let code = cef::initialize(

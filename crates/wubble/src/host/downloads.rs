@@ -37,6 +37,8 @@ pub(super) struct Downloads {
     inflight: HashMap<DownloadId, Inflight>,
     /// PDFs being printed: their paths are reserved until `PdfPrinted` arrives.
     pdfs: HashSet<PathBuf>,
+    /// Prints started this run.
+    printed: usize,
     /// Entries whose progress is not yet stored (written on the tick).
     unsaved: BTreeSet<i64>,
 }
@@ -63,6 +65,11 @@ impl Downloads {
     /// The print to `path` ended: its name is free to reuse.
     pub(super) fn finish_pdf(&mut self, path: &Path) {
         self.pdfs.remove(path);
+    }
+
+    /// Downloads listed (this run's and earlier ones) and prints started this run.
+    pub(super) fn started(&self) -> usize {
+        self.list.len() + self.printed
     }
 
     fn entry_of(&self, download: DownloadId) -> Option<i64> {
@@ -199,6 +206,7 @@ impl Host {
             Some(path) => match self.tab_view(tab).map(|view| view.print_to_pdf(&path)) {
                 Some(Ok(())) => {
                     self.downloads.pdfs.insert(path);
+                    self.downloads.printed += 1;
                     return;
                 }
                 Some(Err(_)) => "Could not save the PDF",

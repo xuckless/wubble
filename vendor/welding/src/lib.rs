@@ -94,6 +94,8 @@ mod drag;
 // wubble change, see `WUBBLE_CHANGES.md`.
 #[cfg(feature = "cef-runtime")]
 mod keyboard;
+// wubble change, see `WUBBLE_CHANGES.md`.
+pub mod clipboard_bridge;
 #[cfg(feature = "cef-runtime")]
 mod profile;
 #[cfg(feature = "cef-runtime")]

@@ -253,6 +253,27 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    copies it and stores `NativeFrame::Copied` (view and popup); new `on_paint`
    counts CPU fallback frames.
 
+26. **Clipboard bridge (Wayland).** New `src/clipboard_bridge.rs`
+   (registered in `lib.rs`): a JS hook (`HOOK`) installed in every frame's
+   main world from the render process handler's new `on_context_created` /
+   `on_context_released` (`app.rs`), only when the renderer was launched with
+   `SWITCH` (`weld-clipboard-bridge`). It reports copies, cuts, `writeText` and
+   selection changes to the browser (`weld.clipboard` `[kind, text]`), cancels
+   Chromium's trusted `paste` and answers it from the host (`weld.paste`
+   `[text, read id]`, `renderer::answer`). `CefRuntimeConfig::
+   child_process_switches` (`runtime.rs`) reach renderers through the browser
+   process handler's new `on_before_child_process_launch`
+   (`WeldApp::build_with`, `app.rs`). `linux_cef/cef_backed.rs`: the client's
+   `on_process_message_received` turns `weld.clipboard` into the new
+   `CefSurfaceEvent::Clipboard { kind, text, frame }` (`surface.rs`); the host
+   answers with `clipboard_bridge::answer_frame`. Why: windowless Chromium on
+   Wayland has no surface, so no input serial to set the selection with and
+   no keyboard focus to be offered one.
+27. **Media state on the context menu.** `NavigationEvent::
+   ContextMenuRequested` gains `media_flags` (`cef_context_menu_media_state_
+   flags_t`: paused, muted, loop, controls, ...), read in `handlers.rs`
+   `run_context_menu`.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

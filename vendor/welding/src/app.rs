@@ -112,6 +112,29 @@ mod cef_backed {
         pub(crate) struct WeldRenderProcessHandler {}
 
         impl RenderProcessHandler {
+            // wubble change: the clipboard bridge's hook in every frame.
+            fn on_context_created(
+                &self,
+                _browser: Option<&mut cef::Browser>,
+                frame: Option<&mut cef::Frame>,
+                context: Option<&mut cef::V8Context>,
+            ) {
+                if let (Some(frame), Some(context)) = (frame, context) {
+                    crate::clipboard_bridge::renderer::context_created(frame, context);
+                }
+            }
+
+            fn on_context_released(
+                &self,
+                _browser: Option<&mut cef::Browser>,
+                frame: Option<&mut cef::Frame>,
+                _context: Option<&mut cef::V8Context>,
+            ) {
+                if let Some(frame) = frame {
+                    crate::clipboard_bridge::renderer::context_released(frame);
+                }
+            }
+
             fn on_process_message_received(
                 &self,
                 _browser: Option<&mut cef::Browser>,
@@ -122,6 +145,10 @@ mod cef_backed {
                 let (Some(frame), Some(message)) = (frame, message) else {
                     return 0;
                 };
+                // wubble change: the host's clipboard answers.
+                if crate::clipboard_bridge::renderer::answer(frame, message) {
+                    return 1;
+                }
                 if cef::CefString::from(&message.name()).to_string() != EVAL_REQUEST {
                     return 0;
                 }
@@ -184,11 +211,22 @@ mod cef_backed {
     cef::wrap_browser_process_handler! {
         pub(crate) struct WeldBrowserProcessHandler {
             scheduler: crate::runtime::PumpScheduler,
+            // wubble change: switches only child processes get.
+            child_switches: Arc<Vec<String>>,
         }
 
         impl BrowserProcessHandler {
             fn on_schedule_message_pump_work(&self, delay_ms: i64) {
                 (self.scheduler.0)(delay_ms);
+            }
+
+            fn on_before_child_process_launch(&self, command_line: Option<&mut cef::CommandLine>) {
+                use cef::ImplCommandLine;
+                let Some(cmd) = command_line else { return };
+                for name in self.child_switches.iter() {
+                    let name: cef::CefString = name.as_str().into();
+                    cmd.append_switch(Some(&name));
+                }
             }
         }
     }
@@ -238,10 +276,19 @@ mod cef_backed {
             switches: Arc<Vec<(String, Option<String>)>>,
             scheduler: Option<crate::runtime::PumpScheduler>,
         ) -> cef::App {
+            Self::build_with(switches, scheduler, Arc::new(Vec::new()))
+        }
+
+        /// wubble change: `child_switches` go to every child process's command line.
+        pub(crate) fn build_with(
+            switches: Arc<Vec<(String, Option<String>)>>,
+            scheduler: Option<crate::runtime::PumpScheduler>,
+            child_switches: Arc<Vec<String>>,
+        ) -> cef::App {
             Self::new(
                 switches,
                 WeldRenderProcessHandler::new(),
-                scheduler.map(WeldBrowserProcessHandler::new),
+                scheduler.map(|s| WeldBrowserProcessHandler::new(s, child_switches)),
             )
         }
     }

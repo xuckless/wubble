@@ -105,6 +105,27 @@ impl EditFlags {
     }
 }
 
+/// CEF's `cef_context_menu_media_state_flags_t`: the state of the media
+/// element under the cursor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MediaFlags(pub u32);
+
+impl MediaFlags {
+    pub const PAUSED: u32 = 1 << 1;
+    pub const MUTED: u32 = 1 << 2;
+    pub const LOOP: u32 = 1 << 3;
+    pub const CAN_SAVE: u32 = 1 << 4;
+    pub const HAS_AUDIO: u32 = 1 << 5;
+    pub const CAN_TOGGLE_CONTROLS: u32 = 1 << 6;
+    pub const CONTROLS: u32 = 1 << 7;
+    pub const CAN_PICTURE_IN_PICTURE: u32 = 1 << 10;
+    pub const CAN_LOOP: u32 = 1 << 12;
+
+    pub fn has(self, flag: u32) -> bool {
+        self.0 & flag == flag
+    }
+}
+
 /// One entry of CEF's default menu. Pick by `command`; CEF runs the standard
 /// commands (back, reload, copy, paste, spelling suggestions, ...) itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,6 +183,7 @@ pub struct ContextMenu {
     pub selection_text: String,
     pub editable: bool,
     pub edit: EditFlags,
+    pub media_flags: MediaFlags,
     pub misspelled_word: String,
     pub suggestions: Vec<String>,
     pub items: Vec<MenuItem>,
@@ -259,9 +281,30 @@ pub enum EditCommand {
     SelectAll,
 }
 
+/// What a frame asks of the host's clipboard ([`PageEvent::Clipboard`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClipboardRequest {
+    /// The page put this text on the clipboard (a copy or cut).
+    Copy(String),
+    /// The selection changed: the primary selection's text.
+    Primary(String),
+    /// The page is pasting: answer with [`crate::view::View::answer_clipboard`].
+    /// `primary`: a middle click's paste, from the primary selection.
+    Paste { primary: bool },
+    /// `navigator.clipboard.readText` passed its permission check: answer with
+    /// the read's id.
+    Read(u32),
+}
+
 /// What the host learns about a page beyond navigation, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageEvent {
+    /// A frame's clipboard request, when the engine runs with
+    /// `EngineConfig::clipboard_bridge`. `frame` names the frame for the answer.
+    Clipboard {
+        frame: String,
+        request: ClipboardRequest,
+    },
     /// The page's icon, downloaded by CEF: raw RGBA, at most 64x64.
     ///
     /// The host (wubble-store holds the cache; `crates/wubble` is not edited

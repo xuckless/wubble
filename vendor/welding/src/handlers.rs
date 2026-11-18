@@ -940,6 +940,7 @@ cef::wrap_context_menu_handler! {
                 has_image_contents: params.has_image_contents() != 0,
                 editable: params.is_editable() != 0,
                 edit_flags: params.edit_state_flags().as_ref().0 as u32,
+                media_flags: params.media_state_flags().as_ref().0 as u32,
                 misspelled_word: cef_string(params.misspelled_word()),
                 suggestions: suggestions.into_iter().collect(),
                 items,

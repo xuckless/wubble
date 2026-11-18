@@ -342,6 +342,11 @@ pub enum Routed {
         path: std::path::PathBuf,
         text: String,
     },
+    /// A frame's copy or paste, for the system clipboard (`clipboard.rs`).
+    Clipboard {
+        frame: String,
+        request: wubble_engine::page::ClipboardRequest,
+    },
     Ignore,
 }
 
@@ -376,6 +381,7 @@ pub fn route(event: PageEvent) -> Routed {
         // The host reads the zoom back when the user zooms; the view's own
         // reports (a load, an address change) are not the user's.
         PageEvent::ZoomChanged { .. } => Routed::Ignore,
+        PageEvent::Clipboard { frame, request } => Routed::Clipboard { frame, request },
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),

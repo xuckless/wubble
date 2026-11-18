@@ -70,6 +70,7 @@ fn run(dir: &Path) -> Result<(), String> {
         cache_dir: dir.join("cache"),
         pump_scheduler: None,
         content_filter: None,
+        clipboard_bridge: false,
     })
     .map_err(|e| e.to_string())?;
     let id = engine
