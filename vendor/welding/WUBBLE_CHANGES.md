@@ -81,6 +81,83 @@ Every change is marked `wubble change` in the source.
    (`frame_timing_defaults_match_upstream`; `BrowserClosed`,
    `LoadingStateChanged` and `FaviconUrlsChanged` added to
    `mixed_callbacks_keep_observation_order`).
+9. **One table for held requests.** New `held.rs`: `Held<C: Answer>` (ids
+   from 1, never reused while waiting, `take` once, at most `MAX_HELD` = 64
+   per kind, `drain` / `drain_default`, a `Drop` that answers what is left
+   with its default) and `RequestId` (re-exported). `auth.rs` and
+   `permissions.rs` hold their callbacks in it instead of an id counter and
+   a `HashMap`; `permissions::Pending::Prompt` keeps the requested mask.
+   `held::request_answers!` writes the producer methods that answer held
+   requests once for the three producers. An opted-out auth or permission
+   notice now carries id 0 (never waiting) and is pushed only when CEF gave
+   a callback.
+10. **Shared handlers.** New `handlers.rs` (cef-runtime): the request,
+   download, permission and context-menu handlers move there from the three
+   `*/cef_backed.rs` copies (their bodies were identical but for
+   formatting), and `Requests` (auth, permissions, downloads, JS dialogs, file
+   choosers, certificate errors, context menus, the drag-source switch)
+   replaces each producer's `auth` / `permissions` / `downloads` fields.
+   Each platform's `WeldClient` takes one `SharedHandlers` and returns its
+   handlers, plus the three new ones below, from its accessors.
+11. **Download control fixed.** `downloads.rs`: the latest
+   `DownloadItemCallback` is kept per download (`DownloadControl`,
+   `set_control`, `steer`) and `cancel/pause/resume_download` act at once.
+   Upstream recorded the op and applied it on the next `OnDownloadUpdated`,
+   which a paused download never sends, so resume after pause was never
+   delivered. `CefDownloadItemCallbackImpl` holds only a weak manager and the
+   id and posts to the UI thread, so keeping it is safe
+   (`download_manager_delegate_impl.cc`). New
+   `CefSurfaceConfig::ask_download_path` (default false, which keeps
+   `download_dir` behaviour): `OnBeforeDownload`'s callback is held,
+   `NavigationEvent::DownloadRequested` reports it and
+   `CefSurfaceProducer::answer_download_path` answers (a path, or `None`,
+   which drops the callback: CEF's cancel).
+12. **Context menu kept and held.** `OnBeforeContextMenu` no longer empties
+   CEF's model (which stopped CEF from ever calling `RunContextMenu`,
+   `menu_manager.cc`); `run_context_menu` reads params and model, holds the
+   callback and returns 1. `ContextMenuRequested` moves there and gains
+   `id`, `frame_url`, `media` (`ContextMenuMedia`), `has_image_contents`,
+   `editable`, `edit_flags`, `misspelled_word`, `suggestions` and `items`
+   (`MenuItem`, `MenuItemKind`; `surface::menu_items` over a `MenuSource`:
+   invisible items and dangling separators dropped, submenus at most
+   `MAX_MENU_DEPTH` = 2 deep). New `answer_context_menu(id, Option<i32>)`;
+   CEF runs the standard command. `OnContextMenuDismissed` with a menu still
+   held reports `ContextMenuDismissed`.
+13. **JS dialogs and file choosers.** New `WeldJsDialogHandler` (`OnJSDialog`,
+   `OnBeforeUnloadDialog`; `OnResetDialogState` answers what is held and
+   reports `JsDialogsReset`) and `WeldDialogHandler` (`OnFileDialog`), both
+   holding the callback and returning true (without them Alloy runs its own
+   GTK dialog). Events `JsDialogRequested` (`JsDialogKind`, whose
+   `default_accept` is the one default table: cancel, except beforeunload,
+   which leaves) and `FileChooserRequested` (`FileChooserMode`,
+   `AcceptFilter`); answers `answer_dialog`, `answer_file_chooser`.
+14. **Certificate errors, fullscreen, audio.** `WeldRequestHandler::
+   on_certificate_error` holds the callback (`CertificateError` event,
+   `answer_certificate`; default cancel). `WeldDisplayHandler::
+   on_fullscreen_mode_change` on Linux, macOS and Windows reports
+   `FullscreenChanged`. New `WeldAudioHandler` returns true from
+   `GetAudioParameters` (which makes Alloy start its loopback capture while
+   the page is audible) and reports `AudioStreamStarted` / `Stopped`.
+15. **Drag source off by default.** `start_dragging` returns 0 and reports
+   nothing unless the host called `CefSurfaceProducer::set_drag_source(true)`:
+   CEF waits for `DragSourceEndedAt` after a true, and a host without a
+   native drag loop would never send it.
+16. **Native popup frame.** `CefSurfaceProducer::acquire_native_popup`
+   (Linux, macOS): the popup slot's frame and its physical rect without an
+   import, for hosts that present `NativeFrame`s. Windows keeps the trait
+   default (`None`): it imports popups inside the paint callback.
+17. **Nothing waits past the close.** `OnBeforeClose` on all three
+   platforms calls `Requests::drain_default`, answering every held request
+   with its default; answers are given outside the table locks, because a
+   CEF callback can call straight back into a handler.
+18. Tests: `held.rs` (ids, take once, cap, drain, drop, fresh ids after a
+   drain), `downloads.rs` (newest control used at once, none after the end,
+   asking keeps the directory policy), `permissions.rs` (prompt all or
+   nothing, media subset), `surface.rs` (`request_vocabulary_tests`; new
+   events in `mixed_callbacks_keep_observation_order`). Linux built and run
+   (wubble-engine's `engine_smoke` example); Windows compile-checked with
+   `cargo check -p welding --target x86_64-pc-windows-msvc` (build script
+   overridden); macOS not compiled here.
 
 ## Not changed, on purpose
 

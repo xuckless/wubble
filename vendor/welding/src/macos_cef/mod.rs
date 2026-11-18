@@ -36,8 +36,7 @@ use crate::{
 use cef::rc::Rc;
 #[cfg(feature = "cef-runtime")]
 use cef::{
-    ImplAuthCallback, ImplBrowser, ImplBrowserHost, ImplFrame, ImplListValue,
-    ImplMediaAccessCallback, ImplPermissionPromptCallback, ImplProcessMessage,
+    ImplBrowser, ImplBrowserHost, ImplFrame, ImplListValue, ImplProcessMessage,
     ImplRequestContextHandler, RequestContextHandler, WrapRequestContextHandler,
 };
 
@@ -60,6 +59,8 @@ struct WeldRenderHandlerInner {
     ime: Arc<crate::ime::LatestComposition>,
     events: Arc<WebEventQueue>,
     metrics: Arc<Mutex<crate::view::ViewMetrics>>,
+    /// Held requests and the drag-source switch (wubble change).
+    requests: Arc<crate::handlers::Requests>,
 }
 
 // CEF invokes this on its UI thread only after a RequestContext can create
@@ -103,12 +104,9 @@ pub struct MacosCefProducer {
     ime: Arc<crate::ime::LatestComposition>,
     #[cfg(feature = "cef-runtime")]
     cookies: Arc<crate::cookies::CookieJar>,
+    /// Every request waiting on the host (wubble change).
     #[cfg(feature = "cef-runtime")]
-    downloads: Arc<crate::downloads::Downloads>,
-    #[cfg(feature = "cef-runtime")]
-    auth: Arc<crate::auth::AuthChallenges>,
-    #[cfg(feature = "cef-runtime")]
-    permissions: Arc<crate::permissions::Permissions>,
+    requests: Arc<crate::handlers::Requests>,
     #[cfg(feature = "cef-runtime")]
     devtools: Arc<crate::devtools::DevToolsChannel>,
     #[cfg(feature = "cef-runtime")]
@@ -235,9 +233,7 @@ impl MacosCefProducer {
         let ime = Arc::new(crate::ime::LatestComposition::default());
         let cookies = Arc::new(crate::cookies::CookieJar::new(events.clone()));
         let scripts = Arc::new(crate::app::PendingScripts::new(events.clone()));
-        let downloads = Arc::new(crate::downloads::Downloads::default());
-        let auth = Arc::new(crate::auth::AuthChallenges::default());
-        auth.set_enabled(config.surface.handle_auth_challenges);
+        let requests = Arc::new(crate::handlers::Requests::new(events.clone(), &config.surface));
 
         let inner = WeldRenderHandlerInner {
             frame_slot: frame_slot.clone(),
@@ -247,6 +243,7 @@ impl MacosCefProducer {
             ime: ime.clone(),
             events: events.clone(),
             metrics: metrics.clone(),
+            requests: requests.clone(),
         };
         let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
         let load_handler = cef_backed::WeldLoadHandler::build(inner.clone());
@@ -255,31 +252,24 @@ impl MacosCefProducer {
             events.clone(),
             scripts.clone(),
             cookies.clone(),
+            requests.clone(),
         );
-        let request_handler =
-            cef_backed::WeldRequestHandler::build(events.clone(), auth.clone(), scripts.clone());
-        downloads.set_dir(config.surface.download_dir.clone());
-        let download_handler =
-            cef_backed::WeldDownloadHandler::build(events.clone(), downloads.clone());
+        let shared = crate::handlers::SharedHandlers::build(
+            events.clone(),
+            requests.clone(),
+            scripts.clone(),
+            metrics.clone(),
+        );
         let devtools = Arc::new(crate::devtools::DevToolsChannel::default());
         devtools.set_enabled(config.surface.devtools_protocol);
         let snapshots = Arc::new(crate::snapshot::SnapshotChannel::default());
-        let permissions = Arc::new(crate::permissions::Permissions::default());
-        permissions.set_enabled(config.surface.handle_permission_requests);
-        let permission_handler =
-            cef_backed::WeldPermissionHandler::build(events.clone(), permissions.clone());
-        let context_menu_handler =
-            cef_backed::WeldContextMenuHandler::build(events.clone(), metrics.clone());
         let find_handler = cef_backed::WeldFindHandler::build(events.clone());
         let mut client = cef_backed::WeldClient::build(
             render_handler,
             load_handler,
             display_handler,
             life_span_handler,
-            request_handler,
-            download_handler,
-            permission_handler,
-            context_menu_handler,
+            shared,
             find_handler,
             scripts.clone(),
             events.clone(),
@@ -324,9 +314,7 @@ impl MacosCefProducer {
             cursor,
             ime,
             cookies,
-            downloads,
-            auth,
-            permissions,
+            requests,
             devtools,
             snapshots,
             _devtools_registration: None,
@@ -350,41 +338,6 @@ impl MacosCefProducer {
     clippy::needless_return
 )]
 impl MacosCefProducer {
-    /// Answer a held permission request. Media hands back the subset being
-    /// granted, everything else an accept/deny result.
-    fn answer_permission(
-        &mut self,
-        id: crate::PermissionId,
-        granted: bool,
-    ) -> Result<(), WeldError> {
-        #[cfg(feature = "cef-runtime")]
-        {
-            let Some(pending) = self.permissions.take(id) else {
-                return Err(WeldError::PlatformUnsupported(
-                    "no permission request is waiting on that id",
-                ));
-            };
-            match pending {
-                crate::permissions::Pending::Prompt(callback) => {
-                    callback.cont(if granted {
-                        cef::PermissionRequestResult::ACCEPT
-                    } else {
-                        cef::PermissionRequestResult::DENY
-                    });
-                },
-                crate::permissions::Pending::Media(callback, requested) => {
-                    callback.cont(if granted { requested } else { 0 });
-                },
-            }
-            return Ok(());
-        }
-        #[cfg(not(feature = "cef-runtime"))]
-        {
-            let _ = (id, granted);
-            Err(pending("cef_permission_prompt_callback_t"))
-        }
-    }
-
     /// Subscribe to CDP if asked and not already subscribed.
     ///
     /// Lazy on purpose: the browser is created asynchronously, so there is no
@@ -416,29 +369,6 @@ impl MacosCefProducer {
         self.ensure_devtools_observer()
     }
 
-    /// Record a download request. It is applied on that download's next
-    /// update, because CEF's download callback exists only inside one.
-    fn request_download(
-        &mut self,
-        id: crate::DownloadId,
-        op: crate::downloads::DownloadOp,
-    ) -> Result<(), WeldError> {
-        #[cfg(feature = "cef-runtime")]
-        {
-            if !self.downloads.is_enabled() {
-                return Err(WeldError::PlatformUnsupported(
-                    "no download_dir is configured, so there are no downloads to steer",
-                ));
-            }
-            self.downloads.request(id, op);
-            return Ok(());
-        }
-        #[cfg(not(feature = "cef-runtime"))]
-        {
-            let _ = (id, op);
-            Err(pending("cef_download_item_callback_t"))
-        }
-    }
 }
 
 // unreachable_code: shared fallback tails are unreachable on the cef-runtime path.
@@ -487,6 +417,21 @@ impl CefSurfaceProducer for MacosCefProducer {
         #[cfg(not(feature = "cef-runtime"))]
         {
             Ok(None)
+        }
+    }
+
+    /// wubble change: the popup frame for a host that presents native frames.
+    fn acquire_native_popup(&mut self) -> Option<(NativeFrame, crate::surface::PopupRect)> {
+        #[cfg(feature = "cef-runtime")]
+        {
+            let rect = self.popup.rect_if_visible()?;
+            let rect = self.metrics.lock().unwrap().rect_to_physical(rect);
+            let frame = self.popup_slot.lock().unwrap().take()?;
+            return Some((frame, rect));
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            None
         }
     }
 
@@ -801,69 +746,10 @@ impl CefSurfaceProducer for MacosCefProducer {
         0
     }
 
-    fn grant_permission(&mut self, id: crate::PermissionId) -> Result<(), WeldError> {
-        self.answer_permission(id, true)
-    }
-
-    fn deny_permission(&mut self, id: crate::PermissionId) -> Result<(), WeldError> {
-        self.answer_permission(id, false)
-    }
-
-    fn answer_auth(
-        &mut self,
-        id: crate::AuthId,
-        username: &str,
-        password: &str,
-    ) -> Result<(), WeldError> {
-        #[cfg(feature = "cef-runtime")]
-        {
-            // Deliberately not logged, here or anywhere.
-            let Some(callback) = self.auth.take(id) else {
-                return Err(WeldError::PlatformUnsupported(
-                    "no auth challenge is waiting on that id",
-                ));
-            };
-            let user: cef::CefString = username.into();
-            let pass: cef::CefString = password.into();
-            callback.cont(Some(&user), Some(&pass));
-            return Ok(());
-        }
-        #[cfg(not(feature = "cef-runtime"))]
-        {
-            let _ = (id, username, password);
-            Err(pending("cef_auth_callback_t::cont"))
-        }
-    }
-
-    fn cancel_auth(&mut self, id: crate::AuthId) -> Result<(), WeldError> {
-        #[cfg(feature = "cef-runtime")]
-        {
-            let Some(callback) = self.auth.take(id) else {
-                return Err(WeldError::PlatformUnsupported(
-                    "no auth challenge is waiting on that id",
-                ));
-            };
-            callback.cancel();
-            return Ok(());
-        }
-        #[cfg(not(feature = "cef-runtime"))]
-        {
-            let _ = id;
-            Err(pending("cef_auth_callback_t::cancel"))
-        }
-    }
-
-    fn cancel_download(&mut self, id: crate::DownloadId) -> Result<(), WeldError> {
-        self.request_download(id, crate::downloads::DownloadOp::Cancel)
-    }
-
-    fn pause_download(&mut self, id: crate::DownloadId) -> Result<(), WeldError> {
-        self.request_download(id, crate::downloads::DownloadOp::Pause)
-    }
-
-    fn resume_download(&mut self, id: crate::DownloadId) -> Result<(), WeldError> {
-        self.request_download(id, crate::downloads::DownloadOp::Resume)
-    }
+    // wubble change: permissions, auth, downloads, JS dialogs, file
+    // choosers, certificate errors, context menus and the drag source,
+    // answered through `crate::handlers::Requests`.
+    crate::held::request_answers!();
 
     fn reload(&mut self) -> Result<(), WeldError> {
         #[cfg(feature = "cef-runtime")]

@@ -19,11 +19,10 @@
 //! is reported and immediately denied, which is what a browser does when the
 //! user dismisses a prompt.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Identifies one permission request until it is answered.
-pub type PermissionId = u32;
+pub type PermissionId = crate::held::RequestId;
 
 /// What a page asked for.
 ///
@@ -138,7 +137,7 @@ pub(crate) fn decode_media(mask: u32) -> Vec<PermissionKind> {
 /// Which CEF callback a pending request came from; they answer differently.
 pub(crate) enum Pending {
     #[cfg(feature = "cef-runtime")]
-    Prompt(cef::PermissionPromptCallback),
+    Prompt(cef::PermissionPromptCallback, u32),
     /// The mask is kept because granting media means handing back the subset
     /// being allowed, not a boolean.
     #[cfg(feature = "cef-runtime")]
@@ -147,46 +146,57 @@ pub(crate) enum Pending {
     Unwired,
 }
 
-#[derive(Default)]
-pub(crate) struct Permissions {
-    inner: Mutex<Inner>,
+/// wubble change: whether a prompt request is accepted when the host grants
+/// `granted`. CEF's prompt callback takes one accept/deny for the whole set,
+/// so it is accepted only when every kind asked for was granted.
+pub(crate) fn prompt_accepted(requested: u32, granted: &[PermissionKind]) -> bool {
+    let asked = decode(requested);
+    !asked.is_empty() && asked.iter().all(|kind| granted.contains(kind))
 }
 
+/// wubble change: the media-capture bits to hand back when the host grants
+/// `granted`: the subset of `requested` whose kinds were granted.
+pub(crate) fn media_granted(requested: u32, granted: &[PermissionKind]) -> u32 {
+    let mut mask = 0;
+    let mut rest = requested;
+    while rest != 0 {
+        let bit = rest & rest.wrapping_neg();
+        if decode_media(bit).iter().all(|kind| granted.contains(kind)) {
+            mask |= bit;
+        }
+        rest &= !bit;
+    }
+    mask
+}
+
+// wubble change: requests are held in a `crate::held::Held` (id, cap, default
+// answer on close and drop) instead of an id counter and a map.
 #[derive(Default)]
-struct Inner {
-    next_id: PermissionId,
-    enabled: bool,
-    pending: HashMap<PermissionId, Pending>,
+pub(crate) struct Permissions {
+    enabled: Mutex<bool>,
+    #[cfg(feature = "cef-runtime")]
+    pub(crate) pending: Mutex<crate::held::Held<Pending>>,
 }
 
 impl Permissions {
     pub(crate) fn set_enabled(&self, enabled: bool) {
-        self.inner.lock().unwrap().enabled = enabled;
+        *self.enabled.lock().unwrap() = enabled;
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
-        self.inner.lock().unwrap().enabled
-    }
-
-    pub(crate) fn next_id(&self) -> PermissionId {
-        let mut inner = self.inner.lock().unwrap();
-        inner.next_id = inner.next_id.wrapping_add(1);
-        inner.next_id
-    }
-
-    pub(crate) fn hold(&self, id: PermissionId, pending: Pending) {
-        self.inner.lock().unwrap().pending.insert(id, pending);
-    }
-
-    pub(crate) fn take(&self, id: PermissionId) -> Option<Pending> {
-        self.inner.lock().unwrap().pending.remove(&id)
+        *self.enabled.lock().unwrap()
     }
 
     // Diagnostic accessor: exercised by unit tests today, kept for host-side
     // leak checks.
     #[allow(dead_code)]
     pub(crate) fn outstanding(&self) -> usize {
-        self.inner.lock().unwrap().pending.len()
+        #[cfg(feature = "cef-runtime")]
+        {
+            return self.pending.lock().unwrap().outstanding();
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        0
     }
 }
 
@@ -270,14 +280,31 @@ mod tests {
     }
 
     #[test]
-    fn ids_are_unique_and_never_zero() {
-        let p = Permissions::default();
-        let ids: Vec<_> = (0..4).map(|_| p.next_id()).collect();
-        assert!(!ids.contains(&0));
-        let mut sorted = ids.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "ids repeated: {ids:?}");
-        assert_eq!(p.outstanding(), 0);
+    fn nothing_is_outstanding_before_a_request() {
+        assert_eq!(Permissions::default().outstanding(), 0);
+    }
+
+    #[test]
+    fn a_prompt_is_accepted_only_when_everything_asked_is_granted() {
+        let asked = GEOLOCATION | NOTIFICATIONS;
+        let both = [PermissionKind::Geolocation, PermissionKind::Notifications];
+        assert!(prompt_accepted(asked, &both));
+        assert!(!prompt_accepted(asked, &both[..1]), "a partial grant accepted the whole prompt");
+        assert!(!prompt_accepted(asked, &[]));
+        assert!(!prompt_accepted(0, &both), "nothing asked is nothing to accept");
+    }
+
+    #[test]
+    fn media_hands_back_the_granted_subset() {
+        let asked = MEDIA_DEVICE_AUDIO | MEDIA_DEVICE_VIDEO;
+        assert_eq!(media_granted(asked, &[PermissionKind::MicStream]), MEDIA_DEVICE_AUDIO);
+        assert_eq!(media_granted(asked, &[PermissionKind::CameraStream]), MEDIA_DEVICE_VIDEO);
+        assert_eq!(
+            media_granted(asked, &[PermissionKind::CameraStream, PermissionKind::MicStream]),
+            asked
+        );
+        assert_eq!(media_granted(asked, &[]), 0);
+        // A grant for something not asked for adds nothing.
+        assert_eq!(media_granted(MEDIA_DEVICE_AUDIO, &[PermissionKind::DesktopVideoCapture]), 0);
     }
 }
