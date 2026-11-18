@@ -33,6 +33,40 @@ pub enum Cursor {
     ResizeEw,
     ResizeNeSw,
     ResizeNwSe,
+    /// Middle-click autoscroll, the page still (all axes, vertical only,
+    /// horizontal only). The shell hides the pointer for these and draws its
+    /// own (`wubble_core::autoscroll`).
+    PanStill,
+    PanStillVertical,
+    PanStillHorizontal,
+    /// Autoscrolling toward a compass point.
+    PanN,
+    PanNE,
+    PanE,
+    PanSE,
+    PanS,
+    PanSW,
+    PanW,
+    PanNW,
+}
+
+impl Cursor {
+    /// What this cursor says about autoscroll.
+    pub fn pan(self) -> wubble_core::autoscroll::Pan {
+        use wubble_core::autoscroll::{Direction as D, Pan};
+        match self {
+            Cursor::PanStill | Cursor::PanStillVertical | Cursor::PanStillHorizontal => Pan::Still,
+            Cursor::PanN => Pan::Moving(D::N),
+            Cursor::PanNE => Pan::Moving(D::NE),
+            Cursor::PanE => Pan::Moving(D::E),
+            Cursor::PanSE => Pan::Moving(D::SE),
+            Cursor::PanS => Pan::Moving(D::S),
+            Cursor::PanSW => Pan::Moving(D::SW),
+            Cursor::PanW => Pan::Moving(D::W),
+            Cursor::PanNW => Pan::Moving(D::NW),
+            _ => Pan::None,
+        }
+    }
 }
 
 impl From<CursorShape> for Cursor {
@@ -54,6 +88,22 @@ impl From<CursorShape> for Cursor {
             CursorShape::ResizeNwSe => Self::ResizeNwSe,
             CursorShape::Grab => Self::Grab,
             CursorShape::Grabbing => Self::Grabbing,
+            CursorShape::Panning(p) => {
+                use welding::Panning as P;
+                match p {
+                    P::Middle => Self::PanStill,
+                    P::MiddleVertical => Self::PanStillVertical,
+                    P::MiddleHorizontal => Self::PanStillHorizontal,
+                    P::North => Self::PanN,
+                    P::NorthEast => Self::PanNE,
+                    P::East => Self::PanE,
+                    P::SouthEast => Self::PanSE,
+                    P::South => Self::PanS,
+                    P::SouthWest => Self::PanSW,
+                    P::West => Self::PanW,
+                    P::NorthWest => Self::PanNW,
+                }
+            }
             // welding's name for CEF's `CT_NONE`.
             CursorShape::Custom(name) if name == "none" => Self::None,
             // Zoom, other custom names, and shapes a newer welding adds.
@@ -79,9 +129,12 @@ pub enum WebEvent {
     /// The page's first icon URL, empty when it has none.
     FaviconChanged(String),
     CursorChanged(Cursor),
-    /// `window.open` or a `target=_blank` link. CEF opened nothing itself.
+    /// `window.open`, a `target=_blank` link, or a middle or Ctrl click on a
+    /// link. CEF opened nothing itself.
     PopupRequested {
         url: String,
+        /// Open it behind the current tab (a middle or Ctrl click).
+        background: bool,
     },
     /// The renderer process died. Unless the host draws its own crash page
     /// ([`NavInput::RendererTerminated`]), the view reloads the page once by
@@ -147,7 +200,10 @@ pub enum NavInput {
     RendererTerminated {
         reload: bool,
     },
-    Popup(String),
+    Popup {
+        url: String,
+        background: bool,
+    },
     Cursor(Cursor),
     // From the host.
     Load(String),
@@ -285,7 +341,10 @@ pub fn transition(state: NavState, input: NavInput) -> (NavState, Vec<NavEffect>
             };
             return (state, effects);
         }
-        NavInput::Popup(url) => (page, vec![Emit(WebEvent::PopupRequested { url })]),
+        NavInput::Popup { url, background } => (
+            page,
+            vec![Emit(WebEvent::PopupRequested { url, background })],
+        ),
         NavInput::Load(url) => (page, command(NavEffect::Load(url))),
         NavInput::Reload => (page, command(NavEffect::Reload)),
         NavInput::HardReload => (page, command(NavEffect::HardReload)),
@@ -513,12 +572,17 @@ mod tests {
     #[test]
     fn popups_are_reported_without_a_state_change() {
         let state = at(Phase::Loaded);
-        let (next, effects) = transition(state.clone(), I::Popup("https://p/".into()));
+        let popup = I::Popup {
+            url: "https://p/".into(),
+            background: true,
+        };
+        let (next, effects) = transition(state.clone(), popup);
         assert_eq!(next, state);
         assert_eq!(
             effects,
             vec![E::Emit(WebEvent::PopupRequested {
-                url: "https://p/".into()
+                url: "https://p/".into(),
+                background: true,
             })]
         );
     }
@@ -638,6 +702,17 @@ mod tests {
     }
 
     #[test]
+    fn panning_cursors_say_where_autoscroll_goes() {
+        use wubble_core::autoscroll::{Direction, Pan};
+        assert_eq!(Cursor::Default.pan(), Pan::None);
+        assert_eq!(Cursor::PanStillVertical.pan(), Pan::Still);
+        assert_eq!(Cursor::PanS.pan(), Pan::Moving(Direction::S));
+        assert_eq!(Cursor::PanNE.pan(), Pan::Moving(Direction::NE));
+        // The shell's cursor table ends with the panning cursors.
+        assert_eq!(Cursor::PanNW as i32, 26);
+    }
+
+    #[test]
     fn cursor_from_every_welding_shape() {
         let cases = [
             (CursorShape::Default, Cursor::Default),
@@ -660,6 +735,15 @@ mod tests {
             (CursorShape::ZoomOut, Cursor::Default),
             (CursorShape::Custom("none".into()), Cursor::None),
             (CursorShape::Custom("alias".into()), Cursor::Default),
+            (
+                CursorShape::Panning(welding::Panning::Middle),
+                Cursor::PanStill,
+            ),
+            (CursorShape::Panning(welding::Panning::South), Cursor::PanS),
+            (
+                CursorShape::Panning(welding::Panning::NorthWest),
+                Cursor::PanNW,
+            ),
         ];
         for (shape, cursor) in cases {
             assert_eq!(Cursor::from(shape.clone()), cursor, "{shape:?}");

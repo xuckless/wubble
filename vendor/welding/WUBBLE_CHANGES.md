@@ -302,6 +302,28 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `MTLCommandBuffer`, `MTLCommandEncoder`, `MTLCommandQueue`. Not
    unit-tested (needs a live CEF frame); the macOS `--smoke frames` pixel and
    glass checks run it.
+29. **Switches for child processes.** `runtime.rs`: new
+   `CefRuntimeConfig::child_process_switches`, added to every child
+   process's command line by the browser process handler's new
+   `on_before_child_process_launch` (`app.rs`, `WeldApp::build` takes them).
+   Chromium hands only switches it knows on to renderers, so a switch the
+   helper reads (wubble's `--wubble-clipboard-bridge`, which turns on its
+   clipboard content script on change 26's channel) cannot go in
+   `command_line_switches`.
+30. **Media state on the context menu.** `NavigationEvent::
+   ContextMenuRequested` gains `media_flags` (`cef_context_menu_media_state_
+   flags_t`: paused, muted, loop, controls, ...), read in `handlers.rs`
+   `run_context_menu`.
+31. **Links opened elsewhere reach the host.** `handlers.rs`: the request
+   handler's new `on_open_urlfrom_tab` (a middle or Ctrl click on a link)
+   reports `NavigationEvent::NewWindowRequested` and cancels CEF's in-place
+   navigation; `NewWindowRequested` gains `background` (the disposition is
+   `CEF_WOD_NEW_BACKGROUND_TAB`, `surface::background_disposition`), also set
+   by `on_before_popup` on all three platforms.
+32. **Autoscroll cursors by name.** `surface.rs`: `CursorShape::Panning`
+   with the new `Panning` (middle, middle vertical/horizontal, eight compass
+   points; exported from `lib.rs`); `cursor.rs` `from_cef` maps CEF's
+   `CT_*PANNING` types to it (`CT_MIDDLEPANNING` was `Move`).
 
 ## Not changed, on purpose
 

@@ -6,16 +6,19 @@ mod block_smoke;
 mod blocking;
 mod chooser;
 mod cli;
+mod clipboard;
 mod host;
 mod ime;
 mod input;
 mod measure;
 mod menu;
 mod nav_smoke;
+mod page_drag;
 mod page_error;
 mod page_smoke;
 mod pages_smoke;
 mod panes;
+mod parity;
 mod perform;
 mod persist;
 mod pixels;
@@ -75,6 +78,7 @@ pub const TAB3_PAGE: &str = include_str!("../assets/tab3.html");
 
 /// The page `--smoke page` drives.
 pub const PAGE_PAGE: &str = include_str!("../assets/page.html");
+pub const PARITY_PAGE: &str = include_str!("../assets/parity.html");
 pub const BLOCK_PAGE: &str = include_str!("../assets/block.html");
 
 /// `--smoke tabs`'s pages, in tab order.
@@ -209,6 +213,29 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: page FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Parity) => {
+            match with_smoke_dir(|config, dir| run(Mode::Parity, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    parity_passed: Some(gaps),
+                    ..
+                }) => {
+                    println!("smoke: parity ok; known gaps: {}", gaps.join(", "));
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: parity FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: parity FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -591,6 +618,8 @@ struct Outcome {
     blocked_seen: Option<u32>,
     /// `--smoke split` reached its end.
     split_passed: bool,
+    /// `--smoke parity` passed every item but the known gaps, which failed as expected.
+    parity_passed: Option<Vec<&'static str>>,
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     pages_passed: bool,
@@ -618,6 +647,8 @@ enum Mode {
     Split,
     /// `--smoke page`.
     Page,
+    /// `--smoke parity`.
+    Parity,
     /// `--smoke block`.
     Block,
     /// `--smoke settings`.
@@ -779,7 +810,13 @@ fn connect_input(window: &AppWindow) {
     });
     window.window().on_winit_window_event(|_, event| {
         let mut result = EventResult::Propagate;
-        with_host(|host| result = host.window_event(event));
+        with_host(|host| {
+            result = if host.parity_owns_input(event) {
+                EventResult::PreventDefault
+            } else {
+                host.window_event(event)
+            }
+        });
         result
     });
 }
@@ -1006,6 +1043,7 @@ fn run(
         tabs_smoke: None,
         session_smoke: None,
         page_smoke: None,
+        parity: None,
         block_smoke: None,
         split_smoke: None,
         settings_smoke: None,
@@ -1066,6 +1104,13 @@ fn run(
             Some(page_url(PAGE_PAGE)),
             Checks {
                 page_smoke: Some(page_smoke::PageSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Parity => (
+            Some(page_url(PARITY_PAGE)),
+            Checks {
+                parity: Some(Default::default()),
                 ..none
             },
         ),
@@ -1134,6 +1179,7 @@ fn run(
         pump_scheduler: Some(pump_scheduler()),
         content_filter: Some(blocking.clone()),
         features: loaded.settings.page_features(),
+        clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         ..config?
     })?;
     if smoke_block {
@@ -1225,6 +1271,7 @@ fn run(
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
+        parity_passed: host.parity_passed,
         settings_passed: host.settings_passed,
         pages_passed: host.pages_passed,
         session_passed: host.session_passed,

@@ -7887,6 +7887,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "slint",
+ "smithay-clipboard",
  "tempfile",
  "wubble-blocker",
  "wubble-core",

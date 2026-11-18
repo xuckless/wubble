@@ -180,7 +180,8 @@ impl Host {
         let bowed = self.mask_panes(window);
         self.render_panes(window);
         self.measure_shell(window, bowed);
-        let moving = strings || stretching;
+        let autoscrolling = self.autoscroll_frame(window, now);
+        let moving = strings || stretching || autoscrolling;
         if !moving {
             self.panes_last = None;
         }

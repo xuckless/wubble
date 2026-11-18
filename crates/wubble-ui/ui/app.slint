@@ -21,6 +21,7 @@ import { Toast } from "components/toast.slint";
 import { PopupLayer } from "components/popup-layer.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { GlowRing } from "components/glow-ring.slint";
+import { AutoscrollCursor } from "components/autoscroll-cursor.slint";
 import { WindowEdges, MoveArea } from "components/window-frame.slint";
 import { Entering } from "components/entering.slint";
 import { PageScroll } from "components/page-scroll.slint";
@@ -71,6 +72,16 @@ export component AppWindow inherits Window {
     // pixels. The host forwards it to that pane's page; nothing here interprets it.
     // The page's pointer shape: an index into `cursors`.
     in property <int> web-cursor;
+    // Middle-click autoscroll's own pointer (wubble_core::autoscroll), window px.
+    in property <bool> autoscroll-on;
+    in property <bool> autoscroll-moving;
+    in property <length> autoscroll-anchor-x;
+    in property <length> autoscroll-anchor-y;
+    in property <length> autoscroll-x;
+    in property <length> autoscroll-y;
+    in property <angle> autoscroll-heading;
+    in property <float> autoscroll-stretch: 1;
+    in property <float> autoscroll-squash: 1;
     // The web content has keyboard focus (the host sends it keys only then).
     out property <bool> web-focused: web-focus.has-focus;
     callback web-pointer-moved(pane: int, x: length, y: length);
@@ -487,6 +498,10 @@ export component AppWindow inherits Window {
         MouseCursor.ew-resize,
         MouseCursor.nesw-resize,
         MouseCursor.nwse-resize,
+        // Autoscroll's eleven panning cursors: hidden, the shell draws its own.
+        MouseCursor.none, MouseCursor.none, MouseCursor.none, MouseCursor.none,
+        MouseCursor.none, MouseCursor.none, MouseCursor.none, MouseCursor.none,
+        MouseCursor.none, MouseCursor.none, MouseCursor.none,
     ];
 
     // The bottom layer: the scene (the design's demo.slint `Image { source: root.scene }`, first
@@ -894,6 +909,21 @@ export component AppWindow inherits Window {
         scrolled(x, y, dx, dy) => {
             root.web-scrolled(root.active-tab-id, x, y, dx, dy);
         }
+    }
+
+    if root.autoscroll-on: AutoscrollCursor {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        anchor-x: root.autoscroll-anchor-x;
+        anchor-y: root.autoscroll-anchor-y;
+        pointer-x: root.autoscroll-x;
+        pointer-y: root.autoscroll-y;
+        moving: root.autoscroll-moving;
+        heading: root.autoscroll-heading;
+        stretch: root.autoscroll-stretch;
+        squash: root.autoscroll-squash;
     }
 
     // Above everything: the resize zones of the frameless window.

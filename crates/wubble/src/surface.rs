@@ -305,6 +305,11 @@ impl Surfaces {
 /// Where a page event goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Routed {
+    /// The page started a drag (`page_drag`).
+    Drag {
+        data: wubble_engine::page::DragData,
+        allowed: wubble_engine::page::DragOps,
+    },
     Dialog(DialogEvent),
     /// A menu event; a request still needs the view's navigation flags.
     Menu(MenuEvent),
@@ -348,6 +353,15 @@ pub enum Routed {
         path: std::path::PathBuf,
         text: String,
     },
+    /// A frame's copy or paste, for the system clipboard (`clipboard.rs`).
+    Clipboard {
+        frame: String,
+        request: wubble_engine::page::ClipboardRequest,
+    },
+    /// A Ctrl+wheel the page left alone: one zoom step, in or out.
+    WheelZoom {
+        zoom_in: bool,
+    },
     Ignore,
 }
 
@@ -382,6 +396,8 @@ pub fn route(event: PageEvent) -> Routed {
         // The host reads the zoom back when the user zooms; the view's own
         // reports (a load, an address change) are not the user's.
         PageEvent::ZoomChanged { .. } => Routed::Ignore,
+        PageEvent::Clipboard { frame, request } => Routed::Clipboard { frame, request },
+        PageEvent::WheelZoom { zoom_in } => Routed::WheelZoom { zoom_in },
         PageEvent::FullscreenChanged(on) => Routed::Fullscreen(on),
         PageEvent::MutedChanged(m) => Routed::Muted(m),
         PageEvent::Audible(a) => Routed::Audible(a),
@@ -438,7 +454,7 @@ pub fn route(event: PageEvent) -> Routed {
             source,
             line,
         } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
-        PageEvent::DragStarted { .. } => Routed::Ignore,
+        PageEvent::DragStarted { data, allowed, .. } => Routed::Drag { data, allowed },
         PageEvent::FaviconImage(icon) => Routed::Favicon(icon),
         PageEvent::PdfPrinted { path, ok } => Routed::Pdf {
             text: pdf_notice(&path, ok),

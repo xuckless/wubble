@@ -440,7 +440,7 @@ cef::wrap_life_span_handler! {
             _popup_id: ::std::os::raw::c_int,
             target_url: Option<&cef::CefString>,
             _target_frame_name: Option<&cef::CefString>,
-            _target_disposition: cef::WindowOpenDisposition,
+            target_disposition: cef::WindowOpenDisposition,
             user_gesture: ::std::os::raw::c_int,
             _popup_features: Option<&cef::PopupFeatures>,
             _window_info: Option<&mut cef::WindowInfo>,
@@ -454,6 +454,7 @@ cef::wrap_life_span_handler! {
                 crate::surface::NavigationEvent::NewWindowRequested {
                     url,
                     user_gesture: user_gesture != 0,
+                    background: crate::surface::background_disposition(*target_disposition.as_ref() as i64),
                 }
             );
             1 // cancel popup creation

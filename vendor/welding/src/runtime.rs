@@ -107,6 +107,12 @@ pub struct CefRuntimeConfig {
     /// `OnScheduleMessagePumpWork`. `None` = the host polls
     /// [`CefRuntime::do_message_loop_work`] on its own timer.
     pub pump_scheduler: Option<PumpScheduler>,
+
+    /// wubble change (29): bare switches added to every child process's command
+    /// line (CEF `OnBeforeChildProcessLaunch`), such as a switch that tells
+    /// the helper which context scripts to run. Chromium hands only switches
+    /// it knows on to renderers, so these cannot go in `command_line_switches`.
+    pub child_process_switches: Vec<String>,
 }
 
 impl CefRuntimeConfig {
@@ -122,6 +128,7 @@ impl CefRuntimeConfig {
             single_process: false,
             log_severity: CefLogSeverity::Default,
             pump_scheduler: None,
+            child_process_switches: Vec::new(),
         }
     }
 }
@@ -233,7 +240,7 @@ mod cef_backed {
             let args = cef::MainArgs {
                 instance: self.instance,
             };
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None, None);
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None, None, Default::default());
             let code =
                 cef::execute_process(Some(&args), Some(&mut app), self.sandbox_info.as_ptr());
             if code >= 0 { Ok(Some(code)) } else { Ok(None) }
@@ -255,6 +262,7 @@ mod cef_backed {
                 std::sync::Arc::new(config.command_line_switches.clone()),
                 config.pump_scheduler.clone(),
                 None,
+                std::sync::Arc::new(config.child_process_switches.clone()),
             );
             let settings = build_settings(&config);
             let code = cef::initialize(
@@ -287,7 +295,7 @@ mod cef_backed {
             let args = Args::new();
             // The same app both roles need: its render-process handler is what
             // makes script evaluation possible in the renderer.
-            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None, None);
+            let mut app = crate::app::WeldApp::build(std::sync::Arc::new(Vec::new()), None, None, Default::default());
             let code = cef::execute_process(
                 Some(args.as_main_args()),
                 Some(&mut app),
@@ -325,6 +333,7 @@ mod cef_backed {
                 std::sync::Arc::new(Vec::new()),
                 None,
                 context_script,
+                Default::default(),
             );
             Ok(cef::execute_process(
                 Some(args.as_main_args()),
@@ -365,6 +374,7 @@ mod cef_backed {
                 std::sync::Arc::new(config.command_line_switches.clone()),
                 config.pump_scheduler.clone(),
                 None,
+                std::sync::Arc::new(config.child_process_switches.clone()),
             );
             let settings = build_settings(&config);
             let code = cef::initialize(

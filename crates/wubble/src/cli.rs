@@ -67,6 +67,7 @@ enum SmokeArg {
     Tabs,
     Split,
     Page,
+    Parity,
     Block,
     Settings,
     Pages,
@@ -82,6 +83,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "tabs" => Ok(SmokeArg::Tabs),
         None if value == "split" => Ok(SmokeArg::Split),
         None if value == "page" => Ok(SmokeArg::Page),
+        None if value == "parity" => Ok(SmokeArg::Parity),
         None if value == "block" => Ok(SmokeArg::Block),
         None if value == "settings" => Ok(SmokeArg::Settings),
         None if value == "pages" => Ok(SmokeArg::Pages),
@@ -94,8 +96,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `block`, `settings`, \
-             `pages`, `session`, `autofill` or `session-phase=1|2`"
+            "expected `boot`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
+             `settings`, `pages`, `session`, `autofill` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -119,6 +121,8 @@ pub enum Smoke {
     Split,
     /// The bundled page's select popup, alert, context menu, find and zoom.
     Page,
+    /// The bundled `parity.html`: the checklist of ordinary page interactions (`parity.rs`).
+    Parity,
     /// The bundled page requests URLs the smoke's list blocks; they are counted.
     Block,
     /// Open wubble://settings, flip a setting through its toggle, read the store back.
@@ -209,6 +213,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
             (Some(SmokeArg::Split), None, None) => Smoke::Split,
             (Some(SmokeArg::Page), None, None) => Smoke::Page,
+            (Some(SmokeArg::Parity), None, None) => Smoke::Parity,
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
@@ -311,6 +316,10 @@ mod tests {
             Some(Command::Smoke(Smoke::Page))
         );
         assert!(parse(["wubble", "--smoke", "page", "--url", "about:blank"]).is_err());
+        assert_eq!(
+            parse(["wubble", "--smoke", "parity"]).ok(),
+            Some(Command::Smoke(Smoke::Parity))
+        );
     }
 
     #[test]

@@ -18,8 +18,6 @@ pub const NOT_YET: &[(Action, &str)] = &[
         Action::ToggleCompactMode,
         "the shell's one sidebar toggle is ToggleSidebar",
     ),
-    (Action::DevTools, "DevTools are not wired"),
-    (Action::ViewSource, "view-source is not wired"),
 ];
 
 /// Engine calls on the visible tab's view.
@@ -53,6 +51,8 @@ pub enum Plan {
     Fullscreen,
     /// Put the text on the clipboard.
     Copy(String),
+    /// Open DevTools on the visible page.
+    DevTools,
     /// Mod+D: the bookmark sheet for the visible page.
     BookmarkPage,
     /// Open the command bar to choose a page to put beside the focused one.
@@ -128,6 +128,18 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             Some(t) if model.split_of(t).is_some() => Plan::Model(Command::Unsplit(t)),
             _ => Plan::Nothing,
         },
+        Action::DevTools => visible.map_or(Plan::Nothing, |_| Plan::DevTools),
+        // Chromium's Ctrl+U: the page's source in a new tab beside it.
+        Action::ViewSource => visible
+            .and_then(|t| model.tabs.get(&t).map(|tab| (t, tab)))
+            .filter(|(_, tab)| !tab.url.is_empty() && !tab.url.starts_with("view-source:"))
+            .map_or(Plan::Nothing, |(t, tab)| {
+                Plan::Model(Command::NewTab {
+                    url: format!("view-source:{}", tab.url),
+                    container: None,
+                    opener: Some(t),
+                })
+            }),
         Action::OpenSettings => Plan::Model(Command::OpenInternal(InternalPage::Settings)),
         Action::OpenHistory => Plan::Model(Command::OpenInternal(InternalPage::History)),
         Action::OpenBookmarks => Plan::Model(Command::OpenInternal(InternalPage::Bookmarks)),
@@ -138,11 +150,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
             .filter(|t| wubble_core::url::is_recordable(&t.url))
             .map_or(Plan::Nothing, |_| Plan::BookmarkPage),
         Action::Quit => Plan::Quit,
-        Action::NewWindow
-        | Action::NewSpace
-        | Action::ToggleCompactMode
-        | Action::DevTools
-        | Action::ViewSource => Plan::NotYet,
+        Action::NewWindow | Action::NewSpace | Action::ToggleCompactMode => Plan::NotYet,
     }
 }
 

@@ -5,6 +5,7 @@
 pub mod action;
 pub mod apply;
 pub mod autofill;
+pub mod autoscroll;
 pub mod beam;
 pub mod bow;
 pub mod download;

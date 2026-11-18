@@ -10,6 +10,16 @@ export global Shell {
     out property <color> selection-ink: #F2F4FA;
     // One logical pixel: divide a length by it to get a plain number.
     out property <length> px: 1px;
+    // Middle-click autoscroll's pointer (components/autoscroll-cursor.slint): the anchor ring and
+    // its centre, the still dot, the arrow at rest, and their rims.
+    out property <length> autoscroll-ring: 22px;
+    out property <length> autoscroll-ring-width: 2px;
+    out property <length> autoscroll-centre: 4px;
+    out property <length> autoscroll-dot: 9px;
+    out property <length> autoscroll-arrow-length: 18px;
+    out property <length> autoscroll-arrow-width: 14px;
+    out property <length> autoscroll-rim: 1.5px;
+    out property <length> autoscroll-shadow: 4px;
     // demo.slint preferred size
     // browser.css .wb-edge: strips 10 and corners 20, centred on the border (the inside half)
     out property <length> edge-width: 5px;

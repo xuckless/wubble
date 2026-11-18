@@ -142,7 +142,7 @@ pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode, 
 pub use surface::{
     AcceptFilter, BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
     CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuMedia, ContextMenuTarget, Cookie,
-    CursorShape, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
+    CursorShape, Panning, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
     FileChooserMode, FocusDirection, ImeComposition, JsDialogKind, KeyEvent, KeyEventKind,
     MAX_MENU_DEPTH, MenuItem, MenuItemKind, MouseAction, MouseButton, MouseEvent,
     NavigationEvent, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,

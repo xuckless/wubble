@@ -52,6 +52,9 @@ pub struct EngineConfig {
     pub content_filter: Option<Arc<dyn ContentFilter>>,
     /// Chromium features chosen by the user's settings; CEF takes them only at start.
     pub features: PageFeatures,
+    /// Runs the page clipboard through the host ([`CLIPBOARD_SWITCH`]): on for
+    /// Wayland, where Chromium's own clipboard cannot reach the system's.
+    pub clipboard_bridge: bool,
     /// Whose profile `cache_dir` is.
     pub profile: ProfileKind,
 }
@@ -67,6 +70,12 @@ pub enum ProfileKind {
     /// owner's screen for every rebuilt, ad hoc signed binary).
     Throwaway,
 }
+
+/// The renderer switch that makes wubble-helper run its clipboard content
+/// script (`clipboard.js`, on the `clipboard` frame channel). Must match
+/// `CLIPBOARD_SWITCH` in wubble-helper/src/main.rs, duplicated on purpose as
+/// `SANDBOX` is: the helper cannot depend on this crate.
+pub const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
 
 /// Page features that are Chromium start switches (the settings' restart rows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +139,7 @@ impl EngineConfig {
             exe_dir: exe_dir.to_path_buf(),
             cache_dir,
             pump_scheduler: None,
+            clipboard_bridge: false,
             content_filter: None,
             features: PageFeatures::default(),
             profile: ProfileKind::User,
@@ -323,6 +333,9 @@ fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
             .map(|(name, value)| ((*name).into(), value.map(Into::into))),
     );
     cef.pump_scheduler = config.pump_scheduler.clone();
+    if config.clipboard_bridge {
+        cef.child_process_switches = vec![CLIPBOARD_SWITCH.into()];
+    }
     cef
 }
 
@@ -669,6 +682,7 @@ mod tests {
             pump_scheduler: None,
             content_filter: None,
             features: PageFeatures::default(),
+            clipboard_bridge: false,
             profile: ProfileKind::User,
         }
     }
@@ -872,6 +886,7 @@ mod tests {
             pump_scheduler: None,
             content_filter: None,
             features: PageFeatures::default(),
+            clipboard_bridge: false,
             profile: ProfileKind::Throwaway,
         })
         .err();
