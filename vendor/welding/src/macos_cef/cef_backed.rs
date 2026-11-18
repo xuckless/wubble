@@ -59,6 +59,22 @@ cef::wrap_render_handler! {
             0
         }
 
+        // wubble change: with `shared_texture_enabled` CEF calls OnPaint only
+        // when it cannot hand over a shared texture, so every call is a CPU
+        // fallback frame (popups included). Counted, never read or shown.
+        fn on_paint(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            type_: cef::PaintElementType,
+            _dirty_rects: Option<&[cef::Rect]>,
+            _buffer: *const u8,
+            width: ::std::os::raw::c_int,
+            height: ::std::os::raw::c_int,
+        ) {
+            let n = self.handler.cpu_paints.fetch_add(1, Ordering::Relaxed) + 1;
+            log::debug!("on_paint (CPU fallback #{n}): {type_:?} {width}x{height}");
+        }
+
         #[cfg(feature = "cef-runtime")]
         fn on_accelerated_paint(
             &self,
@@ -71,6 +87,8 @@ cef::wrap_render_handler! {
             // its own element rather than compositing it into the view, so it
             // lands here with PET_POPUP and goes to a separate slot.
             let is_popup = type_ == cef::PaintElementType::POPUP;
+            // wubble change: stamped for `CopiedFrame::arrived`.
+            let arrived = std::time::Instant::now();
             let Some(info) = info else { return };
             // macOS names this field for what it is: the paint info carries an
             // IOSurfaceRef, not the Windows shared HANDLE.
@@ -79,8 +97,8 @@ cef::wrap_render_handler! {
                 return;
             }
 
-            // Retain the IOSurface so it outlives the callback.
-            // IOSurfaceRef is a CFTypeRef; use CFRetain.
+            // Retain the IOSurface for the import; `MetalTextureRef` releases
+            // it when dropped. IOSurfaceRef is a CFTypeRef; use CFRetain.
             unsafe extern "C" {
                 fn CFRetain(cf: *const c_void) -> *const c_void;
             }
@@ -109,13 +127,16 @@ cef::wrap_render_handler! {
                     generation,
                 )
             };
-            match frame {
-                Ok(frame) => {
-                    slot.store(crate::native_frame::NativeFrame::MetalTextureRef(frame));
-                }
-                Err(error) => {
-                    log::error!("failed to wrap retained CEF IOSurface: {error}");
-                }
+            // wubble change: copy before returning, see `copy_metal_to_owned`.
+            let copied = frame
+                .map_err(|error| format!("failed to wrap retained CEF IOSurface: {error}"))
+                .and_then(|frame| {
+                    crate::native_frame::copy_metal_to_owned(frame, &self.handler.gpu, arrived)
+                        .map_err(|error| format!("failed to copy CEF IOSurface: {error}"))
+                });
+            match copied {
+                Ok(copy) => slot.store(crate::native_frame::NativeFrame::Copied(copy)),
+                Err(error) => log::error!("{error}"),
             }
         }
 

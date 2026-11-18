@@ -12,11 +12,17 @@
 //! `IOSurfaceRef` (`*mut c_void`). Under `cef-runtime` the `on_accelerated_paint`
 //! callback retains the surface via `CFRetain` before returning, and the Metal
 //! importer releases it after wrapping it in a `MTLTexture`.
+//!
+//! wubble change: the callback then imports the surface on the host's device
+//! and copies it into a weld-owned texture before returning
+//! ([`NativeFrame::Copied`]), because CEF renders into pooled IOSurfaces and a
+//! retained surface can be overwritten by a later frame.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "cef-runtime")]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use dpi::PhysicalSize;
 
@@ -59,6 +65,10 @@ struct WeldRenderHandlerInner {
     ime: Arc<crate::ime::LatestComposition>,
     events: Arc<WebEventQueue>,
     metrics: Arc<Mutex<crate::view::ViewMetrics>>,
+    /// The host's device, for the in-callback frame copy (wubble change).
+    gpu: HostWgpuContext,
+    /// CPU `OnPaint` frames seen (wubble change, see `WUBBLE_CHANGES.md`).
+    cpu_paints: Arc<AtomicU64>,
     /// Held requests and the drag-source switch (wubble change).
     requests: Arc<crate::handlers::Requests>,
 }
@@ -121,6 +131,7 @@ pub struct MacosCefProducer {
     next_snapshot_id: i32,
     events: Arc<WebEventQueue>,
     size: PhysicalSize<u32>,
+    cpu_paints: Arc<AtomicU64>,
 }
 
 /// A CEF context prepared for a macOS surface.
@@ -141,7 +152,13 @@ pub struct PreparedMacosCefProfile {
 // return looks needless to clippy but the idiom requires it.
 #[allow(clippy::needless_return)]
 impl MacosCefProducer {
-    pub fn new(_runtime: &CefRuntime, config: MacosCefConfig) -> Result<Self, WeldError> {
+    /// wubble change: takes the host's `HostWgpuContext`, as the Linux and
+    /// Windows producers do, for the in-callback frame copy.
+    pub fn new(
+        _runtime: &CefRuntime,
+        config: MacosCefConfig,
+        host_ctx: &HostWgpuContext,
+    ) -> Result<Self, WeldError> {
         #[cfg(feature = "cef-runtime")]
         {
             if config.surface.user_data_dir.is_some() {
@@ -153,12 +170,12 @@ impl MacosCefProducer {
                 ));
             }
             let mut request_context = crate::profile::create(_runtime, &config.surface)?;
-            return Self::new_with_request_context(&config, &mut request_context);
+            return Self::new_with_request_context(&config, host_ctx, &mut request_context);
         }
 
         #[cfg(not(feature = "cef-runtime"))]
         {
-            let _ = (_runtime, config);
+            let _ = (_runtime, config, host_ctx);
             Err(WeldError::SurfaceCreation(
                 "macOS CEF vtable wiring requires the `cef-runtime` feature".into(),
             ))
@@ -196,6 +213,7 @@ impl MacosCefProducer {
     /// `Ok(None)` means the caller should pump CEF again and retry later.
     pub fn try_new_with_prepared_profile(
         config: &MacosCefConfig,
+        host_ctx: &HostWgpuContext,
         profile: &mut PreparedMacosCefProfile,
     ) -> Result<Option<Self>, WeldError> {
         #[cfg(feature = "cef-runtime")]
@@ -203,12 +221,13 @@ impl MacosCefProducer {
             if !profile.ready.load(Ordering::Acquire) {
                 return Ok(None);
             }
-            return Self::new_with_request_context(config, &mut profile.context).map(Some);
+            return Self::new_with_request_context(config, host_ctx, &mut profile.context)
+                .map(Some);
         }
 
         #[cfg(not(feature = "cef-runtime"))]
         {
-            let _ = (config, profile);
+            let _ = (config, host_ctx, profile);
             Err(WeldError::SurfaceCreation(
                 "macOS CEF vtable wiring requires the `cef-runtime` feature".into(),
             ))
@@ -218,6 +237,7 @@ impl MacosCefProducer {
     #[cfg(feature = "cef-runtime")]
     fn new_with_request_context(
         config: &MacosCefConfig,
+        host_ctx: &HostWgpuContext,
         request_context: &mut cef::RequestContext,
     ) -> Result<Self, WeldError> {
         let initial_size = config.surface.initial_size;
@@ -234,6 +254,7 @@ impl MacosCefProducer {
         let cookies = Arc::new(crate::cookies::CookieJar::new(events.clone()));
         let scripts = Arc::new(crate::app::PendingScripts::new(events.clone()));
         let requests = Arc::new(crate::handlers::Requests::new(events.clone(), &config.surface));
+        let cpu_paints = Arc::new(AtomicU64::new(0));
 
         let inner = WeldRenderHandlerInner {
             frame_slot: frame_slot.clone(),
@@ -243,6 +264,8 @@ impl MacosCefProducer {
             ime: ime.clone(),
             events: events.clone(),
             metrics: metrics.clone(),
+            gpu: host_ctx.clone(),
+            cpu_paints: cpu_paints.clone(),
             requests: requests.clone(),
         };
         let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
@@ -323,6 +346,7 @@ impl MacosCefProducer {
             next_snapshot_id: 1,
             events,
             size: initial_size,
+            cpu_paints,
         })
     }
 }
@@ -377,6 +401,10 @@ impl MacosCefProducer {
 // needless_return: cfg-dispatch bodies end in `return X;` so the scaffold block can follow.
 #[allow(unreachable_code, unused_variables, clippy::needless_return)]
 impl CefSurfaceProducer for MacosCefProducer {
+    fn cpu_paint_count(&self) -> Option<u64> {
+        Some(self.cpu_paints.load(Ordering::Relaxed))
+    }
+
     fn surface_mode(&self) -> CefSurfaceMode {
         CefSurfaceMode::AcceleratedPaint
     }

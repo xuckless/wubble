@@ -211,6 +211,24 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    and measures the whole copy and the `device.poll(Wait)` part. For
    wubble's hand-run `--measure`; costs three `Instant::now()` per frame.
 
+23. **Frame copy inside `OnAcceleratedPaint` (macOS), shared copy.** CEF
+   renders into pooled IOSurfaces, so a retained surface imported at present
+   time could hold a newer frame (cef-rs copies too: `iosurface.rs`
+   `import_to_wgpu` then `copy_to_owned`). `native_frame/mod.rs`: the copy
+   and wait of change 8 moved into one `copy_to_owned(source, ctx, arrived,
+   started)`, whose target format is `source.format.add_srgb_suffix()` (a
+   no-op for Linux's sRGB import; on macOS the `Bgra8Unorm` IOSurface holds
+   display-encoded bytes, and the host samples the copy through an sRGB
+   view). `vulkan_dmabuf.rs` `copy_dmabuf_to_owned` is now its import plus
+   `copy_to_owned`; `metal.rs`: new `copy_metal_to_owned` (`import_metal`
+   plus `copy_to_owned`). `macos_cef/mod.rs`: `MacosCefProducer::new` and
+   `try_new_with_prepared_profile` take the host's `&HostWgpuContext`, kept in
+   `WeldRenderHandlerInner::gpu`; a `cpu_paints` counter and
+   `cpu_paint_count()` as on Linux. `macos_cef/cef_backed.rs`:
+   `on_accelerated_paint` stamps `arrived`, retains and wraps the surface,
+   copies it and stores `NativeFrame::Copied` (view and popup); new `on_paint`
+   counts CPU fallback frames.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

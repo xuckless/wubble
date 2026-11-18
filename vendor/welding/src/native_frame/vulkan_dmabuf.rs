@@ -183,21 +183,15 @@ pub(super) fn import_vulkan(
 }
 
 /// wubble change: imports a callback-scoped CEF frame and copies it into a
-/// weld-owned texture, waiting for the copy to finish. CEF hands the buffer
-/// back to its pool when `OnAcceleratedPaint` returns, and NVIDIA dmabufs
-/// carry no implicit fence, so an import deferred to present time could read
-/// a newer or half-written frame. The Windows path copies inside the callback
-/// for the same reason (`D3d11CallbackFrameCopier`).
+/// weld-owned texture before returning (see [`super::copy_to_owned`]). CEF
+/// hands the buffer back to its pool when `OnAcceleratedPaint` returns, and
+/// NVIDIA dmabufs carry no implicit fence, so an import deferred to present
+/// time could read a newer or half-written frame. The Windows path copies
+/// inside the callback for the same reason (`D3d11CallbackFrameCopier`).
 ///
-/// Ported from cef-rs `cef/src/osr_texture_import/common.rs`
-/// (`texture::copy_to_owned`, `texture::wait_for_copy`; cef-rs #498),
-/// MIT OR Apache-2.0. Changed: the source is welding's own DMABUF import,
-/// whose foreign-queue acquire grafting has already submitted and waited for,
-/// so no release barrier is recorded; the copy is only sampled, never copied
-/// from again.
-///
-/// wubble change: returns a [`CopiedFrame`] timed from `arrived` (the
-/// callback's entry), with the wait measured on its own.
+/// The source is welding's own DMABUF import, whose foreign-queue acquire
+/// grafting has already submitted and waited for, so no release barrier is
+/// recorded; the copy is only sampled, never copied from again.
 pub(crate) fn copy_dmabuf_to_owned(
     frame: DmaBufImage,
     ctx: &HostWgpuContext,
@@ -205,57 +199,7 @@ pub(crate) fn copy_dmabuf_to_owned(
 ) -> Result<CopiedFrame, ImportError> {
     let started = std::time::Instant::now();
     let source = import_vulkan(frame, ctx)?;
-    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("weld-cef-dmabuf-copy"),
-        size: source.size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: source.format,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let mut encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("weld-cef-dmabuf-copy"),
-        });
-    encoder.copy_texture_to_texture(
-        source.texture.as_image_copy(),
-        texture.as_image_copy(),
-        source.size,
-    );
-    let submission = ctx.queue.submit([encoder.finish()]);
-    let waiting = std::time::Instant::now();
-    loop {
-        match ctx.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission.clone()),
-            timeout: None,
-        }) {
-            Ok(_) => break,
-            // CEF must not reuse the source while the copy is in flight.
-            Err(wgpu::PollError::Timeout) => continue,
-            Err(error) => {
-                return Err(ImportError::Hal(format!(
-                    "waiting for the DMABUF frame copy: {error}"
-                )));
-            }
-        }
-    }
-    let done = std::time::Instant::now();
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    Ok(CopiedFrame {
-        texture: ImportedTexture {
-            texture,
-            view,
-            size: source.size,
-            format: source.format,
-            generation: source.generation,
-        },
-        arrived,
-        copy: done - started,
-        copy_wait: done - waiting,
-    })
+    super::copy_to_owned(source, ctx, arrived, started)
 }
 
 fn validate_image_layout(buffer_count: usize, planes: &[DmaBufPlane]) -> Result<(), ImportError> {

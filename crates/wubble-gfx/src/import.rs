@@ -1,15 +1,16 @@
 //! Native frame -> `wgpu::Texture` on Slint's device -> `slint::Image`.
 //!
 //! [`GpuContext`] creates the one wgpu device that both Slint and the frame
-//! importer use (Slint gets it through `WGPUConfiguration::Manual`). The device
-//! carries the dmabuf import extensions, which Slint's own device would not.
+//! importer use (Slint gets it through `WGPUConfiguration::Manual`). On Linux
+//! the device carries the dmabuf import extensions, which Slint's own device
+//! would not; on macOS it is a plain Metal device (IOSurface import).
 //!
 //! [`FramePresenter`] imports each CEF frame with welding and copies it, GPU to
 //! GPU, into a Slint-compatible target. The copy exists because Slint only
 //! accepts `Rgba8Unorm(Srgb)` textures (we use `Rgba8Unorm`, see `TARGET_FORMAT`) with `TEXTURE_BINDING | RENDER_ATTACHMENT`
 //! (i-slint-core `graphics/wgpu_30.rs`, `TryFrom<wgpu::Texture> for Image`),
-//! while welding/grafting import CEF's BGRA dmabuf as `Bgra8UnormSrgb` with
-//! `TEXTURE_BINDING | COPY_SRC`. `copy_texture_to_texture` cannot swizzle, so a
+//! while welding hands over CEF's BGRA frame (dmabuf or IOSurface), copied in
+//! the paint callback, as `Bgra8UnormSrgb` with `TEXTURE_BINDING | COPY_SRC`. `copy_texture_to_texture` cannot swizzle, so a
 //! fullscreen-triangle blit does it. Nothing is read back to the CPU.
 
 use std::fmt;
@@ -24,9 +25,10 @@ use crate::FrameSize;
 /// What went wrong on the GPU side. The text is the underlying error verbatim.
 #[derive(Debug)]
 pub enum GfxError {
-    /// No hardware Vulkan adapter, or this platform has no import path yet.
+    /// No hardware adapter on the import backend (Vulkan on Linux, Metal on
+    /// macOS), or this platform has no import path yet.
     Adapter(String),
-    /// The dmabuf-capable device could not be created.
+    /// The import-capable device could not be created.
     Device(String),
     /// welding/grafting could not import a frame.
     Import(String),
@@ -47,12 +49,13 @@ impl fmt::Display for GfxError {
 
 impl std::error::Error for GfxError {}
 
-/// One CEF frame as an owned native handle (a dmabuf on Linux). Only this
-/// crate opens it; `wubble-engine` hands it over unopened.
+/// One CEF frame, copied on the GPU from its native handle (a dmabuf on
+/// Linux, an IOSurface on macOS). Only this crate opens it; `wubble-engine`
+/// hands it over unopened.
 pub struct NativeFrame(welding::NativeFrame);
 
 /// When CEF painted a frame and what copying it cost the paint callback.
-/// Only frames copied inside the callback (Linux) carry it.
+/// Only frames copied inside the callback (Linux, macOS) carry it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameTiming {
     /// Entry to `OnAcceleratedPaint`.
@@ -103,13 +106,14 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// A Vulkan device on the high-performance hardware adapter (never a CPU
-    /// rasteriser such as llvmpipe), with the dmabuf import extensions.
+    /// A device on the high-performance hardware adapter (never a CPU
+    /// rasteriser such as llvmpipe) that can import CEF's frames: Vulkan with
+    /// the dmabuf import extensions on Linux, Metal on macOS.
     pub fn new() -> Result<Self, GfxError> {
         // Same instance settings as Slint's Automatic path (i-slint-core
-        // graphics/wgpu_30.rs), restricted to Vulkan, the only Linux import path.
+        // graphics/wgpu_30.rs), restricted to the backend this OS imports on.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: IMPORT_BACKENDS,
             flags: wgpu::InstanceFlags::from_build_config().with_env(),
             memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
             backend_options: wgpu::BackendOptions::from_env_or_default(),
@@ -128,7 +132,7 @@ impl GpuContext {
                 info.name
             )));
         }
-        let (device, queue) = dmabuf_device(&adapter)?;
+        let (device, queue) = import_device(&adapter)?;
         Ok(Self {
             instance,
             adapter,
@@ -170,17 +174,33 @@ impl GpuContext {
     }
 }
 
+/// The wgpu backend CEF's shared textures import into on this OS.
 #[cfg(target_os = "linux")]
-fn dmabuf_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), GfxError> {
+const IMPORT_BACKENDS: wgpu::Backends = wgpu::Backends::VULKAN;
+#[cfg(target_os = "macos")]
+const IMPORT_BACKENDS: wgpu::Backends = wgpu::Backends::METAL;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const IMPORT_BACKENDS: wgpu::Backends = wgpu::Backends::all();
+
+#[cfg(target_os = "linux")]
+fn import_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), GfxError> {
     welding::build_dmabuf_capable_device(adapter, &slint_device_descriptor(adapter))
         .map_err(|e| GfxError::Device(e.to_string()))
 }
 
-/// Placeholder until macOS (IOSurface) and Windows (D3D11) get their import path.
-#[cfg(not(target_os = "linux"))]
-fn dmabuf_device(_adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), GfxError> {
+/// Metal imports an IOSurface on any device: no extra features.
+#[cfg(target_os = "macos")]
+fn import_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), GfxError> {
+    poll_once(adapter.request_device(&slint_device_descriptor(adapter)))
+        .ok_or_else(|| GfxError::Device("device request did not complete".into()))?
+        .map_err(|e| GfxError::Device(e.to_string()))
+}
+
+/// Placeholder until Windows (D3D11) gets its import path.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn import_device(_adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), GfxError> {
     Err(GfxError::Adapter(
-        "zero-copy import is Linux-only so far".into(),
+        "zero-copy import is Linux and macOS only so far".into(),
     ))
 }
 
@@ -188,7 +208,7 @@ fn dmabuf_device(_adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue)
 /// features and limits under `Manual` as under `Automatic`.
 /// Ported from Slint 1.19 i-slint-core `graphics/wgpu_30.rs`
 /// `default_device_descriptor` (GPL-3.0-only option of Slint's licence).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn slint_device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
     wgpu::DeviceDescriptor {
         label: None,
