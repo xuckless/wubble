@@ -20,6 +20,8 @@ pub struct HistoryRow {
     pub url: String,
     pub title: String,
     pub visit_ms: i64,
+    /// Store row id of the visit: with `visit_ms` it is the paging cursor.
+    pub visit_id: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +378,7 @@ mod tests {
             url: url.into(),
             title: title.into(),
             visit_ms: ms,
+            visit_id: 0,
         }
     }
 

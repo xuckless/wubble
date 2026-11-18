@@ -116,20 +116,25 @@ impl Store {
         Ok(())
     }
 
-    /// One page of the history page's rows: visits strictly before `before_ms` (`None`: from the
-    /// newest), newest first, at most `limit`. Searching and day grouping are
+    /// One page of the history page's rows: visits strictly before the `(visit_ms, visit_id)`
+    /// cursor of the last row already shown (`None`: from the newest), newest first, at most
+    /// `limit`. The id breaks ties between visits with the same millisecond. Searching and day grouping are
     /// `wubble_core::pages::history_page`.
     pub async fn list_visits(
         &self,
         limit: usize,
-        before_ms: Option<i64>,
+        before: Option<(i64, i64)>,
     ) -> Result<Vec<HistoryRow>> {
         let mut rows = self
             .conn
             .query(
-                "SELECT u.url, u.title, v.visit_time FROM visits v JOIN urls u ON u.id = v.url_id \
-                 WHERE v.visit_time < ?1 ORDER BY v.visit_time DESC, v.id DESC LIMIT ?2",
-                (before_ms.unwrap_or(i64::MAX), limit as i64),
+                "SELECT u.url, u.title, v.visit_time, v.id FROM visits v JOIN urls u ON u.id = v.url_id \
+                 WHERE v.visit_time < ?1 OR (v.visit_time = ?1 AND v.id < ?2) \
+                 ORDER BY v.visit_time DESC, v.id DESC LIMIT ?3",
+                {
+                    let (ms, id) = before.unwrap_or((i64::MAX, i64::MAX));
+                    (ms, id, limit as i64)
+                },
             )
             .await?;
         let mut out = Vec::new();
@@ -138,6 +143,7 @@ impl Store {
                 url: r.get(0)?,
                 title: r.get(1)?,
                 visit_ms: r.get(2)?,
+                visit_id: r.get(3)?,
             });
         }
         Ok(out)
@@ -352,10 +358,36 @@ mod tests {
             );
             assert_eq!(all[0].title, "T");
             assert_eq!(s.list_visits(2, None).await.unwrap().len(), 2);
-            let older = s.list_visits(10, Some(20)).await.unwrap();
+            let cur = |r: &HistoryRow| Some((r.visit_ms, r.visit_id));
+            let older = s.list_visits(10, cur(&all[1])).await.unwrap();
             assert_eq!(older.len(), 1);
             assert_eq!(older[0].visit_ms, 10);
-            assert!(s.list_visits(10, Some(10)).await.unwrap().is_empty());
+            assert!(s.list_visits(10, cur(&all[2])).await.unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn list_visits_pages_across_equal_timestamps() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            for i in 0..5 {
+                let url = format!("https://a.test/{i}");
+                s.record_visit(&url, "T", 100, Transition::Link)
+                    .await
+                    .unwrap();
+            }
+            let mut seen = Vec::new();
+            let mut cursor = None;
+            loop {
+                let page = s.list_visits(2, cursor).await.unwrap();
+                let Some(last) = page.last() else { break };
+                cursor = Some((last.visit_ms, last.visit_id));
+                seen.extend(page.into_iter().map(|r| r.url));
+            }
+            assert_eq!(seen.len(), 5);
+            seen.sort();
+            seen.dedup();
+            assert_eq!(seen.len(), 5);
         });
     }
 

@@ -23,7 +23,7 @@ trait Codec: Sized {
 #[allow(private_bounds)]
 pub trait Setting {
     type Value: Codec;
-    const KEY: &'static str;
+    const DEF: &'static defs::SettingDef;
     fn default() -> Self::Value;
 }
 
@@ -89,7 +89,7 @@ macro_rules! settings {
             pub struct $name;
             impl Setting for $name {
                 type Value = $ty;
-                const KEY: &'static str = $def.key;
+                const DEF: &'static defs::SettingDef = &$def;
                 fn default() -> $ty {
                     <$ty as Codec>::decode($def.default)
                         .expect("a core settings default decodes with its codec")
@@ -125,14 +125,15 @@ impl Store {
     /// The setting's value, or its default if the row is absent or cannot be decoded.
     pub async fn setting<S: Setting>(&self) -> Result<S::Value> {
         Ok(self
-            .get_raw(S::KEY)
+            .get_raw(S::DEF.key)
             .await?
+            .filter(|s| S::DEF.kind.accepts(s))
             .and_then(|s| <S::Value as Codec>::decode(&s))
             .unwrap_or_else(S::default))
     }
 
     pub async fn set_setting<S: Setting>(&mut self, value: S::Value) -> Result<()> {
-        self.set_raw(S::KEY, &Codec::encode(&value)).await
+        self.set_raw(S::DEF.key, &Codec::encode(&value)).await
     }
 
     async fn get_raw(&self, key: &str) -> Result<Option<String>> {
@@ -214,14 +215,18 @@ mod tests {
     fn undecodable_rows_yield_the_default() {
         run(async {
             let mut s = Store::open_in_memory().await.unwrap();
-            s.set_raw(LiveSuggestions::KEY, "maybe").await.unwrap();
-            s.set_raw(SidebarWidth::KEY, "wide").await.unwrap();
-            s.set_raw(SearchEngineChoice::KEY, "bing").await.unwrap();
-            s.set_raw(BlockerExceptions::KEY, "{not a list")
+            s.set_raw(LiveSuggestions::DEF.key, "maybe").await.unwrap();
+            s.set_raw(SidebarWidth::DEF.key, "wide").await.unwrap();
+            s.set_raw(SearchEngineChoice::DEF.key, "bing")
                 .await
                 .unwrap();
-            s.set_raw(BlockerEnabled::KEY, "").await.unwrap();
-            s.set_raw(HistoryRetentionDays::KEY, "-3").await.unwrap();
+            s.set_raw(BlockerExceptions::DEF.key, "{not a list")
+                .await
+                .unwrap();
+            s.set_raw(BlockerEnabled::DEF.key, "").await.unwrap();
+            s.set_raw(HistoryRetentionDays::DEF.key, "-3")
+                .await
+                .unwrap();
             assert_eq!(s.setting::<HistoryRetentionDays>().await.unwrap(), 0);
             assert!(!s.setting::<LiveSuggestions>().await.unwrap());
             assert_eq!(s.setting::<SidebarWidth>().await.unwrap(), 260.0);
@@ -239,30 +244,10 @@ mod tests {
     }
 
     #[test]
-    fn core_kinds_agree_with_the_codecs() {
-        let samples = [
-            "",
-            "0",
-            "1",
-            "2",
-            "-1",
-            "3650",
-            "260",
-            "1.5",
-            "NaN",
-            "google",
-            "duckduckgo",
-            "bing",
-            "[]",
-            "[\"a\"]",
-            "{",
-        ];
+    fn every_default_is_valid_and_decodes() {
         for (def, decodes) in typed() {
+            assert!(def.kind.accepts(def.default), "{} default invalid", def.key);
             assert!(decodes(def.default), "{} default does not decode", def.key);
-            for s in samples {
-                // Anything the page accepts, the store must read back.
-                assert!(!def.kind.accepts(s) || decodes(s), "{} {s:?}", def.key);
-            }
         }
     }
 

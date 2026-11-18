@@ -27,16 +27,8 @@ impl StoreLogins {
         StoreLogins { store }
     }
 
-    pub fn store(&self) -> &Store {
-        &self.store
-    }
-
     pub fn store_mut(&mut self) -> &mut Store {
         &mut self.store
-    }
-
-    pub fn into_inner(self) -> Store {
-        self.store
     }
 }
 
