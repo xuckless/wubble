@@ -230,6 +230,7 @@ impl Host {
                     url,
                     layout: content_layout(&window),
                     frame_rate,
+                    gpu: self.presenter.context().clone(),
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {

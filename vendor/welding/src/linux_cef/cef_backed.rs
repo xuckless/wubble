@@ -149,13 +149,16 @@ cef::wrap_render_handler! {
                     generation,
                 )
             };
-            match image {
-                Ok(image) => {
-                    slot.store(crate::native_frame::NativeFrame::DmaBufImage(image));
-                }
-                Err(error) => {
-                    log::error!("failed to wrap CEF DMABUF image: {error}");
-                }
+            // wubble change: copy before returning, see `copy_dmabuf_to_owned`.
+            let copied = image
+                .map_err(|error| format!("failed to wrap CEF DMABUF image: {error}"))
+                .and_then(|image| {
+                    crate::native_frame::copy_dmabuf_to_owned(image, &self.handler.gpu)
+                        .map_err(|error| format!("failed to copy CEF DMABUF image: {error}"))
+                });
+            match copied {
+                Ok(copy) => slot.store(crate::native_frame::NativeFrame::Copied(copy)),
+                Err(error) => log::error!("{error}"),
             }
         }
 

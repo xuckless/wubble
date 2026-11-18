@@ -62,6 +62,21 @@ Every change is marked `wubble change` in the source.
    for CEF 156 (2026-11-18: crates.io `welding` max 0.15.0 with `cef ^154.5`;
    wgpu-weld `main` at 9edccc08 still pins `cef` 154.5.0), so there was
    nothing to take.
+8. **Frame copy inside `OnAcceleratedPaint` (Linux).** CEF returns each
+   dmabuf to its pool when the callback returns, and NVIDIA dmabufs carry no
+   implicit fence, so welding's import at present time could read a newer or
+   half-written frame. `native_frame/vulkan_dmabuf.rs`: new
+   `copy_dmabuf_to_owned` imports the frame (the existing grafting path) and
+   copies it into a weld-owned texture, waiting on the copy's submission;
+   ported from cef-rs `cef/src/osr_texture_import/common.rs`
+   (`copy_to_owned`, `wait_for_copy`, cef-rs #498, MIT OR Apache-2.0).
+   `native_frame/mod.rs`: new `NativeFrame::Copied(ImportedTexture)` /
+   `NativeFrameKind::Copied`, whose import is a no-op; `ImportedTexture`
+   derives `Debug`. `linux_cef/mod.rs`: `LinuxCefProducer::new` takes the
+   host's `&HostWgpuContext` (as `WindowsCefProducer::new` already does),
+   kept in `WeldRenderHandlerInner::gpu`. `linux_cef/cef_backed.rs`:
+   `on_accelerated_paint` stores the copy, for the view and popups, instead
+   of the dup'd dmabuf. macOS is unchanged.
 6. Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`frame_timing_defaults_match_upstream`; `BrowserClosed`,
    `LoadingStateChanged` and `FaviconUrlsChanged` added to

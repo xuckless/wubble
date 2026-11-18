@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use cef::{ImplBrowser, ImplBrowserHost};
 use welding::{
-    CefRuntime, CefSurfaceEvent, CefSurfaceProducer, NavigationEvent, PlatformCefProducer,
+    CefRuntime, CefSurfaceEvent, CefSurfaceProducer, HostWgpuContext, NavigationEvent,
+    PlatformCefProducer,
 };
 use winit::keyboard::PhysicalKey;
 use wubble_gfx::{FrameSize, NativeFrame};
@@ -133,12 +134,15 @@ pub fn transition(state: ViewState, event: ViewEvent) -> (ViewState, Vec<ViewEff
 }
 
 /// What a new view starts with.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ViewConfig {
     pub url: String,
     pub layout: Layout,
     /// CEF `windowless_frame_rate`; see `wubble_gfx::pacing::frame_rate_for`.
     pub frame_rate: u32,
+    /// The device frames are shown on. On Linux welding copies each frame
+    /// onto it inside CEF's paint callback, before CEF reuses the buffer.
+    pub gpu: HostWgpuContext,
 }
 
 /// One live windowless browser.
@@ -164,7 +168,7 @@ pub struct View {
 impl View {
     pub(crate) fn open(runtime: &CefRuntime, config: ViewConfig) -> Result<Self, EngineError> {
         let layout = config.layout.clamped();
-        let producer = new_producer(runtime, config.url, layout, config.frame_rate)?;
+        let producer = new_producer(runtime, config.url, layout, config.frame_rate, &config.gpu)?;
         let browser_id = producer.browser_id();
         Ok(Self {
             producer,
@@ -501,20 +505,26 @@ fn new_producer(
     url: String,
     layout: Layout,
     frame_rate: u32,
+    gpu: &HostWgpuContext,
 ) -> Result<PlatformCefProducer, EngineError> {
-    PlatformCefProducer::new(
-        runtime,
-        welding::PlatformCefConfig {
-            surface: welding::CefSurfaceConfig {
-                initial_url: url,
-                initial_size: dpi_size(layout.size),
-                scale_factor: layout.scale,
-                windowless_frame_rate: frame_rate,
-                ..welding::CefSurfaceConfig::default()
-            },
+    let config = welding::PlatformCefConfig {
+        surface: welding::CefSurfaceConfig {
+            initial_url: url,
+            initial_size: dpi_size(layout.size),
+            scale_factor: layout.scale,
+            windowless_frame_rate: frame_rate,
+            ..welding::CefSurfaceConfig::default()
         },
-    )
-    .map_err(|e| EngineError::View(e.to_string()))
+    };
+    #[cfg(target_os = "linux")]
+    let producer = PlatformCefProducer::new(runtime, config, gpu);
+    // welding's macOS producer takes no device: it imports at present time.
+    #[cfg(not(target_os = "linux"))]
+    let producer = {
+        let _ = gpu;
+        PlatformCefProducer::new(runtime, config)
+    };
+    producer.map_err(|e| EngineError::View(e.to_string()))
 }
 
 /// welding's Windows producer also needs the host's `HostWgpuContext`, and
@@ -525,6 +535,7 @@ fn new_producer(
     _url: String,
     _layout: Layout,
     _frame_rate: u32,
+    _gpu: &HostWgpuContext,
 ) -> Result<PlatformCefProducer, EngineError> {
     Err(EngineError::View(
         "windowless views are not supported on Windows yet".into(),

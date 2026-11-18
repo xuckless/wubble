@@ -10,10 +10,15 @@
 //! # DMABUF fd lifetime
 //!
 //! Each plane fd in `AcceleratedPaintInfo` is callback-scoped. The
-//! `on_accelerated_paint` callback calls `dup(2)` on every fd before storing
+//! `on_accelerated_paint` callback calls `dup(2)` on every fd before wrapping
 //! the planes in [`DmaBufImage`](crate::native_frame::DmaBufImage). The Vulkan
 //! importer takes ownership of the duped fds on success; otherwise the image's
 //! owned descriptor buffer table closes them.
+//!
+//! wubble change: the callback then imports the image on the host's device
+//! and copies it into a weld-owned texture before returning
+//! ([`NativeFrame::Copied`]), so the pooled buffer is never read after CEF
+//! takes it back.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -57,6 +62,8 @@ struct WeldRenderHandlerInner {
     ime: Arc<crate::ime::LatestComposition>,
     events: Arc<WebEventQueue>,
     metrics: Arc<Mutex<crate::view::ViewMetrics>>,
+    /// The host's device, for the in-callback frame copy (wubble change).
+    gpu: HostWgpuContext,
     /// CPU `OnPaint` frames seen (wubble change, see `WUBBLE_CHANGES.md`).
     cpu_paints: Arc<AtomicU64>,
 }
@@ -116,7 +123,13 @@ pub struct LinuxCefProducer {
 // return looks needless to clippy but the idiom requires it.
 #[allow(clippy::needless_return)]
 impl LinuxCefProducer {
-    pub fn new(_runtime: &CefRuntime, config: LinuxCefConfig) -> Result<Self, WeldError> {
+    /// wubble change: takes the host's `HostWgpuContext`, as the Windows
+    /// producer does, for the in-callback frame copy.
+    pub fn new(
+        _runtime: &CefRuntime,
+        config: LinuxCefConfig,
+        host_ctx: &HostWgpuContext,
+    ) -> Result<Self, WeldError> {
         #[cfg(feature = "cef-runtime")]
         {
             let initial_size = config.surface.initial_size;
@@ -146,6 +159,7 @@ impl LinuxCefProducer {
                 ime: ime.clone(),
                 events: events.clone(),
                 metrics: metrics.clone(),
+                gpu: host_ctx.clone(),
                 cpu_paints: cpu_paints.clone(),
             };
             let render_handler = cef_backed::WeldRenderHandler::build(inner.clone());
@@ -252,7 +266,7 @@ impl LinuxCefProducer {
 
         #[cfg(not(feature = "cef-runtime"))]
         {
-            let _ = (_runtime, config);
+            let _ = (_runtime, config, host_ctx);
             Err(WeldError::SurfaceCreation(
                 "Linux CEF vtable wiring requires the `cef-runtime` feature".into(),
             ))
