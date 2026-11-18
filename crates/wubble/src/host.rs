@@ -194,14 +194,14 @@ pub struct Checks {
     pub begin_frames: bool,
 }
 
-/// The last frame shown in a pane: the image, the part of it to show, and the size CEF painted.
+/// The last frame shown in a pane: the image, the part of it to show, the size CEF painted,
+/// and what the pane shows of it while its size changes (`wubble_core::stretch`).
 struct PaneFrame {
     image: slint::Image,
     clip: wubble_gfx::FrameSize,
     size: wubble_gfx::FrameSize,
-    /// Painted for the pane's current size: it fills the pane. A stale one (mid-resize) shows
-    /// at its own size instead of stretched.
-    current: bool,
+    pane: wubble_core::stretch::Pane,
+    springs: wubble_core::stretch::PaneSprings,
 }
 
 /// The external begin-frame driver's state and its timer.
@@ -242,12 +242,10 @@ pub struct Host {
     frames: BTreeMap<TabId, PaneFrame>,
     /// Where the pages on screen sit: the split physics, stepped per rendered frame.
     panes: Panes,
-    /// The previous split frame's time while the strings move.
-    split_last: Option<Instant>,
+    /// The previous pane frame's time while the strings or a pane's stretch move.
+    panes_last: Option<Instant>,
     /// What the strings settled, waiting to be dispatched outside rendering.
     split_commands: Vec<Command>,
-    /// The panes and seams the shell last drew.
-    drawn_panes: (Vec<wubble_ui::SplitPane>, Vec<wubble_ui::SplitSeam>),
     pub stats: FrameStats,
     last_present: Option<Instant>,
     idle_runs: u32,
@@ -356,9 +354,8 @@ impl Host {
             focus_view: None,
             frames: BTreeMap::new(),
             panes: Panes::default(),
-            split_last: None,
+            panes_last: None,
             split_commands: vec![],
-            drawn_panes: Default::default(),
             stats: FrameStats::default(),
             last_present: None,
             idle_runs: 0,
@@ -1175,7 +1172,7 @@ impl Host {
                 })
                 .collect(),
             visible_views: self.engine.visible_views(),
-            at_rest: self.split_last.is_none()
+            at_rest: self.panes_last.is_none()
                 && self.split_commands.is_empty()
                 && !self.panes.held(),
         };

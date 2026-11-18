@@ -22,6 +22,7 @@ pub mod site;
 pub mod sleep;
 pub mod space;
 pub mod split;
+pub mod stretch;
 pub mod suggest;
 pub mod tab;
 pub mod tabs;

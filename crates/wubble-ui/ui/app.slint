@@ -131,6 +131,11 @@ export component AppWindow inherits Window {
     in property <length> sidebar-saved: Chrome.sidebarDefault;    // Seam.saved: the peek's width
     in property <string> seam-path;
     in property <bool> seam-bowed: false;
+    // How far each height of the window rides the bowed string (Seam::ride), one sample per
+    // `ride-step` from the top; empty while the string is straight. The sidebar's sections
+    // follow it (design browser/chrome.tsx `[data-ride]`).
+    in property <[length]> seam-ride;
+    out property <length> ride-step: Shell.ride-step;
     // scroller.rs: the tab list
     in property <length> scroll-y <=> sidebar.scroll-y;
     in property <length> thumb-top <=> sidebar.thumb-top;
@@ -585,6 +590,7 @@ export component AppWindow inherits Window {
                 // Over the peek's Slint glass (and the page) the scene cannot show: Slint draws.
                 glass-over-wgpu: GlassLayer.scene-active && !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
                 floating: root.hidden-at-rest;
+                ride: root.seam-ride;
                 window-movable: !root.full-screen;
                 window-move-requested => {
                     root.window-begin-move();

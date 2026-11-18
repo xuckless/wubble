@@ -322,9 +322,10 @@ fn install_shell_driver(
             if let Ok(mut glass) = glass.try_borrow_mut() {
                 glass.frame(window, now, items);
             }
-            // The split's strings, stepped with the rest of the shell. Inside rendering the host
-            // may be busy (a pump renders); then this frame skips them and asks for the next.
-            if split_frame(window, now) {
+            // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
+            // Inside rendering the host may be busy (a pump renders); then this frame skips
+            // them and asks for the next.
+            if panes_frame(window, now) {
                 window.window().request_redraw();
             }
         },
@@ -496,13 +497,13 @@ fn with_host(f: impl FnOnce(&mut Host)) {
     });
 }
 
-/// The split's frame from the rendering notifier: whether another frame is needed. A busy host
+/// The panes' frame from the rendering notifier: whether another frame is needed. A busy host
 /// (rendering inside a pump) skips this one and asks for the next; no host needs none.
-fn split_frame(window: &AppWindow, now: Instant) -> bool {
+fn panes_frame(window: &AppWindow, now: Instant) -> bool {
     HOST.with(|cell| match cell.try_borrow_mut() {
         Ok(mut host) => host
             .as_mut()
-            .is_some_and(|host| host.split_frame(window, now)),
+            .is_some_and(|host| host.panes_frame(window, now)),
         Err(_) => true,
     })
 }

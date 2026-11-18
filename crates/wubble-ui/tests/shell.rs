@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
+use i_slint_backend_testing::{
+    ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
+};
 use slint::{
     ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc,
     platform::{PointerEventButton, WindowEvent},
@@ -327,6 +329,8 @@ fn shell_scenarios() {
     space_capsule(&app, &driver);
     popup_input(&app);
     split_panes(&app, &driver);
+    stretched_panes(&app);
+    sections_ride_the_string(&app, &driver);
     content_on_whole_pixels(&app);
 }
 
@@ -404,4 +408,102 @@ fn split_panes(app: &AppWindow, driver: &Shared) {
     app.set_panes(ModelRc::default());
     app.set_seams(ModelRc::default());
     pump(1);
+}
+
+/// The frames shown, as (x, y, width, height) in window logical px, with the pane rects.
+fn frame_rects(app: &AppWindow) -> Vec<(f32, f32, f32, f32)> {
+    ElementHandle::find_by_element_id(app, "SplitView::pane-frame")
+        .map(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            (p.x, p.y, s.width, s.height)
+        })
+        .collect()
+}
+
+/// TODO.md "Resize feel": a pane's frame always fills the pane (a stale one is scaled to it),
+/// stretched further while the size moves and 1:1 on whole pixels at rest. One page alone follows
+/// the window in the same layout pass, with nothing pushed from the host.
+fn stretched_panes(app: &AppWindow) {
+    let (cx, cy, w, h) = (
+        app.get_content_x(),
+        app.get_content_y(),
+        app.get_content_width(),
+        app.get_content_height(),
+    );
+    // a stale frame (clip of another size): fills the pane
+    let stale = SplitPane {
+        id: 1,
+        fill: true,
+        clip_width: 900,
+        clip_height: 500,
+        ..Default::default()
+    };
+    app.set_panes(ModelRc::from([stale.clone()].as_slice()));
+    pump(1);
+    assert_eq!(frame_rects(app), vec![(cx, cy, w, h)]);
+    // stretched: anchored top left, 3% wider and taller; the pane clips the overshoot
+    let stretched = SplitPane {
+        stretch_x: 0.03,
+        stretch_y: 0.03,
+        ..stale.clone()
+    };
+    app.set_panes(ModelRc::from([stretched].as_slice()));
+    pump(1);
+    let got = frame_rects(app)[0];
+    assert_eq!((got.0, got.1), (cx, cy));
+    assert!(
+        (got.2 - w * 1.03).abs() < 1e-3 && (got.3 - h * 1.03).abs() < 1e-3,
+        "{got:?}"
+    );
+    // at rest, 1:1 on whole pixels
+    app.set_panes(ModelRc::from([stale].as_slice()));
+    pump(1);
+    let got = frame_rects(app)[0];
+    for v in [got.0, got.1, got.2, got.3] {
+        assert_eq!(v, v.round(), "{got:?}");
+    }
+    // the window grows: the pane and its frame follow without the host
+    app.window().set_size(LogicalSize::new(1400.0, 860.0));
+    pump(1);
+    let (w2, h2) = (app.get_content_width(), app.get_content_height());
+    assert!(w2 > w && h2 > h);
+    assert_eq!(frame_rects(app), vec![(cx, cy, w2, h2)]);
+    app.window().set_size(LogicalSize::new(1280.0, 800.0));
+    app.set_panes(ModelRc::default());
+    pump(1);
+}
+
+/// While the seam is held and bowed the sidebar's sections ride the string at their own height
+/// (design browser/chrome.tsx `[data-ride]`), the one at the grab height most; released and
+/// settled, every one is back in its column.
+fn sections_ride_the_string(app: &AppWindow, driver: &Shared) {
+    settle(app, driver);
+    let rest = app.get_side_edges();
+    let x = seam_x(app);
+    // grabbed at the pill's height, pulled out
+    let pill_at = ElementHandle::find_by_element_id(app, "Sidebar::pill")
+        .next()
+        .expect("the address pill");
+    let y = pill_at.absolute_position().y + pill_at.size().height / 2.0;
+    pointer(app, x, y);
+    button(app, x, y, true);
+    pointer(app, x + 60.0, y);
+    frames(app, driver, 3);
+    assert!(app.get_seam_bowed());
+    assert!(app.get_seam_ride().row_count() > 0);
+    pump(1);
+    let held = app.get_side_edges();
+    let pill = held.pill - rest.pill;
+    let lights = held.lights - rest.lights;
+    assert!(pill > 1.0, "the pill rides: {pill}");
+    assert!(
+        lights < pill,
+        "the header rides less, nearer the end: {lights} {pill}"
+    );
+    button(app, x + 60.0, y, false);
+    settle(app, driver);
+    pump(1);
+    assert_eq!(app.get_seam_ride().row_count(), 0);
+    assert_eq!(app.get_side_edges().pill, rest.pill);
+    pointer(app, 900.0, 300.0);
 }
