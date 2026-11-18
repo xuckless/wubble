@@ -1,5 +1,7 @@
-//! Typed settings over the key/value `settings` table, defined once in the `settings!` table
-//! below as (name, type, key, default). Values are text; each type has one [`Codec`].
+//! Typed settings over the key/value `settings` table. The keys and defaults are not written
+//! here: the `settings!` table below binds each Rust type to its `wubble_core::settings`
+//! definition, the one table the settings page also reads. Values are text; each type has one
+//! [`Codec`].
 //!
 //! Design reference, no code copied: Chromium's pref registration (a path, a type and a default
 //! per pref, e.g. `RegisterBooleanPref`), BSD-3-Clause.
@@ -7,7 +9,8 @@
 //! A missing or undecodable row yields the default: a bad settings row must not block startup.
 
 use wubble_core::omnibox::SearchEngine;
-use wubble_core::seam::{SIDEBAR_DEFAULT, SidebarMode};
+use wubble_core::seam::SidebarMode;
+use wubble_core::settings as defs;
 use wubble_core::zoom::ZoomTable;
 
 use crate::{Result, Store};
@@ -22,7 +25,7 @@ trait Codec: Sized {
 #[allow(private_bounds)]
 pub trait Setting {
     type Value: Codec;
-    const KEY: &'static str;
+    const DEF: &'static defs::SettingDef;
     fn default() -> Self::Value;
 }
 
@@ -57,22 +60,16 @@ impl Codec for f32 {
     }
 }
 
-/// `None` (ask on first run) is the empty string.
+/// `None` (ask on first run) is the empty string; engines use their `EngineInfo::id`.
 impl Codec for Option<SearchEngine> {
     fn encode(&self) -> String {
-        match self {
-            None => "",
-            Some(SearchEngine::Google) => "google",
-            Some(SearchEngine::DuckDuckGo) => "duckduckgo",
-        }
-        .into()
+        self.map_or("", SearchEngine::id).into()
     }
     fn decode(s: &str) -> Option<Self> {
-        match s {
-            "" => Some(None),
-            "google" => Some(Some(SearchEngine::Google)),
-            "duckduckgo" => Some(Some(SearchEngine::DuckDuckGo)),
-            _ => None,
+        if s.is_empty() {
+            Some(None)
+        } else {
+            SearchEngine::from_id(s).map(Some)
         }
     }
 }
@@ -117,57 +114,61 @@ impl Codec for ZoomTable {
 }
 
 macro_rules! settings {
-    ($($(#[$doc:meta])* $name:ident: $ty:ty = $key:literal, $default:expr;)*) => {
+    ($($(#[$doc:meta])* $name:ident: $ty:ty = $def:expr;)*) => {
         $(
             $(#[$doc])*
             pub struct $name;
             impl Setting for $name {
                 type Value = $ty;
-                const KEY: &'static str = $key;
-                fn default() -> $ty { $default }
+                const DEF: &'static defs::SettingDef = &$def;
+                fn default() -> $ty {
+                    <$ty as Codec>::decode($def.default)
+                        .expect("a core settings default decodes with its codec")
+                }
             }
         )*
-        /// Every key in the table, for the uniqueness test.
+        /// Each typed setting's core definition, for the table-agreement tests.
         #[cfg(test)]
-        const ALL_KEYS: &[&str] = &[$($key),*];
+        fn typed() -> Vec<(&'static defs::SettingDef, fn(&str) -> bool)> {
+            vec![$((&$def, |s| <$ty as Codec>::decode(s).is_some())),*]
+        }
     };
 }
 
 settings! {
     /// `None` = ask on first run.
-    SearchEngineChoice: Option<SearchEngine> = "search.engine", None;
+    SearchEngineChoice: Option<SearchEngine> = defs::SEARCH_ENGINE;
     /// Live engine suggestions; off until the user turns them on.
-    LiveSuggestions: bool = "suggest.live", false;
-    /// The extended sidebar's width, logical px (the seam's `saved`); the design's default.
-    SidebarWidth: f32 = "ui.sidebar_width", SIDEBAR_DEFAULT as f32;
-    /// Extended, rail or hidden (migration 4 carries the old boolean `ui.compact` over).
-    SidebarModeSetting: SidebarMode = "ui.sidebar_mode", SidebarMode::Extended;
+    LiveSuggestions: bool = defs::LIVE_SUGGESTIONS;
+    /// The extended sidebar's width, logical px (the seam's `saved`).
+    SidebarWidth: f32 = defs::SIDEBAR_WIDTH;
+    /// Extended, rail or hidden.
+    SidebarModeSetting: SidebarMode = defs::SIDEBAR_MODE;
     /// Opaque entries; the keybinding editor owns their format.
-    KeybindingOverrides: Vec<String> = "keys.overrides", vec![];
-    BlockerEnabled: bool = "blocker.enabled", true;
+    KeybindingOverrides: Vec<String> = defs::KEYBINDING_OVERRIDES;
+    BlockerEnabled: bool = defs::BLOCKER_ENABLED;
     /// Hosts the blocker skips.
-    BlockerExceptions: Vec<String> = "blocker.exceptions", vec![];
-    /// Download EasyList, EasyPrivacy and uBlock's lists on their schedule. Off: nothing is
-    /// fetched and lists come only from `<profile>/blocklists/*.txt`.
-    BlockerListsAutoUpdate: bool = "blocker.lists_auto_update", false;
+    BlockerExceptions: Vec<String> = defs::BLOCKER_EXCEPTIONS;
+    BlockerListsAutoUpdate: bool = defs::BLOCKER_LISTS_AUTO_UPDATE;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
-    HistoryRetentionDays: u32 = "history.retention_days", 0;
+    HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
     /// Per-site zoom (`wubble_core::zoom`): hosts at 100 % are absent.
-    SiteZoom: ZoomTable = "zoom.sites", ZoomTable::new();
+    SiteZoom: ZoomTable = defs::SITE_ZOOM;
 }
 
 impl Store {
     /// The setting's value, or its default if the row is absent or cannot be decoded.
     pub async fn setting<S: Setting>(&self) -> Result<S::Value> {
         Ok(self
-            .get_raw(S::KEY)
+            .get_raw(S::DEF.key)
             .await?
+            .filter(|s| S::DEF.kind.accepts(s))
             .and_then(|s| <S::Value as Codec>::decode(&s))
             .unwrap_or_else(S::default))
     }
 
     pub async fn set_setting<S: Setting>(&mut self, value: S::Value) -> Result<()> {
-        self.set_raw(S::KEY, &Codec::encode(&value)).await
+        self.set_raw(S::DEF.key, &Codec::encode(&value)).await
     }
 
     pub(crate) async fn get_raw(&self, key: &str) -> Result<Option<String>> {
@@ -196,6 +197,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wubble_core::seam::SIDEBAR_DEFAULT;
 
     fn run<F: std::future::Future>(f: F) -> F::Output {
         pollster::block_on(f)
@@ -228,6 +230,7 @@ mod tests {
             assert!(s.setting::<BlockerExceptions>().await.unwrap().is_empty());
             assert!(s.setting::<SiteZoom>().await.unwrap().is_empty());
             assert!(!s.setting::<BlockerListsAutoUpdate>().await.unwrap());
+            assert_eq!(s.setting::<HistoryRetentionDays>().await.unwrap(), 0);
         });
     }
 
@@ -266,16 +269,24 @@ mod tests {
     fn undecodable_rows_yield_the_default() {
         run(async {
             let mut s = Store::open_in_memory().await.unwrap();
-            s.set_raw(LiveSuggestions::KEY, "maybe").await.unwrap();
-            s.set_raw(SidebarWidth::KEY, "wide").await.unwrap();
-            s.set_raw(SearchEngineChoice::KEY, "bing").await.unwrap();
-            s.set_raw(BlockerExceptions::KEY, "{not a list")
+            s.set_raw(LiveSuggestions::DEF.key, "maybe").await.unwrap();
+            s.set_raw(SidebarWidth::DEF.key, "wide").await.unwrap();
+            s.set_raw(SearchEngineChoice::DEF.key, "bing")
                 .await
                 .unwrap();
-            s.set_raw(BlockerEnabled::KEY, "").await.unwrap();
-            s.set_raw(HistoryRetentionDays::KEY, "-3").await.unwrap();
-            s.set_raw(SidebarModeSetting::KEY, "peeking").await.unwrap();
-            s.set_raw(SiteZoom::KEY, "{\"a.test\": -5}").await.unwrap();
+            s.set_raw(BlockerExceptions::DEF.key, "{not a list")
+                .await
+                .unwrap();
+            s.set_raw(BlockerEnabled::DEF.key, "").await.unwrap();
+            s.set_raw(HistoryRetentionDays::DEF.key, "-3")
+                .await
+                .unwrap();
+            s.set_raw(SidebarModeSetting::DEF.key, "peeking")
+                .await
+                .unwrap();
+            s.set_raw(SiteZoom::DEF.key, "{\"a.test\": -5}")
+                .await
+                .unwrap();
             assert!(s.setting::<SiteZoom>().await.unwrap().is_empty());
             assert_eq!(
                 s.setting::<SidebarModeSetting>().await.unwrap(),
@@ -294,9 +305,17 @@ mod tests {
     }
 
     #[test]
-    fn keys_are_unique() {
-        for (i, k) in ALL_KEYS.iter().enumerate() {
-            assert!(!ALL_KEYS[..i].contains(k), "duplicate key {k}");
+    fn typed_settings_are_exactly_the_core_table() {
+        let typed: Vec<&str> = typed().iter().map(|(d, _)| d.key).collect();
+        let table: Vec<&str> = defs::ALL.iter().map(|d| d.key).collect();
+        assert_eq!(typed, table);
+    }
+
+    #[test]
+    fn every_default_is_valid_and_decodes() {
+        for (def, decodes) in typed() {
+            assert!(def.kind.accepts(def.default), "{} default invalid", def.key);
+            assert!(decodes(def.default), "{} default does not decode", def.key);
         }
     }
 

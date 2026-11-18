@@ -970,7 +970,10 @@ mod tests {
                     .is_err()
             );
             migrate::migrate(&mut store.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&store.conn).await.unwrap(), 7);
+            assert_eq!(
+                migrate::schema_version(&store.conn).await.unwrap(),
+                migrate::latest(MIGRATIONS)
+            );
             let back = store.load_session(now()).await.unwrap();
             assert_same(&back, &restored(&m));
             store.save_session(&with_splits()).await.unwrap();

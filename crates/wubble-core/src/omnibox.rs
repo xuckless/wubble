@@ -27,6 +27,8 @@ pub enum SearchEngine {
 #[derive(Debug, PartialEq, Eq)]
 pub struct EngineInfo {
     pub engine: SearchEngine,
+    /// The text form stored in settings; never rename a shipped one.
+    pub id: &'static str,
     pub name: &'static str,
     pub search: &'static str,
     /// OpenSearch suggestions JSON: `["query", ["a", "b", ...]]`.
@@ -36,12 +38,14 @@ pub struct EngineInfo {
 pub const ENGINES: [EngineInfo; 2] = [
     EngineInfo {
         engine: SearchEngine::Google,
+        id: "google",
         name: "Google",
         search: "https://www.google.com/search?q={q}",
         suggest: "https://suggestqueries.google.com/complete/search?client=firefox&q={q}",
     },
     EngineInfo {
         engine: SearchEngine::DuckDuckGo,
+        id: "duckduckgo",
         name: "DuckDuckGo",
         search: "https://duckduckgo.com/?q={q}",
         suggest: "https://duckduckgo.com/ac/?type=list&q={q}",
@@ -54,6 +58,15 @@ impl SearchEngine {
             .iter()
             .find(|e| e.engine == self)
             .expect("every engine has a table row")
+    }
+
+    /// The stored text form, see [`EngineInfo::id`].
+    pub fn id(self) -> &'static str {
+        self.info().id
+    }
+
+    pub fn from_id(id: &str) -> Option<SearchEngine> {
+        ENGINES.iter().find(|e| e.id == id).map(|e| e.engine)
     }
 }
 
@@ -516,6 +529,17 @@ mod tests {
         for (input, want) in cases {
             assert_eq!(classify(input), want, "{input:?}");
         }
+    }
+
+    #[test]
+    fn engine_ids_round_trip_and_are_unique() {
+        for e in &ENGINES {
+            assert_eq!(SearchEngine::from_id(e.id), Some(e.engine));
+            assert_eq!(e.engine.id(), e.id);
+        }
+        assert_eq!(SearchEngine::from_id("google"), Some(SearchEngine::Google));
+        assert_eq!(SearchEngine::from_id("bing"), None);
+        assert_eq!(SearchEngine::from_id(""), None);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use std::collections::HashSet;
 
 use turso::Connection;
 use wubble_core::omnibox::Bookmark;
+use wubble_core::pages::BookmarkRow;
 
 use crate::{Error, Result, Store, narrow, scalar, url_key};
 
@@ -33,6 +34,19 @@ pub struct BookmarkNode {
     pub url: Option<String>,
     pub added_ms: i64,
     pub modified_ms: i64,
+}
+
+impl From<&BookmarkNode> for BookmarkRow {
+    fn from(n: &BookmarkNode) -> BookmarkRow {
+        BookmarkRow {
+            id: n.id.0,
+            parent: n.parent.map(|p| p.0),
+            is_folder: n.kind == BookmarkKind::Folder,
+            position: n.position,
+            title: n.title.clone(),
+            url: n.url.clone(),
+        }
+    }
 }
 
 const COLUMNS: &str =
@@ -333,6 +347,20 @@ impl Store {
         Ok(out)
     }
 
+    /// Every bookmark and folder in one query, for the bookmarks page
+    /// (`wubble_core::pages::bookmark_tree` builds the tree).
+    pub async fn all_bookmarks(&self) -> Result<Vec<BookmarkRow>> {
+        let mut rows = self
+            .conn
+            .query(&format!("SELECT {COLUMNS} ORDER BY id"), ())
+            .await?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next().await? {
+            out.push(BookmarkRow::from(&node(&r)?));
+        }
+        Ok(out)
+    }
+
     /// Command-bar bookmark candidates: links whose title or url contains `query`
     /// (case-insensitive, `%` and `_` literal). Url-prefix matches (scheme and `www.` ignored)
     /// come first, then title-prefix matches, then the rest; newer first within a tier. One
@@ -413,6 +441,41 @@ mod tests {
     async fn consistent(s: &Store) {
         let p = s.check_consistency().await.unwrap();
         assert!(p.is_empty(), "{p:?}");
+    }
+
+    #[test]
+    fn all_bookmarks_feeds_the_core_tree() {
+        run(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let f = s.add_folder(None, "Work", 10).await.unwrap();
+            s.add_bookmark(Some(f), "Docs", "https://docs.test", 11)
+                .await
+                .unwrap();
+            s.add_bookmark(None, "Home", "https://home.test", 12)
+                .await
+                .unwrap();
+            let rows = s.all_bookmarks().await.unwrap();
+            assert_eq!(rows.len(), 3);
+            let tree = wubble_core::pages::bookmark_tree(&rows);
+            let top: Vec<_> = tree
+                .iter()
+                .map(|i| (i.title.as_str(), i.is_folder))
+                .collect();
+            assert_eq!(top, [("Work", true), ("Home", false)]);
+            assert_eq!(
+                tree[0].children[0].url.as_deref(),
+                Some("https://docs.test")
+            );
+            assert!(
+                Store::open_in_memory()
+                    .await
+                    .unwrap()
+                    .all_bookmarks()
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        });
     }
 
     #[test]

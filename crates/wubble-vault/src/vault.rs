@@ -20,6 +20,22 @@ pub enum VaultError {
     Store(#[from] StoreError),
 }
 
+/// What an unlock found. The UI says "saved passwords cannot be read" for `NewKey` with
+/// `unreadable > 0` and for `Unreadable`; nothing is deleted either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnlockOutcome {
+    /// Unlocked, and every stored login opens (or there are none).
+    Ready,
+    /// The keyring had no key, so this unlock made a new one. `unreadable` is how many logins
+    /// the store already held: all were sealed under a key that is gone (0 on a fresh profile).
+    NewKey { unreadable: usize },
+    /// Unlocked with the existing key, but `rows` stored logins do not open with it (a database
+    /// restored from another machine or keyring). New logins still save normally.
+    Unreadable { rows: usize },
+    /// No usable keyring, or the store could not be read. The vault is not unlocked.
+    Unavailable(String),
+}
+
 pub struct Vault<K: KeyRing, S: LoginStore> {
     state: VaultState,
     keyring: K,
@@ -45,29 +61,63 @@ impl<K: KeyRing, S: LoginStore> Vault<K, S> {
         &self.store
     }
 
-    #[cfg(test)]
-    fn store_mut(&mut self) -> &mut S {
+    /// The storage, for requests that are not about logins (the store thread owns one store).
+    pub fn store_mut(&mut self) -> &mut S {
         &mut self.store
     }
 
-    /// Fetch or create the master key. May block on an OS prompt: call off the UI thread.
-    pub fn unlock(&mut self) -> &VaultState {
-        self.dispatch(Event::UnlockRequested);
-        &self.state
+    /// Fetch or create the master key and report what that means for the stored logins.
+    /// May block on an OS prompt and reads every login once: call off the UI thread.
+    pub fn unlock(&mut self) -> UnlockOutcome {
+        if matches!(self.state, VaultState::Unlocked { .. }) {
+            return UnlockOutcome::Ready;
+        }
+        let created = self.dispatch(Event::UnlockRequested);
+        let VaultState::Unlocked { key } = &self.state else {
+            return UnlockOutcome::Unavailable(match &self.state {
+                VaultState::Unavailable { reason } => reason.clone(),
+                _ => "unlock did not complete".into(),
+            });
+        };
+        let stored = match self.store.all() {
+            Ok(rows) => rows,
+            Err(e) => {
+                self.lock();
+                return UnlockOutcome::Unavailable(e.to_string());
+            }
+        };
+        if created {
+            return UnlockOutcome::NewKey {
+                unreadable: stored.len(),
+            };
+        }
+        let rows = stored
+            .iter()
+            .filter(|r| open_string(key, r, Field::Username, &r.username_enc).is_err())
+            .count();
+        if rows == 0 {
+            UnlockOutcome::Ready
+        } else {
+            UnlockOutcome::Unreadable { rows }
+        }
     }
 
     pub fn lock(&mut self) {
         self.dispatch(Event::LockRequested);
     }
 
-    fn dispatch(&mut self, event: Event) {
+    /// Run the transition and its effects. Returns whether a key was created on the way.
+    fn dispatch(&mut self, event: Event) -> bool {
         let state = std::mem::replace(&mut self.state, VaultState::Locked);
         let (state, effects) = transition(state, event);
         self.state = state;
+        let mut created = false;
         for effect in effects {
+            created |= effect == Effect::CreateKey;
             let event = self.run(effect);
-            self.dispatch(event);
+            created |= self.dispatch(event);
         }
+        created
     }
 
     /// The only impure step: talk to the keyring.
@@ -219,7 +269,7 @@ mod tests {
 
     fn unlocked() -> V {
         let mut v = vault(&FakeKeyRing::default());
-        assert!(matches!(v.unlock(), VaultState::Unlocked { .. }));
+        assert_eq!(v.unlock(), UnlockOutcome::NewKey { unreadable: 0 });
         v
     }
 
@@ -266,7 +316,8 @@ mod tests {
         let kr = FakeKeyRing::default();
         kr.set("wubble", "vault-default", &[1; 5]).unwrap();
         let mut v = vault(&kr);
-        assert!(matches!(v.unlock(), VaultState::Unavailable { .. }));
+        assert!(matches!(v.unlock(), UnlockOutcome::Unavailable(_)));
+        assert!(matches!(v.state(), VaultState::Unavailable { .. }));
         assert_eq!(
             &**kr.get("wubble", "vault-default").unwrap().unwrap(),
             &[1; 5]
@@ -278,13 +329,13 @@ mod tests {
         let kr = FakeKeyRing::default();
         kr.set_failing(true);
         let mut v = vault(&kr);
-        assert!(matches!(v.unlock(), VaultState::Unavailable { .. }));
+        assert!(matches!(v.unlock(), UnlockOutcome::Unavailable(_)));
         let err = v.save(login("https://a.test", "u", "p"), 1).unwrap_err();
         assert!(matches!(err, VaultError::Unavailable(_)));
         assert!(v.store().is_empty());
         // Retrying after the keyring recovers is an explicit unlock.
         kr.set_failing(false);
-        assert!(matches!(v.unlock(), VaultState::Unlocked { .. }));
+        assert_eq!(v.unlock(), UnlockOutcome::NewKey { unreadable: 0 });
     }
 
     #[test]
@@ -417,6 +468,36 @@ mod tests {
         let mut other = unlocked();
         other.store = std::mem::take(&mut v.store);
         assert!(other.reveal(&id).is_err());
+    }
+
+    #[test]
+    fn unlock_reports_what_the_key_means_for_stored_logins() {
+        // Fresh profile: a new key, nothing lost. Unlocking again is Ready without a recount.
+        let kr = FakeKeyRing::default();
+        let mut v = vault(&kr);
+        assert_eq!(v.unlock(), UnlockOutcome::NewKey { unreadable: 0 });
+        assert_eq!(v.unlock(), UnlockOutcome::Ready);
+        v.save(login("https://a.test", "u", "p"), 1).unwrap();
+        v.save(login("https://b.test", "u", "p"), 1).unwrap();
+        // Same key, same rows: Ready.
+        v.lock();
+        assert_eq!(v.unlock(), UnlockOutcome::Ready);
+        // The keyring entry is gone (wiped, new machine): a new key over two unreadable rows.
+        let mut wiped = Vault::new(
+            FakeKeyRing::default(),
+            std::mem::take(&mut v.store),
+            "default",
+        );
+        assert_eq!(wiped.unlock(), UnlockOutcome::NewKey { unreadable: 2 });
+        // A different key already in the keyring: loaded fine, rows do not open.
+        let other = FakeKeyRing::default();
+        other.set("wubble", "vault-default", &[9; 32]).unwrap();
+        let mut other = Vault::new(other, std::mem::take(&mut wiped.store), "default");
+        assert_eq!(other.unlock(), UnlockOutcome::Unreadable { rows: 2 });
+        // New logins still save, and only the old ones are counted.
+        other.save(login("https://c.test", "u", "p"), 2).unwrap();
+        other.lock();
+        assert_eq!(other.unlock(), UnlockOutcome::Unreadable { rows: 2 });
     }
 
     #[test]

@@ -7,9 +7,17 @@
 //! `name,url,username,password,note` (older versions lack `note`); `name`,
 //! `note` and the other Firefox columns are ignored. Rows that cannot be
 //! imported (non-http(s) URL such as `android://`, empty password) are skipped
-//! with their line number rather than failing the file. Dedup is the caller's job.
+//! with their line number rather than failing the file. [`apply`] saves the rows and dedups.
+//!
+//! Sources: export a CSV from Firefox, Zen or Chromium, then `parse_csv` and `apply`.
+//! `wubble-import` has no logins reader (Firefox's `logins.json` is NSS-encrypted).
 
+use crate::keyring::KeyRing;
 use crate::origin::Origin;
+use crate::record::NewLogin;
+use crate::state::VaultState;
+use crate::store::LoginStore;
+use crate::vault::{Vault, VaultError};
 use zeroize::Zeroizing;
 
 pub struct ImportRow {
@@ -146,9 +154,92 @@ pub fn parse_csv(input: &str) -> Result<Import, ImportError> {
     Ok(import)
 }
 
+/// What [`apply`] did with each row.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ApplyReport {
+    pub saved: usize,
+    /// Same origin, username and password already saved.
+    pub duplicates: usize,
+    /// Same origin and username, different password: the saved one is kept, never overwritten
+    /// (an export carries no times to say which is newer).
+    pub conflicts: usize,
+    /// The vault refused the row (store failure, ...).
+    pub failed: usize,
+    /// Lines the parser skipped, forwarded.
+    pub skipped: Vec<Skipped>,
+}
+
+/// Save parsed rows through the vault. Plaintext only ever goes into `Vault::save`, which
+/// encrypts it; the store never sees it. A row is a duplicate or conflict by origin + username
+/// (the vault's exact-origin lookup); logins that no longer decrypt are not seen and so cannot
+/// block a save. Errors up front when the vault is not unlocked, before touching any row.
+pub fn apply<K: KeyRing, S: LoginStore>(
+    vault: &mut Vault<K, S>,
+    import: Import,
+    now_ms: i64,
+) -> Result<ApplyReport, VaultError> {
+    match vault.state() {
+        VaultState::Unlocked { .. } => {}
+        VaultState::Locked => return Err(VaultError::NotUnlocked),
+        VaultState::Unavailable { reason } => return Err(VaultError::Unavailable(reason.clone())),
+    }
+    let mut report = ApplyReport {
+        skipped: import.skipped,
+        ..ApplyReport::default()
+    };
+    for row in import.rows {
+        match apply_row(vault, row, now_ms) {
+            Ok(Outcome::Saved) => report.saved += 1,
+            Ok(Outcome::Duplicate) => report.duplicates += 1,
+            Ok(Outcome::Conflict) => report.conflicts += 1,
+            Err(_) => report.failed += 1,
+        }
+    }
+    Ok(report)
+}
+
+enum Outcome {
+    Saved,
+    Duplicate,
+    Conflict,
+}
+
+fn apply_row<K: KeyRing, S: LoginStore>(
+    vault: &mut Vault<K, S>,
+    row: ImportRow,
+    now_ms: i64,
+) -> Result<Outcome, VaultError> {
+    let mut same_user = false;
+    for c in vault.find_for_origin(&row.origin)? {
+        if c.username == row.username {
+            same_user = true;
+            if *vault.reveal(&c.id)? == *row.password {
+                return Ok(Outcome::Duplicate);
+            }
+        }
+    }
+    if same_user {
+        return Ok(Outcome::Conflict);
+    }
+    vault.save(
+        NewLogin {
+            origin: row.origin,
+            form_action_origin: row.form_action_origin,
+            username: row.username,
+            password: row.password,
+        },
+        now_ms,
+    )?;
+    Ok(Outcome::Saved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keyring::FakeKeyRing;
+    use crate::store::MemoryStore;
+    use crate::store_adapter::StoreLogins;
+    use wubble_store::Store;
 
     #[test]
     fn firefox_sample() {
@@ -242,5 +333,128 @@ https://b.test,bob-user,pw2,,https://b.test\n";
         let imp = parse_csv("url,username,password\n").unwrap();
         assert!(imp.rows.is_empty() && imp.skipped.is_empty());
         assert!(parse_csv("").unwrap().rows.is_empty());
+    }
+
+    const CSV: &str = "url,username,password\n\
+https://a.test,alice,pw-one-xyz\n\
+https://a.test,bob,pw-two-xyz\n\
+https://b.test,,pw-three-xyz\n\
+android://x@com.app/,u,p\n";
+
+    fn memory_vault() -> Vault<FakeKeyRing, MemoryStore> {
+        let mut v = Vault::new(FakeKeyRing::default(), MemoryStore::default(), "default");
+        v.unlock();
+        v
+    }
+
+    #[test]
+    fn apply_saves_rows_that_decrypt_and_forwards_skips() {
+        let mut v = memory_vault();
+        let report = apply(&mut v, parse_csv(CSV).unwrap(), 5).unwrap();
+        assert_eq!(
+            (
+                report.saved,
+                report.duplicates,
+                report.conflicts,
+                report.failed
+            ),
+            (3, 0, 0, 0)
+        );
+        assert_eq!(report.skipped.len(), 1);
+        let a = Origin::parse("https://a.test").unwrap();
+        let found = v.find_for_origin(&a).unwrap();
+        let mut users: Vec<_> = found.iter().map(|c| c.username.as_str()).collect();
+        users.sort();
+        assert_eq!(users, ["alice", "bob"]);
+        let alice = found.iter().find(|c| c.username == "alice").unwrap();
+        assert_eq!(&**v.reveal(&alice.id).unwrap(), "pw-one-xyz");
+        assert!(v.list().unwrap().iter().all(|m| m.created_ms == 5));
+    }
+
+    #[test]
+    fn apply_twice_is_all_duplicates() {
+        let mut v = memory_vault();
+        apply(&mut v, parse_csv(CSV).unwrap(), 5).unwrap();
+        let again = apply(&mut v, parse_csv(CSV).unwrap(), 6).unwrap();
+        assert_eq!((again.saved, again.duplicates, again.conflicts), (0, 3, 0));
+        assert_eq!(v.list().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn same_user_with_another_password_is_a_conflict_and_keeps_the_original() {
+        let mut v = memory_vault();
+        apply(&mut v, parse_csv(CSV).unwrap(), 5).unwrap();
+        let changed =
+            "url,username,password\nhttps://a.test,alice,other-pw\nhttps://a.test,carol,pw-c\n";
+        let report = apply(&mut v, parse_csv(changed).unwrap(), 6).unwrap();
+        assert_eq!(
+            (report.saved, report.conflicts, report.duplicates),
+            (1, 1, 0)
+        );
+        let a = Origin::parse("https://a.test").unwrap();
+        let alice = v
+            .find_for_origin(&a)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.username == "alice")
+            .unwrap();
+        assert_eq!(&**v.reveal(&alice.id).unwrap(), "pw-one-xyz");
+    }
+
+    #[test]
+    fn repeated_rows_inside_one_file_save_once() {
+        let mut v = memory_vault();
+        let csv = "url,username,password\nhttps://a.test,u,p\nhttps://a.test,u,p\n";
+        let report = apply(&mut v, parse_csv(csv).unwrap(), 1).unwrap();
+        assert_eq!((report.saved, report.duplicates), (1, 1));
+    }
+
+    #[test]
+    fn a_locked_or_unavailable_vault_errors_and_saves_nothing() {
+        let mut v = Vault::new(FakeKeyRing::default(), MemoryStore::default(), "default");
+        assert_eq!(
+            apply(&mut v, parse_csv(CSV).unwrap(), 1).unwrap_err(),
+            VaultError::NotUnlocked
+        );
+        assert!(v.list().unwrap().is_empty());
+        let kr = FakeKeyRing::default();
+        kr.set_failing(true);
+        let mut v = Vault::new(kr, MemoryStore::default(), "default");
+        v.unlock();
+        assert!(matches!(
+            apply(&mut v, parse_csv(CSV).unwrap(), 1).unwrap_err(),
+            VaultError::Unavailable(_)
+        ));
+        assert!(v.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_database_file_never_holds_the_plaintext() {
+        pollster::block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("wubble.db");
+            {
+                let store = Store::open(&path).await.unwrap();
+                let mut v = Vault::new(FakeKeyRing::default(), StoreLogins::new(store), "default");
+                v.unlock();
+                let report = apply(&mut v, parse_csv(CSV).unwrap(), 5).unwrap();
+                assert_eq!(report.saved, 3);
+            }
+            // Every file the database wrote (main file and any journal). The plaintext origin
+            // must show up somewhere, or the scan proves nothing.
+            let mut origin_seen = false;
+            for entry in std::fs::read_dir(dir.path()).unwrap() {
+                let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+                let origin = b"https://b.test";
+                origin_seen |= bytes.windows(origin.len()).any(|w| w == origin);
+                for needle in ["pw-one-xyz", "pw-two-xyz", "pw-three-xyz", "alice", "bob"] {
+                    assert!(
+                        !bytes.windows(needle.len()).any(|w| w == needle.as_bytes()),
+                        "{needle} found in the database"
+                    );
+                }
+            }
+            assert!(origin_seen, "the rows never reached the files");
+        });
     }
 }

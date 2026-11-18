@@ -99,7 +99,7 @@ const CHECKS: &[(&str, &str)] = &[
     ),
     (
         "login with negative use count",
-        "SELECT id FROM logins WHERE times_used < 0",
+        "SELECT rowid FROM logins WHERE times_used < 0",
     ),
 ];
 
@@ -373,7 +373,10 @@ mod tests {
                 .await
                 .unwrap();
             migrate::migrate(&mut s.conn, MIGRATIONS).await.unwrap();
-            assert_eq!(migrate::schema_version(&s.conn).await.unwrap(), 4);
+            assert_eq!(
+                migrate::schema_version(&s.conn).await.unwrap(),
+                migrate::latest(MIGRATIONS)
+            );
             assert_eq!(s.bookmark_children(None).await.unwrap()[0].title, "Kept");
             let icon = crate::Favicon {
                 icon_url: "https://k.test/i".into(),
