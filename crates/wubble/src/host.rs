@@ -61,7 +61,7 @@ pub enum Call {
     Nothing,
 }
 
-/// The engine work an effect stands for. Freeze has no CEF call (CEF 154
+/// The engine work an effect stands for. Freeze has no CEF call (CEF 156
 /// has no freeze API; hiding already throttles) and snapshots have no UI
 /// yet, so those are recorded no-ops (TODO.md "Tabs in the host").
 pub fn call(effect: &Effect, model: &Model) -> Call {
@@ -166,7 +166,7 @@ impl Host {
             window: window.as_weak(),
             timer: slint::Timer::default(),
             presenter,
-            model: Model::new(),
+            model: Model::new(Instant::now()),
             views: BTreeMap::new(),
             pending: VecDeque::new(),
             frame_rate: None,
@@ -193,7 +193,10 @@ impl Host {
     pub fn dispatch(&mut self, command: Command) {
         let mut queue = VecDeque::from([command]);
         while let Some(command) = queue.pop_front() {
-            let (model, effects) = model::apply(std::mem::take(&mut self.model), command);
+            // `apply` takes the model by value; a fresh one holds its place meanwhile.
+            let placeholder = Model::new(Instant::now());
+            let current = std::mem::replace(&mut self.model, placeholder);
+            let (model, effects) = model::apply(current, command);
             self.model = model;
             self.pending.extend(effects);
             queue.extend(self.flush());
@@ -227,6 +230,7 @@ impl Host {
                     url,
                     layout: content_layout(&window),
                     frame_rate,
+                    gpu: self.presenter.context().clone(),
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {
@@ -761,7 +765,10 @@ mod tests {
     use wubble_core::space::{ContainerId, SpaceId};
 
     fn one_tab() -> (Model, TabId) {
-        let (m, _) = model::apply(Model::new(), new_tab("https://a.test/".into(), None));
+        let (m, _) = model::apply(
+            Model::new(Instant::now()),
+            new_tab("https://a.test/".into(), None),
+        );
         let t = m.visible_tab().unwrap();
         (m, t)
     }
@@ -854,7 +861,7 @@ mod tests {
 
     #[test]
     fn views_follow_the_live_tabs_through_a_session() {
-        let mut m = Model::new();
+        let mut m = Model::new(Instant::now());
         let clock = Instant::now();
         let mut views = BTreeMap::new();
         let later = |mins: u64| Command::Tick {
@@ -903,7 +910,7 @@ mod tests {
             tab: TabId(9),
             effect: Life::Restore,
         };
-        assert_eq!(call(&effect, &Model::new()), Call::Nothing);
+        assert_eq!(call(&effect, &Model::new(Instant::now())), Call::Nothing);
     }
 
     #[test]

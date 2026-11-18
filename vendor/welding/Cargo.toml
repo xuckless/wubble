@@ -72,7 +72,7 @@ version = "0.22"
 optional = true
 
 [dependencies.cef]
-version = "154.5.0"
+version = "156.6.0" # wubble change 7: was 154.5.0
 features = [
     "accelerated_osr",
     "sandbox",

@@ -7,10 +7,16 @@
 
 pub mod app;
 pub mod devtools;
+pub mod download;
+pub mod drag;
 pub mod extensions;
+pub mod find;
 pub mod ime;
 pub mod input;
 pub mod lifecycle;
+pub mod media;
 pub mod nav;
+pub mod page;
 pub mod popup;
 pub mod view;
+pub mod zoom;

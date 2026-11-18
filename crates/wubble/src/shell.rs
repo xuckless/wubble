@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn an_empty_model_shows_nothing_active() {
-        let v = view_model(&Model::new());
+        let v = view_model(&Model::new(std::time::Instant::now()));
         assert_eq!((v.pinned.len(), v.tabs.len()), (0, 0));
         assert_eq!(v.active_tab, -1);
         assert_eq!(v.active_space, 0);
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn pinned_then_normal_then_folder_tabs_in_order() {
-        let (m, a) = new_tab(Model::new(), "https://a.test/");
+        let (m, a) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
         let (m, b) = new_tab(m, "https://b.test/");
         let (m, c) = new_tab(m, "https://c.test/");
         let (m, _) = apply(
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn only_the_active_space_is_listed() {
-        let (m, _) = new_tab(Model::new(), "https://a.test/");
+        let (m, _) = new_tab(Model::new(std::time::Instant::now()), "https://a.test/");
         let (m, _) = apply(
             m,
             Command::NewSpace {
@@ -218,7 +218,10 @@ mod tests {
 
     #[test]
     fn titles_fall_back_to_host_then_new_tab() {
-        let (m, t) = new_tab(Model::new(), "https://example.com/x");
+        let (m, t) = new_tab(
+            Model::new(std::time::Instant::now()),
+            "https://example.com/x",
+        );
         assert_eq!(view_model(&m).tabs[0].title, "example.com");
         let (m, _) = apply(
             m,

@@ -282,6 +282,11 @@ impl FramePresenter {
         Ok(target.image.clone())
     }
 
+    /// The device frames are presented on, for welding's in-callback copy.
+    pub fn context(&self) -> &HostWgpuContext {
+        &self.ctx
+    }
+
     /// The texture behind the image the last `present` returned, for
     /// [`crate::glass::GlassBackdrop::render`]. `None` before the first frame.
     pub fn current_texture(&self) -> Option<&wgpu::Texture> {

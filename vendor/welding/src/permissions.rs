@@ -9,8 +9,8 @@
 //!
 //! CEF asks through two different callbacks — an ordinary prompt, and a
 //! separate one for camera and microphone capture — and each takes a different
-//! answer: the prompt wants an accept/deny result, media wants the *subset* of
-//! the requested capture bits being granted. Both are reference-counted and may
+//! answer: the prompt wants an accept/deny result, media wants the requested
+//! capture bits handed back (or 0). Both are reference-counted and may
 //! be answered later, so a host is given one id and one pair of verbs and this
 //! module remembers which kind it was.
 //!
@@ -19,11 +19,10 @@
 //! is reported and immediately denied, which is what a browser does when the
 //! user dismisses a prompt.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// Identifies one permission request until it is answered.
-pub type PermissionId = u32;
+pub type PermissionId = crate::held::RequestId;
 
 /// What a page asked for.
 ///
@@ -137,56 +136,61 @@ pub(crate) fn decode_media(mask: u32) -> Vec<PermissionKind> {
 
 /// Which CEF callback a pending request came from; they answer differently.
 pub(crate) enum Pending {
+    /// wubble change: CEF's `prompt_id` is kept so `OnDismissPermissionPrompt`
+    /// can find the request.
     #[cfg(feature = "cef-runtime")]
-    Prompt(cef::PermissionPromptCallback),
-    /// The mask is kept because granting media means handing back the subset
-    /// being allowed, not a boolean.
+    Prompt {
+        callback: cef::PermissionPromptCallback,
+        requested: u32,
+        prompt_id: u64,
+    },
+    /// The mask is kept because granting media means handing the requested
+    /// bits back, not a boolean.
     #[cfg(feature = "cef-runtime")]
     Media(cef::MediaAccessCallback, u32),
     #[cfg(not(feature = "cef-runtime"))]
     Unwired,
 }
 
-#[derive(Default)]
-pub(crate) struct Permissions {
-    inner: Mutex<Inner>,
+/// wubble change: whether a request for `asked` is granted when the host
+/// grants `granted`. Both CEF callbacks take one answer for the whole set:
+/// the prompt one accept/deny, and the media one the requested bits back
+/// exactly (`CefMediaAccessCallback::Continue`, cef_permission_handler.h:
+/// for getUserMedia "|allowed_permissions| must match
+/// |required_permissions|"). So a request is granted only when every kind it
+/// asked for was granted.
+pub(crate) fn all_granted(asked: &[PermissionKind], granted: &[PermissionKind]) -> bool {
+    !asked.is_empty() && asked.iter().all(|kind| granted.contains(kind))
 }
 
+// wubble change: requests are held in a `crate::held::Held` (id, cap, default
+// answer on close and drop) instead of an id counter and a map.
 #[derive(Default)]
-struct Inner {
-    next_id: PermissionId,
-    enabled: bool,
-    pending: HashMap<PermissionId, Pending>,
+pub(crate) struct Permissions {
+    enabled: Mutex<bool>,
+    #[cfg(feature = "cef-runtime")]
+    pub(crate) pending: Mutex<crate::held::Held<Pending>>,
 }
 
 impl Permissions {
     pub(crate) fn set_enabled(&self, enabled: bool) {
-        self.inner.lock().unwrap().enabled = enabled;
+        *self.enabled.lock().unwrap() = enabled;
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
-        self.inner.lock().unwrap().enabled
-    }
-
-    pub(crate) fn next_id(&self) -> PermissionId {
-        let mut inner = self.inner.lock().unwrap();
-        inner.next_id = inner.next_id.wrapping_add(1);
-        inner.next_id
-    }
-
-    pub(crate) fn hold(&self, id: PermissionId, pending: Pending) {
-        self.inner.lock().unwrap().pending.insert(id, pending);
-    }
-
-    pub(crate) fn take(&self, id: PermissionId) -> Option<Pending> {
-        self.inner.lock().unwrap().pending.remove(&id)
+        *self.enabled.lock().unwrap()
     }
 
     // Diagnostic accessor: exercised by unit tests today, kept for host-side
     // leak checks.
     #[allow(dead_code)]
     pub(crate) fn outstanding(&self) -> usize {
-        self.inner.lock().unwrap().pending.len()
+        #[cfg(feature = "cef-runtime")]
+        {
+            return self.pending.lock().unwrap().outstanding();
+        }
+        #[cfg(not(feature = "cef-runtime"))]
+        0
     }
 }
 
@@ -270,14 +274,30 @@ mod tests {
     }
 
     #[test]
-    fn ids_are_unique_and_never_zero() {
-        let p = Permissions::default();
-        let ids: Vec<_> = (0..4).map(|_| p.next_id()).collect();
-        assert!(!ids.contains(&0));
-        let mut sorted = ids.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "ids repeated: {ids:?}");
-        assert_eq!(p.outstanding(), 0);
+    fn nothing_is_outstanding_before_a_request() {
+        assert_eq!(Permissions::default().outstanding(), 0);
+    }
+
+    #[test]
+    fn a_request_is_granted_only_when_everything_asked_is_granted() {
+        let asked = decode(GEOLOCATION | NOTIFICATIONS);
+        let both = [PermissionKind::Geolocation, PermissionKind::Notifications];
+        assert!(all_granted(&asked, &both));
+        assert!(!all_granted(&asked, &both[..1]), "a partial grant accepted the whole prompt");
+        assert!(!all_granted(&asked, &[]));
+        assert!(!all_granted(&[], &both), "nothing asked is nothing to accept");
+    }
+
+    #[test]
+    fn camera_and_microphone_are_granted_together_or_not_at_all() {
+        // CEF denies a getUserMedia answer that is a subset of the request.
+        let asked = decode_media(MEDIA_DEVICE_AUDIO | MEDIA_DEVICE_VIDEO);
+        assert!(!all_granted(&asked, &[PermissionKind::CameraStream]));
+        assert!(!all_granted(&asked, &[PermissionKind::MicStream]));
+        assert!(all_granted(
+            &asked,
+            &[PermissionKind::CameraStream, PermissionKind::MicStream]
+        ));
+        assert!(!all_granted(&decode_media(MEDIA_DEVICE_AUDIO), &[PermissionKind::DesktopVideoCapture]));
     }
 }

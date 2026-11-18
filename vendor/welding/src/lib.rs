@@ -72,6 +72,9 @@ mod cursor;
 mod devtools;
 #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
 mod downloads;
+// wubble change: one table for every held CEF request.
+#[cfg_attr(not(feature = "cef-runtime"), allow(dead_code, unused_macros, unused_imports))]
+mod held;
 #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
 mod ime;
 #[cfg_attr(not(feature = "cef-runtime"), allow(dead_code))]
@@ -83,6 +86,9 @@ mod view;
 
 #[cfg(feature = "cef-runtime")]
 mod cef_input;
+// wubble change: the platform-independent CEF handlers.
+#[cfg(feature = "cef-runtime")]
+mod handlers;
 #[cfg(feature = "cef-runtime")]
 mod drag;
 #[cfg(feature = "cef-runtime")]
@@ -117,6 +123,7 @@ pub use linux_cef::{LinuxCefConfig as PlatformCefConfig, LinuxCefProducer as Pla
 pub use auth::AuthId;
 pub use downloads::DownloadId;
 pub use error::WeldError;
+pub use held::RequestId;
 #[cfg(target_os = "linux")]
 pub use native_frame::build_dmabuf_capable_device;
 pub use native_frame::{
@@ -128,10 +135,11 @@ pub use permissions::{PermissionId, PermissionKind};
 pub use runtime::CefWindowsSandboxContext;
 pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode, PumpScheduler};
 pub use surface::{
-    BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
-    CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuTarget, Cookie, CursorShape,
-    DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
-    FocusDirection, ImeComposition, KeyEvent, KeyEventKind, MouseAction, MouseButton, MouseEvent,
+    AcceptFilter, BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
+    CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuMedia, ContextMenuTarget, Cookie,
+    CursorShape, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
+    FileChooserMode, FocusDirection, ImeComposition, JsDialogKind, KeyEvent, KeyEventKind,
+    MAX_MENU_DEPTH, MenuItem, MenuItemKind, MouseAction, MouseButton, MouseEvent,
     NavigationEvent, PopupRect, PopupSurface, ProcessTerminationStatus, SameSite,
     SnapshotPngCompletion, SnapshotRequestId, TouchInput, TouchPhase, WebRequestId, ZoomCommand,
 };
