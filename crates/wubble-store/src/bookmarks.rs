@@ -356,7 +356,16 @@ impl Store {
         while let Some(r) = rows.next().await? {
             let title: String = r.get(0)?;
             let url: String = r.get(1)?;
-            let tier = if url_key(&url).starts_with(&key) {
+            let url_start = url_key(&url).starts_with(&key);
+            // The SQL filter is a superset: a query that carried a scheme or `www.` is the
+            // start of a url, so it must prefix the url key rather than occur anywhere.
+            let found = title.to_lowercase().contains(&needle)
+                || url.to_lowercase().contains(&needle)
+                || (key != needle && url_start);
+            if !found {
+                continue;
+            }
+            let tier = if url_start {
                 0
             } else if title.to_lowercase().starts_with(&needle) {
                 1

@@ -303,6 +303,14 @@ fn merge_spaces(model: &Model, imp: &Imported, marks: &HashMap<String, i64>) -> 
         spaces.push(space);
         sum.spaces_added += 1;
     }
+    if sum.spaces_added == 0 && sum.containers_added == 0 {
+        // Nothing to add: hand back the very same model (rebuilding would restart its clock).
+        return Ok(Merged {
+            model: model.clone(),
+            marks: new_marks,
+            summary: sum,
+        });
+    }
     let merged =
         Model::from_parts(spaces, containers, tabs, model.active_space).map_err(Error::Corrupt)?;
     Ok(Merged {
