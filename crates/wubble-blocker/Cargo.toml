@@ -9,7 +9,10 @@ license.workspace = true
 
 [dependencies]
 # default-features = false drops `single-thread`, which would make Engine !Send/!Sync.
-adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+adblock = { version = "0.13", default-features = false, features = ["css-validation", "embedded-domain-resolver", "full-regex-handling", "resource-assembler"] }
+# `css-validation` parses selectors, which is how adblock tells procedural
+# filters (`:has-text`, `:upward`, ...) from plain CSS, as Brave builds it.
+# `resource-assembler` (no extra dependencies) is for the `redirects` example only.
 serde_json.workspace = true
 thiserror = "2"
 url = "2"

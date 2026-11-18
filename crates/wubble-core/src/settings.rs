@@ -141,13 +141,52 @@ pub const BLOCKER_EXCEPTIONS: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: false,
 };
-/// Download EasyList, EasyPrivacy and uBlock's lists on their schedule. Off: nothing is fetched
-/// and lists come only from `<profile>/blocklists/*.txt`. Read when the blocker starts.
+/// Keep the filter lists up to date: download uBlock Origin's default set (and the custom lists)
+/// on their schedule. Off: nothing is fetched; the lists bundled with wubble (and any already
+/// downloaded into `<profile>/blocklists`) are used. Read when the blocker starts.
 pub const BLOCKER_LISTS_AUTO_UPDATE: SettingDef = SettingDef {
     key: "blocker.lists_auto_update",
     kind: SettingKind::Bool,
     default: "0",
-    label: "Download blocklist updates",
+    label: "Keep filter lists up to date",
+    section: Section::Privacy,
+    restart: true,
+};
+/// The cookie-notice lists (EasyList and uBlock's): banners are hidden, never clicked.
+pub const BLOCKER_COOKIE_BANNERS: SettingDef = SettingDef {
+    key: "blocker.cookie_banners",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Hide cookie banners",
+    section: Section::Privacy,
+    restart: true,
+};
+/// The URL tracking list: `$removeparam` rules strip tracking parameters from requests.
+pub const BLOCKER_STRIP_PARAMS: SettingDef = SettingDef {
+    key: "blocker.strip_params",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Remove tracking parameters from links",
+    section: Section::Privacy,
+    restart: true,
+};
+/// Filter lists of the user's own, by URL; only HTTPS URLs are fetched, and only while lists
+/// are kept up to date.
+pub const BLOCKER_CUSTOM_LISTS: SettingDef = SettingDef {
+    key: "blocker.custom_lists",
+    kind: SettingKind::List,
+    default: "[]",
+    label: "Your own filter lists (HTTPS URLs)",
+    section: Section::Privacy,
+    restart: true,
+};
+/// Per-list switches by catalog id (`wubble_blocker::catalog`): 0 off, 1 on; a list without an
+/// entry keeps its default.
+pub const BLOCKER_LISTS: SettingDef = SettingDef {
+    key: "blocker.lists",
+    kind: SettingKind::Map,
+    default: "{}",
+    label: "Filter lists switched from their default",
     section: Section::Privacy,
     restart: true,
 };
@@ -278,6 +317,10 @@ pub const ALL: &[&SettingDef] = &[
     &BLOCKER_ENABLED,
     &BLOCKER_EXCEPTIONS,
     &BLOCKER_LISTS_AUTO_UPDATE,
+    &BLOCKER_COOKIE_BANNERS,
+    &BLOCKER_STRIP_PARAMS,
+    &BLOCKER_CUSTOM_LISTS,
+    &BLOCKER_LISTS,
     &HISTORY_RETENTION_DAYS,
     &SITE_ZOOM,
     &ZOOM_DEFAULT,

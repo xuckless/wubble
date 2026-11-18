@@ -39,8 +39,9 @@ use wubble_core::site::{Decision, Permission, SitePermissions};
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
-    BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, ClosedTab, Favicon, HistoryDeleted,
-    Setting, SidebarModeSetting, SidebarWidth, Store, Transition,
+    BlockerCookieBanners, BlockerCustomLists, BlockerEnabled, BlockerExceptions, BlockerLists,
+    BlockerListsAutoUpdate, BlockerStripParams, ClosedTab, Favicon, HistoryDeleted, Setting,
+    SidebarModeSetting, SidebarWidth, Store, Transition,
 };
 use wubble_vault::keyring::KeyRingError;
 use wubble_vault::{
@@ -781,6 +782,10 @@ async fn open_and_load(path: &Path) -> wubble_store::Result<(Store, Loaded)> {
             enabled: store.setting::<BlockerEnabled>().await?,
             exceptions: store.setting::<BlockerExceptions>().await?,
             lists_auto_update: store.setting::<BlockerListsAutoUpdate>().await?,
+            cookie_banners: store.setting::<BlockerCookieBanners>().await?,
+            strip_params: store.setting::<BlockerStripParams>().await?,
+            custom_lists: store.setting::<BlockerCustomLists>().await?,
+            lists: store.setting::<BlockerLists>().await?,
         },
         stored: store.all_settings().await?,
     };

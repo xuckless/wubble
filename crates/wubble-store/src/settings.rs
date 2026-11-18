@@ -152,6 +152,12 @@ settings! {
     /// Hosts the blocker skips.
     BlockerExceptions: Vec<String> = defs::BLOCKER_EXCEPTIONS;
     BlockerListsAutoUpdate: bool = defs::BLOCKER_LISTS_AUTO_UPDATE;
+    BlockerCookieBanners: bool = defs::BLOCKER_COOKIE_BANNERS;
+    BlockerStripParams: bool = defs::BLOCKER_STRIP_PARAMS;
+    /// URLs of the user's own lists.
+    BlockerCustomLists: Vec<String> = defs::BLOCKER_CUSTOM_LISTS;
+    /// Catalog id to 0/1, for lists switched from their default.
+    BlockerLists: std::collections::BTreeMap<String, u32> = defs::BLOCKER_LISTS;
     /// Visits older than this many days are expired by `Store::expire_history`; 0 keeps everything.
     HistoryRetentionDays: u32 = defs::HISTORY_RETENTION_DAYS;
     /// Per-site zoom (`wubble_core::zoom`): hosts at the default zoom are absent.

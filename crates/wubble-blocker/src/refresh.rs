@@ -2,47 +2,26 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
-use crate::lists::RESOURCES_FILE;
+use crate::catalog::{ListDef, Selection};
 
-/// A filter list to keep fresh. `interval_secs` follows the list's own `Expires`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A filter list to keep fresh: a catalog list or a custom one.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListSpec {
-    pub id: &'static str,
-    pub url: &'static str,
+    pub id: String,
+    pub url: String,
     pub interval_secs: u64,
 }
 
 const DAY: u64 = 86_400;
 
-/// Default lists plus the redirect/scriptlet resources JSON (Brave adblock-resources).
-/// Fetched at runtime only, never bundled; the fetcher lives behind an off-by-default flag.
-pub const DEFAULT_LISTS: &[ListSpec] = &[
-    ListSpec {
-        id: "easylist",
-        url: "https://easylist.to/easylist/easylist.txt",
-        interval_secs: 4 * DAY,
-    },
-    ListSpec {
-        id: "easyprivacy",
-        url: "https://easylist.to/easylist/easyprivacy.txt",
-        interval_secs: 4 * DAY,
-    },
-    ListSpec {
-        id: "ublock-filters",
-        url: "https://ublockorigin.github.io/uAssets/filters/filters.txt",
-        interval_secs: 5 * DAY,
-    },
-    ListSpec {
-        id: "ublock-unbreak",
-        url: "https://ublockorigin.github.io/uAssets/filters/unbreak.txt",
-        interval_secs: 5 * DAY,
-    },
-    ListSpec {
-        id: "resources",
-        url: "https://raw.githubusercontent.com/brave/adblock-resources/master/dist/resources.json",
-        interval_secs: 7 * DAY,
-    },
-];
+/// When lists count as due.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Due {
+    /// On their schedule at this unix time.
+    At(u64),
+    /// All of them (the user asked for an update).
+    All,
+}
 
 /// Lists due for a fetch, in input order. `last_fetch` maps list id to unix seconds.
 /// Never fetched, or a last fetch in the future (clock moved back), counts as due.
@@ -53,7 +32,7 @@ pub fn due<'a>(
 ) -> Vec<&'a ListSpec> {
     lists
         .iter()
-        .filter(|l| match last_fetch.get(l.id) {
+        .filter(|l| match last_fetch.get(&l.id) {
             None => true,
             Some(&last) if last > now => true,
             Some(&last) => now - last >= l.interval_secs,
@@ -62,19 +41,59 @@ pub fn due<'a>(
 }
 
 impl ListSpec {
-    /// The list's file in a list directory: `resources.json` for the
-    /// resources, `<id>.txt` for filter lists (what `Blocker::from_dir` reads).
+    /// File-name prefix of the user's custom lists.
+    pub const CUSTOM_PREFIX: &'static str = "custom-";
+
+    /// A custom list: its id is a hash of its URL, so the same URL keeps
+    /// its file. Fetched every four days.
+    pub fn custom(url: &str) -> Self {
+        // FNV-1a: stable across builds, unlike `DefaultHasher`.
+        let hash = url.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        });
+        Self {
+            id: format!("{}{hash:016x}", Self::CUSTOM_PREFIX),
+            url: url.to_owned(),
+            interval_secs: 4 * DAY,
+        }
+    }
+
+    /// The list's file in a list directory (what [`crate::sources`] reads).
     pub fn file_name(&self) -> String {
-        if self.id == RESOURCES_ID {
-            RESOURCES_FILE.to_owned()
-        } else {
-            format!("{}.txt", self.id)
+        format!("{}.txt", self.id)
+    }
+}
+
+impl From<&ListDef> for ListSpec {
+    fn from(def: &ListDef) -> Self {
+        Self {
+            id: def.id.to_owned(),
+            url: def.url.to_owned(),
+            interval_secs: def.interval_secs,
         }
     }
 }
 
-/// The id of the resources entry in [`DEFAULT_LISTS`].
-const RESOURCES_ID: &str = "resources";
+/// The lists `selection` keeps fresh: its enabled catalog lists, then its
+/// custom lists that are HTTPS URLs.
+pub fn specs(selection: &Selection) -> Vec<ListSpec> {
+    selection
+        .enabled()
+        .map(ListSpec::from)
+        .chain(
+            selection
+                .custom
+                .iter()
+                .filter(|u| is_list_url(u))
+                .map(|u| ListSpec::custom(u)),
+        )
+        .collect()
+}
+
+/// Whether `url` may be a custom list: HTTPS with a host.
+pub fn is_list_url(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some())
+}
 
 /// When each list in `dir` was last fetched: its file's modification time
 /// (unix seconds). Lists without a file are missing, so [`due`].
@@ -87,22 +106,26 @@ pub fn last_fetch(dir: &Path, lists: &[ListSpec]) -> BTreeMap<String, u64> {
                 .modified()
                 .ok()?;
             let secs = modified.duration_since(UNIX_EPOCH).ok()?.as_secs();
-            Some((l.id.to_owned(), secs))
+            Some((l.id.clone(), secs))
         })
         .collect()
 }
 
-/// Fetches the lists in `lists` that are [`due`] at `now` into `dir`, each
-/// written atomically (temporary file, then rename). A failed fetch keeps
-/// the old file. Returns the ids written, in order. Only `fetch` touches
-/// the network; the host calls this only with `blocker.lists_auto_update` on.
+/// Fetches the lists in `lists` that are due into `dir`, each written
+/// atomically (temporary file, then rename). A failed fetch keeps the old
+/// file. Returns the ids written, in order. Only `fetch` touches the
+/// network; the host calls this only with `blocker.lists_auto_update` on or
+/// when the user asks for an update.
 pub fn refresh(
     dir: &Path,
     lists: &[ListSpec],
-    now: u64,
+    when: Due,
     fetch: &dyn Fn(&str) -> Result<String, String>,
-) -> Vec<&'static str> {
-    let due = due(lists, &last_fetch(dir, lists), now);
+) -> Vec<String> {
+    let due = match when {
+        Due::At(now) => due(lists, &last_fetch(dir, lists), now),
+        Due::All => lists.iter().collect(),
+    };
     if due.is_empty() {
         return Vec::new();
     }
@@ -112,7 +135,7 @@ pub fn refresh(
     }
     let mut written = Vec::new();
     for list in due {
-        let text = match fetch(list.url) {
+        let text = match fetch(&list.url) {
             Ok(text) => text,
             Err(e) => {
                 eprintln!("wubble-blocker: {} not fetched: {e}", list.id);
@@ -122,7 +145,7 @@ pub fn refresh(
         let path = dir.join(list.file_name());
         let tmp = dir.join(format!("{}.tmp", list.file_name()));
         match std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path)) {
-            Ok(()) => written.push(list.id),
+            Ok(()) => written.push(list.id.clone()),
             Err(e) => eprintln!("wubble-blocker: {} not written: {e}", path.display()),
         }
     }
@@ -154,52 +177,77 @@ pub fn fetch_http(url: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    const A: ListSpec = ListSpec {
-        id: "a",
-        url: "u",
-        interval_secs: 100,
-    };
-    const B: ListSpec = ListSpec {
-        id: "b",
-        url: "u",
-        interval_secs: 1000,
-    };
+    fn spec(id: &str, url: &str, interval_secs: u64) -> ListSpec {
+        ListSpec {
+            id: id.into(),
+            url: url.into(),
+            interval_secs,
+        }
+    }
+
+    fn a() -> ListSpec {
+        spec("a", "u", 100)
+    }
+
+    fn b() -> ListSpec {
+        spec("b", "u", 1000)
+    }
+
     fn last(pairs: &[(&str, u64)]) -> BTreeMap<String, u64> {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
     }
 
     fn ids(v: Vec<&ListSpec>) -> Vec<&str> {
-        v.into_iter().map(|l| l.id).collect()
+        v.into_iter().map(|l| l.id.as_str()).collect()
     }
 
     #[test]
     fn never_fetched_is_due() {
-        assert_eq!(ids(due(&[A, B], &last(&[]), 5)), ["a", "b"]);
+        assert_eq!(ids(due(&[a(), b()], &last(&[]), 5)), ["a", "b"]);
     }
 
     #[test]
     fn fresh_not_due_and_boundary_due() {
         let l = last(&[("a", 1000), ("b", 1000)]);
-        assert!(due(&[A], &l, 1099).is_empty());
-        assert_eq!(ids(due(&[A], &l, 1100)), ["a"]);
+        assert!(due(&[a()], &l, 1099).is_empty());
+        assert_eq!(ids(due(&[a()], &l, 1100)), ["a"]);
     }
 
     #[test]
     fn per_list_interval() {
         let l = last(&[("a", 1000), ("b", 1000)]);
-        assert_eq!(ids(due(&[A, B], &l, 1500)), ["a"]);
+        assert_eq!(ids(due(&[a(), b()], &l, 1500)), ["a"]);
     }
 
     #[test]
     fn clock_backwards_is_due() {
-        assert_eq!(ids(due(&[A], &last(&[("a", 2000)]), 1000)), ["a"]);
+        assert_eq!(ids(due(&[a()], &last(&[("a", 2000)]), 1000)), ["a"]);
     }
 
     #[test]
-    fn file_names() {
-        assert_eq!(A.file_name(), "a.txt");
-        let res = DEFAULT_LISTS.iter().find(|l| l.id == "resources").unwrap();
-        assert_eq!(res.file_name(), "resources.json");
+    fn custom_lists_have_stable_ids_and_need_https() {
+        let c = ListSpec::custom("https://lists.example/a.txt");
+        assert_eq!(c, ListSpec::custom("https://lists.example/a.txt"));
+        assert_ne!(c.id, ListSpec::custom("https://lists.example/b.txt").id);
+        assert!(c.file_name().starts_with(ListSpec::CUSTOM_PREFIX));
+        assert!(c.file_name().ends_with(".txt"));
+        assert!(is_list_url("https://lists.example/a.txt"));
+        assert!(!is_list_url("http://lists.example/a.txt"));
+        assert!(!is_list_url("file:///etc/hosts"));
+        assert!(!is_list_url("lists.example/a.txt"));
+    }
+
+    #[test]
+    fn specs_follow_the_selection() {
+        let sel = Selection {
+            custom: vec!["https://l.example/x.txt".into(), "http://insecure/".into()],
+            ..Selection::default()
+        };
+        let s = specs(&sel);
+        assert_eq!(s.first().unwrap().id, "ublock-filters");
+        assert_eq!(s.last().unwrap().url, "https://l.example/x.txt");
+        assert!(!s.iter().any(|l| l.url.starts_with("http:")));
+        assert!(s.iter().any(|l| l.id == "plowe-0"));
     }
 
     struct Dir(std::path::PathBuf);
@@ -231,37 +279,31 @@ mod tests {
             fetched.borrow_mut().push(url.to_owned());
             Ok(format!("! {url}\n"))
         };
-        let lists = [A, ListSpec { url: "ub", ..B }];
-        assert_eq!(refresh(&d.0, &lists, now(), &fetch), ["a", "b"]);
+        let lists = [a(), spec("b", "ub", 1000)];
+        assert_eq!(refresh(&d.0, &lists, Due::At(now()), &fetch), ["a", "b"]);
         assert_eq!(std::fs::read_to_string(d.0.join("a.txt")).unwrap(), "! u\n");
         assert!(!d.0.join("a.txt.tmp").exists());
         // Just written, so nothing is due an interval later than A's minus one.
         fetched.borrow_mut().clear();
-        assert!(refresh(&d.0, &lists, now() + 50, &fetch).is_empty());
+        assert!(refresh(&d.0, &lists, Due::At(now() + 50), &fetch).is_empty());
         assert!(fetched.borrow().is_empty());
         // A is due after its interval, B is not.
-        assert_eq!(refresh(&d.0, &lists, now() + 200, &fetch), ["a"]);
+        assert_eq!(refresh(&d.0, &lists, Due::At(now() + 200), &fetch), ["a"]);
         assert_eq!(*fetched.borrow(), ["u"]);
+        // An update the user asked for fetches everything.
+        assert_eq!(refresh(&d.0, &lists, Due::All, &fetch), ["a", "b"]);
     }
 
     #[test]
     fn a_failed_fetch_keeps_the_old_file() {
         let d = dir("fail");
         let ok = |_: &str| Ok("||old.test^\n".to_owned());
-        refresh(&d.0, &[A], now(), &ok);
+        refresh(&d.0, &[a()], Due::At(now()), &ok);
         let fail = |_: &str| Err("offline".to_owned());
-        assert!(refresh(&d.0, &[A], now() + 1000, &fail).is_empty());
+        assert!(refresh(&d.0, &[a()], Due::At(now() + 1000), &fail).is_empty());
         assert_eq!(
             std::fs::read_to_string(d.0.join("a.txt")).unwrap(),
             "||old.test^\n"
         );
-    }
-
-    #[test]
-    fn defaults_have_unique_ids() {
-        let mut ids: Vec<_> = DEFAULT_LISTS.iter().map(|l| l.id).collect();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), DEFAULT_LISTS.len());
     }
 }
