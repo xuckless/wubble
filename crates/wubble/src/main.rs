@@ -8,6 +8,7 @@ mod builtin_smoke;
 mod chooser;
 mod cli;
 mod clipboard;
+mod codecs_smoke;
 mod gallery_smoke;
 mod host;
 mod ime;
@@ -169,6 +170,15 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Smoke(Smoke::Codecs { wired }) => {
+            match with_smoke_dir(|config, dir| codecs_smoke::run(config, dir, wired)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("smoke: codecs FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Smoke(Smoke::Session) => match smoke_session() {
             Ok(()) => {
                 println!("smoke: session ok");
@@ -220,7 +230,11 @@ fn main() -> ExitCode {
                     Mode::Gallery
                 }
                 // handled above
-                Smoke::Boot | Smoke::Quit | Smoke::Session | Smoke::SessionPhase { .. } => {
+                Smoke::Boot
+                | Smoke::Quit
+                | Smoke::Codecs { .. }
+                | Smoke::Session
+                | Smoke::SessionPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
                 }
             };

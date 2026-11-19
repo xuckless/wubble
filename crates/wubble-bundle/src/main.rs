@@ -67,12 +67,36 @@ fn main() {
         info,
     )
     .unwrap_or_else(|e| fail(&e.to_string()));
+    add_plist_keys(&app.join("Contents/Info.plist"));
     if let Some(exe) = exe {
         let to = app.join("Contents/MacOS/wubble");
         std::fs::copy(&exe, &to)
             .unwrap_or_else(|e| fail(&format!("cannot copy {}: {e}", exe.display())));
     }
     println!("{}", app.display());
+}
+
+/// Keys `cef::build_util::mac`'s fixed Info.plist has no field for.
+///
+/// `NSLocalNetworkUsageDescription`: since macOS 15 a connection to the local network (a dev
+/// server or NAS at 192.168.x.x, a `name.local` host; loopback is exempt) needs the user's
+/// Local Network permission, and macOS shows this sentence when it asks. Chrome's Info.plist
+/// carries the same key. No `NSBonjourServices`: wubble browses no Bonjour service itself.
+#[cfg(target_os = "macos")]
+fn add_plist_keys(path: &std::path::Path) {
+    let mut info = plist::Value::from_file(path)
+        .ok()
+        .and_then(plist::Value::into_dictionary)
+        .unwrap_or_else(|| fail(&format!("cannot read {}", path.display())));
+    info.insert(
+        "NSLocalNetworkUsageDescription".into(),
+        "wubble opens the web pages you ask for, including ones served by devices and \
+         development servers on your local network."
+            .into(),
+    );
+    plist::Value::Dictionary(info)
+        .to_file_xml(path)
+        .unwrap_or_else(|e| fail(&format!("cannot write {}: {e}", path.display())));
 }
 
 #[cfg(target_os = "macos")]

@@ -42,6 +42,7 @@ mod tasks;
 mod tooltip;
 mod videos;
 mod window;
+pub(crate) use boost::KIT;
 pub use media::MediaObserver;
 pub use swipe::Swipe;
 

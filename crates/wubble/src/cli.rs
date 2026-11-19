@@ -88,6 +88,10 @@ enum SmokeArg {
     Builtins,
     Video,
     Boost,
+    /// `codecs` (the browser's wiring) or `codecs=bare`.
+    Codecs {
+        wired: bool,
+    },
     SessionPhase(Phase),
 }
 
@@ -111,6 +115,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "builtins" => Ok(SmokeArg::Builtins),
         None if value == "video" => Ok(SmokeArg::Video),
         None if value == "boost" => Ok(SmokeArg::Boost),
+        None if value == "codecs" => Ok(SmokeArg::Codecs { wired: true }),
+        Some(("codecs", "bare")) => Ok(SmokeArg::Codecs { wired: false }),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -120,7 +126,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost` or `session-phase=1|2`"
+             `boost`, `codecs`, `codecs=bare` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -174,6 +180,9 @@ pub enum Smoke {
     Video,
     /// Boosts on loopback pages: CSS, a tint and a document-start script; a CSP page.
     Boost,
+    /// Windowless: which codecs and media sources play, with the browser's blocker, media
+    /// observer and page kit (`wired`) or without them (`codecs_smoke.rs`).
+    Codecs { wired: bool },
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -272,6 +281,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
             (Some(SmokeArg::Video), None, None) => Smoke::Video,
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
+            (Some(SmokeArg::Codecs { wired }), None, None) => Smoke::Codecs { wired },
         };
         Ok(Command::Smoke(smoke))
     }
@@ -468,6 +478,19 @@ mod tests {
     }
 
     #[test]
+    fn smoke_codecs() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "codecs"]).ok(),
+            Some(Command::Smoke(Smoke::Codecs { wired: true }))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "codecs=bare", "--no-sandbox"]).ok(),
+            Some(Command::Smoke(Smoke::Codecs { wired: false }))
+        );
+        assert!(parse(["wubble", "--smoke", "codecs=other"]).is_err());
+    }
+
+    #[test]
     fn a_url_does_not_combine_with_a_smoke() {
         for smoke in [
             "boot", "nav", "tabs", "split", "page", "block", "settings", "pages", "windows",
@@ -524,7 +547,7 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--profile", "/tmp/p", "example.com"]).ok(),
             Some(Command::Run {
-                url: Some("https://example.com".into()),
+                url: Some("https://example.com/".into()),
                 profile: Some("/tmp/p".into()),
                 downloads: None,
             })

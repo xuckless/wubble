@@ -98,8 +98,9 @@ const OPAQUE_SCHEMES: [&str; 3] = ["about", "data", "view-source"];
 /// Schemes accepted when typed as `scheme://...`; `wubble` names the internal pages
 /// (`pages::InternalPage`).
 const HIER_SCHEMES: [&str; 5] = ["http", "https", "ftp", "file", "wubble"];
-/// Reserved TLDs that only count as a host with a subdomain (Chromium).
-const RESERVED_TLDS: [&str; 4] = ["example", "test", "local", "internal"];
+/// Reserved TLDs that only count as a host with a subdomain (Chromium). `.local` (mDNS: a Mac's
+/// own `name.local`) and `.internal` name real machines with two labels, so they navigate.
+const RESERVED_TLDS: [&str; 2] = ["example", "test"];
 
 /// Looks like a file name, not a TLD, when typed after a dot.
 const FILE_EXTENSIONS: [&str; 32] = [
@@ -180,11 +181,40 @@ fn parse_url_intent(s: &str) -> Option<String> {
     if !is_url {
         return None;
     }
-    // Scheme-less hosts get https; IP, localhost and a typed `:80` stay http.
-    if !local && typed_port != Some("80") {
+    // A scheme-less public name gets https (there is no fallback to http). Local and
+    // non-unique hosts (IP literals, localhost, single-label and reserved names such as
+    // `nas.local` or `app.test`) and any typed port but `:443` stay http, as Chromium leaves
+    // them out of its typed-navigation HTTPS upgrade: those are dev servers and LAN boxes,
+    // which rarely speak TLS on that port.
+    let public = matches!(host_of(&url), Some(d) if is_public_name(d));
+    if public && typed_port.is_none_or(|p| p == "443") {
         url.set_scheme("https").ok()?;
     }
     Some(url.into())
+}
+
+/// TLDs that never name a public site: RFC 6761/6762 reserved names, `.internal` (ICANN),
+/// `.home.arpa` (RFC 8375) and the usual home-router ones. Chromium's
+/// `IsHostnameNonUnique` asks the registry; this list covers what dev servers and LANs use.
+const NON_UNIQUE_TLDS: [&str; 10] = [
+    "localhost",
+    "local",
+    "test",
+    "example",
+    "invalid",
+    "internal",
+    "arpa",
+    "lan",
+    "home",
+    "intranet",
+];
+
+/// A dotted name under a public-looking TLD (not one of [`NON_UNIQUE_TLDS`]).
+fn is_public_name(domain: &str) -> bool {
+    let domain = domain.strip_suffix('.').unwrap_or(domain);
+    domain
+        .rsplit_once('.')
+        .is_some_and(|(_, tld)| !NON_UNIQUE_TLDS.contains(&tld))
 }
 
 fn host_of(url: &Url) -> Option<&str> {
@@ -511,13 +541,13 @@ mod tests {
             ("example.com.", url("https://example.com./")),
             ("foo.", search("foo.")),
             ("example.com/a b", search("example.com/a b")),
-            ("foo/", url("https://foo/")),
+            ("foo/", url("http://foo/")),
             ("foo/bar", search("foo/bar")),
-            ("foo/bar?x", url("https://foo/bar?x")),
+            ("foo/bar?x", url("http://foo/bar?x")),
             ("", search("")),
             ("   ", search("")),
             ("a.test", search("a.test")),
-            ("www.a.test", url("https://www.a.test/")),
+            ("www.a.test", url("http://www.a.test/")),
             ("http://", search("http://")),
             ("example.com:80", url("http://example.com/")),
             ("foo:80", url("http://foo/")),
@@ -527,6 +557,27 @@ mod tests {
             ("README.md", search("README.md")),
             ("package.json", search("package.json")),
             ("main.rs/", url("https://main.rs/")),
+            // Local servers: dev servers and LAN boxes stay http (no TLS fallback exists).
+            ("localhost:5173/app", url("http://localhost:5173/app")),
+            ("127.0.0.1:8080", url("http://127.0.0.1:8080/")),
+            ("[::1]:3000", url("http://[::1]:3000/")),
+            ("app.localhost:3000", url("http://app.localhost:3000/")),
+            ("app.localhost", url("http://app.localhost/")),
+            ("nas.local", url("http://nas.local/")),
+            ("my-mac.local:3000", url("http://my-mac.local:3000/")),
+            ("api.dev.test:8443", url("http://api.dev.test:8443/")),
+            ("router.lan", url("http://router.lan/")),
+            ("printer.home.arpa", url("http://printer.home.arpa/")),
+            ("devbox:3000", url("http://devbox:3000/")),
+            ("devbox:3000/x", url("http://devbox:3000/x")),
+            ("devbox", search("devbox")),
+            ("intranet/", url("http://intranet/")),
+            ("192.168.1.20:8000", url("http://192.168.1.20:8000/")),
+            ("10.0.0.5", url("http://10.0.0.5/")),
+            ("[fe80::1]:8080", url("http://[fe80::1]:8080/")),
+            // A public name with a typed port: http unless it is 443.
+            ("example.com:8080", url("http://example.com:8080/")),
+            ("example.com:8443", url("http://example.com:8443/")),
         ];
         for (input, want) in cases {
             assert_eq!(classify(input), want, "{input:?}");

@@ -31,8 +31,10 @@ pub fn percent_encode_into(input: &str, out: &mut String) {
 /// Schemes kept as typed although no `//` follows them.
 const OPAQUE_SCHEMES: &[&str] = &["about", "data", "view-source", "mailto", "blob"];
 
-/// The URL a command-line argument names: anything with a scheme as given,
-/// a bare `host/path` as `https://host/path`.
+/// The URL a command-line argument names: anything with a scheme as given, a bare address as
+/// the command bar reads it (`omnibox::classify`: https for a public name, http for localhost,
+/// IP literals, LAN names and a typed port, so `wubble localhost:3000` reaches a dev server),
+/// anything else as `https://arg`.
 pub fn from_cli_arg(arg: &str) -> String {
     let arg = arg.trim();
     let has_scheme = arg.split_once(':').is_some_and(|(scheme, rest)| {
@@ -47,9 +49,11 @@ pub fn from_cli_arg(arg: &str) -> String {
                     .any(|known| known.eq_ignore_ascii_case(scheme)))
     });
     if has_scheme {
-        arg.to_string()
-    } else {
-        format!("https://{arg}")
+        return arg.to_string();
+    }
+    match crate::omnibox::classify(arg) {
+        crate::omnibox::Intent::Url(url) => url,
+        crate::omnibox::Intent::Search(_) => format!("https://{arg}"),
     }
 }
 
@@ -263,13 +267,16 @@ mod tests {
     }
 
     #[test]
-    fn bare_hosts_get_https() {
+    fn bare_addresses_as_the_command_bar_reads_them() {
         let cases = [
-            ("example.com", "https://example.com"),
+            ("example.com", "https://example.com/"),
             ("example.com/a/b?q=1", "https://example.com/a/b?q=1"),
-            ("localhost:8080/x", "https://localhost:8080/x"),
-            ("  example.org  ", "https://example.org"),
-            ("1.2.3.4:80", "https://1.2.3.4:80"),
+            ("localhost:8080/x", "http://localhost:8080/x"),
+            ("127.0.0.1:3000", "http://127.0.0.1:3000/"),
+            ("my-mac.local:5173", "http://my-mac.local:5173/"),
+            ("  example.org  ", "https://example.org/"),
+            ("1.2.3.4:80", "http://1.2.3.4/"),
+            ("devbox", "https://devbox"),
         ];
         for (arg, url) in cases {
             assert_eq!(from_cli_arg(arg), url, "{arg}");
