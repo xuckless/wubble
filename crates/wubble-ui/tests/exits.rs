@@ -1,5 +1,5 @@
-//! Exits on the testing backend: a sheet and the error panel keep their view while they leave
-//! (the host has already cleared it) and answer nothing then; the outgoing page's copy plays
+//! Exits on the testing backend: a sheet and the error panel show their view while they leave
+//! (the host flips only `open`) and answer nothing then; the outgoing page's copy plays
 //! under the incoming one and is dropped. Mock time and explicit frame deltas; one test (one
 //! platform per process).
 
@@ -34,10 +34,10 @@ fn sheet_leaves_with_its_view(app: &AppWindow) {
     });
     mock_elapsed_time(Duration::from_millis(400));
     assert_eq!(opacity_of(app, "Leave site?"), Some(1.0));
-    // the host closes it and clears the view
+    // the host closes it: open off, its text kept for the exit
     app.set_dialog(DialogView {
-        serial: 1,
-        ..Default::default()
+        open: false,
+        ..app.get_dialog()
     });
     mock_elapsed_time(Duration::from_millis(60));
     let leaving = opacity_of(app, "Leave site?").expect("the title is still drawn");
@@ -60,7 +60,10 @@ fn error_panel_leaves_with_its_view(app: &AppWindow) {
     });
     mock_elapsed_time(Duration::from_millis(400));
     assert_eq!(opacity_of(app, "This site can't be reached"), Some(1.0));
-    app.set_page_error(ErrorView::default());
+    app.set_page_error(ErrorView {
+        open: false,
+        ..app.get_page_error()
+    });
     mock_elapsed_time(Duration::from_millis(60));
     let leaving = opacity_of(app, "This site can't be reached").expect("still drawn");
     assert!(leaving > 0.0 && leaving < 1.0, "{leaving}");

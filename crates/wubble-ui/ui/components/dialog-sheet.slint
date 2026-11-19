@@ -18,20 +18,11 @@ export component DialogSheet inherits SheetFrame {
     // (accept, the text field, the password field)
     callback answered(bool, string, string);
 
-    // What the sheet shows: the open dialog, kept while it leaves (the host clears its view).
-    property <DialogView> held;
-    changed dialog => {
-        if root.dialog.open {
-            root.held = root.dialog;
-        }
-    }
-    property <DialogView> d: root.dialog.open ? root.dialog : root.held;
-
     open: root.dialog.open;
-    title: root.d.title;
-    message: root.d.message;
-    accept-text: root.d.accept;
-    cancel-text: root.d.cancel;
+    title: root.dialog.title;
+    message: root.dialog.message;
+    accept-text: root.dialog.accept;
+    cancel-text: root.dialog.cancel;
     accepted => {
         root.confirm();
     }
@@ -41,7 +32,7 @@ export component DialogSheet inherits SheetFrame {
 
     // The prompt's field, else the frame's key scope.
     public function focus-sheet() {
-        if root.d.prompt {
+        if root.dialog.prompt {
             input.focus();
             input.select-all();
         } else {
@@ -50,7 +41,7 @@ export component DialogSheet inherits SheetFrame {
     }
 
     function confirm() {
-        root.answered(true, root.d.prompt ? input.text : "", root.d.secret ? secret-field.text : "");
+        root.answered(true, root.dialog.prompt ? input.text : "", root.dialog.secret ? secret-field.text : "");
         secret-field.text = "";
     }
 
@@ -63,7 +54,7 @@ export component DialogSheet inherits SheetFrame {
     // takes the keyboard, even when it replaced one still showing.
     property <int> serial: root.dialog.serial;
     changed serial => {
-        input.text = root.d.input;
+        input.text = root.dialog.input;
         secret-field.text = "";
         if root.dialog.open {
             root.focus-sheet();
@@ -71,8 +62,8 @@ export component DialogSheet inherits SheetFrame {
     }
 
     Text {
-        visible: root.d.secret;
-        height: root.d.secret ? self.preferred-height : 0px;
+        visible: root.dialog.secret;
+        height: root.dialog.secret ? self.preferred-height : 0px;
         text: "Username";
         color: Palette.mist;
         font-family: Fonts.ui;
@@ -80,8 +71,8 @@ export component DialogSheet inherits SheetFrame {
         font-weight: Type.label.weight;
     }
     Rectangle {
-        visible: root.d.prompt;
-        height: root.d.prompt ? Shell.sheet-input : 0px;
+        visible: root.dialog.prompt;
+        height: root.dialog.prompt ? Shell.sheet-input : 0px;
         border-radius: Shell.sheet-button-radius;
         background: Palette.shell;
         input := TextInput {
@@ -96,7 +87,7 @@ export component DialogSheet inherits SheetFrame {
             font-family: Fonts.ui;
             font-size: Type.body.size;
             accepted => {
-                if root.d.secret {
+                if root.dialog.secret {
                     secret-field.focus();
                 } else {
                     root.confirm();
@@ -112,8 +103,8 @@ export component DialogSheet inherits SheetFrame {
         }
     }
     Text {
-        visible: root.d.secret;
-        height: root.d.secret ? self.preferred-height : 0px;
+        visible: root.dialog.secret;
+        height: root.dialog.secret ? self.preferred-height : 0px;
         text: "Password";
         color: Palette.mist;
         font-family: Fonts.ui;
@@ -121,8 +112,8 @@ export component DialogSheet inherits SheetFrame {
         font-weight: Type.label.weight;
     }
     Rectangle {
-        visible: root.d.secret;
-        height: root.d.secret ? Shell.sheet-input : 0px;
+        visible: root.dialog.secret;
+        height: root.dialog.secret ? Shell.sheet-input : 0px;
         border-radius: Shell.sheet-button-radius;
         background: Palette.shell;
         secret-field := TextInput {

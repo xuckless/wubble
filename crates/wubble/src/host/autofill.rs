@@ -284,7 +284,13 @@ impl Host {
         if self.autofill.drawn.as_ref() == Some(&(tab, view.clone())) {
             return;
         }
-        window.set_autofill(shell_view(&view));
+        // A prompt that closes keeps its text while it leaves.
+        let mut shown = shell_view(&view);
+        if !shown.prompt {
+            let old = window.get_autofill();
+            (shown.title, shown.detail, shown.accept) = (old.title, old.detail, old.accept);
+        }
+        window.set_autofill(shown);
         self.autofill.drawn = Some((tab, view));
     }
 
@@ -438,14 +444,14 @@ fn shell_view(view: &View) -> AutofillView {
             MenuRow::Generate => "Suggest a strong password".into(),
         })
         .collect();
-    let (prompt, title, detail) = match &view.prompt {
-        None => (0, "", String::new()),
+    let (title, detail, accept) = match &view.prompt {
+        None => ("", String::new(), ""),
         Some((kind, user, origin)) => {
             let site = origin.split_once("://").map_or(origin.as_str(), |(_, h)| h);
             let detail = format!("{} on {site}", named(user));
             match kind {
-                SaveKind::New => (1, "Save password?", detail),
-                SaveKind::Update(_) => (2, "Update password?", detail),
+                SaveKind::New => ("Save password?", detail, "Save"),
+                SaveKind::Update(_) => ("Update password?", detail, "Update"),
             }
         }
     };
@@ -453,9 +459,10 @@ fn shell_view(view: &View) -> AutofillView {
         chip: view.chip,
         menu_open: view.menu.is_some(),
         rows: ModelRc::new(VecModel::from(rows)),
-        prompt,
+        prompt: view.prompt.is_some(),
         title: title.into(),
         detail: detail.into(),
+        accept: accept.into(),
     }
 }
 
@@ -503,8 +510,13 @@ mod tests {
         };
         let shown = shell_view(&prompt);
         assert_eq!(
-            (shown.prompt, shown.title.as_str(), shown.detail.as_str()),
-            (2, "Update password?", "bob on a.test")
+            (
+                shown.prompt,
+                shown.title.as_str(),
+                shown.detail.as_str(),
+                shown.accept.as_str()
+            ),
+            (true, "Update password?", "bob on a.test", "Update")
         );
     }
 }

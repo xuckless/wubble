@@ -13,20 +13,11 @@ export component BookmarkSheet inherits SheetFrame {
     in property <[FolderChoiceItem]> folders;
     callback answered(bool, bool, string, int);
 
-    // What the sheet shows: the open one, kept while it leaves (the host clears its view).
-    property <BookmarkSheetView> held;
-    changed sheet => {
-        if root.sheet.open {
-            root.held = root.sheet;
-        }
-    }
-    property <BookmarkSheetView> v: root.sheet.open ? root.sheet : root.held;
-
     property <int> folder: -1;
 
     open: root.sheet.open;
-    title: root.v.title;
-    accept-text: root.v.accept;
+    title: root.sheet.title;
+    accept-text: root.sheet.accept;
     cancel-text: "Cancel";
     accepted => {
         root.answered(true, false, name.text, root.folder);
@@ -36,7 +27,7 @@ export component BookmarkSheet inherits SheetFrame {
     }
 
     public function focus-sheet() {
-        if root.v.show-name {
+        if root.sheet.show-name {
             name.take-focus();
         } else {
             root.take-focus();
@@ -46,16 +37,16 @@ export component BookmarkSheet inherits SheetFrame {
     // Each opening restarts from the sheet's own name and folder.
     property <int> serial: root.sheet.serial;
     changed serial => {
-        name.text = root.v.name;
-        root.folder = root.v.folder;
+        name.text = root.sheet.name;
+        root.folder = root.sheet.folder;
         if root.sheet.open {
             root.focus-sheet();
         }
     }
 
     name := Field {
-        visible: root.v.show-name;
-        height: root.v.show-name ? Shell.sheet-input : 0px;
+        visible: root.sheet.show-name;
+        height: root.sheet.show-name ? Shell.sheet-input : 0px;
         placeholder: "Name";
         accepted(t) => {
             root.answered(true, false, t, root.folder);
@@ -64,7 +55,7 @@ export component BookmarkSheet inherits SheetFrame {
             root.answered(false, false, "", -1);
         }
     }
-    if root.v.show-folders: VerticalLayout {
+    if root.sheet.show-folders: VerticalLayout {
         spacing: Spacing.s1;
         Text {
             text: "Folder";
@@ -94,7 +85,7 @@ export component BookmarkSheet inherits SheetFrame {
             }
         }
     }
-    if root.v.can-remove: Rectangle {
+    if root.sheet.can-remove: Rectangle {
         height: Shell.icon-button;
         Text {
             text: "Remove bookmark";

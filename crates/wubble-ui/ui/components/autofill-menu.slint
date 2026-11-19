@@ -20,10 +20,11 @@ export struct AutofillView {
     chip: bool,
     menu-open: bool,
     rows: [string],
-    // 0: none, 1: save, 2: update.
-    prompt: int,
+    // The save prompt shows; its title, detail and button ("Save" / "Update").
+    prompt: bool,
     title: string,
     detail: string,
+    accept: string,
 }
 
 export component AutofillMenu inherits Rectangle {
@@ -34,15 +35,8 @@ export component AutofillMenu inherits Rectangle {
 
     // A key on the icon family's 24 grid (icon.slint has none): the bow, the shaft, two teeth.
     property <string> key-path: "M8 11a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM10.8 12.2 20 3M16.5 6.5l2.5 2.5M14 9l2 2";
-    property <bool> prompting: root.view.prompt != 0;
-    // The save prompt as it shows: the open one, kept while it leaves (the host clears its view).
-    property <AutofillView> held;
-    changed view => {
-        if root.view.prompt != 0 {
-            root.held = root.view;
-        }
-    }
-    property <AutofillView> p: root.prompting ? root.view : root.held;
+    // The host keeps the prompt's text while it leaves.
+    property <bool> prompting: root.view.prompt;
     property <bool> leaving: !root.prompting && prompt-panel.opacity > 0;
 
     width: Shell.prompt-width;
@@ -136,7 +130,7 @@ export component AutofillMenu inherits Rectangle {
             padding: Spacing.s4;
             spacing: Spacing.s2;
             Text {
-                text: root.p.title;
+                text: root.view.title;
                 color: Palette.ink;
                 font-family: Fonts.ui;
                 font-size: Type.heading.size;
@@ -144,7 +138,7 @@ export component AutofillMenu inherits Rectangle {
                 overflow: elide;
             }
             Text {
-                text: root.p.detail;
+                text: root.view.detail;
                 color: Palette.mist;
                 font-family: Fonts.ui;
                 font-size: Type.body.size;
@@ -173,7 +167,7 @@ export component AutofillMenu inherits Rectangle {
                     }
                 }
                 SheetButton {
-                    text: root.p.prompt == 2 ? "Update" : "Save";
+                    text: root.view.accept;
                     primary: true;
                     clicked => {
                         if root.prompting {

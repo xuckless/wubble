@@ -18,14 +18,6 @@ export component ErrorPanel inherits Rectangle {
     callback secondary();
 
     property <bool> open: root.error.open;
-    // What the panel shows: the open error, kept while it leaves (the host clears its view).
-    property <ErrorView> held;
-    changed error => {
-        if root.error.open {
-            root.held = root.error;
-        }
-    }
-    property <ErrorView> e: root.error.open ? root.error : root.held;
 
     public function take-focus() {
         keys.focus();
@@ -70,12 +62,12 @@ export component ErrorPanel inherits Rectangle {
             height: self.preferred-height;
             spacing: Spacing.s3;
             Icon {
-                path: root.e.cert ? IconPaths.lock : IconPaths.globe;
+                path: root.error.cert ? IconPaths.lock : IconPaths.globe;
                 size: Shell.error-icon;
-                tint: root.e.cert ? Palette.coral : Palette.mist;
+                tint: root.error.cert ? Palette.coral : Palette.mist;
             }
             Text {
-                text: root.e.title;
+                text: root.error.title;
                 color: Palette.ink;
                 font-family: Fonts.ui;
                 font-size: Type.title.size;
@@ -83,7 +75,7 @@ export component ErrorPanel inherits Rectangle {
                 wrap: word-wrap;
             }
             Text {
-                text: root.e.summary;
+                text: root.error.summary;
                 color: Palette.mist;
                 font-family: Fonts.ui;
                 font-size: Shell.sheet-body;
@@ -91,7 +83,7 @@ export component ErrorPanel inherits Rectangle {
             }
             Text {
                 visible: self.text != "";
-                text: root.e.detail;
+                text: root.error.detail;
                 color: Palette.haze;
                 font-family: Fonts.mono;
                 font-size: Type.label.size;
@@ -104,7 +96,7 @@ export component ErrorPanel inherits Rectangle {
                 alignment: start;
                 spacing: Spacing.s2;
                 SheetButton {
-                    text: root.e.primary;
+                    text: root.error.primary;
                     primary: true;
                     clicked => {
                         if root.open {
@@ -112,8 +104,8 @@ export component ErrorPanel inherits Rectangle {
                         }
                     }
                 }
-                if root.e.secondary != "": SheetButton {
-                    text: root.e.secondary;
+                if root.error.secondary != "": SheetButton {
+                    text: root.error.secondary;
                     clicked => {
                         if root.open {
                             root.secondary();

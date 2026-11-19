@@ -523,12 +523,30 @@ impl Host {
         if self.w.drawn.tab != tab || self.w.drawn.permission != current.permission {
             window.set_permission(permission_view(&current.permission));
         }
-        // The sign-in sheet blocks the load; a JS dialog waits behind it.
-        window.set_dialog(match &current.auth {
+        // The sign-in sheet blocks the load; a JS dialog waits behind it. A sheet or panel that
+        // closes keeps its text while it leaves; the closed dialog's serial resets its fields.
+        let dialog = match &current.auth {
             Auth::Open(r) => auth_view(r),
             Auth::None => dialog_view(&current.dialog),
+        };
+        window.set_dialog(if dialog.open {
+            dialog
+        } else {
+            DialogView {
+                open: false,
+                serial: dialog.serial,
+                ..window.get_dialog()
+            }
         });
-        window.set_page_error(error_view(&current.error));
+        let error = error_view(&current.error);
+        window.set_page_error(if error.open {
+            error
+        } else {
+            ErrorView {
+                open: false,
+                ..window.get_page_error()
+            }
+        });
         window.set_find(find_view(&current.find, self.find_focus));
         // the popup is the key page's: the peek's while it has the keys
         let keys = self.key_page();
