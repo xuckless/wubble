@@ -46,6 +46,10 @@ pub enum PipInput {
     FullscreenLeft(TabId),
     /// The window closed (its close button, return to tab, the window manager).
     WindowClosed,
+    /// The user closed the window for good (its close button, the window manager): the video
+    /// stops, as in Chrome. Back to the tab ([`PipInput::TabActivated`], the model's return)
+    /// is not this: the video plays on.
+    Close,
     TabClosed(TabId),
     /// The user left `from` for another tab. `auto`: the "picture-in-picture on tab switch"
     /// setting; `playing`: `from`'s video plays with sound.
@@ -63,6 +67,8 @@ pub enum PipEffect {
     /// `kit.js`: the main video's `requestFullscreen()` as a user gesture.
     EnterFullscreen(TabId),
     ExitFullscreen(TabId),
+    /// `kit.js`: pause the tab's main video.
+    Pause(TabId),
     /// `Command::OpenPip`.
     OpenWindow(TabId),
     /// `Command::ClosePip`.
@@ -105,6 +111,10 @@ pub fn transition(state: Pip, input: PipInput) -> (Pip, Vec<PipEffect>) {
         (Pip::Entering { tab } | Pip::On { tab }, FullscreenLeft(t) | TabClosed(t)) if t == tab => {
             (Pip::Off, vec![CloseWindow(tab)])
         }
+        (Pip::Entering { tab } | Pip::On { tab }, Close) => (
+            Pip::Off,
+            vec![Pause(tab), ExitFullscreen(tab), CloseWindow(tab)],
+        ),
         (Pip::Entering { tab } | Pip::On { tab }, WindowClosed) => {
             (Pip::Off, vec![ExitFullscreen(tab)])
         }
@@ -192,6 +202,32 @@ mod tests {
         }
         // The window closed because the machine asked: it is already off.
         assert_eq!(transition(Pip::Off, WindowClosed), (Pip::Off, vec![]));
+    }
+
+    #[test]
+    fn closing_for_good_pauses_the_video_and_returning_does_not() {
+        let entering = Pip::Entering { tab: A };
+        for s in [on(), entering] {
+            assert_eq!(
+                transition(s, Close),
+                (Pip::Off, vec![Pause(A), ExitFullscreen(A), CloseWindow(A)])
+            );
+            // back to the tab (the model's return closes the window; coming back to the tab):
+            // the video keeps playing
+            for e in [
+                transition(s, WindowClosed).1,
+                transition(s, TabActivated(A)).1,
+                transition(s, Request(A)).1,
+                transition(s, FullscreenLeft(A)).1,
+                transition(s, TabClosed(A)).1,
+            ] {
+                assert!(!e.contains(&Pause(A)), "{e:?}");
+            }
+        }
+        // Nothing is out: nothing to stop. The window the machine closed reports in after.
+        assert_eq!(transition(Pip::Off, Close), (Pip::Off, vec![]));
+        let (s, _) = transition(on(), Close);
+        assert_eq!(transition(s, WindowClosed), (Pip::Off, vec![]));
     }
 
     #[test]

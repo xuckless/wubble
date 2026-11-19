@@ -8,7 +8,8 @@
 //!    fullscreen as a user gesture, printed as `pip: api=.. fullscreen=..` (not asserted); then
 //!    the overlay's button opens the Pip window: the page goes fullscreen, its frames arrive in
 //!    the second window and the Main window shows its card; return puts it back in the Main
-//!    window (one window again); opened once more, its close button ends it (`smoke: pip ok`);
+//!    window (one window again); the clip restarted and opened once more, its close button ends
+//!    it and pauses the clip, which return left playing (`smoke: pip ok`);
 //! 3. speed 2 from the controls reads back from the page and is remembered for the site: after a
 //!    reload (a new document) the page plays at 2 again;
 //! 4. loop on, mute toggled;
@@ -56,6 +57,9 @@ const VIDEO_PAGE: &str = "<!doctype html><title>video</title>\
 const BOOST_PAGE: &str = "<!doctype html><title>plain</title>\
     <body style=\"background:rgb(250,250,250)\"><p>A page to boost.</p>";
 
+/// The clip from its start, playing, so a pause is the picture-in-picture's.
+const RESTART: &str = "(k=>(k.cmd('seek',0),k.cmd('play'),1))(window[Symbol.for('wubble.kit')])";
+
 /// Plays from just before the segment, so the wait is short; muted, since an unmuted video does
 /// not play without a user gesture.
 const PLAY_BEFORE_JUMP: &str = "(k=>(k.cmd('muted',true),k.cmd('rate',1),k.cmd('seek',0.5),k.cmd('play'),1))\
@@ -81,8 +85,13 @@ pub enum Step {
     PipSpike,
     PipOpen,
     PipReturning,
+    /// Back in the tab: the clip restarted (it may have ended), waiting for it to play.
+    PipRestart,
     PipReopen,
     PipClosing,
+    /// Closed: waiting for the clip to read paused part way through (an ended clip is paused
+    /// too, so the check is on the time).
+    PipPaused,
     Rate,
     RateChecked,
     Reloading,
@@ -90,7 +99,9 @@ pub enum Step {
     SiteRate,
     SiteChecked,
     Loop,
-    Mute { before: bool },
+    Mute {
+        before: bool,
+    },
     Skipping,
     SponsorReloading,
     SponsorLoading,
@@ -327,12 +338,28 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
         (PipReturning, Snapshot(seen))
             if !seen.pip.on && !seen.pip.open && !seen.pip.card && seen.pip.windows == 1 =>
         {
+            to(s, PipRestart, vec![Action::Eval(RESTART.into())])
+        }
+        // return left the clip as it was, and it plays on
+        (PipRestart, Snapshot(_))
+            if video
+                .as_ref()
+                .is_some_and(|v| !v.paused && v.time < v.duration / 2.0) =>
+        {
             to(s, PipReopen, vec![Action::Video("pip", 0.0)])
         }
         (PipReopen, Snapshot(seen)) if seen.pip.on && seen.pip.framed.is_some() => {
             to(s, PipClosing, vec![Action::Pip("close")])
         }
         (PipClosing, Snapshot(seen)) if !seen.pip.on && !seen.pip.open && seen.pip.windows == 1 => {
+            to(s, PipPaused, vec![])
+        }
+        // closing pauses it (as Chrome's does), before the clip ends on its own
+        (PipPaused, Snapshot(_))
+            if video
+                .as_ref()
+                .is_some_and(|v| v.paused && v.time < v.duration - 0.5) =>
+        {
             to(
                 s,
                 Rate,
@@ -639,10 +666,52 @@ mod tests {
             ..PipSeen::default()
         };
         let (s, a) = next(s, Input::Snapshot(&pip(&back)));
+        assert_eq!(a, vec![Action::Eval(RESTART.into())]);
+        // Waits for the clip to play, then opens again.
+        let (s, a) = next(
+            s,
+            Input::Snapshot(&Seen {
+                video: Some(VideoState {
+                    paused: true,
+                    ..playing()
+                }),
+                ..pip(&back)
+            }),
+        );
+        assert!(a.is_empty());
+        let (s, a) = next(s, Input::Snapshot(&pip(&back)));
         assert_eq!(a, vec![Action::Video("pip", 0.0)]);
         let (s, a) = next(s, Input::Snapshot(&pip(&framed)));
         assert_eq!(a, vec![Action::Pip("close")]);
+        // Closed, still reading playing: waits for the pause.
         let (s, a) = next(s, Input::Snapshot(&pip(&back)));
+        assert!(a.is_empty());
+        // Paused at its end is not the picture-in-picture's doing.
+        let ended = VideoState {
+            paused: true,
+            time: 3.0,
+            ..playing()
+        };
+        let (s, a) = next(
+            s,
+            Input::Snapshot(&Seen {
+                video: Some(ended),
+                ..pip(&back)
+            }),
+        );
+        assert!(a.is_empty());
+        let paused = VideoState {
+            paused: true,
+            time: 1.0,
+            ..playing()
+        };
+        let (s, a) = next(
+            s,
+            Input::Snapshot(&Seen {
+                video: Some(paused),
+                ..pip(&back)
+            }),
+        );
         assert_eq!(a[1], Action::Video("rate", 7.0));
         let fast = VideoState {
             rate: 2.0,

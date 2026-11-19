@@ -311,6 +311,8 @@ pub enum PageCmd {
     SetLoop(bool),
     SetMuted(bool),
     Toggle,
+    /// Pause, whatever it was doing (picture-in-picture closed).
+    Pause,
     Seek(f64),
 }
 

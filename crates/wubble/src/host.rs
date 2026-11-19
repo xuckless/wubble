@@ -831,6 +831,13 @@ impl Host {
 
     /// The only way tabs change: apply, then execute the effects.
     pub fn dispatch(&mut self, command: Command) {
+        // the window manager's close of the Pip window is the user's close: it pauses the video
+        if let Command::CloseWindow(id) = command
+            && self.model.pip_window() == Some(id)
+            && self.pip_user_closed()
+        {
+            return;
+        }
         // A tab is never opened or loaded for a link another app handles: the user asked for
         // it (typed, a bookmark, a menu row), so it goes to the app as if clicked.
         if let Some((opener, url)) = external_target(&command)

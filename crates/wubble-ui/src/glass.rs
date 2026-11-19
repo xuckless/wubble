@@ -37,6 +37,9 @@ pub struct GlassRegistry {
     items: BTreeMap<i32, GlassItem>,
     dirty: bool,
     sweep: Sweep,
+    /// The list the host was last handed: a sweep whose panels report the same items again (the
+    /// models changed, the glass did not) hands nothing, so it does not wake a frozen scene.
+    sent: Option<Vec<GlassItem>>,
 }
 
 impl Default for GlassRegistry {
@@ -45,6 +48,7 @@ impl Default for GlassRegistry {
             items: BTreeMap::new(),
             dirty: false,
             sweep: Sweep::Idle,
+            sent: None,
         }
     }
 }
@@ -98,7 +102,12 @@ impl GlassRegistry {
             }
             Sweep::Holding | Sweep::Idle => {
                 self.sweep = Sweep::Idle;
-                let glass = std::mem::take(&mut self.dirty).then(|| self.snapshot());
+                let glass = std::mem::take(&mut self.dirty)
+                    .then(|| self.snapshot())
+                    .filter(|list| self.sent.as_ref() != Some(list));
+                if glass.is_some() {
+                    self.sent.clone_from(&glass);
+                }
                 GlassFrame { bump: false, glass }
             }
         }
@@ -156,6 +165,22 @@ mod tests {
             ..item(7, 0.0)
         });
         assert_eq!(r.frame().glass, None);
+    }
+
+    #[test]
+    fn a_sweep_that_changes_nothing_hands_nothing() {
+        let mut r = GlassRegistry::default();
+        r.report(item(0, 0.0));
+        r.report(item(105, 0.0));
+        assert!(r.frame().glass.is_some());
+        r.request_sweep();
+        r.frame();
+        r.report(item(0, 0.0));
+        r.report(item(105, 0.0));
+        assert_eq!(r.frame(), GlassFrame::default());
+        // a change after it still comes through
+        r.report(item(105, 3.0));
+        assert_eq!(r.frame().glass.map(|g| g[1].x), Some(3.0));
     }
 
     #[test]

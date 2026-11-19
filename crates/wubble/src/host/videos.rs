@@ -224,6 +224,7 @@ fn page_script(cmd: PageCmd) -> String {
         PageCmd::SetLoop(on) => ("loop", on.to_string()),
         PageCmd::SetMuted(on) => ("muted", on.to_string()),
         PageCmd::Toggle => ("toggle", "0".into()),
+        PageCmd::Pause => ("pause", "0".into()),
         PageCmd::Seek(t) => ("seek", t.to_string()),
     };
     format!("{KIT_REF}&&{KIT_REF}.cmd('{name}',{arg})")
@@ -972,6 +973,11 @@ impl Host {
                         view.exit_fullscreen();
                     }
                 }
+                PipEffect::Pause(tab) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.eval(&page_script(PageCmd::Pause));
+                    }
+                }
                 PipEffect::OpenWindow(tab) => {
                     self.dispatch(Command::OpenPip { tab });
                     self.pip_event(PipInput::WindowOpened(self.model.pip_tab() == Some(tab)));
@@ -990,6 +996,17 @@ impl Host {
     /// this machine's own `CloseWindow`).
     pub(super) fn pip_window_closed(&mut self) {
         self.pip_event(PipInput::WindowClosed);
+    }
+
+    /// The user closed the Pip window (its close button, the window manager): the video pauses,
+    /// as in Chrome, and this machine closes the window. False when nothing is out (the caller
+    /// closes the window itself).
+    pub(super) fn pip_user_closed(&mut self) -> bool {
+        let out = self.videos.pip.tab().is_some();
+        if out {
+            self.pip_event(PipInput::Close);
+        }
+        out
     }
 
     /// The tab whose page fullscreen belongs to picture-in-picture, not to the window.
@@ -1033,7 +1050,11 @@ impl Host {
     pub(crate) fn pip_command(&mut self, name: &str, value: f32) {
         match name {
             "return" => self.dispatch(Command::ReturnPip),
-            "close" => self.dispatch(Command::ClosePip),
+            "close" => {
+                if !self.pip_user_closed() {
+                    self.dispatch(Command::ClosePip);
+                }
+            }
             "play" | "seek-by" => {
                 if let Some(tab) = self.model.pip_tab() {
                     let here = self.w.id;
