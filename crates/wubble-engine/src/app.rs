@@ -1128,6 +1128,7 @@ mod tests {
                     "enable-blink-features".to_string(),
                     Some("MiddleClickAutoscroll".to_string())
                 ),
+                ("disable-extensions".to_string(), None),
                 ("disable-gpu-memory-buffer-video-frames".to_string(), None),
             ]
         );
