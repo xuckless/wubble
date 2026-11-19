@@ -232,6 +232,9 @@ pub enum HostCheck {
     AutoscrollStretched,
     /// A page drag runs (true) or none does (false).
     Drag(bool),
+    /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
+    /// shifted and scaled, and a click lands where it is drawn, not at its point.
+    PageEntered,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -260,8 +263,9 @@ use Step::*;
 /// full size (the window settles after start), zoom (until the page shows it), a page navigated away from (reloaded); menus, bars, held buttons, an autoscroll, click series and
 /// the pointer ([`HostOp::Neutral`]), until the page saw the neutral click and the host
 /// runs neither an autoscroll nor a page drag; then the page's records, focus, selection and scroll.
-const RESET: [Step; 7] = [
+const RESET: [Step; 8] = [
     Restore,
+    Until(H(C::PageEntered)),
     Until(J("parity.sized()")),
     Until(J("parity.unzoomed()")),
     Retry(
@@ -278,7 +282,8 @@ macro_rules! item {
         Item {
             name: $name,
             steps: &[
-                RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], $($step),*
+                RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], RESET[7],
+                $($step),*
             ],
             expect: &[$($expect),*],
             gap: $gap,
@@ -287,7 +292,8 @@ macro_rules! item {
     ($($t:tt)*) => { item!(@gap false, $($t)*) };
 }
 
-/// An item for a known gap: see [`Item::gap`].
+/// An item for a known gap: see [`Item::gap`]. None is known now.
+#[allow(unused_macros)]
 macro_rules! gap {
     ($($t:tt)*) => { item!(@gap true, $($t)*) };
 }
@@ -760,6 +766,7 @@ pub const ITEMS: &[Item] = &[
         "D.os-file-drop",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Host(HostOp::HoverFile(at::FILEZONE)),
             Settle(10),
             Host(HostOp::DropFile(at::FILEZONE))
@@ -799,6 +806,7 @@ pub const ITEMS: &[Item] = &[
         "E.middle-click-background-tab",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Click(Middle, NONE, at::LINK),
             Settle(20)
         ],
@@ -808,6 +816,7 @@ pub const ITEMS: &[Item] = &[
         "E.shift-wheel-horizontal",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Wheel(SHIFT, at::BLANK, 0.0, -120.0),
             Settle(10)
         ],
@@ -906,17 +915,19 @@ pub const ITEMS: &[Item] = &[
         "F.window-open",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Click(Left, NONE, at::OPEN_BUTTON),
             Settle(20)
         ],
         [H(C::Tabs(2))]
     ),
-    // Known gap (TODO.md M1): after F.window-open the next click has landed 11 px above its
-    // point (seen 2026-11-18, cause not found). This item is that click, on the first field.
-    gap!(
+    // A click straight after a tab switch: it once landed 11 px off, during the page's
+    // entrance (now waited for with `PageEntered`).
+    item!(
         "F.click-after-popup",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Click(Left, NONE, at::INP),
             Settle(5)
         ],
@@ -1895,7 +1906,7 @@ mod tests {
     #[test]
     fn the_known_gaps_are_the_listed_ones() {
         let gaps: Vec<_> = ITEMS.iter().filter(|i| i.gap).map(|i| i.name).collect();
-        assert_eq!(gaps, ["F.click-after-popup"]);
+        assert!(gaps.is_empty(), "{gaps:?}");
     }
 
     /// On macOS no item that runs presses a Ctrl chord: each has its Mac chord, or is a gap
