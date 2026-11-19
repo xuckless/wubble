@@ -102,8 +102,30 @@ pub struct Point {
     pub y: f64,
 }
 
+/// Where the bar's field is (owner, 2026-11-19: "for start page the center address bar should be
+/// the only driver"): the overlay panel at the top of the page card (command.tsx), or the start
+/// page's own search capsule, its results dropping beneath it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Placement {
+    #[default]
+    Overlay,
+    InPage,
+}
+
+impl Placement {
+    /// Where a bar opened over the shown page goes: the start page's capsule on the start page,
+    /// the overlay everywhere else.
+    pub fn for_page(start_page: bool) -> Self {
+        if start_page {
+            Placement::InPage
+        } else {
+            Placement::Overlay
+        }
+    }
+}
+
 /// The command bar's life (command.tsx): open, then on its way out (`leaving`, the `wb-pop-out`
-/// exit), then gone.
+/// exit), then gone. `at` is where its field is while it lives.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum CommandBar {
     #[default]
@@ -111,14 +133,23 @@ pub enum CommandBar {
     Open {
         mode: CommandMode,
         from: Point,
+        at: Placement,
     },
     Closing {
         mode: CommandMode,
         from: Point,
+        at: Placement,
     },
 }
 
 impl CommandBar {
+    pub fn placement(self) -> Option<Placement> {
+        match self {
+            CommandBar::Closed => None,
+            CommandBar::Open { at, .. } | CommandBar::Closing { at, .. } => Some(at),
+        }
+    }
+
     pub fn mode(self) -> Option<CommandMode> {
         match self {
             CommandBar::Closed => None,
@@ -136,8 +167,13 @@ impl CommandBar {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommandEvent {
-    /// The address pill, New tab, the start page's search or an action opened it.
-    Open { mode: CommandMode, from: Point },
+    /// The address pill, New tab, the start page's search or an action opened it, its field
+    /// `at` the overlay or the start page's capsule ([`Placement::for_page`]).
+    Open {
+        mode: CommandMode,
+        from: Point,
+        at: Placement,
+    },
     /// Escape, a click on the scrim, the keys going elsewhere (`close`).
     Close,
     /// The exit ran its course (`setTimeout(..., CMD.out)`).
@@ -166,10 +202,10 @@ pub fn command(state: CommandBar, event: CommandEvent) -> (CommandBar, Vec<Comma
     use CommandEffect::*;
     use CommandEvent as E;
     match (state, event) {
-        (_, E::Open { mode, from }) => (Open { mode, from }, vec![Disarm, FocusInput]),
-        (Open { mode, from }, E::Close) => (Closing { mode, from }, vec![StartExit]),
+        (_, E::Open { mode, from, at }) => (Open { mode, from, at }, vec![Disarm, FocusInput]),
+        (Open { mode, from, at }, E::Close) => (Closing { mode, from, at }, vec![StartExit]),
         (Closing { .. }, E::Settled) | (Open { .. }, E::Pick) => (Closed, vec![RestoreFocus]),
-        (Open { from, .. }, E::SetMode(mode)) => (Open { mode, from }, vec![FocusInput]),
+        (Open { from, at, .. }, E::SetMode(mode)) => (Open { mode, from, at }, vec![FocusInput]),
         (s, _) => (s, vec![]),
     }
 }
@@ -213,7 +249,11 @@ mod tests {
     const AT: Point = Point { x: 48.0, y: 74.0 };
 
     fn open(mode: CommandMode) -> CommandEvent {
-        CommandEvent::Open { mode, from: AT }
+        CommandEvent::Open {
+            mode,
+            from: AT,
+            at: Placement::Overlay,
+        }
     }
 
     #[test]
@@ -224,7 +264,8 @@ mod tests {
             s,
             CommandBar::Open {
                 mode: CommandMode::New,
-                from: AT
+                from: AT,
+                at: Placement::Overlay,
             }
         );
         assert_eq!(fx, [Disarm, FocusInput]);
@@ -276,7 +317,8 @@ mod tests {
             s,
             CommandBar::Open {
                 mode: CommandMode::Split,
-                from: AT
+                from: AT,
+                at: Placement::Overlay,
             }
         );
         assert_eq!(fx, [Disarm, FocusInput]);
@@ -311,7 +353,8 @@ mod tests {
             s,
             CommandBar::Open {
                 mode: CommandMode::Split,
-                from: AT
+                from: AT,
+                at: Placement::Overlay,
             }
         );
         assert_eq!(fx, [FocusInput]);
@@ -320,6 +363,43 @@ mod tests {
         assert_eq!(
             command(closing, CommandEvent::SetMode(CommandMode::New)),
             (closing, vec![])
+        );
+    }
+
+    #[test]
+    fn the_start_page_keeps_the_field_in_its_capsule() {
+        use CommandEffect::*;
+        assert_eq!(Placement::for_page(true), Placement::InPage);
+        assert_eq!(Placement::for_page(false), Placement::Overlay);
+        let in_page = CommandEvent::Open {
+            mode: CommandMode::Here,
+            from: AT,
+            at: Placement::InPage,
+        };
+        let (s, fx) = command(CommandBar::Closed, in_page);
+        assert_eq!(s.placement(), Some(Placement::InPage));
+        assert_eq!(fx, [Disarm, FocusInput]);
+        // Ctrl+L again on the start page: still in the page, the field takes the keys again
+        let (s, fx) = command(s, in_page);
+        assert_eq!(s.placement(), Some(Placement::InPage));
+        assert_eq!(fx, [Disarm, FocusInput]);
+        // it keeps its place while it leaves, and leaves as the overlay does
+        let (s, fx) = command(s, CommandEvent::Close);
+        assert_eq!(
+            (s.placement(), fx),
+            (Some(Placement::InPage), vec![StartExit])
+        );
+        let (s, fx) = command(s, CommandEvent::Settled);
+        assert_eq!((s, fx), (CommandBar::Closed, vec![RestoreFocus]));
+        assert_eq!(CommandBar::Closed.placement(), None);
+        // an overlay bar opened elsewhere moves into the page when the page asks
+        let s = command(CommandBar::Closed, open(CommandMode::Here)).0;
+        let s = command(s, in_page).0;
+        assert_eq!(s.placement(), Some(Placement::InPage));
+        // a pick closes it at once
+        assert_eq!(
+            command(s, CommandEvent::Pick),
+            (CommandBar::Closed, vec![RestoreFocus])
         );
     }
 

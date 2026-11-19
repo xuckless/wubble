@@ -3,10 +3,12 @@
 //! scene must show its bubble: bright pixels (the W tube, the film, the speculars) inside the
 //! body's circle on the dark liquid. A press and release on the body (real pointer events
 //! through the page's stage) must poke it: a wave runs through it and its pixels change. A press
-//! on a mini pops it. A click on the search capsule opens the command bar (from the capsule);
-//! after Esc, the first tile's site opens in the start tab. With `--shot-dir`: one PNG at rest,
-//! mid-poke, after the pop and with the bar open. Every wait is "until the host sees X", bounded
-//! by a count of CEF work runs, never by time.
+//! on a mini pops it. The search capsule is the page's address field (the command bar in the
+//! page): the new tab opens with it holding the keys; after the stage took them, Ctrl+L gives them
+//! back to it; typed keys land in it and its results show under it; Ctrl+L again keeps them
+//! there; Enter navigates the start tab. The overlay bar never opens. With `--shot-dir`: one PNG
+//! at rest (the capsule focused), mid-poke, after the pop and with the results. Every wait is
+//! "until the host sees X", bounded by a count of CEF work runs, never by time.
 
 use crate::nav_smoke::MAX_WORK_RUNS;
 
@@ -40,11 +42,23 @@ pub struct Seen {
     pub bright: usize,
     /// A hash of the scene's pixels over the body (likewise).
     pub body_pixels: u64,
-    /// The command bar is open.
-    pub bar_open: bool,
+    /// The capsule holds the keys.
+    pub search_focused: bool,
+    /// The command bar is open in the page (its field the capsule).
+    pub in_page: bool,
+    /// The overlay command bar shows.
+    pub overlay: bool,
+    /// The bar's query (the capsule's text).
+    pub query: String,
+    /// The bar's rows.
+    pub rows: usize,
     /// The visible tab left the start page for a site.
     pub navigated: bool,
 }
+
+/// What the smoke types into the capsule: an internal page, so Enter navigates without the
+/// network.
+pub const TYPED: &str = "wubble://history";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
@@ -61,11 +75,15 @@ pub enum Stage {
     },
     /// A mini pressed; waiting for its pop.
     Popping,
-    /// The capsule clicked; waiting for the bar.
+    /// Ctrl+L pressed; waiting for the capsule to take the keys.
     Searching,
-    /// The bar is open; letting it grow from the capsule.
-    BarOpen,
-    /// A tile chosen; waiting for the tab to leave the start page.
+    /// Text typed; waiting for it in the capsule and its results.
+    Typing,
+    /// The results show; letting them grow, then Ctrl+L again.
+    Results,
+    /// Ctrl+L pressed again; the keys must stay in the capsule, the text with them.
+    Reselect,
+    /// Enter pressed; waiting for the tab to leave the start page.
     Navigating,
     Done,
 }
@@ -95,10 +113,10 @@ pub enum Action {
     Shoot(&'static str),
     /// Press and release at this page-local point (the stage's own pointer events).
     Click(f64, f64),
-    /// Click the search capsule.
-    Search,
-    /// Close the bar and choose tile 0.
-    Tile,
+    /// These chords through the host's key path (`parity::chords`).
+    Keys(&'static str),
+    /// This text typed through the host's key path.
+    Type(&'static str),
     Pass,
     Fail(String),
 }
@@ -117,10 +135,19 @@ impl StartSmoke {
 pub fn next(s: StartSmoke, seen: &Seen) -> (StartSmoke, Vec<Action>) {
     use Stage::*;
     let to = |stage| StartSmoke { stage, runs: 0 };
+    let fail = |why: String| Some((Done, vec![Action::Fail(why)]));
+    // the capsule is the page's only address field: the overlay never opens on it
+    let watching = !matches!(s.stage, Start | Pinning | Opening | Done);
+    let focused = seen.search_focused && seen.in_page;
     let step: Option<(Stage, Vec<Action>)> = match s.stage {
+        _ if watching && seen.overlay => fail(format!(
+            "the overlay command bar opened on the start page at {:?}",
+            s.stage
+        )),
         Start if seen.ready => Some((Pinning, vec![Action::Pin])),
         Pinning if seen.pinned => Some((Opening, vec![Action::OpenStart])),
-        Opening if seen.start && seen.body.is_some() => Some((Rest, vec![])),
+        // the new tab's capsule holds the keys
+        Opening if seen.start && seen.body.is_some() && focused => Some((Rest, vec![])),
         Rest if s.wants_pixels() => match seen.body {
             Some((c, _)) if seen.bright >= BRIGHT_MIN && seen.sites >= 1 => Some((
                 Poked {
@@ -128,12 +155,9 @@ pub fn next(s: StartSmoke, seen: &Seen) -> (StartSmoke, Vec<Action>) {
                 },
                 vec![Action::Shoot("rest"), Action::Click(c.0, c.1)],
             )),
-            _ => Some((
-                Done,
-                vec![Action::Fail(format!(
-                    "no bubble on the start page: {} bright pixels (want {BRIGHT_MIN}), {} tiles",
-                    seen.bright, seen.sites
-                ))],
+            _ => fail(format!(
+                "no bubble on the start page: {} bright pixels (want {BRIGHT_MIN}), {} tiles",
+                seen.bright, seen.sites
             )),
         },
         Poked { rest } if s.wants_pixels() && seen.waves > 0 && seen.body_pixels != rest => {
@@ -142,13 +166,28 @@ pub fn next(s: StartSmoke, seen: &Seen) -> (StartSmoke, Vec<Action>) {
                     Popping,
                     vec![Action::Shoot("poke"), Action::Click(m.0, m.1)],
                 )),
-                None => Some((Done, vec![Action::Fail("the poke threw no minis".into())])),
+                None => fail("the poke threw no minis".into()),
             }
         }
-        Popping if seen.pops > 0 => Some((Searching, vec![Action::Shoot("pop"), Action::Search])),
-        Searching if seen.bar_open => Some((BarOpen, vec![])),
-        BarOpen if s.runs >= SETTLE_RUNS => {
-            Some((Navigating, vec![Action::Shoot("bar"), Action::Tile]))
+        // the stage took the keys from the capsule; Ctrl+L gives them back to it
+        Popping if seen.pops > 0 && !seen.search_focused => Some((
+            Searching,
+            vec![Action::Shoot("pop"), Action::Keys("Ctrl+L")],
+        )),
+        Searching if focused => Some((Typing, vec![Action::Type(TYPED)])),
+        Typing if focused && seen.query == TYPED && seen.rows > 0 => Some((Results, vec![])),
+        Results if s.runs >= SETTLE_RUNS => Some((
+            Reselect,
+            vec![Action::Shoot("results"), Action::Keys("Ctrl+L")],
+        )),
+        Reselect if s.runs >= SETTLE_RUNS / 4 => {
+            if focused && seen.query == TYPED {
+                Some((Navigating, vec![Action::Keys("Enter")]))
+            } else {
+                fail(format!(
+                    "Ctrl+L on the start page lost the capsule's keys or text: {seen:?}"
+                ))
+            }
         }
         Navigating if seen.navigated => Some((Done, vec![Action::Pass])),
         _ => None,
@@ -230,6 +269,10 @@ mod tests {
         seen.sites = 1;
         seen.body = Some(((400.0, 300.0), 80.0));
         let (s, _) = next(s, &seen);
+        assert_eq!(s.stage, Stage::Opening, "the capsule must hold the keys");
+        seen.search_focused = true;
+        seen.in_page = true;
+        let (s, _) = next(s, &seen);
         assert_eq!(s.stage, Stage::Rest);
         assert!(!s.wants_pixels());
         seen.bright = BRIGHT_MIN;
@@ -247,15 +290,53 @@ mod tests {
         assert_eq!(a, [Action::Shoot("poke"), Action::Click(10.0, 20.0)]);
         seen.pops = 1;
         let (s, a) = next(s, &seen);
-        assert_eq!(a, [Action::Shoot("pop"), Action::Search]);
-        seen.bar_open = true;
+        assert!(a.is_empty(), "the stage has not taken the keys yet");
+        seen.search_focused = false;
+        seen.in_page = false;
         let (s, a) = next(s, &seen);
-        assert!(a.is_empty(), "the bar grows first");
+        assert_eq!(a, [Action::Shoot("pop"), Action::Keys("Ctrl+L")]);
+        seen.search_focused = true;
+        seen.in_page = true;
+        let (s, a) = next(s, &seen);
+        assert_eq!(a, [Action::Type(TYPED)]);
+        seen.query = TYPED.into();
+        seen.rows = 3;
+        let (s, a) = next(s, &seen);
+        assert!(a.is_empty(), "the results grow first");
         let (s, a) = run(s, &seen, SETTLE_RUNS + 1);
-        assert_eq!(a, [Action::Shoot("bar"), Action::Tile]);
+        assert_eq!(a, [Action::Shoot("results"), Action::Keys("Ctrl+L")]);
+        let (s, a) = run(s, &seen, SETTLE_RUNS / 4 + 1);
+        assert_eq!(a, [Action::Keys("Enter")]);
         seen.navigated = true;
         let (s, a) = next(s, &seen);
         assert_eq!((s.stage, a), (Stage::Done, vec![Action::Pass]));
+    }
+
+    #[test]
+    fn the_overlay_bar_fails_it_and_ctrl_l_must_keep_the_text() {
+        let seen = Seen {
+            overlay: true,
+            ..Seen::default()
+        };
+        let s = StartSmoke {
+            stage: Stage::Searching,
+            runs: 0,
+        };
+        let (s, a) = next(s, &seen);
+        assert_eq!(s.stage, Stage::Done);
+        assert!(matches!(a.as_slice(), [Action::Fail(e)] if e.contains("overlay")));
+        let seen = Seen {
+            search_focused: true,
+            in_page: true,
+            query: String::new(),
+            ..Seen::default()
+        };
+        let s = StartSmoke {
+            stage: Stage::Reselect,
+            runs: SETTLE_RUNS / 4,
+        };
+        let (_, a) = next(s, &seen);
+        assert!(matches!(a.as_slice(), [Action::Fail(e)] if e.contains("Ctrl+L")));
     }
 
     #[test]

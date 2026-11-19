@@ -28,6 +28,9 @@ pub enum KeyFocus {
     Page,
     /// A shell text field (the open command bar): it owns editing keys.
     Field,
+    /// The start page's search capsule, the bar in the page: a field, but the focus-address keys
+    /// still run their action there (they select its text), as the page has no overlay bar.
+    Address,
     /// The shell, with nothing that takes text.
     Shell,
 }
@@ -127,14 +130,19 @@ pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bo
         (KeyFocus::Page, _, true) => KeyRoute::PageAndShell,
         (_, _, true) => KeyRoute::Shell,
         (_, Some((action, Route::Shell)), false) => KeyRoute::Perform(action),
+        (KeyFocus::Address, Some((Action::FocusAddress, _)), false) => {
+            KeyRoute::Perform(Action::FocusAddress)
+        }
         (KeyFocus::Page, Some((action, Route::PageFirst)), false) => KeyRoute::PageFirst(action),
-        (KeyFocus::Field, Some((_, Route::PageFirst)), false) => KeyRoute::Shell,
+        (KeyFocus::Field | KeyFocus::Address, Some((_, Route::PageFirst)), false) => {
+            KeyRoute::Shell
+        }
         (KeyFocus::Shell, Some((action, Route::PageFirst)), false) if action.is_edit() => {
             KeyRoute::Shell
         }
         (KeyFocus::Shell, Some((action, Route::PageFirst)), false) => KeyRoute::Perform(action),
         (KeyFocus::Page, None, false) => KeyRoute::Page,
-        (KeyFocus::Field | KeyFocus::Shell, None, false) => KeyRoute::Shell,
+        (KeyFocus::Field | KeyFocus::Address | KeyFocus::Shell, None, false) => KeyRoute::Shell,
     }
 }
 
@@ -533,10 +541,12 @@ mod tests {
 
     #[test]
     fn key_routes() {
-        use KeyFocus::{Field, Page, Shell};
+        use KeyFocus::{Address, Field, Page, Shell};
         let shell = Some((Action::NewTab, Route::Shell));
         let page_first = Some((Action::Reload, Route::PageFirst));
         let edit = Some((Action::Paste, Route::PageFirst));
+        let focus_address = Some((Action::FocusAddress, Route::PageFirst));
+        let stop = Some((Action::Stop, Route::PageFirst));
         let cases = [
             // Shell-reserved chords run whatever has focus.
             (Page, shell, KeyRoute::Perform(Action::NewTab)),
@@ -555,6 +565,18 @@ mod tests {
             (Page, None, KeyRoute::Page),
             (Field, None, KeyRoute::Shell),
             (Shell, None, KeyRoute::Shell),
+            // The start page's capsule: a field (Escape, arrows and edits are its own), but
+            // Ctrl+L still runs there and selects its text; the overlay's field keeps it.
+            (Address, shell, KeyRoute::Perform(Action::NewTab)),
+            (
+                Address,
+                focus_address,
+                KeyRoute::Perform(Action::FocusAddress),
+            ),
+            (Field, focus_address, KeyRoute::Shell),
+            (Address, stop, KeyRoute::Shell),
+            (Address, edit, KeyRoute::Shell),
+            (Address, None, KeyRoute::Shell),
         ];
         for (focus, binding, want) in cases {
             assert_eq!(

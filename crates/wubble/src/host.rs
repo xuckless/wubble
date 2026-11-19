@@ -1706,12 +1706,18 @@ impl Host {
 
     // ----- command bar
 
-    /// Ctrl+T or the new-tab row: the bar is opening on an empty query.
+    /// The new-tab row: the bar is opening on an empty query. On a start page (already a new
+    /// tab) its capsule takes the keys instead, for the start tab.
     pub fn bar_for_new_tab(&mut self, window: &AppWindow) {
+        if self.shown_page() == Some(InternalPage::Start) {
+            return self.bar_for_address(window);
+        }
         self.open_bar(window, BarMode::NewTab, String::new());
     }
 
-    /// Ctrl+L or the address pill: the bar opens on the visible tab's URL.
+    /// Ctrl+L or the address pill: the bar opens on the visible tab's URL. On a start page the
+    /// bar is its capsule (app.slint, wubble_core::chrome::Placement): it goes to the start tab
+    /// on an empty query, or keeps what was typed there (Ctrl+L again selects it).
     pub fn bar_for_address(&mut self, window: &AppWindow) {
         // a Little or Popup window's address is read-only
         if self.w.kind != wubble_core::window::WindowKind::Main {
@@ -1719,11 +1725,16 @@ impl Host {
         }
         let visible = self.shown();
         match visible.and_then(|t| self.model.tabs.get(&t)) {
+            Some(tab) if InternalPage::from_url(&tab.url) == Some(InternalPage::Start) => {
+                if self.bar.mode != BarMode::Navigate(tab.id) {
+                    self.open_bar(window, BarMode::Navigate(tab.id), String::new());
+                }
+            }
             Some(tab) => {
                 let url = tab.url.clone();
                 self.open_bar(window, BarMode::Navigate(tab.id), url);
             }
-            None => self.bar_for_new_tab(window),
+            None => self.open_bar(window, BarMode::NewTab, String::new()),
         }
     }
 
@@ -2983,7 +2994,10 @@ impl Host {
         let focus = if window.get_web_focused() {
             KeyFocus::Page
         } else if window.get_command_bar_state() != CommandBarState::Closed {
-            KeyFocus::Field
+            match window.get_command_placement() {
+                wubble_ui::CommandPlacement::InPage => KeyFocus::Address,
+                wubble_ui::CommandPlacement::Overlay => KeyFocus::Field,
+            }
         } else {
             KeyFocus::Shell
         };

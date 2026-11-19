@@ -7,25 +7,33 @@
 // it, as `.wb-start-front { pointer-events: none }` lets them through to the canvas; its cursor
 // is the canvas's (`pointer`, `grabbing` while the body is held: core/living.ts:29, 58, 64).
 //
+// The search capsule is the page's address field (owner, 2026-11-19: "for start page the center
+// address bar should be the only driver"): the kit SearchCapsule at `.wb-start-search`'s geometry
+// (54 high, radius 27, padding 20, gap 12, min(520, 100%), its `<kbd>` shortcut while empty),
+// a real input where the web's is a button opening the bar. The command bar lives here while
+// the start page shows (wubble_core::chrome::Placement::InPage): what is typed goes to the same
+// query and suggestions as the overlay bar's, and the results drop beneath the capsule in the
+// kit CommandPanel and CommandList (the bar's thick glass and rows), `TouchMenu.gap` under it as
+// a menu hangs under its trigger (derived: notes/fidelity/derived-review.md). Up / Down move the
+// selection, Enter picks it, Escape clears the text and then lets go of the keys.
 // Slots, each behind ONE component boundary with the design's geometry, filled by the lanes
 // that own the looks:
-// - SLOT search capsule (L3 SearchCapsule): `StartSearch`, a GlassPanel + PressableButton
-//   stand-in (54 high, radius 27, padding 20, gap 12, min(520, 100%)).
 // - SLOT site tile (L3 Button look): `StartTile`, PressableButton's .97 press; the design's icon
 //   hover 1.08 (.45 s spring) and active (1.1, .88) at .12 s are not drawn yet.
 // Entrances: OverlapLayer with the design's delays and durations (start.css `wb-in`: heading
 // 40 ms / .4 s, search 80 ms / .4 s, tile i 120 + 30 i ms / .36 s), blur included (OverlapLook).
 
-import { Palette } from "../gen/tokens.slint";
-import { StartCss } from "../gen/css.slint";
+import { Palette, TouchMenu } from "../gen/tokens.slint";
+import { StartCss, BrowserCss } from "../gen/css.slint";
 import { StartGen } from "../gen/literals.slint";
 import { Role } from "../gen/text.slint";
 import { KitText } from "../text.slint";
 import { GlassPanel } from "../material/glass.slint";
 import { PressableButton } from "../controls/button.slint";
-import { Icon, Glyph } from "../controls/icon.slint";
 import { OverlapLayer } from "../motion/overlap.slint";
-import { GlassTier } from "../../components/model.slint";
+import { SearchCapsule } from "../controls/search-capsule.slint";
+import { CommandPanel, CommandList } from "../chrome/command-list.slint";
+import { CommandBarState, CommandResult, GlassTier } from "../../components/model.slint";
 
 // A site on the start page: the shell's own favourites (wubble's data and wording).
 export struct StartSite {
@@ -44,61 +52,18 @@ export global StartBridge {
     // the search capsule's centre, window coordinates (where the start smoke clicks)
     in-out property <length> search-x;
     in-out property <length> search-y;
-    callback search-clicked(length, length);
+    // the capsule has the keys (what the start smoke checks)
+    in-out property <bool> search-focused;
+    // the driver's FocusInput and RestoreFocus for the bar in the page: each bump takes the keys
+    // (text selected) or lets them go
+    in-out property <int> focus-serial;
+    in-out property <int> release-serial;
     callback site-activated(string);
     // page-local logical px
     callback stage-down(length, length);
     callback stage-move(length, length);
     callback stage-up();
     callback stage-leave();
-}
-
-// SLOT search capsule (L3 SearchCapsule): the `wb-start-search` button.
-component StartSearch inherits PressableButton {
-    in property <string> placeholder;
-    in property <string> shortcut;
-    // `width: min(520px, 100%)`: the button's own layout would shrink it to its content
-    in property <length> capsule-width;
-    padding-x: 0px;
-    border-radius: StartCss.wb-start-search--border-radius;
-    background: transparent;
-    label: root.placeholder;
-    Rectangle {
-        min-width: root.capsule-width;
-        GlassPanel {
-            tier: GlassTier.thin;
-            radius: StartCss.wb-start-search--border-radius;
-            hover: root.hovered;
-            pressed: root.pressed;
-            focused: root.keyboard-focused;
-        }
-        HorizontalLayout {
-            padding-left: StartCss.wb-start-search--padding-left;
-            padding-right: StartCss.wb-start-search--padding-right;
-            spacing: StartCss.wb-start-search--gap;
-            Icon {
-                y: (parent.height - self.height) / 2;
-                path: Glyph.search;
-                size: StartGen.search-icon;
-                tint: root.hovered ? StartCss.wb-start-search-hover--color : StartCss.wb-start-search--color;
-            }
-            KitText {
-                role: Role.wb-start-search;
-                horizontal-stretch: StartCss.wb-start-search-span--flex;
-                vertical-alignment: center;
-                text: root.placeholder;
-                color: root.hovered ? StartCss.wb-start-search-hover--color : StartCss.wb-start-search--color;
-            }
-            // `<kbd class="wb-mono">`
-            KitText {
-                role: Role.wb-mono;
-                font-size: StartCss.wb-start-search-kbd--font-size;
-                vertical-alignment: center;
-                text: root.shortcut;
-                color: StartCss.wb-start-search-kbd--color;
-            }
-        }
-    }
 }
 
 // SLOT site tile (L3 Button look): one `wb-start-site` button, its icon and its name.
@@ -149,11 +114,32 @@ export component StartPage inherits Rectangle {
     in property <bool> shown: true;
     // the body is held (the stage's cursor)
     in property <bool> grabbing;
-    // the capsule's centre in window coordinates (the command bar grows from it)
-    callback search-clicked(length, length);
     callback site-activated(string);
+    // the capsule's centre in window coordinates
     out property <length> search-x: search.absolute-position.x + search.width / 2;
     out property <length> search-y: search.absolute-position.y + search.height / 2;
+    out property <bool> search-focused: search.focused;
+    // The command bar in the page (wubble_core::chrome::Placement::InPage): its state (closed
+    // unless the bar is here), the query (the bar's own), its rows; the driver's effects come
+    // as serials (FocusInput, RestoreFocus).
+    in property <CommandBarState> state: CommandBarState.closed;
+    in-out property <string> query <=> search.text;
+    in property <[CommandResult]> results;
+    in property <int> focus-serial;
+    in property <int> release-serial;
+    changed focus-serial => {
+        list.selected = 0;
+        search.take-focus-all();
+    }
+    changed release-serial => {
+        search.drop-focus();
+    }
+    callback query-changed(string);
+    callback result-chosen(int);
+    // the capsule took or lost the keys
+    callback focus-changed(bool);
+    out property <bool> results-shown: root.state == CommandBarState.open && root.query != "";
+    out property <int> shown-rows: list.count;
     // the stage's pointer, page-local logical px
     callback stage-down(length, length);
     callback stage-move(length, length);
@@ -179,6 +165,8 @@ export component StartPage inherits Rectangle {
         mouse-cursor: root.grabbing ? MouseCursor.grabbing : MouseCursor.pointer;
         pointer-event(e) => {
             if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                // a press on the stage takes the keys from the capsule, as the web's canvas would
+                search.drop-focus();
                 root.stage-down(self.mouse-x, self.mouse-y);
             } else if e.kind == PointerEventKind.move {
                 root.stage-move(self.mouse-x, self.mouse-y);
@@ -224,15 +212,48 @@ export component StartPage inherits Rectangle {
             delay: StartCss.wb-start-search--animation-delay;
             duration: StartCss.wb-start-search--animation-duration;
             height: StartCss.wb-start-search--height;
-            search := StartSearch {
+            search := SearchCapsule {
                 x: (parent.width - root.search-width) / 2;
                 width: root.search-width;
-                capsule-width: root.search-width;
                 height: parent.height;
                 placeholder: root.placeholder;
-                shortcut: root.shortcut;
-                clicked => {
-                    root.search-clicked(root.search-x, root.search-y);
+                radius: StartCss.wb-start-search--border-radius;
+                pad-left: StartCss.wb-start-search--padding-left;
+                pad-right: StartCss.wb-start-search--padding-right;
+                gap: StartCss.wb-start-search--gap;
+                icon-size: StartGen.search-icon;
+                icon-ink: StartCss.wb-start-search--color;
+                role: Role.wb-start-search;
+                ink: StartCss.wb-start-search-hover--color;
+                placeholder-ink: StartCss.wb-start-search--color;
+                // `<kbd class="wb-mono">`
+                hint: root.shortcut;
+                hint-role: {
+                    family: Role.wb-mono.family,
+                    size: StartCss.wb-start-search-kbd--font-size,
+                    weight: Role.wb-mono.weight,
+                    line-height: Role.wb-mono.line-height,
+                };
+                hint-ink: StartCss.wb-start-search-kbd--color;
+                steps: true;
+                edited(text) => {
+                    // `useEffect(() => setSel(0), [q])`
+                    list.selected = 0;
+                    root.query-changed(text);
+                }
+                accepted => {
+                    if root.results-shown {
+                        list.choose-current();
+                    }
+                }
+                step(d) => {
+                    list.step(d);
+                }
+                escaped => {
+                    search.drop-focus();
+                }
+                focus-changed(on) => {
+                    root.focus-changed(on);
                 }
             }
         }
@@ -259,6 +280,34 @@ export component StartPage inherits Rectangle {
                     clicked => {
                         root.site-activated(site.url);
                     }
+                }
+            }
+        }
+    }
+
+    // The bar's results under the capsule: its thick glass and rows (kit CommandPanel and
+    // CommandList), as wide as the capsule, `TouchMenu.gap` below it, growing from its centre.
+    results := CommandPanel {
+        property <length> top: search.absolute-position.y - root.absolute-position.y + search.height + TouchMenu.gap;
+        open: root.results-shown;
+        visible: root.results-shown || self.opacity > 0;
+        over-content: true;
+        x: search.absolute-position.x - root.absolute-position.x;
+        y: self.top;
+        width: search.width;
+        height: BrowserCss.wb-cmd--padding-top + list.height + BrowserCss.wb-cmd--padding-bottom;
+        grow-from: { x: self.width / 2, y: -TouchMenu.gap - search.height / 2 };
+        VerticalLayout {
+            padding-top: BrowserCss.wb-cmd--padding-top;
+            padding-left: BrowserCss.wb-cmd--padding-left;
+            padding-right: BrowserCss.wb-cmd--padding-right;
+            padding-bottom: BrowserCss.wb-cmd--padding-bottom;
+            alignment: start;
+            list := CommandList {
+                results: root.results;
+                shown: root.results-shown;
+                chosen(i) => {
+                    root.result-chosen(i);
                 }
             }
         }

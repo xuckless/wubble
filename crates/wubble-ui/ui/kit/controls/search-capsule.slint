@@ -6,10 +6,14 @@
 // (opacity and blur .2 s, scale .24 s, ease-out), out over .15 s ease-in; hidden it takes no
 // pointer and no focus. Escape with a query clears it and is consumed (else `escaped()` and the
 // key goes on to the sheet or page around it); the clear button clears and gives the focus back to the input.
+// wubble: the geometry, type and inks are properties (the settings page's by default) so the
+// start page's capsule (`.wb-start-search`: 54 high, radius 27, padding 0 20, gap 12, an 18 px
+// icon, 15 px, mist; its `<kbd>` hint while empty) is this same field; Up / Down are `step`
+// for a list under it (derived: notes/fidelity/derived-review.md).
 
 import { Palette, TouchMenu } from "../gen/tokens.slint";
 import { SettingsCss } from "../gen/css.slint";
-import { Role } from "../gen/text.slint";
+import { Role, TextRole } from "../gen/text.slint";
 import { Shell } from "../derived.slint";
 import { KitText } from "../text.slint";
 import { GlassPanel } from "../material/glass.slint";
@@ -23,7 +27,25 @@ import { FocusKeys } from "../../components/focus-ring.slint";
 export component SearchCapsule inherits Rectangle {
     in-out property <string> text <=> input.text;
     in property <string> placeholder;
+    // the geometry, type and inks (`.st-search` unless told otherwise)
+    in property <length> radius: SettingsCss.st-search--border-radius;
+    in property <length> pad-left: SettingsCss.st-search--padding-left;
+    in property <length> pad-right: SettingsCss.st-search--padding-right;
+    in property <length> gap: SettingsCss.st-search--gap;
+    in property <length> icon-size: TouchMenu.search-icon;
+    in property <color> icon-ink: SettingsCss.st-search--color;
+    in property <TextRole> role: Role.st-search-input;
+    in property <color> ink: SettingsCss.st-search-input--color;
+    in property <color> placeholder-ink: SettingsCss.st-search-input-placeholder--color;
+    // a hint after the field while it is empty (the start page's `<kbd>` shortcut)
+    in property <string> hint;
+    in property <TextRole> hint-role: Role.wb-mono;
+    in property <color> hint-ink: SettingsCss.st-search-input-placeholder--color;
     callback edited(string);
+    // Up (-1) / Down (+1), for a list under the field; not taken unless `steps` is on
+    in property <bool> steps: false;
+    callback step(int);
+    callback focus-changed(bool);
     callback accepted(string);
     // Escape in an empty field: a sheet or page around it may close.
     callback escaped();
@@ -38,6 +60,14 @@ export component SearchCapsule inherits Rectangle {
     public function take-focus() {
         input.focus();
     }
+    // the keys come here with the text selected (the address field's focus)
+    public function take-focus-all() {
+        input.focus();
+        input.select-all();
+    }
+    public function drop-focus() {
+        input.clear-focus();
+    }
     function clear-query() {
         input.text = "";
         root.edited("");
@@ -47,7 +77,7 @@ export component SearchCapsule inherits Rectangle {
 
     GlassPanel {
         tier: GlassTier.thin;
-        radius: SettingsCss.st-search--border-radius;
+        radius: root.radius;
         film: root.ring;
         // `cursor: text`: a press anywhere on the capsule focuses the input
         TouchArea {
@@ -57,15 +87,16 @@ export component SearchCapsule inherits Rectangle {
             }
         }
         HorizontalLayout {
-            padding-left: SettingsCss.st-search--padding-left;
-            padding-right: SettingsCss.st-search--padding-right;
-            spacing: SettingsCss.st-search--gap;
+            padding-left: root.pad-left;
+            // the empty clear slot still takes a gap: the padding gives it back
+            padding-right: root.hint != "" && input.text == "" ? max(0px, root.pad-right - root.gap) : root.pad-right;
+            spacing: root.gap;
             VerticalLayout {
                 alignment: center;
                 Icon {
-                    size: TouchMenu.search-icon;
+                    size: root.icon-size;
                     path: Glyph.search;
-                    tint: SettingsCss.st-search--color;
+                    tint: root.icon-ink;
                 }
             }
             Rectangle {
@@ -73,20 +104,20 @@ export component SearchCapsule inherits Rectangle {
                 KitText {
                     width: parent.width;
                     height: parent.height;
-                    role: Role.st-search-input;
+                    role: root.role;
                     text: root.placeholder;
                     visible: input.text == "";
-                    color: SettingsCss.st-search-input-placeholder--color;
+                    color: root.placeholder-ink;
                     vertical-alignment: center;
                     overflow: elide;
                 }
                 input := TextInput {
                     width: parent.width;
                     height: parent.height;
-                    font-family: Role.st-search-input.family;
-                    font-size: Role.st-search-input.size;
-                    font-weight: Role.st-search-input.weight;
-                    color: SettingsCss.st-search-input--color;
+                    font-family: root.role.family;
+                    font-size: root.role.size;
+                    font-weight: root.role.weight;
+                    color: root.ink;
                     selection-background-color: Shell.selection-fill;
                     selection-foreground-color: Shell.selection-ink;
                     vertical-alignment: center;
@@ -98,7 +129,14 @@ export component SearchCapsule inherits Rectangle {
                     accepted => {
                         root.accepted(self.text);
                     }
+                    changed has-focus => {
+                        root.focus-changed(self.has-focus);
+                    }
                     key-pressed(event) => {
+                        if root.steps && (event.text == Key.UpArrow || event.text == Key.DownArrow) {
+                            root.step(event.text == Key.UpArrow ? -1 : 1);
+                            return accept;
+                        }
                         if event.text == Key.Escape {
                             if self.text != "" {
                                 root.clear-query();
@@ -113,10 +151,18 @@ export component SearchCapsule inherits Rectangle {
                     }
                 }
             }
+            // the hint, while the field is empty
+            if root.hint != "" && input.text == "": KitText {
+                role: root.hint-role;
+                text: root.hint;
+                color: root.hint-ink;
+                vertical-alignment: center;
+            }
             VerticalLayout {
                 alignment: center;
                 Rectangle {
-                    width: SettingsCss.wb-st-clear--width;
+                    // the hint takes the clear button's place while the field is empty
+                    width: root.hint != "" && input.text == "" ? 0px : SettingsCss.wb-st-clear--width;
                     height: SettingsCss.wb-st-clear--height;
                     // opacity and blur on one curve, the scale on its own (CSS: three transitions)
                     fade := Tween {

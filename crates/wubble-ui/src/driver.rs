@@ -42,8 +42,9 @@ use wubble_core::tabs::{self, SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
 use crate::{
-    AppWindow, BeamShape, Chrome, CommandBarState, CommandMode, GlassItem, GlassLayer, LeavingRow,
-    Origin, PageScroll, PeekCue, Radius, Shell, SidebarMode, TabItem, sync,
+    AppWindow, BeamShape, Chrome, CommandBarState, CommandMode, CommandPlacement, GlassItem,
+    GlassLayer, InternalPageKind, LeavingRow, Origin, PageScroll, PeekCue, Radius, Shell,
+    SidebarMode, TabItem, sync,
 };
 
 impl From<seam::SidebarMode> for SidebarMode {
@@ -592,6 +593,12 @@ fn command_step(
             chrome::CommandMode::Split => CommandMode::Split,
         });
     }
+    if let Some(at) = state.placement() {
+        window.set_command_placement(match at {
+            chrome::Placement::Overlay => CommandPlacement::Overlay,
+            chrome::Placement::InPage => CommandPlacement::InPage,
+        });
+    }
     if let Some(from) = state.from() {
         window.set_command_origin(Origin {
             x: from.x as f32,
@@ -780,7 +787,9 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
             x: f64::from(from.x),
             y: f64::from(from.y),
         };
-        command_step(&d, &w, &t, CommandEvent::Open { mode, from });
+        // the start page keeps the bar's field in its capsule
+        let at = chrome::Placement::for_page(w.get_page() == InternalPageKind::Start);
+        command_step(&d, &w, &t, CommandEvent::Open { mode, from, at });
     });
     let (d, w, t) = (Rc::clone(&driver), window.as_weak(), Rc::clone(&exit_timer));
     window.on_command_close(move || {

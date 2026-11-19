@@ -71,6 +71,13 @@ export enum CommandBarState {
     closing,
 }
 
+// Where the command bar's field is (mirrors wubble_core::chrome::Placement; the driver writes
+// it): the overlay panel, or the start page's capsule.
+export enum CommandPlacement {
+    overlay,
+    in-page,
+}
+
 // What the command bar opens for (mirrors wubble_core::chrome::CommandMode).
 export enum CommandMode {
     here,
