@@ -2,7 +2,7 @@
 // browser): `node --test tools/fidelity/test/`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { de2000, ssim, deltaE } from '../lib/metrics.mjs';
+import { de2000, ssim, deltaE, maskOf, coverage } from '../lib/metrics.mjs';
 import { cropRects } from '../lib/geometry.mjs';
 import { encode, decode, blank, crop } from '../lib/png.mjs';
 import { parseCss, splitTop } from '../lib/css.mjs';
@@ -25,6 +25,29 @@ test('identical images score SSIM 1 and ΔE 0; different ones less', () => {
   const b = blank(32, 32, [140, 120, 100, 255]);
   assert.ok(ssim(a, b) < 1);
   assert.ok(deltaE(a, b).mean > 5);
+});
+
+test('masked pixels change neither SSIM nor ΔE; unmasked differences still score', () => {
+  const a = blank(40, 20, [100, 120, 140, 255]);
+  for (let i = 0; i < a.data.length; i += 4 * 5) a.data[i] = 30;
+  // b differs from a only inside x 10..19 (a "URL text" region)
+  const b = blank(40, 20, [0, 0, 0, 255]);
+  b.data.set(a.data);
+  for (let y = 0; y < 20; y++) for (let x = 10; x < 20; x++) b.data[(y * 40 + x) * 4 + 1] = 250;
+  assert.ok(ssim(a, b) < 0.95);
+  assert.ok(deltaE(a, b).mean > 5);
+  const m = maskOf(40, 20, [[5, 0, 5, 10]], 2); // logical rect at 2x: x 10..19, y 0..19
+  assert.equal(coverage(m), 0.25);
+  assert.ok(Math.abs(ssim(a, b, m) - 1) < 1e-9);
+  const d = deltaE(a, b, m);
+  assert.equal(d.mean, 0);
+  assert.equal(d.p95, 0);
+  // a difference outside the mask still counts
+  b.data[(5 * 40 + 30) * 4] = 255;
+  assert.ok(ssim(a, b, m) < 1);
+  assert.ok(deltaE(a, b, m).mean > 0);
+  // everything masked: nothing to compare
+  assert.equal(ssim(a, b, maskOf(40, 20, [[0, 0, 40, 20]])), 1);
 });
 
 test('a PNG round-trips', () => {

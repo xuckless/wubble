@@ -36,10 +36,21 @@ function blur(src, w, h, k) {
   return out;
 }
 
-/** Mean SSIM of two images' luma (BT.601), 0..1. */
-export function ssim(a, b) {
+/**
+ * `b` with its masked pixels replaced by `a`'s, so a window straddling the mask's edge sees no
+ * difference from inside it. `mask` is a Uint8Array (1 = excluded) of the images' size, or null.
+ */
+function unmasked(a, b, mask) {
+  if (!mask) return b;
+  const data = Buffer.from(b.data);
+  for (let i = 0; i < mask.length; i++) if (mask[i]) for (let c = 0; c < 4; c++) data[i * 4 + c] = a.data[i * 4 + c];
+  return { ...b, data };
+}
+
+/** Mean SSIM of two images' luma (BT.601), 0..1, over the pixels `mask` (optional) keeps. */
+export function ssim(a, b, mask = null) {
   const w = a.width, h = a.height, n = w * h;
-  const fa = flatten(a), fb = flatten(b);
+  const fa = flatten(a), fb = flatten(unmasked(a, b, mask));
   const x = new Float32Array(n), y = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     x[i] = 0.299 * fa[i * 3] + 0.587 * fa[i * 3 + 1] + 0.114 * fa[i * 3 + 2];
@@ -49,12 +60,14 @@ export function ssim(a, b) {
   const mx = blur(x, w, h, k), my = blur(y, w, h, k);
   const sxx = blur(mul(x, x), w, h, k), syy = blur(mul(y, y), w, h, k), sxy = blur(mul(x, y), w, h, k);
   const C1 = (0.01 * 255) ** 2, C2 = (0.03 * 255) ** 2;
-  let total = 0;
+  let total = 0, kept = 0;
   for (let i = 0; i < n; i++) {
+    if (mask?.[i]) continue;
     const vx = sxx[i] - mx[i] * mx[i], vy = syy[i] - my[i] * my[i], cxy = sxy[i] - mx[i] * my[i];
     total += ((2 * mx[i] * my[i] + C1) * (2 * cxy + C2)) / ((mx[i] ** 2 + my[i] ** 2 + C1) * (vx + vy + C2));
+    kept++;
   }
-  return total / n;
+  return kept ? total / kept : 1;
 }
 
 function lab([r, g, b]) {
@@ -91,9 +104,12 @@ export function de2000([L1, a1, b1], [L2, a2, b2]) {
   return Math.sqrt((dLp / Sl) ** 2 + (dCp / Sc) ** 2 + (dHp / Sh) ** 2 + Rt * (dCp / Sc) * (dHp / Sh));
 }
 
-/** Per-pixel CIEDE2000 (`Float32Array`), its mean and 95th percentile. */
-export function deltaE(a, b) {
-  const n = a.width * a.height, fa = flatten(a), fb = flatten(b), map = new Float32Array(n);
+/**
+ * Per-pixel CIEDE2000 (`Float32Array`, 0 where masked), its mean and 95th percentile over the
+ * pixels `mask` (optional) keeps.
+ */
+export function deltaE(a, b, mask = null) {
+  const n = a.width * a.height, fa = flatten(a), fb = flatten(unmasked(a, b, mask)), map = new Float32Array(n);
   const cache = new Map();
   const labOf = (f, i) => {
     const key = (Math.round(f[i * 3]) << 16) | (Math.round(f[i * 3 + 1]) << 8) | Math.round(f[i * 3 + 2]);
@@ -102,9 +118,16 @@ export function deltaE(a, b) {
     return v;
   };
   let sum = 0;
-  for (let i = 0; i < n; i++) { map[i] = de2000(labOf(fa, i), labOf(fb, i)); sum += map[i]; }
-  const sorted = Float32Array.from(map).sort();
-  return { map, mean: sum / n, p95: sorted[Math.floor(0.95 * (n - 1))] };
+  const kept = [];
+  for (let i = 0; i < n; i++) {
+    if (mask?.[i]) continue;
+    map[i] = de2000(labOf(fa, i), labOf(fb, i));
+    sum += map[i];
+    kept.push(map[i]);
+  }
+  if (!kept.length) return { map, mean: 0, p95: 0 };
+  const sorted = Float32Array.from(kept).sort();
+  return { map, mean: sum / kept.length, p95: sorted[Math.floor(0.95 * (kept.length - 1))] };
 }
 
 /** A heat map of a ΔE map: black at 0, red at 5, yellow at 10 and above. */
@@ -118,4 +141,30 @@ export function heat(map, width, height) {
     data[i * 4 + 3] = 255;
   }
   return { width, height, data };
+}
+
+/** A mask (Uint8Array, 1 = excluded) of a `width` x `height` crop from logical rects scaled by `dpr`. */
+export function maskOf(width, height, rects, dpr = 1) {
+  const m = new Uint8Array(width * height);
+  for (const [x, y, w, h] of rects ?? []) {
+    const x0 = Math.max(0, Math.floor(x * dpr)), y0 = Math.max(0, Math.floor(y * dpr));
+    const x1 = Math.min(width, Math.ceil((x + w) * dpr)), y1 = Math.min(height, Math.ceil((y + h) * dpr));
+    for (let yy = y0; yy < y1; yy++) m.fill(1, yy * width + x0, Math.max(yy * width + x0, yy * width + x1));
+  }
+  return m;
+}
+
+/** The share of a mask's pixels that are excluded, 0..1. */
+export const coverage = m => (m.length ? m.reduce((s, v) => s + v, 0) / m.length : 0);
+
+/** The mask drawn over an image as a grey hatch (for contact sheets). */
+export function hatch(img, mask) {
+  if (!mask) return img;
+  const data = Buffer.from(img.data);
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i] || ((i % img.width) + Math.floor(i / img.width)) % 6 > 1) continue;
+    data[i * 4] = data[i * 4 + 1] = data[i * 4 + 2] = 128;
+    data[i * 4 + 3] = 255;
+  }
+  return { ...img, data };
 }
