@@ -1,7 +1,8 @@
-import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Palette, Motion, Fonts } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier } from "model.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The tab hover preview: title, address and the page's last frame, on thick glass beside the
 // sidebar at the hovered row. Written from scratch: the design repo has no tooltip or hover card
@@ -27,11 +28,11 @@ export component PreviewCard inherits Rectangle {
         over-content: true;
         y: root.shown ? 0px : Shell.preview-rise;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: root.shown ? 1 : Motion.dropdownFrom;
+        transform-scale: root.shown ? 1 : Motion.dropdown-from;
         opacity: root.shown ? 1 : 0;
         animate y, transform-scale, opacity {
-            duration: root.shown ? Shell.preview-in : Shell.preview-out;
-            easing: root.shown ? Motion.easeOut : Motion.easeIn;
+            duration: Calm.ms(root.shown ? Shell.preview-in : Shell.preview-out);
+            easing: root.shown ? Motion.ease-out : Motion.ease-in;
         }
         VerticalLayout {
             padding: Shell.preview-pad;

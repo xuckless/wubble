@@ -1,0 +1,16 @@
+// design: core/wubble.css:6-10, core/tokens.ts:64-69 @598f814
+// KitText: the one text element. A role (gen/text.slint, generated from the type scale and every
+// font rule of the design's stylesheets) sets the face, size and weight; the caller sets the
+// colour and the layout. Slint text has no line height: `line` is the role's line box (size times
+// line height) for callers that size a row to it; a single line sits centred in its box as CSS
+// centres it. The design sets no letter spacing anywhere, so there is none.
+
+import { TextRole, Role } from "gen/text.slint";
+
+export component KitText inherits Text {
+    in property <TextRole> role: Role.body;
+    out property <length> line: root.role.size * root.role.line-height;
+    font-family: root.role.family;
+    font-size: root.role.size;
+    font-weight: root.role.weight;
+}

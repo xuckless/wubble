@@ -1,11 +1,13 @@
-// derived: Shell values (moved unchanged from ui/app-tokens.slint); each is to become an
-// expression of gen/tokens.slint or gen/css.slint (lane L2), see notes/fidelity gen-diff.
+// derived: Shell values: design values by name (aliases of gen/tokens.slint, gen/css.slint,
+// gen/text.slint), the wubble-only ones in the `derived:` block at the end, each citing its rule.
 // Values wubble's own components need that tokens.slint (the design repo's port) has no token
 // for. Each comes from the design repo's web chrome, `src/wubble/browser/browser.css` and
 // `icons.tsx` (xuckless/the-wallpaper-project @ 6c840da), named by its CSS rule. Nothing here
 // repeats a value tokens.slint already has.
 
-import { Chrome } from "../tokens.slint";
+import { Chrome, Palette, Glass, Keyframes, Motion } from "gen/tokens.slint";
+import { BrowserCss, SettingsCss, TouchCss } from "gen/css.slint";
+import { Role } from "gen/text.slint";
 
 export global Shell {
     // Touch sizing: the host sets it from the input kind (a touch flips it on, a mouse move off)
@@ -14,8 +16,7 @@ export global Shell {
     out property <length> row: touch ? Chrome.rowTouch : Chrome.row;
     // Selected text in every text field: the Space sky as a translucent fill with ink on top.
     // Slint's default selection foreground is dark, which vanished on the old dark fill.
-    out property <color> selection-fill: rgba(124, 200, 255, 0.35);
-    out property <color> selection-ink: #F2F4FA;
+    out property <color> selection-ink: Palette.ink;
     // One logical pixel: divide a length by it to get a plain number.
     out property <length> px: 1px;
     // Middle-click autoscroll's pointer (components/autoscroll-cursor.slint): the anchor ring and
@@ -33,75 +34,67 @@ export global Shell {
     out property <length> edge-width: 5px;
     out property <length> edge-corner: 10px;
     // .wb-nav: gap 2, pulled 4 right; .wb-ib: 30 square, radius 9, white 7 % on hover, 35 % disabled
-    out property <length> nav-gap: 2px;
+    out property <length> nav-gap: BrowserCss.wb-nav--gap;
     out property <length> nav-pull: 4px;
     // The keyboard focus ring (core/wubble.css `.wb :focus-visible { outline: 2px solid
     // var(--wb-sky); outline-offset: 2px }`), drawn by FocusRing.
     out property <length> focus-ring-width: 2px;
     out property <length> focus-ring-offset: 2px;
-    out property <length> icon-button: 30px;
-    out property <length> icon-button-radius: 9px;
-    out property <color> icon-button-hover: rgba(255, 255, 255, 0.07);
-    out property <float> icon-button-disabled: 0.35;
-    out property <duration> icon-button-ms: 150ms;   // .wb-ib transition: color .15s
+    out property <length> icon-button: BrowserCss.wb-ib--width;
+    out property <length> icon-button-radius: BrowserCss.wb-ib--border-radius;
+    out property <color> icon-button-hover: BrowserCss.wb-ib-hover-not-disabled--background;
+    out property <float> icon-button-disabled: BrowserCss.wb-ib-disabled--opacity;
+    out property <duration> icon-button-ms: BrowserCss.wb-ib--transition-color-duration;   // .wb-ib transition: color .15s
     // wubble.css wb-wob: the icon wobble on a hit
-    out property <duration> wobble-ms: 550ms;
+    out property <duration> wobble-ms: Keyframes.wobble-ms;
     // The outgoing page rises this far as it leaves (webview.tsx `wb-out`).
     out property <length> page-exit-shift: 5px;
     // Chrome buttons release at a third of the squash token (touch.tsx Buttons).
-    out property <float> squash-chrome: 0.3333;
     // how far a press on bare chrome travels before it moves the window
     out property <length> move-threshold: 4px;
     // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
     out property <length> side-top: 30px;
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
-    out property <duration> light-fill-ms: 200ms;
-    out property <duration> light-glyph-ms: 150ms;
+    out property <duration> light-fill-ms: BrowserCss.wb-light--transition-background-color-duration;
+    out property <duration> light-glyph-ms: BrowserCss.wb-light--transition-color-duration;
     out property <length> light: 12px;
     out property <length> light-gap: 8px;
     out property <length> light-gap-rail: 6px;
     out property <length> light-glyph: 8px;
-    out property <color> light-rest: rgba(255, 255, 255, 0.18);
+    out property <color> light-rest: BrowserCss.wb-light--background;
     out property <color> light-glyph-ink: rgba(8, 9, 13, 0.7);
     out property <float> light-press-x: 0.8;
     out property <float> light-press-y: 1.15;
     // the ring's width: GlassPanel's film rim (1.5)
-    out property <length> glow-width: 1.5px;
+    out property <length> glow-width: Glass.film-width;
     // the checkbox's tick lands this long behind its fill (touch.tsx CHECKS.tickDelay)
-    out property <duration> check-tick-delay: 70ms;
     // …and leaves first, faster (touch.css `.tp-ck-box path`: .1 s)
     out property <duration> check-tick-out: 100ms;
     // .wb-tab-x: a 22 px tile, radius 7, white 10% while hovered
-    out property <length> tab-close-radius: 7px;
+    out property <length> tab-close-radius: BrowserCss.wb-tab-x--border-radius;
     // a closed row shrinks to 0.94 as it leaves (browser.css `wb-tab-out`)
-    out property <float> tab-exit-shrink: 0.06;
     out property <color> tab-close-hover: rgba(255, 255, 255, 0.1);
     // The Slint border beam's tail, in strokes (border-beam.slint)
-    out property <int> beam-segments: 10;
     // one logical px: lengths to the beam path's viewbox numbers
     out property <length> beam-unit: 1px;
     // …and its bloom: a wide faint stroke under the line (the shader blurs; Slint cannot)
     out property <length> beam-bloom: 5px;
-    out property <float> beam-bloom-alpha: 0.3;
     // browser.css .wb-side-peek: padding 10 8 10 10 (the extended sidebar's is side-pad, 6)
-    out property <length> peek-pad-start: 10px;
-    out property <length> peek-pad-end: 8px;
-    out property <length> peek-pad-y: 10px;
+    out property <length> peek-pad-start: BrowserCss.wb-side-peek--padding-left;
+    out property <length> peek-pad-end: BrowserCss.wb-side-peek--padding-right;
+    out property <length> peek-pad-y: BrowserCss.wb-side-peek--padding-top;
     // Stand-in for the backdrop blur (.wb-thick: blur 44) while the wgpu pass is not under the
     // panel: thick glass over the page at .94, so the page cannot be read through the text.
-    out property <color> thick-unblurred-fill: rgba(28, 31, 40, 0.94);
-    out property <length> window-width: 1280px;
-    out property <length> window-height: 800px;
 
     // .wb-side: padding 6; the content edge is 14 px from the window (inset 8 + 6), and every
     // icon and label starts 10 px further in, at 24.
-    out property <length> side-pad: 6px;
+    out property <length> side-pad: BrowserCss.wb-side--padding;
     out property <length> side-grid: 10px;
     // controls inside the sidebar: 12 (the web view's 14 minus the 2 px they sit inside)
     out property <length> control-radius: 12px;
     // .wb-tabs-rail .wb-tab, .wb-rail-addr, .wb-favs-rail: 40 wide, favourites 6 apart
     out property <length> rail-item: 40px;
-    out property <length> rail-gap: 6px;
+    out property <length> rail-gap: BrowserCss.wb-favs-rail--gap;
 
     // icons.tsx: 24 grid, 1.7 stroke, round caps
     out property <length> icon: 16px;
@@ -114,35 +107,34 @@ export global Shell {
     out property <length> folder-indent: 14px;
     // .wb-address: icon 13 at stroke 1.9, pressed to .985 over .2 s
     out property <length> address-icon: 13px;
-    out property <float> address-icon-stroke: 1.9;
-    out property <float> address-press: 0.985;
-    out property <duration> address-press-ms: 200ms;
+    out property <float> address-press: BrowserCss.wb-address-active--transform-scale;
+    out property <duration> address-press-ms: BrowserCss.wb-address--transition-transform-duration;
     // .wb-favs: 4 columns; .wb-fav > .wb-icon 18, scale 1.1 on hover over .36 s (spring ease)
     out property <int> fav-columns: 4;
     out property <length> fav-icon: 18px;
-    out property <float> fav-hover-scale: 1.1;
-    out property <duration> fav-hover-ms: 360ms;
+    out property <float> fav-hover-scale: BrowserCss.wb-fav-hover-gt-wb-icon--scale;
+    out property <duration> fav-hover-ms: BrowserCss.wb-fav-gt-wb-icon--transition-scale-duration;
     // .wb-tab-ind: white 12 %, the selected favourite's fill
-    out property <color> selected-fill: rgba(255, 255, 255, 0.12);
+    out property <color> selected-fill: BrowserCss.wb-tab-ind--background;
     // a CSS inset rim's or lip's width
     out property <length> hairline: 1px;
     // .wb-tab-ind (@ 21838b8): box-shadow inset 0 1px 0 white 20 % (the top highlight),
     // inset 0 0 0 1px white 6 % (the rim), 0 6px 14px black 28 % (the drop shadow)
-    out property <color> selected-highlight: rgba(255, 255, 255, 0.2);
-    out property <color> selected-rim: rgba(255, 255, 255, 0.06);
-    out property <length> selected-shadow-y: 6px;
-    out property <length> selected-shadow-blur: 14px;
-    out property <color> selected-shadow: rgba(0, 0, 0, 0.28);
+    out property <color> selected-highlight: BrowserCss.wb-tab-ind--box-shadow-shadow-1-color;
+    out property <color> selected-rim: BrowserCss.wb-tab-ind--box-shadow-shadow-2-color;
+    out property <length> selected-shadow-y: BrowserCss.wb-tab-ind--box-shadow-shadow-3-y;
+    out property <length> selected-shadow-blur: BrowserCss.wb-tab-ind--box-shadow-shadow-3-blur;
+    out property <color> selected-shadow: BrowserCss.wb-tab-ind--box-shadow-shadow-3-color;
     // .wb-tab: title #C3C8D4 at 13.5 (ink when on), white 4.5 % on hover
-    out property <color> tab-ink: #C3C8D4;
-    out property <length> tab-font: 13.5px;
+    out property <color> tab-ink: BrowserCss.wb-tab--color;
+    out property <length> tab-font: BrowserCss.wb-tab--font-size;
     out property <color> row-hover: rgba(255, 255, 255, 0.045);
     // .wb-newtab: plus 15 at stroke 2
     out property <length> new-tab-icon: 15px;
     out property <float> new-tab-stroke: 2;
     // .wb-space-name: 18 high, 2 px top padding
-    out property <length> space-name-height: 18px;
-    out property <length> space-name-top: 2px;
+    out property <length> space-name-height: BrowserCss.wb-space-name--height;
+    out property <length> space-name-top: BrowserCss.wb-space-name--padding-top;
     // .wb-spaces: 36 tiles 2 apart (pitch 38 = SpaceSwitcher::PITCH), drawn at 17;
     // .wb-spaces-ind: accent at 20 %, colour change over .4 s
     out property <length> space-tile: 36px;
@@ -150,51 +142,45 @@ export global Shell {
     // follows the pointer and the content edge it would split into.
     out property <length> drag-ghost-max: 280px;
     out property <length> drag-ghost-blur: 12px;
-    out property <color> drag-ghost-shadow: rgba(0, 0, 0, 0.25);
     out property <length> drag-zone-border: 2px;
     out property <length> space-gap: 2px;
     out property <length> space-glyph: 17px;
     // .wb-side-bottom > .wb-ib: 36 square (radius control-radius); .wb-side-bottom-rail: gap 10
     out property <length> side-bottom-button: 36px;
     out property <length> side-bottom-gap-rail: 10px;
-    out property <float> capsule-alpha: 0.2;
-    out property <duration> capsule-colour-ms: 400ms;
+    out property <float> capsule-alpha: BrowserCss.wb-spaces-ind--opacity;
+    out property <duration> capsule-colour-ms: BrowserCss.wb-spaces-ind--transition-background-color-duration;
 
     // chrome.tsx: the sidebar takes room beside the web view once wider than this
-    out property <length> sidebar-open: 0.5px;
 
     // browser.css .wb-split-grab: a split seam's hit strip, centred on the seam (chrome.tsx
     // `sm.x - 10`); the Slint port's 12 px left 2 px of page each side of the 8 px gap
-    out property <length> split-grab: 20px;
+    out property <length> split-grab: BrowserCss.wb-split-grab--width;
 
     // A glass panel's clip range when nothing clips it (GlassPanel `clip-start`/`clip-end`)
-    out property <length> no-clip: 100000px;
 
     // chrome.tsx: a hidden sidebar peeks 60 ms after the pointer reaches the edge strip and
     // hides 260 ms after it leaves; .wb-side-peek slides in over .34 s from 20 % opacity,
     // 16 px past its own width.
-    out property <duration> peek-in: 60ms;
-    out property <duration> peek-out: 260ms;
-    out property <duration> peek-slide: 340ms;
+    out property <duration> peek-slide: BrowserCss.wb-side-peek--animation-duration;
     out property <float> peek-from: 0.2;
     out property <length> peek-travel: 16px;
 
     // .wb-cmd: 600 wide, 72 from the top, padding 6 8 8, radius 20; .wb-cmd-in 52 high at 17;
     // .wb-cmd-head padding 0 4 0 12; .wb-cmd-row 44 high, padding 0 12, gap 12;
     // .wb-cmd-sel white 8 %; .wb-scrim black-blue 32 %; .wb-cmd-icon 18
-    out property <length> command-bar-width: 600px;
     out property <length> command-bar-top: 72px;
-    out property <length> command-input-height: 52px;
-    out property <length> command-input-font: 17px;
-    out property <length> command-row-height: 44px;
+    out property <length> command-input-height: BrowserCss.wb-cmd-in--height;
+    out property <length> command-input-font: BrowserCss.wb-cmd-in--font-size;
+    out property <length> command-row-height: BrowserCss.wb-cmd-row--height;
     out property <length> command-icon: 18px;
     out property <int> command-max-rows: 7;   // command.tsx CMD.rows
     out property <duration> scrim-in: 200ms;
     out property <duration> scrim-out: 160ms;
-    out property <duration> command-sel-ms: 180ms;
-    out property <duration> command-sel-fade: 150ms;
+    out property <duration> command-sel-ms: BrowserCss.wb-cmd-sel--transition-transform-duration;
+    out property <duration> command-sel-fade: BrowserCss.wb-cmd-sel--transition-opacity-duration;
     out property <length> shortcut-hint-width: 72px;
-    out property <color> command-selected: rgba(255, 255, 255, 0.08);
+    out property <color> command-selected: BrowserCss.wb-cmd-sel--background;
     out property <color> scrim: rgba(5, 6, 9, 0.32);
 
     // ── The page's own UI. The design repo has no menu, sheet, toast or find bar; their looks
@@ -219,14 +205,12 @@ export global Shell {
     out property <length> sheet-pad: 26px;
     out property <length> sheet-radius: 20px;
     out property <length> sheet-title: 19px;
-    out property <int> sheet-title-weight: 560;
-    out property <length> sheet-body: 14.5px;
     out property <length> sheet-button: 42px;
     out property <length> sheet-button-radius: 11px;
     out property <length> sheet-button-pad: 16px;
     out property <length> sheet-input: 40px;
-    out property <duration> sheet-in: 300ms;
-    out property <float> sheet-from: 0.95;
+    out property <duration> sheet-in: Motion.dropdown-in;
+    out property <float> sheet-from: Motion.dropdown-from;
     // The link status bubble (status-bubble.slint): Chromium's status bubble, capsule-shaped.
     out property <length> status-height: 24px;
     out property <length> status-pad: 10px;
@@ -234,8 +218,8 @@ export global Shell {
     out property <length> status-text: 12px;
     // Chromium's fades (kShowFadeDuration 120, kHideFadeDuration 200) and pointer padding
     // (kMousePadding 20); the move to the right edge, Firefox's mirror, over 160 ms.
-    out property <duration> status-in: 120ms;
-    out property <duration> status-out: 200ms;
+    out property <duration> status-in: TouchCss.tp-tip-show--transition-opacity-duration;
+    out property <duration> status-out: TouchCss.tp-tip--transition-opacity-duration;
     out property <duration> status-move: 160ms;
     out property <length> status-dodge: 20px;
     out property <length> status-border: 1px;
@@ -243,17 +227,16 @@ export global Shell {
     // `DOCK.glideMs`), 8 px from what it labels, kept 4 px inside the window.
     out property <length> tip-height: 30px;
     out property <length> tip-pad: 11px;
-    out property <length> tip-radius: 10px;
-    out property <length> tip-text: 12.5px;
-    out property <length> tip-rise: 4px;
+    out property <length> tip-radius: TouchCss.tp-tip--border-radius;
+    out property <length> tip-text: TouchCss.tp-tip--font-size;
+    out property <length> tip-rise: TouchCss.tp-tip--transform-translatey;
     out property <length> tip-gap: 8px;
     out property <length> tip-edge: 4px;
-    out property <duration> tip-glide: 260ms;
     // .tp-tip / .tp-tip.show: opacity in .16 s, rise in .2 s (ease-out); out .13 s / .16 s.
-    out property <duration> tip-fade-in: 160ms;
-    out property <duration> tip-fade-out: 130ms;
-    out property <duration> tip-rise-in: 200ms;
-    out property <duration> tip-rise-out: 160ms;
+    out property <duration> tip-fade-in: TouchCss.tp-tip-show--transition-opacity-duration;
+    out property <duration> tip-fade-out: TouchCss.tp-tip--transition-opacity-duration;
+    out property <duration> tip-rise-in: TouchCss.tp-tip-show--transition-transform-duration;
+    out property <duration> tip-rise-out: TouchCss.tp-tip--transition-transform-duration;
     // .ur-o-toast: 46 high, padding 0 12, radius 14, 14 / 540; rises 14 px from .95 over a
     // 400 ms spring. Shown for 1.5 s (Chromium's zoom bubble closes after 1.5 s).
     out property <length> toast-height: 46px;
@@ -262,12 +245,10 @@ export global Shell {
     out property <length> toast-max-width: 520px;
     out property <length> toast-pad: 16px;
     out property <length> toast-font: 14px;
-    out property <int> toast-weight: 540;
     out property <length> toast-radius: 14px;
     out property <length> toast-rise: 14px;
-    out property <duration> toast-in: 400ms;
-    out property <duration> toast-out: 190ms;
-    out property <duration> toast-shown: 1500ms;
+    out property <duration> toast-in: Motion.overlap-in;
+    out property <duration> toast-out: Motion.overlap-out;
     // The tab preview card (ur-o-tip numbers: scale .95 and a 3 px rise, .18 s in, .13 s out).
     out property <length> preview-width: 240px;
     out property <length> preview-pad: 10px;
@@ -277,11 +258,10 @@ export global Shell {
     out property <length> preview-rise: 3px;
     out property <length> preview-title: 13px;
     out property <length> preview-address: 11.5px;
-    out property <duration> preview-in: 180ms;
-    out property <duration> preview-out: 130ms;
+    out property <duration> preview-in: TouchCss.tp-tip-show--transition-opacity-duration;
+    out property <duration> preview-out: TouchCss.tp-tip--transition-opacity-duration;
     // The Boost editor docked beside the page.
     out property <length> boost-panel-width: 340px;
-    out property <length> boost-code-height: 150px;
     out property <length> boost-swatch: 22px;
     out property <length> boost-swatch-ring: 2px;
     out property <length> boost-swatch-rim: 1px;
@@ -293,10 +273,7 @@ export global Shell {
     out property <length> video-strip-width: 380px;
     // The picture-in-picture window (Chromium's overlay window opens about this size, and goes
     // no smaller than its controls need).
-    out property <length> pip-width: 400px;
-    out property <length> pip-height: 225px;
     out property <length> pip-min-width: 240px;
-    out property <length> pip-min-height: 135px;
     // The collapsed strip's tab at the page's right edge: its width (the glyph plus a little).
     out property <length> video-tab-width: 22px;
     // The find bar: an .ur-o-surface strip at the content's top right (Chromium's place), the
@@ -320,7 +297,6 @@ export global Shell {
     out property <length> error-icon: 40px;
     // The prompt's "remember" check box: a 1 px rim, a 1.6 px tick.
     out property <length> check-rim: 1px;
-    out property <length> check-tick: 1.6px;
 
     // The settings page (wubble://settings), from the design repo's `pages/settings.css` and the
     // touch kit's `pages/touch.css` (xuckless/the-wallpaper-project @ 21838b8), by rule.
@@ -328,87 +304,85 @@ export global Shell {
     // 48 apart. .st-pin h1: 40, 20 below, 4 in. The pinned column rides 24 below the page's top
     // once scrolled (settings.tsx onScroll `y + 24 - top0`); the nav tracks the last section
     // whose top is within 140 of the top (`t <= y + 140`).
-    out property <length> settings-max: 1120px;
+    out property <length> settings-max: SettingsCss.st-grid--max-width;
     out property <length> settings-top: 48px;
     out property <length> settings-bottom: 96px;
     out property <length> settings-pad-min: 16px;
     out property <length> settings-pad-max: 48px;
-    out property <float> settings-pad-share: 0.04;
-    out property <length> settings-side: 232px;
-    out property <length> settings-gap: 48px;
-    out property <length> settings-title: 40px;
+    out property <length> settings-side: SettingsCss.st-grid--grid-template-columns-1;
+    out property <length> settings-gap: SettingsCss.st-grid--gap-column;
+    out property <length> settings-title: Role.st-title.size;
     out property <length> settings-title-below: 20px;
     out property <length> settings-title-in: 4px;
     out property <length> settings-pin: 24px;
-    out property <length> settings-spy: 140px;
     // the page's end counts from 2 short of it (`y >= scroll.max() - 2`): the last section is then
     // the current one
     out property <length> settings-end-slack: 2px;
     // .st-search: 40 high, radius 20, padding 0 6 0 14, gap 8, text 14; .st-clear 28, white 10 %
-    out property <length> search-height: 40px;
-    out property <length> search-pad-start: 14px;
-    out property <length> search-pad-end: 6px;
-    out property <length> search-font: 14px;
+    out property <length> search-height: SettingsCss.st-search--height;
+    out property <length> search-pad-start: SettingsCss.st-search--padding-left;
+    out property <length> search-pad-end: SettingsCss.st-search--padding-right;
+    out property <length> search-font: SettingsCss.st-search-input--font-size;
     out property <length> search-clear: 28px;
     out property <length> search-clear-icon: 14px;
-    out property <color> search-clear-fill: rgba(255, 255, 255, 0.1);
+    out property <color> search-clear-fill: SettingsCss.wb-st-clear--background;
     // .st-count: 18 high at 12.5, 8 above, 12 below, 14 in
-    out property <length> count-height: 18px;
-    out property <length> count-above: 8px;
-    out property <length> count-below: 12px;
-    out property <length> count-in: 14px;
-    out property <length> count-font: 12.5px;
+    out property <length> count-height: SettingsCss.st-count--height;
+    out property <length> count-above: SettingsCss.st-count--margin-top;
+    out property <length> count-below: SettingsCss.st-count--margin-bottom;
+    out property <length> count-in: SettingsCss.st-count--margin-left;
+    out property <length> count-font: SettingsCss.st-count--font-size;
     // .st-nav: rows 36, 2 apart, radius 12, padding 0 12, icon gap 11, 13.5; disabled .32;
     // .st-nav-ind: white 8 %, inset 0 1px 0 white 7 %
-    out property <length> nav-row: 36px;
-    out property <length> nav-row-gap: 2px;
-    out property <length> nav-pad: 12px;
-    out property <length> nav-icon-gap: 11px;
-    out property <length> nav-font: 13.5px;
+    out property <length> nav-row: SettingsCss.wb-st-nav-btn--height;
+    out property <length> nav-row-gap: SettingsCss.st-nav--gap;
+    out property <length> nav-pad: SettingsCss.wb-st-nav-btn--padding-left;
+    out property <length> nav-icon-gap: SettingsCss.wb-st-nav-btn--gap;
+    out property <length> nav-font: SettingsCss.wb-st-nav-btn--font-size;
     out property <float> nav-disabled: 0.32;
-    out property <color> nav-fill: rgba(255, 255, 255, 0.08);
-    out property <color> nav-highlight: rgba(255, 255, 255, 0.07);
+    out property <color> nav-fill: SettingsCss.st-nav-ind--background;
+    out property <color> nav-highlight: SettingsCss.st-nav-ind--box-shadow-shadow-1-color;
     // .st-main: 60 down; .st-sec-head 32 high, margin 0 6 8 8, h2 19 / 600 display;
     // .st-sec-body 40 below
-    out property <length> section-top: 60px;
-    out property <length> section-head: 32px;
+    out property <length> section-top: SettingsCss.st-main--padding-top;
+    out property <length> section-head: SettingsCss.st-sec-head--height;
     out property <length> section-head-in: 8px;
-    out property <length> section-head-end: 6px;
+    out property <length> section-head-end: SettingsCss.st-sec-head--margin-right;
     out property <length> section-head-below: 8px;
-    out property <length> section-title: 19px;
-    out property <length> section-below: 40px;
+    out property <length> section-title: Role.st-sec-head-h2.size;
+    out property <length> section-below: SettingsCss.st-sec-body--padding-bottom;
     // .st-card: padding 6, radius 20, white 3.5 %, inset 0 1px 0 white 6 %
-    out property <length> card-pad: 6px;
-    out property <color> settings-card: rgba(255, 255, 255, 0.035);
-    out property <color> card-highlight: rgba(255, 255, 255, 0.06);
+    out property <length> card-pad: SettingsCss.st-card--padding;
+    out property <color> settings-card: SettingsCss.st-card--background;
+    out property <color> card-highlight: SettingsCss.st-card--box-shadow-shadow-1-color;
     // .st-row: min 60, padding 11 14, radius 14, gap 16; tap rows white 4 % on hover;
     // title 14 / 500, note 13 mist 2 below
-    out property <length> settings-row: 60px;
+    out property <length> settings-row: SettingsCss.st-row--min-height;
     out property <length> row-pad-y: 11px;
     out property <length> row-pad-x: 14px;
-    out property <length> row-gap: 16px;
+    out property <length> row-gap: SettingsCss.st-row--gap-column;
     out property <color> row-tap-hover: rgba(255, 255, 255, 0.04);
-    out property <length> row-title: 14px;
-    out property <length> row-note: 13px;
+    out property <length> row-title: Role.st-row-title.size;
+    out property <length> row-note: Role.st-row-note.size;
     out property <length> row-note-above: 2px;
     // .st-reset: 28 high, padding 0 11, radius 9, 13 / 500 mist; white 7 % and ink on hover
-    out property <length> reset-height: 28px;
+    out property <length> reset-height: SettingsCss.wb-st-reset--height;
     out property <length> reset-pad: 11px;
-    out property <length> reset-radius: 9px;
-    out property <length> reset-font: 13px;
+    out property <length> reset-radius: SettingsCss.wb-st-reset--border-radius;
+    out property <length> reset-font: SettingsCss.wb-st-reset--font-size;
     out property <color> reset-hover: rgba(255, 255, 255, 0.07);
     // The springy controls (components/controls/, `wubble_core::controls`): the film rim fades
     // in 200 ms and out 150 ms (.wb-film, as GlassPanel's rim); the toggle's travel in the
     // design (track 92 − 2 × inset 5 − knob 42), the unit the Rust machine counts in; one px of
     // those units as a length.
-    out property <duration> film-in: 200ms;
-    out property <duration> film-out: 150ms;
+    out property <duration> film-in: Glass.film-in;
+    out property <duration> film-out: Glass.film-out;
     out property <length> toggle-design-travel: 40px;
     out property <length> control-unit: 1px;
     // .tp-tg-sm: 50 x 30, padding 3, knob 24 (mist, ink when on), shadow 0 2px 5px / .4 and
     // inset 0 1px 0 white 40 %; the body is .wb-thin; the accent fill fades in when on
-    out property <length> toggle-width: 50px;
-    out property <length> toggle-height: 30px;
+    out property <length> toggle-width: TouchCss.wb-tp-tg-sm--width;
+    out property <length> toggle-height: TouchCss.wb-tp-tg-sm--height;
     out property <length> toggle-knob: 24px;
     out property <length> toggle-inset: 3px;
     out property <length> toggle-shadow-blur: 5px;
@@ -417,20 +391,20 @@ export global Shell {
     out property <color> knob-highlight: rgba(255, 255, 255, 0.4);
     // .st-seg: padding 3, radius 12 on .wb-thin; segments 30 high, padding 0 13, radius 9, 13;
     // .tp-seg-ind ink, shadow 0 4px 12px / .35, its label abyss
-    out property <length> seg-pad: 3px;
-    out property <length> seg-radius: 12px;
+    out property <length> seg-pad: SettingsCss.st-seg--padding;
+    out property <length> seg-radius: SettingsCss.st-seg--border-radius;
     out property <length> seg-height: 30px;
     out property <length> seg-inner-radius: 9px;
     out property <length> seg-label-pad: 13px;
     out property <length> seg-label: 13px;
-    out property <length> seg-shadow-blur: 12px;
-    out property <length> seg-shadow-y: 4px;
-    out property <color> seg-shadow: rgba(0, 0, 0, 0.35);
+    out property <length> seg-shadow-blur: TouchCss.tp-seg-ind--box-shadow-shadow-1-blur;
+    out property <length> seg-shadow-y: TouchCss.tp-seg-ind--box-shadow-shadow-1-y;
+    out property <color> seg-shadow: TouchCss.tp-seg-ind--box-shadow-shadow-1-color;
     // .tp-sl: 44 high, rail 8 radius 4 at white 12 % with inset 0 1px 0 white 10 %, knob 26 ink,
     // shadow 0 6px 14px / .5; .st-slider 240 wide, its value (13 / 500 ink) at the end, 6 into it
     out property <color> track: rgba(255, 255, 255, 0.12);
     out property <color> rail-highlight: rgba(255, 255, 255, 0.1);
-    out property <length> slider-height: 44px;
+    out property <length> slider-height: TouchCss.tp-sl--height;
     out property <length> slider-rail: 8px;
     out property <length> slider-knob: 26px;
     out property <length> slider-width: 240px;
@@ -444,7 +418,7 @@ export global Shell {
     out property <length> stepper-field: 88px;
     // .st-swatches: 34 targets 2 apart, the dot 20 with inset 0 1px 0 white 35 % and
     // 0 2px 6px / .35, scaled 1.12 on hover; .st-sw-ring: inset 0 0 0 2px ink
-    out property <length> swatch-target: 34px;
+    out property <length> swatch-target: SettingsCss.st-sw-ring--width;
     out property <length> swatch-gap: 2px;
     out property <length> swatch: 20px;
     out property <color> swatch-highlight: rgba(255, 255, 255, 0.35);
@@ -452,10 +426,10 @@ export global Shell {
     out property <length> swatch-shadow-blur: 6px;
     out property <color> swatch-shadow: rgba(0, 0, 0, 0.35);
     out property <float> swatch-hover: 1.12;
-    out property <length> swatch-ring: 2px;
+    out property <length> swatch-ring: SettingsCss.st-sw-ring--box-shadow-shadow-1-spread;
     // .st-lead: 36 tile, radius 12, white 6 %; the Space icon 18 in it
     out property <length> lead: 36px;
-    out property <color> lead-fill: rgba(255, 255, 255, 0.06);
+    out property <color> lead-fill: SettingsCss.st-lead--background;
     out property <length> lead-icon: 18px;
     // .st-page kbd: 26 high, min 26, padding 0 7, radius 7, white 7 %, inset 0 -1px 0 black 35 %
     // and inset 0 1px 0 white 8 %, 12 / 500
@@ -467,12 +441,11 @@ export global Shell {
     out property <color> kbd-highlight: rgba(255, 255, 255, 0.08);
     out property <length> kbd-font: 12px;
     // .wb-thin, the chips' body (wubble.css): shadow 0 10px 24px / .35 (the fill and the rims are
-    // Glass.thin.fill, Glass.rimTop, Glass.rimAll)
+    // Glass.thin.fill, Glass.thin.rim-top, Glass.thin.rim-all)
     out property <color> thin-shadow: rgba(0, 0, 0, 0.35);
     // the other native pages' column (wubble's: the design has no list page)
-    out property <length> settings-width: 720px;
-    out property <duration> control-ms: 240ms;   // .tp-seg-ind background .24s
-    out property <duration> seg-label-ms: 200ms; // .tp-seg-btn color .2s
+    out property <duration> control-ms: TouchCss.tp-seg-ind--transition-background-color-duration;   // .tp-seg-ind background .24s
+    out property <duration> seg-label-ms: TouchCss.wb-tp-seg-btn--transition-color-duration; // .tp-seg-btn color .2s
     // the history, bookmarks and passwords rows (wubble's: the design repo has no list page)
     out property <length> page-row: 44px;
     // The Task manager's columns: state, memory, CPU.
@@ -485,4 +458,36 @@ export global Shell {
     out property <length> task-end: 48px;
     out property <length> page-indent: 20px;
     out property <length> page-favicon: 16px;
+
+    // derived: values with no design equal (notes/fidelity/derived-review.md, for the owner).
+    // Each line names the design rule it derives from; an expression of design tokens where one fits.
+    out property <color> selection-fill: Palette.sky.transparentize(0.65); // derived from the Space accent sky (core/tokens.ts color.sky) at .35: selected text in a field; the design styles no ::selection
+    out property <duration> check-tick-delay: 70ms; // derived from pages/touch.tsx:554 CHECKS.tickDelay (generated in kit_gen.rs touch::CHECKS, not in gen/*.slint)
+    out property <float> tab-exit-shrink: 1 - BrowserCss.wb-tab-out-k-to--scale; // derived from browser/browser.css:72 @keyframes wb-tab-out to scale(.94)
+    out property <int> beam-segments: 10; // derived from wubble-only: the Slint border beam stand-in (GLASS beam is scene-drawn in the design); strokes in its tail
+    out property <float> beam-bloom-alpha: 0.3; // derived from wubble-only: the stand-in beam's bloom stroke (the design blurs it in the shader)
+    out property <color> thick-unblurred-fill: rgba(28, 31, 40, 0.94); // derived from .wb-thick over live content (Glass.over-content .42) is blurred in the design; without the page in the scene the fallback needs body (owner decision 3: until L1 composites the page)
+    out property <length> window-width: 1280px; // derived from wubble-only: the first window's size (the design is a page in a browser window)
+    out property <length> window-height: 800px; // derived from wubble-only: as window-width
+    out property <float> address-icon-stroke: 1.9; // derived from browser/chrome.tsx address lock icon drawn at stroke 1.9 (icons.tsx default 1.7)
+    out property <color> drag-ghost-shadow: BrowserCss.wb-tab-drag--box-shadow-shadow-1-color; // derived from browser/browser.css:70 .wb-tab-drag shadow 0 10px 24px .4 (was .25)
+    out property <length> sidebar-open: 0.5px; // derived from technical: a sidebar narrower than half a pixel counts as hidden
+    out property <length> no-clip: 100000px; // derived from technical: an unbounded clip range for GlassPanel
+    out property <duration> peek-in: 60ms; // derived from browser/chrome.tsx:254 setTimeout(setPeek(true), 60)
+    out property <duration> peek-out: 260ms; // derived from browser/chrome.tsx:256 setTimeout(setPeek(false), 260)
+    out property <length> command-bar-width: 600px; // derived from browser/browser.css:166 .wb-cmd width: min(600px, calc(100% - 32px)) (not read by the generator)
+    out property <int> sheet-title-weight: Role.st-sec-head-h2.weight; // derived from wubble-only sheet title, 19 px like .st-sec-head h2 (settings.css:36): its weight 600 (was 560)
+    out property <length> sheet-body: Role.body.size; // derived from wubble-only sheet body text: the type scale body (core/tokens.ts type.body 14; was 14.5)
+    out property <duration> tip-glide: 260ms; // derived from pages/touch.css:101 .tp-tip-pos transition var(--tp-glide) = touch.tsx DOCK.glideMs (kit_gen.rs touch::DOCK)
+    out property <int> toast-weight: Role.st-row-title.weight; // derived from wubble-only toast text, 14 px like .st-row-title (settings.css:45): its weight 500 (was 540)
+    out property <duration> toast-shown: 1500ms; // derived from wubble-only: how long a toast stays; no design counterpart
+    out property <length> boost-code-height: 150px; // derived from wubble-only: the Boost editor's code area (a missing primitive, wubble-only.md)
+    out property <length> pip-width: 400px; // derived from wubble-only: picture-in-picture window, 16:9
+    out property <length> pip-height: 225px; // derived from wubble-only: as pip-width
+    out property <length> pip-min-height: 135px; // derived from wubble-only: as pip-width (pip-min-width 240 at 16:9)
+    out property <length> check-tick: px * 3 * 14 / 24; // derived from pages/touch.tsx:570 the tick: stroke 3 of a 24 viewBox drawn at 14 px (was 1.6)
+    out property <float> settings-pad-share: 0.04; // derived from pages/settings.css:6 .st-grid padding clamp(16px, 4cqi, 48px) (not read by the generator)
+    out property <length> settings-spy: 140px; // derived from pages/settings.tsx:468 the scroll spy line (t <= y + 140)
+    out property <length> settings-width: 720px; // derived from wubble-only: the list pages' column (pages.slint); settings itself is .st-grid (1120, settings-max)
+    // end derived
 }

@@ -266,28 +266,30 @@ pub fn squash_of(s: f64) -> f64 {
     1.0 / s.sqrt()
 }
 
-// The squash token's keys, in a file of their own that `wubble-ui`'s build script also reads
-// (it writes them into the Slint squash), so the table has one copy.
-mod squash;
-pub use squash::{SQUASH_KEYS, SQUASH_MS};
+// wubble change: ported from `pages/touch-kit.tsx` `SQUASH` / `squashAt` (@source touch-squash);
+// the keys and length are the generated `SQUASH` (kit_gen.rs), the Slint side plays the CSS
+// `wb-sq-a` table (kit/motion/keys.slint).
+/// The squash token's length, ms.
+pub const SQUASH_MS: f64 = crate::kit_gen::touch_kit::SQUASH::ms;
 
-/// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token).
+/// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token):
+/// 1.30×0.78 → 0.93×1.07 → 1.03×0.98 (README › Motion tokens › Squash).
 /// Ease-out between keys; outside 0..1 it is at rest, `(1, 1)`.
 pub fn squash_at(t: f64, amp: f64) -> (f64, f64) {
     // wubble change: cut under reduced motion (the design's `squashAt`).
     if reduced() || !(0.0..1.0).contains(&t) {
         return (1.0, 1.0);
     }
-    let k = &SQUASH_KEYS;
+    let k = &crate::kit_gen::touch_kit::SQUASH::keys;
     let mut i = 0;
-    while i < k.len() - 2 && t > k[i + 1].0 {
+    while i < k.len() - 2 && t > k[i + 1][0] {
         i += 1;
     }
     let (a, b) = (k[i], k[i + 1]);
-    let u = (t - a.0) / (b.0 - a.0);
+    let u = (t - a[0]) / (b[0] - a[0]);
     let e = 1.0 - (1.0 - u) * (1.0 - u);
-    let sx = a.1 + (b.1 - a.1) * e;
-    let sy = a.2 + (b.2 - a.2) * e;
+    let sx = a[1] + (b[1] - a[1]) * e;
+    let sy = a[2] + (b[2] - a[2]) * e;
     (1.0 + (sx - 1.0) * amp, 1.0 + (sy - 1.0) * amp)
 }
 
@@ -362,11 +364,21 @@ pub fn bezier(p: [f64; 4], t: f64) -> f64 {
     at(p[1], p[3], (lo + hi) / 2.0)
 }
 
+/// A fixed-curve tween a driver times itself: `curve` over `len` seconds, `secs` after it began,
+/// 0..1. wubble change: at its end under reduced motion, as the design's 1 ms lands every CSS
+/// animation at once (the Slint side's `Calm.ms`); the one chokepoint for Rust-timed tweens.
+pub fn tween(curve: [f64; 4], secs: f64, len: f64) -> f64 {
+    if reduced() {
+        return 1.0;
+    }
+    bezier(curve, secs / len)
+}
+
 /// How far the Overlap entrance (`wb-in` in core/wubble.css: 240 ms on the ease-out curve) is,
 /// 0..1, `secs` after it began. The drawing side maps it as `wb-in` does: opacity e, 7 px below
-/// → in place, scale 0.98 → 1 (Slint `Entering`; the 4 px blur is left out).
+/// → in place, scale 0.98 → 1, blur 4 px → 0 (Slint `Entering`, kit/motion/overlap.slint).
 pub fn overlap_in(secs: f64) -> f64 {
-    bezier(ease::out, secs / OVERLAP_IN)
+    tween(ease::out, secs, OVERLAP_IN)
 }
 
 /// `motion.overlap.in` in tokens.ts, seconds.
@@ -398,6 +410,16 @@ mod tests {
     }
 
     #[test]
+    fn reduced_motion_lands_rust_timed_tweens() {
+        set_reduced(true);
+        assert_eq!(overlap_in(0.0), 1.0);
+        assert_eq!(tween(ease::inOut, 0.0, 0.19), 1.0);
+        set_reduced(false);
+        assert_eq!(overlap_in(0.0), 0.0);
+        assert_eq!(tween(ease::inOut, 0.0, 0.19), 0.0);
+    }
+
+    #[test]
     fn bezier_matches_the_css_curves() {
         assert_eq!(bezier(ease::out, 0.0), 0.0);
         assert!((bezier(ease::out, 1.0) - 1.0).abs() < 1e-9);
@@ -419,6 +441,66 @@ mod tests {
             "ease-out: most of the way in a quarter of the time"
         );
         assert_eq!(overlap_in(10.0), overlap_in(OVERLAP_IN));
+    }
+
+    /// The web's `wb-in` opacity, sampled in Chromium every 1/120 s
+    /// (tools/fidelity/curves/overlap-in.json), against `overlap_in` on the same clock.
+    #[test]
+    fn overlap_in_follows_the_web_curve() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/fidelity/curves/overlap-in.json"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("read curve"))
+                .expect("json");
+        let dt = json["dt"].as_f64().expect("dt") / 1000.0;
+        let web: Vec<f64> = json["frames"]["opacity"]
+            .as_array()
+            .expect("opacity")
+            .iter()
+            .map(|v| v.as_f64().expect("number"))
+            .collect();
+        let rms = (web
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (overlap_in(i as f64 * dt) - w).powi(2))
+            .sum::<f64>()
+            / web.len() as f64)
+            .sqrt();
+        assert!(1.0 - rms >= 0.90, "similarity {}", 1.0 - rms);
+        assert!(rms < 0.01, "the same curve: rms {rms}");
+    }
+
+    /// CSS `ease-out` (the curve a keyframe interval takes) as the generated table the Slint
+    /// wobble interpolates (`Motion.ease-out-css`, kit/gen/tokens.slint): within 1e-3 of the
+    /// bezier everywhere.
+    #[test]
+    fn generated_css_ease_out_table_is_the_bezier() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../wubble-ui/ui/kit/gen/tokens.slint"
+        );
+        let text = std::fs::read_to_string(path).expect("read gen tokens");
+        let line = text
+            .lines()
+            .find(|l| l.contains("ease-out-css:"))
+            .expect("ease-out-css");
+        let values = &line[line.find("ease-out-css:").expect("name")..];
+        let list = &values[values.find('[').expect("[") + 1..values.find(']').expect("]")];
+        let table: Vec<f64> = list
+            .split(", ")
+            .map(|v| v.parse().expect("number"))
+            .collect();
+        assert_eq!(table.len(), 33);
+        let css = [0.0, 0.0, 0.58, 1.0];
+        for i in 0..=1000 {
+            let u = f64::from(i) / 1000.0;
+            let k = ((u * 32.0).floor() as usize).min(31);
+            let f = u * 32.0 - k as f64;
+            let lerp = table[k] + (table[k + 1] - table[k]) * f;
+            assert!((lerp - bezier(css, u)).abs() < 1e-3, "at {u}");
+        }
     }
 
     #[test]

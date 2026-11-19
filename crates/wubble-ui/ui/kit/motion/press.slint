@@ -1,0 +1,20 @@
+// design: core/wubble.css:46-49 @598f814
+// Press (`.wb-press`): scale .97 in 120 ms ease-out while held, back over 200 ms ease-out. Only
+// where the design has `wb-press` (icon buttons, favourites, new tab, `.tp-btn`, the toggle,
+// swatches, the settings clear, reset and select trigger, nav buttons); rows are never pressed.
+// Callers multiply `scale` into their own transform, so a press and a squash never fight.
+
+import { Motion } from "../gen/tokens.slint";
+import { Tween } from "tween.slint";
+
+export component Press {
+    in property <bool> pressed;
+    out property <float> scale: 1 - (1 - Motion.press-scale) * tw.t;
+    width: 0px;
+    height: 0px;
+    tw := Tween {
+        on: root.pressed;
+        in-ms: Motion.press-in;
+        out-ms: Motion.press-out;
+    }
+}

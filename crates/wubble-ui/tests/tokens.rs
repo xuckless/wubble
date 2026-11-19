@@ -59,8 +59,8 @@ fn tokens_match_physics() {
         ("contents", K::contents),
         ("pop", K::pop),
     ] {
-        let k = token("tokens.slint", &format!("{name}K"));
-        let c = token("tokens.slint", &format!("{name}C"));
+        let k = token("kit/gen/tokens.slint", &format!("{name}-k"));
+        let c = token("kit/gen/tokens.slint", &format!("{name}-c"));
         assert_eq!([k, c], kc, "{name}");
     }
     // A favicon image is handed over at twice the side it is drawn at (wubble_core::favicon),

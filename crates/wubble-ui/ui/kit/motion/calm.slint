@@ -1,0 +1,17 @@
+// design: core/wubble.css:72-74 @598f814
+// Reduced motion, the design's one switch: under `prefers-reduced-motion` every animation and
+// transition lasts 1 ms (`animation-duration: 1ms; transition-duration: 1ms`), so each lands at
+// once and nothing else changes. Slint has no global animation scale (its `MotionPreference` only
+// reaches `Flickable`), so every kit `animate` takes its duration through `Calm.ms`: the one place
+// a duration is shortened. The host writes `reduced` from the setting and the OS preference
+// (host/look.rs, os_motion.rs); `wubble_core::motion::set_reduced` is the Rust half.
+
+import { WubbleCss } from "../gen/css.slint";
+
+export global Calm {
+    in property <bool> reduced: false;
+    // A design duration, or the design's 1 ms under reduced motion.
+    public pure function ms(d: duration) -> duration {
+        return Calm.reduced ? WubbleCss.prefers-reduced-motion-reduce-wb-all--transition-duration : d;
+    }
+}

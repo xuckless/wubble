@@ -1,8 +1,9 @@
-import { Palette, Motion, Spacing, Fonts, Type, Chrome } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type, Chrome } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // One download: its glyph, name, second line and progress, and the buttons its state allows
 // (pause, resume, cancel, retry, open, show in folder, remove). The one row of the downloads
@@ -17,15 +18,11 @@ export component DownloadRow inherits Rectangle {
     property <bool> done: root.item.status == DownloadStatus.complete;
     border-radius: Shell.menu-row-radius;
     background: row-touch.has-hover ? Shell.command-selected : transparent;
-    animate background {
-        duration: Shell.menu-hover-ms;
-        easing: Motion.easeOut;
-    }
     row-touch := TouchArea { }
     HorizontalLayout {
         padding-left: Shell.menu-row-pad;
-        padding-right: Spacing.s1;
-        spacing: Spacing.s3;
+        padding-right: Space.s1;
+        spacing: Space.s3;
         Rectangle {
             width: Shell.icon;
             Icon {
@@ -37,7 +34,7 @@ export component DownloadRow inherits Rectangle {
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: Spacing.s1;
+            spacing: Space.s1;
             Text {
                 text: root.item.name;
                 color: Palette.ink;
@@ -65,8 +62,8 @@ export component DownloadRow inherits Rectangle {
                     background: Palette.sky;
                     opacity: root.item.progress < 0 ? 0.35 : 1;
                     animate width {
-                        duration: Motion.dropdownIn;
-                        easing: Motion.easeOut;
+                        duration: Calm.ms(Motion.dropdown-in);
+                        easing: Motion.ease-out;
                     }
                 }
             }

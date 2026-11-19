@@ -29,7 +29,7 @@ use std::time::Instant;
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
 use wubble_core::beam::{self, Beam};
 use wubble_core::bow::{BOWED, EdgeTable};
-use wubble_core::motion::{DT_CAP, OVERLAP_IN, bezier, ease, overlap_in};
+use wubble_core::motion::{DT_CAP, OVERLAP_IN, ease, overlap_in, tween};
 
 /// The outgoing page's exit, s: the design's `wb-out` (`webview.tsx`, 190 ms in-out).
 const PAGE_OUT: f64 = 0.19;
@@ -393,7 +393,7 @@ impl Driver {
         window.set_page_enter(overlap_in(self.page_t) as f32);
         // The outgoing page (the host's copy of its last frame, `exit-page`) leaves under the
         // incoming one; once gone, or when no switch started it, the copy is dropped.
-        window.set_exit_t(bezier(ease::inOut, self.exit_t / PAGE_OUT) as f32);
+        window.set_exit_t(tween(ease::inOut, self.exit_t, PAGE_OUT) as f32);
         if self.exit_t >= PAGE_OUT && window.get_exit_page().size().width > 0 {
             window.set_exit_page(slint::Image::default());
         }

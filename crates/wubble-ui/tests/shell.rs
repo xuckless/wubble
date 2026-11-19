@@ -131,8 +131,7 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert!(app.get_peeking());
     // The slide (340 ms), then over a child row: still peeking.
     pump(400);
-    // The glowing border is on while peeking, off otherwise; the panel pads 10 8 10 10.
-    assert_eq!(app.get_peek_glow(), 1.0);
+    // The panel pads 10 8 10 10 (no glowing border: the design's peek has none).
     let e = app.get_side_edges();
     assert_eq!(e.pill, INSET as f32 + 10.0);
     assert_eq!(e.pill_end, INSET as f32 + SIDEBAR_DEFAULT as f32 - 8.0);
@@ -146,7 +145,6 @@ fn peek(app: &AppWindow, driver: &Shared) {
     pump(100);
     assert!(!app.get_peeking());
     pump(400);
-    assert_eq!(app.get_peek_glow(), 0.0);
 
     // Pushed against the window's edge, over the west resize strip: it peeks too.
     pump(400);
@@ -321,7 +319,6 @@ fn shell_scenarios() {
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
     let driver = driver::wire(&app, wubble_core::seam::Seam::new()).driver;
     settle(&app, &driver);
-    assert_eq!(app.get_peek_glow(), 0.0);
     column_alignment(&app);
     three_modes(&app, &driver);
     sidebar_button(&app, &driver);

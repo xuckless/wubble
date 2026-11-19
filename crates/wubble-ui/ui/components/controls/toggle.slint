@@ -5,12 +5,13 @@
 // `wubble_core::controls::Toggle` through `Controls`. Its look is the settings page's .tp-tg-sm
 // (`pages/touch.css`, @ 21838b8): a .wb-thin chip body and a raised knob, mist, ink when on.
 
-import { Palette, Motion } from "../../tokens.slint";
+import { Palette, Motion } from "../../kit/gen/tokens.slint";
 import { Shell } from "../../kit/derived.slint";
 import { Controls, ControlView } from "registry.slint";
-import { FilmRim } from "../glow-ring.slint";
+
 import { Raised, Chip } from "../raised.slint";
 import { FocusKeys } from "../focus-ring.slint";
+import { Calm } from "../../kit/motion/calm.slint";
 
 export component Toggle inherits Rectangle {
     in property <bool> on;
@@ -71,13 +72,9 @@ export component Toggle inherits Rectangle {
         transform-scale-x: root.v.scale-x;
         transform-scale-y: root.v.scale-y;
         animate background {
-            duration: Shell.control-ms;
-            easing: Motion.easeOut;
+            duration: Calm.ms(Shell.control-ms);
+            easing: Motion.ease-out;
         }
-    }
-    FilmRim {
-        radius: root.border-radius;
-        touched: ta.has-hover || ta.pressed || fs.has-focus;
     }
     fs := FocusKeys {
         activate => {

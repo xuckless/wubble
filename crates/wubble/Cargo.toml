@@ -73,6 +73,14 @@ interprocess = "2.2"
 # through winit's AppKit backend (Zlib OR Apache-2.0 OR MIT).
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"
+# The OS reduced-motion preference (`os_motion.rs`); the version already in Cargo.lock through
+# wubble-ui and wubble-engine (Zlib OR Apache-2.0 OR MIT).
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility"] }
+
+# The OS reduced-motion preference (`os_motion.rs`, "Animation effects"); the version already in
+# Cargo.lock through wubble-sysmem (MIT OR Apache-2.0).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The system clipboard and primary selection, drops from and drags to other apps, touchpad pinch

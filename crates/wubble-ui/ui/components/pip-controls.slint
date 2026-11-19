@@ -1,10 +1,11 @@
-import { Spacing, Motion } from "../tokens.slint";
+import { Space, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
 import { IconPaths } from "icon.slint";
 import { MoveArea } from "window-frame.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The picture-in-picture window's controls (wubble_core::pip): a strip at the window's foot while
 // the pointer is over the window, with play or pause, back and forward ten seconds, return to the
@@ -34,18 +35,18 @@ export component PipControls inherits Rectangle {
             tier: GlassTier.thick;
             radius: Shell.menu-radius;
             over-content: true;
-            width: min(row.preferred-width, root.width - 2 * Spacing.s2);
-            height: Shell.icon-button + 2 * Spacing.s1;
+            width: min(row.preferred-width, root.width - 2 * Space.s2);
+            height: Shell.icon-button + 2 * Space.s1;
             x: (root.width - self.width) / 2;
-            y: root.height - self.height - Spacing.s2 + (self.open ? 0px : Shell.toast-rise);
+            y: root.height - self.height - Space.s2 + (self.open ? 0px : Shell.toast-rise);
             opacity: self.open ? 1 : 0;
             animate opacity, y {
-                duration: self.open ? Motion.overlapIn : Motion.overlapOut;
-                easing: self.open ? Motion.easeOut : Motion.easeIn;
+                duration: Calm.ms(self.open ? Motion.overlap-in : Motion.overlap-out);
+                easing: self.open ? Motion.ease-out : Motion.ease-in;
             }
             row := HorizontalLayout {
-                padding: Spacing.s1;
-                spacing: Spacing.s1;
+                padding: Space.s1;
+                spacing: Space.s1;
                 IconButton {
                     icon-path: IconPaths.back;
                     label: "Back 10 seconds";

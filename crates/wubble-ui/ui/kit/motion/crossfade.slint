@@ -1,0 +1,65 @@
+// design: pages/touch-kit.tsx:70-110, pages/touch.css:27-36 @598f814
+// Crossfade (the touch kit's `Swap`): when the label changes, the old one leaves 7 px up at .98,
+// blurring, over 190 ms ease-in-out while the new one arrives from 7 px below over 240 ms
+// ease-out; both share the box. Built for text labels, the design's use; the x and up/down
+// variants of `Swap` (`.tp-sw-x`, `.tp-sw-up/down`) are not built until a surface needs them.
+
+import { TouchCss } from "../gen/css.slint";
+import { TextRole, Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+import { Tween } from "tween.slint";
+import { OverlapLook } from "overlap.slint";
+
+component SwapLayer inherits OverlapLook {
+    in property <bool> shown;
+    in property <string> text;
+    in property <TextRole> role;
+    in property <color> ink;
+    in property <TextHorizontalAlignment> align;
+    e: tw.t;
+    entering: root.shown;
+    shift-in: TouchCss.tp-sw-i-data-s-pre--transform-translatey;
+    shift-out: TouchCss.tp-sw-i-data-s-out--transform-translatey;
+    scale-from: TouchCss.tp-sw-i-data-s-pre--transform-scale;
+    tw := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-sw-i--transition-opacity-duration;
+        out-ms: TouchCss.tp-sw-i-data-s-out--transition-duration;
+        in-easing: TouchCss.tp-sw-i--transition-opacity-easing;
+        out-easing: TouchCss.tp-sw-i-data-s-out--transition-timing-function;
+    }
+    KitText {
+        role: root.role;
+        text: root.text;
+        color: root.ink;
+        horizontal-alignment: root.align;
+        vertical-alignment: center;
+    }
+}
+
+export component CrossfadeText inherits Rectangle {
+    in property <string> text;
+    in property <TextRole> role: Role.body;
+    in property <color> ink;
+    in property <TextHorizontalAlignment> align: left;
+    // which layer holds the current text; the other leaves with the previous one
+    property <bool> front: true;
+    property <string> a;
+    property <string> b;
+    init => {
+        root.a = root.text;
+    }
+    // the arriving layer's progress and the leaving one's
+    out property <float> e: root.front ? la.e : lb.e;
+    out property <float> leaving: root.front ? lb.e : la.e;
+    changed text => {
+        if root.front {
+            root.b = root.text;
+        } else {
+            root.a = root.text;
+        }
+        root.front = !root.front;
+    }
+    la := SwapLayer { shown: root.front; text: root.a; role: root.role; ink: root.ink; align: root.align; }
+    lb := SwapLayer { shown: !root.front; text: root.b; role: root.role; ink: root.ink; align: root.align; }
+}

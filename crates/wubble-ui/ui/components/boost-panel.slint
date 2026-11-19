@@ -1,4 +1,4 @@
-import { Palette, Spacing, Fonts, Type, Motion, Radius } from "../tokens.slint";
+import { Palette, Space, Fonts, Type, Motion, Radius } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, BoostView } from "model.slint";
@@ -18,8 +18,8 @@ component CodeField inherits Rectangle {
     background: Shell.track;
     clip: true;
     Text {
-        x: Spacing.s2;
-        y: Spacing.s2;
+        x: Space.s2;
+        y: Space.s2;
         text: root.placeholder;
         visible: input.text == "";
         color: Palette.haze;
@@ -28,10 +28,10 @@ component CodeField inherits Rectangle {
     }
     input := TextInput {
         accessible-label: "Boost CSS";
-        x: Spacing.s2;
-        y: Spacing.s2;
-        width: parent.width - 2 * Spacing.s2;
-        height: parent.height - 2 * Spacing.s2;
+        x: Space.s2;
+        y: Space.s2;
+        width: parent.width - 2 * Space.s2;
+        height: parent.height - 2 * Space.s2;
         color: Palette.ink;
         font-family: Fonts.mono;
         font-size: Type.label.size;
@@ -88,10 +88,10 @@ export component BoostPanel inherits Rectangle {
         over-content: true;
         TouchArea { }
         VerticalLayout {
-            padding: Spacing.s3;
-            spacing: Spacing.s2;
+            padding: Space.s3;
+            spacing: Space.s2;
             HorizontalLayout {
-                spacing: Spacing.s2;
+                spacing: Space.s2;
                 Text {
                     text: root.view.is-new ? "New Boost" : "Boost";
                     color: Palette.ink;
@@ -183,7 +183,7 @@ export component BoostPanel inherits Rectangle {
                 text: "Tint";
             }
             HorizontalLayout {
-                spacing: Spacing.s1;
+                spacing: Space.s1;
                 alignment: start;
                 for c in root.swatches: Rectangle {
                     width: Shell.boost-swatch;
@@ -214,7 +214,7 @@ export component BoostPanel inherits Rectangle {
                 }
             }
             HorizontalLayout {
-                spacing: Spacing.s2;
+                spacing: Space.s2;
                 alignment: end;
                 if !root.view.is-new: TextButton {
                     text: "Delete";

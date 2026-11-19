@@ -5,7 +5,7 @@
 // nothing for these pages (no list row, sheet or tree), so they are written from scratch from
 // the settings page's widgets (Field, TextButton, Card, SectionHeader) and the sheet chrome.
 
-import { Palette, Spacing, Fonts, Type, Radius, Chrome } from "../tokens.slint";
+import { Palette, Space, Fonts, Type, Radius, Chrome } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "model.slint";
@@ -39,7 +39,7 @@ component RowIcon inherits Rectangle {
 component RowText inherits HorizontalLayout {
     in property <string> title;
     in property <string> detail;
-    spacing: Spacing.s3;
+    spacing: Space.s3;
     horizontal-stretch: 1;
     Text {
         horizontal-stretch: 1;
@@ -138,7 +138,7 @@ export component HistoryPage inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-top: Spacing.s4;
+            padding-top: Space.s4;
             alignment: end;
             if root.clearable: TextButton {
                 text: "Clear browsing data";
@@ -152,7 +152,7 @@ export component HistoryPage inherits Rectangle {
                 text: root.searching ? root.empty-search-text : root.empty-text;
         }
         for line in root.lines: VerticalLayout {
-            padding-top: line.header ? Spacing.s6 : 0px;
+            padding-top: line.header ? Space.s6 : 0px;
             if line.header: SectionHeader {
                 text: line.label;
             }
@@ -165,9 +165,9 @@ export component HistoryPage inherits Rectangle {
                     root.opened-new-tab(line.url, line.key);
                 }
                 HorizontalLayout {
-                    padding-left: Spacing.s3;
-                    padding-right: Spacing.s1;
-                    spacing: Spacing.s3;
+                    padding-left: Space.s3;
+                    padding-right: Space.s1;
+                    spacing: Space.s3;
                     RowIcon {
                         favicon: line.favicon;
                     }
@@ -186,7 +186,7 @@ export component HistoryPage inherits Rectangle {
             }
         }
         if root.has-more: HorizontalLayout {
-            padding-top: Spacing.s4;
+            padding-top: Space.s4;
             alignment: center;
             TextButton {
                 text: "Show more";
@@ -239,7 +239,7 @@ export component BookmarksPage inherits PageFrame {
     placeholder: "Search bookmarks";
 
     HorizontalLayout {
-        padding-top: Spacing.s4;
+        padding-top: Space.s4;
         alignment: end;
         TextButton {
             text: "New folder";
@@ -268,9 +268,9 @@ export component BookmarksPage inherits PageFrame {
             }
         }
         HorizontalLayout {
-            padding-left: Spacing.s3 + line.depth * Shell.page-indent;
-            padding-right: Spacing.s1;
-            spacing: Spacing.s3;
+            padding-left: Space.s3 + line.depth * Shell.page-indent;
+            padding-right: Space.s1;
+            spacing: Space.s3;
             if line.is-folder: Rectangle {
                 width: Shell.icon;
                 Icon {
@@ -322,7 +322,7 @@ export component DownloadsPage inherits PageFrame {
     searchable: false;
 
     HorizontalLayout {
-        padding-top: Spacing.s4;
+        padding-top: Space.s4;
         alignment: end;
         TextButton {
             text: "Clear finished";
@@ -383,9 +383,9 @@ export component PasswordsPage inherits Rectangle {
         Card {
             content-pad: Shell.row-pad-x;
             VerticalLayout {
-                padding-top: Spacing.s3;
-                padding-bottom: Spacing.s3;
-                spacing: Spacing.s2;
+                padding-top: Space.s3;
+                padding-bottom: Space.s3;
+                spacing: Space.s2;
                 Text {
                     text: root.view.title;
                     color: Palette.ink;
@@ -402,7 +402,7 @@ export component PasswordsPage inherits Rectangle {
                     wrap: word-wrap;
                 }
                 HorizontalLayout {
-                    spacing: Spacing.s2;
+                    spacing: Space.s2;
                     alignment: start;
                     if root.view.state == VaultState.locked: TextButton {
                         text: "Unlock";
@@ -439,9 +439,9 @@ export component PasswordsPage inherits Rectangle {
         for login in root.logins: login-row := Rectangle {
             height: Shell.page-row;
             HorizontalLayout {
-                padding-left: Spacing.s3;
-                padding-right: Spacing.s1;
-                spacing: Spacing.s3;
+                padding-left: Space.s3;
+                padding-right: Space.s1;
+                spacing: Space.s3;
                 RowText {
                     title: login.site;
                     detail: login.has-revealed ? login.revealed : login.username;
@@ -546,8 +546,8 @@ export component TasksPage inherits PageFrame {
     searchable: false;
 
     HorizontalLayout {
-        padding-top: Spacing.s4;
-        padding-bottom: Spacing.s2;
+        padding-top: Space.s4;
+        padding-bottom: Space.s2;
         Text {
             horizontal-stretch: 1;
             text: root.total;
@@ -562,9 +562,9 @@ export component TasksPage inherits PageFrame {
         background: ta.has-hover ? Shell.icon-button-hover : transparent;
         ta := TouchArea { }
         HorizontalLayout {
-            spacing: Spacing.s3;
-            padding-left: Spacing.s2;
-            padding-right: Spacing.s2;
+            spacing: Space.s3;
+            padding-left: Space.s2;
+            padding-right: Space.s2;
             VerticalLayout {
                 horizontal-stretch: 1;
                 alignment: center;

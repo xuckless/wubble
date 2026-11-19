@@ -1,0 +1,34 @@
+// design: pages/settings.css:56-61 @598f814
+// Fold (`.st-fold` / `.st-fold-in`, the settings search's in and out): the row's height runs
+// from 0 to its content's (`grid-template-rows` 0fr to 1fr) while the content fades in from 7 px
+// above, blurred 4 px: 240 ms ease-out opening, 190 ms ease-in-out closing. The content is
+// clipped to the running height (`.st-fold.clip`).
+
+import { SettingsCss } from "../gen/css.slint";
+import { Tween } from "tween.slint";
+import { OverlapLook } from "overlap.slint";
+
+export component Fold inherits Rectangle {
+    in property <bool> open;
+    // the content's height when open
+    in property <length> content-height;
+    out property <float> e: tw.t;
+    tw := Tween {
+        on: root.open;
+        in-ms: SettingsCss.st-fold-open--transition-duration;
+        out-ms: SettingsCss.st-fold--transition-grid-template-rows-duration;
+        in-easing: SettingsCss.st-fold-open--transition-timing-function;
+        out-easing: SettingsCss.st-fold--transition-grid-template-rows-easing;
+    }
+    height: root.content-height * tw.t;
+    clip: true;
+    OverlapLook {
+        y: 0;
+        height: root.content-height;
+        e: tw.t;
+        shift-in: SettingsCss.st-fold-in--transform-translatey;
+        shift-out: SettingsCss.st-fold-in--transform-translatey;
+        scale-from: 1;
+        @children
+    }
+}

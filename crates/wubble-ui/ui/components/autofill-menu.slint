@@ -1,10 +1,11 @@
-import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { GlassTier } from "model.slint";
 import { SheetButton } from "sheet-button.slint";
 import { IconButton } from "nav-buttons.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // Password autofill (wubble host/autofill.rs): the key chip a sign-in form shows, its menu of
 // saved logins (and "Suggest a strong password" on a sign-up form), and the save / update prompt
@@ -65,11 +66,11 @@ export component AutofillMenu inherits Rectangle {
         radius: Shell.menu-radius;
         over-content: true;
         transform-origin: { x: 0px, y: 0px };
-        transform-scale: root.view.menu-open ? 1 : Motion.dropdownFrom;
+        transform-scale: root.view.menu-open ? 1 : Motion.dropdown-from;
         opacity: root.view.menu-open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.view.menu-open ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.view.menu-open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.view.menu-open ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.view.menu-open ? Motion.ease-out : Motion.ease-in-out;
         }
         TouchArea {
             enabled: root.view.menu-open;
@@ -85,8 +86,8 @@ export component AutofillMenu inherits Rectangle {
                     border-radius: Shell.menu-row-radius;
                     background: row-touch.has-hover ? Shell.command-selected : transparent;
                     animate background {
-                        duration: Shell.menu-hover-ms;
-                        easing: Motion.easeOut;
+                        duration: Calm.ms(Shell.menu-hover-ms);
+                        easing: Motion.ease-out;
                     }
                     row-touch := TouchArea {
                         enabled: root.view.menu-open;
@@ -118,19 +119,19 @@ export component AutofillMenu inherits Rectangle {
         radius: Shell.menu-radius;
         over-content: true;
         transform-origin: { x: 0px, y: 0px };
-        transform-scale: root.prompting ? 1 : Motion.dropdownFrom;
+        transform-scale: root.prompting ? 1 : Motion.dropdown-from;
         opacity: root.prompting ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.prompting ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.prompting ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.prompting ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.prompting ? Motion.ease-out : Motion.ease-in-out;
         }
         TouchArea {
             enabled: root.prompting;
         }
 
         prompt := VerticalLayout {
-            padding: Spacing.s4;
-            spacing: Spacing.s2;
+            padding: Space.s4;
+            spacing: Space.s2;
             Text {
                 text: root.view.title;
                 color: Palette.ink;
@@ -147,11 +148,11 @@ export component AutofillMenu inherits Rectangle {
                 wrap: word-wrap;
             }
             Rectangle {
-                height: Spacing.s1;
+                height: Space.s1;
             }
             HorizontalLayout {
                 alignment: end;
-                spacing: Spacing.s2;
+                spacing: Space.s2;
                 SheetButton {
                     text: "Never";
                     clicked => {

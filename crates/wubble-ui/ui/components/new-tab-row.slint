@@ -3,10 +3,11 @@
 // @ 6c840da): the Slint port has no new-tab row. It is a tab row's twin: 36 high, the plus on the
 // same 24 px grid as the tab icons, hover fill and the 0.97 press of the port's TabRow.
 
-import { Palette, Chrome, Radius, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Chrome, Radius, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { FocusRing, FocusKeys } from "focus-ring.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 export component NewTabRow inherits Rectangle {
     in property <bool> compact: false;
@@ -28,14 +29,14 @@ export component NewTabRow inherits Rectangle {
         border-radius: Radius.sm;
         background: ta.has-hover ? Shell.row-hover : transparent;   // .wb-newtab:hover white 4.5 %
         animate background {
-            duration: Motion.pressRelease;
-            easing: Motion.easeOut;
+            duration: Calm.ms(Motion.press-out);
+            easing: Motion.ease-out;
         }
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: ta.pressed ? Motion.pressScale : 1;
+        transform-scale: ta.pressed ? Motion.press-scale : 1;
         animate transform-scale {
-            duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-            easing: Motion.easeOut;
+            duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
+            easing: Motion.ease-out;
         }
 
         keys := FocusKeys {
