@@ -19,7 +19,7 @@ struct CompositeU {
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var uDye: texture_2d<f32>;
 
-fn dyeAt(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(uDye, samp, uv, 0.0).rgb; }
+fn dyeAt(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(uDye, samp, uv, 0.0).rgb; } // wubble change: level 0 explicitly (textureSampleLevel)
 
 @fragment
 fn fs_composite(fin: VsOut) -> @location(0) vec4<f32> {

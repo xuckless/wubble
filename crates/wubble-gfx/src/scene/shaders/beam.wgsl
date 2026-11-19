@@ -9,8 +9,8 @@ fn sheen(u: f32) -> vec3<f32> {
   let c0 = vec3<f32>(0.486, 0.784, 1.0); let c1 = vec3<f32>(0.722, 0.651, 1.0);
   let c2 = vec3<f32>(1.0, 0.62, 0.847); let c3 = vec3<f32>(0.541, 0.949, 0.816);
   let x = fract(u) * 4.0; let i = i32(x); var m = fract(x); m = m * m * (3.0 - 2.0 * m);
-  var a = c3; var b = c0;
-  if (i == 0) { a = c0; b = c1; } else if (i == 1) { a = c1; b = c2; } else if (i == 2) { a = c2; b = c3; }
+  var a = c3; if (i == 0) { a = c0; } else if (i == 1) { a = c1; } else if (i == 2) { a = c2; }
+  var b = c0; if (i == 0) { b = c1; } else if (i == 1) { b = c2; } else if (i == 2) { b = c3; }
   return mix(a, b, m);
 }
 
@@ -30,8 +30,14 @@ fn perimeterAt(p: vec2<f32>, halfSize: vec2<f32>, r: f32) -> vec2<f32> {
   }
   var sideHit: bool;
   if (ax > ex) { sideHit = true; } else if (ay > ey) { sideHit = false; } else { sideHit = (halfSize.x - ax) < (halfSize.y - ay); }
-  if (sideHit) { return vec2<f32>(select(3.0 * ex + 3.0 * arc + 2.0 * ey + (ey - p.y), ex + arc + (p.y + ey), p.x >= 0.0), P); }
-  if (p.y < 0.0) { return vec2<f32>(select(P + p.x, p.x, p.x >= 0.0), P); }
+  if (sideHit) {
+    if (p.x >= 0.0) { return vec2<f32>(ex + arc + (p.y + ey), P); }
+    return vec2<f32>(3.0 * ex + 3.0 * arc + 2.0 * ey + (ey - p.y), P);
+  }
+  if (p.y < 0.0) {
+    if (p.x >= 0.0) { return vec2<f32>(p.x, P); }
+    return vec2<f32>(P + p.x, P);
+  }
   return vec2<f32>(ex + 2.0 * arc + 2.0 * ey + (ex - p.x), P);
 }
 

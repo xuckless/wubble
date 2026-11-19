@@ -45,8 +45,8 @@ fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQu
 // Frosted: the two deepest blur levels only. thin 0 → 40% toward the deepest, regular 1 → 75%, thick 2 → all.
 fn bg(px: vec2<f32>, tier: f32) -> vec3<f32> {
   var uv = px / U.uView; uv.y = 1.0 - uv.y;
-  let a = textureSampleLevel(uB2, samp, uv, 0.0).rgb;
-  let b = textureSampleLevel(uB3, samp, uv, 0.0).rgb;
+  let a = textureSampleLevel(uB2, samp, uv, 0.0).rgb; // wubble change: level 0 explicitly (textureSampleLevel)
+  let b = textureSampleLevel(uB3, samp, uv, 0.0).rgb; // wubble change: level 0 explicitly
   return mix(a, b, clamp(0.4 + tier * 0.3, 0.0, 1.0));
 }
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
@@ -81,11 +81,11 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
     let s = per.x / per.y;
     let behind = fract(U.uBeam.x - s);
     let ahead = fract(s - U.uBeam.x);
-    var along = select(0.0, pow(1.0 - behind / U.uBeam.y, 2.2), behind < U.uBeam.y);
+    var along: f32; if (behind < U.uBeam.y) { along = pow(1.0 - behind / U.uBeam.y, 2.2); } else { along = 0.0; }
     along = max(along, 1.0 - smoothstep(0.0, 0.012, ahead)); // a crisp head
     let stroke = exp(-sq((d + 0.8) / 1.0)); 
-    let inner = select(0.0, exp(d / 10.0), d < 0.0);
-    let bloom = select(0.0, exp(-d / 8.0), d > 0.0);
+    var inner: f32; if (d < 0.0) { inner = exp(d / 10.0); } else { inner = 0.0; }
+    var bloom: f32; if (d > 0.0) { bloom = exp(-d / 8.0); } else { bloom = 0.0; }
     let bc = sheen(s * 1.5 + U.uBeam.w);
     let k = along * U.uBeam.z;
     fx += bc * (stroke * 1.3 + inner * 0.32) * k; fxA = max(fxA, (stroke * 0.9 + inner * 0.25) * k);
@@ -96,7 +96,7 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   if (U.uVoiceAmt > 0.001) {
     let sc = U.uRect.z / 350.0;
     let base = vec2<f32>(0.0, half_.y);
-    var levels = array<f32, 3>(U.uVoice.x, U.uVoice.y, U.uVoice.z);
+    var levels: array<f32, 3> = array<f32, 3>(U.uVoice.x, U.uVoice.y, U.uVoice.z);
     let spread = 1.0 + 0.35 * U.uVoice.y;
     var vc = vec3<f32>(0.0); var va = 0.0;
     for (var i = 0; i < 7; i++) {
@@ -163,8 +163,7 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   col += (thinFilm(320.0 + 140.0 * wBand, 0.85) * 0.12 + 0.03) * wBand;
   // pointer light: a broad, soft brightening in the frost (no specular band, no hotspot)
   let lp = U.uLight - c;
-  let gs = max(U.uRect.z, U.uRect.w) * 0.45;
-  let glow = exp(-dot(p - lp, p - lp) / (2.0 * gs * gs));
+  let glow = exp(-dot(p - lp, p - lp) / (2.0 * sq(max(U.uRect.z, U.uRect.w) * 0.45)));
   col += glow * 0.03;
   // the edge: a faint, soft light just inside, a little brighter facing the pointer. No hairline.
   let rim = exp(d / 1.6) * step(d, 0.0);

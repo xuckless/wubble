@@ -1,7 +1,8 @@
 //! The scene's shaders are translations of the design's web GLSL (kit plan, "Shaders are
 //! translations"): every WGSL file opens with `// translates: <file>:<a>-<b>[; ...]`, and the
-//! numbers in it are the numbers of the GLSL lines it cites, both ways. A number only one side
-//! has is a failure, unless the WGSL line that holds it says why (`// wubble change:`). The
+//! numbers in it are the numbers of the GLSL lines it cites, in the same order (a diff of the two
+//! sequences, so a swapped pair or a value moved to another place fails). A number only one side
+//! has is a failure, unless a WGSL line within that difference says why (`// wubble change:`). The
 //! render constants the shaders depend on (blur σ, pyramid divisors, glass padding, the DPR cap)
 //! are checked against the web's TypeScript the same way.
 //!
@@ -9,7 +10,6 @@
 //! verbatim by `tools/fidelity/extract.mjs`, which `--check`s it against the clone), so this runs
 //! without the clone.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -126,10 +126,10 @@ fn header(name: &str, wgsl: &str) -> Vec<(String, usize, usize)> {
         .collect()
 }
 
-/// The numbers of the GLSL lines `ranges` cite, without the `#version`/`precision` lines and
-/// the `${...}` includes (each included chunk is its own WGSL file).
-fn glsl_numbers(name: &str, ranges: &[(String, usize, usize)]) -> BTreeSet<i64> {
-    let mut set = BTreeSet::new();
+/// The numbers of the GLSL lines `ranges` cite, in order, without the `#version`/`precision`
+/// lines and the `${...}` includes (each included chunk is its own WGSL file).
+fn glsl_numbers(name: &str, ranges: &[(String, usize, usize)]) -> Vec<f64> {
+    let mut out = vec![];
     for (file, a, b) in ranges {
         let text = snapshot(file);
         let lines: Vec<&str> = text.lines().collect();
@@ -146,24 +146,89 @@ fn glsl_numbers(name: &str, ranges: &[(String, usize, usize)]) -> BTreeSet<i64> 
             {
                 continue;
             }
-            set.extend(numbers(line).into_iter().map(key));
+            out.extend(numbers(line));
         }
     }
-    set
+    out
 }
 
-/// The WGSL file's numbers, and the ones on lines marked `// wubble change:` (exempt).
-fn wgsl_numbers(wgsl: &str) -> (BTreeSet<i64>, BTreeSet<i64>) {
-    let (mut plain, mut changed) = (BTreeSet::new(), BTreeSet::new());
-    for line in wgsl.lines().skip(1) {
-        let set = if line.contains(CHANGE) {
-            &mut changed
-        } else {
-            &mut plain
-        };
-        set.extend(numbers(line).into_iter().map(key));
+/// One WGSL number: its value and the (0-based) line it is on, after the header.
+struct WgslNumber {
+    value: f64,
+    line: usize,
+}
+
+/// The WGSL file's numbers in order, and which of its lines are marked `// wubble change:`.
+fn wgsl_numbers(wgsl: &str) -> (Vec<WgslNumber>, Vec<bool>) {
+    let (mut out, mut changed) = (vec![], vec![]);
+    for (line, text) in wgsl.lines().skip(1).enumerate() {
+        changed.push(text.contains(CHANGE));
+        out.extend(
+            numbers(text)
+                .into_iter()
+                .map(|value| WgslNumber { value, line }),
+        );
     }
-    (plain, changed)
+    (out, changed)
+}
+
+/// The differences between the GLSL's numbers and the WGSL's, in order: a longest common
+/// subsequence of the two, then each stretch between two matched numbers (a hunk) that has a
+/// number of one side only. A hunk is excused when a WGSL line it spans is marked
+/// `// wubble change:`; the lines of the matched numbers around it count, so a change that drops
+/// a number in the middle of a line is excused by that line's mark.
+fn differences(glsl: &[f64], wgsl: &[WgslNumber], changed: &[bool]) -> Vec<String> {
+    let (n, m) = (glsl.len(), wgsl.len());
+    let same = |i: usize, j: usize| key(glsl[i]) == key(wgsl[j].value);
+    // lcs[i][j]: the common length of glsl[i..] and wgsl[j..]
+    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[i][j] = if same(i, j) {
+                lcs[i + 1][j + 1] + 1
+            } else {
+                lcs[i + 1][j].max(lcs[i][j + 1])
+            };
+        }
+    }
+    let mut matched = vec![];
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if same(i, j) {
+            matched.push((i, j));
+            (i, j) = (i + 1, j + 1);
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    let last_line = changed.len().saturating_sub(1);
+    let mut errors = vec![];
+    let mut from = (0, 0);
+    for &(gi, wj) in matched.iter().chain([(n, m)].iter()) {
+        let (g, w) = (&glsl[from.0..gi], &wgsl[from.1..wj]);
+        if !g.is_empty() || !w.is_empty() {
+            // the WGSL lines from the matched number before the hunk to the one after it
+            let first = from.1.checked_sub(1).map_or(0, |k| wgsl[k].line);
+            let last = wgsl.get(wj).map_or(last_line, |x| x.line);
+            if !changed[first..=last.max(first)].iter().any(|&c| c) {
+                let show = |v: &mut dyn Iterator<Item = f64>| {
+                    v.map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
+                };
+                errors.push(format!(
+                    "WGSL lines {}-{}: GLSL has [{}], WGSL has [{}] (mark the line `{CHANGE}` \
+                     if it differs on purpose)",
+                    first + 2,
+                    last + 2,
+                    show(&mut g.iter().copied()),
+                    show(&mut w.iter().map(|x| x.value)),
+                ));
+            }
+        }
+        from = (gi + 1, wj + 1);
+    }
+    errors
 }
 
 fn shaders() -> Vec<(String, String)> {
@@ -184,42 +249,55 @@ fn shaders() -> Vec<(String, String)> {
     out
 }
 
-fn show(set: &BTreeSet<i64>) -> String {
-    set.iter()
-        .map(|&k| format!("{}", k as f64 / 1e9))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 #[test]
 fn every_shader_has_the_numbers_of_the_glsl_it_translates() {
     let all = shaders();
     assert_eq!(all.len(), 9, "the scene's nine shaders");
     let mut errors = vec![];
     for (name, wgsl) in &all {
-        let ranges = header(name, wgsl);
-        let glsl = glsl_numbers(name, &ranges);
-        let (plain, changed) = wgsl_numbers(wgsl);
-        let only_wgsl: BTreeSet<i64> = plain.difference(&glsl).copied().collect();
-        let only_glsl: BTreeSet<i64> = glsl
-            .iter()
-            .filter(|k| !plain.contains(k) && !changed.contains(k))
-            .copied()
-            .collect();
-        if !only_wgsl.is_empty() {
-            errors.push(format!(
-                "{name}: numbers not in the GLSL (mark the line `{CHANGE}`): {}",
-                show(&only_wgsl)
-            ));
-        }
-        if !only_glsl.is_empty() {
-            errors.push(format!(
-                "{name}: GLSL numbers missing from the WGSL: {}",
-                show(&only_glsl)
-            ));
-        }
+        let glsl = glsl_numbers(name, &header(name, wgsl));
+        let (numbers, changed) = wgsl_numbers(wgsl);
+        errors.extend(
+            differences(&glsl, &numbers, &changed)
+                .into_iter()
+                .map(|e| format!("{name}: {e}")),
+        );
     }
     assert!(errors.is_empty(), "\n{}", errors.join("\n"));
+}
+
+#[test]
+fn a_swapped_or_moved_number_is_a_difference() {
+    let glsl: Vec<f64> = [
+        "float s = mix(0.22, 0.38, k);",
+        "float l = exp(-d * d / 0.45) * 0.03;",
+        "vec2 f = vec2(0.85, 0.45);",
+    ]
+    .iter()
+    .flat_map(|l| numbers(l))
+    .collect();
+    let diff = |wgsl: &str| {
+        let wgsl = format!("// translates: x\n{wgsl}");
+        let (n, c) = wgsl_numbers(&wgsl);
+        differences(&glsl, &n, &c)
+    };
+    let same = "let s = mix(0.22, 0.38, k);\n\
+                let l = exp(-d * d / 0.45) * 0.03;\n\
+                let f = vec2(0.85, 0.45);";
+    assert!(diff(same).is_empty(), "{:?}", diff(same));
+    // a swapped pair: every number is still in the file
+    let swapped = same.replace("mix(0.22, 0.38", "mix(0.38, 0.22");
+    assert!(!diff(&swapped).is_empty());
+    // a value changed to one found elsewhere in the file
+    let moved = same.replace("/ 0.45)", "/ 0.85)");
+    assert!(!diff(&moved).is_empty());
+    // a dropped number
+    assert!(!diff(&same.replace(" * 0.03", "")).is_empty());
+    // the same changes, marked, are excused
+    let marked = swapped.replace("k);", &format!("k); {CHANGE} why"));
+    assert!(diff(&marked).is_empty(), "{:?}", diff(&marked));
+    let dropped = same.replace(" * 0.03;", &format!("; {CHANGE} no light"));
+    assert!(diff(&dropped).is_empty(), "{:?}", diff(&dropped));
 }
 
 /// The numbers of the first snapshot line of `file` that contains `needle`.

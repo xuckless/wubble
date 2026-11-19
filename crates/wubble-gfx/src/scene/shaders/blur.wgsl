@@ -21,7 +21,7 @@ fn fs_blur(fin: VsOut) -> @location(0) vec4<f32> {
   for (var i = -12.0; i <= 12.0; i += 1.0) {
     if (abs(i) > r) { continue; }
     let w = exp(-i * i / (2.0 * U.uSigma * U.uSigma));
-    s += textureSampleLevel(uTex, samp, fin.vUv + U.uStep * i, 0.0) * w; wsum += w;
+    s += textureSampleLevel(uTex, samp, fin.vUv + U.uStep * i, 0.0) * w; wsum += w; // wubble change: WGSL samples in a loop at level 0 explicitly (textureSampleLevel)
   }
   return s / wsum;
 }

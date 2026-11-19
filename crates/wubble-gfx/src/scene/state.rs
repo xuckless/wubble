@@ -597,12 +597,18 @@ impl Scene {
                 fluid: false,
             };
         }
+        // a still dye is splatted afresh for any new size, as the harness's web side does: kept,
+        // it would stretch with the window (a living liquid is sampled by uv and survives)
+        let still_reshaped = self.still() && (w, h) != (self.w, self.h);
         self.w = w;
         self.h = h;
         self.dpr = dpr;
         // the liquid survives resizes: it's sampled by uv, so only a big change of shape reallocates it
         let aspect = w / h.max(1.0);
-        if self.fluid_aspect != 0.0 && (aspect / self.fluid_aspect).ln().abs() < 0.35 {
+        if !still_reshaped
+            && self.fluid_aspect != 0.0
+            && (aspect / self.fluid_aspect).ln().abs() < 0.35
+        {
             return Resized {
                 targets: true,
                 fluid: false,
@@ -1151,11 +1157,27 @@ mod tests {
         s.advance(1.0 / 60.0, 1.0);
         assert_eq!(s.take_still_work(), (false, false), "nothing moved");
         assert!(!s.animating());
-        // a small change of shape keeps the dye; a big one makes new grids
-        s.resize(900.0, 600.0, 1.0);
-        assert_eq!(s.take_still_work(), (false, false));
+        // any new size makes new grids and splats the dye afresh, a small change of shape too
+        // (kept, the dye would stretch with the window)
+        assert_eq!(
+            s.resize(900.0, 600.0, 1.0),
+            Resized {
+                targets: true,
+                fluid: true
+            }
+        );
+        assert_eq!(s.take_still_work(), (true, true));
         s.resize(1800.0, 600.0, 1.0);
         assert_eq!(s.take_still_work(), (true, true));
+        // another pixel ratio alone keeps it (the grids are in logical px)
+        assert_eq!(
+            s.resize(1800.0, 600.0, 2.0),
+            Resized {
+                targets: true,
+                fluid: false
+            }
+        );
+        assert_eq!(s.take_still_work(), (false, false));
         // a palette: afresh while it crossfades, then not
         s.set_palette([hex(0xFFFFFF); 3]);
         assert!(s.animating());

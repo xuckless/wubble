@@ -76,6 +76,26 @@ pub const GLASS_PAD: f64 = 70.0;
 /// The highest device pixel ratio drawn at (scene.ts `resize`, `Math.min(devicePixelRatio, 2)`).
 pub const DPR_MAX: f32 = 2.0;
 
+/// The scene's view of a window `width`×`height` physical px at `scale`: its logical size
+/// (the window's, whatever the scale) and the pixel ratio it draws at (at most [`DPR_MAX`]).
+/// A window above [`DPR_MAX`] gets a smaller texture, which Slint stretches to the window.
+pub fn view_of(width: u32, height: u32, scale: f32) -> (f32, f32, f32) {
+    let scale = scale.max(f32::MIN_POSITIVE);
+    (
+        width as f32 / scale,
+        height as f32 / scale,
+        scale.min(DPR_MAX),
+    )
+}
+
+/// The output texture's size, physical px, for a view of `w`×`h` logical px at `dpr`.
+pub fn out_size(w: f32, h: f32, dpr: f32) -> (u32, u32) {
+    (
+        ((w * dpr).round() as u32).max(1),
+        ((h * dpr).round() as u32).max(1),
+    )
+}
+
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -592,13 +612,13 @@ impl Renderer {
         now: Instant,
         pace: f32,
     ) -> Result<Option<slint::Image>, GfxError> {
-        let dpr = window.scale_factor().min(DPR_MAX);
-        let size = window.size().to_logical(dpr);
+        let size = window.size();
+        let (w, h, dpr) = view_of(size.width, size.height, window.scale_factor());
         let dt = self
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        let tex = self.render_paced(size.width, size.height, dpr, dt.min(MAX_DT), pace);
+        let tex = self.render_paced(w, h, dpr, dt.min(MAX_DT), pace);
         tex.map(|t| slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string())))
             .transpose()
     }
@@ -646,13 +666,8 @@ impl Renderer {
             Some(s) if !rs.fluid => s.fluid,
             _ => fluid_targets(d, w, h, &self.scene.opts.fluid),
         };
-        let out = target(
-            d,
-            ((w * dpr).round() as u32).max(1),
-            ((h * dpr).round() as u32).max(1),
-            OUT,
-            "wubble scene",
-        );
+        let (ow, oh) = out_size(w, h, dpr);
+        let out = target(d, ow, oh, OUT, "wubble scene");
         let tex = out.tex.clone();
         self.sized = Some(Sized {
             fluid,
@@ -1236,6 +1251,19 @@ mod tests {
             .find(|(_, t)| t.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("no struct {name}"));
         layouter[h].size
+    }
+
+    #[test]
+    fn a_window_above_the_dpr_cap_keeps_its_logical_size_and_gets_a_smaller_texture() {
+        // 1000x600 logical at 3x: the scene's view is the window's, drawn at 2x
+        let (w, h, dpr) = view_of(3000, 1800, 3.0);
+        assert_eq!((w, h, dpr), (1000.0, 600.0, 2.0));
+        assert_eq!(out_size(w, h, dpr), (2000, 1200));
+        // at or below the cap the texture is the window's
+        let (w, h, dpr) = view_of(2720, 1760, 2.0);
+        assert_eq!(out_size(w, h, dpr), (2720, 1760));
+        let (w, h, dpr) = view_of(1700, 1100, 1.25);
+        assert_eq!(out_size(w, h, dpr), (1700, 1100));
     }
 
     #[test]

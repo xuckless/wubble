@@ -18,6 +18,7 @@ use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
     Backdrop, Beam, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
+    out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
@@ -297,11 +298,14 @@ impl Glass {
         if let Some(items) = glass {
             s.set_items(window, items);
         }
+        // against the texture `before_rendering` sizes, which is smaller than the window above
+        // `DPR_MAX`
         let size = window.window().size();
+        let (w, h, dpr) = view_of(size.width, size.height, window.window().scale_factor());
         let resized = s
             .renderer
             .output()
-            .is_none_or(|t| (t.width(), t.height()) != (size.width, size.height));
+            .is_none_or(|t| (t.width(), t.height()) != out_size(w, h, dpr));
         // the scene's own motion starting (a beam lap, a Space's palette) wakes a still scene,
         // as input does; a page's frames do not
         let tint = active_tint(window);

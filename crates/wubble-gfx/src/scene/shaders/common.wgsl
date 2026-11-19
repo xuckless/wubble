@@ -33,7 +33,7 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VsOut {
   let aPos = stripCorner(vi);
   var o: VsOut;
   o.pos = vec4<f32>(aPos, 0.0, 1.0);
-  o.vUv = vec2<f32>(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  o.vUv = vec2<f32>(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5); // wubble change: v runs down in wgpu textures, so it is flipped
   return o;
 }
 

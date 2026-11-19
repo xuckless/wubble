@@ -1444,13 +1444,13 @@ impl Host {
         };
         let sample = pixels::check_varied(shot, region)?;
         // What the window shows there is the scene's frame of this render, not an older one.
-        let (_, _, scene) = self
+        let (sw, sh, scene) = self
             .w
             .glass
             .borrow()
             .readback()
             .ok_or("the scene has no frame")?;
-        let diff = pixels::check_shows_scene(shot, &scene, region)?;
+        let diff = pixels::check_shows_scene(shot, (sw, sh, &scene), region)?;
         println!(
             "smoke: glass ok quality={} distinct={} diff={diff}",
             self.w

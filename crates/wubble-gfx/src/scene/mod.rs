@@ -76,7 +76,9 @@ pub use quality::{
     SAMPLE_CAP, SETTLE_FRAMES, Signal, UP_FRACTION, should_render,
 };
 pub(crate) use render::with_prelude;
-pub use render::{BLUR_SIGMA, DPR_MAX, GLASS_PAD, PYRAMID_DIV, Renderer, readback_rgba8};
+pub use render::{
+    BLUR_SIGMA, DPR_MAX, GLASS_PAD, PYRAMID_DIV, Renderer, out_size, readback_rgba8, view_of,
+};
 pub use state::{
     Backdrop, Beam, Blob, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, STILL_DYE,
     Scene, SceneOptions, Tier, film_level, hex, still_blobs, surface_of,
