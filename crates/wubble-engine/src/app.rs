@@ -30,22 +30,16 @@ use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
 use crate::view::{View, ViewConfig};
 
-/// The debugging switch that turns the sandbox off (Chromium's own name, so CEF
-/// also passes it on to every subprocess). wubble-helper reads the same switch
-/// from its argv and applies the same rule as [`sandbox_mode`]: the helper
-/// cannot depend on this crate (TODO.md Decided, "CEF sandbox").
-pub const NO_SANDBOX_SWITCH: &str = "no-sandbox";
+/// The debugging argument that turns the sandbox off: Chromium's own switch, so CEF
+/// also passes it on to every subprocess, where wubble-helper applies the same rule,
+/// welding's `CefSandboxMode::for_direct_entry` (TODO.md Decided, "CEF sandbox").
+pub const NO_SANDBOX_ARG: &str = "--no-sandbox";
 
-/// The sandbox wubble runs CEF with: on (Linux namespaces + seccomp-bpf, macOS
-/// seatbelt) unless `no_sandbox` asks otherwise. Windows stays off: welding's
-/// direct entry point refuses `Sandboxed` there, which needs CEF's
-/// `bootstrap.exe` and wubble as a client DLL (TODO.md M1).
-pub fn sandbox_mode(no_sandbox: bool, windows: bool) -> CefSandboxMode {
-    if no_sandbox || windows {
-        CefSandboxMode::UnsandboxedTrustedContent
-    } else {
-        CefSandboxMode::Sandboxed
-    }
+/// Whether `args` (a process's command line) has [`NO_SANDBOX_ARG`]: what
+/// [`EngineConfig::from_current_exe`] reads, and what a process that runs wubble
+/// again must pass on.
+pub fn no_sandbox_requested<S: AsRef<std::ffi::OsStr>>(args: impl IntoIterator<Item = S>) -> bool {
+    args.into_iter().any(|a| a.as_ref() == NO_SANDBOX_ARG)
 }
 
 /// What the engine needs to start.
@@ -75,7 +69,7 @@ pub struct EngineConfig {
     pub clipboard_bridge: bool,
     /// Whose profile `cache_dir` is.
     pub profile: ProfileKind,
-    /// Runs CEF without its sandbox ([`NO_SANDBOX_SWITCH`]): for debugging only, logged
+    /// Runs CEF without its sandbox ([`NO_SANDBOX_ARG`]): for debugging only, logged
     /// loudly at start, never a stored setting.
     pub no_sandbox: bool,
 }
@@ -95,7 +89,7 @@ pub enum ProfileKind {
 /// The renderer switch that makes wubble-helper run its clipboard content
 /// script (`clipboard.js`, on the `clipboard` frame channel). Must match
 /// `CLIPBOARD_SWITCH` in wubble-helper/src/main.rs, duplicated on purpose as
-/// [`NO_SANDBOX_SWITCH`] is: the helper cannot depend on this crate.
+/// [`NO_SANDBOX_ARG`] is: the helper cannot depend on this crate.
 pub const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
 
 /// Page features that are Chromium start switches (the settings' restart rows).
@@ -288,8 +282,7 @@ impl EngineConfig {
             response_observer: None,
             features: PageFeatures::default(),
             profile: ProfileKind::User,
-            no_sandbox: std::env::args_os()
-                .any(|a| a.to_str().and_then(|a| a.strip_prefix("--")) == Some(NO_SANDBOX_SWITCH)),
+            no_sandbox: no_sandbox_requested(std::env::args_os()),
         })
     }
 }
@@ -387,8 +380,9 @@ impl Platform for Linux {
     /// in the composited frame and in a canvas `drawImage` of the video, while the same
     /// clip is right with `--disable-gpu` (so decoding is fine, the pool's high-bit-depth
     /// copy is not). Without the pool the frames are uploaded as textures by the
-    /// compositor's video resource updater, 8-bit clips unchanged (hdr_probe, CEF 156,
-    /// NVIDIA; frame_smoke's 10-bit check).
+    /// compositor's video resource updater (hdr_probe, CEF 156, NVIDIA; frame_smoke's
+    /// 10-bit check). It applies to all video: 8-bit streams look the same but take that
+    /// upload path too, at a cost not yet measured (TODO.md Performance pass).
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] =
         &[("disable-gpu-memory-buffer-video-frames", None)];
 
@@ -475,7 +469,7 @@ type Current = Windows;
 fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {
     let mut cef = CefRuntimeConfig::new(
         Current::framework_dir(&config.exe_dir),
-        sandbox_mode(config.no_sandbox, cfg!(windows)),
+        CefSandboxMode::for_direct_entry(config.no_sandbox),
     );
     cef.browser_subprocess_path = Current::helper_path(&config.exe_dir);
     cef.cache_path = Some(config.cache_dir.clone());
@@ -515,12 +509,15 @@ fn probe_switches(spec: Option<&str>) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
-/// Why Chromium's Linux namespace sandbox cannot start, from the kernel knobs that turn
-/// unprivileged user namespaces off (read through `read`, so the rule is testable); `None`
-/// when nothing says so. Without them Chromium falls back to the setuid `chrome-sandbox`,
-/// which CEF ships unprivileged, and aborts every renderer: worth a clear line at start.
+/// The line to print at start when a kernel knob turns unprivileged user namespaces off
+/// (read through `read`, so the rule is testable); `None` when nothing says so. Without
+/// them Chromium has no namespace sandbox, and its setuid fallback (`chrome-sandbox`) is
+/// not installed setuid by CEF, so the zygote host stops the whole browser at start
+/// ("No usable sandbox!"). A warning, not an error: on Ubuntu (23.10 and later,
+/// `apparmor_restrict_unprivileged_userns` 1 by default) an AppArmor profile for wubble
+/// that allows `userns` makes the knob a false alarm.
 #[cfg(any(target_os = "linux", test))]
-fn linux_sandbox_blocked(read: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+fn linux_sandbox_warning(read: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     const KNOBS: [(&str, &str); 3] = [
         ("/proc/sys/user/max_user_namespaces", "0"),
         ("/proc/sys/kernel/unprivileged_userns_clone", "0"),
@@ -529,9 +526,14 @@ fn linux_sandbox_blocked(read: &dyn Fn(&str) -> Option<String>) -> Option<String
             "1",
         ),
     ];
-    KNOBS
+    let (path, off) = KNOBS
         .iter()
-        .find_map(|(path, off)| (read(path)?.trim() == *off).then(|| format!("{path} is {off}")))
+        .find(|(path, off)| read(path).is_some_and(|v| v.trim() == *off))?;
+    Some(format!(
+        "wubble: the Linux sandbox needs unprivileged user namespaces, but {path} is {off}: \
+         unless an AppArmor profile allows them for wubble, Chromium will stop at start \
+         (\"No usable sandbox!\"). Enable them, or run with {NO_SANDBOX_ARG} (debugging only)."
+    ))
 }
 
 /// The CEF version wubble is built against (the bundled libcef comes from the
@@ -624,17 +626,14 @@ impl Engine {
     pub fn start(config: EngineConfig) -> Result<Self, EngineError> {
         if config.no_sandbox {
             eprintln!(
-                "wubble: WARNING: the CEF sandbox is OFF (--{NO_SANDBOX_SWITCH}). Pages run \
+                "wubble: WARNING: the CEF sandbox is OFF ({NO_SANDBOX_ARG}). Pages run \
                  with this user's full rights. Use it for debugging only."
             );
         } else {
             #[cfg(target_os = "linux")]
-            if let Some(why) = linux_sandbox_blocked(&|path| std::fs::read_to_string(path).ok()) {
-                eprintln!(
-                    "wubble: the Linux sandbox needs unprivileged user namespaces, but {why}; \
-                     pages will not start. Enable them, or run with --{NO_SANDBOX_SWITCH} \
-                     (debugging only)."
-                );
+            if let Some(warning) = linux_sandbox_warning(&|path| std::fs::read_to_string(path).ok())
+            {
+                eprintln!("{warning}");
             }
         }
         let mut cef = cef_config(&config);
@@ -1179,25 +1178,34 @@ mod tests {
     }
 
     #[test]
-    fn the_sandbox_is_on_unless_asked_off_or_on_windows() {
-        assert_eq!(sandbox_mode(false, false), CefSandboxMode::Sandboxed);
-        assert_eq!(
-            sandbox_mode(true, false),
-            CefSandboxMode::UnsandboxedTrustedContent
-        );
-        assert_eq!(
-            sandbox_mode(false, true),
-            CefSandboxMode::UnsandboxedTrustedContent
-        );
+    fn the_sandbox_is_on_unless_asked_off() {
         let off = EngineConfig {
             no_sandbox: true,
             ..config("/opt/wubble", "/c")
         };
-        assert_eq!(cef_config(&off).sandbox, sandbox_mode(true, cfg!(windows)));
+        assert_eq!(
+            cef_config(&off).sandbox,
+            CefSandboxMode::UnsandboxedTrustedContent
+        );
         assert_eq!(
             cef_config(&config("/opt/wubble", "/c")).sandbox,
-            sandbox_mode(false, cfg!(windows))
+            CefSandboxMode::for_direct_entry(false)
         );
+        assert_eq!(
+            NO_SANDBOX_ARG.strip_prefix("--"),
+            Some(CefSandboxMode::NO_SANDBOX_SWITCH)
+        );
+        assert!(no_sandbox_requested([
+            "wubble",
+            "--smoke",
+            "session",
+            "--no-sandbox"
+        ]));
+        assert!(!no_sandbox_requested([
+            "wubble",
+            "--no-sandboxes",
+            "no-sandbox"
+        ]));
     }
 
     #[test]
@@ -1210,18 +1218,26 @@ mod tests {
                     .map(|(_, v)| format!("{v}\n"))
             }
         };
-        assert_eq!(linux_sandbox_blocked(&knobs(&[])), None);
+        assert_eq!(linux_sandbox_warning(&knobs(&[])), None);
         assert_eq!(
-            linux_sandbox_blocked(&knobs(&[("/proc/sys/user/max_user_namespaces", "126785")])),
+            linux_sandbox_warning(&knobs(&[("/proc/sys/user/max_user_namespaces", "126785")])),
             None
         );
-        let ubuntu = linux_sandbox_blocked(&knobs(&[(
+        // Ubuntu's default: the line says the browser stops, not just its pages, and how
+        // to get past it.
+        let ubuntu = linux_sandbox_warning(&knobs(&[(
             "/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
             "1",
-        )]));
-        assert!(ubuntu.is_some_and(|why| why.contains("apparmor")));
+        )]))
+        .expect("Ubuntu's knob is named");
         assert!(
-            linux_sandbox_blocked(&knobs(&[("/proc/sys/user/max_user_namespaces", "0")])).is_some()
+            ubuntu.contains("apparmor_restrict_unprivileged_userns is 1"),
+            "{ubuntu}"
+        );
+        assert!(ubuntu.contains("Chromium will stop at start"), "{ubuntu}");
+        assert!(ubuntu.contains(NO_SANDBOX_ARG), "{ubuntu}");
+        assert!(
+            linux_sandbox_warning(&knobs(&[("/proc/sys/user/max_user_namespaces", "0")])).is_some()
         );
     }
 

@@ -155,6 +155,25 @@ pub enum CefSandboxMode {
     Sandboxed,
 }
 
+impl CefSandboxMode {
+    /// Chromium's switch that turns its sandbox off. CEF hands the browser's
+    /// command line on to every subprocess, so a helper sees it too. wubble
+    /// change (39), see `WUBBLE_CHANGES.md`.
+    pub const NO_SANDBOX_SWITCH: &'static str = "no-sandbox";
+
+    /// The mode the browser and its helpers both run with on the direct
+    /// (re-executed binary) entry point: `Sandboxed` unless `no_sandbox`, or on
+    /// Windows, which refuses it there (see [`Self::Sandboxed`]). One rule for
+    /// both sides, so they cannot disagree. wubble change (39).
+    pub fn for_direct_entry(no_sandbox: bool) -> Self {
+        if no_sandbox || cfg!(target_os = "windows") {
+            Self::UnsandboxedTrustedContent
+        } else {
+            Self::Sandboxed
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CefLogSeverity {
     #[default]
@@ -326,9 +345,17 @@ mod cef_backed {
             sandbox: CefSandboxMode,
             context_script: Option<&'static str>,
         ) -> Result<i32, WeldError> {
-            pin_cef_api_version();
+            // wubble change (40): the seatbelt first, then the framework, as
+            // CEF's helper does (cefsimple `process_helper_mac.cc`:
+            // `CefScopedSandboxContext::Initialize`, then
+            // `CefScopedLibraryLoader::LoadInHelper`), so the framework's
+            // initialisers already run sandboxed. The helper must not load the
+            // framework itself.
             #[cfg(target_os = "macos")]
             let _sandbox = MacSandbox::initialize(args.as_main_args(), sandbox)?;
+            #[cfg(target_os = "macos")]
+            maybe_load_library(&helper_frameworks_dir()?)?;
+            pin_cef_api_version();
             let mut app = crate::app::WeldApp::build(
                 std::sync::Arc::new(Vec::new()),
                 None,
@@ -538,6 +565,28 @@ mod cef_backed {
         Ok(())
     }
 
+    /// `Contents/Frameworks` of the app bundle, from a helper's executable in
+    /// `Contents/Frameworks/<name> Helper.app/Contents/MacOS` (CEF's
+    /// `CefScopedLibraryLoader::LoadInHelper` resolves the same `../../..`).
+    /// wubble change (40).
+    #[cfg(target_os = "macos")]
+    fn helper_frameworks_dir() -> Result<std::path::PathBuf, WeldError> {
+        let executable = std::env::current_exe().map_err(|error| {
+            WeldError::SandboxSetup(format!("cannot locate macOS helper executable: {error}"))
+        })?;
+        executable
+            .parent()
+            .unwrap_or(&executable)
+            .join("../../..")
+            .canonicalize()
+            .map_err(|error| {
+                WeldError::SandboxSetup(format!(
+                    "cannot locate Contents/Frameworks from {}: {error}",
+                    executable.display()
+                ))
+            })
+    }
+
     #[cfg(target_os = "macos")]
     struct MacSandbox {
         library: libloading::Library,
@@ -705,6 +754,27 @@ mod stub {
 
 #[cfg(not(feature = "cef-runtime"))]
 pub use stub::CefRuntime;
+
+/// wubble change (39): one sandbox rule for the browser and its helpers.
+#[cfg(test)]
+mod sandbox_mode_tests {
+    use super::CefSandboxMode;
+
+    #[test]
+    fn the_sandbox_is_on_unless_asked_off_or_on_windows() {
+        assert_eq!(CefSandboxMode::NO_SANDBOX_SWITCH, "no-sandbox");
+        assert_eq!(
+            CefSandboxMode::for_direct_entry(true),
+            CefSandboxMode::UnsandboxedTrustedContent
+        );
+        let default = if cfg!(target_os = "windows") {
+            CefSandboxMode::UnsandboxedTrustedContent
+        } else {
+            CefSandboxMode::Sandboxed
+        };
+        assert_eq!(CefSandboxMode::for_direct_entry(false), default);
+    }
+}
 
 #[cfg(test)]
 mod pump_scheduler_tests {

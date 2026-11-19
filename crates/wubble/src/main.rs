@@ -702,10 +702,10 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     let exe = std::env::current_exe()?;
     let profile = std::env::temp_dir().join(format!("wubble-session-{}", std::process::id()));
     let result = (|| {
+        let no_sandbox = app::no_sandbox_requested(std::env::args_os());
         for phase in ["session-phase=1", "session-phase=2"] {
             let status = std::process::Command::new(&exe)
-                .args(["--smoke", phase, "--profile"])
-                .arg(&profile)
+                .args(session_phase_args(phase, &profile, no_sandbox))
                 .status()?;
             if !status.success() {
                 return Err(format!("{phase} exited with {status}").into());
@@ -715,6 +715,19 @@ fn smoke_session() -> Result<(), Box<dyn std::error::Error>> {
     })();
     remove_cache(&profile);
     result
+}
+
+/// One `--smoke session` phase's command line; the parent's `--no-sandbox` goes with it,
+/// so a debugging run is unsandboxed in both phases too.
+fn session_phase_args(phase: &str, profile: &Path, no_sandbox: bool) -> Vec<std::ffi::OsString> {
+    let mut args = vec![
+        "--smoke".into(),
+        phase.into(),
+        "--profile".into(),
+        profile.into(),
+    ];
+    args.extend(no_sandbox.then(|| app::NO_SANDBOX_ARG.into()));
+    args
 }
 
 /// `--smoke autofill`: the login the key menu must offer on the smoke's page.
@@ -1723,4 +1736,20 @@ fn run(
         video_passed: host.video_passed.take(),
         measured,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_phases_keep_the_parents_no_sandbox() {
+        let profile = Path::new("/tmp/p");
+        let sandboxed = session_phase_args("session-phase=1", profile, false);
+        assert!(!app::no_sandbox_requested(&sandboxed));
+        assert_eq!(sandboxed[..2], ["--smoke", "session-phase=1"]);
+        let off = session_phase_args("session-phase=2", profile, true);
+        assert!(app::no_sandbox_requested(&off));
+        assert_eq!(off[3], "/tmp/p");
+    }
 }

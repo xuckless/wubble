@@ -380,6 +380,18 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `WaylandEventWatcherGlib`): a Chrome-style window such as DevTools was
    created but never got its first `configure`, so it never appeared.
    cefclient's Linux external pump runs the same context as its loop.
+39. **One sandbox rule for browser and helpers.** `runtime.rs`:
+   `CefSandboxMode::NO_SANDBOX_SWITCH` (Chromium's `no-sandbox`) and
+   `CefSandboxMode::for_direct_entry(no_sandbox)` (`Sandboxed` unless asked
+   off, or on Windows, where the direct entry point refuses it). wubble-engine
+   and wubble-helper both call it, so the two processes cannot disagree.
+40. **macOS helpers load the framework after the seatbelt.**
+   `runtime.rs`: `try_run_subprocess_with_script` initialises
+   `libcef_sandbox.dylib` first, then loads `Contents/Frameworks/Chromium
+   Embedded Framework.framework` itself (`helper_frameworks_dir`,
+   `maybe_load_library`), then pins the API version (which calls into the
+   framework). CEF's helper order (cefsimple `process_helper_mac.cc`); the
+   helper no longer loads the framework, so its initialisers run sandboxed.
 
 ## Not changed, on purpose
 

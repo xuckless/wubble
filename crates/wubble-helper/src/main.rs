@@ -19,21 +19,9 @@ const PROBES: (&str, &str) = ("probes", include_str!("probes.js"));
 /// `clipboard.js`: the page clipboard through the window, only when the browser
 /// passed [`CLIPBOARD_SWITCH`] (browser side `crates/wubble/src/clipboard.rs`).
 const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
-/// Must match `CLIPBOARD_SWITCH` in wubble-engine/src/app.rs. Duplicated on purpose,
-/// as [`NO_SANDBOX_SWITCH`]: the helper cannot depend on wubble-engine.
+/// Must match `CLIPBOARD_SWITCH` in wubble-engine/src/app.rs. Duplicated on purpose:
+/// the helper cannot depend on wubble-engine.
 const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
-/// Must match `NO_SANDBOX_SWITCH` in wubble-engine/src/app.rs; CEF passes it on to
-/// every subprocess when the browser runs unsandboxed.
-const NO_SANDBOX_SWITCH: &str = "no-sandbox";
-
-/// The same rule as wubble-engine's `sandbox_mode` (TODO.md Decided, "CEF sandbox").
-fn sandbox_mode(no_sandbox: bool, windows: bool) -> CefSandboxMode {
-    if no_sandbox || windows {
-        CefSandboxMode::UnsandboxedTrustedContent
-    } else {
-        CefSandboxMode::Sandboxed
-    }
-}
 
 /// One context script running `scripts`, each called with its own channel:
 /// `send(text)` posts `name\ntext`, and a browser message `name\ntext` reaches
@@ -63,10 +51,11 @@ fn compose(scripts: &[(&str, &str)]) -> String {
 }
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    let _framework = load_framework();
+    // macOS: welding applies the seatbelt, then loads the CEF framework (change 40).
     let switch = |name| std::env::args().any(|a| a.strip_prefix("--") == Some(name));
-    let sandbox = sandbox_mode(switch(NO_SANDBOX_SWITCH), cfg!(windows));
+    // The browser's rule (TODO.md Decided, "CEF sandbox"); CEF passes its
+    // `--no-sandbox` on to every subprocess.
+    let sandbox = CefSandboxMode::for_direct_entry(switch(CefSandboxMode::NO_SANDBOX_SWITCH));
     let clipboard = switch(CLIPBOARD_SWITCH);
     let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES]
         .into_iter()
@@ -79,21 +68,6 @@ fn main() {
         sandbox,
         Some(script),
     ));
-}
-
-/// macOS helpers live in `wubble.app/Contents/Frameworks/wubble Helper*.app`
-/// and must load the CEF framework before any CEF call; the loader keeps it
-/// loaded while it lives. Linux links libcef directly and needs nothing.
-///
-/// From cef-rs `cef/src/library_loader.rs` and its use in the cefsimple helper
-/// (tauri-apps/cef-rs, MIT OR Apache-2.0), as wgpu-weld's
-/// `demo-weld-mac/src/helper.rs` does (MPL-2.0).
-#[cfg(target_os = "macos")]
-fn load_framework() -> cef::library_loader::LibraryLoader {
-    let exe = std::env::current_exe().expect("the helper knows its own path");
-    let loader = cef::library_loader::LibraryLoader::new(&exe, true);
-    assert!(loader.load(), "cannot load the CEF framework");
-    loader
 }
 
 #[cfg(test)]
@@ -111,20 +85,6 @@ mod tests {
         assert!(script.contains("[\"probes\", "));
         // No script ends in a statement terminator inside the array.
         assert!(!script.contains("});,"));
-    }
-
-    #[test]
-    fn the_sandbox_follows_the_engines_rule() {
-        assert_eq!(NO_SANDBOX_SWITCH, "no-sandbox");
-        assert_eq!(sandbox_mode(false, false), CefSandboxMode::Sandboxed);
-        assert_eq!(
-            sandbox_mode(true, false),
-            CefSandboxMode::UnsandboxedTrustedContent
-        );
-        assert_eq!(
-            sandbox_mode(false, true),
-            CefSandboxMode::UnsandboxedTrustedContent
-        );
     }
 
     #[test]

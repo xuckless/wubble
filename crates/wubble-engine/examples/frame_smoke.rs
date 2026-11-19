@@ -139,8 +139,8 @@ fn run(dir: &Path) -> Result<(), String> {
         println!("frame smoke: 10-bit video ok");
         #[cfg(target_os = "linux")]
         {
-            let renderers = sandboxed_renderers()?;
-            println!("frame smoke: sandbox ok renderers={renderers}");
+            let renderers = sandboxed_processes()?;
+            println!("frame smoke: sandbox ok renderers={renderers} gpu=seccomp");
         }
         Ok(())
     })();
@@ -185,14 +185,14 @@ fn until(
     Err(format!("{what} never matched: {}", last.unwrap_err()))
 }
 
-/// How many sandboxed renderers this process has, once each is in seccomp filter mode
-/// (`Seccomp: 2` in `/proc/<pid>/status`); an error names the first that is not, or says
-/// none was found. Read from the process tree, as renderers are not dumpable and their
+/// How many sandboxed renderers this process has, once each and the GPU process are in
+/// seccomp filter mode (`Seccomp: 2` in `/proc/<pid>/status`); an error names the first
+/// that is not, or says none was found. Read from the process tree, as renderers are not dumpable and their
 /// command lines are the zygote's: Chromium's sandboxed zygote is a process in a new user
 /// namespace (its init) with the zygote under it, and every process the zygote forks, two
 /// levels into that namespace, is a renderer.
 #[cfg(target_os = "linux")]
-fn sandboxed_renderers() -> Result<usize, String> {
+fn sandboxed_processes() -> Result<usize, String> {
     use std::collections::HashMap;
     struct Proc {
         parent: u32,
@@ -239,11 +239,34 @@ fn sandboxed_renderers() -> Result<usize, String> {
     if renderers.is_empty() {
         return Err("no sandboxed renderer of this process found in /proc".into());
     }
-    match renderers.iter().find(|(_, p)| p.seccomp != Some(2)) {
-        Some((pid, p)) => Err(format!(
+    if let Some((pid, p)) = renderers.iter().find(|(_, p)| p.seccomp != Some(2)) {
+        return Err(format!(
             "renderer {pid} is not under seccomp-bpf (Seccomp: {:?})",
             p.seccomp
-        )),
-        None => Ok(renderers.len()),
+        ));
     }
+    // Forked by the unsandboxed zygote, so its command line is the zygote's: known by
+    // its Viz compositor thread instead.
+    let gpu = procs
+        .iter()
+        .find(|(pid, _)| ours(**pid) && has_thread(**pid, "VizCompositorTh"))
+        .ok_or("no GPU process (with a VizCompositorTh thread) of this process found in /proc")?;
+    if gpu.1.seccomp != Some(2) {
+        return Err(format!(
+            "GPU process {} is not under seccomp-bpf (Seccomp: {:?})",
+            gpu.0, gpu.1.seccomp
+        ));
+    }
+    Ok(renderers.len())
+}
+
+/// Whether one of `pid`'s threads is named `name` (`/proc/<pid>/task/*/comm`, which Chromium
+/// sets for its named threads and anyone may read).
+#[cfg(target_os = "linux")]
+fn has_thread(pid: u32, name: &str) -> bool {
+    std::fs::read_dir(format!("/proc/{pid}/task")).is_ok_and(|tasks| {
+        tasks.filter_map(Result::ok).any(|task| {
+            std::fs::read_to_string(task.path().join("comm")).is_ok_and(|c| c.trim() == name)
+        })
+    })
 }
