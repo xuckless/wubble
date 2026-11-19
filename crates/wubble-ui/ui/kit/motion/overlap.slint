@@ -12,15 +12,20 @@ import { Motion } from "../gen/tokens.slint";
 import { WubbleCss } from "../gen/css.slint";
 import { Tween } from "tween.slint";
 
-// The layer's look at eased progress `e` (1 = in place) heading in (`entering`) or out.
-component OverlapLook inherits Rectangle {
+// The layer's look at eased progress `e` (1 = in place) heading in (`entering`) or out: from
+// `shift-in` below or to `shift-out`, at `scale-from`, blurred. Overlap's values by default;
+// Crossfade passes the Swap's.
+export component OverlapLook inherits Rectangle {
     in property <float> e: 1;
     in property <bool> entering: true;
+    // from (`wb-in`) or to (`wb-out`) keyframe: shift and scale
+    in property <length> shift-in: WubbleCss.wb-in-k-from--transform-translatey;
+    in property <length> shift-out: WubbleCss.wb-out-k-to--transform-translatey;
+    in property <float> scale-from: WubbleCss.wb-in-k-from--transform-scale;
     opacity: root.e;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    // from (`wb-in`) or to (`wb-out`) keyframe: shift and scale
-    property <length> shift: root.entering ? WubbleCss.wb-in-k-from--transform-translatey : WubbleCss.wb-out-k-to--transform-translatey;
-    property <float> scale: root.entering ? WubbleCss.wb-in-k-from--transform-scale : WubbleCss.wb-out-k-to--transform-scale;
+    property <length> shift: root.entering ? root.shift-in : root.shift-out;
+    property <float> scale: root.scale-from;
     // the look at `e`, also read by the curve tests
     out property <length> offset: root.shift * (1 - root.e);
     out property <float> zoom: 1 - (1 - root.scale) * (1 - root.e);

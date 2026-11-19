@@ -1,0 +1,35 @@
+// design: core/wubble.css:66, pages/touch.css:87 @598f814
+// Pulse (`wb-pulse` on `.tp-pulse`, .8 s ease-out): a mint ring grows 0 to 14 px outside the
+// box while it fades from .5 to clear, once per flip of `hit`. CSS draws it as a box shadow with
+// spread and no blur; Slint scales a shadow by the fill's alpha (the pulse has none), so the ring
+// is a border of the same width just outside the box: the same pixels.
+
+import { WubbleCss } from "../gen/css.slint";
+import { TouchCss } from "../gen/css.slint";
+import { Calm } from "calm.slint";
+
+export component Pulse inherits Rectangle {
+    in property <bool> hit: false;
+    in property <length> radius;
+    // one eased run per flip: 0 → 1 on ease-out either way
+    property <float> phase: root.hit ? 1 : 0;
+    animate phase {
+        duration: Calm.ms(TouchCss.tp-pulse--animation-duration);
+        easing: TouchCss.tp-pulse--animation-easing;
+    }
+    // 1 (done) until the first flip
+    out property <float> e: root.hit ? root.phase : 1 - root.phase;
+    out property <length> spread: WubbleCss.wb-pulse-k-from--box-shadow-shadow-1-spread + (WubbleCss.wb-pulse-k-to--box-shadow-shadow-1-spread - WubbleCss.wb-pulse-k-from--box-shadow-shadow-1-spread) * root.e;
+    property <color> from: WubbleCss.wb-pulse-k-from--box-shadow-shadow-1-color;
+    property <color> to: WubbleCss.wb-pulse-k-to--box-shadow-shadow-1-color;
+    Rectangle {
+        x: -root.spread;
+        y: -root.spread;
+        width: root.width + 2 * root.spread;
+        height: root.height + 2 * root.spread;
+        border-radius: root.radius + root.spread;
+        border-width: root.spread;
+        border-color: root.to.mix(root.from, root.e);
+        visible: root.e < 1;
+    }
+}

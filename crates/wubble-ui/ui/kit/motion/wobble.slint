@@ -30,9 +30,15 @@ export component Wobble inherits Rectangle {
         return a + (b - a) * root.e;
     }
 
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-rotation: root.lerp(root.k[root.seg].rot, root.k[root.seg + 1].rot) * 1deg;
-    transform-scale-x: root.lerp(root.k[root.seg].sx, root.k[root.seg + 1].sx);
-    transform-scale-y: root.lerp(root.k[root.seg].sy, root.k[root.seg + 1].sy);
-    @children
+    out property <angle> rotation: root.lerp(root.k[root.seg].rot, root.k[root.seg + 1].rot) * 1deg;
+    out property <float> scale-x: root.lerp(root.k[root.seg].sx, root.k[root.seg + 1].sx);
+    out property <float> scale-y: root.lerp(root.k[root.seg].sy, root.k[root.seg + 1].sy);
+    // a component's root takes no transform (Slint), so the children turn inside it
+    Rectangle {
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-rotation: root.rotation;
+        transform-scale-x: root.scale-x;
+        transform-scale-y: root.scale-y;
+        @children
+    }
 }

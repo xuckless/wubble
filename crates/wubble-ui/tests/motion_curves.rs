@@ -19,6 +19,9 @@ slint::slint! {
     import { Press } from "ui/kit/motion/press.slint";
     import { Film } from "ui/kit/motion/film.slint";
     import { Wobble } from "ui/kit/motion/wobble.slint";
+    import { Pulse } from "ui/kit/motion/pulse.slint";
+    import { Fold } from "ui/kit/motion/fold.slint";
+    import { CrossfadeText } from "ui/kit/motion/crossfade.slint";
     import { Calm } from "ui/kit/motion/calm.slint";
     export { Calm }
     export component Probe inherits Window {
@@ -29,11 +32,15 @@ slint::slint! {
         press := Press { pressed: root.on; }
         film := Film { on: root.on; radius: 8px; width: 100px; height: 40px; }
         wob := Wobble { hit: root.on; width: 20px; height: 20px; }
+        pulse := Pulse { hit: root.on; radius: 8px; width: 20px; height: 20px; }
+        fold := Fold { open: root.on; content-height: 40px; width: 100px; }
+        xf := CrossfadeText { text: root.on ? "on" : "off"; width: 100px; height: 20px; ink: white; }
         out property <[float]> now: [
             ov.progress, ov.offset / 1px, ov.zoom, ov.blur / 1px,
             press.scale,
             film.shown,
-            wob.transform-rotation / 1deg, wob.transform-scale-x, wob.transform-scale-y,
+            wob.rotation / 1deg, wob.scale-x, wob.scale-y,
+            pulse.e, fold.e, xf.e, xf.leaving,
         ];
     }
 }
@@ -50,6 +57,8 @@ const PAIRS: &[(&str, &[(&str, usize)])] = &[
     ("press-in", &[("sx", 4)]),
     ("film-in", &[("opacity", 5)]),
     ("wobble", &[("rot", 6), ("sx", 7), ("sy", 8)]),
+    // the Swap's entrance is `wb-in`'s (touch.css:28-29: 240 ms ease-out, +7, .98, blur 4)
+    ("overlap-in", &[("opacity", 11)]),
 ];
 const PAIRS_OUT: &[(&str, &[(&str, usize)])] = &[
     (
@@ -58,6 +67,8 @@ const PAIRS_OUT: &[(&str, &[(&str, usize)])] = &[
     ),
     ("press-out", &[("sx", 4)]),
     ("film-out", &[("opacity", 5)]),
+    // the Swap's exit fades as `wb-out` (touch.css:30: 190 ms ease-in-out; it shifts -7, not -5)
+    ("overlap-out", &[("opacity", 12)]),
 ];
 
 fn web(name: &str) -> serde_json::Value {
@@ -75,6 +86,7 @@ fn now(p: &Probe) -> Vec<f32> {
 /// animations start from the state, not from the first read after the next flip).
 fn settle(p: &Probe, on: bool) -> Vec<f32> {
     p.set_on(on);
+    slint::platform::update_timers_and_animations();
     now(p);
     mock_elapsed_time(Duration::from_secs(2));
     now(p)
@@ -83,6 +95,8 @@ fn settle(p: &Probe, on: bool) -> Vec<f32> {
 /// `frames` samples of `Probe.now`, the first at the flip, then one per step.
 fn run(p: &Probe, on: bool, frames: usize) -> Vec<Vec<f32>> {
     p.set_on(on);
+    // the event loop's turn before a frame: change handlers run (Crossfade's swap)
+    slint::platform::update_timers_and_animations();
     let mut out = vec![now(p)];
     for _ in 1..frames {
         mock_elapsed_time(Duration::from_micros(DT_US));
@@ -128,7 +142,7 @@ fn compare(p: &Probe, on: bool, pairs: &[(&str, &[(&str, usize)])], report: &mut
                 .collect();
             let ours: Vec<f64> = kit.iter().map(|f| f64::from(f[*i])).collect();
             let s = similarity(&ours, &web);
-            report.push(format!("{name}.{prop}: {s:.3}"));
+            report.push(format!("{name}.{prop} (kit value {i}): {s:.3}"));
             assert!(
                 s >= 0.90,
                 "{name}.{prop}: {s:.3}\nkit {ours:?}\nweb {web:?}"
