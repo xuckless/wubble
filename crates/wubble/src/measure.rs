@@ -12,6 +12,14 @@
 //! report is printed (and the CSV written) before CEF shuts down. It prints a table (nearest-rank
 //! p50/p95/p99/max), counts and histograms, and writes the samples as CSV.
 //!
+//! `idle` holds a still page for `--seconds` after a warm-up longer than the scene's pointer
+//! hold, with the browser's host timers running, and reports what still happens: CEF frames,
+//! Slint and scene renders, pump runs and every timer that woke the UI thread ([`Count`]),
+//! the CPU time of wubble's process tree over the window (`wubble_sysmem::Meter`) and, on
+//! Linux with an NVIDIA GPU, the GPU's busy share from an `nvidia-smi` child. `startup`
+//! stamps the start-up stages ([`Stage`]) from the top of `main` and quits at the first
+//! render that shows page pixels. Every scenario also prints the counts and the CPU table.
+//!
 //! The numbers are printed, never asserted: nothing here runs in `cargo
 //! test` except the pure [`Recorder`], summary, histogram and CSV code on
 //! fixed inputs. [`Recorder`] reads no clock; the hooks at the bottom stamp
@@ -20,6 +28,9 @@
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use slint::ComponentHandle;
@@ -38,6 +49,13 @@ const WARMUP: Duration = Duration::from_secs(1);
 
 /// How often [`tick`] runs: input injection and window resizes.
 pub const TICK: Duration = Duration::from_millis(16);
+
+/// `idle`'s warm-up: past the scene's pointer hold (a window opening under the pointer gets one
+/// move), so the window is measured in its idle state.
+const IDLE_WARMUP: Duration = Duration::from_secs(4);
+
+/// `idle`'s tick: it only ends the run, and is itself a wake-up (counted).
+const IDLE_TICK: Duration = Duration::from_secs(1);
 
 /// Ticks without a first frame after which the run gives up (about 20 s).
 const MAX_WAIT_TICKS: u32 = 1250;
@@ -75,6 +93,13 @@ pub enum Scenario {
     /// The content blocker alone, windowless: compile, cache and per-request
     /// cost of the bundled lists (`blocking::measure`).
     Blocker,
+    /// A still page, the pointer still, the host's timers running: what keeps drawing.
+    Idle,
+    /// Process start to the first render showing page pixels, by stage.
+    Startup,
+    /// Loopback pages loaded cold and warm: the page's own timings and the first frame shown
+    /// (`load_run`).
+    Load,
 }
 
 impl Scenario {
@@ -85,6 +110,9 @@ impl Scenario {
             Self::Resize => "resize",
             Self::Typing => "typing",
             Self::Blocker => "blocker",
+            Self::Idle => "idle",
+            Self::Startup => "startup",
+            Self::Load => "load",
         }
     }
 
@@ -94,6 +122,7 @@ impl Scenario {
             Self::Video => include_str!("../assets/measure-video.html"),
             Self::Resize => include_str!("../assets/measure-resize.html"),
             Self::Typing => include_str!("../assets/measure-typing.html"),
+            Self::Idle | Self::Startup | Self::Load => include_str!("../assets/measure-idle.html"),
             // Windowless: `main` runs `blocking::measure` instead of a page.
             Self::Blocker => "",
         }
@@ -102,6 +131,90 @@ impl Scenario {
     /// Whether each taken frame is probed (a GPU readback and wait).
     fn probes(self) -> bool {
         self == Self::Typing
+    }
+
+    fn warmup(self) -> Duration {
+        match self {
+            Self::Idle => IDLE_WARMUP,
+            _ => WARMUP,
+        }
+    }
+
+    /// How often [`tick`] runs.
+    pub fn tick_every(self) -> Duration {
+        match self {
+            Self::Idle => IDLE_TICK,
+            _ => TICK,
+        }
+    }
+
+    /// Whether the browser's own timers (media poll, video clock, audible probe, lifecycle)
+    /// run, as they do when browsing.
+    pub fn host_timers(self) -> bool {
+        self == Self::Idle
+    }
+}
+
+/// What woke the UI thread or drew, counted over the recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Count {
+    /// A frame the host took from CEF, any view.
+    CefFrame,
+    SlintRender,
+    /// A frame of the wgpu scene (the glass backdrop).
+    SceneRender,
+    /// A pump request handed to the host (CEF's schedule or the pump timer).
+    Pump,
+    /// ... of which CEF did work.
+    PumpWorked,
+    /// The scene's idle timer asked for a frame.
+    IdleTick,
+    /// The host's timers.
+    MediaPoll,
+    VideoTick,
+    AudibleProbe,
+    Lifecycle,
+    /// `--measure`'s own tick.
+    MeasureTick,
+    /// The scene's run state changed.
+    RunChange,
+}
+
+impl Count {
+    pub const ALL: [Self; 12] = [
+        Self::CefFrame,
+        Self::SlintRender,
+        Self::SceneRender,
+        Self::Pump,
+        Self::PumpWorked,
+        Self::IdleTick,
+        Self::MediaPoll,
+        Self::VideoTick,
+        Self::AudibleProbe,
+        Self::Lifecycle,
+        Self::MeasureTick,
+        Self::RunChange,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CefFrame => "cef_frames",
+            Self::SlintRender => "slint_renders",
+            Self::SceneRender => "scene_renders",
+            Self::Pump => "pump_runs",
+            Self::PumpWorked => "pump_worked",
+            Self::IdleTick => "idle_ticks",
+            Self::MediaPoll => "media_polls",
+            Self::VideoTick => "video_ticks",
+            Self::AudibleProbe => "audible_probes",
+            Self::Lifecycle => "lifecycle_ticks",
+            Self::MeasureTick => "measure_ticks",
+            Self::RunChange => "run_state_changes",
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|&c| c == self).unwrap_or(0)
     }
 }
 
@@ -231,6 +344,8 @@ pub enum Event {
     ResizeRequested,
     /// One shell frame (the panes' step), what it laid out.
     Shell(Shell),
+    /// Something counted happened once.
+    Count(Count),
 }
 
 /// One shell frame: whether the scene's texture and the panes were laid out for this frame's
@@ -297,6 +412,8 @@ pub struct Recorder {
     input: Option<(Instant, InputKind, Option<[u8; 4]>)>,
     /// An input a taken frame shows, waiting for that frame's render.
     shown: Option<(Instant, InputKind)>,
+    /// Per [`Count`], in [`Count::ALL`] order.
+    counted: [u64; Count::ALL.len()],
 }
 
 fn ms(d: Duration) -> f64 {
@@ -332,7 +449,12 @@ impl Recorder {
                 c.stretched += u64::from(shell.stretched);
                 c.bowed += u64::from(shell.bowed);
             }
+            Event::Count(count) => self.counted[count.index()] += 1,
         }
+    }
+
+    pub fn counted(&self, count: Count) -> u64 {
+        self.counted[count.index()]
     }
 
     fn push(&mut self, metric: Metric, value: Duration) {
@@ -456,9 +578,9 @@ impl Recorder {
     }
 
     /// The summary table, counts and histograms. `period` is the display's
-    /// refresh period, if known.
-    pub fn report(&self, period: Option<Duration>) -> String {
-        let mut out = String::new();
+    /// refresh period, if known; `seconds` the recording's length, for the rates.
+    pub fn report(&self, period: Option<Duration>, seconds: f64) -> String {
+        let mut out = self.counts_text(seconds);
         let _ = writeln!(
             out,
             "{:<22} {:>6} {:>8} {:>8} {:>8} {:>8}  (ms)",
@@ -514,6 +636,269 @@ impl Recorder {
         }
         out
     }
+}
+
+impl Recorder {
+    /// Each [`Count`] and its rate per second over `seconds`.
+    pub fn counts_text(&self, seconds: f64) -> String {
+        let mut out = format!("{:<22} {:>8} {:>9}\n", "count", "n", "per s");
+        for count in Count::ALL {
+            let n = self.counted(count);
+            let rate = if seconds > 0.0 {
+                n as f64 / seconds
+            } else {
+                0.0
+            };
+            let _ = writeln!(out, "{:<22} {n:>8} {rate:>9.2}", count.name());
+        }
+        out.push('\n');
+        out
+    }
+}
+
+/// One process's CPU time when sampled: pid, label (`wubble_sysmem::label`), milliseconds.
+pub type CpuTime = (u32, String, u64);
+
+/// When the tree was sampled: its processes, then the browser process's threads (Linux).
+type CpuSnapshot = (Instant, (Vec<CpuTime>, Vec<CpuTime>));
+
+/// One process's CPU use over the recording.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CpuRow {
+    pub pid: u32,
+    pub label: String,
+    pub cpu_ms: u64,
+    /// Percent of one core.
+    pub percent: f64,
+}
+
+/// CPU used over `wall` per process of `end`; one that started meanwhile counts all its time.
+/// A process gone by `end` is left out (its time is unknown).
+pub fn cpu_rows(start: &[CpuTime], end: &[CpuTime], wall: Duration) -> Vec<CpuRow> {
+    let wall_ms = ms(wall);
+    end.iter()
+        .map(|(pid, label, at_end)| {
+            let at_start = start
+                .iter()
+                .find(|(p, ..)| p == pid)
+                .map_or(0, |(_, _, t)| *t);
+            let cpu_ms = at_end.saturating_sub(at_start);
+            CpuRow {
+                pid: *pid,
+                label: label.clone(),
+                cpu_ms,
+                percent: if wall_ms > 0.0 {
+                    cpu_ms as f64 * 100.0 / wall_ms
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect()
+}
+
+/// The CPU table, with a total row.
+pub fn cpu_text(rows: &[CpuRow], wall: Duration) -> String {
+    let mut out = format!(
+        "cpu over {:.1} s ({} processes)\n{:<12} {:>8} {:>9} {:>10}\n",
+        wall.as_secs_f64(),
+        rows.len(),
+        "process",
+        "pid",
+        "cpu ms",
+        "% of core"
+    );
+    for r in rows {
+        let _ = writeln!(
+            out,
+            "{:<12} {:>8} {:>9} {:>10.2}",
+            r.label, r.pid, r.cpu_ms, r.percent
+        );
+    }
+    let total: u64 = rows.iter().map(|r| r.cpu_ms).sum();
+    let percent: f64 = rows.iter().map(|r| r.percent).sum();
+    let _ = writeln!(out, "{:<12} {:>8} {total:>9} {percent:>10.2}", "total", "");
+    out
+}
+
+/// The CPU rows as `process,pid,cpu_ms,percent_of_core`.
+pub fn cpu_csv(rows: &[CpuRow]) -> String {
+    let mut out = String::from("process,pid,cpu_ms,percent_of_core\n");
+    for r in rows {
+        let _ = writeln!(out, "{},{},{},{:.3}", r.label, r.pid, r.cpu_ms, r.percent);
+    }
+    out
+}
+
+/// The mean of `nvidia-smi --query-gpu=utilization.gpu,power.draw --format=csv,noheader,nounits`
+/// lines: (samples, busy percent, watts). Lines it cannot read are skipped.
+pub fn gpu_mean(text: &str) -> Option<(usize, f64, f64)> {
+    let samples: Vec<(f64, f64)> = text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(',').map(str::trim);
+            let busy = fields.next()?.parse().ok()?;
+            let watts = fields.next()?.parse().ok()?;
+            Some((busy, watts))
+        })
+        .collect();
+    let n = samples.len();
+    (n > 0).then(|| {
+        let (busy, watts) = samples
+            .iter()
+            .fold((0.0, 0.0), |(b, w), (sb, sw)| (b + sb, w + sw));
+        (n, busy / n as f64, watts / n as f64)
+    })
+}
+
+/// A start-up stage, stamped once ([`mark`]) when `--measure startup` runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// The saved session and settings arrived from the store thread.
+    StoreLoaded,
+    /// The shared wgpu device exists.
+    Gpu,
+    /// Slint's backend is selected.
+    SlintBackend,
+    /// `Engine::start` returned (CEF initialised).
+    CefStarted,
+    /// The blocker was started (its cache loaded on this thread when it matches).
+    BlockerStarted,
+    /// The first window is built (not shown).
+    WindowOpened,
+    /// `show` returned.
+    WindowShown,
+    /// The session's other windows are open.
+    SessionRestored,
+    /// The first view (browser) was created.
+    FirstView,
+    /// Slint's first render.
+    FirstRender,
+    /// The host took CEF's first frame.
+    FirstCefFrame,
+    /// The first render after that frame: page pixels on screen.
+    FirstPixels,
+    /// The blocker's lists are in force (from the cache or compiled).
+    BlockerReady,
+}
+
+impl Stage {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::StoreLoaded => "store_loaded",
+            Self::Gpu => "gpu_device",
+            Self::SlintBackend => "slint_backend",
+            Self::CefStarted => "cef_started",
+            Self::BlockerStarted => "blocker_started",
+            Self::WindowOpened => "window_opened",
+            Self::WindowShown => "window_shown",
+            Self::SessionRestored => "session_restored",
+            Self::FirstView => "first_view",
+            Self::FirstRender => "first_render",
+            Self::FirstCefFrame => "first_cef_frame",
+            Self::FirstPixels => "first_page_pixels",
+            Self::BlockerReady => "blocker_ready",
+        }
+    }
+}
+
+/// The stages in time order, each with its time since `start` and since the stage before
+/// (milliseconds); `premain` (process creation to `main`, if known) leads as its own row.
+pub fn startup_rows(
+    start: Instant,
+    premain_ms: Option<f64>,
+    stages: &[(Stage, Instant)],
+) -> Vec<(&'static str, f64, f64)> {
+    let mut sorted = stages.to_vec();
+    sorted.sort_by_key(|(_, at)| *at);
+    let mut rows = Vec::new();
+    if let Some(p) = premain_ms {
+        rows.push(("process_to_main", 0.0, p));
+    }
+    let mut last = start;
+    for (stage, at) in sorted {
+        rows.push((
+            stage.name(),
+            ms(at.saturating_duration_since(start)),
+            ms(at.saturating_duration_since(last)),
+        ));
+        last = at;
+    }
+    rows
+}
+
+/// The start-up table and its CSV (`stage,since_main_ms,delta_ms`).
+pub fn startup_text(rows: &[(&str, f64, f64)]) -> (String, String) {
+    let mut text = format!(
+        "{:<20} {:>10} {:>10}  (ms)\n",
+        "stage", "since main", "delta"
+    );
+    let mut csv = String::from("stage,since_main_ms,delta_ms\n");
+    for (name, t, d) in rows {
+        let _ = writeln!(text, "{name:<20} {t:>10.1} {d:>10.1}");
+        let _ = writeln!(csv, "{name},{t:.3},{d:.3}");
+    }
+    (text, csv)
+}
+
+/// Process creation to now from `/proc/self/stat`'s start time (field 22, clock ticks after
+/// boot; the fork, not the exec: under `cargo run`, which execs the binary in its own process,
+/// it holds cargo's run too, so run the binary itself, or through a runner that forks) and
+/// `/proc/uptime`, milliseconds. The command name (field 2) may hold spaces and parentheses,
+/// so the fields are counted after its last `)`.
+pub fn since_exec_ms(stat: &str, uptime: &str, ticks_per_s: f64) -> Option<f64> {
+    let after_name = &stat[stat.rfind(')')? + 1..];
+    // Field 3 is the first after the name: field 22 is the 20th from there.
+    let start_ticks: f64 = after_name.split_whitespace().nth(19)?.parse().ok()?;
+    let up: f64 = uptime.split_whitespace().next()?.parse().ok()?;
+    let ms = (up - start_ticks / ticks_per_s) * 1000.0;
+    (ms >= 0.0).then_some(ms)
+}
+
+/// When `main` started, set by [`process_started`].
+static MAIN_START: OnceLock<(Instant, Option<f64>)> = OnceLock::new();
+/// `--measure startup` is running: [`mark`] records.
+static STARTUP: AtomicBool = AtomicBool::new(false);
+static STAGES: Mutex<Vec<(Stage, Instant)>> = Mutex::new(Vec::new());
+
+/// The first statement of `main`: the clock start-up stages count from, and (Linux) how long
+/// the process ran before it (the dynamic loader mapping CEF).
+pub fn process_started() {
+    MAIN_START.get_or_init(|| {
+        let now = Instant::now();
+        #[cfg(target_os = "linux")]
+        let premain = std::fs::read_to_string("/proc/self/stat")
+            .ok()
+            .zip(std::fs::read_to_string("/proc/uptime").ok())
+            // USER_HZ: 100 on every Linux wubble runs on.
+            .and_then(|(stat, up)| since_exec_ms(&stat, &up, 100.0));
+        #[cfg(not(target_os = "linux"))]
+        let premain = None;
+        (now, premain)
+    });
+}
+
+/// Stamps `stage` the first time it is reached, while `--measure startup` runs. Any thread.
+pub fn mark(stage: Stage) {
+    if stage == Stage::BlockerReady {
+        crate::load_run::blocker_ready();
+    }
+    if !STARTUP.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut stages = STAGES.lock().unwrap_or_else(PoisonError::into_inner);
+    if !stages.iter().any(|(s, _)| *s == stage) {
+        stages.push((stage, Instant::now()));
+    }
+}
+
+fn marked(stage: Stage) -> bool {
+    STARTUP.load(Ordering::Relaxed)
+        && STAGES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|(s, _)| *s == stage)
 }
 
 /// Sample count and nearest-rank percentiles.
@@ -589,25 +974,143 @@ struct Session {
     scenario: Scenario,
     seconds: u32,
     recorder: Recorder,
-    /// The first frame; recording starts [`WARMUP`] later.
+    /// The first frame; recording starts at the first tick [`Scenario::warmup`] later.
     first_frame: Option<Instant>,
+    /// When recording started and whether it has ended: every count and the CPU times cover
+    /// this one window, which the rates divide by.
+    started: Option<Instant>,
+    ended: bool,
     ticks: u32,
     /// The window's logical size when `resize` started.
     base: Option<(f32, f32)>,
     /// The display's refresh and the window, read when recording starts.
     refresh_mhz: Option<u32>,
     window: String,
+    /// The process tree, found by a thread from the first frame on (a walk of every process
+    /// on the system, kept off the UI thread), then the CPU times when recording started and
+    /// ended (only the tree's own processes: [`wubble_sysmem::Meter::resample`]).
+    finding: Option<std::thread::JoinHandle<wubble_sysmem::Meter>>,
+    meter: Option<wubble_sysmem::Meter>,
+    cpu_start: Option<CpuSnapshot>,
+    cpu_end: Option<CpuSnapshot>,
+    /// `nvidia-smi` sampling the GPU over the recording, then what it printed.
+    gpu: Option<Child>,
+    gpu_text: Option<String>,
 }
 
 impl Session {
+    fn new(scenario: Scenario, seconds: u32) -> Self {
+        Self {
+            scenario,
+            seconds,
+            recorder: Recorder::default(),
+            first_frame: None,
+            started: None,
+            ended: false,
+            ticks: 0,
+            base: None,
+            refresh_mhz: None,
+            window: "n/a".into(),
+            finding: None,
+            meter: None,
+            cpu_start: None,
+            cpu_end: None,
+            gpu: None,
+            gpu_text: None,
+        }
+    }
+
+    /// The warm-up after the first frame is over: recording may start.
+    fn warm(&self, now: Instant) -> bool {
+        self.first_frame
+            .is_some_and(|t| now >= t + self.scenario.warmup())
+    }
+
     fn recording(&self, now: Instant) -> bool {
-        self.first_frame.is_some_and(|t| now >= t + WARMUP)
+        !self.ended && self.started.is_some_and(|t| now >= t)
     }
 
     fn finished(&self, now: Instant) -> bool {
-        self.first_frame
-            .is_some_and(|t| now >= t + WARMUP + Duration::from_secs(self.seconds.into()))
+        self.started
+            .is_some_and(|t| now >= t + Duration::from_secs(self.seconds.into()))
     }
+
+    /// The first frame arrived at `now`: the tree is looked for from here, on a thread.
+    fn frame_arrived(&mut self, now: Instant) {
+        if self.first_frame.is_some() {
+            return;
+        }
+        self.first_frame = Some(now);
+        if self.scenario != Scenario::Startup {
+            self.finding = std::thread::Builder::new()
+                .name("wubble-measure".into())
+                .spawn(|| {
+                    let mut meter = wubble_sysmem::Meter::default();
+                    meter.sample();
+                    meter
+                })
+                .ok();
+        }
+    }
+
+    /// The tree's processes, then the browser process's threads (Linux); `None` without a
+    /// meter.
+    fn cpu_times(&mut self) -> Option<(Vec<CpuTime>, Vec<CpuTime>)> {
+        let meter = self.meter.as_mut()?;
+        let procs = meter
+            .resample()
+            .into_iter()
+            .map(|p| (p.pid, p.label, p.cpu_ms))
+            .collect();
+        Some((procs, meter.threads()))
+    }
+
+    /// Recording starts at `now`: the CPU times and, where there is one, the GPU sampler.
+    fn start(&mut self, now: Instant) {
+        self.started = Some(now);
+        if self.scenario == Scenario::Startup {
+            return;
+        }
+        // Long done: the warm-up is seconds, the walk tens of milliseconds.
+        self.meter = self.finding.take().and_then(|t| t.join().ok());
+        self.cpu_start = self.cpu_times().map(|times| (Instant::now(), times));
+        self.gpu = gpu_sampler();
+    }
+
+    /// Recording ends (once).
+    fn end_samples(&mut self) {
+        if self.started.is_none() || self.ended {
+            return;
+        }
+        self.ended = true;
+        self.cpu_end = self.cpu_times().map(|times| (Instant::now(), times));
+        if let Some(mut child) = self.gpu.take() {
+            let _ = child.kill();
+            self.gpu_text = child
+                .wait_with_output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        }
+    }
+}
+
+/// `nvidia-smi` printing the GPU's busy share and power every 500 ms (Linux only, if it is
+/// installed). Measuring only: no network, killed when recording ends.
+fn gpu_sampler() -> Option<Child> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu,power.draw",
+            "--format=csv,noheader,nounits",
+            "-lms",
+            "500",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()
 }
 
 thread_local! {
@@ -620,25 +1123,28 @@ fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
 
 /// Starts recording `scenario` for `seconds` once the first frame arrives.
 pub fn begin(scenario: Scenario, seconds: u32) {
-    SESSION.set(Some(Session {
-        scenario,
-        seconds,
-        recorder: Recorder::default(),
-        first_frame: None,
-        ticks: 0,
-        base: None,
-        refresh_mhz: None,
-        window: "n/a".into(),
-    }));
+    SESSION.set(Some(Session::new(scenario, seconds)));
+    STARTUP.store(scenario == Scenario::Startup, Ordering::Relaxed);
+}
+
+/// Counts `count` while a session records (a thread-local lookup and nothing else otherwise).
+pub fn count(count: Count) {
+    with_session(|s| {
+        if s.recording(Instant::now()) {
+            s.recorder.record(Event::Count(count));
+        }
+    });
 }
 
 /// Host hook: `frame` was set on the window. `probe` reads its probe pixel
 /// and runs only when the scenario probes. Nothing happens when not
 /// measuring.
 pub fn taken(frame: Frame, probe: impl FnOnce() -> Option<[u8; 4]>) {
+    crate::load_run::frame_taken();
+    mark(Stage::FirstCefFrame);
     let Some(probes) = with_session(|s| {
         let now = Instant::now();
-        s.first_frame.get_or_insert(now);
+        s.frame_arrived(now);
         s.recording(now).then_some(s.scenario.probes())
     })
     .flatten() else {
@@ -649,8 +1155,16 @@ pub fn taken(frame: Frame, probe: impl FnOnce() -> Option<[u8; 4]>) {
     with_session(|s| s.recorder.record(Event::Taken { at, frame, probe }));
 }
 
-/// Rendering-notifier hook: Slint finished a render.
+/// Rendering-notifier hook: Slint finished a render. `startup` ends at the first one after
+/// the first page frame.
 pub fn rendered() {
+    crate::load_run::rendered();
+    mark(Stage::FirstRender);
+    if marked(Stage::FirstCefFrame) && !marked(Stage::FirstPixels) {
+        mark(Stage::FirstPixels);
+        crate::quit();
+    }
+    count(Count::SlintRender);
     with_session(|s| {
         let now = Instant::now();
         if s.recording(now) {
@@ -697,9 +1211,14 @@ pub fn shell(shell: Shell) {
 /// Timer hook, every [`TICK`] while measuring: injects input (`typing`) or
 /// resizes the window (`resize`), and quits once the run is over.
 pub fn tick(host: &mut Host, window: &AppWindow) {
+    if crate::load_run::active() {
+        return crate::load_run::tick(host);
+    }
+    count(Count::MeasureTick);
     let now = Instant::now();
     let Some((scenario, step, base)) = with_session(|s| {
         if s.finished(now) {
+            s.end_samples();
             crate::quit();
             return None;
         }
@@ -711,7 +1230,7 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
             }
             return None;
         }
-        if !s.recording(now) {
+        if !s.warm(now) {
             s.ticks = 0;
             return None;
         }
@@ -724,6 +1243,7 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
                 .with_winit_window(crate::display_refresh_mhz)
                 .flatten();
             s.window = format!("{}x{}@{scale}", size.width, size.height);
+            s.start(now);
         }
         let size = size.to_logical(scale);
         let base = *s.base.get_or_insert((size.width, size.height));
@@ -797,7 +1317,15 @@ fn inject(host: &mut Host, kind: InputKind, n: u32) {
 /// `adapter` names the GPU for the header.
 /// A run in which no frame arrived recorded nothing and is `None` too.
 pub fn finish(adapter: &str) -> Option<(String, String)> {
-    let session = SESSION.take().filter(|s| s.first_frame.is_some())?;
+    if let Some(load) = crate::load_run::finish() {
+        return Some(load);
+    }
+    let mut session = SESSION.take().filter(|s| s.first_frame.is_some())?;
+    if session.scenario == Scenario::Startup {
+        return Some(finish_startup(adapter));
+    }
+    // A run quit early (the window closed) still reports its window so far.
+    session.end_samples();
     let period = session
         .refresh_mhz
         .filter(|&m| m > 0)
@@ -815,8 +1343,70 @@ pub fn finish(adapter: &str) -> Option<(String, String)> {
         adapter,
         load.trim()
     );
-    let report = header + &session.recorder.report(period);
-    Some((report, session.recorder.csv()))
+    let cpu = session
+        .cpu_start
+        .as_ref()
+        .zip(session.cpu_end.as_ref())
+        .map(|((t0, start), (t1, end))| {
+            let wall = t1.saturating_duration_since(*t0);
+            let mut threads = cpu_rows(&start.1, &end.1, wall);
+            threads.retain(|t| t.cpu_ms > 0);
+            threads.sort_by_key(|t| std::cmp::Reverse(t.cpu_ms));
+            (wall, cpu_rows(&start.0, &end.0, wall), threads)
+        });
+    let seconds = cpu
+        .as_ref()
+        .map_or(f64::from(session.seconds), |(wall, ..)| wall.as_secs_f64());
+    let mut report = header + &session.recorder.report(period, seconds);
+    let mut csv = session.recorder.csv();
+    if let Some((wall, rows, threads)) = &cpu {
+        report.push('\n');
+        report.push_str(&cpu_text(rows, *wall));
+        if !threads.is_empty() {
+            report.push_str("\nbrowser process threads that ran:\n");
+            report.push_str(&cpu_text(threads, *wall));
+        }
+        csv.push('\n');
+        csv.push_str(&cpu_csv(rows));
+    }
+    let gpu = match session.gpu_text.as_deref().map(gpu_mean) {
+        Some(Some((n, busy, watts))) => {
+            format!(
+                "gpu: {busy:.1} % busy, {watts:.1} W (mean of {n} nvidia-smi samples, whole GPU)"
+            )
+        }
+        Some(None) => "gpu: nvidia-smi printed nothing readable".into(),
+        None => "gpu: n/a (no nvidia-smi)".into(),
+    };
+    let _ = writeln!(report, "{gpu}");
+    Some((report, csv))
+}
+
+/// `startup`'s report: the stage table, its CSV.
+fn finish_startup(adapter: &str) -> (String, String) {
+    let (start, premain) = MAIN_START
+        .get()
+        .copied()
+        .unwrap_or_else(|| (Instant::now(), None));
+    let stages = STAGES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let (text, csv) = startup_text(&startup_rows(start, premain, &stages));
+    let missing: Vec<&str> = [Stage::BlockerReady, Stage::FirstPixels]
+        .into_iter()
+        .filter(|s| !stages.iter().any(|(m, _)| m == s))
+        .map(Stage::name)
+        .collect();
+    let mut report = format!("measure: scenario=startup adapter={adapter}\n{text}");
+    if !missing.is_empty() {
+        let _ = writeln!(
+            report,
+            "not reached before the run ended: {}",
+            missing.join(", ")
+        );
+    }
+    (report, csv)
 }
 
 /// Where `--out` writes the CSV.
@@ -1057,12 +1647,142 @@ mod tests {
     }
 
     #[test]
+    fn counts_and_their_rates() {
+        let mut r = Recorder::default();
+        for c in [Count::Pump, Count::Pump, Count::IdleTick, Count::Pump] {
+            r.record(Event::Count(c));
+        }
+        assert_eq!(r.counted(Count::Pump), 3);
+        assert_eq!(r.counted(Count::CefFrame), 0);
+        let text = r.counts_text(2.0);
+        assert!(
+            text.contains("pump_runs                     3      1.50\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("idle_ticks                    1      0.50\n"),
+            "{text}"
+        );
+        // no time, no rate
+        assert!(
+            r.counts_text(0.0)
+                .contains("pump_runs                     3      0.00")
+        );
+    }
+
+    #[test]
+    fn cpu_rows_are_the_time_used_over_the_window() {
+        let start = vec![(1, "Browser".into(), 1_000), (2, "GPU".into(), 500)];
+        let end = vec![
+            (1, "Browser".into(), 1_050),
+            (2, "GPU".into(), 500),
+            // started meanwhile: all of its time counts
+            (3, "Renderer".into(), 20),
+        ];
+        let rows = cpu_rows(&start, &end, Duration::from_secs(10));
+        let got: Vec<(u32, u64, f64)> = rows.iter().map(|r| (r.pid, r.cpu_ms, r.percent)).collect();
+        assert_eq!(got, [(1, 50, 0.5), (2, 0, 0.0), (3, 20, 0.2)]);
+        let text = cpu_text(&rows, Duration::from_secs(10));
+        assert!(
+            text.ends_with("total                        70       0.70\n"),
+            "{text}"
+        );
+        assert_eq!(
+            cpu_csv(&rows[..1]),
+            "process,pid,cpu_ms,percent_of_core\nBrowser,1,50,0.500\n"
+        );
+        // a zero window gives no percentages, not a division by zero
+        assert_eq!(cpu_rows(&start, &end, Duration::ZERO)[0].percent, 0.0);
+    }
+
+    #[test]
+    fn gpu_mean_of_nvidia_smi_lines() {
+        assert_eq!(gpu_mean(""), None);
+        assert_eq!(gpu_mean("garbage\n"), None);
+        assert_eq!(
+            gpu_mean("10, 30.00\n20, 34.00\n[N/A], 1\n"),
+            Some((2, 15.0, 32.0))
+        );
+    }
+
+    #[test]
+    fn startup_stages_in_time_order_with_deltas() {
+        let t0 = Instant::now();
+        let stages = [
+            (Stage::CefStarted, at(t0, 120)),
+            (Stage::StoreLoaded, at(t0, 20)),
+            (Stage::FirstPixels, at(t0, 400)),
+        ];
+        let rows = startup_rows(t0, Some(35.0), &stages);
+        assert_eq!(
+            rows,
+            [
+                ("process_to_main", 0.0, 35.0),
+                ("store_loaded", 20.0, 20.0),
+                ("cef_started", 120.0, 100.0),
+                ("first_page_pixels", 400.0, 280.0),
+            ]
+        );
+        let (text, csv) = startup_text(&rows[1..2]);
+        assert_eq!(
+            text,
+            "stage                since main      delta  (ms)\nstore_loaded               20.0       20.0\n"
+        );
+        assert_eq!(
+            csv,
+            "stage,since_main_ms,delta_ms\nstore_loaded,20.000,20.000\n"
+        );
+    }
+
+    #[test]
+    fn exec_time_counts_fields_after_the_last_parenthesis() {
+        // the command name holds a space and a ')': fields are counted after the last ')'
+        let mut fields = vec!["0"; 20];
+        fields[0] = "S";
+        // field 22: start time, 500 ticks after boot
+        fields[19] = "500";
+        let stat = format!("1234 (we ird) name) {}", fields.join(" "));
+        assert_eq!(since_exec_ms(&stat, "5.25 99.0\n", 100.0), Some(250.0));
+        // a start in the future (clock skew) or junk gives nothing
+        assert_eq!(since_exec_ms(&stat, "4.0 1.0", 100.0), None);
+        assert_eq!(since_exec_ms("no parens", "5.0 1.0", 100.0), None);
+    }
+
+    #[test]
+    fn the_idle_scenario_warms_up_past_the_pointer_hold() {
+        // a window opening under the pointer gets one move: the recording must start Idle
+        const { assert!(IDLE_WARMUP.as_millis() > wubble_gfx::scene::run::POINTER_HOLD.as_millis()) };
+        assert_eq!(Scenario::Idle.warmup(), IDLE_WARMUP);
+        assert_eq!(Scenario::Scroll.warmup(), WARMUP);
+        assert!(Scenario::Idle.host_timers() && !Scenario::Scroll.host_timers());
+    }
+
+    #[test]
     fn a_run_without_frames_reports_nothing() {
         begin(Scenario::Scroll, 1);
         assert_eq!(finish("test"), None);
         begin(Scenario::Scroll, 1);
         with_session(|s| s.first_frame = Some(Instant::now()));
         assert!(finish("test").is_some());
+    }
+
+    #[test]
+    fn counts_and_cpu_times_cover_one_window() {
+        // Startup takes no CPU samples (no thread, no meter): the window logic alone.
+        let mut s = Session::new(Scenario::Startup, 10);
+        let t0 = Instant::now();
+        s.frame_arrived(t0);
+        let warm = t0 + Scenario::Startup.warmup();
+        // Warm, but the tick that starts recording (and samples the CPU) has not run yet.
+        assert!(s.warm(warm) && !s.recording(warm) && !s.finished(warm));
+        let tick = warm + IDLE_TICK;
+        s.start(tick);
+        assert!(!s.recording(warm) && s.recording(tick));
+        // The run is as long as asked from the start, not from the warm-up's end.
+        let secs = Duration::from_secs;
+        assert!(!s.finished(tick + secs(9)) && s.finished(tick + secs(10)));
+        s.end_samples();
+        assert!(!s.recording(tick + secs(1)));
     }
 
     #[test]

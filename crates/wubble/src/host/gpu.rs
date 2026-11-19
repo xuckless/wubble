@@ -47,8 +47,14 @@ impl Looker {
             .name("wubble-gpu-watch".into())
             .spawn(move || {
                 let mut meter = Meter::default();
+                let mut known = None;
                 for () in asks {
-                    if answer.send(meter.gpu_pid()).is_err() {
+                    // A found process is only checked to still run (one process read); the
+                    // whole system's list is walked again only when it is gone.
+                    known = known
+                        .filter(|&pid| meter.still_running(pid))
+                        .or_else(|| meter.gpu_pid());
+                    if answer.send(known).is_err() {
                         break;
                     }
                 }

@@ -103,6 +103,11 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_composition_is_still_a_valid_script() {
+        assert!(compose(&[]).starts_with("(function (send, register) {"));
+    }
+
+    #[test]
     fn the_clipboard_runs_only_when_asked() {
         assert_eq!(CLIPBOARD_SWITCH, "wubble-clipboard-bridge");
         assert!(!compose(&[AUTOFILL]).contains("\"clipboard\""));

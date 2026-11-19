@@ -14,6 +14,9 @@ pub struct Proc {
     /// What it is (`label`): Browser, Renderer, GPU, ...
     pub label: String,
     pub sample: Sample,
+    /// CPU time used since it started, milliseconds (`sysinfo`'s accumulated CPU time; Linux
+    /// counts it in clock ticks, 10 ms).
+    pub cpu_ms: u64,
 }
 
 /// Samples wubble's process tree. Keeps its `System` between samples: CPU use is measured
@@ -38,7 +41,7 @@ impl Meter {
         }
     }
 
-    /// Refreshes and returns the tree, `root` first.
+    /// Refreshes and returns the tree, `root` first. Reads every process on the system.
     pub fn sample(&mut self) -> Vec<Proc> {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
@@ -48,9 +51,38 @@ impl Meter {
                 .with_cpu()
                 .with_cmd(UpdateKind::OnlyIfNotSet),
         );
+        self.tree()
+    }
+
+    /// Refreshes the CPU time of only the tree [`Meter::sample`] last found and of the root's
+    /// threads, root first: a few files, not the whole system, so cheap enough for the UI
+    /// thread and (nearly) not counted in the root's own time. A process started since that
+    /// sample is missed; memory is that sample's.
+    pub fn resample(&mut self) -> Vec<Proc> {
+        let mut pids: Vec<Pid> = self.tree().iter().map(|p| Pid::from_u32(p.pid)).collect();
+        if let Some(tasks) = self
+            .system
+            .process(Pid::from_u32(self.root))
+            .and_then(|p| p.tasks())
+        {
+            pids.extend(tasks.iter().copied());
+        }
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&pids),
+            false,
+            ProcessRefreshKind::nothing().with_cpu(),
+        );
+        self.tree()
+    }
+
+    /// The tree as of the last refresh, `root` first.
+    fn tree(&self) -> Vec<Proc> {
         let processes = self.system.processes();
+        // Linux lists each thread as a process whose parent is its own process: a process's
+        // CPU time and memory already hold its threads', so threads are left out.
         let table: Vec<(u32, Option<u32>)> = processes
             .iter()
+            .filter(|(_, p)| p.thread_kind().is_none())
             .map(|(pid, p)| (pid.as_u32(), p.parent().map(Pid::as_u32)))
             .collect();
         descendants(self.root, &table)
@@ -69,9 +101,47 @@ impl Meter {
                         rss_bytes: p.memory(),
                         cpu_percent: p.cpu_usage(),
                     },
+                    cpu_ms: p.accumulated_cpu_time(),
                 })
             })
             .collect()
+    }
+
+    /// The threads of `root` as of the last refresh: id, name, CPU time in ms, the main thread
+    /// first ([`with_main`]). Linux only (sysinfo lists threads there); empty elsewhere.
+    pub fn threads(&self) -> Vec<(u32, String, u64)> {
+        let Some(root) = self.system.process(Pid::from_u32(self.root)) else {
+            return Vec::new();
+        };
+        let Some(tasks) = root.tasks() else {
+            return Vec::new();
+        };
+        let threads = tasks
+            .iter()
+            .filter_map(|tid| {
+                let t = self.system.process(*tid)?;
+                Some((
+                    tid.as_u32(),
+                    t.name().to_string_lossy().into_owned(),
+                    t.accumulated_cpu_time(),
+                ))
+            })
+            .collect();
+        with_main(self.root, root.accumulated_cpu_time(), threads)
+    }
+
+    /// Whether `pid` still runs (not gone, not a zombie), refreshing that one process only: the
+    /// cheap check between full looks ([`Meter::gpu_pid`] reads every process on the system).
+    pub fn still_running(&mut self, pid: u32) -> bool {
+        let pid = Pid::from_u32(pid);
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        self.system
+            .process(pid)
+            .is_some_and(|p| p.status() != sysinfo::ProcessStatus::Zombie)
     }
 
     /// The id of Chromium's GPU process among wubble's children, refreshing only the process
@@ -129,6 +199,23 @@ impl Meter {
                 .process(Pid::from_u32(pid))
                 .is_some_and(|p| p.kill())
     }
+}
+
+/// `threads` with the main thread first. sysinfo leaves out the thread whose id is the
+/// process's (Linux `get_proc_tasks`), and the process's time holds every thread's: the main
+/// thread's is the rest, together with threads that have exited. No row without threads.
+pub fn with_main(
+    root: u32,
+    root_ms: u64,
+    threads: Vec<(u32, String, u64)>,
+) -> Vec<(u32, String, u64)> {
+    if threads.is_empty() {
+        return threads;
+    }
+    let others: u64 = threads.iter().map(|t| t.2).sum();
+    let mut out = vec![(root, "main".to_string(), root_ms.saturating_sub(others))];
+    out.extend(threads);
+    out
 }
 
 /// The kernel's name of Viz's compositor thread, which runs in the GPU process.
@@ -228,11 +315,33 @@ mod tests {
     }
 
     #[test]
+    fn the_main_thread_is_the_process_less_its_other_threads() {
+        let threads = vec![(11, "a".to_string(), 30), (12, "b".to_string(), 20)];
+        assert_eq!(
+            with_main(10, 140, threads),
+            vec![
+                (10, "main".to_string(), 90),
+                (11, "a".to_string(), 30),
+                (12, "b".to_string(), 20)
+            ]
+        );
+        // Clock ticks may put the threads' sum past the process's.
+        assert_eq!(with_main(10, 5, vec![(11, "a".into(), 10)])[0].2, 0);
+        assert!(with_main(10, 140, vec![]).is_empty());
+    }
+
+    #[test]
     fn the_meter_sees_this_process() {
         let mut m = Meter::default();
         let tree = m.sample();
         assert_eq!(tree.first().map(|p| p.pid), Some(std::process::id()));
         assert_eq!(tree[0].label, "Browser");
+        assert_eq!(
+            m.resample().first().map(|p| p.pid),
+            Some(std::process::id())
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(m.threads().first().map(|t| t.0), Some(std::process::id()));
         // Never ends itself.
         assert!(!m.end(std::process::id()));
     }

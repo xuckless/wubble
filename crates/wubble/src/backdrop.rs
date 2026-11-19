@@ -256,6 +256,7 @@ impl Glass {
         if s.run.state() == RunState::Paused {
             return;
         }
+        crate::measure::count(crate::measure::Count::SceneRender);
         let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint
@@ -287,7 +288,7 @@ impl Glass {
             .renderer
             .before_rendering(window.window(), now, s.run.max_dt())
         {
-            // every frame: see `Renderer::before_rendering`
+            // a new texture only (first frame, resize): see `Renderer::before_rendering`
             Ok(Some(image)) => window.set_scene(image),
             Ok(None) => {}
             Err(e) => {

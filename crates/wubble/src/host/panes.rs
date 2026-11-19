@@ -82,12 +82,41 @@ fn edge(table: &EdgeTable) -> Edge<'_> {
 fn sync_rows<T: Clone + PartialEq + 'static>(
     model: slint::ModelRc<T>,
     rows: Vec<T>,
+    same: impl Fn(&T, &T) -> bool,
     set: impl FnOnce(slint::ModelRc<T>),
 ) {
     match slint::Model::as_any(&model).downcast_ref::<slint::VecModel<T>>() {
-        Some(model) => wubble_ui::sync(model, rows),
+        Some(model) => wubble_ui::sync_by(model, rows, same),
         None => set(super::surfaces::model(rows)),
     }
+}
+
+/// Whether two rows show the same: their `images` (wgpu textures) compared by texture, as Slint
+/// 1.19 never finds two such images equal ([`wubble_ui::same_image`]), the rest by `==`;
+/// rewriting an unchanged row every frame asked for the next frame, so the shell rendered at the
+/// display rate forever.
+fn same_row<T: Clone + PartialEq, const N: usize>(
+    a: &T,
+    b: &T,
+    images: fn(&mut T) -> [&mut slint::Image; N],
+) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    let a_images = images(&mut a).map(std::mem::take);
+    let b_images = images(&mut b).map(std::mem::take);
+    a_images
+        .iter()
+        .zip(&b_images)
+        .all(|(x, y)| wubble_ui::same_image(x, y))
+        && a == b
+}
+
+fn same_pane(a: &SplitPane, b: &SplitPane) -> bool {
+    same_row(a, b, |p| [&mut p.frame, &mut p.edge, &mut p.prev])
+}
+
+/// [`same_pane`] for the peek's card.
+fn same_glance(a: &GlanceView, b: &GlanceView) -> bool {
+    same_row(a, b, |g| [&mut g.frame])
 }
 
 /// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's
@@ -564,8 +593,12 @@ impl Host {
         } else {
             self.w.panes.ring(focused, height)
         };
-        sync_rows(window.get_panes(), panes, |m| window.set_panes(m));
-        sync_rows(window.get_seams(), seams, |m| window.set_seams(m));
+        sync_rows(window.get_panes(), panes, same_pane, |m| {
+            window.set_panes(m)
+        });
+        sync_rows(window.get_seams(), seams, PartialEq::eq, |m| {
+            window.set_seams(m)
+        });
         window.set_focus_ring(ring.into());
     }
 
@@ -594,7 +627,7 @@ impl Host {
                 ..window.get_glance()
             },
         };
-        if window.get_glance() != view {
+        if !same_glance(&window.get_glance(), &view) {
             window.set_glance(view);
         }
     }
@@ -641,6 +674,7 @@ impl Host {
             let Some(frame) = frame else {
                 continue;
             };
+            measure::count(measure::Count::CefFrame);
             self.pace(PaceEvent::FrameArrived);
             let size = frame.size();
             // A frame painted for this layout shows its layout's part (CEF can paint a pixel
