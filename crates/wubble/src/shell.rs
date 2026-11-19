@@ -77,6 +77,8 @@ pub struct ShellView {
     /// The address pill: the visible tab's host and the rest of its URL.
     pub host: String,
     pub path: String,
+    /// The pill's lock (a site over https) or its bubble.
+    pub secure: bool,
 }
 
 /// The shell of `window`: its Space's rows (the active Space for a Little or Popup window, whose
@@ -156,15 +158,16 @@ pub fn view_model(
     let address = visible
         .and_then(|t| model.tabs.get(&t))
         .map_or("", |t| t.url.as_str());
-    let (host, path) = url::address_parts(address);
+    let (host, path) = wubble_core::chrome::address_parts(address);
     ShellView {
         pinned,
         tabs,
         spaces,
         active_tab: visible.and_then(|t| slint_id(t.0)).unwrap_or(-1),
         active_space: slint_id(space_id.0).unwrap_or(-1),
-        host: host.into(),
-        path: path.into(),
+        host,
+        path,
+        secure: wubble_core::chrome::is_secure(address),
     }
 }
 

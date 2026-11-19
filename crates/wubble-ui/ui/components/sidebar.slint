@@ -20,7 +20,7 @@ import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
-import { AddressPill } from "address-pill.slint";
+import { AddressPill } from "../kit/chrome/address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
 import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
@@ -57,6 +57,7 @@ export component Sidebar inherits Rectangle {
     in property <length> ride-step;
     in property <string> address-host;
     in property <string> address-path;
+    in property <bool> address-secure;
     in property <bool> address-bookmarkable: false;
     in property <bool> address-bookmarked: false;
     in property <bool> address-blocker-visible: false;
@@ -115,7 +116,7 @@ export component Sidebar inherits Rectangle {
     out property <float> address-sheen: pill.sheen;
     // Where the command bar grows from when opened from the pill / the new-tab row, in window
     // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
-    out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
+    out property <Origin> address-origin: pill.origin;
     // Where the column's edges fall, in window coordinates (the alignment the tests pin).
     out property <SideEdges> edges: {
         start: root.absolute-position.x,
@@ -292,6 +293,7 @@ export component Sidebar inherits Rectangle {
                 beam: root.address-beam;
                 host: root.address-host;
                 path: root.address-path;
+                secure: root.address-secure;
                 bookmarkable: root.address-bookmarkable;
                 bookmarked: root.address-bookmarked;
                 blocker-visible: root.address-blocker-visible;
