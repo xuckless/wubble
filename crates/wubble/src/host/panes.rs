@@ -517,8 +517,16 @@ impl Host {
         let fill = rects.len() == 1;
         let split = self.w.panes.seam_count() > 0;
         let panel_x = rects.iter().find(|r| r.tab == PANEL_TAB).map(|r| r.x);
+        // a start page has no frame and no pane fill: the scene's living layer shows there
+        let start = |t| {
+            self.model.tabs.get(&t).is_some_and(|t| {
+                wubble_core::pages::InternalPage::from_url(&t.url)
+                    == Some(wubble_core::pages::InternalPage::Start)
+            })
+        };
         let panes: Vec<SplitPane> = rects
             .into_iter()
+            .filter(|r| !start(r.tab))
             .map(|r| {
                 let frame = self.w.frames.get(&r.tab);
                 let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));

@@ -14,6 +14,9 @@ import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
 import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+// start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
+import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
+export { StartBridge, StartSite }
 import { CommandBar } from "components/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
 import { GlanceView } from "components/model.slint";
@@ -760,7 +763,8 @@ export component AppWindow inherits Window {
             border-radius: root.page-fullscreen || root.pip ? 0px : Radius.md;
             clip: !root.edge-bowed;
             // Between split panes the window's glass shows (the design's `.wb-split` web view).
-            background: root.panes.length > 1 || root.edge-bowed ? transparent : Palette.web;
+            // start page (L7): and the start page's living scene under it.
+            background: root.panes.length > 1 || root.edge-bowed || root.page == InternalPageKind.start ? transparent : Palette.web;
             // Over the frames and under the command bar, so the bar takes
             // its own pointer events and the pages only get the rest.
             web-focus := FocusScope {
@@ -838,6 +842,43 @@ export component AppWindow inherits Window {
             settings-ui := SettingsPage {
                 open: root.settings-open;
                 accent: root.space-accent;
+            }
+            // start page (L7): the new-tab page's front over the scene's living layer
+            if root.page == InternalPageKind.start: StartPage {
+                sites: StartBridge.sites;
+                shortcut: StartBridge.shortcut;
+                grabbing: StartBridge.grabbing;
+                // the command bar grows from the capsule (E-179); the host gives it the tab
+                search-clicked(x, y) => {
+                    root.command-origin = { x: x, y: y };
+                    bar.dispatch(CommandBarEvent.open);
+                    StartBridge.search-clicked(x, y);
+                }
+                site-activated(i) => {
+                    StartBridge.site-activated(i);
+                }
+                stage-down(x, y) => {
+                    StartBridge.stage-down(x, y);
+                }
+                stage-move(x, y) => {
+                    StartBridge.stage-move(x, y);
+                }
+                stage-up => {
+                    StartBridge.stage-up();
+                }
+                stage-leave => {
+                    StartBridge.stage-leave();
+                }
+                init => {
+                    StartBridge.search-x = self.search-x;
+                    StartBridge.search-y = self.search-y;
+                }
+                changed search-x => {
+                    StartBridge.search-x = self.search-x;
+                }
+                changed search-y => {
+                    StartBridge.search-y = self.search-y;
+                }
             }
             history-ui := HistoryPage {
                 open: root.page == InternalPageKind.history;
