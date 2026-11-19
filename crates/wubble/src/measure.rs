@@ -799,7 +799,7 @@ impl Stage {
 }
 
 /// The stages in time order, each with its time since `start` and since the stage before
-/// (milliseconds); `premain` (exec to `main`, if known) leads as its own row.
+/// (milliseconds); `premain` (process creation to `main`, if known) leads as its own row.
 pub fn startup_rows(
     start: Instant,
     premain_ms: Option<f64>,
@@ -809,7 +809,7 @@ pub fn startup_rows(
     sorted.sort_by_key(|(_, at)| *at);
     let mut rows = Vec::new();
     if let Some(p) = premain_ms {
-        rows.push(("exec_to_main", 0.0, p));
+        rows.push(("process_to_main", 0.0, p));
     }
     let mut last = start;
     for (stage, at) in sorted {
@@ -837,7 +837,9 @@ pub fn startup_text(rows: &[(&str, f64, f64)]) -> (String, String) {
     (text, csv)
 }
 
-/// Exec to now from `/proc/self/stat`'s start time (field 22, clock ticks after boot) and
+/// Process creation to now from `/proc/self/stat`'s start time (field 22, clock ticks after
+/// boot; the fork, not the exec: under `cargo run`, which execs the binary in its own process,
+/// it holds cargo's run too, so run the binary itself, or through a runner that forks) and
 /// `/proc/uptime`, milliseconds. The command name (field 2) may hold spaces and parentheses,
 /// so the fields are counted after its last `)`.
 pub fn since_exec_ms(stat: &str, uptime: &str, ticks_per_s: f64) -> Option<f64> {
@@ -1660,7 +1662,7 @@ mod tests {
         assert_eq!(
             rows,
             [
-                ("exec_to_main", 0.0, 35.0),
+                ("process_to_main", 0.0, 35.0),
                 ("store_loaded", 20.0, 20.0),
                 ("cef_started", 120.0, 100.0),
                 ("first_page_pixels", 400.0, 280.0),

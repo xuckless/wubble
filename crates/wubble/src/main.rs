@@ -1078,28 +1078,17 @@ fn run(
         }
         _ => Box::new(wubble_vault::FakeKeyRing::default()),
     };
-    // The database loads while the GPU and CEF start.
+    // The database loads, and the GPU device is made (about 150 ms on the Linux box, as long
+    // as CEF's start), while CEF starts.
     let (store, loaded) = StoreClient::spawn(db, keyring);
     if let Some(port) = autofill_port {
         seed_autofill_login(&store, port);
     }
-    let gpu = GpuContext::new()?;
-    measure::mark(measure::Stage::Gpu);
-    eprintln!("wubble: GPU {}", gpu.describe());
+    let gpu_init = std::thread::Builder::new()
+        .name("wubble-gpu-init".into())
+        .spawn(|| GpuContext::new().map_err(|e| e.to_string()))?;
     wubble_ui::window::no_os_window_restoration();
     wubble_ui::window::no_automatic_tabbing();
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name("skia-wgpu".into())
-        .require_wgpu_30(gpu.slint_configuration())
-        .with_winit_window_attributes_hook(wubble_ui::window::attributes)
-        .select()?;
-    measure::mark(measure::Stage::SlintBackend);
-    // Slint's platform lives in a thread-local and would drop the last handle
-    // to the shared device during thread-local teardown, after wgpu-core's
-    // own thread-locals are gone (wgpu-core `snatch` lock tracing, debug
-    // builds), which aborts the process. Keep one handle until exit instead.
-    std::mem::forget(gpu.clone());
 
     let bundled = || page_url(SMOKE_PAGE);
     let none = Checks {
@@ -1297,9 +1286,6 @@ fn run(
             },
         ),
     };
-    // The first pump runs once the loop does; from there CEF schedules every
-    // pump itself.
-    slint::invoke_from_event_loop(|| deliver(Wake::Schedule(0)))?;
     // A database that cannot be opened or loaded is left alone: the
     // browser runs without persistence (the store thread has ended). Read
     // before CEF starts: some settings are CEF start switches.
@@ -1335,6 +1321,27 @@ fn run(
         ..config?
     })?;
     measure::mark(measure::Stage::CefStarted);
+    let gpu = gpu_init
+        .join()
+        .map_err(|_| "the GPU device thread panicked")??;
+    measure::mark(measure::Stage::Gpu);
+    eprintln!("wubble: GPU {}", gpu.describe());
+    // Pump requests CEF made while it started, before Slint's loop existed, were dropped
+    // (`ui_loop`); the first pump runs once the loop does, and from there CEF schedules every
+    // pump itself.
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("skia-wgpu".into())
+        .require_wgpu_30(gpu.slint_configuration())
+        .with_winit_window_attributes_hook(wubble_ui::window::attributes)
+        .select()?;
+    measure::mark(measure::Stage::SlintBackend);
+    // Slint's platform lives in a thread-local and would drop the last handle
+    // to the shared device during thread-local teardown, after wgpu-core's
+    // own thread-locals are gone (wgpu-core `snatch` lock tracing, debug
+    // builds), which aborts the process. Keep one handle until exit instead.
+    std::mem::forget(gpu.clone());
+    slint::invoke_from_event_loop(|| deliver(Wake::Schedule(0)))?;
     if smoke_block {
         // Only the smoke's own list, through the same filter wiring as the browser's.
         blocking.use_list(block_smoke::BLOCK_LIST);
