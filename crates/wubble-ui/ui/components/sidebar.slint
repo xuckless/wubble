@@ -24,6 +24,7 @@ import { AddressPill } from "../kit/chrome/address-pill.slint";
 import { Favs } from "../kit/chrome/favs.slint";
 import { SpaceName } from "../kit/chrome/space-switcher.slint";
 import { SideBottom } from "../kit/chrome/side-bottom.slint";
+import { SideMode, SidePad } from "../kit/chrome/sidebar.slint";
 import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
@@ -111,8 +112,9 @@ export component Sidebar inherits Rectangle {
     // The wgpu scene draws the glass of the pill and the favourites (and the sidebar's own,
     // in app.slint).
     in property <bool> glass-over-wgpu: false;
-    // The floating peek panel: .wb-side-peek pads 10 8 10 10 where the sidebar pads 6.
-    in property <bool> floating: false;
+    // The look it takes (chrome.tsx `sideMode`): its padding (.wb-side 6, .wb-side-rail 6 0,
+    // .wb-side-peek 10 8 10 10).
+    in property <SideMode> mode: SideMode.extended;
     // The window can be moved by dragging the sidebar's glass (off in full screen).
     in property <bool> window-movable: true;
     // The address pill's border beam this frame (see AddressPill).
@@ -241,10 +243,10 @@ export component Sidebar inherits Rectangle {
 
     VerticalLayout {
         width: root.content-width;
-        padding-left: root.floating ? Shell.peek-pad-start : Shell.side-pad;
-        padding-right: root.floating ? Shell.peek-pad-end : Shell.side-pad;
-        padding-top: root.floating ? Shell.peek-pad-y : Shell.side-pad;
-        padding-bottom: root.floating ? Shell.peek-pad-y : Shell.side-pad;
+        padding-left: SidePad.left(root.mode);
+        padding-right: SidePad.right(root.mode);
+        padding-top: SidePad.top(root.mode);
+        padding-bottom: SidePad.bottom(root.mode);
         spacing: Space.s3;
 
         // .wb-side-top: 30 high, lights 10 in (centred on the rail)

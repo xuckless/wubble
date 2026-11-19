@@ -152,6 +152,12 @@ export function readDecl(prop, value, R) {
           if (v.some(x => x === null)) return null;
           if (f === 'scale' && v.length === 2) { put(`${name}-x`, { t: 'float', v: v[0] }); put(`${name}-y`, { t: 'float', v: v[1] }); }
           else put(name, { t: 'float', v: v[0] });
+        } else if (/^translate/.test(f) && a.length === 1 && /^calc\(/.test(a[0])) {
+          // `calc(-100% - 16px)`: the share of the element's own size and the length past it
+          const m = /^calc\((-?[\d.]+)%\s*([+-])\s*([\d.]+)px\)$/.exec(a[0]);
+          if (!m) return null;
+          put(`${name}-pct`, { t: 'float', v: Number(m[1]) / 100 });
+          put(name, { t: 'length', v: (m[2] === '-' ? -1 : 1) * Number(m[3]) });
         } else if (/^translate/.test(f) || f === 'blur') {
           const v = a.map(x => R.length(x) ?? R.percent(x));
           if (v.some(x => !x)) return null;

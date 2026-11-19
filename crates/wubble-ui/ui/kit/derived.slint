@@ -67,10 +67,6 @@ export global Shell {
     out property <length> beam-unit: 1px;
     // …and its bloom: a wide faint stroke under the line (the shader blurs; Slint cannot)
     out property <length> beam-bloom: 5px;
-    // browser.css .wb-side-peek: padding 10 8 10 10 (the extended sidebar's is side-pad, 6)
-    out property <length> peek-pad-start: BrowserCss.wb-side-peek--padding-left;
-    out property <length> peek-pad-end: BrowserCss.wb-side-peek--padding-right;
-    out property <length> peek-pad-y: BrowserCss.wb-side-peek--padding-top;
     // Stand-in for the backdrop blur (.wb-thick: blur 44) while the wgpu pass is not under the
     // panel: thick glass over the page at .94, so the page cannot be read through the text.
 
@@ -157,12 +153,6 @@ export global Shell {
 
     // A glass panel's clip range when nothing clips it (GlassPanel `clip-start`/`clip-end`)
 
-    // chrome.tsx: a hidden sidebar peeks 60 ms after the pointer reaches the edge strip and
-    // hides 260 ms after it leaves; .wb-side-peek slides in over .34 s from 20 % opacity,
-    // 16 px past its own width.
-    out property <duration> peek-slide: BrowserCss.wb-side-peek--animation-duration;
-    out property <float> peek-from: 0.2;
-    out property <length> peek-travel: 16px;
 
     // .wb-cmd: 600 wide, 72 from the top, padding 6 8 8, radius 20; .wb-cmd-in 52 high at 17;
     // .wb-cmd-head padding 0 4 0 12; .wb-cmd-row 44 high, padding 0 12, gap 12;
@@ -444,8 +434,6 @@ export global Shell {
     out property <color> drag-ghost-shadow: BrowserCss.wb-tab-drag--box-shadow-shadow-1-color; // derived from browser/browser.css:70 .wb-tab-drag shadow 0 10px 24px .4 (was .25)
     out property <length> sidebar-open: 0.5px; // derived from technical: a sidebar narrower than half a pixel counts as hidden
     out property <length> no-clip: 100000px; // derived from technical: an unbounded clip range for GlassPanel
-    out property <duration> peek-in: 60ms; // derived from browser/chrome.tsx:254 setTimeout(setPeek(true), 60)
-    out property <duration> peek-out: 260ms; // derived from browser/chrome.tsx:256 setTimeout(setPeek(false), 260)
     out property <length> command-bar-width: 600px; // derived from browser/browser.css:166 .wb-cmd width: min(600px, calc(100% - 32px)) (not read by the generator)
     out property <int> sheet-title-weight: Role.st-sec-head-h2.weight; // derived from wubble-only sheet title, 19 px like .st-sec-head h2 (settings.css:36): its weight 600 (was 560)
     out property <length> sheet-body: Role.body.size; // derived from wubble-only sheet body text: the type scale body (core/tokens.ts type.body 14; was 14.5)

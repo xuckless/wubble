@@ -5,6 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Space } from "kit/gen/tokens.slint";
 import { Calm } from "kit/motion/calm.slint";
 import { Shell } from "kit/derived.slint";
+import { SidePeek, SideMode, PeekCue } from "kit/chrome/sidebar.slint";
 import { Seam } from "kit/controls/seam.slint";
 import { GlassPanel } from "kit/material/glass.slint";
 import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
@@ -52,7 +53,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
+export { PeekCue, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -643,26 +644,36 @@ export component AppWindow inherits Window {
     }
 
     // Peek (chrome.tsx): a hidden sidebar slides in over the page, on thick glass at its saved
-    // width, once the pointer has rested in the edge strip; it leaves once the pointer has been
-    // off it for a while. Presentation only: `peek` never outlives the hidden mode.
-    in-out property <bool> peek: false;
+    // width, when the pointer reaches the edge strip; it leaves once the pointer has been off it
+    // for a while. The machine is wubble_core::chrome::Peek, run by the driver from the cues
+    // below; `peek` is its one output (shown or leaving). It never outlives the hidden mode.
+    in property <bool> peek: false;
+    callback peek-cue(PeekCue);
+    callback sidebar-mode-changed(SidebarMode);
     out property <bool> peeking: root.peek && root.sidebar-mode == SidebarMode.hidden;
     out property <SideEdges> side-edges <=> sidebar.edges;
     changed sidebar-mode => {
-        if (root.sidebar-mode != SidebarMode.hidden) {
-            root.peek = false;
+        root.sidebar-mode-changed(root.sidebar-mode);
+    }
+    // The pointer is in the strip a hidden sidebar peeks from: `.wb-peek-edge` (shows at once),
+    // or the window's west resize strip over its first pixels (the design's `onMove` strip: 60 ms).
+    property <bool> at-edge: !root.page-fullscreen && !root.pip && (edge.has-hover || edges.west-hovered);
+    property <bool> at-west: !root.page-fullscreen && !root.pip && root.sidebar-mode == SidebarMode.hidden && edges.west-hovered;
+    changed at-west => {
+        if self.at-west {
+            root.peek-cue(PeekCue.strip-moved);
         }
     }
-    // The pointer is in the strip a hidden sidebar peeks from.
-    property <bool> at-edge: !root.page-fullscreen && !root.pip && (edge.has-hover || edges.west-hovered);
+    // over the panel or the strip: leaving both starts the peek's way out
+    property <bool> over-side: zone.has-hover || root.at-edge;
+    changed over-side => {
+        root.peek-cue(self.over-side ? PeekCue.panel-entered : PeekCue.panel-left);
+    }
     // Hidden and closed, or peeking (chrome.tsx: the peek panel shows at once, even mid-close).
     property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && (root.peek || root.sidebar-width <= Shell.sidebar-open);
-    property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
-    property <float> peek-alpha: root.peeking ? 1 : Shell.peek-from;
-    animate peek-offset, peek-alpha {
-        duration: Calm.ms(Shell.peek-slide);
-        easing: Motion.ease-out;
-    }
+    // the look the sidebar takes (chrome.tsx `sideMode`); compact is the driver's (core `compact`)
+    property <SideMode> side-mode: root.peeking ? SideMode.peek : root.sidebar-rail ? SideMode.rail
+        : root.sidebar-mode == SidebarMode.hidden ? SideMode.hidden : SideMode.extended;
 
     // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
     // out of range shows the default.
@@ -1185,57 +1196,27 @@ export component AppWindow inherits Window {
             width: Chrome.peekEdge + Chrome.inset;
             height: parent.height;
             enabled: root.sidebar-mode == SidebarMode.hidden && !root.page-fullscreen && !root.pip;
-        }
-        Timer {
-            interval: Shell.peek-in;
-            running: root.at-edge && root.sidebar-mode == SidebarMode.hidden && !root.peek;
-            triggered => {
-                root.peek = true;
-            }
-        }
-        Timer {
-            interval: Shell.peek-out;
-            running: root.peeking && !zone.has-hover && !root.at-edge;
-            triggered => {
-                root.peek = false;
+            changed has-hover => {
+                if self.has-hover {
+                    root.peek-cue(PeekCue.edge-entered);
+                }
             }
         }
 
         // The sidebar sits inside its hover zone, so the zone keeps has-hover
         // while the pointer is over a child row.
-        zone := TouchArea {
+        zone := SidePeek {
             visible: !root.page-fullscreen;
-            x: root.hidden-at-rest ? root.peek-offset : 0px;
-            y: 0px;
+            mode: root.side-mode;
+            floating: root.hidden-at-rest;
             width: Chrome.inset + sidebar.width;
             height: parent.height;
-
-            // The scene's glass of the peek (GlassOver.peek), over the page, under the peek panel
-            // (no fill of its own then) and the sidebar's content: window-sized, so placed back at
-            // the window's origin.
-            if root.over-on && root.over-peek.width > 0: Image {
-                x: -zone.x;
-                y: -zone.y;
-                width: root.width;
-                height: root.height;
-                source: root.over-peek;
-                image-fit: fill;
-            }
-
-            // the peek's own glass (.wb-side-peek: thick, radius 20)
-            GlassPanel {
-                x: sidebar.x;
-                y: sidebar.y;
-                width: sidebar.width;
-                height: sidebar.height;
-                tier: GlassTier.thick;
-                radius: Radius.lg;
-                over-content: true;
-                key: GlassKeys.peek;
-                over-layer: GlassOver.peek;
-                visible: root.hidden-at-rest;
-                opacity: root.peek-alpha;
-            }
+            panel-width: sidebar.width;
+            panel-height: sidebar.height;
+            over-on: root.over-on;
+            over-peek: root.over-peek;
+            window-width: root.width;
+            window-height: root.height;
 
             sidebar := Sidebar {
                 x: Chrome.inset;
@@ -1243,11 +1224,11 @@ export component AppWindow inherits Window {
                 width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-width;
                 content-width: root.hidden-at-rest ? root.sidebar-saved : root.sidebar-contents;
                 height: parent.height - 2 * Chrome.inset;
-                opacity: root.hidden-at-rest ? root.peek-alpha : root.sidebar-opacity;
-                compact: root.hidden-at-rest ? false : root.sidebar-rail;
+                opacity: root.hidden-at-rest ? zone.alpha : root.sidebar-opacity;
+                compact: root.sidebar-rail;
                 // Over the peek's Slint glass (and the page) the scene cannot show: Slint draws.
                 glass-over-wgpu: GlassLayer.scene-active && !root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open;
-                floating: root.hidden-at-rest;
+                mode: root.side-mode;
                 // the peek floats off the seam: its sections hold still
                 ride: root.hidden-at-rest ? [] : root.seam-edge;
                 ride-step: root.seam-edge-step;

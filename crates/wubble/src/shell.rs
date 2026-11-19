@@ -317,7 +317,9 @@ mod tests {
         assert_eq!(v.active_tab, -1);
         assert_eq!(v.active_space, 0);
         assert_eq!(v.spaces.len(), 1);
-        assert_eq!((v.host.as_str(), v.path.as_str()), ("", ""));
+        // no page: the design's start address (chrome.tsx `addressOf`)
+        assert_eq!((v.host.as_str(), v.path.as_str()), ("wubble", "://start"));
+        assert!(!v.secure);
     }
 
     #[test]

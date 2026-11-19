@@ -1,6 +1,5 @@
 # The kit lock's recorded violations (tests/kit_lock.rs): file, rule, token, count.
 # Counts only go down: a lane that clears violations lowers them here (KIT_LOCK_WRITE=1).
-app.slint	animate	animate	1
 app.slint	paint	background	5
 app.slint	paint	border-color	1
 app.slint	paint	border-width	1
@@ -8,9 +7,8 @@ app.slint	paint	drop-shadow-blur	1
 app.slint	paint	drop-shadow-color	1
 app.slint	text	Text	1
 app.slint	token	Fonts	1
-app.slint	token	Motion	1
 app.slint	token	Palette	7
-app.slint	token	Radius	6
+app.slint	token	Radius	5
 app.slint	token	Type	1
 components/autofill-menu.slint	animate	animate	3
 components/autofill-menu.slint	font	font-family	3
@@ -269,7 +267,7 @@ kit/derived.slint	kit-literal	150ms	1
 kit/derived.slint	kit-literal	150px	1
 kit/derived.slint	kit-literal	15px	1
 kit/derived.slint	kit-literal	160ms	2
-kit/derived.slint	kit-literal	16px	5
+kit/derived.slint	kit-literal	16px	4
 kit/derived.slint	kit-literal	17px	1
 kit/derived.slint	kit-literal	18px	5
 kit/derived.slint	kit-literal	19px	1
@@ -281,7 +279,6 @@ kit/derived.slint	kit-literal	225px	1
 kit/derived.slint	kit-literal	22px	4
 kit/derived.slint	kit-literal	240px	3
 kit/derived.slint	kit-literal	24px	2
-kit/derived.slint	kit-literal	260ms	1
 kit/derived.slint	kit-literal	26px	3
 kit/derived.slint	kit-literal	280px	1
 kit/derived.slint	kit-literal	28px	1
@@ -304,7 +301,6 @@ kit/derived.slint	kit-literal	520px	1
 kit/derived.slint	kit-literal	56px	1
 kit/derived.slint	kit-literal	5px	3
 kit/derived.slint	kit-literal	600px	1
-kit/derived.slint	kit-literal	60ms	1
 kit/derived.slint	kit-literal	60px	1
 kit/derived.slint	kit-literal	6px	6
 kit/derived.slint	kit-literal	720px	1
