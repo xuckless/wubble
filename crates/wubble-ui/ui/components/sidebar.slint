@@ -84,8 +84,8 @@ export component Sidebar inherits Rectangle {
     in property <int> dragged-row: -1;
     // Up / Down from row `i`: the row to select (wubble_core::tabs::step_focus, the driver)
     pure callback tab-step(int, bool) -> int;
-    // a tab row holds the keyboard focus: the selected row takes it as the selection moves
-    property <bool> rows-focused: false;
+    // the tab Up / Down moved to, until its row takes the focus (TabRow.focus-to)
+    property <int> focus-to: -1;
     // each row's entrance, 0..1 (wubble_core::tabs: a new tab, at most four at once)
     in property <[float]> row-enter;
     // the whole list's entrance after a Space switch, 0..1: one opacity layer for the list
@@ -522,13 +522,11 @@ export component Sidebar inherits Rectangle {
                                     }
                                     focus-token: root.focus-serial;
                                     dragging: i == root.dragged-row;
-                                    follow-focus: root.rows-focused;
-                                    focused(on) => {
-                                        root.rows-focused = on;
-                                    }
+                                    focus-to <=> root.focus-to;
                                     step(down) => {
                                         let j = root.tab-step(i, down);
                                         if j != i && j >= 0 && j < root.tabs.length {
+                                            root.focus-to = root.tabs[j].id;
                                             root.tab-activated(root.tabs[j].id);
                                         }
                                     }

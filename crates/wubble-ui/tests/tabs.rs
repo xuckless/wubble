@@ -193,6 +193,37 @@ fn tab_keys_step_clamp_and_close(app: &AppWindow, driver: &Shared, log: &Log) {
     settle(app, driver);
 }
 
+/// The focused row goes away (Backspace closed the last tab, the host put a new, already
+/// active one in its place), the user clicks into the page, then the active tab changes
+/// (Ctrl+Tab): the page keeps the keyboard; no tab row pulls it back.
+fn closed_focused_row_leaves_page_focus(app: &AppWindow, driver: &Shared) {
+    use slint::platform::Key;
+    app.set_tabs(tabs([10, 11, 12]));
+    app.set_active_tab_id(12);
+    pump();
+    settle(app, driver);
+    app.invoke_focus_region(wubble_ui::FocusRegion::Sidebar);
+    pump();
+    key(app, Key::Backspace);
+    app.set_active_tab_id(13);
+    app.set_tabs(tabs([10, 11, 13]));
+    pump();
+    settle(app, driver);
+    app.invoke_focus_region(wubble_ui::FocusRegion::Page);
+    pump();
+    assert!(app.get_web_focused(), "the page has the keyboard");
+    app.set_active_tab_id(10);
+    pump();
+    settle(app, driver);
+    assert!(
+        app.get_web_focused(),
+        "a selection change keeps the page's focus"
+    );
+    app.set_tabs(tabs([10, 11, 12]));
+    pump();
+    settle(app, driver);
+}
+
 /// Drag row 0 two slots down; halfway, the host re-renders the rows (a title changed) with
 /// `rerender`. Returns how far the dragged row has followed the pointer just before the release.
 fn drag_across_rerender(app: &AppWindow, driver: &Shared, rerender: impl Fn(Vec<TabItem>)) -> f32 {
@@ -343,6 +374,7 @@ fn tab_list_scenarios() {
     tab_close_middle_click(&app, &driver, &log);
     tab_drag_emits_tab_moved(&app, &driver, &log);
     tab_keys_step_clamp_and_close(&app, &driver, &log);
+    closed_focused_row_leaves_page_focus(&app, &driver);
     drag_survives_an_in_place_rerender(&app, &driver);
     tab_scroll_reaches_scroller(&app, &driver);
     folder_header_is_a_row(&app, &driver, &log);
