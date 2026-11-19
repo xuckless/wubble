@@ -104,6 +104,20 @@ impl Meter {
             .collect()
     }
 
+    /// Whether `pid` still runs (not gone, not a zombie), refreshing that one process only: the
+    /// cheap check between full looks ([`Meter::gpu_pid`] reads every process on the system).
+    pub fn still_running(&mut self, pid: u32) -> bool {
+        let pid = Pid::from_u32(pid);
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().without_tasks(),
+        );
+        self.system
+            .process(pid)
+            .is_some_and(|p| p.status() != sysinfo::ProcessStatus::Zombie)
+    }
+
     /// The id of Chromium's GPU process among wubble's children, refreshing only the process
     /// list and command lines (no memory or CPU). It still reads every process on the system
     /// (about 10 ms on a desktop's 800), so it belongs off the UI thread. `None` when there is
