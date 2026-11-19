@@ -277,6 +277,22 @@ pub fn sample(
                 let _ = writeln!(r.report, "  {} MiB {name}", memreport::mib(bytes));
             }
         }
+        // macOS: the browser process's footprint by region type (IOSurface, IOAccelerator,
+        // MALLOC, ...), from the system's `vmmap`.
+        if cfg!(target_os = "macos")
+            && let Ok(out) = std::process::Command::new("vmmap")
+                .args(["--summary", &std::process::id().to_string()])
+                .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let table = text
+                .lines()
+                .skip_while(|l| !l.starts_with("REGION TYPE"))
+                .take_while(|l| !l.starts_with("TOTAL"));
+            for line in table {
+                let _ = writeln!(r.report, "  {line}");
+            }
+        }
         if let Some((allocated, reserved)) = wgpu {
             let _ = writeln!(
                 r.report,
