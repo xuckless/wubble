@@ -1,0 +1,168 @@
+// derived: the Source panel (browser/browser.css:183-203 `.wb-source`, `.wb-source-head`, `.wb-code`) on GlassPanel thick, Flickable + Thumb (controls/scroller.slint), BField's thin glass and film ring, Tween + OverlapLook
+// A panel docked at the page's right edge (wubble-only.md §29: the Boost editor "is the Source
+// panel"): radius 14, its head 46 high (padding 0 8 0 6, gap 8) with the title in the heading
+// role and a `.wb-ib` close, and under it a column that scrolls (`.wb-thumb` while the pointer is
+// over it) holding the caller's settings card and groups. It comes and goes as Overlap,
+// shifted across from the edge it is docked to; its scene glass shows only while it does.
+// BCode: a code area (`.wb-code`: mono 12 on a 19 px line, #C9CEDA; placeholder haze), several
+// lines, in the sheet field's body (thin glass, radius 12, the film ring while it has the focus).
+// derived (notes/fidelity/derived-review.md "Overlays B"): the thick glass for the Source panel's
+// own fill (the scene blurs under it), the entrance, the code area as a field (editing is a new
+// primitive: no line numbers, `.wb-code-n`, since Slint cannot count a text's lines, and no
+// token colours).
+
+import { Palette, Fonts, Motion, Radius } from "../../gen/tokens.slint";
+import { BrowserCss, SettingsCss, TouchCss, WubbleCss } from "../../gen/css.slint";
+import { Role, TextRole } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Tween } from "../../motion/tween.slint";
+import { OverlapLook } from "../../motion/overlap.slint";
+import { IconButton } from "../../controls/icon-button.slint";
+import { Glyph } from "../../controls/icon.slint";
+import { Thumb } from "../../controls/scroller.slint";
+import { GlassTier } from "../../../components/model.slint";
+
+export component BSidePanel inherits Rectangle {
+    in property <bool> shown;
+    in property <string> title;
+    in property <int> key: -1;
+    in property <int> layer;
+    callback closed();
+    out property <float> progress: tw.t;
+
+    visible: tw.t > 0;
+
+    tw := Tween {
+        on: root.shown;
+        in-ms: Motion.overlap-in;
+        out-ms: Motion.overlap-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+    OverlapLook {
+        e: tw.t;
+        entering: root.shown;
+        along-x: true;
+        // across from the right edge it is docked to, and back out to it
+        shift-out: WubbleCss.wb-in-k-from--transform-translatey;
+        GlassPanel {
+            key: root.key;
+            over-layer: root.layer;
+            present: tw.t > 0;
+            tier: GlassTier.thick;
+            radius: BrowserCss.wb-source--border-radius;
+            over-content: true;
+            // the page under it takes no pointer
+            TouchArea { }
+            VerticalLayout {
+                HorizontalLayout {
+                    height: BrowserCss.wb-source-head--height;
+                    padding-left: BrowserCss.wb-source-head--padding-left + TouchCss.wb-tp-mrow--padding-left;
+                    padding-right: BrowserCss.wb-source-head--padding-right;
+                    spacing: BrowserCss.wb-source-head--gap;
+                    KitText {
+                        role: Role.heading;
+                        text: root.title;
+                        color: Palette.ink;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            icon-path: Glyph.close;
+                            label: "Close";
+                            clicked => {
+                                root.closed();
+                            }
+                        }
+                    }
+                }
+                body := Rectangle {
+                    vertical-stretch: 1;
+                    // around the column: it keeps its hover while the pointer is on a row
+                    hover := TouchArea {
+                        flick := Flickable {
+                            content-height: column.preferred-height;
+                            column := VerticalLayout {
+                                padding: SettingsCss.st-card--padding;
+                                padding-bottom: Radius.md;
+                                spacing: SettingsCss.st-row--gap-row;
+                                @children
+                            }
+                        }
+                    }
+                    Thumb {
+                        shown: hover.has-hover && flick.content-height > flick.height;
+                        top: flick.content-height > 0 ? -flick.content-y * flick.height / flick.content-height : 0px;
+                        length: flick.content-height > 0 ? flick.height * min(1, flick.height / flick.content-height) : 0px;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component BCode inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    in property <string> label;
+    // lines shown
+    in property <int> lines: 6;
+    callback edited(string);
+    property <TextRole> code: {
+        family: Fonts.mono,
+        size: BrowserCss.wb-code--font-size,
+        weight: Role.wb-code.weight,
+        line-height: BrowserCss.wb-code--line-height / BrowserCss.wb-code--font-size,
+    };
+    height: root.lines * BrowserCss.wb-code--line-height + 2 * SettingsCss.st-row--padding-top;
+    GlassPanel {
+        tier: GlassTier.thin;
+        radius: TouchCss.wb-tp-btn-body--border-radius;
+        film: input.has-focus;
+        clip: true;
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+        KitText {
+            x: SettingsCss.st-search--padding-left;
+            y: SettingsCss.st-row--padding-top;
+            width: parent.width - 2 * SettingsCss.st-search--padding-left;
+            role: root.code;
+            text: root.placeholder;
+            visible: input.text == "";
+            color: SettingsCss.st-search-input-placeholder--color;
+        }
+        input := TextInput {
+            x: SettingsCss.st-search--padding-left;
+            y: SettingsCss.st-row--padding-top;
+            width: parent.width - 2 * SettingsCss.st-search--padding-left;
+            height: parent.height - 2 * SettingsCss.st-row--padding-top;
+            font-family: root.code.family;
+            font-size: root.code.size;
+            color: BrowserCss.wb-code--color;
+            selection-background-color: Shell.selection-fill;
+            selection-foreground-color: Shell.selection-ink;
+            single-line: false;
+            wrap: word-wrap;
+            accessible-label: root.label;
+            edited => {
+                root.edited(self.text);
+            }
+        }
+    }
+}
+
+// The Boost tint's swatches: wubble's own choice, the design's colours (the Space accents, the
+// values' amber and the abyss).
+export global BoostTints {
+    out property <[color]> colours: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.amber, Palette.abyss];
+    out property <[string]> names: ["Sky", "Lilac", "Blush", "Mint", "Amber", "Abyss"];
+}

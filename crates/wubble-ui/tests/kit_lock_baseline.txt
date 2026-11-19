@@ -47,17 +47,6 @@ components/autoscroll-cursor.slint	paint	stroke-width	1
 components/autoscroll-cursor.slint	primitive	Path	1
 components/autoscroll-cursor.slint	primitive	commands	1
 components/autoscroll-cursor.slint	token	Palette	9
-components/boost-panel.slint	font	font-family	5
-components/boost-panel.slint	font	font-size	5
-components/boost-panel.slint	font	font-weight	2
-components/boost-panel.slint	paint	background	2
-components/boost-panel.slint	paint	border-color	1
-components/boost-panel.slint	paint	border-width	1
-components/boost-panel.slint	text	Text	4
-components/boost-panel.slint	token	Fonts	5
-components/boost-panel.slint	token	Palette	13
-components/boost-panel.slint	token	Radius	1
-components/boost-panel.slint	token	Type	7
 components/border-beam.slint	paint	fill	2
 components/border-beam.slint	paint	stroke	2
 components/border-beam.slint	paint	stroke-width	2
