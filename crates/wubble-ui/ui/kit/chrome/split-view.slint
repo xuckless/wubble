@@ -1,0 +1,215 @@
+// design: browser/webview.tsx:55-138, browser/split.ts:1-234, browser/browser.css:109-119 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Palette, Spacing } from "../../tokens.slint";
+import { Shell } from "../derived.slint";
+import { StatusBubble } from "../../components/status-bubble.slint";
+import { PressableButton } from "../controls/button.slint";
+
+// @source slint-split-view
+// Split view (wubble_core::split): 2–3 pages side by side, divided by rubber strings. Rust owns every
+// position: `panes` (x0..x1 in this element's coordinates, from Split::panes) and `seams` (centre
+// x and the bowed string from string_line while held or twanging). Each pane is a rounded rect;
+// Slint can't clip by the bowed `string_rect` path, so while a string bends a pane's edge the
+// host hands the pane its frame already cut along it (`edge`, wubble change).
+// wubble change: a pane shows its page's live frame and takes the page's input instead of a
+// title; one page alone is one pane filling the view (no close button, no ring). The focus is the
+// TS's accent ring (`ring`, browser/webview.tsx `.wb-split-ring`, 1.5 px) instead of the port's
+// 1 px sky border, and a press in a pane is the page's (the host focuses the pane first), so there
+// is no `pane-focus`.
+export struct SplitPane {
+    id: int,
+    x0: length,
+    x1: length,
+    // wubble change: the page's frame and the part of it to show, in image pixels from the top
+    // left (CEF can paint a pixel more than the pane at fractional scales; that pixel is cropped).
+    frame: image,
+    clip-width: int,
+    clip-height: int,
+    // wubble change: the frame always fills the pane (TODO.md "Resize feel"): a stale one,
+    // painted for another size mid-resize, is scaled to the pane's rectangle, then stretched
+    // further by `stretch-x/-y` (wubble_core::stretch, the design's window stretch: 0 at rest,
+    // up to 0.035), anchored top left; the pane clips the overshoot. At rest it is 1:1.
+    stretch-x: float,
+    stretch-y: float,
+    // wubble change: one page alone fills the view, bound here rather than pushed from Rust,
+    // so it follows the window in the same layout pass (`x0`/`x1` are ignored).
+    fill: bool,
+    focused: bool,
+    // wubble change: whether the pane shows its close button (the panes of a split, the docked
+    // DevTools panel; not a lone page).
+    closable: bool,
+    // wubble change: while a string bends this pane's edge, the frame with that edge cut along
+    // the string (wubble_gfx::mask), wider than the pane by `margin` each side for a bulge, drawn
+    // 1:1 in place of `frame`; the pane neither clips nor fills then. Margin 0: not masked.
+    edge: image,
+    margin: length,
+    // wubble change: the stale frame the frame at the new size replaced, fading out over it
+    // (`prev-opacity` 1 → 0, wubble_core::stretch `Settling { fading }`), drawn as `frame` was.
+    prev: image,
+    prev-clip-width: int,
+    prev-clip-height: int,
+    prev-opacity: float,
+    // wubble change: the hovered link's status bubble (status-bubble.slint): shown, the host
+    // and the rest of the URL, already cut to fit.
+    status-shown: bool,
+    status-host: string,
+    status-rest: string,
+}
+
+export struct SplitSeam {
+    x: length,
+    path: string,     // string_line(...) while bowed, "" when straight
+}
+
+export component SplitView inherits Rectangle {
+    in property <[SplitPane]> panes;
+    in property <[SplitSeam]> seams;
+    // wubble change: the focus ring (string_rect round the focused pane, "" for a single page),
+    // stroked in the Space's accent; the corner radius; the page's pointer shape.
+    in property <string> ring;
+    in property <color> accent: Palette.sky;
+    in property <length> radius: 14px;
+    in property <MouseCursor> cursor;
+    callback seam-grab(int, length, length);   // seam index, pointer in this element's px
+    callback seam-drag(length, length);
+    callback seam-release();
+    callback seam-even();                      // double-click: even shares
+    callback pane-close(int);                  // pane id
+    // wubble change: the page's input, per pane: (pane id, ..., pane-relative px)
+    callback pointer-moved(int, length, length);
+    callback pointer-left(int, length, length);
+    callback pointer-pressed(int, PointerEventButton, length, length);
+    callback pointer-released(int, PointerEventButton, length, length);
+    callback pointer-cancelled(int);
+    callback scrolled(int, length, length, length, length);
+
+    for p in root.panes: Rectangle {
+        property <bool> masked: p.margin > 0;
+        x: p.fill ? 0px : p.x0;
+        width: p.fill ? root.width : p.x1 - p.x0;
+        border-radius: root.radius;
+        clip: !self.masked;
+        background: self.masked ? transparent : Palette.web;
+        // wubble change: anchored top left, filling the pane times the stretch (see SplitPane).
+        pane-frame := Image {
+            x: 0;
+            y: 0;
+            width: parent.width * (1 + p.stretch-x);
+            height: parent.height * (1 + p.stretch-y);
+            source: p.frame;
+            source-clip-width: p.clip-width;
+            source-clip-height: p.clip-height;
+            image-fit: fill;
+            visible: !parent.masked;
+        }
+        pane-prev := Image {
+            x: 0;
+            y: 0;
+            width: parent.width * (1 + p.stretch-x);
+            height: parent.height * (1 + p.stretch-y);
+            source: p.prev;
+            source-clip-width: p.prev-clip-width;
+            source-clip-height: p.prev-clip-height;
+            image-fit: fill;
+            opacity: p.prev-opacity;
+            visible: !parent.masked && p.prev-opacity > 0;
+        }
+        pane-edge := Image {
+            x: -p.margin;
+            y: 0;
+            width: parent.width + 2 * p.margin;
+            height: parent.height;
+            source: p.edge;
+            image-fit: fill;
+            visible: parent.masked;
+        }
+        touch := TouchArea {
+            mouse-cursor: root.cursor;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    root.pointer-pressed(p.id, event.button, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.up {
+                    root.pointer-released(p.id, event.button, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.move {
+                    root.pointer-moved(p.id, self.mouse-x, self.mouse-y);
+                } else {
+                    root.pointer-cancelled(p.id);
+                }
+            }
+            scroll-event(event) => {
+                root.scrolled(p.id, self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                accept
+            }
+            changed has-hover => {
+                if !self.has-hover {
+                    root.pointer-left(p.id, self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+        // wubble change: the link status bubble, under the pane's own controls; it moves to the
+        // right edge while the pointer is near its place (Chromium's 20 px padding).
+        StatusBubble {
+            shown: p.status-shown;
+            host: p.status-host;
+            rest: p.status-rest;
+            pane-width: parent.width;
+            pane-height: parent.height;
+            mirrored: touch.has-hover
+                && touch.mouse-x < Shell.status-margin + self.width + Shell.status-dodge
+                && touch.mouse-y > parent.height - Shell.status-margin - self.height - Shell.status-dodge;
+        }
+        if p.closable: PressableButton {
+            x: parent.width - self.width - Spacing.s2;
+            y: Spacing.s2;
+            width: 28px;
+            // wubble change: its own height; unset, it would take the pane's whole height
+            height: 28px;
+            text: "×";
+            // wubble change: spoken as words, not the sign
+            label: "Close pane";
+            clicked => { root.pane-close(p.id); }
+        }
+    }
+    if root.ring != "": Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: root.ring;
+        fill: transparent;
+        stroke: root.accent;
+        stroke-width: 1.5px;
+    }
+    for s[j] in root.seams: Rectangle {
+        Path {
+            width: root.width;
+            height: root.height;
+            viewbox-x: 0;
+            viewbox-y: 0;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            commands: s.path;
+            visible: s.path != "";
+            fill: transparent;
+            stroke: Palette.sky;
+            stroke-width: 1px;
+            opacity: 0.6;
+        }
+        TouchArea {
+            // wubble change: the web design's 20 px strip (Shell.split-grab), not the port's 12
+            x: s.x - Shell.split-grab / 2;
+            width: Shell.split-grab;
+            mouse-cursor: col-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { root.seam-grab(j, self.x + self.mouse-x, self.mouse-y); }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.seam-release(); }
+            }
+            moved => { if (self.pressed) { root.seam-drag(self.x + self.mouse-x, self.mouse-y); } }
+            double-clicked => { root.seam-even(); }
+        }
+    }
+}

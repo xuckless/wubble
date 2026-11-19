@@ -1,6 +1,8 @@
 import { Palette, Motion, Spacing, Fonts, Type, Chrome } from "../tokens.slint";
-import { Shell } from "../app-tokens.slint";
-import { GlassPanel, PressableButton, OverlapLayer } from "../components.slint";
+import { Shell } from "../kit/derived.slint";
+import { GlassPanel } from "../kit/material/glass.slint";
+import { PressableButton } from "../kit/controls/button.slint";
+import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { GlassTier, DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
 import { DownloadRow } from "download-row.slint";
 

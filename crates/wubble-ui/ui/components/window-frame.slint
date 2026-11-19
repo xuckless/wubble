@@ -5,7 +5,7 @@
 // so only the inside half is kept. A press reports the edge and the host hands the grab to the
 // compositor (xdg_toplevel.resize on Wayland). The corners come last, so they win over the strips.
 
-import { Shell } from "../app-tokens.slint";
+import { Shell } from "../kit/derived.slint";
 import { WindowEdge } from "model.slint";
 
 component Zone inherits TouchArea {

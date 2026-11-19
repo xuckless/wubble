@@ -1,0 +1,94 @@
+// design: core/wubble.css:46-49, browser/browser.css:34-38 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Palette, Spacing, Chrome, Fonts, Type, Motion, Radius } from "../../tokens.slint";
+import { Shell } from "../derived.slint";
+import { Squash } from "../../components/squash.slint"; // wubble change
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+
+// @source slint-pressable
+// Press: scale to 0.97 over 120 ms ease-out, back over 200 ms ease-out (wubble.css .wb-press).
+// Never used where physics owns the transform (the tab indicator, the bubble).
+export component PressableButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    // wubble change: the side padding, so an icon-only button (.wb-ib, 30 square) fits
+    in property <length> padding-x: Spacing.s3;
+    callback clicked();
+    // wubble change: a right-button release on the button, for a second choice on one control.
+    callback secondary-clicked();
+    out property <bool> pressed: touch.pressed;
+    out property <bool> hovered: touch.has-hover;
+    // wubble change: what a screen reader calls the button when it has no text (an icon).
+    in property <string> label;
+    // wubble change: Tab reaches the button (Space or Enter clicks it), with the design's ring.
+    out property <bool> keyboard-focused: keys.has-focus;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label != "" ? root.label : root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    min-height: Chrome.controls;
+    border-radius: Radius.sm;
+    background: touch.has-hover ? Palette.shell : transparent;
+    animate background { duration: 150ms; easing: Motion.easeOut; }
+
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    // wubble change: the release squash (wubble.css `wb-sq` at a third, squash.slint) times the
+    // press, on one transform.
+    property <float> press: touch.pressed ? Motion.pressScale : 1;
+    animate press {
+        duration: touch.pressed ? Motion.pressMs : Motion.pressRelease;
+        easing: Motion.easeOut;
+    }
+    transform-scale-x: root.press * sq.sx;
+    transform-scale-y: root.press * sq.sy;
+    sq := Squash {
+        amp: Shell.squash-chrome;
+    }
+    changed pressed => {
+        if !self.pressed {
+            sq.hit = !sq.hit;
+        }
+    }
+
+    keys := FocusKeys {
+        enabled: root.enabled;
+        activate => { root.clicked(); }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+        pointer-event(e) => {
+            if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                root.secondary-clicked();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.padding-x;
+        padding-right: root.padding-x;
+        spacing: Spacing.s2;
+        alignment: center;
+        @children
+        if root.text != "": Text {
+            text: root.text;
+            vertical-alignment: center;
+            color: root.enabled ? Palette.ink : Palette.haze;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+            font-weight: Type.label.weight;
+        }
+    }
+    // wubble change: the keyboard focus ring
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.border-radius;
+    }
+}

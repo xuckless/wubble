@@ -16,8 +16,10 @@
 // WubbleScroller, wubble's IconButton, Icon and Raised.
 
 import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.slint";
-import { Shell } from "../app-tokens.slint";
-import { PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
+import { Shell } from "../kit/derived.slint";
+import { PressableButton } from "../kit/controls/button.slint";
+import { SpaceIcon } from "../kit/chrome/space-icon.slint";
+import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, FilterListItem } from "model.slint";
 import { PageScroll } from "page-scroll.slint";
 import { Icon, IconPaths } from "icon.slint";

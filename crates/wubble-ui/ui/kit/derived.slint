@@ -1,9 +1,11 @@
+// derived: Shell values (moved unchanged from ui/app-tokens.slint); each is to become an
+// expression of gen/tokens.slint or gen/css.slint (lane L2), see notes/fidelity gen-diff.
 // Values wubble's own components need that tokens.slint (the design repo's port) has no token
 // for. Each comes from the design repo's web chrome, `src/wubble/browser/browser.css` and
 // `icons.tsx` (xuckless/the-wallpaper-project @ 6c840da), named by its CSS rule. Nothing here
 // repeats a value tokens.slint already has.
 
-import { Chrome } from "tokens.slint";
+import { Chrome } from "../tokens.slint";
 
 export global Shell {
     // Touch sizing: the host sets it from the input kind (a touch flips it on, a mouse move off)

@@ -14,7 +14,7 @@ use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer};
 
 /// 120 Hz.
 const FRAME: Duration = Duration::from_micros(8_333);
-/// app-tokens.slint `Shell.sidebar-open`.
+/// kit/derived.slint `Shell.sidebar-open`.
 const SIDEBAR_OPEN: f32 = 0.5;
 /// Frames a transition may take before the test calls it stalled. A count, not a clock.
 const MAX_FRAMES: usize = 2_000;

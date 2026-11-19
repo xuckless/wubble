@@ -1,0 +1,39 @@
+// design: core/wubble.css:51-58 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Motion } from "../../tokens.slint";
+
+// @source slint-overlap
+// Overlap: old and new share the screen. The incoming layer fades in over 240 ms ease-out from
+// 7px below at 0.98; the outgoing one fades out over 190 ms ease-in-out, 5px up, to 0.98.
+// Slint has no keyframes and can't blur an arbitrary subtree, so this is the opacity/shift/
+// scale part of wb-in / wb-out; the 4px blur is skipped. Stack two layers and flip `shown`.
+// `delay` staggers rows by Motion.overlapStagger (30 ms) per `index`.
+export component OverlapLayer inherits Rectangle {
+    in property <bool> shown: true;
+    in property <int> index: 0;
+    property <duration> stagger: root.shown ? Motion.overlapStagger * root.index : 0ms;
+
+    opacity: root.shown ? 1 : 0;
+    // leaving goes up 5px, entering comes from 7px below. Without keyframes the layer starts its
+    // entrance from where it last left (−5px): the shift is approximate, the timing exact.
+    property <length> shift: root.shown ? 0px : -5px;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: root.shown ? 1 : 0.98;
+    animate opacity, transform-scale {
+        duration: root.shown ? Motion.overlapIn : Motion.overlapOut;
+        delay: root.stagger;
+        easing: root.shown ? Motion.easeOut : Motion.easeInOut;
+    }
+    animate shift {
+        duration: root.shown ? Motion.overlapIn : Motion.overlapOut;
+        delay: root.stagger;
+        easing: root.shown ? Motion.easeOut : Motion.easeInOut;
+    }
+
+    Rectangle {
+        y: root.shift;
+        @children
+    }
+}

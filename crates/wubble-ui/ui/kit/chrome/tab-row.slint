@@ -1,0 +1,196 @@
+// design: browser/tabs.tsx:15-136, browser/browser.css:60-80 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Palette, Radius, Fonts, Type, Motion } from "../../tokens.slint";
+import { TabItem } from "../../components/model.slint";
+import { Icon, IconPaths } from "../../components/icon.slint";
+import { Shell } from "../derived.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+
+// @source slint-tab-row
+// wubble change: `TabItem` (with an `id`) is in components/model.slint.
+
+export component TabRow inherits Rectangle {
+    in property <TabItem> tab;
+    in property <bool> selected: false;
+    in property <bool> compact: false;   // rail mode: icon only
+    // pointer y in window px; tabs.rs decides click vs drag (6 px) and the reorder
+    callback press(length);
+    callback drag(length);
+    callback release();
+    callback close();
+    // wubble change: the speaker glyph, shown while the page plays sound or is muted.
+    callback mute();
+    // wubble change: a right click, pointer in window px (the tab's context menu).
+    callback context(length, length);
+    // wubble change: the left button's press in window px (0 down, 3 cancel), for a drag that
+    // leaves the list (wubble_core::tabdrag); the host follows the pointer from the window.
+    callback track(int, length, length);
+    // wubble change: the pointer enters or leaves the row; the row's top in window px (the
+    // tab hover preview).
+    callback hovered(bool, length);
+    // wubble change: keyboard and screen reader: Space, Enter or the default action pick the
+    // tab, Delete closes it; `focus-token` changing gives the selected row keyboard focus (F6
+    // to the sidebar).
+    callback activate();
+    in property <int> focus-token;
+    changed focus-token => {
+        if root.selected {
+            keys.focus();
+        }
+    }
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.tab.title;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-action-default => {
+        root.activate();
+    }
+
+    height: Shell.row; // wubble change: touch sizing (Shell.row)
+    border-radius: Radius.sm;
+    // the selected row's background is the indicator (drawn by Sidebar), so rows only hover
+    // wubble change: .wb-tab:hover white 4.5 % (the port's opaque shell read as a slab)
+    background: touch.has-hover && !root.selected ? Shell.row-hover : transparent;
+    animate background { duration: 150ms; easing: Motion.easeOut; }
+
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: touch.pressed ? Motion.pressScale : 1;
+    animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
+
+    keys := FocusKeys {
+        activate => { root.activate(); }
+        other-key(e) => {
+            if e.text == Key.Delete { root.close(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea {
+        changed has-hover => { root.hovered(self.has-hover, root.absolute-position.y); }
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.middle && e.kind == PointerEventKind.down) { root.close(); return; } // middle click closes
+            // wubble change: right click opens the tab's menu
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) { root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); return; }
+            if (e.button != PointerEventButton.left) { return; }
+            if (e.kind == PointerEventKind.down) { root.track(0, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); root.press(self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.cancel) { root.track(3, 0, 0); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
+        }
+        moved => { if (self.pressed) { root.drag(self.absolute-position.y + self.mouse-y); } }
+    }
+
+    // wubble change: metrics from browser.css (.wb-tab padding 0 6 0 10, gap 10, an 18 px icon
+    // box), so the icon sits on the sidebar's 24 px grid; the favicon shows only when the model
+    // has one, else the neutral globe (icons.tsx `Favicon`), never a letter tile.
+    HorizontalLayout {
+        padding-left: root.compact ? (root.width - Shell.tab-icon) / 2 : Shell.side-grid;
+        padding-right: Shell.side-pad;
+        spacing: Shell.side-grid;
+        Rectangle {
+            width: Shell.tab-icon;
+            if root.tab.favicon.width > 0: Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                source: root.tab.favicon;
+                width: Shell.icon;
+                height: Shell.icon;
+            }
+            if root.tab.favicon.width == 0: Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                // wubble change: a wubble:// page shows its own glyph (icons.tsx PAGE_ICON)
+                path: IconPaths.page(root.tab.url);
+                tint: root.selected ? Palette.ink : Shell.tab-ink;
+            }
+        }
+        if !root.compact: Text {
+            text: root.tab.title;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+            // wubble change: .wb-tab #C3C8D4 at 13.5
+            color: root.selected ? Palette.ink : Shell.tab-ink;
+            font-family: Fonts.ui;
+            font-size: Shell.tab-font;
+            font-weight: Type.body.weight;
+            animate color { duration: 150ms; easing: Motion.easeOut; }
+        }
+        // wubble change: the speaker, before the close button (Chromium's tab alert indicator
+        // place); a click mutes or unmutes the tab.
+        if !root.compact && (root.tab.audible || root.tab.muted): Rectangle {
+            width: Shell.speaker;
+            speaker-touch := TouchArea {
+                clicked => {
+                    root.mute();
+                }
+            }
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                size: Shell.icon - 2px;
+                path: root.tab.muted ? IconPaths.speaker-muted : IconPaths.speaker;
+                tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
+            }
+        }
+        // wubble change: the split glyph of a pane of the Space's split (tabs.tsx `wb-tab-split`:
+        // 22 px, haze, the icon at 13 px), gone while the row is hovered.
+        if !root.compact && root.tab.in-split && !touch.has-hover && !close-touch.has-hover: Rectangle {
+            width: 22px;
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                size: 13px;
+                path: IconPaths.split;
+                tint: Palette.haze;
+            }
+        }
+        // wubble change: the close button's slot stays in the layout (as .wb-tab-x, which only
+        // fades), and the button itself sits outside it, below.
+        if !root.compact: Rectangle {
+            width: 22px;
+        }
+    }
+    // wubble change: shown while the row or the button itself is hovered. In the port the button
+    // appeared only while the row's TouchArea had hover, which it loses to the button's own
+    // TouchArea, so the button flickered away under the pointer.
+    // wubble change: it fades and grows in as .wb-tab-x does (browser.css: opacity 0 → 1 over
+    // .15 s, scale .8 → 1 over .2 s ease-out; a 22 px tile, radius 7, white 10% on its own hover).
+    // wubble change: hover only, the selected row too (.wb-tab:hover .wb-tab-x)
+    property <bool> close-shown: !root.compact && (touch.has-hover || close-touch.has-hover);
+    Rectangle {
+        x: root.width - Shell.side-pad - self.width;
+        y: (root.height - self.height) / 2;
+        width: 22px;
+        height: 22px;
+        border-radius: Shell.tab-close-radius;
+        background: close-touch.has-hover ? Shell.tab-close-hover : transparent;
+        animate background { duration: 150ms; easing: Motion.easeOut; }
+        visible: !root.compact;
+        opacity: root.close-shown ? 1 : 0;
+        animate opacity { duration: 150ms; easing: Motion.easeOut; }
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: root.close-shown ? 1 : 0.8;
+        animate transform-scale { duration: 200ms; easing: Motion.easeOut; }
+        close-touch := TouchArea {
+            clicked => { root.close(); }
+        }
+        Path {
+            width: 10px;
+            height: 10px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            viewbox-width: 10;
+            viewbox-height: 10;
+            commands: "M1 1 9 9M9 1 1 9";
+            stroke: close-touch.has-hover ? Palette.ink : Palette.haze;
+            stroke-width: 1.5px;
+            stroke-line-cap: round;
+        }
+    }
+    // wubble change: the keyboard focus ring
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.border-radius;
+    }
+}

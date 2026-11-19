@@ -1,0 +1,57 @@
+// design: browser/seam.ts:1-101, browser/browser.css:139-146 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Palette, Motion } from "../../tokens.slint";
+
+// @source slint-seam
+// The rubber-string seam (seam.rs). The hit strip sits on the sidebar's edge; grab/drag/release
+// go to Rust with window coordinates, and Rust writes back `seam-x` and `seam-path` (the bowed
+// string from Seam::clip, in this element's coordinates). Pulling past the minimum snaps to the
+// rail, and further to hidden: one gesture for resize and all three modes.
+export component Seam inherits Rectangle {
+    in property <length> seam-x;
+    in property <string> seam-path;      // "M… C… C…": empty while the string is straight
+    in property <bool> bowed: false;
+    callback grab(length, length);       // window px
+    callback drag(length, length);
+    callback release();
+    // wubble change: double-click flips rail and extended (chrome.tsx `onDblClick`)
+    callback double-clicked();
+
+    touch := TouchArea {
+        x: root.seam-x - 4px;
+        width: 8px;
+        mouse-cursor: col-resize;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.grab(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
+        }
+        moved => { if (self.pressed) { root.drag(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); } }
+        double-clicked => { root.double-clicked(); }
+    }
+    // the straight hairline at rest
+    Rectangle {
+        x: root.seam-x - 0.5px;
+        width: 1px;
+        background: Palette.sky;
+        visible: !root.bowed;
+        opacity: touch.has-hover || touch.pressed ? 0.6 : 0;
+        animate opacity { duration: touch.has-hover ? 200ms : 150ms; easing: Motion.easeOut; }
+    }
+    // the bowed string while held or twanging
+    Path {
+        width: root.width;
+        height: root.height;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: root.seam-path;
+        visible: root.bowed && root.seam-path != "";
+        fill: transparent;
+        stroke: Palette.sky;
+        stroke-width: 1px;
+        opacity: 0.6;
+    }
+}

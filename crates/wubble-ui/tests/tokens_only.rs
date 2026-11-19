@@ -1,14 +1,14 @@
 //! Every colour, size and duration in the UI comes from a token file. The
-//! design repo's port files (`tokens.slint`, `components.slint`) are copied
-//! as they are, so they are exempt along with `app-tokens.slint`; every
-//! wubble-authored file is scanned. Also: no focus borders and no letter
+//! design repo's port token file (`tokens.slint`) and the kit (`kit/`: the
+//! port's components and `derived.slint`, moved there unchanged) are exempt;
+//! every other file is scanned. Also: no focus borders and no letter
 //! tiles anywhere, port files included. Pure string scans; no timing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Files whose literals are the source of truth (or a verbatim copy of it).
-const TOKEN_FILES: [&str; 3] = ["tokens.slint", "app-tokens.slint", "components.slint"];
+const TOKEN_FILES: [&str; 1] = ["tokens.slint"];
 
 fn slint_files(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).expect("read ui dir") {
@@ -30,8 +30,10 @@ fn ui_files() -> Vec<PathBuf> {
 }
 
 fn is_token_file(path: &Path) -> bool {
-    path.parent().is_some_and(|p| p.ends_with("ui"))
-        && TOKEN_FILES.iter().any(|t| path.ends_with(t))
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+    path.starts_with(ui.join("kit"))
+        || path.parent().is_some_and(|p| p.ends_with("ui"))
+            && TOKEN_FILES.iter().any(|t| path.ends_with(t))
 }
 
 /// Returns the offending literals found in one line of Slint source.
