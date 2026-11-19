@@ -23,7 +23,9 @@
 //! The clips come from `WUBBLE_CODEC_CLIPS=DIR` (written by `scripts/codec-clips.sh`); without
 //! it only the bundled VP8 clip runs (cross-origin, Range, no Range, CORS, `blob:`, `data:`,
 //! iframe, autoplay), which is the regression check that always applies. Rows for codecs prebuilt
-//! CEF does not have (H.264, AAC, HEVC: no `proprietary_codecs`) are reported, not asserted.
+//! CEF does not have (H.264, AAC, MPEG-TS, native HLS, HEVC: no `proprietary_codecs`) are
+//! reported, not asserted, unless the build says it plays H.264 (a codec build from
+//! `scripts/build-cef.sh`): then all but HEVC must play. HEVC is always reported only.
 //! `WUBBLE_PROBE_URL=URL` (`codecs` only) also loads that page (an ordinary page load), then
 //! prints its media elements' state and what the blocker blocked there.
 //!
@@ -84,6 +86,32 @@ const MUST_WITH_CLIPS: &[&str] = &[
     "audio.wav",
     "mse vp9 webm",
     "vp9-opus.webm no-range",
+];
+
+/// The support row that tells a build with proprietary codecs (`proprietary_codecs=true
+/// ffmpeg_branding=Chrome`, `scripts/build-cef.sh`) from one without.
+const H264_SUPPORT: &str = "support video/mp4; codecs=\"avc1.42E01E\"";
+
+/// Rows that must play when the build has proprietary codecs: H.264, AAC, MPEG-TS, native HLS.
+/// HEVC stays reported only: on Linux it needs a VA-API decoder, so it is the machine's, not
+/// the build's.
+const MUST_WITH_CODECS: &[&str] = &[
+    "support video/mp4; codecs=\"avc1.64001f, mp4a.40.2\"",
+    "support video/mp4; codecs=\"avc1.64001f\"",
+    "support audio/mp4; codecs=\"mp4a.40.2\"",
+    "support video/mp2t; codecs=\"avc1.42E01E, mp4a.40.2\"",
+    "support application/vnd.apple.mpegurl",
+];
+
+/// Rows that must play when the build has proprietary codecs and the clips are there.
+const MUST_WITH_CODECS_AND_CLIPS: &[&str] = &[
+    "h264-aac.mp4",
+    "h264.mp4",
+    "audio.m4a",
+    "mse h264+aac fmp4 (X)",
+    "native hls h264 fmp4",
+    "native hls h264 ts",
+    "native hls vp9 fmp4",
 ];
 
 /// The clips the page plays when present, with the element they go in.
@@ -552,6 +580,21 @@ fn verdict(
     if clips {
         must.extend(MUST_WITH_CLIPS);
     }
+    let codecs = played(H264_SUPPORT);
+    if codecs {
+        must.extend(MUST_WITH_CODECS);
+        if clips {
+            must.extend(MUST_WITH_CODECS_AND_CLIPS);
+        }
+    }
+    println!(
+        "codecs: proprietary codecs in this build: {}",
+        if codecs {
+            "yes, asserted"
+        } else {
+            "no, reported"
+        }
+    );
     if wired {
         must.push("page kit");
     }
@@ -856,7 +899,9 @@ async function support() {{
         r.decode = (d.supported ? 'supported' : 'no') + (d.smooth ? ' smooth' : '') + (d.powerEfficient ? ' hw' : ''); }}
       catch (e) {{ r.decode = String(e); }}
     }}
-    r.ok = r.mse === true; if (build) r.build = true;
+    // A playlist is never an MSE type: native HLS is `canPlayType`'s answer alone.
+    r.ok = type === 'application/vnd.apple.mpegurl' ? r.canPlay !== '""' : r.mse === true;
+    if (build) r.build = true;
     log(r);
   }}
 }}
