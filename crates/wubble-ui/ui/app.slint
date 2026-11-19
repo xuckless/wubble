@@ -854,8 +854,8 @@ export component AppWindow inherits Window {
                     bar.dispatch(CommandBarEvent.open);
                     StartBridge.search-clicked(x, y);
                 }
-                site-activated(i) => {
-                    StartBridge.site-activated(i);
+                site-activated(url) => {
+                    StartBridge.site-activated(url);
                 }
                 stage-down(x, y) => {
                     StartBridge.stage-down(x, y);

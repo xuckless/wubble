@@ -777,13 +777,14 @@ impl Scene {
 
     /// `Scene.pop`'s push in the liquid for a pop of radius `r` at (x, y), logical px (the pop
     /// itself is drawn from the start page's frame). wubble: the start page's (`start::apply`).
-    pub(super) fn pop_push(&mut self, x: f32, y: f32, r: f32) {
+    /// `k` and `min`: the push's radius per radius over the width, and its floor.
+    pub(super) fn pop_push(&mut self, x: f32, y: f32, r: f32, strength: f32, k: f32, min: f32) {
         if self.w > 0.0 && !self.still() {
             self.push_op(FluidOp::Ripple {
                 x: x / self.w,
                 y: 1.0 - y / self.h,
-                strength: super::start::POP_PUSH,
-                radius: (r / self.w * super::start::POP_PUSH_K).max(super::start::POP_PUSH_MIN),
+                strength,
+                radius: (r / self.w * k).max(min),
             });
         }
     }

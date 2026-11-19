@@ -27,6 +27,7 @@ use std::time::Instant;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use wubble_core::action::Action;
 use wubble_core::kit_gen::living as K;
+use wubble_core::kit_gen::scene as KS;
 use wubble_core::pages::InternalPage;
 use wubble_core::start::frame::{BubbleUniforms, PopUniforms};
 use wubble_core::start::living::{Cursor, Effect, Event, Living, Options, transition};
@@ -55,6 +56,15 @@ pub struct Out {
     pub fx: Vec<StartFx>,
     pub grabbing: Option<bool>,
 }
+
+/// The start page's step per tick under `--frozen-backdrop`: the fidelity harness's fixed clock
+/// (tools/fidelity/README.md, `__wb.step(1000 / 120)`).
+pub const FROZEN_STEP: f64 = 1.0 / 120.0;
+
+/// The scene time the start page is shot at under `--frozen-backdrop`: the web capture's
+/// (tools/fidelity/scenes.json `"settle": 2000` then `"after": 600` ms on that clock, the
+/// bubble stepping through both: capture.mjs freezes only the liquid; checked by a test).
+pub const FROZEN_AT: f64 = 2.6;
 
 /// Where the W field is.
 enum WField {
@@ -107,6 +117,9 @@ pub fn fx_of(e: &Effect) -> Option<StartFx> {
             x: p.x as f32,
             y: p.y as f32,
             r: p.r as f32,
+            strength: KS::pop_push as f32,
+            k: KS::pop_push_k as f32,
+            min: KS::pop_push_min as f32,
         }),
         Effect::Capture | Effect::Cursor(_) | Effect::Poked | Effect::Popped => None,
     }
@@ -300,12 +313,35 @@ impl StartHost {
         out
     }
 
+    /// One scene frame under the fidelity harness's fixed clock: the shown bubble is stepped in
+    /// 1/120 s ticks up to the scene time `at`, then held there (a `Tick` of 0), however many
+    /// frames the display renders before the shot.
+    pub fn frame_frozen(&mut self, size: (f64, f64), reduced: bool, at: f64) -> Out {
+        let mut out = self.frame(size, reduced, 0.0);
+        let per_tick = FROZEN_STEP * if reduced { K::still_time } else { 1.0 };
+        let ticks = self
+            .living()
+            .map_or(0.0, |l| ((at - l.time) / per_tick).round().max(0.0));
+        for _ in 0..ticks as usize {
+            let tick = self.frame(size, reduced, FROZEN_STEP);
+            out.fx.extend(tick.fx);
+            out.grabbing = tick.grabbing.or(out.grabbing);
+        }
+        out
+    }
+
     /// The W field, once it is computed: given out once.
     pub fn take_wfield(&mut self) -> Option<(Vec<u8>, u32)> {
         let WField::Computing(rx) = &self.wfield else {
             return None;
         };
-        match rx.try_recv() {
+        let got = rx.try_recv();
+        self.received(got)
+    }
+
+    /// What the W field's thread gave: the field (handed over), nothing yet, or nothing ever.
+    fn received(&mut self, got: Result<Vec<u8>, TryRecvError>) -> Option<(Vec<u8>, u32)> {
+        match got {
             Ok(rgba) => {
                 self.wfield = WField::Handed;
                 Some((rgba, W_SIZE as u32))
@@ -385,22 +421,6 @@ impl Host {
             return;
         };
         self.open_bar(&window, BarMode::Navigate(tab), String::new());
-    }
-
-    /// A tile: its site in the start tab.
-    pub(crate) fn start_site(&mut self, index: i32) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
-        let urls: Vec<String> = window
-            .global::<StartBridge>()
-            .get_sites()
-            .iter()
-            .map(|s| s.url.to_string())
-            .collect();
-        if let Some(url) = site_url(&urls, index) {
-            self.page_opened(url);
-        }
     }
 }
 
@@ -487,7 +507,10 @@ impl Host {
                 Do::Tile => {
                     let _ = self.w.window.upgrade_in_event_loop(|window| {
                         window.invoke_dismiss_command_bar();
-                        window.global::<StartBridge>().invoke_site_activated(0);
+                        let bridge = window.global::<StartBridge>();
+                        if let Some(site) = bridge.get_sites().row_data(0) {
+                            bridge.invoke_site_activated(site.url);
+                        }
                     });
                 }
                 Do::Pass => {
@@ -517,14 +540,6 @@ impl Host {
             }
         });
     }
-}
-
-/// The site a tile at `index` opens, from the shown sites' URLs.
-pub fn site_url(urls: &[String], index: i32) -> Option<&str> {
-    usize::try_from(index)
-        .ok()
-        .and_then(|i| urls.get(i))
-        .map(String::as_str)
 }
 
 #[cfg(test)]
@@ -565,7 +580,10 @@ mod tests {
                 StartFx::Pop {
                     x: 10.0,
                     y: 20.0,
-                    r: 4.0
+                    r: 4.0,
+                    strength: 500.0,
+                    k: 0.6,
+                    min: 0.002,
                 },
                 StartFx::LightLeave
             ]
@@ -648,20 +666,68 @@ mod tests {
         let WField::Computing(rx) = &h.wfield else {
             panic!("the first start tab starts the W field");
         };
-        // what the frame's `take_wfield` gets, waited for here
-        let rgba = rx.recv().expect("the W field");
-        assert_eq!(rgba.len(), W_SIZE * W_SIZE * 4);
-        // taken (the thread is gone): never asked for again
+        // what the frame's `take_wfield` gets once the thread is done, waited for here
+        let got = rx.recv().map_err(|_| TryRecvError::Disconnected);
+        let (rgba, n) = h.received(got).expect("the W field");
+        assert_eq!((rgba.len(), n), (W_SIZE * W_SIZE * 4, W_SIZE as u32));
+        // handed over: never asked for again, and another start tab starts no second thread
+        assert!(matches!(h.wfield, WField::Handed));
         assert!(h.take_wfield().is_none());
         h.sync(Some(TabId(5)), |_| true);
         assert!(matches!(h.wfield, WField::Handed));
     }
 
     #[test]
-    fn a_tile_opens_its_own_site_only() {
-        let urls = vec!["https://a.test/".to_owned(), "https://b.test/".to_owned()];
-        assert_eq!(site_url(&urls, 1), Some("https://b.test/"));
-        assert_eq!(site_url(&urls, 2), None);
-        assert_eq!(site_url(&urls, -1), None);
+    fn the_w_field_waits_for_its_thread_and_gives_up_on_a_lost_one() {
+        let mut h = StartHost::new(7);
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        h.wfield = WField::Computing(rx);
+        // still computing: asked again next frame
+        assert!(h.take_wfield().is_none());
+        assert!(matches!(h.wfield, WField::Computing(_)));
+        // the thread ended without one: never asked for again
+        drop(tx);
+        assert!(h.take_wfield().is_none());
+        assert!(matches!(h.wfield, WField::Handed));
+    }
+
+    #[test]
+    fn a_frozen_start_page_is_shot_at_one_scene_time_however_many_frames_run() {
+        let at = |frames: usize| {
+            let mut h = StartHost::new(7);
+            h.sync(Some(TabId(1)), |_| true);
+            for _ in 0..frames {
+                h.frame_frozen((800.0, 600.0), false, FROZEN_AT);
+            }
+            let l = h.living().unwrap();
+            (l.time, l.body.center(), l.minis.list.len())
+        };
+        let (t, ..) = at(1);
+        assert!((t - FROZEN_AT).abs() < 1e-9, "{t}");
+        // a 60 Hz and a 120 Hz settle: the same bubble
+        assert_eq!(at(72), at(144));
+        assert_eq!(at(1), at(72));
+    }
+
+    #[test]
+    fn the_frozen_time_is_the_web_capture_s_settle() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/fidelity/scenes.json"
+        );
+        let scenes: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let start = scenes["scenes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "start")
+            .unwrap();
+        let ms = |k: &str| start.get(k).unwrap_or(&scenes[k]).as_f64().unwrap();
+        assert!(
+            start.get("steps").is_none(),
+            "the web shot's clock has steps too"
+        );
+        assert!(((ms("settle") + ms("after")) / 1000.0 - FROZEN_AT).abs() < 1e-9);
     }
 }

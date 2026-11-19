@@ -36,10 +36,6 @@ use crate::host::start::{self, StagePointer, StartHost};
 /// Set to `slint` to force the Slint-only glass (by hand, to see the fallback).
 pub const GLASS_ENV: &str = "WUBBLE_GLASS";
 
-/// The start page's step per frame under `--frozen-backdrop`: the fidelity harness's fixed
-/// clock (1/120 s), so its bubble comes to rest the same way on every run.
-const FROZEN_STEP: f64 = 1.0 / 120.0;
-
 /// The frame budget the glass is held to: 120 Hz (AGENTS.md). Also the budget when the
 /// display's refresh rate is unknown.
 const DEFAULT_BUDGET: Duration = Duration::from_micros(8_333);
@@ -549,17 +545,16 @@ impl SceneHost {
             return;
         }
         let frozen = crate::shot::frozen_backdrop();
-        let dt = if frozen {
-            FROZEN_STEP
-        } else {
-            since.map_or(0.0, |d| d.as_secs_f64())
-        };
         let (w, h) = (window.get_content_width(), window.get_content_height());
-        let out = self.start.frame(
-            (f64::from(w), f64::from(h)),
-            wubble_core::motion::reduced(),
-            dt,
-        );
+        let size = (f64::from(w), f64::from(h));
+        let reduced = wubble_core::motion::reduced();
+        // `--frozen-backdrop`: the web capture's scene time, whatever the frame count
+        let out = if frozen {
+            self.start.frame_frozen(size, reduced, start::FROZEN_AT)
+        } else {
+            self.start
+                .frame(size, reduced, since.map_or(0.0, |d| d.as_secs_f64()))
+        };
         self.apply_start(window, out);
         if let Some((rgba, n)) = self.start.take_wfield() {
             self.renderer.set_wfield(&rgba, n);

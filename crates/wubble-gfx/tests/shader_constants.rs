@@ -13,9 +13,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use wubble_gfx::scene::{
-    BLUR_SIGMA, DPR_MAX, GLASS_PAD, POP_PUSH, POP_PUSH_K, POP_PUSH_MIN, PYRAMID_DIV,
-};
+use wubble_gfx::scene::{BLUR_SIGMA, DPR_MAX, GLASS_PAD, PYRAMID_DIV};
 
 const CHANGE: &str = "// wubble change:";
 /// The header of a shader that is wubble's own, with no design counterpart.
@@ -350,13 +348,6 @@ fn the_render_constants_are_the_web_s() {
         ts_line("core/gl/scene.ts", "Math.min(devicePixelRatio,"),
         [f64::from(DPR_MAX)]
     );
-    // scene.ts pop(): fluid.ripple(x / this.w, 1 - y / this.h, 500, Math.max(0.002, (r / this.w) * 0.6))
-    let pop = ts_line("core/gl/scene.ts", "1 - y / this.h, 500,");
-    let ours = [1.0, POP_PUSH, POP_PUSH_MIN, POP_PUSH_K].map(f64::from);
-    assert_eq!(pop.len(), ours.len(), "{pop:?}");
-    for (web, ours) in pop.iter().zip(ours) {
-        assert!((web - ours).abs() < 1e-6, "{pop:?}");
-    }
     // scene.ts drawGlass(): const pad = 70
     assert_eq!(ts_line("core/gl/scene.ts", "const pad = "), [GLASS_PAD]);
 }

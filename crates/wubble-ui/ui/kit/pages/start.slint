@@ -45,7 +45,7 @@ export global StartBridge {
     in-out property <length> search-x;
     in-out property <length> search-y;
     callback search-clicked(length, length);
-    callback site-activated(int);
+    callback site-activated(string);
     // page-local logical px
     callback stage-down(length, length);
     callback stage-move(length, length);
@@ -151,7 +151,7 @@ export component StartPage inherits Rectangle {
     in property <bool> grabbing;
     // the capsule's centre in window coordinates (the command bar grows from it)
     callback search-clicked(length, length);
-    callback site-activated(int);
+    callback site-activated(string);
     out property <length> search-x: search.absolute-position.x + search.width / 2;
     out property <length> search-y: search.absolute-position.y + search.height / 2;
     // the stage's pointer, page-local logical px
@@ -257,7 +257,7 @@ export component StartPage inherits Rectangle {
                 StartTile {
                     site: site;
                     clicked => {
-                        root.site-activated(i);
+                        root.site-activated(site.url);
                     }
                 }
             }

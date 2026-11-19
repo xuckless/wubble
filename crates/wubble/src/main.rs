@@ -926,7 +926,8 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
         bridge.on_stage_up(move || pointer(StagePointer::Up));
         bridge.on_stage_leave(move || pointer(StagePointer::Leave));
         bridge.on_search_clicked(move |_, _| with_host_in(win, |host| host.start_search()));
-        bridge.on_site_activated(move |i| with_host_in(win, |host| host.start_site(i)));
+        // a tile: its site in the start tab
+        bridge.on_site_activated(move |url| with_host_in(win, |host| host.page_opened(&url)));
     }
     let weak = window.as_weak();
     window.on_new_tab_requested(move || {

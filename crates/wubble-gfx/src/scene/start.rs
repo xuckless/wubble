@@ -24,18 +24,9 @@
 //!
 //! Source of the uniform mirrors: the-wallpaper-project `src/wubble/slint/render.rs` (`BubbleU`,
 //! `PopU` and their fill in `frame`), owner's code; the pop's push is `scene.pop` in
-//! `core/gl/scene.ts` (checked against it by `tests/shader_constants.rs`).
+//! `core/gl/scene.ts`, its numbers handed in by the host (`kit_gen::scene::pop_push*`).
 
 use super::state::{Rect, Scene};
-
-// `Scene.pop`'s push in the liquid (scene.ts `pop`): `fluid.ripple(x / w, 1 - y / h, 500,
-// Math.max(0.002, (r / w) * 0.6))`.
-/// The pop's push, `fluid.ripple`'s strength.
-pub const POP_PUSH: f32 = 500.0;
-/// The push's smallest radius (sim units).
-pub const POP_PUSH_MIN: f32 = 0.002;
-/// The push's radius per bubble radius over the view's width.
-pub const POP_PUSH_K: f32 = 0.6;
 
 /// Where the start page's card is: logical window px and its corner radius.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -105,8 +96,16 @@ pub enum StartFx {
     Light { x: f32, y: f32 },
     /// `scene.leave()`.
     LightLeave,
-    /// `scene.pop`'s push in the liquid for a pop of radius `r` at (x, y).
-    Pop { x: f32, y: f32, r: f32 },
+    /// `scene.pop`'s push in the liquid for a pop of radius `r` at (x, y): `fluid.ripple(x / w,
+    /// 1 - y / h, strength, max(min, r / w * k))`.
+    Pop {
+        x: f32,
+        y: f32,
+        r: f32,
+        strength: f32,
+        k: f32,
+        min: f32,
+    },
 }
 
 /// The ring's sample count (scene.ts `RING_N`, bubble.wgsl `RING_N`).
@@ -123,7 +122,14 @@ pub(super) fn apply(scene: &mut Scene, fx: StartFx) {
         } => scene.ripple(x, y, reach, strength),
         StartFx::Light { x, y } => scene.pointer_move(x, y),
         StartFx::LightLeave => scene.pointer_leave(),
-        StartFx::Pop { x, y, r } => scene.pop_push(x, y, r),
+        StartFx::Pop {
+            x,
+            y,
+            r,
+            strength,
+            k,
+            min,
+        } => scene.pop_push(x, y, r, strength, k, min),
     }
 }
 
@@ -250,6 +256,9 @@ mod tests {
                 x: 200.0,
                 y: 150.0,
                 r: 10.0,
+                strength: 500.0,
+                k: 0.6,
+                min: 0.002,
             },
         );
         let ops = s.fluid_ops(0.0);
@@ -258,8 +267,8 @@ mod tests {
             super::super::state::FluidOp::Ripple {
                 x: 0.25,
                 y: 0.75,
-                strength: POP_PUSH,
-                radius: (10.0 / 800.0 * POP_PUSH_K).max(POP_PUSH_MIN),
+                strength: 500.0,
+                radius: (10.0_f32 / 800.0 * 0.6).max(0.002),
             }
         );
         // a tiny pop's push keeps the floor
@@ -269,11 +278,14 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 r: 0.1,
+                strength: 500.0,
+                k: 0.6,
+                min: 0.002,
             },
         );
         assert!(matches!(
             s.fluid_ops(0.0)[0],
-            super::super::state::FluidOp::Ripple { radius, .. } if radius == POP_PUSH_MIN
+            super::super::state::FluidOp::Ripple { radius, .. } if radius == 0.002
         ));
     }
 
