@@ -3,11 +3,15 @@
 # target/<profile>/; under the layout cargo 1.100 made the default (OUT_DIR one level
 # deeper, build/<package>/<hash>/out) it is target/<profile>/build/. The search path
 # covers both, for every place cargo puts a binary:
-#   $ORIGIN, $ORIGIN/build           wubble, wubble-helper   (target/<profile>/)
-#   $ORIGIN/.., $ORIGIN/../build     examples, old-layout tests (examples/, deps/)
+#   $ORIGIN/build, $ORIGIN           wubble, wubble-helper   (target/<profile>/)
+#   $ORIGIN/../build, $ORIGIN/..     examples, old-layout tests (examples/, deps/)
 #   $ORIGIN/../../..                 new-layout tests (build/<package>/<hash>/out/)
 # `cargo test` hides a miss whenever CEF was unpacked inside the target directory (it puts
 # link-search paths there on LD_LIBRARY_PATH), so CI, whose CEF_PATH is outside it, is where
 # a missing entry shows: check a test binary with `ldd` when this changes.
+# The new layout's directory comes first: a target directory built by an older cargo keeps a
+# stale target/<profile>/libcef.so that nothing refreshes, and after a CEF bump that copy
+# would fail CEF's API-version check. (The old layout leaves no libcef.so in build/.) After
+# moving such a tree to cargo 1.100, `cargo clean` once to drop the stale copy.
 [target.'cfg(target_os = "linux")']
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/build:$ORIGIN/..:$ORIGIN/../build:$ORIGIN/../../.."]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN/build:$ORIGIN:$ORIGIN/../build:$ORIGIN/..:$ORIGIN/../../.."]
