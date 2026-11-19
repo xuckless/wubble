@@ -420,7 +420,10 @@ enum Body {
 /// A drag's thumbnail under the pointer: a surface of its own with an shm buffer.
 struct Icon {
     surface: WlSurface,
-    _buffer: ShmBuffer,
+    /// The surface's top left from the pointer (minus the hotspot), attached once the
+    /// drag has started.
+    offset: (i32, i32),
+    buffer: ShmBuffer,
     _pool: SlotPool,
 }
 
@@ -576,9 +579,18 @@ impl State {
             offered.0.iter().map(|(mime, _)| *mime),
             dnd_action(allowed),
         );
-        // The icon's buffer is committed before the drag starts: mutter and weston need it.
+        // The icon's buffer is committed before the drag starts (mutter and weston need
+        // it); its hotspot offset only after, once the surface has its dnd-icon role:
+        // the offset is the role's pending state (Chromium `WaylandDataDragController`
+        // starts the drag, then draws the icon).
         let icon = data.image.as_ref().and_then(|image| self.icon(image));
         source.start_drag(device, surface, icon.as_ref().map(|i| &i.surface), serial);
+        if let Some(icon) = &icon {
+            icon.surface
+                .attach(Some(icon.buffer.wl_buffer()), icon.offset.0, icon.offset.1);
+            icon.surface.damage(0, 0, i32::MAX, i32::MAX);
+            icon.surface.commit();
+        }
         self.source = Some(DragOut {
             window,
             source,
@@ -611,13 +623,12 @@ impl State {
             surface.set_buffer_scale(scale);
         }
         buffer.attach_to(&surface).ok()?;
-        // Again, offset: the surface's top left goes from the pointer by minus the hotspot.
-        surface.attach(Some(buffer.wl_buffer()), x, y);
         surface.damage(0, 0, i32::MAX, i32::MAX);
         surface.commit();
         Some(Icon {
             surface,
-            _buffer: buffer,
+            offset: (x, y),
+            buffer,
             _pool: pool,
         })
     }
@@ -742,24 +753,17 @@ struct Picture {
     name: String,
 }
 
-/// The picture a drag carries: the page's own bytes, else (a picture whose
-/// bytes CEF did not give) the drag image as PNG. Nothing is fetched.
+/// The picture a drag carries: the page's own bytes. Without them (CEF gave
+/// none, or more than welding's cap) there is no file: the drag image is a
+/// downscaled, 75%-opaque thumbnail (Chromium `kDragImageAlpha`), not the
+/// picture, so the drag offers the link, HTML and URL only. Nothing is fetched.
 fn picture(data: &DragData) -> Option<Picture> {
-    if let Some(contents) = &data.file_contents {
-        let mime = dnd::sniff_image_mime(&contents.bytes);
-        return Some(Picture {
-            mime,
-            bytes: contents.bytes.clone(),
-            name: dnd::drag_file_name(contents.name.as_deref(), mime),
-        });
-    }
-    let image = data.image.as_ref()?;
-    data.html.as_deref().filter(|h| dnd::is_picture_markup(h))?;
-    let mime = Some("image/png");
+    let contents = data.file_contents.as_ref()?;
+    let mime = dnd::sniff_image_mime(&contents.bytes);
     Some(Picture {
         mime,
-        bytes: image.png.clone(),
-        name: dnd::drag_file_name(None, mime),
+        bytes: contents.bytes.clone(),
+        name: dnd::drag_file_name(contents.name.as_deref(), mime),
     })
 }
 
@@ -1566,11 +1570,14 @@ mod tests {
         assert!(!path.exists());
         assert_eq!(out[1].1, jpeg);
         assert_eq!(out[5].1, b"https://a.test/cat.jpg");
-        // Without the page's bytes the drag image stands in, as a PNG.
-        let thumb = picture_drag(None);
-        let out = sent(&thumb, tmp.path());
-        assert_eq!(out[1], ("image/png", thumb.image.unwrap().png.to_vec()));
-        assert!(String::from_utf8_lossy(&out[0].1).ends_with("/image.png\r\n"));
+        // Without the page's bytes there is no file and no picture: the drag
+        // image is a faded thumbnail, so the link, HTML and URL go out alone.
+        let out = sent(&picture_drag(None), tmp.path());
+        assert_eq!(
+            out[0],
+            ("text/uri-list", b"https://a.test/cat.jpg\r\n".to_vec())
+        );
+        assert!(out.iter().all(|(m, _)| !m.starts_with("image/")));
         // A text drag's image is no picture.
         let text = DragData {
             text: Some("words".into()),

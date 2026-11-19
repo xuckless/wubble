@@ -207,21 +207,14 @@ fn is_svg(bytes: &[u8]) -> bool {
     head.starts_with("<svg") || (head.starts_with("<?xml") && head.contains("<svg"))
 }
 
-/// The file extension of a picture type; `None` for another type.
-pub fn image_extension(mime: &str) -> Option<&'static str> {
-    PICTURES
-        .iter()
-        .find(|(m, ..)| m.eq_ignore_ascii_case(mime))
-        .map(|(_, ext, _)| *ext)
+/// The `PICTURES` row of a picture type.
+fn picture(mime: &str) -> Option<&'static (&'static str, &'static str, &'static [&'static str])> {
+    PICTURES.iter().find(|(m, ..)| m.eq_ignore_ascii_case(mime))
 }
 
-/// Whether `html` is what Blink writes for a dragged picture
-/// (`DataTransfer::DeclareAndWriteDragImage`: the `<img>` element's markup),
-/// so a drag image without the picture's bytes may stand in for it.
-pub fn is_picture_markup(html: &str) -> bool {
-    let html = html.trim_start();
-    html.get(..4)
-        .is_some_and(|tag| tag.eq_ignore_ascii_case("<img"))
+/// The file extension of a picture type; `None` for another type.
+pub fn image_extension(mime: &str) -> Option<&'static str> {
+    picture(mime).map(|(_, ext, _)| *ext)
 }
 
 /// The longest a dragged picture's file name gets, in bytes.
@@ -241,7 +234,7 @@ pub fn drag_file_name(name: Option<&str>, mime: Option<&str>) -> String {
         Some((stem, ext)) if !stem.is_empty() => (stem.trim_end_matches(['.', ' ']), ext),
         _ => (clean, ""),
     };
-    let ext = match mime.and_then(|m| PICTURES.iter().find(|(p, ..)| p.eq_ignore_ascii_case(m))) {
+    let ext = match mime.and_then(picture) {
         Some((_, own, others)) => {
             let fits =
                 ext.eq_ignore_ascii_case(own) || others.iter().any(|o| ext.eq_ignore_ascii_case(o));
@@ -372,9 +365,6 @@ mod tests {
             assert_eq!(sniff_image_mime(bytes), *mime, "{bytes:?}");
         }
         assert_eq!(image_extension("image/JPEG"), Some("jpg"));
-        assert!(is_picture_markup(" <IMG src=\"a.png\">"));
-        assert!(!is_picture_markup("<b>x</b><img src=a>"));
-        assert!(!is_picture_markup("<i"));
         assert_eq!(image_extension("text/html"), None);
     }
 
