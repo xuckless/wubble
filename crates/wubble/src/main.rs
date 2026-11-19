@@ -960,13 +960,7 @@ impl WindowFactory {
             id,
             kind,
             window,
-            [
-                gpu.presenter(),
-                gpu.presenter(),
-                gpu.presenter(),
-                gpu.presenter(),
-                gpu.presenter(),
-            ],
+            std::array::from_fn(|_| gpu.presenter()),
             glass,
             panels,
         ))

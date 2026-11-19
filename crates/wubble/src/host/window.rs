@@ -28,6 +28,46 @@ use super::{PaneFrame, surfaces};
 use crate::backdrop::Glass;
 use crate::panes::Panes;
 
+/// The presenter slots: the pages', then the DevTools panel's, then the peek's.
+pub(super) const SLOTS: usize = MAX_PANES + 2;
+pub(super) const PANEL_SLOT: usize = MAX_PANES;
+pub(super) const PEEK_SLOT: usize = MAX_PANES + 1;
+
+/// The slot that presents `tab`: `own` for a view with a slot of its own (the panel, the
+/// peek), else the page slot it holds, else a page slot no framed tab holds.
+pub(super) fn pick_slot(
+    slots: &mut [Option<TabId>; SLOTS],
+    tab: TabId,
+    own: Option<usize>,
+    framed: &[TabId],
+) -> usize {
+    let pages = &slots[..MAX_PANES];
+    let i = own
+        .or_else(|| pages.iter().position(|s| *s == Some(tab)))
+        .or_else(|| {
+            pages
+                .iter()
+                .position(|s| s.is_none_or(|t| !framed.contains(&t)))
+        })
+        .unwrap_or(MAX_PANES - 1);
+    slots[i] = Some(tab);
+    i
+}
+
+/// Frees the slots of tabs no longer framed, so the page slots held count the pages on screen.
+pub(super) fn free_slots(slots: &mut [Option<TabId>; SLOTS], framed: &[TabId]) {
+    for s in slots.iter_mut() {
+        if s.is_some_and(|t| !framed.contains(&t)) {
+            *s = None;
+        }
+    }
+}
+
+/// How many pages the slots present (not the panel, not the peek).
+pub(super) fn page_panes(slots: &[Option<TabId>; SLOTS]) -> usize {
+    slots[..MAX_PANES].iter().filter(|s| s.is_some()).count()
+}
+
 /// One window's share of the host.
 pub(crate) struct WindowHost {
     pub(super) id: WindowId,
@@ -37,9 +77,10 @@ pub(crate) struct WindowHost {
     pub(super) window: slint::Weak<AppWindow>,
     /// One ring of textures per pane on screen (each pane has its own frame size), and the tab
     /// each slot presents; a tab keeps its slot while it stays on screen.
-    /// The last one is the DevTools panel's (`PANEL_TAB`).
-    pub(super) presenters: [FramePresenter; MAX_PANES + 1],
-    pub(super) slots: [Option<TabId>; MAX_PANES + 1],
+    /// After the pages' come the DevTools panel's ([`PANEL_SLOT`]) and the peek's
+    /// ([`PEEK_SLOT`]).
+    pub(super) presenters: [FramePresenter; SLOTS],
+    pub(super) slots: [Option<TabId>; SLOTS],
     /// The popup widget's frames: a ring of their own, since a popup's size
     /// differs from the page's and changes with every popup.
     pub(super) popup_presenter: FramePresenter,
@@ -69,18 +110,18 @@ impl WindowHost {
         id: WindowId,
         kind: WindowKind,
         handle: AppWindow,
-        presenters: [FramePresenter; MAX_PANES + 2],
+        presenters: [FramePresenter; SLOTS + 1],
         glass: Rc<RefCell<Glass>>,
         panels: Rc<RefCell<GlassRegistry>>,
     ) -> Self {
-        let [a, b, c, popup_presenter, panel_presenter] = presenters;
+        let [a, b, c, popup_presenter, panel_presenter, peek_presenter] = presenters;
         Self {
             id,
             kind,
             window: handle.as_weak(),
             handle,
-            presenters: [a, b, c, panel_presenter],
-            slots: [None; MAX_PANES + 1],
+            presenters: [a, b, c, panel_presenter, peek_presenter],
+            slots: [None; SLOTS],
             popup_presenter,
             glass,
             panels,
@@ -90,5 +131,42 @@ impl WindowHost {
             split_commands: vec![],
             drawn: Default::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(n: u64) -> TabId {
+        TabId(n)
+    }
+
+    #[test]
+    fn a_peek_over_a_full_split_has_its_own_slot() {
+        let mut slots = [None; SLOTS];
+        let framed = [t(1), t(2), t(3), t(9)];
+        let panes: Vec<usize> = (1..=3)
+            .map(|n| pick_slot(&mut slots, t(n), None, &framed))
+            .collect();
+        let peek = pick_slot(&mut slots, t(9), Some(PEEK_SLOT), &framed);
+        assert_eq!(peek, PEEK_SLOT);
+        assert!(!panes.contains(&peek));
+        // the third pane keeps its slot after the peek presented
+        assert_eq!(pick_slot(&mut slots, t(3), None, &framed), panes[2]);
+    }
+
+    #[test]
+    fn a_single_page_counts_one_pane_after_a_split_or_a_peek() {
+        let mut slots = [None; SLOTS];
+        let framed = [t(1), t(2), t(9)];
+        pick_slot(&mut slots, t(1), None, &framed);
+        pick_slot(&mut slots, t(2), None, &framed);
+        pick_slot(&mut slots, t(9), Some(PEEK_SLOT), &framed);
+        assert_eq!(page_panes(&slots), 2);
+        // unsplit, peek closed
+        free_slots(&mut slots, &[t(1)]);
+        assert_eq!(page_panes(&slots), 1);
+        assert_eq!(slots[PEEK_SLOT], None);
     }
 }

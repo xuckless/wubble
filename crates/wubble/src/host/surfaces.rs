@@ -144,8 +144,8 @@ impl Host {
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
             Routed::Committed => self.busy_page_started(tab),
-            Routed::ImeBounds(rect) if visible => {
-                place_candidates(window, self.focus_origin(window), rect)
+            Routed::ImeBounds(rect) if self.key_page() == Some(tab) => {
+                place_candidates(window, self.view_origin(window, tab), rect)
             }
             Routed::Dismissed(ids) => {
                 self.apply_dialog(tab, DialogEvent::Dismissed(ids.clone()));
@@ -530,8 +530,14 @@ impl Host {
         });
         window.set_page_error(error_view(&current.error));
         window.set_find(find_view(&current.find, self.find_focus));
-        window.set_popup(popup_view(window, self.focus_origin(window), current.popup));
-        if current.popup.is_none() {
+        // the popup is the key page's: the peek's while it has the keys
+        let keys = self.key_page();
+        let popup = keys
+            .and_then(|t| self.surfaces.get(&t))
+            .and_then(|s| s.popup);
+        let origin = keys.map_or(self.focus_origin(window), |t| self.view_origin(window, t));
+        window.set_popup(popup_view(window, origin, popup));
+        if popup.is_none() {
             window.set_popup_frame(slint::Image::default());
         }
         window.set_page_fullscreen(matches!(self.screen, Screen::Page { .. }));
@@ -706,7 +712,7 @@ impl Host {
         };
         let (next, call) = ime::transition(self.ime, input);
         self.ime = next;
-        if let (Some(call), Some(view)) = (call, self.view()) {
+        if let (Some(call), Some(view)) = (call, self.focused_view()) {
             match call {
                 ImeCall::SetComposition { text, selection } => {
                     view.ime_set_composition(&text, selection)

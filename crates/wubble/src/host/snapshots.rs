@@ -85,10 +85,7 @@ impl Host {
     /// driver plays it and drops it, `exit-page`). Only when it was this window's one pane and
     /// motion is not reduced; a split's panes keep their places.
     fn capture_exit_page(&mut self, tab: TabId) {
-        let panes = self.w.slots[..wubble_core::space::MAX_PANES]
-            .iter()
-            .filter(|s| s.is_some())
-            .count();
+        let panes = super::window::page_panes(&self.w.slots);
         if wubble_core::motion::reduced() || panes != 1 || !self.w.frames.contains_key(&tab) {
             return;
         }

@@ -9,7 +9,6 @@ use wubble_core::bow::{BOWED, EdgeTable};
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
-use wubble_core::space::MAX_PANES;
 use wubble_core::split::{Bow, SPLIT, string_line};
 use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
@@ -37,6 +36,7 @@ pub(super) struct GlanceRect {
     pub height: f64,
 }
 
+use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
 use crate::menu::{self, MenuEvent};
@@ -232,11 +232,26 @@ impl Host {
     /// The focused page's top left in the window, logical pixels: its menu, popup and IME
     /// candidates are placed from there.
     pub(super) fn focus_origin(&self, window: &AppWindow) -> (f32, f32) {
-        let x = self
-            .shown()
-            .and_then(|t| self.pane_rects(window).into_iter().find(|r| r.tab == t))
-            .map_or(0.0, |r| r.x as f32);
-        (window.get_content_x() + x, window.get_content_y())
+        match self.shown() {
+            Some(t) => self.view_origin(window, t),
+            None => (window.get_content_x(), window.get_content_y()),
+        }
+    }
+
+    /// Where `tab`'s view's top left sits in the window (logical px): the peek's page in its
+    /// card, else its pane.
+    pub(super) fn view_origin(&self, window: &AppWindow, tab: TabId) -> (f32, f32) {
+        let (x, y) = match self.glance_rect(window).filter(|g| g.tab == tab) {
+            Some(g) => (g.x as f32, g.y as f32),
+            None => (
+                self.pane_rects(window)
+                    .into_iter()
+                    .find(|r| r.tab == tab)
+                    .map_or(0.0, |r| r.x as f32),
+                0.0,
+            ),
+        };
+        (window.get_content_x() + x, window.get_content_y() + y)
     }
 
     /// One frame of `dt` seconds of the split's strings. What they settled is dispatched later,
@@ -490,7 +505,7 @@ impl Host {
                     stretch_y: (sy - 1.0) as f32,
                     fill,
                     focused: if r.tab == PANEL_TAB {
-                        self.devtools.focused
+                        self.key_pane == Some(PANEL_TAB)
                     } else {
                         Some(r.tab) == focused
                     },
@@ -581,27 +596,22 @@ impl Host {
     /// The presenter slot of `tab`: its own while its frame is kept, else one no kept frame
     /// holds.
     fn slot_for(&mut self, tab: TabId) -> usize {
-        // the panel's presenter is the one after the pages'
-        if tab == PANEL_TAB {
-            self.w.slots[MAX_PANES] = Some(tab);
-            return MAX_PANES;
-        }
-        if let Some(i) = self.w.slots.iter().position(|s| *s == Some(tab)) {
-            return i;
-        }
-        let shown = self.framed_tabs();
-        let i = self.w.slots[..MAX_PANES]
-            .iter()
-            .position(|s| s.is_none_or(|t| !shown.contains(&t)))
-            .unwrap_or(MAX_PANES - 1);
-        self.w.slots[i] = Some(tab);
-        i
+        let own = if tab == PANEL_TAB {
+            Some(PANEL_SLOT)
+        } else if self.model.is_glance(tab) {
+            Some(PEEK_SLOT)
+        } else {
+            None
+        };
+        let framed = self.framed_tabs();
+        pick_slot(&mut self.w.slots, tab, own, &framed)
     }
 
     /// Takes each pane's new frame, if it has one, and the focused page's popup frame. Returns
     /// whether any pane got a frame.
     pub(super) fn present_panes(&mut self, window: &AppWindow) -> Result<bool, String> {
         let focused = self.shown();
+        let keys = self.key_page();
         let mut presented = false;
         for (tab, layout) in self.view_layouts(window) {
             let Some(view) = self.tab_view(tab) else {
@@ -611,7 +621,7 @@ impl Host {
             let wanted = view.wanted_frame().unwrap_or(layout.frame_size());
             let frame = view.take_frame();
             // The popup's placement comes from its events (`render_surfaces`).
-            let popup = (Some(tab) == focused)
+            let popup = (Some(tab) == keys)
                 .then(|| view.take_popup_frame())
                 .flatten();
             if let Some(popup) = popup {

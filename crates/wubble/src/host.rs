@@ -324,6 +324,9 @@ pub struct Host {
     bar: Bar,
     /// The view last told about keyboard focus.
     focus_view: Option<ViewId>,
+    /// The pane the last press took the keys to when it is not the model's shown page: the
+    /// DevTools panel (`PANEL_TAB`) or the window's peek. Ignored once that pane is gone.
+    key_pane: Option<TabId>,
     pub stats: FrameStats,
     last_present: Option<Instant>,
     idle_runs: u32,
@@ -529,6 +532,7 @@ impl Host {
                 generation: 0,
             },
             focus_view: None,
+            key_pane: None,
             stats: FrameStats::default(),
             last_present: None,
             idle_runs: 0,
@@ -933,6 +937,7 @@ impl Host {
         let kept = self.framed_tabs();
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
+        window::free_slots(&mut self.w.slots, &kept);
         if self.w.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
             for tab in self.shown_tabs() {
@@ -1063,12 +1068,21 @@ impl Host {
         self.tab_view(self.shown()?)
     }
 
-    /// The view that gets keys: the DevTools panel's after a press in it, else the page's.
-    fn focused_view(&mut self) -> Option<&mut View> {
+    /// The page that gets keys: the window's peek after a press in it, else the shown page.
+    pub(super) fn key_page(&self) -> Option<TabId> {
+        input::key_page(
+            self.key_pane,
+            self.model.glance_of(self.w.id).map(|g| g.tab),
+            self.shown(),
+        )
+    }
+
+    /// The view that gets keys: the DevTools panel's after a press in it, else the key page's.
+    pub(super) fn focused_view(&mut self) -> Option<&mut View> {
         if self.keys_to_panel().is_some() {
             return self.panel_view();
         }
-        self.view()
+        self.tab_view(self.key_page()?)
     }
 
     /// The visible tab's view, else any live tab's: for work that needs a view but none in
@@ -2574,7 +2588,7 @@ impl Host {
         let target = if let Some(panel) = self.keys_to_panel() {
             Some(panel)
         } else {
-            self.shown().and_then(|t| self.views.get(&t)).copied()
+            self.key_page().and_then(|t| self.views.get(&t)).copied()
         };
         if target != self.focus_view {
             if let Some(view) = self.focus_view.and_then(|id| self.engine.view(id)) {
@@ -2586,7 +2600,7 @@ impl Host {
         }
         // The page's own context menu takes the shell's focus but not the page's.
         let page_menu = target
-            .and(self.shown())
+            .and(self.key_page())
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| s.menu.keeps_page_focus());
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
@@ -2729,21 +2743,24 @@ impl Host {
         {
             return EventResult::PreventDefault;
         }
-        // Esc closes the window's peek.
-        if key.pressed
-            && key.unmodified == Key::Named(NamedKey::Escape)
-            && self.model.glance_of(self.w.id).is_some()
-        {
-            self.dispatch(Command::CloseGlance(self.w.id));
-            return EventResult::PreventDefault;
-        }
-        // Esc leaves page fullscreen before anything else sees it.
-        if key.pressed
-            && key.unmodified == Key::Named(NamedKey::Escape)
-            && matches!(self.screen, Screen::Page { .. })
-        {
-            self.apply_screen(window, ScreenEvent::Escape);
-            return EventResult::PreventDefault;
+        // Esc leaves page fullscreen before anything else sees it; it closes the peek only
+        // when no shell field, sheet or menu holds the focus.
+        if key.pressed && key.unmodified == Key::Named(NamedKey::Escape) {
+            match input::esc_to(
+                matches!(self.screen, Screen::Page { .. }),
+                window.get_web_focused(),
+                self.model.glance_of(self.w.id).is_some(),
+            ) {
+                input::EscTo::Fullscreen => {
+                    self.apply_screen(window, ScreenEvent::Escape);
+                    return EventResult::PreventDefault;
+                }
+                input::EscTo::Peek => {
+                    self.dispatch(Command::CloseGlance(self.w.id));
+                    return EventResult::PreventDefault;
+                }
+                input::EscTo::Route => {}
+            }
         }
         // The keybinding editor's recorder takes keys before any shortcut does.
         if key.pressed
@@ -2779,7 +2796,7 @@ impl Host {
             KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
         ) {
             self.pace(PaceEvent::Wake);
-            if let Some(view) = self.view() {
+            if let Some(view) = self.focused_view() {
                 view.key(key);
             }
             // A key down the page sees ends its autoscroll.
@@ -2908,10 +2925,10 @@ impl Host {
             self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
         }
         if pressed && let Some(tab) = crate::shell::tab_id(pane) {
-            // keys follow the pane that was pressed: the DevTools panel or a page
-            let panel = tab == PANEL_TAB;
-            if self.devtools.focused != panel && self.shown_tabs().contains(&tab) {
-                self.devtools.focused = panel;
+            // keys follow the pane that was pressed: the DevTools panel, the peek or a page
+            let to = (tab == PANEL_TAB || self.model.is_glance(tab)).then_some(tab);
+            if self.key_pane != to && self.shown_tabs().contains(&tab) {
+                self.key_pane = to;
                 if let Some(window) = self.w.window.upgrade() {
                     self.sync_focus(&window);
                 }
