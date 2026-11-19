@@ -174,8 +174,9 @@ fn row_buttons_follow_their_item() {
         "b's row takes a hold at once"
     );
 
-    // Downloads: the popover's row keeps its pitch, the page's row its own height (a note
-    // makes it taller than the pitch).
+    // Downloads: the page's row takes its own height (a note makes it taller than the
+    // popover's pitch). The popover draws its rows with the overlay kit's ADownloadRow
+    // (kit/overlay/a), on the pitch its OverlapLayer gives them.
     app.set_page(InternalPageKind::Downloads);
     app.set_downloads(ModelRc::from(Rc::new(VecModel::from(vec![DownloadItem {
         id: 1,
@@ -186,15 +187,9 @@ fn row_buttons_follow_their_item() {
     }]))));
     app.set_downloads_open(true);
     run(&app, &wired, &mut now, 500);
-    let mut heights: Vec<f32> = ElementHandle::find_by_element_id(&app, "DownloadRow::row-touch")
+    let heights: Vec<f32> = ElementHandle::find_by_element_id(&app, "DownloadRow::row-touch")
         .map(|e| e.size().height)
         .collect();
-    heights.sort_by(f32::total_cmp);
-    assert_eq!(
-        heights.len(),
-        2,
-        "a popover row and a page row: {heights:?}"
-    );
-    assert_eq!(heights[0], 60.0, "the popover's pitch: {heights:?}");
-    assert!(heights[1] > 60.0, "the page row with a note: {heights:?}");
+    assert_eq!(heights.len(), 1, "the page's row: {heights:?}");
+    assert!(heights[0] > 60.0, "the page row with a note: {heights:?}");
 }
