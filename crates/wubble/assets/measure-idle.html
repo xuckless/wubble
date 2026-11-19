@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- `wubble --measure idle` and `startup`: a still page. Nothing animates, nothing is focused
+     (no caret), no timers, no script. Bundled; loads nothing. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble measure idle</title>
+<style>
+  html, body { margin: 0; font: 400 18px/1.5 system-ui, sans-serif; color: #111114; background: #fafafa; }
+  main { max-width: 42em; margin: 48px auto; padding: 0 24px; }
+  h1 { font-size: 28px; }
+  .swatch { display: inline-block; width: 64px; height: 64px; margin-right: 8px; }
+</style>
+</head>
+<body>
+<main>
+<h1>A still page</h1>
+<p>This page draws once. Nothing on it moves, blinks or polls, so after it has loaded
+Chromium has no reason to paint another frame and the shell no reason to render one.</p>
+<p><span class="swatch" style="background:#d33"></span><span class="swatch" style="background:#3a3"></span><span class="swatch" style="background:#36c"></span></p>
+<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt
+ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco
+laboris nisi ut aliquip ex ea commodo consequat.</p>
+</main>
+</body>
+</html>

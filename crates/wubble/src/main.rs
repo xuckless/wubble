@@ -128,6 +128,8 @@ use wubble_core::model::Command as Cmd;
 use wubble_core::window::{WindowId, WindowKind};
 
 fn main() -> ExitCode {
+    // `--measure startup` counts from here.
+    measure::process_started();
     // Before anything touches the OS's application object (winit, CEF).
     app::prepare_process();
     let command = match cli::parse_with_shot(std::env::args_os()) {
@@ -640,6 +642,7 @@ impl WindowFactory {
 
 /// Hands a pump request to the host.
 pub fn deliver(wake: Wake) {
+    measure::count(measure::Count::Pump);
     let at = Instant::now();
     with_host(|host| host.pump(wake));
     measure::pumped(at);
@@ -1081,6 +1084,7 @@ fn run(
         seed_autofill_login(&store, port);
     }
     let gpu = GpuContext::new()?;
+    measure::mark(measure::Stage::Gpu);
     eprintln!("wubble: GPU {}", gpu.describe());
     wubble_ui::window::no_os_window_restoration();
     wubble_ui::window::no_automatic_tabbing();
@@ -1090,6 +1094,7 @@ fn run(
         .require_wgpu_30(gpu.slint_configuration())
         .with_winit_window_attributes_hook(wubble_ui::window::attributes)
         .select()?;
+    measure::mark(measure::Stage::SlintBackend);
     // Slint's platform lives in a thread-local and would drop the last handle
     // to the shared device during thread-local teardown, after wgpu-core's
     // own thread-locals are gone (wgpu-core `snatch` lock tracing, debug
@@ -1118,10 +1123,14 @@ fn run(
         sponsor_endpoint: None,
         begin_frames: false,
     };
-    let browsing = matches!(mode, Mode::Browse { .. });
     let smoke_page = matches!(mode, Mode::Page);
     let smoke_block = matches!(mode, Mode::Block);
     let measuring = matches!(mode, Mode::Measure { .. });
+    let (host_timers, measure_tick) = match &mode {
+        Mode::Browse { .. } => (true, measure::TICK),
+        Mode::Measure { scenario, .. } => (scenario.host_timers(), scenario.tick_every()),
+        _ => (false, measure::TICK),
+    };
     let measure_out = match &mode {
         Mode::Measure { out, .. } => out.clone(),
         _ => None,
@@ -1297,6 +1306,7 @@ fn run(
     let loaded = loaded
         .recv()
         .unwrap_or_else(|_| Err("the store thread ended".into()));
+    measure::mark(measure::Stage::StoreLoaded);
     let loaded = loaded.unwrap_or_else(|e| {
         eprintln!("wubble: running without a saved session: {e}");
         Loaded::default()
@@ -1324,12 +1334,14 @@ fn run(
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),
         ..config?
     })?;
+    measure::mark(measure::Stage::CefStarted);
     if smoke_block {
         // Only the smoke's own list, through the same filter wiring as the browser's.
         blocking.use_list(block_smoke::BLOCK_LIST);
     } else {
         blocking.start(profile, &loaded.settings.blocker);
     }
+    measure::mark(measure::Stage::BlockerStarted);
     let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
     let factory = WindowFactory {
         gpu: gpu.clone(),
@@ -1339,6 +1351,7 @@ fn run(
     let focused = loaded.model.focused();
     let geometry = loaded.model.window(focused).and_then(|w| w.geometry);
     let first = factory.open(focused, WindowKind::Main, loaded.settings.ui, geometry)?;
+    measure::mark(measure::Stage::WindowOpened);
     let window = first.handle();
     shot::attach(&window);
     let host = Host::new(
@@ -1361,29 +1374,34 @@ fn run(
             });
         });
     }
-    // Smokes drive the lifecycle themselves, never by wall-clock time.
+    // Smokes drive the lifecycle themselves, never by wall-clock time; `--measure idle` runs
+    // the browser's timers.
     let lifecycle = slint::Timer::default();
     let audible = slint::Timer::default();
     let media = slint::Timer::default();
     let video_clock = slint::Timer::default();
-    if browsing {
+    if host_timers {
         video_clock.start(slint::TimerMode::Repeated, VIDEO_TICK_EVERY, || {
+            measure::count(measure::Count::VideoTick);
             with_host(Host::tick_video)
         });
         media.start(slint::TimerMode::Repeated, MEDIA_POLL_EVERY, || {
+            measure::count(measure::Count::MediaPoll);
             with_host(Host::poll_media)
         });
         lifecycle.start(slint::TimerMode::Repeated, LIFECYCLE_TICK, || {
+            measure::count(measure::Count::Lifecycle);
             with_host(|host| host.tick(Instant::now()))
         });
         audible.start(slint::TimerMode::Repeated, AUDIBLE_PROBE_EVERY, || {
+            measure::count(measure::Count::AudibleProbe);
             with_host(Host::probe_audible)
         });
     }
     let measure_timer = slint::Timer::default();
     if measuring {
         let weak = window.as_weak();
-        measure_timer.start(slint::TimerMode::Repeated, measure::TICK, move || {
+        measure_timer.start(slint::TimerMode::Repeated, measure_tick, move || {
             if let Some(window) = weak.upgrade() {
                 with_host(|host| measure::tick(host, &window));
             }
@@ -1391,7 +1409,9 @@ fn run(
     }
 
     window.show()?;
+    measure::mark(measure::Stage::WindowShown);
     with_host(Host::open_session_windows);
+    measure::mark(measure::Stage::SessionRestored);
     let result = slint::run_event_loop();
     // Read while the windows still exist.
     let ui = HOST.with_borrow_mut(|host| {

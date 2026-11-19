@@ -256,6 +256,7 @@ impl Glass {
         if s.run.state() == RunState::Paused {
             return;
         }
+        crate::measure::count(crate::measure::Count::SceneRender);
         let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint

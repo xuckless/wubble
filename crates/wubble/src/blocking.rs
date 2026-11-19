@@ -462,6 +462,7 @@ impl Blocking {
     /// old one. The lock is held for the pointer move only: the old engine
     /// is dropped after it is released.
     pub fn replace_blocker(&self, blocker: Blocker) {
+        crate::measure::mark(crate::measure::Stage::BlockerReady);
         let new = Arc::new(blocker);
         let old = std::mem::replace(
             &mut *self.blocker.write().unwrap_or_else(PoisonError::into_inner),

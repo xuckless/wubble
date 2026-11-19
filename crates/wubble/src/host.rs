@@ -89,6 +89,7 @@ use crate::blocking::Blocking;
 use crate::clipboard::Bridge as _;
 use crate::ime::Ime;
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
+use crate::measure;
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
 use crate::page_error::ErrorEvent;
 use crate::page_smoke::{self, PageSmoke};
@@ -893,6 +894,7 @@ impl Host {
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {
+                        measure::mark(measure::Stage::FirstView);
                         self.views.insert(tab, id);
                         // Page drags run inside the window (`page_drag`).
                         if let Some(view) = self.engine.view(id) {
@@ -1181,6 +1183,7 @@ impl Host {
         if !worked {
             return;
         }
+        measure::count(measure::Count::PumpWorked);
         for (view, event) in events {
             if let Some(window) = self.enter_view(view) {
                 self.on_web_event(&window, view, event);

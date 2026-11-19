@@ -90,7 +90,16 @@ impl Runner {
     /// Takes one event: the new state, and the effect to execute.
     fn step(&mut self, event: RunEvent) -> RunEffect {
         let (next, effect) = run::transition(self.state, event);
-        self.changed |= next != self.state;
+        if next != self.state {
+            self.changed = true;
+            crate::measure::count(crate::measure::Count::RunChange);
+            if std::env::var_os("WUBBLE_TRACE").is_some() {
+                eprintln!(
+                    "wubble: scene run state {:?} -> {next:?} on {event:?}",
+                    self.state
+                );
+            }
+        }
         self.state = next;
         effect
     }
@@ -104,6 +113,7 @@ impl Runner {
                 let weak = window.as_weak();
                 self.idle
                     .start(slint::TimerMode::Repeated, IDLE_TICK, move || {
+                        crate::measure::count(crate::measure::Count::IdleTick);
                         if let Some(w) = weak.upgrade() {
                             w.window().request_redraw();
                         }

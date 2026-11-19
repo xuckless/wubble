@@ -14,6 +14,9 @@ pub struct Proc {
     /// What it is (`label`): Browser, Renderer, GPU, ...
     pub label: String,
     pub sample: Sample,
+    /// CPU time used since it started, milliseconds (`sysinfo`'s accumulated CPU time; Linux
+    /// counts it in clock ticks, 10 ms).
+    pub cpu_ms: u64,
 }
 
 /// Samples wubble's process tree. Keeps its `System` between samples: CPU use is measured
@@ -49,8 +52,11 @@ impl Meter {
                 .with_cmd(UpdateKind::OnlyIfNotSet),
         );
         let processes = self.system.processes();
+        // Linux lists each thread as a process whose parent is its own process: a process's
+        // CPU time and memory already hold its threads', so threads are left out.
         let table: Vec<(u32, Option<u32>)> = processes
             .iter()
+            .filter(|(_, p)| p.thread_kind().is_none())
             .map(|(pid, p)| (pid.as_u32(), p.parent().map(Pid::as_u32)))
             .collect();
         descendants(self.root, &table)
@@ -69,7 +75,31 @@ impl Meter {
                         rss_bytes: p.memory(),
                         cpu_percent: p.cpu_usage(),
                     },
+                    cpu_ms: p.accumulated_cpu_time(),
                 })
+            })
+            .collect()
+    }
+
+    /// The threads of `root` as of the last [`Meter::sample`]: id, name, CPU time in ms. Linux
+    /// only (sysinfo lists threads there); empty elsewhere.
+    pub fn threads(&self) -> Vec<(u32, String, u64)> {
+        let Some(tasks) = self
+            .system
+            .process(Pid::from_u32(self.root))
+            .and_then(|p| p.tasks())
+        else {
+            return Vec::new();
+        };
+        tasks
+            .iter()
+            .filter_map(|tid| {
+                let t = self.system.process(*tid)?;
+                Some((
+                    tid.as_u32(),
+                    t.name().to_string_lossy().into_owned(),
+                    t.accumulated_cpu_time(),
+                ))
             })
             .collect()
     }

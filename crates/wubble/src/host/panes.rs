@@ -641,6 +641,7 @@ impl Host {
             let Some(frame) = frame else {
                 continue;
             };
+            measure::count(measure::Count::CefFrame);
             self.pace(PaceEvent::FrameArrived);
             let size = frame.size();
             // A frame painted for this layout shows its layout's part (CEF can paint a pixel

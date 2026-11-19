@@ -29,8 +29,10 @@ struct Cli {
     smoke: Option<SmokeArg>,
     /// Measure the frame path on a bundled page and print the numbers (hand
     /// run only): `scroll` (scripted scroll), `video` (CSS and canvas
-    /// animation), `resize` (the window resizes itself) or `typing` (keys and
-    /// clicks, timed to the first frame that shows them). Exits by itself.
+    /// animation), `resize` (the window resizes itself), `typing` (keys and
+    /// clicks, timed to the first frame that shows them), `idle` (a still page:
+    /// renders, wake-ups, CPU and GPU), `startup` (start-up stages to the first
+    /// page pixels) or `blocker` (windowless). Exits by itself.
     #[arg(long, value_name = "SCENARIO", value_enum, conflicts_with = "profile")]
     measure: Option<Scenario>,
     /// How long `--measure` runs.
@@ -588,6 +590,8 @@ mod tests {
             ("resize", Scenario::Resize),
             ("typing", Scenario::Typing),
             ("blocker", Scenario::Blocker),
+            ("idle", Scenario::Idle),
+            ("startup", Scenario::Startup),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),
