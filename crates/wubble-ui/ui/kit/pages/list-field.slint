@@ -4,6 +4,9 @@
 // search capsule's body (`.st-search`: thin glass, 40 high, radius 20, the film ring while it has
 // the focus or text, padding 0 14, the 14 px input in ink, the placeholder haze) with no icon and
 // no clear button; `secret` masks it. Escape is `escaped()` (the sheet round it cancels).
+// A second copy of the capsule's body: it goes when SearchCapsule takes a bare (no icon, no
+// clear) and secret mode (kit gap, controls/search-capsule.slint is not this lane's); until then
+// a fix to the capsule's ring, padding or placeholder is made here too.
 
 import { SettingsCss } from "../gen/css.slint";
 import { Role } from "../gen/text.slint";

@@ -9,8 +9,6 @@ import { SettingsCss } from "../kit/gen/css.slint";
 import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { Button, PressableButton, ButtonKind } from "../kit/controls/button.slint";
-import { HoldButton } from "../kit/controls/hold-button.slint";
-import { ConfirmButton } from "../kit/controls/confirm-button.slint";
 import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
 import { Segmented } from "../kit/controls/segmented.slint";
 import { Sheet } from "../kit/controls/sheet.slint";
@@ -18,6 +16,7 @@ import { PageFrame } from "../kit/pages/page-frame.slint";
 import { ListCard, ListGroup, ListEmpty, ListToolbar, ListNote, ListFoot } from "../kit/pages/list-card.slint";
 import { ListRow, RowAction, RowTextAction, RowChevron } from "../kit/pages/list-row.slint";
 import { ListField } from "../kit/pages/list-field.slint";
+import { KeyedHoldButton, KeyedConfirmButton } from "../kit/pages/row-keyed.slint";
 import { TableHead, TableCell, TableSlot, TableHeadLine } from "../kit/pages/list-table.slint";
 import { DownloadRow } from "download-row.slint";
 
@@ -253,6 +252,7 @@ export component DownloadsPage inherits PageFrame {
     if root.items.length > 0: ListCard {
         for item[i] in root.items: DownloadRow {
             item: item;
+            pitch: 0px;
             shown: root.open;
             index: i;
             action(id, a) => {
@@ -378,24 +378,20 @@ export component PasswordsPage inherits Rectangle {
                         }
                     }
                 }
-                VerticalLayout {
-                    alignment: center;
-                    ConfirmButton {
-                        idle-text: "Copy";
-                        done-text: "Copied";
-                        run => {
-                            root.copy(login.id);
-                        }
+                KeyedConfirmButton {
+                    key: login.id;
+                    idle-text: "Copy";
+                    done-text: "Copied";
+                    run => {
+                        root.copy(login.id);
                     }
                 }
-                VerticalLayout {
-                    alignment: center;
-                    HoldButton {
-                        text: "Delete";
-                        done-text: "Deleted";
-                        done => {
-                            root.deleted(login.id);
-                        }
+                KeyedHoldButton {
+                    key: login.id;
+                    text: "Delete";
+                    done-text: "Deleted";
+                    done => {
+                        root.deleted(login.id);
                     }
                 }
             }
@@ -534,7 +530,9 @@ export component TasksPage inherits PageFrame {
             }
             TableSlot {
                 width: SettingsCss.wb-st-hold--min-width;
-                if item.can-end: HoldButton {
+                if item.can-end: KeyedHoldButton {
+                    // End acts on the pid alone (host/tasks.rs task_action)
+                    key: item.pid;
                     text: "End";
                     done-text: "Ended";
                     done => {

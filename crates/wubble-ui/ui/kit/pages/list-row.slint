@@ -149,6 +149,10 @@ export component ListRow inherits Rectangle {
     in property <color> icon-tint: Palette.mist;
     // a tree's depth: the row starts this far in
     in property <length> indent;
+    // a fixed pitch (a list that places rows at a set step, the downloads popover): the row is
+    // that high and its vertical padding gives way to centre the text in it; 0: the row's own
+    // height
+    in property <length> pitch;
     // the whole row is a target (`.st-row.tap`): hover, click opens, middle-click opens in a tab
     in property <bool> tappable: true;
     // the entrance: the row comes in when this turns true (the page opening), `index` places it
@@ -158,7 +162,7 @@ export component ListRow inherits Rectangle {
     // a progress rail under the text (a download's; ListProgress), `progress` below 0: unknown
     in property <bool> has-progress;
     in property <float> progress;
-    // what a screen reader calls the row; the default action opens it
+    // what a screen reader calls the row; the default action opens a tappable one
     in property <string> label: root.title;
     callback opened();
     callback opened-new-tab();
@@ -169,11 +173,14 @@ export component ListRow inherits Rectangle {
     // wubble: rows past this many share the last step (a page's first screen staggers, the rest
     // comes with it); a count, not a design value
     property <int> stagger-cap: 12;
-    height: max(SettingsCss.st-row--min-height, body.preferred-height);
+    height: root.pitch > 0px ? root.pitch : max(SettingsCss.st-row--min-height, body.preferred-height);
+    property <length> pad-y: clamp((root.pitch - text-col.preferred-height) / 2, 0px, SettingsCss.st-row--padding-top);
     accessible-role: AccessibleRole.list-item;
     accessible-label: root.label;
     accessible-action-default => {
-        root.opened();
+        if root.tappable {
+            root.opened();
+        }
     }
 
     hover := Tween {
@@ -208,8 +215,8 @@ export component ListRow inherits Rectangle {
             body := HorizontalLayout {
                 padding-left: SettingsCss.st-row--padding-left + root.indent;
                 padding-right: SettingsCss.st-row--padding-right;
-                padding-top: SettingsCss.st-row--padding-top;
-                padding-bottom: SettingsCss.st-row--padding-bottom;
+                padding-top: root.pitch > 0px ? root.pad-y : SettingsCss.st-row--padding-top;
+                padding-bottom: root.pitch > 0px ? root.pad-y : SettingsCss.st-row--padding-bottom;
                 spacing: SettingsCss.st-row--gap-column;
                 if root.lead: VerticalLayout {
                     alignment: center;

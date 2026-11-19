@@ -2,6 +2,7 @@ import { DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { ListRow, RowAction } from "../kit/pages/list-row.slint";
 import { DownloadTint } from "../kit/pages/list-progress.slint";
+import { Shell } from "../kit/derived.slint";
 
 // One download: its icon, name, second line and progress, and the buttons its state allows
 // (pause, resume, cancel, retry, open, show in folder, remove). The one row of the downloads
@@ -13,6 +14,9 @@ export component DownloadRow inherits Rectangle {
     // the entrance (a list page's row): in when this turns true, `index` on the stagger
     in property <bool> shown: true;
     in property <int> index;
+    // the popover places rows `Shell.download-row` apart; the page lays them out at their own
+    // height (0)
+    in property <length> pitch: Shell.download-row;
     callback action(int, DownloadAction);
 
     // Still has bytes to come (`DownloadState::is_active`).
@@ -30,6 +34,7 @@ export component DownloadRow inherits Rectangle {
         progress: root.item.progress;
         shown: root.shown;
         index: root.index;
+        pitch: root.pitch;
         if root.item.status == DownloadStatus.running: RowAction {
             icon-path: Glyph.pause;
             label: "Pause";
