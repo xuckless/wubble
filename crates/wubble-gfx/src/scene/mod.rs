@@ -51,7 +51,8 @@
 //!   effects only (the beam is drawn that way).
 //! - No OS window transparency: the scene image is opaque.
 //! - Frames from the host by the run state ([`run`]): every vsync while something moves,
-//!   15 Hz while only the liquid drifts, none while the window is hidden. `before_rendering`
+//!   15 Hz while only the liquid drifts, none once it has eased to a stop (`Still`) or while
+//!   the window is hidden. `before_rendering`
 //!   no longer asks for the next frame itself; [`Renderer::animating`] says whether it wants one.
 //!
 //! Left out: the design's start page (bubble, pops, minis, soft body, voice
