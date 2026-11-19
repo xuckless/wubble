@@ -442,7 +442,7 @@ pub fn hardware_video_decode_found() -> bool {
 
 /// What libva needs to pick libva-nvidia-driver (its README): every process inherits it, the
 /// GPU process is the one that reads it. A value the user set already is kept.
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NVIDIA_VAAPI_ENV: [(&str, &str); 2] =
     [("LIBVA_DRIVER_NAME", "nvidia"), ("NVD_BACKEND", "direct")];
 
