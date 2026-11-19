@@ -63,4 +63,10 @@ fn tokens_match_physics() {
         let c = token("tokens.slint", &format!("{name}C"));
         assert_eq!([k, c], kc, "{name}");
     }
+    // A favicon image is handed over at twice the side it is drawn at (wubble_core::favicon),
+    // so the renderer's bilinear sample is an exact 2x2 average at scale 1.
+    let shell_icon = f64::from(wubble_core::favicon::SHELL_ICON_PX);
+    for name in ["icon", "page-favicon"] {
+        assert_eq!(2.0 * token("app-tokens.slint", name), shell_icon, "{name}");
+    }
 }
