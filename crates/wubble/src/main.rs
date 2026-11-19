@@ -249,8 +249,9 @@ fn install_shell_driver(
             measure::render_began(now);
             if let Ok(mut glass) = glass.try_borrow_mut() {
                 let at = Instant::now();
-                glass.frame(window, now, items);
-                measure::stage(measure::Metric::Scene, at);
+                if glass.frame(window, now, items) {
+                    measure::stage(measure::Metric::Scene, at);
+                }
             }
             // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
             // Inside rendering the host may be busy (a pump renders); then this frame skips

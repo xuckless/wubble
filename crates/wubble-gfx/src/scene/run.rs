@@ -100,6 +100,27 @@ pub fn transition(s: RunState, e: RunEvent) -> (RunState, RunEffect) {
     }
 }
 
+/// Whether a window render also renders the scene. The window renders for more than the scene
+/// (a page's new frame, the shell's springs), and the glass never samples the page, so a render
+/// in [`RunState::Idle`] steps the scene only when its idle frame is due: `since_last` (since the
+/// scene's last frame, `None` before the first) reached half an [`IDLE_TICK`], so the idle timer's
+/// own render is never skipped and page frames cannot drive the liquid faster than twice the idle
+/// rate. `changed` (the glass list, the window's size) always renders. `covered` (the page fills
+/// the window: page fullscreen) and [`RunState::Paused`] never do; the last scene image stays.
+pub fn scene_due(
+    state: RunState,
+    covered: bool,
+    changed: bool,
+    since_last: Option<Duration>,
+) -> bool {
+    match state {
+        _ if covered => false,
+        RunState::Paused => false,
+        RunState::Running => true,
+        RunState::Idle => changed || since_last.is_none_or(|d| d >= IDLE_TICK / 2),
+    }
+}
+
 /// The longest step a frame in `s` gives the liquid.
 pub fn max_dt(s: RunState) -> f32 {
     match s {
@@ -166,6 +187,59 @@ mod tests {
             },
         ] {
             assert_eq!(n.event(), Moving);
+        }
+    }
+
+    #[test]
+    fn the_scene_renders_only_when_due() {
+        let ms = |n| Some(Duration::from_millis(n));
+        let half = IDLE_TICK / 2;
+        let cases = [
+            // (state, covered, changed, since_last, due)
+            (Running, false, false, ms(1), true),
+            (Running, false, true, ms(1), true),
+            (Running, false, false, None, true),
+            (Idle, false, false, None, true),
+            (Idle, false, false, ms(1), false),
+            (
+                Idle,
+                false,
+                false,
+                Some(half - Duration::from_micros(1)),
+                false,
+            ),
+            (Idle, false, false, Some(half), true),
+            (Idle, false, false, Some(IDLE_TICK), true),
+            (Idle, false, true, ms(1), true),
+            (Paused, false, false, None, false),
+            (Paused, false, true, Some(IDLE_TICK), false),
+            (Running, true, false, ms(1), false),
+            (Idle, true, true, Some(IDLE_TICK), false),
+        ];
+        for (state, covered, changed, since, due) in cases {
+            assert_eq!(
+                scene_due(state, covered, changed, since),
+                due,
+                "{state:?} covered={covered} changed={changed} {since:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn paused_or_covered_is_never_due() {
+        let times = [
+            None,
+            Some(Duration::ZERO),
+            Some(IDLE_TICK),
+            Some(Duration::from_secs(60)),
+        ];
+        for state in [Running, Idle, Paused] {
+            for changed in [false, true] {
+                for since in times {
+                    assert!(!scene_due(state, true, changed, since), "{state:?} covered");
+                    assert!(!scene_due(Paused, false, changed, since), "paused");
+                }
+            }
         }
     }
 
