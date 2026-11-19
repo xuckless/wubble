@@ -19,12 +19,17 @@ export struct ControlView {
     // The slider's value shown, 0..100; the segment chosen.
     value: float,
     held: bool,
+    // controls kit B: the slider's value bubble, its centre px from the track's left, and its
+    // lean in degrees.
+    bubble-x: float,
+    lean: float,
 }
 
 export global Controls {
     in property <[ControlView]> views;
     in property <int> generation;
-    // kind: 0 toggle (value 0/1), 1 slider (value 0..100), 2 segmented (value the segment).
+    // kind: 0 toggle (value 0/1), 1 slider (value in its domain, 0..100 until `configure`),
+    // 2 segmented (value the segment), 3 swatches (value the swatch the ring is on).
     // Returns the slot.
     callback acquire(int, float) -> int;
     // The setting changed from outside: the control springs to it.
@@ -40,6 +45,12 @@ export global Controls {
     // held (or, segmented, landed on no segment).
     callback release(int) -> float;
     callback alive(int);
+    // controls kit B: the slider's value domain (min, max, step), as the TSX props.
+    callback configure(int, float, float, float);
+    // A key on the control (code: 0 Left, 1 Right, 2 Up, 3 Down, 4 PageUp, 5 PageDown, 6 Home,
+    // 7 End; Shift): the value it now reports (slider: the snapped value; segmented, swatches:
+    // the index chosen; only Left and Right move those).
+    callback key(int, int, bool) -> float;
 
     public pure function view(slot: int) -> ControlView {
         return slot >= 0 && slot < root.views.length ? root.views[slot] : { scale-x: 1, scale-y: 1, origin: 0.5 };

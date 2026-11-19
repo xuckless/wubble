@@ -12,7 +12,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
-use wubble_core::controls::{Segmented, Slider, Toggle};
+use wubble_core::controls::slider::{Cfg, Key};
+use wubble_core::controls::{Ring, Segmented, Slider, Toggle};
 
 use crate::{AppWindow, ControlView, Controls as Global};
 
@@ -25,6 +26,7 @@ enum Slot {
     Toggle(Toggle),
     Slider(Slider),
     Segmented(Segmented),
+    Swatches(Ring),
 }
 
 impl Slot {
@@ -33,11 +35,13 @@ impl Slot {
             Slot::Toggle(t) => t.step(dt),
             Slot::Slider(s) => s.step(dt),
             Slot::Segmented(s) => s.step(dt),
+            Slot::Swatches(r) => r.step(dt),
         }
     }
 
     fn view(&self) -> ControlView {
         // (x, w, scale x, scale y, origin, fill, value, held): one mapping for every control
+        let (mut bubble_x, mut lean) = (0.0, 0.0);
         let (x, w, sx, sy, origin, fill, value, held) = match self {
             Slot::Toggle(t) => {
                 let v = t.view();
@@ -46,6 +50,7 @@ impl Slot {
             }
             Slot::Slider(s) => {
                 let v = s.view();
+                (bubble_x, lean) = (v.bubble_x, v.lean);
                 (
                     v.x, 0.0, v.scale_x, v.scale_y, v.origin, 0.0, v.value, v.held,
                 )
@@ -57,6 +62,11 @@ impl Slot {
                     v.left, v.width, v.scale_x, v.scale_y, 0.5, 0.0, selected, v.held,
                 )
             }
+            Slot::Swatches(r) => {
+                let v = r.view();
+                let idx = r.idx() as f64;
+                (v.x, 0.0, v.scale_x, v.scale_y, v.origin, 0.0, idx, false)
+            }
         };
         ControlView {
             x: x as f32,
@@ -67,6 +77,8 @@ impl Slot {
             fill: fill as f32,
             value: value as f32,
             held,
+            bubble_x: bubble_x as f32,
+            lean: lean as f32,
         }
     }
 }
@@ -141,8 +153,52 @@ impl Controls {
             Some(Slot::Toggle(t)) => t.set(value > 0.5),
             Some(Slot::Slider(s)) => s.set(f64::from(value)),
             Some(Slot::Segmented(s)) => s.set(value.max(0.0) as usize),
+            Some(Slot::Swatches(r)) => r.set(value.max(0.0) as usize),
             None => {}
         }
+    }
+
+    fn configure(&mut self, id: i32, min: f32, max: f32, step: f32) {
+        match self.slot(id) {
+            Some(Slot::Slider(s)) => {
+                s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)))
+            }
+            // the swatches' count is their `max`
+            Some(Slot::Swatches(r)) => r.set_count(max.max(0.0) as usize),
+            _ => {}
+        }
+        self.write(id);
+    }
+
+    /// A key on a control: the value it now reports (see `Controls.key`).
+    fn key(&mut self, id: i32, code: i32, shift: bool) -> f32 {
+        let dir = match Key::from_code(code) {
+            Some(Key::Left) => -1,
+            Some(Key::Right) => 1,
+            _ => 0,
+        };
+        let v = match (self.slot(id), Key::from_code(code)) {
+            (Some(Slot::Slider(s)), Some(k)) => {
+                s.key(k, shift);
+                s.view().value
+            }
+            (Some(Slot::Segmented(s)), _) => {
+                if dir != 0 {
+                    s.key(dir);
+                }
+                s.view().selected as f64
+            }
+            (Some(Slot::Swatches(r)), _) => {
+                if dir != 0 {
+                    r.key(dir);
+                }
+                r.idx() as f64
+            }
+            (Some(Slot::Slider(s)), None) => s.view().value,
+            _ => -1.0,
+        };
+        self.write(id);
+        v as f32
     }
 
     fn segment(&mut self, id: i32, i: i32, left: f32, width: f32) {
@@ -165,8 +221,9 @@ impl Controls {
             Some(Slot::Toggle(tg)) => tg.press(f64::from(px), t),
             Some(Slot::Slider(s)) => s.press(f64::from(px)),
             Some(Slot::Segmented(s)) => s.press(f64::from(px), t),
-            None => {}
+            _ => {}
         }
+        self.write(id);
     }
 
     fn drag(&mut self, id: i32, px: f32) {
@@ -175,17 +232,19 @@ impl Controls {
             Some(Slot::Toggle(tg)) => tg.drag(f64::from(px), t),
             Some(Slot::Slider(s)) => s.drag(f64::from(px)),
             Some(Slot::Segmented(s)) => s.drag(f64::from(px), t),
-            None => {}
+            _ => {}
         }
     }
 
     fn release(&mut self, id: i32) -> f32 {
-        match self.slot(id) {
+        let v = match self.slot(id) {
             Some(Slot::Toggle(t)) => t.release().map_or(-1.0, |on| if on { 1.0 } else { 0.0 }),
             Some(Slot::Slider(s)) => s.release().map_or(-1.0, |v| v as f32),
             Some(Slot::Segmented(s)) => s.release().map_or(-1.0, |i| i as f32),
-            None => -1.0,
-        }
+            _ => -1.0,
+        };
+        self.write(id);
+        v
     }
 
     fn write(&mut self, id: i32) {
@@ -257,7 +316,12 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
         let slot = match kind {
             0 => Slot::Toggle(Toggle::new(value > 0.5)),
             2 => Slot::Segmented(Segmented::new(value.max(0.0) as usize)),
-            _ => Slot::Slider(Slider::new(f64::from(value), DEFAULT_TRAVEL)),
+            3 => Slot::Swatches(Ring::new(value.max(0.0) as usize)),
+            _ => Slot::Slider(Slider::new(
+                f64::from(value),
+                DEFAULT_TRAVEL,
+                Cfg::default(),
+            )),
         };
         r.borrow_mut().acquire(slot)
     });
@@ -280,9 +344,20 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
         r.borrow_mut().drag(id, px);
         w();
     });
-    let (r, w) = (Rc::clone(&reg), wake);
+    let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_release(move |id| {
         let v = r.borrow_mut().release(id);
+        w();
+        v
+    });
+    let (r, w) = (Rc::clone(&reg), wake.clone());
+    g.on_configure(move |id, min, max, step| {
+        r.borrow_mut().configure(id, min, max, step);
+        w();
+    });
+    let (r, w) = (Rc::clone(&reg), wake.clone());
+    g.on_key(move |id, code, shift| {
+        let v = r.borrow_mut().key(id, code, shift);
         w();
         v
     });
