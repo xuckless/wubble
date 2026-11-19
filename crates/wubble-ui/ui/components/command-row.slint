@@ -8,8 +8,8 @@ import { Palette, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { CommandKind, CommandResult } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
 import { Calm } from "../kit/motion/calm.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 export component CommandRow inherits Rectangle {
     in property <CommandResult> item;
@@ -32,18 +32,18 @@ export component CommandRow inherits Rectangle {
 
     pure function icon(kind: CommandKind) -> string {
         if (kind == CommandKind.open-tab) {
-            return IconPaths.globe;
+            return Glyph.globe;
         }
         if (kind == CommandKind.history) {
-            return IconPaths.reload;
+            return Glyph.reload;
         }
         if (kind == CommandKind.bookmark) {
-            return IconPaths.arrow;
+            return Glyph.arrow;
         }
         if (kind == CommandKind.search) {
-            return IconPaths.search;
+            return Glyph.search;
         }
-        return IconPaths.code;
+        return Glyph.code;
     }
 
     OverlapLayer {

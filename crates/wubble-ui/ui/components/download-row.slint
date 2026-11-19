@@ -2,8 +2,8 @@ import { Palette, Motion, Space, Fonts, Type, Chrome } from "../kit/gen/tokens.s
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
 import { Calm } from "../kit/motion/calm.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 // One download: its glyph, name, second line and progress, and the buttons its state allows
 // (pause, resume, cancel, retry, open, show in folder, remove). The one row of the downloads
@@ -27,7 +27,7 @@ export component DownloadRow inherits Rectangle {
             width: Shell.icon;
             Icon {
                 y: (parent.height - self.height) / 2;
-                path: IconPaths.download;
+                path: Glyph.download;
                 tint: done ? Palette.mint : active ? Palette.ink : Palette.haze;
             }
         }
@@ -112,7 +112,7 @@ export component DownloadRow inherits Rectangle {
                 root.action(root.item.id, DownloadAction.remove);
             }
             Icon {
-                path: IconPaths.close;
+                path: Glyph.close;
             }
         }
     }

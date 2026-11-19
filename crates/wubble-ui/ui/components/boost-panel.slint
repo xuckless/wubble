@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, BoostView } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
-import { IconPaths } from "icon.slint";
+import { Glyph } from "../kit/controls/icon.slint";
 import { Field, Segmented, TextButton } from "settings.slint";
 import { Toggle } from "controls/toggle.slint";
 import { Slider } from "controls/slider.slint";
@@ -109,7 +109,7 @@ export component BoostPanel inherits Rectangle {
                     }
                 }
                 IconButton {
-                    icon-path: IconPaths.close;
+                    icon-path: Glyph.close;
                     label: "Close";
                     clicked => {
                         root.act("close");

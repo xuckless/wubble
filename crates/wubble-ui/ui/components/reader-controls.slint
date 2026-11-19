@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
-import { IconPaths } from "icon.slint";
+import { Glyph } from "../kit/controls/icon.slint";
 import { Segmented } from "settings.slint";
 
 // Reader mode's typography: text size, column width, font and theme, live, and a way out.
@@ -39,7 +39,7 @@ export component ReaderControls inherits Rectangle {
             spacing: Space.s2;
             alignment: center;
             IconButton {
-                icon-path: IconPaths.minus;
+                icon-path: Glyph.minus;
                 label: "Smaller text";
                 y: (parent.height - self.height) / 2;
                 clicked => {
@@ -54,7 +54,7 @@ export component ReaderControls inherits Rectangle {
                 font-size: Type.label.size;
             }
             IconButton {
-                icon-path: IconPaths.plus;
+                icon-path: Glyph.plus;
                 label: "Larger text";
                 y: (parent.height - self.height) / 2;
                 clicked => {
@@ -83,7 +83,7 @@ export component ReaderControls inherits Rectangle {
                 }
             }
             IconButton {
-                icon-path: IconPaths.close;
+                icon-path: Glyph.close;
                 label: "Close reader";
                 y: (parent.height - self.height) / 2;
                 clicked => {

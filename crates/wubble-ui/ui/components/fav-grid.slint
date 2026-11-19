@@ -9,9 +9,9 @@ import { Palette, Chrome, Space, Glass, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, GlassKeys, TabItem } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
 import { Wobble } from "../kit/motion/wobble.slint";
 import { Calm } from "../kit/motion/calm.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 export component FavGrid inherits Rectangle {
     in property <[TabItem]> tabs;
@@ -87,7 +87,7 @@ export component FavGrid inherits Rectangle {
                     height: parent.height;
                 }
                 if tab.favicon.width == 0: Icon {
-                    path: IconPaths.page(tab.url);
+                    path: Glyph.page(tab.url);
                     size: Shell.fav-icon;
                     tint: tab.id == root.active-tab-id ? Palette.ink : Palette.mist;
                 }

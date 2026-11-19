@@ -3,8 +3,8 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { GlassTier, MenuEntry } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
 import { Calm } from "../kit/motion/calm.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 // The page's context menu; fills its parent (the window) so a click anywhere outside the panel
 // dismisses it (and is consumed, as Chromium's menu consumes it). Written from scratch: the
@@ -181,7 +181,7 @@ export component ContextMenu inherits Rectangle {
                     if entry.icon != "": Icon {
                         x: Shell.menu-row-pad;
                         y: (parent.height - self.height) / 2;
-                        path: IconPaths.named(entry.icon);
+                        path: Glyph.named(entry.icon);
                         tint: entry.danger ? Palette.coral : entry.enabled ? Palette.mist : Palette.haze;
                     }
                     shortcut := Text {

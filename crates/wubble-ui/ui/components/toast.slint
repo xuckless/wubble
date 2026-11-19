@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
-import { IconPaths } from "icon.slint";
+import { Glyph } from "../kit/controls/icon.slint";
 import { TextButton } from "settings.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
@@ -107,7 +107,7 @@ export component Toast inherits Rectangle {
             }
             if root.action != "" && root.sticky: IconButton {
                 y: (parent.height - self.height) / 2;
-                icon-path: IconPaths.close;
+                icon-path: Glyph.close;
                 label: "Close";
                 enabled: root.shown;
                 clicked => {
