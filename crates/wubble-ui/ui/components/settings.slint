@@ -40,7 +40,8 @@ export component Segmented inherits KitSegmented {
 // A quiet text button (`.st-reset`, always on): a toast's action, Remove, Replace.
 export component TextButton inherits ResetButton { }
 
-// A number typed in a field: Enter applies it, clamped to the range.
+// A number typed in a field: Enter applies it, clamped to the range; an empty or unparsable
+// entry is refused (the stored value shows again).
 component NumberField inherits Field {
     in property <float> value;
     in property <float> min;
@@ -50,7 +51,9 @@ component NumberField inherits Field {
     numeric: true;
     text: root.value;
     accepted(t) => {
-        root.set(Math.clamp(t.to-float(), root.min, root.max));
+        if t.is-float() {
+            root.set(Math.clamp(t.to-float(), root.min, root.max));
+        }
         self.text = root.value;
     }
     changed value => {
@@ -80,7 +83,7 @@ export component Stepper inherits HorizontalLayout {
             root.set(v);
         }
     }
-    if root.max - root.min > SettingsLayout.slider-range: NumberField {
+    if root.max - root.min > SettingsLayout.slider-range: number := NumberField {
         value: root.value;
         min: root.min;
         max: root.max;
@@ -194,7 +197,6 @@ component SettingRow inherits VerticalLayout {
                 value: root.setting.number;
                 min: root.setting.min;
                 max: root.setting.max;
-                step: root.setting.step;
                 accent: root.accent;
                 set(v) => {
                     root.changed(root.setting.key, Math.round(v));

@@ -11,6 +11,7 @@ use std::time::Duration;
 use i_slint_backend_testing::{
     ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
+use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, LogicalSize, Model, ModelRc, VecModel};
 use wubble_core::keys::{Platform, binding_rows};
 use wubble_core::pages::{settings_page, settings_page_from};
@@ -34,9 +35,18 @@ const fn def(key: &'static str, kind: SettingKind, default: &'static str) -> Set
 }
 
 /// One setting of every kind, none of them shipped: the page needs no code for any of them.
-const DEFS: [SettingDef; 7] = [
+const DEFS: [SettingDef; 8] = [
     def("t.bool", SettingKind::Bool, "1"),
     def("t.count", SettingKind::Count { min: 0, max: 9 }, "3"),
+    // a range too wide for a slider: the number is typed
+    def(
+        "t.wide",
+        SettingKind::Count {
+            min: 10,
+            max: 86_400,
+        },
+        "300",
+    ),
     def("t.float", SettingKind::Float { min: 0.0, max: 1.0 }, "0.5"),
     def("t.engine", SettingKind::SearchEngine, ""),
     def("t.choice", SettingKind::Choice(&["x", "y"]), "x"),
@@ -69,6 +79,20 @@ fn settings_page_scenarios() {
     pump();
     assert_eq!(app.get_settings_rows().row_count(), shown);
     assert_eq!(count(&app, "SettingsPage::setting-row"), shown);
+    // A whole-number row's slider moves by one, so every number of its range can be set
+    // (the default zoom's 100 % among them).
+    let count_sliders: Vec<ElementHandle> =
+        ElementHandle::find_by_element_id(&app, "SettingRow::stepper")
+            .flat_map(|row| {
+                row.query_descendants()
+                    .match_accessible_role(i_slint_backend_testing::AccessibleRole::Slider)
+                    .find_all()
+            })
+            .collect();
+    assert!(!count_sliders.is_empty(), "the table has whole-number rows");
+    for slider in &count_sliders {
+        assert_eq!(slider.accessible_value_step(), Some(1.0));
+    }
 
     // A table of every kind: each row shows its control.
     let defs: Vec<&SettingDef> = DEFS.iter().collect();
@@ -79,7 +103,7 @@ fn settings_page_scenarios() {
     pump();
     for (id, n) in [
         ("SettingRow::toggle", 1),
-        ("SettingRow::stepper", 1),
+        ("SettingRow::stepper", 2),
         ("SettingRow::slider", 1),
         // the engine picks from a Select, as the design's; the other choice is segmented
         ("SettingRow::segmented", 1),
@@ -105,23 +129,48 @@ fn settings_page_scenarios() {
         .unwrap();
     y.invoke_accessible_default_action();
     pump();
-    // the engine's Select opens its menu, whose row picks the engine
+    // the engine's Select opens its menu, whose row picks the engine; none is chosen yet, so
+    // the first one (shown in the trigger) is a pick too
     let engine = ElementHandle::find_by_accessible_label(&app, "t.engine")
         .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Combobox))
         .unwrap();
     engine.invoke_accessible_default_action();
     pump();
-    let duck = ElementHandle::find_by_accessible_label(&app, "DuckDuckGo")
+    let google = ElementHandle::find_by_accessible_label(&app, "Google")
         .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem))
         .unwrap();
-    duck.invoke_accessible_default_action();
+    google.invoke_accessible_default_action();
     pump();
+    // An empty number is refused, not written as the range's minimum; a typed one is clamped.
+    let wide = ElementHandle::find_by_element_id(&app, "Stepper::number")
+        .next()
+        .unwrap()
+        .query_descendants()
+        .match_accessible_role(i_slint_backend_testing::AccessibleRole::TextInput)
+        .find_first()
+        .unwrap();
+    wide.mock_single_click(slint::platform::PointerEventButton::Left);
+    for text in ["", "-", "999999"] {
+        wide.set_accessible_value(text);
+        for event in [
+            WindowEvent::KeyPressed {
+                text: Key::Return.into(),
+            },
+            WindowEvent::KeyReleased {
+                text: Key::Return.into(),
+            },
+        ] {
+            app.window().dispatch_event(event);
+        }
+        pump();
+    }
     assert_eq!(
         *changed.borrow(),
         [
             ("t.bool".to_string(), "0".to_string()),
             ("t.choice".to_string(), "y".to_string()),
-            ("t.engine".to_string(), "duckduckgo".to_string()),
+            ("t.engine".to_string(), "google".to_string()),
+            ("t.wide".to_string(), "86400".to_string()),
         ]
     );
 

@@ -28,12 +28,6 @@ pub fn section_title(section: Section) -> &'static str {
     }
 }
 
-/// The ± step of a stepper over `min..=max`: about a hundredth of the range, a power of ten.
-pub fn stepper_step(min: u32, max: u32) -> u32 {
-    let digits = (max - min).max(1).ilog10();
-    10u32.pow(digits.saturating_sub(1))
-}
-
 /// What a segment shows for a stored word: an engine's name, or the word capitalised.
 fn word_label(kind: SettingKind, word: &str) -> String {
     if kind == SettingKind::SearchEngine
@@ -83,11 +77,10 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
                 .iter()
                 .position(|w| *w == row.value)
                 .map_or(-1, |i| i as i32);
-            // The engine is picked from a Select, as the design's; none chosen yet (the stored
-            // default, "ask on first run") shows the first engine, so the Select never shows
-            // nothing.
+            // The engine is picked from a Select, as the design's. None chosen yet (the stored
+            // default, "ask on first run") keeps `selected` at -1: the Select shows the first
+            // engine's label, and picking any engine, the first too, stores it.
             if row.kind == SettingKind::SearchEngine {
-                item.selected = item.selected.max(0);
                 item.options = ModelRc::from(std::rc::Rc::new(VecModel::from(
                     labels
                         .iter()
@@ -106,7 +99,6 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
             item.control = SettingControl::Stepper;
             item.number = row.value.parse().unwrap_or(min as f32);
             (item.min, item.max) = (min as f32, max as f32);
-            item.step = stepper_step(min, max) as f32;
         }
         Control::Slider { min, max } => {
             item.control = SettingControl::Slider;
@@ -162,14 +154,6 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn steps_are_about_a_hundredth_of_the_range() {
-        assert_eq!(stepper_step(25, 500), 10);
-        assert_eq!(stepper_step(10, 86_400), 1000);
-        assert_eq!(stepper_step(0, 9), 1);
-        assert_eq!(stepper_step(5, 5), 1);
-    }
-
-    #[test]
     fn every_row_of_the_table_maps_to_its_control() {
         let page = wubble_core::pages::settings_page(&HashMap::new());
         let items = setting_items(&page);
@@ -201,7 +185,10 @@ mod tests {
                 .find(|r| r.key == "search.engine")
                 .unwrap(),
         );
-        assert_eq!(engine.selected, 0, "no engine chosen yet: the first shows");
+        assert_eq!(
+            engine.selected, -1,
+            "no engine chosen yet: none is selected, so picking the first stores it"
+        );
         let labels: Vec<String> = engine.labels.iter().map(|s| s.to_string()).collect();
         assert_eq!(labels, ["Google", "DuckDuckGo"]);
         let options: Vec<String> = engine.options.iter().map(|o| o.label.to_string()).collect();
