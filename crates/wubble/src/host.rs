@@ -1856,6 +1856,13 @@ impl Host {
     pub fn perform(&mut self, action: Action) {
         match perform::plan(action, &self.model) {
             Plan::Model(command) => self.dispatch(command),
+            // added last: shown at once (an empty Space opens its start page)
+            Plan::NewSpace(command) => {
+                self.dispatch(command);
+                if let Some(space) = self.model.spaces.last().map(|s| s.id) {
+                    self.dispatch(Command::SwitchSpace(space));
+                }
+            }
             Plan::View(op) => {
                 if let Some(tab) = self.shown() {
                     self.typed_nav.ended(tab);
