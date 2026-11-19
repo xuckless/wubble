@@ -27,3 +27,5 @@ i-slint-backend-testing = "1.19"
 # the same release the `slint` pin pulls in.
 i-slint-renderer-skia = "=1.19.0"
 wgpu.workspace = true
+# Reads the web curves (tools/fidelity/curves/*.json) in tests/motion_curves.rs.
+serde_json.workspace = true

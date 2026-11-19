@@ -22,7 +22,8 @@ export component Film inherits Rectangle {
     border-radius: root.radius;
     border-width: Glass.film-width;
     border-color: @conic-gradient(root.wrap 0deg, root.blush 30deg, root.mint 120deg, root.sky 210deg, root.lilac 300deg, root.wrap 360deg);
-    opacity: Glass.film-opacity * tw.t;
+    out property <float> shown: Glass.film-opacity * tw.t;
+    opacity: root.shown;
     visible: tw.t > 0;
     tw := Tween {
         on: root.on;

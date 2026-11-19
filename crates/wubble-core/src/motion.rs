@@ -364,7 +364,7 @@ pub fn bezier(p: [f64; 4], t: f64) -> f64 {
 
 /// How far the Overlap entrance (`wb-in` in core/wubble.css: 240 ms on the ease-out curve) is,
 /// 0..1, `secs` after it began. The drawing side maps it as `wb-in` does: opacity e, 7 px below
-/// → in place, scale 0.98 → 1 (Slint `Entering`; the 4 px blur is left out).
+/// → in place, scale 0.98 → 1, blur 4 px → 0 (Slint `Entering`, kit/motion/overlap.slint).
 pub fn overlap_in(secs: f64) -> f64 {
     bezier(ease::out, secs / OVERLAP_IN)
 }
@@ -419,6 +419,66 @@ mod tests {
             "ease-out: most of the way in a quarter of the time"
         );
         assert_eq!(overlap_in(10.0), overlap_in(OVERLAP_IN));
+    }
+
+    /// The web's `wb-in` opacity, sampled in Chromium every 1/120 s
+    /// (tools/fidelity/curves/overlap-in.json), against `overlap_in` on the same clock.
+    #[test]
+    fn overlap_in_follows_the_web_curve() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/fidelity/curves/overlap-in.json"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("read curve"))
+                .expect("json");
+        let dt = json["dt"].as_f64().expect("dt") / 1000.0;
+        let web: Vec<f64> = json["frames"]["opacity"]
+            .as_array()
+            .expect("opacity")
+            .iter()
+            .map(|v| v.as_f64().expect("number"))
+            .collect();
+        let rms = (web
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (overlap_in(i as f64 * dt) - w).powi(2))
+            .sum::<f64>()
+            / web.len() as f64)
+            .sqrt();
+        assert!(1.0 - rms >= 0.90, "similarity {}", 1.0 - rms);
+        assert!(rms < 0.01, "the same curve: rms {rms}");
+    }
+
+    /// CSS `ease-out` (the curve a keyframe interval takes) as the generated table the Slint
+    /// wobble interpolates (`Motion.ease-out-css`, kit/gen/tokens.slint): within 1e-3 of the
+    /// bezier everywhere.
+    #[test]
+    fn generated_css_ease_out_table_is_the_bezier() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../wubble-ui/ui/kit/gen/tokens.slint"
+        );
+        let text = std::fs::read_to_string(path).expect("read gen tokens");
+        let line = text
+            .lines()
+            .find(|l| l.contains("ease-out-css:"))
+            .expect("ease-out-css");
+        let values = &line[line.find("ease-out-css:").expect("name")..];
+        let list = &values[values.find('[').expect("[") + 1..values.find(']').expect("]")];
+        let table: Vec<f64> = list
+            .split(", ")
+            .map(|v| v.parse().expect("number"))
+            .collect();
+        assert_eq!(table.len(), 33);
+        let css = [0.0, 0.0, 0.58, 1.0];
+        for i in 0..=1000 {
+            let u = f64::from(i) / 1000.0;
+            let k = ((u * 32.0).floor() as usize).min(31);
+            let f = u * 32.0 - k as f64;
+            let lerp = table[k] + (table[k + 1] - table[k]) * f;
+            assert!((lerp - bezier(css, u)).abs() < 1e-3, "at {u}");
+        }
     }
 
     #[test]

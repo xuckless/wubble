@@ -21,13 +21,17 @@ component OverlapLook inherits Rectangle {
     // from (`wb-in`) or to (`wb-out`) keyframe: shift and scale
     property <length> shift: root.entering ? WubbleCss.wb-in-k-from--transform-translatey : WubbleCss.wb-out-k-to--transform-translatey;
     property <float> scale: root.entering ? WubbleCss.wb-in-k-from--transform-scale : WubbleCss.wb-out-k-to--transform-scale;
-    transform-scale: 1 - (1 - root.scale) * (1 - root.e);
+    // the look at `e`, also read by the curve tests
+    out property <length> offset: root.shift * (1 - root.e);
+    out property <float> zoom: 1 - (1 - root.scale) * (1 - root.e);
+    out property <length> blur: Motion.overlap-blur * (1 - root.e);
+    transform-scale: root.zoom;
     Rectangle {
-        y: root.shift * (1 - root.e);
+        y: root.offset;
         @children
     }
     Rectangle {
-        backdrop-blur: Motion.overlap-blur * (1 - root.e);
+        backdrop-blur: root.blur;
         visible: root.e > 0 && root.e < 1;
     }
 }
@@ -44,7 +48,11 @@ export component OverlapLayer inherits Rectangle {
         out-easing: Motion.ease-in-out;
         delay: root.shown ? Motion.overlap-stagger * root.index : 0ms;
     }
-    OverlapLook {
+    out property <float> progress: look.e;
+    out property <length> offset: look.offset;
+    out property <float> zoom: look.zoom;
+    out property <length> blur: look.blur;
+    look := OverlapLook {
         e: tw.t;
         entering: root.shown;
         @children
