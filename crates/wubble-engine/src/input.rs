@@ -327,10 +327,12 @@ pub fn key_events(key: &KeyInput) -> Vec<CefKey> {
             _ => 0,
         }
         | if key.repeat { flag::REPEAT } else { 0 };
+    // macOS: what AppKit puts in a named key's `characters` (CEF builds an NSEvent from it)
+    let appkit = appkit_character(windows_key_code);
     let unmodified = match &key.unmodified {
         _ if windows_key_code == vk::RETURN => Some('\r' as u16),
         Key::Character(text) => text.encode_utf16().next(),
-        _ => None,
+        _ => appkit,
     };
     let event = |kind, character: u16, unmodified_character: u16| CefKey {
         kind,
@@ -362,7 +364,7 @@ pub fn key_events(key: &KeyInput) -> Vec<CefKey> {
     let first = chars.first().copied();
     let mut events = vec![event(
         KeyKind::RawKeyDown,
-        first.unwrap_or(0),
+        first.or(appkit).unwrap_or(0),
         first.map_or(unmodified.unwrap_or(0), unmodified_of),
     )];
     events.extend(
@@ -379,6 +381,36 @@ pub fn key_events(key: &KeyInput) -> Vec<CefKey> {
 fn native_key_code(scancode: Option<u32>) -> i32 {
     let offset = if cfg!(target_os = "linux") { 8 } else { 0 };
     scancode.map_or(0, |code| (code + offset) as i32)
+}
+
+/// The character AppKit gives a named key on macOS (`NSEvent.characters`: the function-key
+/// constants of `NSEvent.h`, ASCII for the rest); `None` for other keys and on other OSs.
+/// CEF's macOS key events are NSEvents built from `character` / `unmodified_character`
+/// (`key_event_util_mac.mm` `GetLegacyWebKeyEvent`), and both zero makes a flags-changed
+/// event: Backspace and the arrows then acted twice (a key-up read as a second press).
+fn appkit_character(windows_key_code: i32) -> Option<u16> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let f = |n: i32| windows_key_code == vk::F1 + n;
+    Some(match windows_key_code {
+        vk::BACK => 0x7F,
+        vk::TAB => 0x09,
+        vk::ESCAPE => 0x1B,
+        vk::UP => 0xF700,
+        vk::DOWN => 0xF701,
+        vk::LEFT => 0xF702,
+        vk::RIGHT => 0xF703,
+        vk::INSERT => 0xF727,
+        vk::DELETE => 0xF728,
+        vk::HOME => 0xF729,
+        vk::END => 0xF72B,
+        vk::PRIOR => 0xF72C,
+        vk::NEXT => 0xF72D,
+        // NSF1FunctionKey .. NSF24FunctionKey
+        code if (0..24).any(f) => 0xF704 + (code - vk::F1) as u16,
+        _ => return None,
+    })
 }
 
 /// `KeyboardCode` values from Chromium `keyboard_codes_posix.h` (= Windows `VK_*`).
@@ -1011,8 +1043,24 @@ mod tests {
             (KeyCode::ArrowDown, NamedKey::ArrowDown, 0x28),
         ] {
             let events = key_events(&key(code, Key::Named(named), None));
-            assert_eq!(kinds(&events), [(KeyKind::RawKeyDown, vk, 0)], "{code:?}");
+            let c = appkit_character(vk).unwrap_or(0);
+            assert_eq!(kinds(&events), [(KeyKind::RawKeyDown, vk, c)], "{code:?}");
         }
+    }
+
+    /// macOS: a named key's events carry AppKit's character, never both characters zero
+    /// (CEF would build a flags-changed NSEvent); elsewhere they carry none.
+    #[test]
+    fn named_keys_carry_appkit_characters_on_macos_only() {
+        let mac = cfg!(target_os = "macos");
+        assert_eq!(appkit_character(vk::LEFT), mac.then_some(0xF702));
+        assert_eq!(appkit_character(vk::BACK), mac.then_some(0x7F));
+        assert_eq!(appkit_character(vk::F1 + 11), mac.then_some(0xF70F));
+        assert_eq!(appkit_character(vk::A), None);
+        let mut up = key(KeyCode::Backspace, Key::Named(NamedKey::Backspace), None);
+        up.pressed = false;
+        let up = key_events(&up);
+        assert_eq!(up[0].unmodified_character != 0, mac);
     }
 
     #[test]

@@ -6,6 +6,8 @@ in through Cargo are not listed here.
 | What | Where in wubble | Source | Licence |
 |---|---|---|---|
 | Helper `main` shape (args, execute_process, exit code) | `crates/wubble-helper/src/main.rs` | cef-rs `examples/cefsimple/src/bin/cefsimple_helper.rs`, tauri-apps/cef-rs | MIT OR Apache-2.0 |
+| CEF-aware `NSApplication` subclass (`CrAppProtocol`, `CrAppControlProtocol`, `CefAppProtocol`; `sendEvent:` wrapped) | `crates/wubble-engine/src/mac_app.rs` | cef-rs `examples/cefsimple/src/mac/mod.rs` (`SimpleApplication`, `setup_simple_application`), tauri-apps/cef-rs commit b84b7caa; originally CEF `tests/cefclient` (`ClientApplication`) | MIT OR Apache-2.0 (cef-rs); BSD-3-Clause (CEF) |
+| AppKit's characters for named keys (`NSUpArrowFunctionKey` .. `NSF24FunctionKey`, `NSDeleteCharacter`) | `crates/wubble-engine/src/input.rs` (`appkit_character`) | Apple `NSEvent.h` constants, as CEF `libcef/browser/key_event_util_mac.mm` reads them; values only | n/a (interface constants) |
 | Slint's wgpu device descriptor (`default_device_descriptor`) and `poll_once` | `crates/wubble-gfx/src/import.rs` | Slint 1.19.0, `internal/core/graphics/wgpu_30.rs` (crate i-slint-core), slint-ui/slint | GPL-3.0-only (one of Slint's licence options) |
 | Fullscreen-triangle blit shader and pipeline | `crates/wubble-gfx/src/import.rs` (`FULLSCREEN_VS_WGSL`, `BLIT_FS_WGSL`, `Blitter`) | wgpu `examples/features/src/mipmap/blit.wgsl` and `mod.rs`, gfx-rs/wgpu | MIT OR Apache-2.0 |
 | Tab lifecycle state model (Active/Frozen/Discarded, discard reasons), no code copied | `crates/wubble-core/src/lifecycle.rs` | Chromium `chrome/browser/resource_coordinator/lifecycle_unit_state.mojom`, `components/performance_manager/freezing/freezing_policy.cc` | BSD-3-Clause |

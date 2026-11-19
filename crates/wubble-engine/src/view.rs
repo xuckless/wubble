@@ -371,9 +371,8 @@ impl View {
 
     /// Opens DevTools in its own native window (a non-windowless `WindowInfo`;
     /// DevTools is the allowed non-Slint exception). Focuses it if open.
-    /// Linux only until it is verified on macOS and Windows (a default
-    /// `WindowInfo` on a windowless browser may need a parent there): elsewhere
-    /// it logs and does nothing.
+    /// Verified on Linux and macOS (macOS needs the CEF-aware application
+    /// class, `app::prepare_process`); unverified on Windows.
     pub fn open_devtools(&mut self) {
         self.open_devtools_at(None);
     }
@@ -381,10 +380,6 @@ impl View {
     /// [`Self::open_devtools`], revealing the element under `at` (CSS pixels of the page) in
     /// the Elements panel (`ShowDevTools`'s `inspect_element_at`).
     pub fn open_devtools_at(&mut self, at: Option<(i32, i32)>) {
-        if !cfg!(target_os = "linux") {
-            eprintln!("wubble-engine: DevTools is not verified on this platform yet");
-            return;
-        }
         // The engine's DevTools client: the engine counts the window until it
         // closes (`app::extra`).
         let window = cef::WindowInfo::default();

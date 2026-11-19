@@ -18,6 +18,8 @@ pub mod find;
 pub mod ime;
 pub mod input;
 pub mod lifecycle;
+#[cfg(target_os = "macos")]
+mod mac_app;
 pub mod media;
 pub mod nav;
 pub mod page;

@@ -188,4 +188,15 @@ mod tests {
         assert_eq!(read_from(Some("garbage"), || Some(MEMINFO.into())), meminfo);
         assert_eq!(read_from(None, || None), Reading::Unknown);
     }
+
+    /// The sysctl exists on every macOS wubble runs on: the reading is a level, never Unknown.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reads_a_level() {
+        use super::PressureSource;
+        assert!(matches!(
+            super::macos::SysctlPressure.read(),
+            Reading::Level(_)
+        ));
+    }
 }

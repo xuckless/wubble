@@ -108,9 +108,9 @@ addEventListener('mousedown', (e) => {
   if (e.isTrusted && e.button === 0 && e.clientX >= 720) seen.neutral++;
 }, true);
 addEventListener('keydown', (e) => {
-  seen.keys.push((e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + e.key + '/' + e.code);
+  seen.keys.push((e.ctrlKey ? 'Ctrl+' : '') + (e.altKey ? 'Alt+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.metaKey ? 'Cmd+' : '') + e.key + '/' + e.code);
   // A page that owns Ctrl+F (a web app's own search) when asked to.
-  if (seen.grab && e.ctrlKey && e.key === 'f') { e.preventDefault(); seen.keys.push('grabbed'); }
+  if (seen.grab && (e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); seen.keys.push('grabbed'); }
 });
 $('drag').addEventListener('dragstart', (e) => { seen.dragstart++; e.dataTransfer.setData('text/plain', 'payload'); });
 $('drop').addEventListener('dragover', (e) => e.preventDefault());

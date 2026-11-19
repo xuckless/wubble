@@ -7,7 +7,9 @@
 //! `PageEvent::Clipboard`). The window has both. smithay-clipboard (MIT) is the
 //! crate Slint's winit backend uses for the same job; it carries text only.
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the
-//! bridge is off; the shell's own copies then go through Slint.
+//! bridge is off for the pages; on X11 the shell's own copies go through Slint,
+//! on macOS and Windows through arboard (the same system clipboard, which the
+//! parity smoke also reads back).
 
 /// Which clipboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,23 +43,62 @@ pub trait Bridge: Default {
 #[cfg(target_os = "linux")]
 pub type Clipboard = wayland::Wayland;
 #[cfg(not(target_os = "linux"))]
-pub type Clipboard = NoBridge;
+pub type Clipboard = Arboard;
 
-/// macOS and Windows: Chromium's own clipboard serves the pages, so nothing is bridged and
-/// the shell's own copies go through Slint.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+/// macOS and Windows: the system clipboard through arboard (MIT OR Apache-2.0). Chromium's own
+/// clipboard serves the pages there, so this carries only the shell's own copies and the parity
+/// smoke's reads. They have no primary selection.
+#[cfg(not(target_os = "linux"))]
 #[derive(Default)]
-pub struct NoBridge;
+pub struct Arboard {
+    /// Opened on first use.
+    clipboard: Option<arboard::Clipboard>,
+}
 
-impl Bridge for NoBridge {
-    fn open(&mut self, _window: &slint::Window) {}
-
-    fn store(&mut self, _window: &slint::Window, _buffer: Buffer, _text: &str) -> bool {
-        false
+#[cfg(not(target_os = "linux"))]
+impl Arboard {
+    fn get(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new()
+                .inspect_err(|e| eprintln!("wubble: no system clipboard: {e}"))
+                .ok();
+        }
+        self.clipboard.as_mut()
     }
 
-    fn load(&mut self, _window: &slint::Window, _buffer: Buffer) -> Option<String> {
-        None
+    fn store_text(&mut self, buffer: Buffer, text: &str) -> bool {
+        match (buffer, self.get()) {
+            (Buffer::Clipboard, Some(clipboard)) => clipboard
+                .set_text(text)
+                .inspect_err(|e| eprintln!("wubble: clipboard: {e}"))
+                .is_ok(),
+            _ => false,
+        }
+    }
+
+    fn load_text(&mut self, buffer: Buffer) -> Option<String> {
+        match (buffer, self.get()) {
+            (Buffer::Clipboard, Some(clipboard)) => clipboard
+                .get_text()
+                .inspect_err(|e| log::debug!("clipboard: nothing to paste: {e}"))
+                .ok(),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Bridge for Arboard {
+    fn open(&mut self, _window: &slint::Window) {
+        self.get();
+    }
+
+    fn store(&mut self, _window: &slint::Window, buffer: Buffer, text: &str) -> bool {
+        self.store_text(buffer, text)
+    }
+
+    fn load(&mut self, _window: &slint::Window, buffer: Buffer) -> Option<String> {
+        self.load_text(buffer)
     }
 }
 
@@ -132,5 +173,25 @@ mod tests {
         );
         assert!(!bridge_needed(Some(OsStr::new(""))));
         assert!(!bridge_needed(None));
+    }
+
+    /// What is stored is what loads back; the primary selection does not exist here. Skipped
+    /// where there is no clipboard (a headless runner). Puts back what the clipboard held.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn arboard_stores_and_loads_text() {
+        let Ok(mut probe) = arboard::Clipboard::new() else {
+            eprintln!("no system clipboard: skipped");
+            return;
+        };
+        let before = probe.get_text().ok();
+        let mut bridge = Arboard::default();
+        let text = "wubble clipboard test";
+        assert!(!bridge.store_text(Buffer::Primary, text));
+        assert!(bridge.store_text(Buffer::Clipboard, text));
+        assert_eq!(bridge.load_text(Buffer::Clipboard).as_deref(), Some(text));
+        if let Some(before) = before {
+            let _ = probe.set_text(before);
+        }
     }
 }

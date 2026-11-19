@@ -14,12 +14,14 @@
 //! Keys are built here as winit would report them on a US layout
 //! ([`key_inputs`]): the host routes them exactly as raw winit key events
 //! (`Host::key`), only the winit `KeyEvent` itself cannot be built outside
-//! winit.
+//! winit. The script names Linux chords; on macOS [`MAC_CHORDS`] rewrites them to
+//! the Mac's own, and [`PLATFORM_GAPS`] lists what that OS has no equivalent for.
 
 use slint::winit_030::winit::keyboard::{
     Key as WinitKey, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey,
 };
-use wubble_core::keys::{Chord, Key};
+use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
+use wubble_core::keys::{Chord, Key, Platform};
 use wubble_engine::input::{Buttons, KeyInput, Modifiers, Point};
 
 /// Runs of CEF work one wait may take before its item fails.
@@ -83,12 +85,15 @@ pub struct Mods {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    /// Cmd on macOS (Super).
+    pub cmd: bool,
 }
 
 pub const NONE: Mods = Mods {
     ctrl: false,
     shift: false,
     alt: false,
+    cmd: false,
 };
 pub const CTRL: Mods = Mods { ctrl: true, ..NONE };
 pub const SHIFT: Mods = Mods {
@@ -102,7 +107,21 @@ impl Mods {
         s.set(ModifiersState::CONTROL, self.ctrl);
         s.set(ModifiersState::SHIFT, self.shift);
         s.set(ModifiersState::ALT, self.alt);
+        s.set(ModifiersState::SUPER, self.cmd);
         s
+    }
+
+    /// The modifiers a click holds on `platform`: macOS opens a link in the background with
+    /// Cmd, as Ctrl+click is a right click there. Wheel steps keep Ctrl (pinch-zoom's chord).
+    pub fn for_click(self, platform: Platform) -> Self {
+        match platform {
+            Platform::Mac => Self {
+                ctrl: false,
+                cmd: self.cmd || self.ctrl,
+                ..self
+            },
+            Platform::Linux | Platform::Windows => self,
+        }
     }
 }
 
@@ -324,6 +343,10 @@ pub const ITEMS: &[Item] = &[
         [
             Js("parity.field('inp', 'old text')"),
             Keys("Ctrl+A"),
+            // macOS selects through the host's edit command, a round trip after the key
+            Until(J(
+                "$('inp').selectionEnd - $('inp').selectionStart == 8 || 'not all selected'"
+            )),
             Type("z")
         ],
         [J("eq($('inp').value, 'z')")]
@@ -881,103 +904,101 @@ pub const ITEMS: &[Item] = &[
 
 // ----------------------------------------------------------------- keys
 
-/// The physical key, its evdev code and what it types on a US layout,
-/// unshifted and shifted (`None`: no text).
-/// A key on a US layout: its code, evdev scan code, logical key, and the
-/// characters it types unshifted and shifted (none for a named key).
-type UsKey = (KeyCode, u32, WinitKey, Option<(char, char)>);
+/// A key on a US layout: its code, logical key, and the characters it types unshifted and
+/// shifted (none for a named key). The OS's scan code comes from winit (`to_scancode`).
+type UsKey = (KeyCode, WinitKey, Option<(char, char)>);
 
 fn us_key(key: Key) -> Option<UsKey> {
     use KeyCode as K;
     let named = |n| WinitKey::Named(n);
     let ch = |c: char| WinitKey::Character(c.to_string().into());
-    const LETTERS: [(KeyCode, u32); 26] = [
-        (K::KeyA, 30),
-        (K::KeyB, 48),
-        (K::KeyC, 46),
-        (K::KeyD, 32),
-        (K::KeyE, 18),
-        (K::KeyF, 33),
-        (K::KeyG, 34),
-        (K::KeyH, 35),
-        (K::KeyI, 23),
-        (K::KeyJ, 36),
-        (K::KeyK, 37),
-        (K::KeyL, 38),
-        (K::KeyM, 50),
-        (K::KeyN, 49),
-        (K::KeyO, 24),
-        (K::KeyP, 25),
-        (K::KeyQ, 16),
-        (K::KeyR, 19),
-        (K::KeyS, 31),
-        (K::KeyT, 20),
-        (K::KeyU, 22),
-        (K::KeyV, 47),
-        (K::KeyW, 17),
-        (K::KeyX, 45),
-        (K::KeyY, 21),
-        (K::KeyZ, 44),
+    const LETTERS: [KeyCode; 26] = [
+        K::KeyA,
+        K::KeyB,
+        K::KeyC,
+        K::KeyD,
+        K::KeyE,
+        K::KeyF,
+        K::KeyG,
+        K::KeyH,
+        K::KeyI,
+        K::KeyJ,
+        K::KeyK,
+        K::KeyL,
+        K::KeyM,
+        K::KeyN,
+        K::KeyO,
+        K::KeyP,
+        K::KeyQ,
+        K::KeyR,
+        K::KeyS,
+        K::KeyT,
+        K::KeyU,
+        K::KeyV,
+        K::KeyW,
+        K::KeyX,
+        K::KeyY,
+        K::KeyZ,
     ];
-    const DIGITS: [(KeyCode, u32, char); 10] = [
-        (K::Digit0, 11, ')'),
-        (K::Digit1, 2, '!'),
-        (K::Digit2, 3, '@'),
-        (K::Digit3, 4, '#'),
-        (K::Digit4, 5, '$'),
-        (K::Digit5, 6, '%'),
-        (K::Digit6, 7, '^'),
-        (K::Digit7, 8, '&'),
-        (K::Digit8, 9, '*'),
-        (K::Digit9, 10, '('),
+    const DIGITS: [(KeyCode, char); 10] = [
+        (K::Digit0, ')'),
+        (K::Digit1, '!'),
+        (K::Digit2, '@'),
+        (K::Digit3, '#'),
+        (K::Digit4, '$'),
+        (K::Digit5, '%'),
+        (K::Digit6, '^'),
+        (K::Digit7, '&'),
+        (K::Digit8, '*'),
+        (K::Digit9, '('),
     ];
-    const PUNCT: [(KeyCode, u32, char, char); 11] = [
-        (K::Minus, 12, '-', '_'),
-        (K::Equal, 13, '=', '+'),
-        (K::BracketLeft, 26, '[', '{'),
-        (K::BracketRight, 27, ']', '}'),
-        (K::Semicolon, 39, ';', ':'),
-        (K::Quote, 40, '\'', '"'),
-        (K::Backquote, 41, '`', '~'),
-        (K::Backslash, 43, '\\', '|'),
-        (K::Comma, 51, ',', '<'),
-        (K::Period, 52, '.', '>'),
-        (K::Slash, 53, '/', '?'),
+    const PUNCT: [(KeyCode, char, char); 11] = [
+        (K::Minus, '-', '_'),
+        (K::Equal, '=', '+'),
+        (K::BracketLeft, '[', '{'),
+        (K::BracketRight, ']', '}'),
+        (K::Semicolon, ';', ':'),
+        (K::Quote, '\'', '"'),
+        (K::Backquote, '`', '~'),
+        (K::Backslash, '\\', '|'),
+        (K::Comma, ',', '<'),
+        (K::Period, '.', '>'),
+        (K::Slash, '/', '?'),
     ];
     Some(match key {
         Key::Char(c @ 'a'..='z') => {
-            let (code, scan) = LETTERS[(c as u8 - b'a') as usize];
-            (code, scan, ch(c), Some((c, c.to_ascii_uppercase())))
+            let code = LETTERS[(c as u8 - b'a') as usize];
+            (code, ch(c), Some((c, c.to_ascii_uppercase())))
         }
         Key::Char(c @ '0'..='9') => {
-            let (code, scan, shifted) = DIGITS[(c as u8 - b'0') as usize];
-            (code, scan, ch(c), Some((c, shifted)))
+            let (code, shifted) = DIGITS[(c as u8 - b'0') as usize];
+            (code, ch(c), Some((c, shifted)))
         }
         // A digit's shifted symbol (`!` is Shift+1), or punctuation.
-        Key::Char(c) => match DIGITS.iter().find(|d| d.2 == c) {
-            Some(&(code, scan, shifted)) => {
-                let plain = char::from(b'0' + DIGITS.iter().position(|d| d.2 == c)? as u8);
-                (code, scan, ch(plain), Some((plain, shifted)))
+        Key::Char(c) => match DIGITS.iter().find(|d| d.1 == c) {
+            Some(&(code, shifted)) => {
+                let plain = char::from(b'0' + DIGITS.iter().position(|d| d.1 == c)? as u8);
+                (code, ch(plain), Some((plain, shifted)))
             }
             None => {
-                let &(code, scan, plain, shifted) = PUNCT.iter().find(|p| p.2 == c || p.3 == c)?;
-                (code, scan, ch(plain), Some((plain, shifted)))
+                let &(code, plain, shifted) = PUNCT.iter().find(|p| p.1 == c || p.2 == c)?;
+                (code, ch(plain), Some((plain, shifted)))
             }
         },
-        Key::Space => (K::Space, 57, ch(' '), Some((' ', ' '))),
-        Key::Enter => (K::Enter, 28, named(NamedKey::Enter), Some(('\r', '\r'))),
-        Key::Tab => (K::Tab, 15, named(NamedKey::Tab), Some(('\t', '\t'))),
-        Key::Escape => (K::Escape, 1, named(NamedKey::Escape), None),
-        Key::Backspace => (K::Backspace, 14, named(NamedKey::Backspace), None),
-        Key::Delete => (K::Delete, 111, named(NamedKey::Delete), None),
-        Key::Left => (K::ArrowLeft, 105, named(NamedKey::ArrowLeft), None),
-        Key::Right => (K::ArrowRight, 106, named(NamedKey::ArrowRight), None),
-        Key::Up => (K::ArrowUp, 103, named(NamedKey::ArrowUp), None),
-        Key::Down => (K::ArrowDown, 108, named(NamedKey::ArrowDown), None),
-        Key::Home => (K::Home, 102, named(NamedKey::Home), None),
-        Key::End => (K::End, 107, named(NamedKey::End), None),
-        Key::PageUp => (K::PageUp, 104, named(NamedKey::PageUp), None),
-        Key::PageDown => (K::PageDown, 109, named(NamedKey::PageDown), None),
+        Key::Space => (K::Space, ch(' '), Some((' ', ' '))),
+        Key::Enter => (K::Enter, named(NamedKey::Enter), Some(('\r', '\r'))),
+        Key::Tab => (K::Tab, named(NamedKey::Tab), Some(('\t', '\t'))),
+        Key::Escape => (K::Escape, named(NamedKey::Escape), None),
+        Key::Backspace => (K::Backspace, named(NamedKey::Backspace), None),
+        Key::Delete => (K::Delete, named(NamedKey::Delete), None),
+        Key::Left => (K::ArrowLeft, named(NamedKey::ArrowLeft), None),
+        Key::Right => (K::ArrowRight, named(NamedKey::ArrowRight), None),
+        Key::Up => (K::ArrowUp, named(NamedKey::ArrowUp), None),
+        Key::Down => (K::ArrowDown, named(NamedKey::ArrowDown), None),
+        Key::Home => (K::Home, named(NamedKey::Home), None),
+        Key::End => (K::End, named(NamedKey::End), None),
+        Key::PageUp => (K::PageUp, named(NamedKey::PageUp), None),
+        Key::PageDown => (K::PageDown, named(NamedKey::PageDown), None),
         Key::F(n @ 1..=10) => {
             const F: [KeyCode; 10] = [
                 K::F1,
@@ -1004,33 +1025,27 @@ fn us_key(key: Key) -> Option<UsKey> {
                 NamedKey::F10,
             ];
             let i = usize::from(n - 1);
-            (F[i], 59 + u32::from(n - 1), named(N[i]), None)
+            (F[i], named(N[i]), None)
         }
         Key::F(_) => return None,
     })
 }
 
-/// The modifier keys a chord holds, in press order: code, evdev code, key, state bit.
-const MODIFIER_KEYS: [(KeyCode, u32, NamedKey, ModifiersState); 3] = [
+/// The modifier keys a chord holds, in press order: code, key, state bit. Cmd is Super.
+const MODIFIER_KEYS: [(KeyCode, NamedKey, ModifiersState); 4] = [
     (
         KeyCode::ControlLeft,
-        29,
         NamedKey::Control,
         ModifiersState::CONTROL,
     ),
-    (KeyCode::AltLeft, 56, NamedKey::Alt, ModifiersState::ALT),
-    (
-        KeyCode::ShiftLeft,
-        42,
-        NamedKey::Shift,
-        ModifiersState::SHIFT,
-    ),
+    (KeyCode::AltLeft, NamedKey::Alt, ModifiersState::ALT),
+    (KeyCode::ShiftLeft, NamedKey::Shift, ModifiersState::SHIFT),
+    (KeyCode::SuperLeft, NamedKey::Super, ModifiersState::SUPER),
 ];
 
 fn input(
     pressed: bool,
     code: KeyCode,
-    scan: u32,
     unmodified: WinitKey,
     text: Option<String>,
     location: KeyLocation,
@@ -1040,7 +1055,7 @@ fn input(
         pressed,
         repeat: false,
         physical: PhysicalKey::Code(code),
-        scancode: Some(scan),
+        scancode: code.to_scancode(),
         unmodified,
         text,
         location,
@@ -1051,22 +1066,22 @@ fn input(
     }
 }
 
-/// The key events of one chord as winit reports them on Linux with a US layout:
-/// each modifier pressed (the state includes it from its own press on, as
-/// Chromium's X11 and Wayland events do), the key pressed and released, the
-/// modifiers released. winit's Linux `text` ignores Ctrl (Ctrl+C types "c").
+/// The key events of one chord as winit reports them with a US layout: each
+/// modifier pressed (the state includes it from its own press on, as Chromium's
+/// X11 and Wayland events do), the key pressed and released, the modifiers
+/// released. winit's Linux `text` ignores Ctrl (Ctrl+C types "c"). The scan
+/// code is this OS's (winit's `to_scancode`).
 pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
-    let (code, scan, unmodified, chars) = us_key(chord.key)?;
-    let held = [chord.ctrl, chord.alt, chord.shift];
+    let (code, unmodified, chars) = us_key(chord.key)?;
+    let held = [chord.ctrl, chord.alt, chord.shift, chord.cmd];
     let mut state = ModifiersState::empty();
     let mut out = vec![];
-    for (on, &(code, scan, named, bit)) in held.iter().zip(&MODIFIER_KEYS) {
+    for (on, &(code, named, bit)) in held.iter().zip(&MODIFIER_KEYS) {
         if *on {
             state |= bit;
             out.push(input(
                 true,
                 code,
-                scan,
                 WinitKey::Named(named),
                 None,
                 KeyLocation::Left,
@@ -1078,7 +1093,6 @@ pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
     out.push(input(
         true,
         code,
-        scan,
         unmodified.clone(),
         text,
         KeyLocation::Standard,
@@ -1087,19 +1101,17 @@ pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
     out.push(input(
         false,
         code,
-        scan,
         unmodified,
         None,
         KeyLocation::Standard,
         state,
     ));
-    for (on, &(code, scan, named, bit)) in held.iter().zip(&MODIFIER_KEYS).rev() {
+    for (on, &(code, named, bit)) in held.iter().zip(&MODIFIER_KEYS).rev() {
         if *on {
             state.remove(bit);
             out.push(input(
                 false,
                 code,
-                scan,
                 WinitKey::Named(named),
                 None,
                 KeyLocation::Left,
@@ -1114,7 +1126,7 @@ pub fn key_inputs(chord: Chord) -> Option<Vec<KeyInput>> {
 pub fn typed(text: &str) -> Option<Vec<Chord>> {
     text.chars()
         .map(|c| {
-            let (_, _, _, chars) = us_key(if c == ' ' {
+            let (_, _, chars) = us_key(if c == ' ' {
                 Key::Space
             } else {
                 Key::Char(c.to_ascii_lowercase())
@@ -1137,10 +1149,64 @@ pub fn typed(text: &str) -> Option<Vec<Chord>> {
         .collect()
 }
 
-/// `Keys` steps name keys as `Chord::parse` does, with `BackSpace` for Backspace too.
+/// macOS's own chord for each Linux chord the script names: Cmd where Linux takes Ctrl (edit,
+/// find, the shell's chords, zoom), Option for word moves, Cmd+[ and Cmd+] for history (as
+/// Chromium and AppKit text fields on macOS). Data, applied by [`chords_on`].
+pub const MAC_CHORDS: &[(&str, &str)] = &[
+    ("Ctrl+A", "Cmd+A"),
+    ("Ctrl+C", "Cmd+C"),
+    ("Ctrl+V", "Cmd+V"),
+    ("Ctrl+X", "Cmd+X"),
+    ("Ctrl+Z", "Cmd+Z"),
+    ("Ctrl+Shift+Z", "Cmd+Shift+Z"),
+    // macOS has no Ctrl+Y redo (Cmd+Y is history); its redo is Cmd+Shift+Z
+    ("Ctrl+Y", "Cmd+Shift+Z"),
+    ("Ctrl+F", "Cmd+F"),
+    ("Ctrl+T", "Cmd+T"),
+    ("Ctrl+L", "Cmd+L"),
+    ("Ctrl+P", "Cmd+P"),
+    ("Ctrl+=", "Cmd+="),
+    ("Ctrl+0", "Cmd+0"),
+    ("Ctrl+Left", "Alt+Left"),
+    ("Ctrl+Right", "Alt+Right"),
+    ("Ctrl+BackSpace", "Alt+BackSpace"),
+    ("Alt+Left", "Cmd+["),
+    ("Alt+Right", "Cmd+]"),
+];
+
+/// Items an OS has no equivalent for, expected to fail there as [`Item::gap`] items do
+/// everywhere: macOS and Windows have no primary selection.
+pub const PLATFORM_GAPS: &[(Platform, &str)] = &[
+    (Platform::Mac, "B.primary-selection"),
+    (Platform::Mac, "B.middle-click-paste"),
+    (Platform::Windows, "B.primary-selection"),
+    (Platform::Windows, "B.middle-click-paste"),
+];
+
+/// `item` is expected to fail on `platform`.
+pub fn is_gap(item: &Item, platform: Platform) -> bool {
+    item.gap || PLATFORM_GAPS.contains(&(platform, item.name))
+}
+
+/// `Keys` steps name keys as `Chord::parse` does, with `BackSpace` for Backspace too, as
+/// this OS's chords.
 pub fn chords(spec: &str) -> Option<Vec<Chord>> {
+    chords_on(spec, Platform::current())
+}
+
+/// [`chords`] on `platform`.
+pub fn chords_on(spec: &str, platform: Platform) -> Option<Vec<Chord>> {
     spec.split_whitespace()
-        .map(|c| Chord::parse(&c.replace("BackSpace", "Backspace")).ok())
+        .map(|c| {
+            let c = match platform {
+                Platform::Mac => MAC_CHORDS
+                    .iter()
+                    .find(|(linux, _)| *linux == c)
+                    .map_or(c, |(_, mac)| mac),
+                Platform::Linux | Platform::Windows => c,
+            };
+            Chord::parse(&c.replace("BackSpace", "Backspace")).ok()
+        })
         .collect()
 }
 
@@ -1500,7 +1566,7 @@ fn finish_item(items: &[Item], item: usize, result: Result<(), String>) -> (Pari
     let report = Action::Report {
         name: items[item].name,
         result,
-        gap: items[item].gap,
+        gap: is_gap(&items[item], Platform::current()),
     };
     advance(items, item + 1, 0, vec![report])
 }
@@ -1573,7 +1639,8 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(events[2].scancode, Some(44));
+        assert_eq!(events[2].scancode, KeyCode::KeyZ.to_scancode());
+        assert!(events[2].scancode.is_some());
     }
 
     #[test]
@@ -1816,6 +1883,62 @@ mod tests {
                 "F.mailto-to-os"
             ]
         );
+    }
+
+    /// On macOS no item that runs presses a Ctrl chord: each has its Mac chord, or is a gap
+    /// there.
+    #[test]
+    fn every_mac_chord_is_rewritten() {
+        let mac = Platform::Mac;
+        for item in ITEMS.iter().filter(|i| !is_gap(i, mac)) {
+            for step in item.steps {
+                if let Step::Keys(spec) = step {
+                    for c in chords_on(spec, mac).unwrap() {
+                        assert!(!c.ctrl, "{}: {c}", item.name);
+                        assert!(key_inputs(c).is_some(), "{}: {c}", item.name);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            chords_on("Alt+Left Ctrl+BackSpace", mac),
+            chords_on("Cmd+[ Alt+Backspace", Platform::Linux)
+        );
+        assert_eq!(
+            chords_on("Ctrl+A", Platform::Linux),
+            Chord::parse("Ctrl+A").ok().map(|c| vec![c])
+        );
+        // every rewrite parses, and names a chord the script uses
+        for (linux, mac) in MAC_CHORDS {
+            assert!(chords_on(mac, Platform::Linux).is_some(), "{mac}");
+            assert!(
+                ITEMS.iter().any(|i| i.steps.iter().any(
+                    |s| matches!(s, Step::Keys(k) if k.split_whitespace().any(|t| t == *linux))
+                )),
+                "{linux} is not in the script"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mac_click_takes_cmd_for_ctrl() {
+        let cmd = Mods { cmd: true, ..NONE };
+        assert_eq!(CTRL.for_click(Platform::Mac), cmd);
+        assert_eq!(CTRL.for_click(Platform::Linux), CTRL);
+        assert_eq!(SHIFT.for_click(Platform::Mac), SHIFT);
+    }
+
+    #[test]
+    fn platform_gaps_name_items() {
+        for (_, name) in PLATFORM_GAPS {
+            assert!(ITEMS.iter().any(|i| i.name == *name), "{name}");
+        }
+        let primary = ITEMS
+            .iter()
+            .find(|i| i.name == "B.primary-selection")
+            .unwrap();
+        assert!(is_gap(primary, Platform::Mac));
+        assert!(!is_gap(primary, Platform::Linux));
     }
 
     #[test]

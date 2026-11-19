@@ -273,6 +273,25 @@ impl EngineConfig {
             profile: ProfileKind::User,
         })
     }
+
+    /// Config for an engine example (`cargo run -p wubble-engine --example ..`) on a throwaway
+    /// profile with CEF's cache in `cache_dir`: CEF from the build's output directory, or on
+    /// macOS from the bundle `wubble-bundle --exe` made of the example.
+    pub fn for_example(cache_dir: PathBuf) -> Result<Self, EngineError> {
+        let exe = std::env::current_exe().map_err(|e| EngineError::ExeDir(e.to_string()))?;
+        let exe_dir = Current::example_exe_dir(&exe)
+            .ok_or_else(|| EngineError::ExeDir(format!("{} has no build dir", exe.display())))?;
+        Ok(Self {
+            exe_dir: exe_dir.to_path_buf(),
+            cache_dir,
+            pump_scheduler: None,
+            clipboard_bridge: false,
+            content_filter: None,
+            response_observer: None,
+            features: PageFeatures::default(),
+            profile: ProfileKind::Throwaway,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -333,6 +352,12 @@ trait Platform {
         exe_dir.to_path_buf()
     }
 
+    /// The main executable's directory for an example binary `exe`: `target/<profile>/examples/x`
+    /// runs with CEF and the helper of `target/<profile>` by default.
+    fn example_exe_dir(exe: &Path) -> Option<&Path> {
+        exe.parent()?.parent()
+    }
+
     /// The CEF subprocess executable, or `None` when CEF finds it itself:
     /// next to the main one by default.
     fn helper_path(exe_dir: &Path) -> Option<PathBuf> {
@@ -345,6 +370,21 @@ trait Platform {
 
     /// Chromium switches added on a [`ProfileKind::Throwaway`] profile.
     const THROWAWAY_SWITCHES: &[(&str, Option<&str>)] = &[];
+
+    /// Idle `do_message_loop_work` turns per second: what turns the shutdown
+    /// budgets of [`state`] (counts, not clocks) into time on this OS. About
+    /// 4 us per idle turn on the owner's Linux machine.
+    const TURNS_PER_SECOND: u32 = 250_000;
+
+    /// Process-wide setup before anything else touches the OS's application
+    /// object (winit, `cef::initialize`). Nothing by default.
+    fn prepare_process() {}
+}
+
+/// Process-wide setup that must come first in `main`, before the window
+/// system and CEF: on macOS, the CEF-aware application class.
+pub fn prepare_process() {
+    Current::prepare_process()
 }
 
 /// Chromium switches every wubble process gets on every OS. One entry per
@@ -380,8 +420,22 @@ impl Platform for MacOs {
     /// before its first frame behind a keychain access prompt for "Chromium Safe Storage".
     const THROWAWAY_SWITCHES: &[(&str, Option<&str>)] = &[("use-mock-keychain", None)];
 
+    /// An idle turn blocks in `-[NSApplication run]` until the next frame
+    /// (16.7 ms measured at 60 Hz), so a turn is a frame, not microseconds.
+    const TURNS_PER_SECOND: u32 = 60;
+
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         mac_data_dir(env)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn prepare_process() {
+        crate::mac_app::install();
+    }
+
+    /// The example runs bundled as `wubble.app/Contents/MacOS/wubble` (`wubble-bundle --exe`).
+    fn example_exe_dir(exe: &Path) -> Option<&Path> {
+        exe.parent()
     }
 
     /// `Contents/Frameworks`, holding `Chromium Embedded Framework.framework`.

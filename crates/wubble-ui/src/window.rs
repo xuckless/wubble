@@ -106,6 +106,22 @@ pub fn no_os_window_restoration() {
     }
 }
 
+/// Keeps AppKit from merging wubble's windows into one tabbed window ("Prefer tabs: Always" in
+/// System Settings, or Window > Merge All Windows): wubble has its own tabs, and a merged window
+/// would hide one shell's frame behind another's. A class property, so it holds for every window
+/// made after it; call it before the event loop starts, on the main thread. Elsewhere nothing.
+pub fn no_automatic_tabbing() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWindow;
+        use objc2_foundation::MainThreadMarker;
+        match MainThreadMarker::new() {
+            Some(mtm) => NSWindow::setAllowsAutomaticWindowTabbing(false, mtm),
+            None => eprintln!("wubble-ui: window tabbing left on: not on the main thread"),
+        }
+    }
+}
+
 /// The window's mode. Not stored: it is read from the window each time (one owner).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Frame {

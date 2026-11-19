@@ -84,12 +84,20 @@ pub enum Action {
     ScreenshotFullPage,
     /// The Boost editor on a new Boost for the visible site (`boost`).
     NewBoost,
+    /// Edit commands on the focused page (its frame's undo, cut, copy ...): Chromium's Edit menu.
+    /// On macOS Blink leaves their chords to the browser, so these run them there.
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 54] = [
+const FIXED: [(&str, Action); 60] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -143,6 +151,12 @@ const FIXED: [(&str, Action); 54] = [
     ("screenshot-visible", Action::ScreenshotVisible),
     ("screenshot-full-page", Action::ScreenshotFullPage),
     ("new-boost", Action::NewBoost),
+    ("undo", Action::Undo),
+    ("redo", Action::Redo),
+    ("cut", Action::Cut),
+    ("copy", Action::Copy),
+    ("paste", Action::Paste),
+    ("select-all", Action::SelectAll),
     ("quit", Action::Quit),
 ];
 
@@ -353,7 +367,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 72);
+        assert_eq!(all.len(), 78);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -364,7 +378,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 72);
+        assert_eq!(ids.len(), 78);
     }
 
     #[test]

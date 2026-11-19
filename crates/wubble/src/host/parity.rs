@@ -323,7 +323,10 @@ impl Host {
         match step {
             Step::Click(b, mods, p) => {
                 let p = at(p);
-                self.parity_pointer(mods, vec![moved(p), press(p, b), release(p, b)]);
+                self.parity_pointer(
+                    mods.for_click(wubble_core::keys::Platform::current()),
+                    vec![moved(p), press(p, b), release(p, b)],
+                );
             }
             Step::Clicks(n, p) => {
                 let p = at(p);

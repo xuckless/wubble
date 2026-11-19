@@ -341,6 +341,17 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+Shift+D", ALL, Action::TogglePinTab, PageFirst;
     "Mod+Shift+C", ALL, Action::CopyUrl, PageFirst;
     "Mod+P", ALL, Action::Print, PageFirst;
+    // Chromium's Edit menu. Blink runs Ctrl+C/V/X/A/Z itself on Linux and Windows, so there the
+    // page takes the key; it leaves their Cmd forms on macOS to the browser's menu (Blink
+    // `editing_behavior.cc`), so there the page declines it and the action runs it on the
+    // focused frame.
+    "Mod+Z", ALL, Action::Undo, PageFirst;
+    "Mod+Shift+Z", ALL, Action::Redo, PageFirst;
+    "Ctrl+Y", LW, Action::Redo, PageFirst;
+    "Mod+X", ALL, Action::Cut, PageFirst;
+    "Mod+C", ALL, Action::Copy, PageFirst;
+    "Mod+V", ALL, Action::Paste, PageFirst;
+    "Mod+A", ALL, Action::SelectAll, PageFirst;
     // the design's split chord; Shift+\ types `|`, so the unsplit row names that
     "Mod+\\", ALL, Action::SplitNext, Shell;
     "Mod+|", ALL, Action::Unsplit, Shell;

@@ -1663,6 +1663,7 @@ impl Host {
                         let muted = view.is_muted();
                         view.set_muted(!muted);
                     }
+                    ViewOp::Edit(command) => view.edit(command),
                 }
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
                     let percent = view.zoom_percent();
