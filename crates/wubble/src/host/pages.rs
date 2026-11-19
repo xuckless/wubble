@@ -774,6 +774,16 @@ impl Host {
         }
     }
 
+    /// `--smoke gallery`: Mod+D's sheet for an example page (the bundled page is not one a
+    /// bookmark keeps).
+    pub(super) fn gallery_bookmark_sheet(&mut self) {
+        self.open_sheet(SheetKind::Page {
+            url: "https://example.com/".into(),
+            title: "Example Domain".into(),
+            existing: None,
+        });
+    }
+
     /// Mod+D: the sheet for the visible web page. Not while an engine dialog waits for its
     /// answer (one sheet at a time).
     pub(crate) fn bookmark_page(&mut self) {

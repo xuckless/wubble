@@ -48,6 +48,12 @@ pub enum Overlay {
     Find,
     Permission,
     Dialog,
+    /// A prompt dialog, its field holding the page's text.
+    Prompt,
+    /// Mod+D's bookmark sheet (name, folders).
+    Bookmark,
+    /// The print sheet.
+    Print,
     LoadError,
     CertError,
     AutofillMenu,
@@ -119,6 +125,9 @@ pub const SCENES: &[Scene] = &[
     over("autofill-menu", Overlay::AutofillMenu),
     over("autofill-save", Overlay::AutofillSave),
     over("dialog-sheet", Overlay::Dialog),
+    over("dialog-prompt", Overlay::Prompt),
+    over("bookmark-sheet", Overlay::Bookmark),
+    over("print-sheet", Overlay::Print),
     over("toast", Overlay::Toast),
     over("error-page", Overlay::LoadError),
     over("cert-error-page", Overlay::CertError),
