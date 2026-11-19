@@ -5,9 +5,10 @@
 //! about to send goes through [`ContentFilter::check`] on CEF's IO thread
 //! (CEF `CefResourceRequestHandler::OnBeforeResourceLoad`, through welding's
 //! `RequestFilter`), so the filter must answer from shared read-only data
-//! and never wait on the UI thread. When a main-frame load commits, the view
-//! asks [`ContentFilter::page_script`] on the UI thread and runs the answer
-//! in the page (cosmetic filtering).
+//! and never wait on the UI thread. Cosmetic filtering goes through the
+//! frames' own scripts: each frame's `cosmetic.js` asks, on the UI thread,
+//! for [`ContentFilter::frame_cosmetic`] when its context is created and for
+//! [`ContentFilter::generic_hide`] as new class names and ids appear.
 //!
 //! Hook shape from cefclient `ClientHandler::GetResourceRequestHandler` /
 //! `OnBeforeResourceLoad` (chromiumembedded/cef, BSD-3-Clause) and Brave's
@@ -64,9 +65,33 @@ pub trait ContentFilter: Send + Sync {
     /// release profile aborts on panic).
     fn check(&self, request: &RequestInfo<'_>) -> RequestAction;
 
-    /// Script to run in a page whose main-frame load just committed
-    /// (`None`: nothing to inject). Called on the UI thread.
-    fn page_script(&self, top_url: &str) -> Option<String>;
+    /// What a frame whose script context was just created is given. `top_url`
+    /// is the page the frame belongs to (the shields decision), `frame_url`
+    /// the frame's own (its host's rules). Called on the UI thread.
+    fn frame_cosmetic(&self, top_url: &str, frame_url: &str) -> FrameCosmetic;
+
+    /// Stylesheet rules hiding the generic selectors that match class names
+    /// and ids a frame has found. Called on the UI thread.
+    fn generic_hide(
+        &self,
+        top_url: &str,
+        frame_url: &str,
+        classes: &[String],
+        ids: &[String],
+    ) -> Vec<String>;
+}
+
+/// What [`ContentFilter::frame_cosmetic`] gives a frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FrameCosmetic {
+    /// Stylesheet rules (hiding).
+    pub css: Vec<String>,
+    /// Procedural filters (adblock's JSON) for the frame's executor.
+    pub procedural: Vec<String>,
+    /// Scriptlets, run in the frame from the browser (a page's CSP does not apply).
+    pub script: Option<String>,
+    /// The frame should report class names and ids ([`ContentFilter::generic_hide`]).
+    pub generic: bool,
 }
 
 impl fmt::Debug for dyn ContentFilter {
@@ -228,8 +253,11 @@ mod tests {
                 _ => RequestAction::Allow,
             }
         }
-        fn page_script(&self, _: &str) -> Option<String> {
-            None
+        fn frame_cosmetic(&self, _: &str, _: &str) -> FrameCosmetic {
+            FrameCosmetic::default()
+        }
+        fn generic_hide(&self, _: &str, _: &str, _: &[String], _: &[String]) -> Vec<String> {
+            Vec::new()
         }
     }
 

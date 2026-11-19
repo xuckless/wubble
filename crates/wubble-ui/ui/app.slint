@@ -5,7 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
@@ -38,7 +38,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -354,6 +354,8 @@ export component AppWindow inherits Window {
     in property <[SpaceSetting]> settings-spaces <=> settings-ui.spaces;
     in property <[EntryItem]> settings-site-zoom <=> settings-ui.site-zoom;
     in property <[EntryItem]> settings-site-permissions <=> settings-ui.site-permissions;
+    in property <[FilterListItem]> settings-filter-lists <=> settings-ui.filter-lists;
+    in property <bool> settings-filter-busy <=> settings-ui.filter-busy;
     in property <AboutView> settings-about <=> settings-ui.about;
     // The history page: the lines (day headers and visits), the search state, "Show more".
     in property <[HistoryLineItem]> history-lines;
@@ -416,6 +418,8 @@ export component AppWindow inherits Window {
     callback space-icon-chosen <=> settings-ui.space-icon-chosen;
     callback site-zoom-removed <=> settings-ui.site-zoom-removed;
     callback site-permission-removed <=> settings-ui.site-permission-removed;
+    callback filter-list-toggled <=> settings-ui.filter-list-toggled;
+    callback filter-lists-update <=> settings-ui.filter-lists-update;
     // The error panel's default button (Reload, or Go back) and its second (Proceed).
     callback error-primary();
     callback error-secondary();

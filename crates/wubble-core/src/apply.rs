@@ -114,6 +114,14 @@ pub enum Applied {
     SidebarMode(SidebarMode),
     BlockerEnabled(bool),
     BlockerExceptions(Vec<String>),
+    /// Which filter lists are on (`blocker.lists`, `.cookie_banners`, `.strip_params`,
+    /// `.custom_lists`): the blocker is rebuilt in the background.
+    BlockerLists {
+        lists: std::collections::BTreeMap<String, u32>,
+        cookie_banners: bool,
+        strip_params: bool,
+        custom: Vec<String>,
+    },
     /// Expire history by the stored retention (the store reads it).
     ExpireHistory,
     /// The zoom of sites without their own level.
@@ -204,6 +212,22 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::SIDEBAR_MODE.key => Applied::SidebarMode(SidebarMode::from_id(v)?),
         k if k == s::BLOCKER_ENABLED.key => Applied::BlockerEnabled(flag(def, stored)),
         k if k == s::BLOCKER_EXCEPTIONS.key => Applied::BlockerExceptions(list(def, stored)),
+        k if [
+            s::BLOCKER_LISTS.key,
+            s::BLOCKER_COOKIE_BANNERS.key,
+            s::BLOCKER_STRIP_PARAMS.key,
+            s::BLOCKER_CUSTOM_LISTS.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::BlockerLists {
+                lists: serde_json::from_str(value_of(&s::BLOCKER_LISTS, stored))
+                    .unwrap_or_default(),
+                cookie_banners: flag(&s::BLOCKER_COOKIE_BANNERS, stored),
+                strip_params: flag(&s::BLOCKER_STRIP_PARAMS, stored),
+                custom: list(&s::BLOCKER_CUSTOM_LISTS, stored),
+            }
+        }
         k if k == s::HISTORY_RETENTION_DAYS.key => Applied::ExpireHistory,
         k if k == s::ZOOM_DEFAULT.key => Applied::ZoomDefault(count(def, stored)),
         k if k == s::SITE_ZOOM.key => Applied::SiteZoom(map(def, stored)),
@@ -379,6 +403,29 @@ mod tests {
         assert_eq!(effect_of("no.such", &empty), None);
         // The seam owns the width while the app runs.
         assert_eq!(effect_of(settings::SIDEBAR_WIDTH.key, &empty), None);
+    }
+
+    #[test]
+    fn the_list_settings_apply_live_as_one_selection() {
+        let s = stored(&[
+            ("blocker.lists", r#"{"easylist":0}"#),
+            ("blocker.cookie_banners", "0"),
+            ("blocker.custom_lists", r#"["https://l.test/a.txt"]"#),
+        ]);
+        let want = Some(Applied::BlockerLists {
+            lists: [("easylist".to_owned(), 0)].into(),
+            cookie_banners: false,
+            strip_params: true,
+            custom: vec!["https://l.test/a.txt".into()],
+        });
+        for key in [
+            "blocker.lists",
+            "blocker.cookie_banners",
+            "blocker.strip_params",
+            "blocker.custom_lists",
+        ] {
+            assert_eq!(effect_of(key, &s), want, "{key}");
+        }
     }
 
     #[test]

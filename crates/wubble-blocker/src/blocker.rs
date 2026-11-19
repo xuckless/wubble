@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use adblock::Engine;
+use adblock::cosmetic_filter_cache::ProceduralOrActionFilter;
 use adblock::lists::{FilterFormat, FilterSet, ParseOptions, RuleTypes};
 use adblock::request::Request;
 use adblock::resources::{PermissionMask, Resource};
@@ -38,49 +39,48 @@ pub struct Cosmetic {
 impl Cosmetic {
     /// One `sel{display:none!important}` rule per selector, so one bad selector
     /// cannot void the rest.
-    pub fn css(&self) -> String {
-        self.hide_selectors
-            .iter()
-            .map(|s| format!("{s}{{display:none!important}}\n"))
-            .collect()
+    pub fn rules(&self) -> Vec<String> {
+        self.hide_selectors.iter().map(|s| hide_rule(s)).collect()
     }
 
-    /// The script that applies this page's rules: a `<style>` with
-    /// [`Self::css`] (added as soon as the document has a root element),
-    /// then the scriptlets. `None` when there is nothing to apply.
+    /// [`Self::procedural_actions`] split in two: the filters that are plain
+    /// CSS (a selector alone, or with `:style()`) as stylesheet rules, and the
+    /// rest as the JSON the page's executor runs (`cosmetic.js`).
+    pub fn procedural(&self) -> (Vec<String>, Vec<String>) {
+        let (mut css, mut script) = (Vec::new(), Vec::new());
+        for json in &self.procedural_actions {
+            // Anything adblock wrote that does not read back is dropped.
+            if let Ok(filter) = serde_json::from_str::<ProceduralOrActionFilter>(json) {
+                match filter.as_css() {
+                    Some((selector, style)) => css.push(format!("{selector}{{{style}}}")),
+                    None => script.push(json.clone()),
+                }
+            }
+        }
+        (css, script)
+    }
+
+    /// The scriptlets, wrapped in one function scope; `None` when there are none.
     ///
-    /// Brave applies the same data (`url_cosmetic_resources`: hide
-    /// selectors as a stylesheet, then `injected_script`) from its cosmetic
-    /// filters tab helper (brave-core `components/brave_shields`, MPL-2.0);
-    /// no code copied. Generic class/id selectors and procedural filters
-    /// are not applied yet.
-    pub fn page_script(&self) -> Option<String> {
-        let css = self.css();
-        if css.is_empty() && self.injected_script.is_empty() {
+    /// adblock emits scriptlet dependencies (uBO's `safeSelf`, ...) as
+    /// top-level functions that read `scriptletGlobals`. Brave's cosmetic
+    /// filters init script and uBO's injector both declare it and keep the
+    /// scriptlets in one function scope, off the page's globals; a plain
+    /// object is enough for uBO's property access.
+    pub fn scriptlets(&self) -> Option<String> {
+        if self.injected_script.is_empty() {
             return None;
         }
-        let mut script = String::new();
-        if !css.is_empty() {
-            let css = serde_json::to_string(&css).expect("a string always serialises");
-            script.push_str(&format!(
-                "(function(){{var css={css};function add(){{var s=document.createElement('style');\
-                 s.textContent=css;(document.head||document.documentElement).appendChild(s);}}\
-                 if(document.documentElement){{add();}}else{{document.addEventListener(\
-                 'readystatechange',add,{{once:true}});}}}})();\n"
-            ));
-        }
-        if !self.injected_script.is_empty() {
-            // adblock emits scriptlet dependencies (uBO's `safeSelf`, ...) as
-            // top-level functions that read `scriptletGlobals`. Brave's
-            // cosmetic filters init script and uBO's injector both declare it
-            // and keep the scriptlets in one function scope, off the page's
-            // globals; a plain object is enough for uBO's property access.
-            script.push_str("(function(){const scriptletGlobals={};\n");
-            script.push_str(&self.injected_script);
-            script.push_str("\n})();\n");
-        }
-        Some(script)
+        Some(format!(
+            "(function(){{const scriptletGlobals={{}};\n{}\n}})();\n",
+            self.injected_script
+        ))
     }
+}
+
+/// The rule that hides `selector`.
+pub fn hide_rule(selector: &str) -> String {
+    format!("{selector}{{display:none!important}}")
 }
 
 /// Compiled filter engine. `Send + Sync`; holds no per-site state.
@@ -383,8 +383,11 @@ mod tests {
         let c = b.cosmetic("https://example.com/", Shields::On);
         assert_eq!(c.hide_selectors, [".aaa", ".sponsor"]);
         assert_eq!(
-            c.css(),
-            ".aaa{display:none!important}\n.sponsor{display:none!important}\n"
+            c.rules(),
+            [
+                ".aaa{display:none!important}",
+                ".sponsor{display:none!important}"
+            ]
         );
         assert!(
             b.cosmetic("https://other.org/", Shields::On)
@@ -412,23 +415,19 @@ mod tests {
     }
 
     #[test]
-    fn page_script_escapes_css_and_appends_scriptlets() {
-        assert_eq!(Cosmetic::default().page_script(), None);
+    fn rules_and_scriptlets_of_a_page() {
+        assert_eq!(Cosmetic::default().scriptlets(), None);
         let c = Cosmetic {
             hide_selectors: vec![r#"a[href="x\y"]"#.into()],
             ..Cosmetic::default()
         };
-        let script = c.page_script().unwrap();
-        assert!(
-            script.contains(r#"var css="a[href=\"x\\y\"]{display:none!important}\n";"#),
-            "{script}"
-        );
+        assert_eq!(c.rules(), [r#"a[href="x\y"]{display:none!important}"#]);
         let c = Cosmetic {
             injected_script: "window.scriptlet=1;".into(),
             ..Cosmetic::default()
         };
         assert_eq!(
-            c.page_script().as_deref(),
+            c.scriptlets().as_deref(),
             Some("(function(){const scriptletGlobals={};\nwindow.scriptlet=1;\n})();\n")
         );
     }
@@ -443,7 +442,7 @@ mod tests {
         let b = Blocker::from_lists(&["example.com##+js(dep-user)\n"]).with_resources_json(res);
         let script = b
             .cosmetic("https://example.com/", Shields::On)
-            .page_script()
+            .scriptlets()
             .unwrap();
         let body = script
             .strip_prefix("(function(){const scriptletGlobals={};\n")
@@ -454,22 +453,56 @@ mod tests {
     }
 
     #[test]
-    fn page_script_from_host_rules() {
+    fn host_rules_become_rules_only_for_their_host() {
         let b = Blocker::from_lists(&["example.com##.sponsor\n"]);
-        let script = b
-            .cosmetic("https://example.com/", Shields::On)
-            .page_script()
-            .unwrap();
-        assert!(script.contains(".sponsor{display:none!important}"));
-        assert_eq!(
-            b.cosmetic("https://other.org/", Shields::On).page_script(),
-            None
+        let c = b.cosmetic("https://example.com/", Shields::On);
+        assert_eq!(c.rules(), [".sponsor{display:none!important}"]);
+        assert!(
+            b.cosmetic("https://other.org/", Shields::On)
+                .rules()
+                .is_empty()
         );
-        assert_eq!(
+        assert!(
             b.cosmetic("https://example.com/", Shields::Off)
-                .page_script(),
-            None
+                .rules()
+                .is_empty()
         );
+    }
+
+    const COOKIES: &str = "##.cookie-notice\n###consent\n##div[class*=\"adbox\"]\n\
+        example.com#@#.cookie-notice\nnews.test##.promo\n@@||plain.test^$generichide\n\
+        news.test##.box:style(margin: 0)\nnews.test##.row:has-text(Sponsored)\n";
+
+    #[test]
+    fn generic_class_and_id_rules_wait_for_the_page_s_names() {
+        let b = Blocker::from_lists(&[COOKIES]);
+        let c = b.cosmetic("https://a.test/", Shields::On);
+        // misc generic selectors are already in the page's hide list
+        assert_eq!(c.hide_selectors, [r#"div[class*="adbox"]"#]);
+        assert_eq!(
+            b.generic_selectors(&["cookie-notice", "x"], &["consent"], &c),
+            ["#consent", ".cookie-notice"]
+        );
+        let c = b.cosmetic("https://example.com/", Shields::On);
+        assert_eq!(
+            b.generic_selectors(&["cookie-notice"], &["consent"], &c),
+            ["#consent"]
+        );
+        let c = b.cosmetic("https://news.test/", Shields::On);
+        assert!(c.hide_selectors.contains(&".promo".to_string()));
+        let c = b.cosmetic("https://plain.test/", Shields::On);
+        assert!(c.generichide);
+        assert!(b.generic_selectors(&["cookie-notice"], &[], &c).is_empty());
+    }
+
+    #[test]
+    fn procedural_filters_split_into_css_and_script() {
+        let b = Blocker::from_lists(&[COOKIES]);
+        let c = b.cosmetic("https://news.test/", Shields::On);
+        let (css, script) = c.procedural();
+        assert_eq!(css, [".box{margin: 0}"]);
+        assert_eq!(script.len(), 1, "{script:?}");
+        assert!(script[0].contains("has-text"), "{script:?}");
     }
 
     const LIST: &str = "||ads.example^\n@@||ads.example/ok^\n||img.test^$image,redirect=1x1.gif\nexample.com##.sponsor\n";

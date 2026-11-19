@@ -155,15 +155,16 @@ pub const BLOCKER_LISTS_AUTO_UPDATE: SettingDef = SettingDef {
     section: Section::Privacy,
     restart: true,
 };
-/// The cookie-notice lists (EasyList and uBlock's): banners are hidden, never clicked. Until generic
-/// class/id hiding is wired, only their site-specific and complex generic rules apply.
+/// The cookie-notice lists (EasyList and uBlock's): banners are hidden, never clicked. Their
+/// generic class and id rules apply through the page's collector (`cosmetic.js`). Live: the
+/// blocker is rebuilt in the background.
 pub const BLOCKER_COOKIE_BANNERS: SettingDef = SettingDef {
     key: "blocker.cookie_banners",
     kind: SettingKind::Bool,
     default: "1",
     label: "Hide cookie banners",
     section: Section::Privacy,
-    restart: true,
+    restart: false,
 };
 /// The URL tracking list: `$removeparam` rules strip tracking parameters from requests.
 pub const BLOCKER_STRIP_PARAMS: SettingDef = SettingDef {
@@ -172,17 +173,17 @@ pub const BLOCKER_STRIP_PARAMS: SettingDef = SettingDef {
     default: "1",
     label: "Remove tracking parameters from links",
     section: Section::Privacy,
-    restart: true,
+    restart: false,
 };
 /// Filter lists of the user's own, by URL; only HTTPS URLs are fetched, and only while lists
-/// are kept up to date.
+/// are kept up to date or when the user presses "Update now".
 pub const BLOCKER_CUSTOM_LISTS: SettingDef = SettingDef {
     key: "blocker.custom_lists",
     kind: SettingKind::List,
     default: "[]",
     label: "Your own filter lists (HTTPS URLs)",
     section: Section::Privacy,
-    restart: true,
+    restart: false,
 };
 /// Per-list switches by catalog id (`wubble_blocker::catalog`): 0 off, 1 on; a list without an
 /// entry keeps its default.
@@ -192,7 +193,7 @@ pub const BLOCKER_LISTS: SettingDef = SettingDef {
     default: "{}",
     label: "Filter lists switched from their default",
     section: Section::Privacy,
-    restart: true,
+    restart: false,
 };
 /// Visits older than this many days are expired; 0 keeps everything.
 pub const HISTORY_RETENTION_DAYS: SettingDef = SettingDef {

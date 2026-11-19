@@ -11,21 +11,26 @@
 //! snapshot bundled in the binary, or the copy downloaded into
 //! `<profile>/blocklists` (plus the user's own `*.txt` there). The compiled
 //! engine is cached in `<profile>/blocker-engine.bin`. Nothing is downloaded
-//! unless `blocker.lists_auto_update` is on (TODO.md, Decided).
+//! unless `blocker.lists_auto_update` is on or the user presses "Update now"
+//! (TODO.md, Decided). Switching lists on or off rebuilds the engine on a
+//! worker thread and swaps it in ([`Blocking::reselect`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use wubble_blocker::catalog::Selection;
 use wubble_blocker::{
-    Blocker, Decision, Due, NetRequest, ResourceType, Shields, SiteOverrides, Source,
+    Blocker, Cosmetic, Decision, Due, ListRow, NetRequest, ResourceType, Shields, SiteOverrides,
+    Source,
 };
-use wubble_engine::filter::{ContentFilter, RequestAction, RequestInfo, RequestKind};
+use wubble_engine::filter::{
+    ContentFilter, FrameCosmetic, RequestAction, RequestInfo, RequestKind,
+};
 use wubble_store::{BlockerEnabled, BlockerExceptions, BlockerListsAutoUpdate, Setting};
 
 /// The list directory inside a profile.
@@ -104,6 +109,20 @@ impl PageBlocks {
     }
 }
 
+/// Frame URLs whose cosmetic rules are kept: a page asks again for each batch
+/// of new class names, and adblock rebuilds a URL's data on every query.
+const COSMETIC_CACHE: usize = 64;
+
+/// The one owner of which lists are on, and where they live.
+#[derive(Default)]
+struct ListState {
+    selection: Selection,
+    /// Set by [`Blocking::start`]; nothing is rebuilt before.
+    profile: Option<PathBuf>,
+    /// Rules per list id, counted from the list texts after each build.
+    rules: BTreeMap<String, u32>,
+}
+
 /// The blocker shared with CEF's IO thread, and what each view's page had
 /// blocked, for the shell to show.
 pub struct Blocking {
@@ -113,6 +132,20 @@ pub struct Blocking {
     /// Per view ([`wubble_engine::view::View::browser_id`]), since its last
     /// main-frame request; dropped when the view goes ([`Self::keep_views`]).
     blocked: Mutex<HashMap<i32, PageBlocks>>,
+    lists: Mutex<ListState>,
+    /// Counts the requests for a rebuild: only the newest one is swapped in.
+    generation: AtomicU64,
+    /// Held while an engine compiles: a burst of toggles compiles the first
+    /// and the last selection only.
+    compiling: Mutex<()>,
+    /// Rebuilds waiting or running.
+    rebuilding: AtomicUsize,
+    /// An update from the network is running.
+    updating: AtomicBool,
+    /// Cosmetic data per frame URL, cleared when the blocker is replaced.
+    cosmetic: Mutex<HashMap<String, Arc<Cosmetic>>>,
+    /// Called (on a worker thread) when the lists' state changed.
+    changed: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Blocking {
@@ -123,6 +156,13 @@ impl Blocking {
             overrides: RwLock::new(SiteOverrides::default()),
             enabled: AtomicBool::new(BlockerEnabled::default()),
             blocked: Mutex::new(HashMap::new()),
+            lists: Mutex::new(ListState::default()),
+            generation: AtomicU64::new(0),
+            compiling: Mutex::new(()),
+            rebuilding: AtomicUsize::new(0),
+            updating: AtomicBool::new(false),
+            cosmetic: Mutex::new(HashMap::new()),
+            changed: Mutex::new(None),
         })
     }
 
@@ -141,31 +181,45 @@ impl Blocking {
         settings: &BlockerSettings,
         fetch: Fetch,
     ) -> Option<JoinHandle<()>> {
-        let (dir, cache) = paths(profile);
-        let selection = settings.selection.clone();
-        let sources = wubble_blocker::sources(&dir, &selection);
-        let compiled = self.load_cached(settings, &sources, &cache);
-        let update = settings.lists_auto_update;
-        if compiled && !update {
-            return None;
+        let (dir, _) = paths(profile);
+        {
+            let mut lists = self.state();
+            lists.selection = settings.selection.clone();
+            lists.profile = Some(profile.to_owned());
         }
+        let sources = wubble_blocker::sources(&dir, &settings.selection);
+        let compiled = self.load_cached(settings, &sources, &paths(profile).1);
+        let update = settings.lists_auto_update;
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let this = self.clone();
+        let work = move || {
+            if compiled {
+                this.count_rules(&sources);
+            } else {
+                this.run_rebuild(generation);
+            }
+            if update {
+                loop {
+                    this.update_once(fetch, Due::At(unix_now()));
+                    std::thread::sleep(UPDATE_CHECK);
+                }
+            }
+        };
         let spawned = std::thread::Builder::new()
             .name("wubble-blocker".into())
-            .spawn(move || {
-                if !compiled {
-                    this.replace_blocker(Blocker::compile(&sources, Some(&cache)));
-                }
-                if update {
-                    loop {
-                        this.update_once(&dir, &cache, &selection, fetch);
-                        std::thread::sleep(UPDATE_CHECK);
-                    }
-                }
-            });
-        spawned
-            .inspect_err(|e| eprintln!("wubble: blocker lists not loaded: {e}"))
-            .ok()
+            .spawn(work);
+        match spawned {
+            // Counting alone is not worth the caller waiting for.
+            Ok(thread) if compiled && !update => {
+                drop(thread);
+                None
+            }
+            Ok(thread) => Some(thread),
+            Err(e) => {
+                eprintln!("wubble: blocker lists not loaded: {e}");
+                None
+            }
+        }
     }
 
     /// The settings, then the cached blocker if it matches the sources.
@@ -182,15 +236,181 @@ impl Blocking {
         }
     }
 
-    /// Fetches the due lists into `dir`; recompiles and swaps if any changed.
-    fn update_once(&self, dir: &Path, cache: &Path, selection: &Selection, fetch: Fetch) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let specs = wubble_blocker::specs(selection);
-        if !wubble_blocker::refresh(dir, &specs, Due::At(now), &fetch).is_empty() {
-            let sources = wubble_blocker::sources(dir, selection);
-            self.replace_blocker(Blocker::compile(&sources, Some(cache)));
+    fn state(&self) -> std::sync::MutexGuard<'_, ListState> {
+        self.lists.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Compiles the current selection and swaps the result in, unless a newer
+    /// rebuild was asked for meanwhile (`generation` is no longer the newest).
+    /// Slow (seconds): worker threads only.
+    fn rebuild(&self, generation: u64) {
+        {
+            let _one_at_a_time = self
+                .compiling
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let newest = || self.generation.load(Ordering::SeqCst) == generation;
+            let (profile, selection) = {
+                let lists = self.state();
+                (lists.profile.clone(), lists.selection.clone())
+            };
+            if let Some(profile) = profile.filter(|_| newest()) {
+                let (dir, cache) = paths(&profile);
+                let sources = wubble_blocker::sources(&dir, &selection);
+                let blocker = Blocker::compile(&sources, Some(&cache));
+                if newest() {
+                    self.replace_blocker(blocker);
+                    self.count_rules(&sources);
+                }
+            }
+        }
+    }
+
+    /// [`Self::rebuild`] counted as running, then the page told.
+    fn run_rebuild(&self, generation: u64) {
+        self.rebuilding.fetch_add(1, Ordering::SeqCst);
+        self.rebuild(generation);
+        self.rebuilding.fetch_sub(1, Ordering::SeqCst);
+        self.notify();
+    }
+
+    /// Records the rules in each source list.
+    fn count_rules(&self, sources: &[Source]) {
+        let rules = wubble_blocker::rule_counts(sources);
+        self.state().rules = rules;
+        self.notify();
+    }
+
+    /// Switches to `selection` (the list settings changed): rebuilds on a
+    /// worker thread; requests pass on the old engine until the swap. The
+    /// thread, if one was started.
+    pub fn reselect(self: &Arc<Self>, selection: Selection) -> Option<JoinHandle<()>> {
+        {
+            let mut lists = self.state();
+            if lists.selection == selection || lists.profile.is_none() {
+                return None;
+            }
+            lists.selection = selection;
+        }
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let this = self.clone();
+        // Counted now, so the page shows "rebuilding" before the thread runs.
+        self.rebuilding.fetch_add(1, Ordering::SeqCst);
+        let spawned = std::thread::Builder::new()
+            .name("wubble-blocker-rebuild".into())
+            .spawn(move || {
+                this.rebuild(generation);
+                this.rebuilding.fetch_sub(1, Ordering::SeqCst);
+                this.notify();
+            });
+        spawned
+            .inspect_err(|e| {
+                self.rebuilding.fetch_sub(1, Ordering::SeqCst);
+                eprintln!("wubble: blocker not rebuilt: {e}");
+            })
+            .ok()
+    }
+
+    /// Fetches the lists that are `due` into the profile; rebuilds if any
+    /// changed. Returns how many were written and how many were asked for.
+    fn update_once(&self, fetch: Fetch, due: Due) -> (usize, usize) {
+        let (profile, selection) = {
+            let lists = self.state();
+            (lists.profile.clone(), lists.selection.clone())
+        };
+        let Some(profile) = profile else {
+            return (0, 0);
+        };
+        let specs = wubble_blocker::specs(&selection);
+        let written = wubble_blocker::refresh(&paths(&profile).0, &specs, due, &fetch).len();
+        if written > 0 {
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            self.run_rebuild(generation);
+        }
+        (written, specs.len())
+    }
+
+    /// "Update now": fetches every selected list, rebuilds, then calls `done`
+    /// with a sentence for the user. Only the user's button starts this (and
+    /// the opt-in auto-update does the same on a schedule). `None` while an
+    /// update already runs.
+    pub fn update_now(
+        self: &Arc<Self>,
+        done: impl FnOnce(String) + Send + 'static,
+    ) -> Option<JoinHandle<()>> {
+        self.update_now_with(wubble_blocker::fetch_http, done)
+    }
+
+    fn update_now_with(
+        self: &Arc<Self>,
+        fetch: Fetch,
+        done: impl FnOnce(String) + Send + 'static,
+    ) -> Option<JoinHandle<()>> {
+        if self.updating.swap(true, Ordering::SeqCst) {
+            return None;
+        }
+        let this = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("wubble-blocker-update".into())
+            .spawn(move || {
+                let (written, asked) = this.update_once(fetch, Due::All);
+                this.updating.store(false, Ordering::SeqCst);
+                this.notify();
+                done(update_report(written, asked));
+            });
+        spawned
+            .inspect_err(|e| {
+                self.updating.store(false, Ordering::SeqCst);
+                eprintln!("wubble: blocker update not started: {e}");
+            })
+            .ok()
+    }
+
+    /// A rebuild or an update is running.
+    pub fn is_busy(&self) -> bool {
+        self.rebuilding.load(Ordering::SeqCst) > 0 || self.updating.load(Ordering::SeqCst)
+    }
+
+    /// The settings page's rows: every list, on or off, with what is known of it.
+    pub fn list_rows(&self) -> Vec<ListRow> {
+        let (profile, selection, rules) = {
+            let lists = self.state();
+            (
+                lists.profile.clone(),
+                lists.selection.clone(),
+                lists.rules.clone(),
+            )
+        };
+        let fetched = profile.map_or_else(BTreeMap::new, |profile| {
+            let specs: Vec<_> = wubble_blocker::catalog::LISTS
+                .iter()
+                .map(wubble_blocker::ListSpec::from)
+                .chain(
+                    selection
+                        .custom
+                        .iter()
+                        .map(|u| wubble_blocker::ListSpec::custom(u)),
+                )
+                .collect();
+            wubble_blocker::last_fetch(&paths(&profile).0, &specs)
+        });
+        wubble_blocker::rows(&selection, &fetched, &rules)
+    }
+
+    /// Calls `f` whenever the lists' state changes (a rebuild or update ended,
+    /// counts arrived), from a worker thread.
+    pub fn on_lists_changed(&self, f: impl Fn() + Send + Sync + 'static) {
+        *self.changed.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(f));
+    }
+
+    fn notify(&self) {
+        let f = self
+            .changed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(f) = f {
+            f();
         }
     }
 
@@ -236,6 +456,29 @@ impl Blocking {
             new,
         );
         drop(old);
+        self.cosmetic
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
+    /// The cosmetic data of a frame's URL, as a page with shields on gets it.
+    fn cosmetic_of(&self, frame_url: &str) -> Arc<Cosmetic> {
+        if let Some(found) = self
+            .cosmetic
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(frame_url)
+        {
+            return found.clone();
+        }
+        let made = Arc::new(self.current().cosmetic(frame_url, Shields::On));
+        let mut cache = self.cosmetic.lock().unwrap_or_else(PoisonError::into_inner);
+        if cache.len() >= COSMETIC_CACHE {
+            cache.clear();
+        }
+        cache.insert(frame_url.to_owned(), made.clone());
+        made
     }
 
     /// Distinct URLs blocked in a view since its last main-frame request.
@@ -404,13 +647,56 @@ impl ContentFilter for Blocking {
         action
     }
 
-    fn page_script(&self, top_url: &str) -> Option<String> {
-        let shields = self.shields_for(top_url);
-        if shields == Shields::Off {
-            return None;
+    fn frame_cosmetic(&self, top_url: &str, frame_url: &str) -> FrameCosmetic {
+        if self.shields_for(top_url) == Shields::Off || !is_web(frame_url) {
+            return FrameCosmetic::default();
         }
-        self.current().cosmetic(top_url, shields).page_script()
+        let cosmetic = self.cosmetic_of(frame_url);
+        let (mut css, procedural) = cosmetic.procedural();
+        css.splice(0..0, cosmetic.rules());
+        FrameCosmetic {
+            css,
+            procedural,
+            script: cosmetic.scriptlets(),
+            generic: !cosmetic.generichide,
+        }
     }
+
+    fn generic_hide(
+        &self,
+        top_url: &str,
+        frame_url: &str,
+        classes: &[String],
+        ids: &[String],
+    ) -> Vec<String> {
+        if self.shields_for(top_url) == Shields::Off || !is_web(frame_url) {
+            return Vec::new();
+        }
+        let cosmetic = self.cosmetic_of(frame_url);
+        let classes: Vec<&str> = classes.iter().map(String::as_str).collect();
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        self.current()
+            .generic_selectors(&classes, &ids, &cosmetic)
+            .iter()
+            .map(|s| wubble_blocker::hide_rule(s))
+            .collect()
+    }
+}
+
+/// What "Update now" tells the user.
+fn update_report(written: usize, asked: usize) -> String {
+    match (written, asked) {
+        (_, 0) => "No filter lists to update".into(),
+        (0, _) => "Could not download the filter lists".into(),
+        (n, m) if n == m => format!("Updated {n} filter list{}", if n == 1 { "" } else { "s" }),
+        (n, m) => format!("Updated {n} of {m} filter lists"),
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// The engine's request kinds are the blocker's resource types; the two
@@ -609,7 +895,10 @@ example.com##.sponsor
         assert_eq!(check(&b, ads, "https://notsite.org/", Script), Block);
         b.set_enabled(false);
         assert_eq!(check(&b, ads, "https://notsite.org/", Script), Allow);
-        assert_eq!(b.page_script("https://example.com/"), None);
+        assert_eq!(
+            b.frame_cosmetic("https://example.com/", "https://example.com/"),
+            FrameCosmetic::default()
+        );
     }
 
     #[test]
@@ -683,17 +972,97 @@ example.com##.sponsor
         assert_eq!(check(&b, url, SITE, Script), Block);
     }
 
+    const COSMETIC_LIST: &str = "\
+example.com##.sponsor
+##.cookie-notice
+###consent
+##div[class*=\"adbox\"]
+example.com#@#.cookie-notice
+";
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_owned()).collect()
+    }
+
     #[test]
-    fn cosmetic_rules_are_selected_per_host() {
-        let b = blocking(TEST_LIST);
-        let script = b.page_script("https://example.com/a").unwrap();
-        assert!(script.contains(".sponsor{display:none!important}"));
-        assert_eq!(b.page_script("https://other.org/"), None);
-        assert_eq!(b.page_script("file:///example.com/"), None);
+    fn cosmetic_rules_are_selected_per_frame_host() {
+        let b = blocking(COSMETIC_LIST);
+        let frame = |top, url| b.frame_cosmetic(top, url);
+        let page = frame("https://example.com/a", "https://example.com/a");
+        assert!(
+            page.css
+                .contains(&".sponsor{display:none!important}".to_owned())
+        );
+        assert!(page.generic);
+        let other = frame("https://other.org/", "https://other.org/");
+        assert!(
+            !other
+                .css
+                .contains(&".sponsor{display:none!important}".to_owned())
+        );
+        // A frame on another host gets that host's rules, under the page's shields.
+        let sub = frame("https://other.org/", "https://example.com/ad");
+        assert!(
+            sub.css
+                .contains(&".sponsor{display:none!important}".to_owned())
+        );
+        // Not web: nothing, and no collector.
+        assert_eq!(
+            frame("file:///example.com/", "file:///example.com/"),
+            FrameCosmetic::default()
+        );
+        assert_eq!(
+            frame("https://example.com/", "about:blank"),
+            FrameCosmetic::default()
+        );
         let mut o = SiteOverrides::default();
         o.insert("example.com");
         b.set_overrides(o);
-        assert_eq!(b.page_script("https://example.com/a"), None);
+        assert_eq!(
+            frame("https://example.com/a", "https://example.com/a"),
+            FrameCosmetic::default()
+        );
+    }
+
+    #[test]
+    fn generic_selectors_answer_the_names_a_frame_found() {
+        let b = blocking(COSMETIC_LIST);
+        let hide = |top: &str, classes: &[&str], ids: &[&str]| {
+            b.generic_hide(top, top, &names(classes), &names(ids))
+        };
+        assert_eq!(
+            hide("https://a.test/", &["cookie-notice", "x"], &["consent"]),
+            [
+                "#consent{display:none!important}",
+                ".cookie-notice{display:none!important}"
+            ]
+        );
+        // The host's exception wins.
+        assert_eq!(
+            hide("https://example.com/", &["cookie-notice"], &["consent"]),
+            ["#consent{display:none!important}"]
+        );
+        assert!(hide("https://a.test/", &["fine"], &[]).is_empty());
+        let mut o = SiteOverrides::default();
+        o.insert("a.test");
+        b.set_overrides(o);
+        assert!(hide("https://a.test/", &["cookie-notice"], &[]).is_empty());
+        b.set_enabled(false);
+        assert!(hide("https://b.test/", &["cookie-notice"], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_replaced_blocker_clears_the_cosmetic_cache() {
+        let b = blocking(COSMETIC_LIST);
+        let url = "https://example.com/";
+        assert!(!b.frame_cosmetic(url, url).css.is_empty());
+        assert_eq!(b.cosmetic.lock().unwrap().len(), 1);
+        b.replace_blocker(Blocker::from_lists(&["example.com##.other\n"]));
+        assert!(b.cosmetic.lock().unwrap().is_empty());
+        assert_eq!(
+            b.frame_cosmetic(url, url).css,
+            [".other{display:none!important}"]
+        );
     }
 
     struct Profile(PathBuf);
@@ -779,19 +1148,119 @@ example.com##.sponsor
         assert_eq!(check(&b, ads, "https://other.org/", Script), Block);
     }
 
+    /// A started blocker on a profile with no catalog list, for the rebuild tests.
+    fn started(p: &Profile) -> Arc<Blocking> {
+        let b = Blocking::new();
+        {
+            let mut lists = b.state();
+            lists.selection = Selection::none();
+            lists.profile = Some(p.0.clone());
+        }
+        b
+    }
+
+    fn custom_list(p: &Profile, url: &str, text: &str) {
+        let (dir, _) = paths(&p.0);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = wubble_blocker::ListSpec::custom(url).file_name();
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+
+    fn selecting(url: &str) -> Selection {
+        Selection {
+            custom: vec![url.into()],
+            ..Selection::none()
+        }
+    }
+
+    const A: &str = "https://lists.test/a.txt";
+    const B: &str = "https://lists.test/b.txt";
+
     #[test]
     fn an_update_fetches_lists_and_swaps_the_blocker() {
         let p = Profile::new("update");
-        let (dir, cache) = paths(&p.0);
-        let b = Blocking::new();
+        let (dir, _) = paths(&p.0);
+        let b = started(&p);
+        b.state().selection = Selection::default();
         fn fake(_: &str) -> Result<String, String> {
             Ok("||ads.example^\n".into())
         }
-        let selection = Selection::default();
-        b.update_once(&dir, &cache, &selection, fake);
+        let (written, asked) = b.update_once(fake, Due::At(unix_now()));
+        assert!(written > 0 && written == asked, "{written} of {asked}");
         assert!(dir.join("easylist.txt").exists());
         assert_eq!(check(&b, "https://ads.example/x.js", SITE, Script), Block);
         // Everything is fresh now: a second update fetches nothing.
-        b.update_once(&dir, &cache, &selection, no_network);
+        assert_eq!(b.update_once(no_network, Due::At(unix_now())).0, 0);
+    }
+
+    #[test]
+    fn update_now_fetches_everything_selected_and_reports() {
+        let p = Profile::new("update-now");
+        let b = started(&p);
+        b.state().selection = selecting(A);
+        fn fake(_: &str) -> Result<String, String> {
+            Ok("||fresh.test^\n".into())
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        b.update_now_with(fake, move |text| tx.send(text).unwrap())
+            .expect("starts")
+            .join()
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), "Updated 1 filter list");
+        assert_eq!(check(&b, "https://fresh.test/x.js", SITE, Script), Block);
+        assert!(!b.is_busy());
+        // Fresh lists are fetched again when the user asks.
+        let (tx, rx) = std::sync::mpsc::channel();
+        b.update_now_with(fake, move |text| tx.send(text).unwrap())
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(rx.recv().unwrap(), "Updated 1 filter list");
+    }
+
+    #[test]
+    fn update_reports_read_as_sentences() {
+        assert_eq!(update_report(0, 0), "No filter lists to update");
+        assert_eq!(update_report(0, 3), "Could not download the filter lists");
+        assert_eq!(update_report(3, 3), "Updated 3 filter lists");
+        assert_eq!(update_report(2, 3), "Updated 2 of 3 filter lists");
+    }
+
+    #[test]
+    fn reselecting_rebuilds_without_a_restart() {
+        let p = Profile::new("reselect");
+        custom_list(&p, A, "||a.test^\n");
+        custom_list(&p, B, "||b.test^\n");
+        let b = started(&p);
+        b.reselect(selecting(A)).unwrap().join().unwrap();
+        let blocked = |host: &str| check(&b, &format!("https://{host}/x.js"), SITE, Script);
+        assert_eq!((blocked("a.test"), blocked("b.test")), (Block, Allow));
+        // The same selection again is nothing to do.
+        assert!(b.reselect(selecting(A)).is_none());
+        b.reselect(selecting(B)).unwrap().join().unwrap();
+        assert_eq!((blocked("a.test"), blocked("b.test")), (Allow, Block));
+        // The rows know how many rules each list has.
+        let id = wubble_blocker::ListSpec::custom(B).id;
+        let rows = b.list_rows();
+        assert_eq!(rows.iter().find(|r| r.id == id).unwrap().rules, Some(1));
+    }
+
+    /// Two selections asked for while one engine compiles: only the newest is built.
+    #[test]
+    fn the_newest_selection_wins() {
+        let p = Profile::new("newest");
+        custom_list(&p, A, "||a.test^\n");
+        custom_list(&p, B, "||b.test^\n");
+        let b = started(&p);
+        let busy = b.compiling.lock().unwrap();
+        let first = b.reselect(selecting(A)).unwrap();
+        let second = b.reselect(selecting(B)).unwrap();
+        assert!(b.is_busy());
+        drop(busy);
+        first.join().unwrap();
+        second.join().unwrap();
+        assert!(!b.is_busy());
+        let blocked = |host: &str| check(&b, &format!("https://{host}/x.js"), SITE, Script);
+        assert_eq!((blocked("a.test"), blocked("b.test")), (Allow, Block));
     }
 }

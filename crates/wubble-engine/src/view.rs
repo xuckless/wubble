@@ -666,7 +666,9 @@ impl View {
                         is_main,
                         pid,
                     };
-                    if let Some(event) = frame_message(frame, text) {
+                    if let Some((FrameChannel::Cosmetic, body)) = FrameChannel::split(&text) {
+                        self.answer_cosmetic(&frame, body);
+                    } else if let Some(event) = frame_message(frame, text) {
                         self.emit_page(event, mode);
                     }
                 }
@@ -768,24 +770,45 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
-            Route::PageCommitted(url) => {
-                self.inject_page_script(&url);
-                self.page.push(PageEvent::Committed);
-            }
+            Route::PageCommitted => self.page.push(PageEvent::Committed),
         }
     }
 
-    /// Runs the content filter's script for the page that just committed
-    /// (cosmetic filtering), in the main frame.
-    fn inject_page_script(&mut self, url: &str) {
-        let Some(script) = self.filter.as_ref().and_then(|f| f.page_script(url)) else {
+    /// Answers a frame's `cosmetic.js` with the content filter's rules
+    /// (`cosmetic::Request`): the data goes back on the channel, scriptlets
+    /// run in the frame from here.
+    fn answer_cosmetic(&mut self, frame: &crate::page::FrameInfo, body: &str) {
+        use crate::cosmetic::{Reply, Request};
+        let Some(filter) = self.filter.clone() else {
             return;
         };
-        if let Err(e) = self.producer.execute_script(&script, url) {
-            eprintln!(
-                "wubble-engine: view {}: page script not run: {e}",
-                self.browser_id
-            );
+        // A main frame is its own page; a subframe's page is the view's.
+        let top = if frame.is_main {
+            frame.url.clone()
+        } else {
+            self.nav.page.url.clone()
+        };
+        let reply = match Request::parse(body) {
+            Some(Request::Hello) => {
+                let given = filter.frame_cosmetic(&top, &frame.url);
+                if let Some(script) = &given.script {
+                    self.run_script_in(&frame.id, script);
+                }
+                Reply {
+                    css: given.css,
+                    procedural: given.procedural,
+                    generic: given.generic,
+                }
+            }
+            Some(Request::Names { classes, ids }) => Reply {
+                css: filter.generic_hide(&top, &frame.url, &classes, &ids),
+                generic: true,
+                ..Reply::default()
+            },
+            None => return,
+        };
+        if reply != Reply::default() {
+            self.send_frame_message(&frame.id, FrameChannel::Cosmetic, &reply.to_text());
         }
     }
 
@@ -1474,9 +1497,9 @@ enum Route {
     ObserveZoom,
     /// The renderer process ended.
     Crashed,
-    /// The main frame committed a load of this URL (welding reports
-    /// `LoadStart` for the main frame only).
-    PageCommitted(String),
+    /// The main frame committed a load (welding reports `LoadStart` for the
+    /// main frame only).
+    PageCommitted,
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1498,6 +1521,8 @@ fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEven
             frame: frame.id,
             request: clipboard_request(body)?,
         },
+        // Answered by the engine itself (`View::answer_cosmetic`).
+        FrameChannel::Cosmetic => return None,
         FrameChannel::Zoom => PageEvent::WheelZoom {
             zoom_in: match body {
                 "in" => true,
@@ -1528,7 +1553,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
     match event {
         E::AddressChanged { url } => vec![Route::Nav(NavInput::Address(url)), Route::ObserveZoom],
         E::TitleChanged { title } => one(Route::Nav(NavInput::Title(title))),
-        E::LoadStart { url } => one(Route::PageCommitted(url)),
+        E::LoadStart { .. } => one(Route::PageCommitted),
         E::LoadingStateChanged {
             loading,
             can_go_back,
@@ -2237,6 +2262,7 @@ mod tests {
             FrameChannel::Clipboard,
             FrameChannel::Zoom,
             FrameChannel::Probes,
+            FrameChannel::Cosmetic,
         ] {
             assert_eq!(
                 FrameChannel::split(&channel.join("x\ny")),
@@ -2467,15 +2493,14 @@ mod tests {
         );
     }
 
-    /// The cosmetic-filter hook: a main-frame commit asks for the page
-    /// script, the end of the load does not.
+    /// A main-frame commit is reported, the end of the load is not.
     #[test]
-    fn a_main_frame_commit_routes_to_the_page_script() {
+    fn a_main_frame_commit_is_reported() {
         assert_eq!(
             route_one(NavigationEvent::LoadStart {
                 url: "https://site.test/".into()
             }),
-            Route::PageCommitted("https://site.test/".into())
+            Route::PageCommitted
         );
         assert!(
             route(NavigationEvent::LoadEnd {

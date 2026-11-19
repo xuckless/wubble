@@ -311,14 +311,18 @@ pub enum FrameChannel {
     Zoom,
     /// `probes.js`: [`PageEvent::Probe`].
     Probes,
+    /// `cosmetic.js`: answered by the engine itself with the content filter's
+    /// rules ([`crate::cosmetic`]); no [`PageEvent`].
+    Cosmetic,
 }
 
 impl FrameChannel {
-    const ALL: [(FrameChannel, &'static str); 4] = [
+    const ALL: [(FrameChannel, &'static str); 5] = [
         (FrameChannel::Autofill, "autofill"),
         (FrameChannel::Clipboard, "clipboard"),
         (FrameChannel::Zoom, "zoom"),
         (FrameChannel::Probes, "probes"),
+        (FrameChannel::Cosmetic, "cosmetic"),
     ];
 
     pub fn name(self) -> &'static str {

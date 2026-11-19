@@ -16,9 +16,11 @@ mod refresh;
 mod site;
 mod types;
 
-pub use blocker::{Blocker, BlockerError, Cosmetic};
+pub use blocker::{Blocker, BlockerError, Cosmetic, hide_rule};
 pub use decision::Decision;
-pub use lists::{Origin, Source, bundled_sources, sources};
+pub use lists::{
+    ListRow, Origin, Source, bundled_sources, count_rules, rows, rule_counts, sources,
+};
 pub use refresh::{Due, ListSpec, due, fetch_http, is_list_url, last_fetch, refresh, specs};
 pub use site::{Shields, SiteOverrides};
 pub use types::{NetRequest, ResourceType};
