@@ -9,6 +9,8 @@ import { Shell } from "../derived.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { Calm } from "../motion/calm.slint";
 import { BrowserCss } from "../gen/css.slint";
+import { KitText } from "../text.slint";
+import { Role } from "../gen/text.slint";
 
 // @source slint-tab-row
 // wubble change: `TabItem` (with an `id`) is in components/model.slint.
@@ -101,16 +103,14 @@ export component TabRow inherits Rectangle {
                 tint: root.selected ? Palette.ink : Shell.tab-ink;
             }
         }
-        if !root.compact: Text {
+        if !root.compact: KitText {
+            role: Role.wb-tab;
             text: root.tab.title;
             horizontal-stretch: 1;
             vertical-alignment: center;
             overflow: elide;
-            // wubble change: .wb-tab #C3C8D4 at 13.5
+            // wubble change: .wb-tab #C3C8D4
             color: root.selected ? Palette.ink : Shell.tab-ink;
-            font-family: Fonts.ui;
-            font-size: Shell.tab-font;
-            font-weight: Type.body.weight;
         }
         // wubble change: the speaker, before the close button (Chromium's tab alert indicator
         // place); a click mutes or unmutes the tab.

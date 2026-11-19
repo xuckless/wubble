@@ -278,9 +278,9 @@ components/reader-controls.slint	token	Fonts	1
 components/reader-controls.slint	token	Palette	1
 components/reader-controls.slint	token	Type	1
 components/settings.slint	animate	animate	9
-components/settings.slint	font	font-family	17
-components/settings.slint	font	font-size	17
-components/settings.slint	font	font-weight	8
+components/settings.slint	font	font-family	15
+components/settings.slint	font	font-size	15
+components/settings.slint	font	font-weight	6
 components/settings.slint	paint	background	7
 components/settings.slint	paint	border-color	1
 components/settings.slint	paint	border-width	1
@@ -289,8 +289,8 @@ components/settings.slint	paint	drop-shadow-color	2
 components/settings.slint	paint	drop-shadow-offset-y	2
 components/settings.slint	paint	fill	5
 components/settings.slint	paint	stroke-width	1
-components/settings.slint	text	Text	15
-components/settings.slint	token	Fonts	17
+components/settings.slint	text	Text	13
+components/settings.slint	token	Fonts	15
 components/settings.slint	token	Motion	15
 components/settings.slint	token	Palette	37
 components/settings.slint	token	Radius	5

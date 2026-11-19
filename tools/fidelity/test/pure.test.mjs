@@ -78,3 +78,13 @@ test('the CSS ease-out table follows cubic-bezier(0, 0, .58, 1)', async () => {
   }
   assert.ok(worst < 1e-3, `worst ${worst}`);
 });
+
+test('a font rule reads as a text role over what it inherits', async () => {
+  const { fontOf } = await import('../lib/text.mjs');
+  const base = { family: 'ui', size: 14, weight: 400, lh: 1.45 };
+  const d = (prop, value) => ({ prop, value });
+  assert.deepEqual(fontOf([d('font-family', 'var(--wb-font-display)'), d('font-size', '19px'), d('font-weight', '600'), d('line-height', '1')], base), { family: 'display', size: 19, weight: 600, lh: 1 });
+  assert.deepEqual(fontOf([d('font', '500 12px var(--wb-font-ui)')], base), { family: 'ui', size: 12, weight: 500, lh: 1.45 });
+  assert.deepEqual(fontOf([d('font', 'inherit'), d('font-size', '17px')], base), { ...base, size: 17 });
+  assert.deepEqual(fontOf([d('color', 'red')], base), base);
+});

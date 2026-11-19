@@ -19,6 +19,7 @@ import { REPO, designRoot, designSrc, designCommit } from './lib/design.mjs';
 import { parseCss } from './lib/css.mjs';
 import { makeReader, readDecl } from './lib/values.mjs';
 import { CSS_EASE_OUT, easeTable } from './lib/ease.mjs';
+import { fontOf } from './lib/text.mjs';
 
 const args = process.argv.slice(2);
 const flag = n => args.includes(n);
@@ -517,6 +518,71 @@ function rustGen(css) {
   return out.join('\n');
 }
 
+// ── Text roles ─────────────────────────────────────────────────────────────────────────────
+// Every rule of the shell's stylesheets that sets a font (family, size, weight or the `font`
+// shorthand) as one role: family, size, weight and line height, each taken from the rule or
+// inherited from `.wb` (core/wubble.css: the ui face, 14 px, 400, 1.45). Plus the type scale of
+// tokens.ts, and the roles the markup composes from two rules (an element with a class), cited.
+const TEXT_CSS = ['core/wubble.css', 'browser/browser.css', 'pages/settings.css', 'pages/touch.css', 'pages/start.css'];
+// [role, file:line of the markup, [file, selector] composed in order]
+const TEXT_COMPOSED = [
+  ['st-title', 'pages/settings.tsx:557', [['pages/settings.css', '.st-pin h1'], ['core/wubble.css', '.wb-display']]],
+  ['st-title-narrow', 'pages/settings.tsx:557', [['pages/settings.css', '.st-pin h1'], ['pages/settings.css', '@container (max-width: 759px) .st-pin h1'], ['core/wubble.css', '.wb-display']]],
+];
+function textSlint() {
+  const rules = new Map();
+  for (const file of TEXT_CSS) for (const r of parseCss(read(file))) {
+    if (r.at && !r.at.startsWith('@media') && !r.at.startsWith('@container')) continue;
+    rules.set(`${file} ${r.at ? `${r.at} ` : ''}${r.selector}`, r);
+  }
+  const wb = rules.get('core/wubble.css .wb');
+  const base = fontOf(wb.decls, { family: 'ui', size: 14, weight: 400, lh: 1.45 });
+  const out = [
+    '// The design\'s text roles: the type scale of core/tokens.ts and every rule of the shell\'s',
+    '// stylesheets that sets a font, with what it inherits from `.wb` (core/wubble.css). KitText',
+    '// (kit/text.slint) draws a role; nothing else names a font.',
+    '',
+    'import { Fonts } from "tokens.slint";',
+    '',
+    '/// family, size, weight and line height (a factor of the size; Slint text has none, so it is',
+    '/// the role\'s box height for layout).',
+    'export struct TextRole { family: string, size: length, weight: int, line-height: float }',
+    'export global Role {',
+  ];
+  const role = (id, f, cite) => out.push(`    out property <TextRole> ${id}: { family: Fonts.${f.family}, size: ${fmtNum(f.size)}px, weight: ${f.weight}, line-height: ${fmtNum(f.lh)} }; // ${cite}`);
+  const tl = lineOf('core/tokens.ts', 'export const type') + 1;
+  for (const [k, [sz, w, lh]] of Object.entries(tokens.type)) role(k, { family: k === 'display' ? 'display' : 'ui', size: sz, weight: w, lh }, `core/tokens.ts:${tl}`);
+  const seen = new Set(Object.keys(tokens.type));
+  // an element that also carries `.wb-mono` / `.wb-display` (the selector's last part names it)
+  const classed = (sel, f) => {
+    const last = sel.trim().split(/\s+/).pop();
+    for (const c of ['wb-mono', 'wb-display']) if (last.includes(`.${c}`)) f = fontOf(rules.get(`core/wubble.css .${c}`).decls, f);
+    return f;
+  };
+  for (const [key, r] of rules) {
+    const file = key.slice(0, key.indexOf(' '));
+    const fonts = r.decls.filter(d => /^font(-family|-size|-weight)?$/.test(d.prop) && d.value.trim() !== 'inherit');
+    if (!fonts.length || r.selector === '.wb') continue;
+    const first = r.selector.split(',')[0].trim();
+    let id = (r.at ? `${slug(r.at.replace(/^@\w+/, ''))}-` : '') + slug(first);
+    if (!/^[a-z]/.test(id)) id = `r-${id}`;
+    if (seen.has(id)) continue;
+    // a media/container rule restyles the element its plain rule styles
+    const plain = r.at ? rules.get(`${file} ${r.selector}`) : null;
+    const f = fontOf(r.decls, classed(first, plain ? fontOf(plain.decls, base) : base));
+    seen.add(id);
+    use(file, fonts[0].line);
+    role(id, f, `${file.split('/').pop()}:${fonts[0].line}`);
+  }
+  for (const [id, markup, parts] of TEXT_COMPOSED) {
+    let f = base;
+    for (const [file, sel] of parts) f = fontOf(rules.get(`${file} ${sel}`).decls, f);
+    role(id, f, `${markup} (${parts.map(([file, sel]) => `${file.split('/').pop()} ${sel}`).join(' + ')})`);
+  }
+  out.push('}');
+  return out.join('\n');
+}
+
 // ── Headers, hashes, writing ───────────────────────────────────────────────────────────────
 /** FNV-1a 64 of a string's UTF-8 bytes, as 16 hex digits (the lock test recomputes it). */
 export function fnv1a64(text) {
@@ -534,6 +600,7 @@ const files = {
   'crates/wubble-ui/ui/kit/gen/tokens.slint': withHeader(tokensSlint(css)),
   'crates/wubble-ui/ui/kit/gen/css.slint': withHeader(cssSlint(css)),
   'crates/wubble-ui/ui/kit/gen/icons.slint': withHeader(iconsSlint()),
+  'crates/wubble-ui/ui/kit/gen/text.slint': withHeader(textSlint()),
   'crates/wubble-core/src/kit_gen.rs': withHeader(rustGen(css)),
 };
 

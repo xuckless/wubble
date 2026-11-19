@@ -9,6 +9,8 @@ import { Press } from "../motion/press.slint";
 import { WubbleCss } from "../gen/css.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { Calm } from "../motion/calm.slint";
+import { KitText } from "../text.slint";
+import { Role } from "../gen/text.slint";
 
 // @source slint-pressable
 // Press: scale to 0.97 over 120 ms ease-out, back over 200 ms ease-out (wubble.css .wb-press).
@@ -78,13 +80,11 @@ export component PressableButton inherits Rectangle {
         spacing: Space.s2;
         alignment: center;
         @children
-        if root.text != "": Text {
+        if root.text != "": KitText {
+            role: Role.label;
             text: root.text;
             vertical-alignment: center;
             color: root.enabled ? Palette.ink : Palette.haze;
-            font-family: Fonts.ui;
-            font-size: Type.label.size;
-            font-weight: Type.label.weight;
         }
     }
     // wubble change: the keyboard focus ring

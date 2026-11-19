@@ -30,6 +30,8 @@ import { Slider } from "controls/slider.slint";
 import { Controls, ControlView } from "controls/registry.slint";
 import { Squash } from "../kit/motion/squash.slint";
 import { Calm } from "../kit/motion/calm.slint";
+import { KitText } from "../kit/text.slint";
+import { Role } from "../kit/gen/text.slint";
 
 // .tp-seg in .st-seg: a chip with one segment per word, each as wide as its label; the chosen
 // one is the ink indicator with the dark label. The indicator is the design's liquid one
@@ -416,11 +418,9 @@ export component EntryList inherits VerticalLayout {
 }
 
 // .st-sec-head h2: a section's title, in the display face.
-export component SectionHeader inherits Text {
+export component SectionHeader inherits KitText {
+    role: Role.st-sec-head-h2;
     color: Palette.ink;
-    font-family: Fonts.display;
-    font-size: Shell.section-title;
-    font-weight: 600;
     vertical-alignment: center;
 }
 
@@ -894,11 +894,9 @@ component PageScroller inherits Rectangle {
 }
 
 // The page's title in the display face (.st-pin h1).
-component PageTitle inherits Text {
+component PageTitle inherits KitText {
+    role: Role.st-title;
     color: Palette.ink;
-    font-family: Fonts.display;
-    font-size: Shell.settings-title;
-    font-weight: 600;
     vertical-alignment: center;
 }
 
