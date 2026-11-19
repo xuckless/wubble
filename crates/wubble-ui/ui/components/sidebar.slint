@@ -172,11 +172,11 @@ export component Sidebar inherits Rectangle {
     callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
-    // F6 to the sidebar: keyboard focus to the active tab's row (the rows take it), else, with
-    // no rows, the new-tab row.
+    // F6 to the sidebar: keyboard focus to the active tab's row (the rows take it), else, when
+    // the active tab is no row (a favourite, or none), the new-tab row.
     property <int> focus-serial: 0;
     public function take-focus() {
-        if root.tabs.length > 0 {
+        if root.selected >= 0 && root.selected < root.tabs.length {
             root.focus-serial += 1;
         } else {
             new-tab.take-focus();

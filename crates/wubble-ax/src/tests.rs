@@ -192,7 +192,8 @@ fn node_id_to_clear_drops_the_old_subtree() {
     );
     // the focused field went with the old subtree: focus falls back to the root
     assert_eq!(u.focus, NodeId(1));
-    assert!(!tree.nodes.contains_key(&6) && !tree.nodes.contains_key(&5));
+    let nodes = &tree.trees["tree-a"].nodes;
+    assert!(!nodes.contains_key(&6) && !nodes.contains_key(&5));
 }
 
 #[test]
@@ -218,7 +219,9 @@ fn a_new_document_starts_the_mirror_over() {
     );
     assert_eq!(u.tree_id, tree_id_of("tree-b"));
     assert_eq!(u.nodes.len(), 1);
-    assert_eq!(tree.nodes.len(), 1);
+    assert_eq!(tree.trees.len(), 1, "the old document is gone");
+    assert_eq!(tree.trees["tree-b"].nodes.len(), 1);
+    assert_eq!(tree.tree(), Some(tree_id_of("tree-b")));
 }
 
 #[test]
@@ -233,7 +236,9 @@ fn a_moved_container_moves_what_it_contains() {
           "new_location": { "bounds": { "x": 9.0, "y": 9.0, "width": 9.0, "height": 9.0 } } }
     ])));
     assert_eq!(moves.len(), 2);
-    let u = tree.move_nodes(&moves).expect("an update");
+    let mut updates = tree.move_nodes(&moves);
+    assert_eq!(updates.len(), 1, "a frame not on this page moves nothing");
+    let u = updates.remove(0);
     let mut ids: Vec<u64> = u.nodes.iter().map(|(n, _)| n.0).collect();
     ids.sort();
     assert_eq!(
@@ -245,7 +250,7 @@ fn a_moved_container_moves_what_it_contains() {
         by_id(&u, 5).bounds(),
         Some(Rect::new(5.0, 210.0, 85.0, 230.0))
     );
-    assert!(tree.move_nodes(&[]).is_none());
+    assert!(tree.move_nodes(&[]).is_empty());
 }
 
 #[test]
@@ -265,11 +270,17 @@ fn requests_become_page_actions() {
     );
     assert_eq!(
         tree.action(&request(Action::Focus, here, 6)),
-        Some(PageAction::Focus(6))
+        Some(PageAction::Focus {
+            tree: "tree-a".into(),
+            node: 6
+        })
     );
     assert_eq!(
         tree.action(&request(Action::ScrollIntoView, here, 7)),
-        Some(PageAction::ScrollIntoView(7))
+        Some(PageAction::ScrollIntoView {
+            tree: "tree-a".into(),
+            node: 7
+        })
     );
     assert_eq!(tree.action(&request(Action::Click, TreeId::ROOT, 5)), None);
     assert_eq!(tree.action(&request(Action::Click, here, 99)), None);
@@ -290,4 +301,92 @@ fn missing_keys_read_as_defaults() {
     assert_eq!(u.changes[0].nodes[0].location, value::Location::default());
     assert_eq!(role_of("somethingNew"), Role::GenericContainer);
     assert!(parse_locations(&AxValue::Null).is_empty());
+}
+
+/// An iframe's document: its own tree, a child of `tree-a`, hosted by `tree-a`'s node 8.
+fn frame() -> Value {
+    json!({
+        "ax_tree_id": "frame-1",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "frame-1", "parent_tree_id": "tree-a", "focus_id": 2 },
+            "root_id": 1,
+            "nodes": [
+                { "id": 1, "role": "rootWebArea",
+                  "location": { "x": 0.0, "y": 0.0, "width": 300.0, "height": 150.0 },
+                  "child_ids": [2] },
+                { "id": 2, "role": "button", "offset_container_id": 1,
+                  "location": { "x": 10.0, "y": 10.0, "width": 40.0, "height": 20.0 },
+                  "attributes": { "name": "Play" } }
+            ]
+        }]
+    })
+}
+
+/// `tree-a` with node 8, an iframe at (400, 0) hosting `frame-1`, added under the root.
+fn host_change() -> Value {
+    json!({
+        "ax_tree_id": "tree-a",
+        "updates": [{
+            "nodes": [
+                { "id": 1, "role": "rootWebArea", "state": ["focusable"],
+                  "location": { "x": 0.0, "y": 0.0, "width": 800.0, "height": 600.0 },
+                  "child_ids": [2, 3, 8],
+                  "attributes": { "name": "Page title" } },
+                { "id": 8, "role": "iframe", "offset_container_id": 1,
+                  "location": { "x": 400.0, "y": 0.0, "width": 300.0, "height": 150.0 },
+                  "attributes": { "childTreeId": "frame-1" } }
+            ]
+        }]
+    })
+}
+
+#[test]
+fn frames_keep_their_own_subtree_grafted_at_their_host() {
+    let mut tree = PageTree::default();
+    // the frame's tree can come before the page's; main and frame updates interleave
+    let f = first(&mut tree, frame());
+    assert_eq!(f.tree_id, tree_id_of("frame-1"));
+    first(&mut tree, page());
+    let host = first(&mut tree, host_change());
+    first(&mut tree, frame());
+    assert_eq!(
+        tree.trees.len(),
+        2,
+        "neither update wiped the other document"
+    );
+    assert_eq!(tree.trees["tree-a"].nodes.len(), 8);
+    assert_eq!(tree.tree(), Some(tree_id_of("tree-a")));
+    let graft = by_id(&host, 8);
+    assert_eq!(graft.tree_id(), Some(tree_id_of("frame-1")));
+    assert!(graft.children().is_empty());
+    assert_eq!(by_id(&host, 1).children().len(), 3);
+
+    // a click in the frame lands where the frame sits in the page
+    let click = tree.action(&ActionRequest {
+        action: Action::Click,
+        target_tree: tree_id_of("frame-1"),
+        target_node: NodeId(2),
+        data: None,
+    });
+    assert_eq!(click, Some(PageAction::Click { x: 430.0, y: 20.0 }));
+
+    // a frame's location change reaches only its own document
+    let moves = parse_locations(&ax(&json!([
+        { "id": 2, "ax_tree_id": "frame-1",
+          "new_location": { "offset_container_id": 1,
+                            "bounds": { "x": 0.0, "y": 0.0, "width": 40.0, "height": 20.0 } } }
+    ])));
+    let updates = tree.move_nodes(&moves);
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].tree_id, tree_id_of("frame-1"));
+
+    // navigating: a new parentless document drops the old page and its frames
+    first(
+        &mut tree,
+        json!({ "ax_tree_id": "tree-b", "updates": [{ "root_id": 1, "nodes": [
+            { "id": 1, "role": "rootWebArea" }
+        ]}]}),
+    );
+    assert_eq!(tree.trees.keys().collect::<Vec<_>>(), ["tree-b"]);
 }

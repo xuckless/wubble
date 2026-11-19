@@ -12,7 +12,7 @@ use i_slint_backend_testing::{
 };
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
-use wubble_ui::{AppWindow, FocusRegion, MenuEntry, MenuView, SpaceItem, TabItem};
+use wubble_ui::{AppWindow, CommandBarState, FocusRegion, MenuEntry, MenuView, SpaceItem, TabItem};
 
 /// The one element `label` names (role and all), failing with the label when there is none.
 fn one(app: &AppWindow, label: &str) -> ElementHandle {
@@ -50,6 +50,7 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         tab(2, "Beta"),
     ])));
     app.set_active_tab_id(2);
+    app.set_selected_row(1);
     let space = |id: i32, name: &str| SpaceItem {
         id,
         name: name.into(),
@@ -85,10 +86,25 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         app.on_tab_closed(move |id| l.borrow_mut().push(format!("close {id}")));
     }
 
-    // F6 to the sidebar focuses the active tab's row: Enter picks it, Delete closes it, Tab
-    // goes on to the new-tab row and Space presses it.
-    app.invoke_focus_region(FocusRegion::Sidebar);
+    // F6 from the page: the address (the bar opens and takes the keys), F6 again: the sidebar.
+    // The bar's closing does not take the keys back to the page once it settles.
+    assert!(!app.get_sidebar_focused());
+    app.invoke_focus_region(FocusRegion::Address);
     pump();
+    app.invoke_focus_region(FocusRegion::Sidebar);
+    assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+    // the close timer (the dropdown's out duration, 176 ms) starts on the next turn
+    pump();
+    mock_elapsed_time(Duration::from_millis(200));
+    assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+    pump();
+    assert!(
+        app.get_sidebar_focused(),
+        "F6 counts the sidebar as holding the keys"
+    );
+    assert!(!app.get_web_focused());
+    // On the sidebar's active row: Enter picks it, Delete closes it, Tab goes on to the
+    // new-tab row and Space presses it.
     key(&app, Key::Return.into());
     key(&app, Key::Delete.into());
     key(&app, Key::Tab.into());
@@ -178,4 +194,19 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
     .to_vec();
     let got: Vec<SharedString> = log.borrow().iter().map(SharedString::from).collect();
     assert_eq!(got, expected);
+    log.borrow_mut().clear();
+
+    // The active tab is no row (a favourite): F6 to the sidebar lands on the new-tab row.
+    app.set_menu(MenuView::default());
+    app.set_active_tab_id(99);
+    app.set_selected_row(-1);
+    pump();
+    app.invoke_focus_region(FocusRegion::Sidebar);
+    pump();
+    key(&app, Key::Return.into());
+    assert_eq!(log.borrow().as_slice(), ["new tab"]);
+    // F6 to the page: the sidebar no longer holds the keys.
+    app.invoke_focus_region(FocusRegion::Page);
+    pump();
+    assert!(!app.get_sidebar_focused());
 }

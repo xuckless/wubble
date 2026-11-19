@@ -24,15 +24,17 @@ export component FocusRing inherits Rectangle {
 }
 
 // A control's keyboard focus: reached by Tab (never by a click, so the ring is focus-visible
-// only), Space or Enter activates. Its `has-focus` shows the control's FocusRing.
+// only), Space or Enter activates; any other key goes to `other-key` (unset: rejected, so it
+// reaches the parent). Its `has-focus` shows the control's FocusRing.
 export component FocusKeys inherits FocusScope {
     callback activate();
+    callback other-key(KeyEvent) -> EventResult;
     focus-on-click: false;
     key-pressed(e) => {
         if e.text == " " || e.text == Key.Return {
             root.activate();
             return accept;
         }
-        return reject;
+        return root.other-key(e);
     }
 }

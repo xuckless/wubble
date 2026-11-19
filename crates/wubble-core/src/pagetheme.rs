@@ -80,19 +80,22 @@ pub enum Motion {
     NoPreference,
 }
 
-/// The stored words of [`Motion`], in order: the setting's choices (`allow` is
-/// `no-preference`).
-pub const MOTION_WORDS: [&str; 3] = ["auto", "reduce", "allow"];
+/// [`Motion`]'s stored words, in the setting's order (`allow` is `no-preference`).
+const MOTIONS: [(&str, Motion); 3] = [
+    ("auto", Motion::Auto),
+    ("reduce", Motion::Reduce),
+    ("allow", Motion::NoPreference),
+];
+/// The setting's choices.
+pub const MOTION_WORDS: [&str; 3] = words(&MOTIONS);
 
 impl Motion {
-    pub const ALL: [Motion; 3] = [Self::Auto, Self::Reduce, Self::NoPreference];
-
     pub fn id(self) -> &'static str {
-        MOTION_WORDS[self as usize]
+        word_of(&MOTIONS, self)
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|m| m.id() == id)
+        of_word(&MOTIONS, id)
     }
 }
 
@@ -107,19 +110,46 @@ pub enum Contrast {
     Forced,
 }
 
-/// The stored words of [`Contrast`], in order: the setting's choices.
-pub const CONTRAST_WORDS: [&str; 3] = ["auto", "more", "forced"];
+/// [`Contrast`]'s stored words, in the setting's order.
+const CONTRASTS: [(&str, Contrast); 3] = [
+    ("auto", Contrast::Auto),
+    ("more", Contrast::More),
+    ("forced", Contrast::Forced),
+];
+/// The setting's choices.
+pub const CONTRAST_WORDS: [&str; 3] = words(&CONTRASTS);
 
 impl Contrast {
-    pub const ALL: [Contrast; 3] = [Self::Auto, Self::More, Self::Forced];
-
     pub fn id(self) -> &'static str {
-        CONTRAST_WORDS[self as usize]
+        word_of(&CONTRASTS, self)
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|c| c.id() == id)
+        of_word(&CONTRASTS, id)
     }
+}
+
+/// The words of a (word, value) table, in its order.
+const fn words<T: Copy, const N: usize>(table: &[(&'static str, T); N]) -> [&'static str; N] {
+    let mut out = [""; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = table[i].0;
+        i += 1;
+    }
+    out
+}
+
+fn word_of<T: Copy + PartialEq>(table: &[(&'static str, T)], value: T) -> &'static str {
+    table
+        .iter()
+        .find(|(_, v)| *v == value)
+        .map(|(w, _)| *w)
+        .expect("every value has a word")
+}
+
+fn of_word<T: Copy>(table: &[(&'static str, T)], word: &str) -> Option<T> {
+    table.iter().find(|(w, _)| *w == word).map(|(_, v)| *v)
 }
 
 /// The accessibility media features every page is shown with (settings, not per site).
@@ -221,6 +251,18 @@ mod tests {
         assert_eq!(PageTheme::Auto.next(), PageTheme::Dark);
         assert_eq!(PageTheme::Dark.next(), PageTheme::Light);
         assert_eq!(PageTheme::Light.next(), PageTheme::Auto);
+    }
+
+    #[test]
+    fn media_words_round_trip() {
+        for (word, m) in MOTIONS {
+            assert_eq!((m.id(), Motion::from_id(word)), (word, Some(m)));
+        }
+        for (word, c) in CONTRASTS {
+            assert_eq!((c.id(), Contrast::from_id(word)), (word, Some(c)));
+        }
+        assert_eq!(Motion::NoPreference.id(), "allow");
+        assert_eq!(Contrast::from_id("high"), None);
     }
 
     #[test]

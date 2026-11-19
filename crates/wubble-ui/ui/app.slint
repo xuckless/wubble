@@ -92,6 +92,9 @@ export component AppWindow inherits Window {
     in property <float> autoscroll-squash: 1;
     // The web content has keyboard focus (the host sends it keys only then).
     out property <bool> web-focused: web-focus.has-focus;
+    // F6 put the keys in the sidebar and nothing has taken them since (the page, the bar's
+    // return to it, an internal page or overlay settling focus): the host's region for F6.
+    out property <bool> sidebar-focused: false;
     callback web-pointer-moved(pane: int, x: length, y: length);
     callback web-pointer-left(pane: int, x: length, y: length);
     callback web-pointer-pressed(pane: int, button: PointerEventButton, x: length, y: length);
@@ -318,6 +321,7 @@ export component AppWindow inherits Window {
     // F6 and Shift+F6 (wubble_core::region, run by the host): keyboard focus to a region. The
     // address is the command bar on the page's URL; leaving it closes the bar.
     public function focus-region(region: FocusRegion) {
+        root.sidebar-focused = region == FocusRegion.sidebar;
         if region == FocusRegion.address {
             root.request-address-focus();
             return;
@@ -498,6 +502,7 @@ export component AppWindow inherits Window {
     property <int> find-focus: root.find.focus-serial;
     property <bool> overlay-open: root.menu.open || root.downloads-open || root.dialog.open || root.page-error.open;
     function settle-focus() {
+        root.sidebar-focused = false;
         if root.menu.open {
             menu-ui.take-focus();
         } else if root.downloads-open {
@@ -693,6 +698,9 @@ export component AppWindow inherits Window {
                 width: 100%;
                 height: 100%;
                 changed has-focus => {
+                    if self.has-focus {
+                        root.sidebar-focused = false;
+                    }
                     root.web-focus-changed(self.has-focus);
                 }
                 // A newly shown page arrives with the Overlap entrance (webview.tsx: the shown

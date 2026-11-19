@@ -329,10 +329,9 @@ export component TabRow inherits Rectangle {
     transform-scale: touch.pressed ? Motion.pressScale : 1;
     animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
 
-    keys := FocusScope {
-        focus-on-click: false;
-        key-pressed(e) => {
-            if e.text == " " || e.text == Key.Return { root.activate(); return accept; }
+    keys := FocusKeys {
+        activate => { root.activate(); }
+        other-key(e) => {
             if e.text == Key.Delete { root.close(); return accept; }
             return reject;
         }

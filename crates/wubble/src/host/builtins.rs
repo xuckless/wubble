@@ -120,15 +120,14 @@ impl Host {
 
     pub(super) fn set_min_font_size(&mut self, px: u32) {
         self.builtins.min_font = px;
-        let tabs: Vec<_> = self.views.keys().copied().collect();
-        for tab in tabs {
+        if let Some(tab) = self.views.keys().next().copied() {
             self.sync_min_font(tab);
         }
     }
 
-    /// Tells Chromium the minimum font size through `tab`'s view. A profile preference, so
-    /// telling it again (each view that opens, in case views ever use other contexts) costs a
-    /// no-op write.
+    /// Tells Chromium the minimum font size through `tab`'s view. A preference of the one
+    /// request context every view shares, so one live view is enough: on a change, and when
+    /// the first view opens (none was there to take it before).
     fn sync_min_font(&mut self, tab: TabId) {
         let px = self.builtins.min_font;
         if let Some(view) = self.tab_view(tab)
@@ -174,7 +173,9 @@ impl Host {
     pub(super) fn builtins_view_opened(&mut self, tab: TabId, url: &str) {
         self.builtins.applied.remove(&tab);
         self.sync_page_theme(tab, Some(url));
-        self.sync_min_font(tab);
+        if self.views.len() == 1 {
+            self.sync_min_font(tab);
+        }
         self.boosts_view_opened(tab);
     }
 
@@ -182,7 +183,6 @@ impl Host {
     /// other one.
     pub(super) fn builtins_loading(&mut self, tab: TabId, url: &str) {
         self.sync_page_theme(tab, Some(url));
-        self.sync_min_font(tab);
     }
 
     /// The tab's view is gone (closed, discarded): forget what it was told.

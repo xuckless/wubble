@@ -1692,10 +1692,11 @@ impl Host {
                     .window
                     .upgrade_in_event_loop(|window| window.invoke_request_address_focus());
             }
+            // Later, outside the host, as FocusAddress: the address region opens the bar.
             Plan::CycleRegion(back) => {
-                if let Some(window) = self.w.window.upgrade() {
+                let _ = self.w.window.upgrade_in_event_loop(move |window| {
                     let at = Region::of(
-                        window.get_web_focused(),
+                        window.get_sidebar_focused(),
                         window.get_command_bar_state() != CommandBarState::Closed,
                     );
                     let shown = window.get_sidebar_mode() != SidebarMode::Hidden
@@ -1705,7 +1706,7 @@ impl Host {
                         Region::Sidebar => FocusRegion::Sidebar,
                         Region::Page => FocusRegion::Page,
                     });
-                }
+                });
             }
             Plan::ReopenClosed => self.store.pop_closed(|closed| {
                 if let Some(closed) = closed {

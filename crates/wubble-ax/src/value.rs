@@ -184,6 +184,8 @@ pub struct TreeChange {
 pub struct Updates {
     /// Chromium's `AXTreeID` as a string (one per document; a new one on navigation).
     pub tree_id: String,
+    /// The tree this one is a frame of (`tree_data.parent_tree_id`), when the update says.
+    pub parent: Option<String>,
     pub changes: Vec<TreeChange>,
 }
 
@@ -199,8 +201,15 @@ pub fn parse_updates(v: &AxValue) -> Updates {
             nodes: u.list("nodes").iter().filter_map(AxNode::of).collect(),
         })
         .collect();
+    let parent = v
+        .list("updates")
+        .iter()
+        .filter_map(|u| u.get("tree_data"))
+        .map(|d| d.string("parent_tree_id"))
+        .find(|p| !p.is_empty());
     Updates {
         tree_id: v.string("ax_tree_id"),
+        parent,
         changes,
     }
 }

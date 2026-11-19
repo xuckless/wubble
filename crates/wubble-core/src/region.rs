@@ -2,7 +2,9 @@
 //! `BrowserView::CycleFocus` moves it between the toolbar, the bookmarks bar and the page. From
 //! the page F6 goes to the address first (wubble's F6 did only that before), then the sidebar's
 //! tab list, then back to the page. The host reads where focus is ([`Region::of`]), asks for the
-//! next region here and gives it focus; no state is kept between presses.
+//! next region here and gives it focus. The shell remembers only that F6 put the keys in the
+//! sidebar (until something else takes them): anything else that holds them, the web page, an
+//! internal page or an overlay over it, is the page.
 
 /// A part of the window keyboard focus can be sent to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,15 +21,15 @@ pub enum Region {
 const ORDER: [Region; 3] = [Region::Address, Region::Sidebar, Region::Page];
 
 impl Region {
-    /// Where focus is: the page when it has the keys, the address while the command bar is
-    /// open, else the shell around them, the sidebar.
-    pub fn of(page_focused: bool, bar_open: bool) -> Region {
+    /// Where focus is: the address while the command bar is open, the sidebar while F6 left
+    /// the keys there, else the page (web content, an internal page or an overlay on it).
+    pub fn of(sidebar_focused: bool, bar_open: bool) -> Region {
         if bar_open {
             Region::Address
-        } else if page_focused {
-            Region::Page
-        } else {
+        } else if sidebar_focused {
             Region::Sidebar
+        } else {
+            Region::Page
         }
     }
 }
@@ -75,7 +77,14 @@ mod tests {
     fn the_open_bar_is_the_address_whatever_else_has_focus() {
         assert_eq!(Region::of(true, true), Address);
         assert_eq!(Region::of(false, true), Address);
-        assert_eq!(Region::of(true, false), Page);
-        assert_eq!(Region::of(false, false), Sidebar);
+        assert_eq!(Region::of(true, false), Sidebar);
+    }
+
+    #[test]
+    fn keys_outside_the_sidebar_and_bar_are_the_page() {
+        // an internal page (settings) or an overlay holds the keys: F6 leaves it for the
+        // address, not for the page it is already on
+        assert_eq!(Region::of(false, false), Page);
+        assert_eq!(next_region(Region::of(false, false), false, true), Address);
     }
 }
