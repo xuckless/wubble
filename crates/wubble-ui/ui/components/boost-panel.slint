@@ -1,181 +1,82 @@
-import { Palette, Space, Fonts, Type, Motion, Radius } from "../kit/gen/tokens.slint";
+import { Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier, BoostView, GlassKeys, GlassOver } from "model.slint";
-import { IconButton } from "nav-buttons.slint";
-import { Glyph } from "../kit/controls/icon.slint";
-import { Field, Segmented, TextButton } from "settings.slint";
-import { Toggle } from "controls/toggle.slint";
-import { Slider } from "controls/slider.slint";
+import { BoostView, GlassKeys, GlassOver } from "model.slint";
+import { Button, ButtonKind } from "../kit/controls/button.slint";
+import { HoldButton } from "../kit/controls/hold-button.slint";
+import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
+import { Segmented } from "../kit/controls/segmented.slint";
+import { Swatches } from "../kit/controls/swatches.slint";
+import { ElasticSlider } from "../kit/controls/slider.slint";
+import { BField, BGroup } from "../kit/overlay/b/b-field.slint";
+import { BCard, BRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
+import { BSidePanel, BCode, BoostTints } from "../kit/overlay/b/b-panel.slint";
 
-// A code area: monospace text on the track colour, several lines.
-component CodeField inherits Rectangle {
-    in-out property <string> text <=> input.text;
-    in property <string> placeholder;
-    callback edited(string);
-    height: Shell.boost-code-height;
-    border-radius: Radius.sm;
-    background: Shell.track;
-    clip: true;
-    Text {
-        x: Space.s2;
-        y: Space.s2;
-        text: root.placeholder;
-        visible: input.text == "";
-        color: Palette.haze;
-        font-family: Fonts.mono;
-        font-size: Type.label.size;
-    }
-    input := TextInput {
-        accessible-label: "Boost CSS";
-        x: Space.s2;
-        y: Space.s2;
-        width: parent.width - 2 * Space.s2;
-        height: parent.height - 2 * Space.s2;
-        color: Palette.ink;
-        font-family: Fonts.mono;
-        font-size: Type.label.size;
-        single-line: false;
-        wrap: word-wrap;
-        edited => {
-            root.edited(self.text);
-        }
-    }
-}
-
-component Label inherits Text {
-    color: Palette.mist;
-    font-family: Fonts.ui;
-    font-size: Type.label.size;
-    font-weight: Type.label.weight;
-}
-
-// The Boost editor (wubble_core::boost), docked at the page's right edge on thick glass: the
-// site pattern, CSS and a script (monospace), when the script runs, a tint and its strength, a
-// font, on/off, and the element zapper. Written from scratch: the design repo has no editor;
-// built from the settings page's Field, Segmented, Slider and Toggle and the house's icon and
-// text buttons. CSS applies to the page as it is typed; a script on Done (the page reloads).
+// The Boost editor (wubble_core::boost), docked at the page's right edge: the site pattern, CSS
+// and a script (monospace), when the script runs, a tint and its strength, a font, on/off, and
+// the element zapper. The design has no editor (wubble-only.md §29): the panel is the Source
+// panel (kit/overlay/b/b-panel.slint) holding a settings card (on, runs), the sheet fields, code
+// areas, a Tint toggle row over Swatches and an ElasticSlider for the tint, Delete as a HoldButton (destructive means
+// hold) and Done as `pri`; the site error is a coral note. CSS applies to the page as it is
+// typed; a script on Done (the page reloads).
 // Intents only: `text-edited(field, text)` for name, site, css, js, font; `number(field, value)`
 // for at and strength; `tint(colour)`; `act(name)` for enabled, zap, done, delete, close.
 export component BoostPanel inherits Rectangle {
     in property <BoostView> view;
     // The tint swatches (wubble's own palette: the Space colours).
-    in property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.amber, Palette.abyss];
+    in property <[color]> swatches: BoostTints.colours;
     callback text-edited(string, string);
     callback number(string, float);
     callback tint(color);
     callback act(string);
 
-    visible: root.view.open;
     width: Shell.boost-panel-width;
+    visible: panel.visible;
 
+    // The texts reload only when the host replaced them.
+    property <int> loaded: -1;
+    property <string> name;
+    property <string> site;
+    property <string> css;
+    property <string> js;
+    property <string> font;
     changed view => {
-        // The texts reload only when the host replaced them.
         if root.loaded != root.view.serial {
             root.loaded = root.view.serial;
-            name.text = root.view.name;
-            site.text = root.view.site;
-            css.text = root.view.css;
-            js.text = root.view.js;
-            font.text = root.view.font;
+            root.name = root.view.name;
+            root.site = root.view.site;
+            root.css = root.view.css;
+            root.js = root.view.js;
+            root.font = root.view.font;
         }
     }
-    property <int> loaded: -1;
+    // the controls that take registry slots are built while it shows and as it leaves
+    property <bool> built: root.view.open || panel.progress > 0;
 
-    GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
+    panel := BSidePanel {
         key: GlassKeys.boost;
-        over-layer: GlassOver.card;
-        present: root.view.open;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        TouchArea { }
-        VerticalLayout {
-            padding: Space.s3;
-            spacing: Space.s2;
-            HorizontalLayout {
-                spacing: Space.s2;
-                Text {
-                    text: root.view.is-new ? "New Boost" : "Boost";
-                    color: Palette.ink;
-                    font-family: Fonts.ui;
-                    font-size: Type.heading.size;
-                    font-weight: Type.heading.weight;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
+        layer: GlassOver.card;
+        shown: root.view.open;
+        title: root.view.is-new ? "New Boost" : "Boost";
+        closed => {
+            root.act("close");
+        }
+        if root.built: BCard {
+            BRow {
+                title: "On";
                 Toggle {
-                    y: (parent.height - self.height) / 2;
+                    size: ToggleSize.sm;
+                    label: "On";
                     on: root.view.enabled;
                     toggled => {
                         root.act("enabled");
                     }
                 }
-                IconButton {
-                    icon-path: Glyph.close;
-                    label: "Close";
-                    clicked => {
-                        root.act("close");
-                    }
-                }
             }
-            name := Field {
-                placeholder: "Name";
-                edited(t) => {
-                    root.text-edited("name", t);
-                }
-            }
-            Label {
-                text: "Sites (example.com, *.example.com, https://example.com/docs/*)";
-            }
-            site := Field {
-                placeholder: "example.com";
-                edited(t) => {
-                    root.text-edited("site", t);
-                }
-            }
-            if root.view.error != "": Text {
-                text: root.view.error;
-                color: Palette.blush;
-                font-family: Fonts.ui;
-                font-size: Type.label.size;
-            }
-            HorizontalLayout {
-                Label {
-                    text: "CSS";
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                TextButton {
-                    text: root.view.zapping ? "Click an element\u{2026}" : "Zap an element";
-                    clicked => {
-                        root.act("zap");
-                    }
-                }
-            }
-            css := CodeField {
-                placeholder: "body { font-size: 18px }";
-                edited(t) => {
-                    root.text-edited("css", t);
-                }
-            }
-            HorizontalLayout {
-                Label {
-                    text: "Script (runs with the page's rights)";
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-            }
-            js := CodeField {
-                placeholder: "document.title = 'boosted'";
-                edited(t) => {
-                    root.text-edited("js", t);
-                }
-            }
-            HorizontalLayout {
-                alignment: start;
+            BRow {
+                title: "Script runs";
                 Segmented {
+                    compact: true;
+                    label: "Script runs";
                     labels: ["At start", "When ready"];
                     selected: root.view.at;
                     chosen(i) => {
@@ -183,54 +84,131 @@ export component BoostPanel inherits Rectangle {
                     }
                 }
             }
-            Label {
-                text: "Tint";
+        }
+        BGroup {
+            label: "Name";
+            BField {
+                text <=> root.name;
+                placeholder: "Name";
+                edited(t) => {
+                    root.text-edited("name", t);
+                }
+            }
+        }
+        BGroup {
+            label: "Sites";
+            BField {
+                text <=> root.site;
+                placeholder: "example.com";
+                label: "Sites";
+                edited(t) => {
+                    root.text-edited("site", t);
+                }
+            }
+            BNote {
+                text: root.view.error != "" ? root.view.error : "example.com, *.example.com, https://example.com/docs/*";
+                danger: root.view.error != "";
+            }
+        }
+        BGroup {
+            label: "CSS";
+            BCode {
+                text <=> root.css;
+                label: "Boost CSS";
+                placeholder: "body { font-size: 18px }";
+                edited(t) => {
+                    root.text-edited("css", t);
+                }
             }
             HorizontalLayout {
-                spacing: Space.s1;
                 alignment: start;
-                for c in root.swatches: Rectangle {
-                    width: Shell.boost-swatch;
-                    height: Shell.boost-swatch;
-                    border-radius: Shell.boost-swatch / 2;
-                    background: c;
-                    border-width: root.view.tint-on && root.view.tint == c ? Shell.boost-swatch-ring : Shell.boost-swatch-rim;
-                    border-color: root.view.tint-on && root.view.tint == c ? Palette.ink : Palette.ink.transparentize(0.8);
-                    TouchArea {
-                        clicked => {
-                            root.tint(c);
-                        }
-                    }
-                }
-                Slider {
-                    min: 0;
-                    max: 100;
-                    value: root.view.strength;
-                    set(v) => {
-                        root.number("strength", v);
+                Button {
+                    kind: ButtonKind.glass;
+                    text: root.view.zapping ? "Click an element\u{2026}" : "Zap an element";
+                    clicked => {
+                        root.act("zap");
                     }
                 }
             }
-            font := Field {
-                placeholder: "Font (Geist, serif, ...)";
+        }
+        BGroup {
+            label: "Script (runs with the page's rights)";
+            BCode {
+                text <=> root.js;
+                label: "Boost script";
+                placeholder: "document.title = 'boosted'";
+                edited(t) => {
+                    root.text-edited("js", t);
+                }
+            }
+        }
+        // The tint: a Toggle row (as in settings) is its on and off, and the Swatches and the
+        // strength show only while it is on (the Swatches have no "none": their ring would stay
+        // on a colour that is not applied). Off and on again both ask for the shown colour: the
+        // host takes the chosen swatch again as no tint, and a new one as that tint.
+        if root.built: BCard {
+            BRow {
+                title: "Tint";
+                Toggle {
+                    size: ToggleSize.sm;
+                    label: "Tint";
+                    on: root.view.tint-on;
+                    toggled => {
+                        root.tint(root.view.tint);
+                    }
+                }
+            }
+        }
+        if root.built && root.view.tint-on: BGroup {
+            Swatches {
+                label: "Tint colour";
+                colours: root.swatches;
+                names: BoostTints.names;
+                value: root.view.tint;
+                chosen(c) => {
+                    root.tint(c);
+                }
+            }
+            ElasticSlider {
+                compact: true;
+                label: "Strength";
+                unit: "%";
+                // off is the toggle's: a strength of 0 would read as off and take the slider
+                // away under the pointer
+                min: 1;
+                max: 100;
+                value: root.view.strength;
+                edited(v) => {
+                    root.number("strength", v);
+                }
+            }
+        }
+        BGroup {
+            label: "Font";
+            BField {
+                text <=> root.font;
+                placeholder: "Geist, serif, ...";
+                label: "Font";
                 edited(t) => {
                     root.text-edited("font", t);
                 }
             }
-            HorizontalLayout {
-                spacing: Space.s2;
-                alignment: end;
-                if !root.view.is-new: TextButton {
-                    text: "Delete";
-                    clicked => {
-                        root.act("delete");
-                    }
+        }
+        if root.built: HorizontalLayout {
+            alignment: end;
+            spacing: Space.s2;
+            if !root.view.is-new: HoldButton {
+                text: "Delete";
+                done-text: "Deleted";
+                done => {
+                    root.act("delete");
                 }
-                TextButton {
-                    text: "Done";
-                    clicked => {
-                        root.act("done");
-                    }
+            }
+            Button {
+                kind: ButtonKind.pri;
+                text: "Done";
+                clicked => {
+                    root.act("done");
                 }
             }
         }

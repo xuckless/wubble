@@ -1,66 +1,14 @@
-import { Palette, Space, Fonts, Type } from "../kit/gen/tokens.slint";
-import { Shell } from "../kit/derived.slint";
-import { SheetButton } from "sheet-button.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
+import { BPipCard } from "../kit/overlay/b/b-pip-card.slint";
 
 // What a Main window shows for its tab while the tab plays in the picture-in-picture window: a
 // centred column ("Playing in picture-in-picture", the tab's title, Back to tab) on the page's
-// ground. Written from scratch: the design repo has no picture-in-picture. The column, type and
-// button are the error panel's (error-panel.slint). Intents only: `command("return", 0)`.
-export component PipCard inherits Rectangle {
-    in property <bool> open;
-    in property <string> title;
+// ground. The design has no picture-in-picture (wubble-only.md §21): the error page's column
+// (kit/overlay/b/b-pip-card.slint). Intents only: `command("return", 0)`.
+export component PipCard inherits BPipCard {
     callback command(string, float);
-
-    visible: root.open;
-    background: Palette.web;
-
-    // the page under it takes nothing
-    TouchArea {
-        scroll-event(e) => {
-            accept
-        }
-    }
-
-    VerticalLayout {
-        x: (parent.width - self.width) / 2;
-        y: max(Space.s6, (parent.height - self.preferred-height) / 3);
-        width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
-        height: self.preferred-height;
-        spacing: Space.s3;
-        Icon {
-            path: Glyph.pip;
-            size: Shell.error-icon;
-            tint: Palette.mist;
-        }
-        Text {
-            text: "Playing in picture-in-picture";
-            color: Palette.ink;
-            font-family: Fonts.ui;
-            font-size: Type.title.size;
-            font-weight: Type.title.weight;
-            wrap: word-wrap;
-        }
-        Text {
-            visible: self.text != "";
-            text: root.title;
-            color: Palette.mist;
-            font-family: Fonts.ui;
-            font-size: Shell.sheet-body;
-            wrap: word-wrap;
-        }
-        Rectangle {
-            height: Space.s3;
-        }
-        HorizontalLayout {
-            alignment: start;
-            SheetButton {
-                text: "Back to tab";
-                primary: true;
-                clicked => {
-                    root.command("return", 0);
-                }
-            }
-        }
+    line: "Playing in picture-in-picture";
+    action: "Back to tab";
+    acted => {
+        root.command("return", 0);
     }
 }

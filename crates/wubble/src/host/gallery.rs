@@ -32,6 +32,9 @@ const SEED_SETTLE: Duration = Duration::from_millis(4000);
 
 /// A request id no engine view holds: its surface is never answered.
 const FAKE: RequestId = RequestId(u32::MAX);
+/// Another, for a dialog shown after the first: a new one to the sheet, whose serial is the id
+/// as an `i32` (every id past `i32::MAX` is the same serial).
+const FAKE_2: RequestId = RequestId(i32::MAX.unsigned_abs() - 1);
 
 /// Where the synthetic menus open, logical px in the window: beside the first tab row, and
 /// under the address pill.
@@ -122,6 +125,11 @@ impl Host {
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
         }
+        // The bookmark and print sheets are the host's own state, not the tab's: closed too.
+        self.bookmark_sheet_answered(false, false, "", -1);
+        if !matches!(self.print, wubble_core::print::Sheet::Closed) {
+            self.print_event(wubble_core::print::Event::Cancel);
+        }
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
         }
@@ -184,6 +192,25 @@ impl Host {
                     message: "Discard the changes to this page?".into(),
                     default_text: String::new(),
                 })
+            }
+            Overlay::Prompt => {
+                surfaces.dialog = Dialog::Open(OpenDialog {
+                    id: FAKE_2,
+                    kind: JsDialogKind::Prompt,
+                    origin: origin.clone(),
+                    message: "Name this list".into(),
+                    default_text: "Groceries".into(),
+                })
+            }
+            Overlay::Bookmark => self.gallery_bookmark_sheet(),
+            Overlay::Print => {
+                if let Some(tab) = shown {
+                    self.print_event(wubble_core::print::Event::Open {
+                        tab,
+                        printers: vec!["Office laser".into(), "Studio inkjet".into()],
+                        default: None,
+                    });
+                }
             }
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {

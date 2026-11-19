@@ -1,0 +1,118 @@
+// derived: the scrim (.wb-scrim, browser.css:163-164) with a clear cut-out, the held seam line (.wb-split-line held: sky 1.6, browser.css:114-115) as its rim, the slider's value bubble (.tp-sl-bub b, pages/touch.css:55-59) for its size, Tween
+// The screenshot region picker's marquee (wubble-only.md §24): the page under the design's scrim
+// (rgb(5 6 9 / .32), faded in over .2 s and out over .16 s, `wb-fade`); while a region is
+// dragged the scrim is cut round it, the cut's edge is the held line (sky, 1.6) and its size
+// rides under its bottom right corner in the slider's value bubble: an ink pill, padding 3 8,
+// radius 9, the number in mono 12.5 / 600 abyss, springing in from .6 and 8 px lower as the
+// bubble does while held. Draws only; the drag is the caller's.
+// derived (notes/fidelity/derived-review.md "Overlays B"): the marquee itself (a new primitive
+// in wubble-only.md), composed of those three.
+
+import { BrowserCss, TouchCss } from "../../gen/css.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { Tween } from "../../motion/tween.slint";
+import { BNumber } from "b-dock.slint";
+
+export component BMarquee inherits Rectangle {
+    in property <bool> shown;
+    in property <bool> dragging;
+    // the pane the scrim covers, and the region (corner to corner), in this area
+    in property <length> pane-x;
+    in property <length> pane-width;
+    in property <length> x0;
+    in property <length> y0;
+    in property <length> x1;
+    in property <length> y1;
+    out property <float> fade: dim.t;
+
+    property <length> rim: BrowserCss.wb-split-line--stroke-width * Shell.px;
+
+    dim := Tween {
+        on: root.shown;
+        in-ms: Shell.scrim-in;
+        out-ms: Shell.scrim-out;
+        in-easing: BrowserCss.wb-scrim--animation-easing;
+        out-easing: BrowserCss.wb-scrim-out--animation-easing;
+    }
+    bubble := Tween {
+        on: root.shown && root.dragging;
+        in-ms: TouchCss.tp-sl-wrap-held-tp-sl-bub-b--transition-transform-duration;
+        out-ms: TouchCss.tp-sl-bub-b--transition-transform-duration;
+        in-easing: TouchCss.tp-sl-wrap-held-tp-sl-bub-b--transition-transform-easing;
+        out-easing: TouchCss.tp-sl-bub-b--transition-transform-easing;
+    }
+
+    visible: dim.t > 0;
+
+    Rectangle {
+        opacity: dim.t;
+        // the whole pane at rest
+        if !root.dragging: Rectangle {
+            x: root.pane-x;
+            width: root.pane-width;
+            background: BrowserCss.wb-scrim--background;
+        }
+        // round the cut-out while dragging
+        if root.dragging: Rectangle {
+            Rectangle {
+                x: root.pane-x;
+                width: root.pane-width;
+                y: 0px;
+                height: max(0px, root.y0);
+                background: BrowserCss.wb-scrim--background;
+            }
+            Rectangle {
+                x: root.pane-x;
+                width: root.pane-width;
+                y: root.y1;
+                height: max(0px, parent.height - root.y1);
+                background: BrowserCss.wb-scrim--background;
+            }
+            Rectangle {
+                x: root.pane-x;
+                width: max(0px, root.x0 - root.pane-x);
+                y: root.y0;
+                height: root.y1 - root.y0;
+                background: BrowserCss.wb-scrim--background;
+            }
+            Rectangle {
+                x: root.x1;
+                width: max(0px, root.pane-x + root.pane-width - root.x1);
+                y: root.y0;
+                height: root.y1 - root.y0;
+                background: BrowserCss.wb-scrim--background;
+            }
+            // the held line round the region, outside it
+            Rectangle {
+                x: root.x0 - root.rim;
+                y: root.y0 - root.rim;
+                width: root.x1 - root.x0 + 2 * root.rim;
+                height: root.y1 - root.y0 + 2 * root.rim;
+                border-width: root.rim;
+                border-color: BrowserCss.wb-split-line--stroke;
+            }
+        }
+    }
+    // the size, under the region's bottom right corner
+    if root.dragging || bubble.t > 0: Rectangle {
+        property <length> w: max(TouchCss.tp-sl-bub-b--min-width, size.preferred-width + TouchCss.tp-sl-bub-b--padding-left + TouchCss.tp-sl-bub-b--padding-right);
+        property <length> h: size.preferred-height + TouchCss.tp-sl-bub-b--padding-top + TouchCss.tp-sl-bub-b--padding-bottom;
+        x: max(root.pane-x, root.x1 - self.w);
+        y: root.y1 + root.rim + TouchCss.tp-sl-bub-b--padding-top + TouchCss.tp-sl-bub-b--transform-translatey * (1 - bubble.t);
+        width: self.w;
+        height: self.h;
+        opacity: min(1, bubble.t);
+        transform-origin: { x: self.width, y: 0px };
+        transform-scale: TouchCss.tp-sl-bub-b--transform-scale + (1 - TouchCss.tp-sl-bub-b--transform-scale) * bubble.t;
+        border-radius: TouchCss.tp-sl-bub-b--border-radius;
+        background: TouchCss.tp-sl-bub-b--background;
+        size := KitText {
+            role: BNumber.bubble;
+            text: round((root.x1 - root.x0) / Shell.px) + " × " + round((root.y1 - root.y0) / Shell.px);
+            color: TouchCss.tp-sl-bub-b--color;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

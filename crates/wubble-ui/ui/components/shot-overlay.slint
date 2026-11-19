@@ -1,15 +1,17 @@
-import { Palette, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
-import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier, GlassKeys, GlassOver } from "model.slint";
-import { SheetButton } from "sheet-button.slint";
+import { Space } from "../kit/gen/tokens.slint";
+import { GlassKeys, GlassOver } from "model.slint";
+import { IconButton } from "../kit/controls/icon-button.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { BDock, BDockLabel } from "../kit/overlay/b/b-dock.slint";
+import { BMarquee } from "../kit/overlay/b/b-marquee.slint";
 
 // The screenshot region picker over the page: the page dims, a drag cuts a clear rectangle out
 // of the dim with its size beside it, and a toolbar offers the whole visible page or the full
-// page instead. Written from scratch: the design repo has no drag-select overlay. Its pieces are
-// the house's: the toolbar is the find bar's thick glass over content with the sheets' buttons,
-// the cut-out's rim the ink hairline. The rectangle is only drawn here: what the corners mean
-// (order, clamping, the smallest region) is the host's (`wubble_core::shot::RectF::from_drag`).
+// page instead. The design has no drag-select overlay (wubble-only.md §24): the marquee is the
+// scrim cut round the region with the held line and the slider's value bubble
+// (kit/overlay/b/b-marquee.slint); the toolbar is the Dock with a hint and IconButtons. The
+// rectangle is only drawn here: what the corners mean (order, clamping, the smallest region) is
+// the host's (`wubble_core::shot::RectF::from_drag`).
 export component ShotOverlay inherits Rectangle {
     in property <bool> active;
     // The page's pane within this area (a split shows several), logical px.
@@ -21,7 +23,7 @@ export component ShotOverlay inherits Rectangle {
     callback capture(bool);
     callback cancelled();
 
-    visible: root.active;
+    visible: root.active || marquee.fade > 0;
     changed active => {
         if root.active {
             keys.focus();
@@ -29,11 +31,6 @@ export component ShotOverlay inherits Rectangle {
     }
 
     property <bool> dragging: area.pressed;
-    property <length> x0: area.x + min(area.pressed-x, area.mouse-x);
-    property <length> y0: min(area.pressed-y, area.mouse-y);
-    property <length> x1: area.x + max(area.pressed-x, area.mouse-x);
-    property <length> y1: max(area.pressed-y, area.mouse-y);
-    property <brush> dim: Palette.abyss.with-alpha(Shell.shot-dim);
 
     keys := FocusScope {
         key-pressed(event) => {
@@ -45,63 +42,21 @@ export component ShotOverlay inherits Rectangle {
         }
     }
 
-    // The dim: the whole pane at rest, around the cut-out while dragging.
-    Rectangle {
-        x: root.pane-x;
-        width: root.pane-width;
-        visible: !root.dragging;
-        background: root.dim;
-    }
-    if root.dragging: Rectangle {
-        Rectangle {
-            x: root.pane-x;
-            width: root.pane-width;
-            height: root.y0;
-            y: 0;
-            background: root.dim;
-        }
-        Rectangle {
-            x: root.pane-x;
-            width: root.pane-width;
-            y: root.y1;
-            height: max(0px, parent.height - root.y1);
-            background: root.dim;
-        }
-        Rectangle {
-            x: root.pane-x;
-            width: max(0px, root.x0 - root.pane-x);
-            y: root.y0;
-            height: root.y1 - root.y0;
-            background: root.dim;
-        }
-        Rectangle {
-            x: root.x1;
-            width: max(0px, root.pane-x + root.pane-width - root.x1);
-            y: root.y0;
-            height: root.y1 - root.y0;
-            background: root.dim;
-        }
-        Rectangle {
-            x: root.x0;
-            y: root.y0;
-            width: root.x1 - root.x0;
-            height: root.y1 - root.y0;
-            border-width: Shell.px;
-            border-color: Palette.ink;
-        }
-        Text {
-            x: root.x0;
-            y: root.y1 + Space.s1;
-            text: round((root.x1 - root.x0) / Shell.px) + " × " + round((root.y1 - root.y0) / Shell.px);
-            color: Palette.ink;
-            font-family: Fonts.mono;
-            font-size: Type.label.size;
-        }
+    marquee := BMarquee {
+        shown: root.active;
+        dragging: root.dragging;
+        pane-x: root.pane-x;
+        pane-width: root.pane-width;
+        x0: area.x + min(area.pressed-x, area.mouse-x);
+        y0: min(area.pressed-y, area.mouse-y);
+        x1: area.x + max(area.pressed-x, area.mouse-x);
+        y1: max(area.pressed-y, area.mouse-y);
     }
 
     area := TouchArea {
         x: root.pane-x;
         width: root.pane-width;
+        enabled: root.active;
         mouse-cursor: crosshair;
         pointer-event(event) => {
             if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
@@ -110,50 +65,38 @@ export component ShotOverlay inherits Rectangle {
         }
     }
 
-    // The toolbar, at the pane's bottom centre; hidden while dragging so it never covers the
+    // The toolbar, at the pane's bottom centre; it goes while dragging so it never covers the
     // region being drawn.
-    bar := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
+    bar := BDock {
         key: GlassKeys.shot;
-        over-layer: GlassOver.card;
-        present: root.active;
-        visible: !root.dragging;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        width: row.preferred-width;
-        height: Shell.find-height;
+        layer: GlassOver.card;
+        shown: root.active && !root.dragging;
+        interactive: root.active && !root.dragging;
+        width: self.row-width;
         x: root.pane-x + (root.pane-width - self.width) / 2;
         y: root.height - self.height - Space.s4;
-        TouchArea { }
-        row := HorizontalLayout {
-            padding-left: Space.s3;
-            padding-right: Space.s1;
-            spacing: Space.s1;
-            Text {
-                text: "Drag to capture a region";
-                vertical-alignment: center;
-                color: Palette.mist;
-                font-family: Fonts.ui;
-                font-size: Type.label.size;
+        BDockLabel {
+            text: "Drag to capture a region";
+        }
+        IconButton {
+            icon-path: Glyph.eye;
+            label: "Visible page";
+            clicked => {
+                root.capture(false);
             }
-            SheetButton {
-                text: "Visible page";
-                clicked => {
-                    root.capture(false);
-                }
+        }
+        IconButton {
+            icon-path: Glyph.expand;
+            label: "Full page";
+            clicked => {
+                root.capture(true);
             }
-            SheetButton {
-                text: "Full page";
-                clicked => {
-                    root.capture(true);
-                }
-            }
-            SheetButton {
-                text: "Cancel";
-                clicked => {
-                    root.cancelled();
-                }
+        }
+        IconButton {
+            icon-path: Glyph.close;
+            label: "Cancel";
+            clicked => {
+                root.cancelled();
             }
         }
     }

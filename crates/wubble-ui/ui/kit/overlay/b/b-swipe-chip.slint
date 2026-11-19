@@ -1,0 +1,63 @@
+// derived: the start page's site tile (.wb-start-site-icon, pages/start.css:23-28: 52 round, thin glass with the film rim) on GlassPanel thin, Wobble (motion/wobble.slint), Icon
+// The touchpad history swipe's chip (wubble-only.md §22): the start page's round site tile in
+// thin glass holding the back or forward arrow, pulled in from the edge as the fingers travel
+// (the caller places it: the scroll ends' rubber band) and faded in over the first half of the
+// pull. "Ready" (a release would go there) is touch: the film rim lights (`.wb-film`), the tile
+// takes its pressed squash (`scale(1.1, .88)` on the tile's spring, .45 s) and the arrow wobbles
+// once (`wb-wob`).
+// derived (notes/fidelity/derived-review.md "Overlays B"): ready as the film rim and the press
+// squash instead of a mint arrow; the leaving `wb-out` needs the chip kept while it leaves
+// (app.slint builds it only while the swipe runs).
+
+import { Palette } from "../../gen/tokens.slint";
+import { StartCss } from "../../gen/css.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Wobble } from "../../motion/wobble.slint";
+import { Calm } from "../../motion/calm.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { GlassTier } from "../../../components/model.slint";
+
+export component BSwipeChip inherits Rectangle {
+    // the arrow: back (true) or forward
+    in property <bool> back;
+    in property <bool> ready;
+    // 0..1 of the pull shown
+    in property <float> shown: 1;
+
+    property <length> size: StartCss.wb-start-site-icon--width;
+    property <float> squash: root.ready ? 1 : 0;
+    animate squash {
+        duration: Calm.ms(StartCss.wb-start-site-icon--transition-transform-duration);
+        easing: StartCss.wb-start-site-icon--transition-transform-easing;
+    }
+    property <bool> hit;
+    changed ready => {
+        if root.ready {
+            root.hit = !root.hit;
+        }
+    }
+
+    width: root.size;
+    height: root.size;
+    opacity: root.shown;
+
+    Rectangle {
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: 1 + (StartCss.wb-start-site-active-wb-start-site-icon--transform-scale-x - 1) * root.squash;
+        transform-scale-y: 1 + (StartCss.wb-start-site-active-wb-start-site-icon--transform-scale-y - 1) * root.squash;
+        GlassPanel {
+            tier: GlassTier.thin;
+            radius: root.size * StartCss.wb-start-site-icon--border-radius;
+            film: root.ready;
+            Wobble {
+                hit: root.hit;
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    path: root.back ? Glyph.back : Glyph.forward;
+                    tint: Palette.ink;
+                }
+            }
+        }
+    }
+}

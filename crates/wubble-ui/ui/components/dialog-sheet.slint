@@ -1,18 +1,15 @@
-import { Palette, Space, Fonts, Type } from "../kit/gen/tokens.slint";
-import { Shell } from "../kit/derived.slint";
 import { SheetFrame } from "sheet-frame.slint";
 import { DialogView } from "model.slint";
+import { BField, BGroup } from "../kit/overlay/b/b-field.slint";
 
 // A JS dialog (alert, confirm, prompt, beforeunload) as a sheet over the page; fills its parent
 // (the content area), whose scrim blocks the page, so the dialog is tab-modal: the sidebar and
-// other tabs stay usable. Written from scratch: the design repo has no dialog. Looks and timings
-// are Ultra Reactivate's `.ur-o-dialog` (src/ultra-reactivate/overlays.css, the owner's
-// library): min(380, width - 32) wide, padding 26, radius 20, title 19 / 560, body 14.5 muted,
-// actions right-aligned 8 apart, buttons 42 high with radius 11; it grows in over 300 ms. On
-// thick glass over content (GlassPanel), anchored to the top of the page like a sheet: the chrome
-// is SheetFrame's. `answered` is the intent; the host answers the engine.
+// other tabs stay usable. The design has no dialog: the chrome is the kit's derived Sheet
+// (SheetFrame), the fields the derived sheet field (kit/overlay/b/b-field.slint, wubble-only.md
+// §13). `answered` is the intent; the host answers the engine.
 // wubble: the same sheet signs in to a site (HTTP auth): `secret` adds a masked password field
-// under the user name, both labelled.
+// under the user name, both labelled. The fields are built only when the dialog has them (a
+// hidden layout child still takes the column's spacing: the gap above the buttons).
 export component DialogSheet inherits SheetFrame {
     in property <DialogView> dialog;
     // (accept, the text field, the password field)
@@ -30,23 +27,29 @@ export component DialogSheet inherits SheetFrame {
         root.cancel();
     }
 
+    // the fields' texts (the fields exist only while the dialog has them)
+    property <string> typed;
+    property <string> password;
+    // each bump moves the keyboard to the field (the prompt's, or the password's)
+    property <int> want-input;
+    property <int> want-password;
+
     // The prompt's field, else the frame's key scope.
     public function focus-sheet() {
         if root.dialog.prompt {
-            input.focus();
-            input.select-all();
+            root.want-input += 1;
         } else {
             root.take-focus();
         }
     }
 
     function confirm() {
-        root.answered(true, root.dialog.prompt ? input.text : "", root.dialog.secret ? secret-field.text : "");
-        secret-field.text = "";
+        root.answered(true, root.dialog.prompt ? root.typed : "", root.dialog.secret ? root.password : "");
+        root.password = "";
     }
 
     function cancel() {
-        secret-field.text = "";
+        root.password = "";
         root.answered(false, "", "");
     }
 
@@ -54,91 +57,56 @@ export component DialogSheet inherits SheetFrame {
     // takes the keyboard, even when it replaced one still showing.
     property <int> serial: root.dialog.serial;
     changed serial => {
-        input.text = root.dialog.input;
-        secret-field.text = "";
+        root.typed = root.dialog.input;
+        root.password = "";
         if root.dialog.open {
             root.focus-sheet();
         }
     }
 
-    Text {
-        visible: root.dialog.secret;
-        height: root.dialog.secret ? self.preferred-height : 0px;
-        text: "Username";
-        color: Palette.mist;
-        font-family: Fonts.ui;
-        font-size: Type.label.size;
-        font-weight: Type.label.weight;
-    }
-    Rectangle {
-        visible: root.dialog.prompt;
-        height: root.dialog.prompt ? Shell.sheet-input : 0px;
-        border-radius: Shell.sheet-button-radius;
-        background: Palette.shell;
-        input := TextInput {
-            accessible-label: root.dialog.message;
-            x: Space.s3;
-            width: parent.width - 2 * Space.s3;
-            height: parent.height;
-            vertical-alignment: center;
-            single-line: true;
-            color: Palette.ink;
-            selection-background-color: Shell.selection-fill;
-            selection-foreground-color: Shell.selection-ink;
-            font-family: Fonts.ui;
-            font-size: Type.body.size;
+    if root.dialog.prompt: BGroup {
+        label: root.dialog.secret ? "Username" : "";
+        input := BField {
+            text <=> root.typed;
+            label: root.dialog.secret ? "Username" : root.dialog.message;
+            property <int> want: root.want-input;
+            init => {
+                if root.dialog.open {
+                    self.take-focus();
+                    self.select-all();
+                }
+            }
+            changed want => {
+                self.take-focus();
+                self.select-all();
+            }
             accepted => {
                 if root.dialog.secret {
-                    secret-field.focus();
+                    root.want-password += 1;
                 } else {
                     root.confirm();
                 }
             }
-            key-pressed(event) => {
-                if event.text == Key.Escape {
-                    root.cancel();
-                    return accept;
-                }
-                return reject;
+            escaped => {
+                root.cancel();
             }
         }
     }
-    Text {
-        visible: root.dialog.secret;
-        height: root.dialog.secret ? self.preferred-height : 0px;
-        text: "Password";
-        color: Palette.mist;
-        font-family: Fonts.ui;
-        font-size: Type.label.size;
-        font-weight: Type.label.weight;
-    }
-    Rectangle {
-        visible: root.dialog.secret;
-        height: root.dialog.secret ? Shell.sheet-input : 0px;
-        border-radius: Shell.sheet-button-radius;
-        background: Palette.shell;
-        secret-field := TextInput {
-            accessible-label: "Password";
-            x: Space.s3;
-            width: parent.width - 2 * Space.s3;
-            height: parent.height;
-            vertical-alignment: center;
-            single-line: true;
-            input-type: password;
-            color: Palette.ink;
-            selection-background-color: Shell.selection-fill;
-            selection-foreground-color: Shell.selection-ink;
-            font-family: Fonts.ui;
-            font-size: Type.body.size;
+    if root.dialog.secret: BGroup {
+        label: "Password";
+        secret-field := BField {
+            text <=> root.password;
+            label: "Password";
+            secret: true;
+            property <int> want: root.want-password;
+            changed want => {
+                self.take-focus();
+            }
             accepted => {
                 root.confirm();
             }
-            key-pressed(event) => {
-                if event.text == Key.Escape {
-                    root.cancel();
-                    return accept;
-                }
-                return reject;
+            escaped => {
+                root.cancel();
             }
         }
     }

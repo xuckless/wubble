@@ -26,6 +26,8 @@ export component Field inherits Rectangle {
     in property <bool> capsule: false;
     // masked text (a password)
     in property <bool> secret: false;
+    // what a screen reader calls it (the placeholder when empty)
+    in property <string> label: "";
     callback edited(string);
     callback accepted(string);
     // Escape in the field: a sheet around it cancels.
@@ -37,6 +39,10 @@ export component Field inherits Rectangle {
         } else {
             input.focus();
         }
+    }
+    // selects the plain field's text (a prompt's proposed text comes selected)
+    public function select-all() {
+        input.select-all();
     }
 
     height: root.capsule ? SettingsCss.st-search--height : Shell.field-height;
@@ -106,7 +112,7 @@ export component Field inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-alignment: root.numeric ? right : left;
                     single-line: true;
-                    accessible-label: root.placeholder;
+                    accessible-label: root.label != "" ? root.label : root.placeholder;
                     input-type: root.secret ? InputType.password : root.numeric ? InputType.decimal : InputType.text;
                     edited => {
                         root.edited(self.text);
