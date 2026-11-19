@@ -12,13 +12,12 @@
 // The toggle and the slider are the springy ports in `controls/` (`wubble_core::controls`);
 // the other springs (the liquid indicator, the travelling ring) are not ported: Slint `animate`
 // moves them. Written for wubble, the design having none: the stepper,
-// the list editor and the chord recorder row. Reused: the port's PressableButton, SpaceIcon and
+// the list editor and the chord recorder row. Reused: the port's PressableButton, the kit Icon and
 // WubbleScroller, wubble's IconButton, Icon and Raised.
 
 import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
-import { SpaceIcon } from "../kit/chrome/space-icon.slint";
 import { Mark } from "../kit/chrome/mark.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, FilterListItem } from "model.slint";
@@ -1208,13 +1207,11 @@ export component SettingsPage inherits Rectangle {
                                             root.space-icon-chosen(space.id, root.next-icon(space.icon));
                                         }
                                     }
-                                    SpaceIcon {
+                                    Icon {
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        width: Shell.lead-icon;
-                                        height: Shell.lead-icon;
-                                        stroke-width: Shell.lead-icon * Shell.icon-stroke / Shell.icon-grid;
-                                        kind: space.icon;
+                                        size: Shell.lead-icon;
+                                        path: Glyph.space(space.icon);
                                         tint: space.tint;
                                     }
                                 }

@@ -6,7 +6,7 @@
 
 import { Palette } from "../../tokens.slint";
 import { Shell, Derived } from "../derived.slint";
-import { IconStroke, BrowserIcons, KitIcons, SettingsIcons, InlinePaths } from "../gen/icons.slint";
+import { IconStroke, BrowserIcons, KitIcons, SettingsIcons, InlinePaths, SpaceIcons } from "../gen/icons.slint";
 
 export global Glyph {
     // browser/icons.tsx `P`
@@ -74,7 +74,14 @@ export global Glyph {
         if url == "wubble://bookmarks" { return self.star; }
         if url == "wubble://downloads" { return self.download; }
         if url == "wubble://passwords" { return self.lock; }
+        if url == "wubble://archive" { return self.clock; }
+        if url == "wubble://tasks" { return self.gauge; }
         return self.globe;
+    }
+
+    // A space's glyph by its id ("personal" | "work" | "study", wubble_core::space::SpaceIcon).
+    public pure function space(kind: string) -> string {
+        return kind == "work" ? SpaceIcons.work : kind == "study" ? SpaceIcons.study : SpaceIcons.personal;
     }
 
     // A glyph by name, for rows that carry their icon as data (MenuEntry.icon); "" for none.

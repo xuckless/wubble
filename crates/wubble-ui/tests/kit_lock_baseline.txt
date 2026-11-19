@@ -377,9 +377,6 @@ crates/wubble-gfx/src/scene/shaders/film.wgsl	shader-header	translates	1
 crates/wubble-gfx/src/scene/shaders/fluid.wgsl	shader-header	translates	1
 crates/wubble-gfx/src/scene/shaders/glass.wgsl	shader-header	translates	1
 crates/wubble-gfx/src/scene/shaders/wave.wgsl	shader-header	translates	1
-kit/chrome/space-icon.slint	kit-literal	1.7px	1
-kit/chrome/space-icon.slint	kit-literal	150ms	1
-kit/chrome/space-icon.slint	kit-literal	24px	2
 kit/chrome/split-view.slint	kit-literal	1.5px	1
 kit/chrome/split-view.slint	kit-literal	14px	1
 kit/chrome/split-view.slint	kit-literal	1px	5

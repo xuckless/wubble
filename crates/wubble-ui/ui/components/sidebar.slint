@@ -17,7 +17,6 @@ import { Palette, Radius, Spacing, Chrome, Fonts, Type, Motion } from "../tokens
 import { Shell } from "../kit/derived.slint";
 import { TabRow } from "../kit/chrome/tab-row.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
-import { SpaceIcon } from "../kit/chrome/space-icon.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
@@ -641,12 +640,10 @@ export component Sidebar inherits Rectangle {
                         width: Shell.space-glyph;
                         height: Shell.space-glyph;
                         hit: tile.hit;
-                        SpaceIcon {
-                            width: parent.width;
-                            height: parent.height;
+                        Icon {
                             // the icon is drawn at 17 px (tabs.tsx SpaceIcons): stroke 1.7 on the 24 grid
-                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                            kind: space.icon;
+                            size: Shell.space-glyph;
+                            path: Glyph.space(space.icon);
                             // .wb button: ink (the capsule under the active one carries its colour)
                             tint: Palette.ink;
                         }

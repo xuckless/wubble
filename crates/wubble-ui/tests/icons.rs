@@ -20,15 +20,16 @@ fn ui() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("ui")
 }
 
-/// Path data is a string starting with a move command and a number.
+/// Path data is a string starting with a move command (either case) and a number.
 fn has_path_literal(line: &str) -> bool {
     let line = line.split("//").next().unwrap_or("");
-    line.contains("\"M") && line.chars().any(|c| c.is_ascii_digit()) && {
-        let after = line.split("\"M").nth(1).unwrap_or("");
-        after
-            .trim_start()
-            .starts_with(|c: char| c.is_ascii_digit() || c == '-')
-    }
+    line.split('"').skip(1).step_by(2).any(|lit| {
+        let mut c = lit.trim_start().chars();
+        matches!(c.next(), Some('M' | 'm'))
+            && c.as_str()
+                .trim_start()
+                .starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')
+    })
 }
 
 #[test]
