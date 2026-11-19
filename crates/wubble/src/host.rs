@@ -25,6 +25,8 @@ mod drag;
 mod external;
 mod gpu;
 mod hover;
+mod gallery;
+mod look;
 mod media;
 mod pages;
 mod panes;
@@ -69,6 +71,7 @@ use wubble_core::pages::InternalPage;
 use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
+use wubble_core::touch::InputEvent;
 use wubble_core::window::WindowId;
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
@@ -267,6 +270,7 @@ pub struct Checks {
     pub split_smoke: Option<SplitSmoke>,
     pub settings_smoke: Option<SettingsSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
+    pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
     pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
@@ -328,6 +332,9 @@ pub struct Host {
     bar: Bar,
     /// The view last told about keyboard focus.
     focus_view: Option<ViewId>,
+    /// The pane the last press took the keys to when it is not the model's shown page: the
+    /// DevTools panel (`PANEL_TAB`) or the window's peek. Ignored once that pane is gone.
+    key_pane: Option<TabId>,
     pub stats: FrameStats,
     last_present: Option<Instant>,
     idle_runs: u32,
@@ -343,6 +350,10 @@ pub struct Host {
     pub windows_passed: bool,
     pub settings_passed: bool,
     pub pages_passed: bool,
+    /// `--smoke gallery` shot every scene.
+    pub gallery_passed: bool,
+    /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
+    gallery_timer: slint::Timer,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
     pub(crate) input: InputState,
@@ -462,6 +473,10 @@ pub struct Host {
     boosts: boost::Boosts,
     /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/videos.rs`).
     videos: videos::Videos,
+    /// Reduced motion and touch sizing (`look.rs`).
+    look: look::Look,
+    /// Shift+click opens a peek (`glance.enabled`).
+    glance_enabled: bool,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
 }
@@ -544,6 +559,7 @@ impl Host {
                 generation: 0,
             },
             focus_view: None,
+            key_pane: None,
             stats: FrameStats::default(),
             last_present: None,
             idle_runs: 0,
@@ -557,6 +573,8 @@ impl Host {
             windows_passed: false,
             settings_passed: false,
             pages_passed: false,
+            gallery_passed: false,
+            gallery_timer: slint::Timer::default(),
             settings_read: None,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
@@ -627,6 +645,8 @@ impl Host {
             boosts: boost::Boosts::new(boosts),
             videos,
             video_passed: None,
+            look: look::Look::new(),
+            glance_enabled: true,
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -692,6 +712,7 @@ impl Host {
                 return;
             }
         };
+        look::paint(&opened.handle, self.look());
         if let Err(e) = opened.handle.show() {
             eprintln!("wubble: window {}: {e}", id.0);
             return;
@@ -960,6 +981,7 @@ impl Host {
         let kept = self.framed_tabs();
         let before = self.w.frames.len();
         self.w.frames.retain(|tab, _| kept.contains(tab));
+        window::free_slots(&mut self.w.slots, &kept);
         if self.w.frames.len() != before {
             window.set_web_cursor(Cursor::Default as i32);
             for tab in self.shown_tabs() {
@@ -1090,12 +1112,21 @@ impl Host {
         self.tab_view(self.shown()?)
     }
 
-    /// The view that gets keys: the DevTools panel's after a press in it, else the page's.
-    fn focused_view(&mut self) -> Option<&mut View> {
+    /// The page that gets keys: the window's peek after a press in it, else the shown page.
+    pub(super) fn key_page(&self) -> Option<TabId> {
+        input::key_page(
+            self.key_pane,
+            self.model.glance_of(self.w.id).map(|g| g.tab),
+            self.shown(),
+        )
+    }
+
+    /// The view that gets keys: the DevTools panel's after a press in it, else the key page's.
+    pub(super) fn focused_view(&mut self) -> Option<&mut View> {
         if self.keys_to_panel().is_some() {
             return self.panel_view();
         }
-        self.view()
+        self.tab_view(self.key_page()?)
     }
 
     /// The visible tab's view, else any live tab's: for work that needs a view but none in
@@ -1161,6 +1192,9 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
+        if self.frame_rate.is_some() {
+            self.gallery_step(crate::gallery_smoke::Event::Ready);
+        }
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
@@ -1467,8 +1501,17 @@ impl Host {
         let remembered = site
             .as_deref()
             .and_then(|o| self.site_permissions.get(o, Permission::Popups));
-        match popup::decide(request.opened, request.gesture, remembered) {
+        let glance = self.glance_enabled;
+        match popup::decide(request.opened, request.gesture, remembered, glance) {
             Outcome::Tab { foreground: true } => self.dispatch(new_tab(request.url, Some(tab))),
+            Outcome::Glance => match self.model.window_of(tab) {
+                Some(window) => self.dispatch(Command::OpenGlance {
+                    window,
+                    opener: tab,
+                    url: request.url,
+                }),
+                None => self.dispatch(new_tab(request.url, Some(tab))),
+            },
             Outcome::Tab { foreground: false } => self.dispatch(Command::BackgroundTab {
                 url: request.url,
                 opener: tab,
@@ -1724,6 +1767,7 @@ impl Host {
             Plan::Copy(text) => self.copy(&text),
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::DevTools => self.toggle_devtools(),
+            Plan::DockNudge(dir) => self.source_nudge(f64::from(dir)),
             Plan::OpenBeside => self.open_beside(),
             Plan::Builtin(builtin) => self.builtin(builtin),
             // Later, outside the host: opening the bar calls back into it.
@@ -1979,6 +2023,7 @@ impl Host {
         self.save_download_progress();
         self.passwords_tick(now);
         self.gpu_check();
+        self.look_tick();
     }
 
     // ----- smokes
@@ -2597,7 +2642,7 @@ impl Host {
         let target = if let Some(panel) = self.keys_to_panel() {
             Some(panel)
         } else {
-            self.shown().and_then(|t| self.views.get(&t)).copied()
+            self.key_page().and_then(|t| self.views.get(&t)).copied()
         };
         if target != self.focus_view {
             if let Some(view) = self.focus_view.and_then(|id| self.engine.view(id)) {
@@ -2609,7 +2654,7 @@ impl Host {
         }
         // The page's own context menu takes the shell's focus but not the page's.
         let page_menu = target
-            .and(self.shown())
+            .and(self.key_page())
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| s.menu.keeps_page_focus());
         let focused = self.input.window_focused && (window.get_web_focused() || page_menu);
@@ -2645,8 +2690,18 @@ impl Host {
         }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => self.input.keys = modifiers.state(),
+            WindowEvent::Touch(t) => {
+                let at = t
+                    .location
+                    .to_logical::<f64>(window.window().scale_factor().into());
+                self.input_kind(InputEvent::Touch { x: at.x, y: at.y });
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let position = position.to_logical(window.window().scale_factor().into());
+                self.input_kind(InputEvent::MouseMove {
+                    x: f64::from(position.x),
+                    y: f64::from(position.y),
+                });
                 self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
                 self.w
                     .glass
@@ -2742,13 +2797,24 @@ impl Host {
         {
             return EventResult::PreventDefault;
         }
-        // Esc leaves page fullscreen before anything else sees it.
-        if key.pressed
-            && key.unmodified == Key::Named(NamedKey::Escape)
-            && matches!(self.screen, Screen::Page { .. })
-        {
-            self.apply_screen(window, ScreenEvent::Escape);
-            return EventResult::PreventDefault;
+        // Esc leaves page fullscreen before anything else sees it; it closes the peek only
+        // when no shell field, sheet or menu holds the focus.
+        if key.pressed && key.unmodified == Key::Named(NamedKey::Escape) {
+            match input::esc_to(
+                matches!(self.screen, Screen::Page { .. }),
+                window.get_web_focused(),
+                self.model.glance_of(self.w.id).is_some(),
+            ) {
+                input::EscTo::Fullscreen => {
+                    self.apply_screen(window, ScreenEvent::Escape);
+                    return EventResult::PreventDefault;
+                }
+                input::EscTo::Peek => {
+                    self.dispatch(Command::CloseGlance(self.w.id));
+                    return EventResult::PreventDefault;
+                }
+                input::EscTo::Route => {}
+            }
         }
         // The keybinding editor's recorder takes keys before any shortcut does.
         if key.pressed
@@ -2784,7 +2850,7 @@ impl Host {
             KeyRoute::Page | KeyRoute::PageAndShell | KeyRoute::PageFirst(_)
         ) {
             self.pace(PaceEvent::Wake);
-            if let Some(view) = self.view() {
+            if let Some(view) = self.focused_view() {
                 view.key(key);
             }
             // A key down the page sees ends its autoscroll.
@@ -2919,15 +2985,19 @@ impl Host {
             self.tip_dismiss();
         }
         if pressed && let Some(tab) = crate::shell::tab_id(pane) {
-            // keys follow the pane that was pressed: the DevTools panel or a page
-            let panel = tab == PANEL_TAB;
-            if self.devtools.focused != panel && self.shown_tabs().contains(&tab) {
-                self.devtools.focused = panel;
+            // keys follow the pane that was pressed: the DevTools panel, the peek or a page
+            let to = (tab == PANEL_TAB || self.model.is_glance(tab)).then_some(tab);
+            if self.key_pane != to && self.shown_tabs().contains(&tab) {
+                self.key_pane = to;
                 if let Some(window) = self.w.window.upgrade() {
                     self.sync_focus(&window);
                 }
             }
-            if self.shown() != Some(tab) && self.model.window_tabs(self.w.id).contains(&tab) {
+            // a press in the peek stays a peek: its buttons promote it
+            if self.shown() != Some(tab)
+                && !self.model.is_glance(tab)
+                && self.model.window_tabs(self.w.id).contains(&tab)
+            {
                 self.dispatch(Command::ActivateTab(tab));
             }
         }

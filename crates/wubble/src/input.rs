@@ -32,6 +32,40 @@ pub enum KeyFocus {
     Shell,
 }
 
+/// The page that gets keys: the peek after a press in it (`pressed`, while it is still the
+/// window's `peek`), else the model's `shown` page.
+pub fn key_page(
+    pressed: Option<wubble_core::tab::TabId>,
+    peek: Option<wubble_core::tab::TabId>,
+    shown: Option<wubble_core::tab::TabId>,
+) -> Option<wubble_core::tab::TabId> {
+    pressed.filter(|&t| Some(t) == peek).or(shown)
+}
+
+/// Who takes a pressed Esc before the keymap's routing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscTo {
+    /// The page leaves fullscreen.
+    Fullscreen,
+    /// The window's peek closes.
+    Peek,
+    /// The key goes on as any other: to a shell field, sheet or menu holding the focus, or the
+    /// page.
+    Route,
+}
+
+/// Fullscreen first; the peek only when the web content has the focus (no shell overlay took
+/// it), as the last taker before the page.
+pub fn esc_to(fullscreen: bool, web_focused: bool, peek: bool) -> EscTo {
+    if fullscreen {
+        EscTo::Fullscreen
+    } else if peek && web_focused {
+        EscTo::Peek
+    } else {
+        EscTo::Route
+    }
+}
+
 /// What to do with a key event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyRoute {
@@ -359,6 +393,33 @@ impl InputState {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn keys_go_to_the_peek_after_a_press_in_it() {
+        use wubble_core::tab::TabId;
+        let (opener, peek, other) = (Some(TabId(1)), Some(TabId(2)), Some(TabId(3)));
+        assert_eq!(
+            key_page(None, peek, opener),
+            opener,
+            "the opener until a press"
+        );
+        assert_eq!(key_page(peek, peek, opener), peek);
+        assert_eq!(key_page(peek, None, opener), opener, "the peek closed");
+        assert_eq!(
+            key_page(peek, other, opener),
+            opener,
+            "another peek needs its own press"
+        );
+    }
+
+    #[test]
+    fn esc_closes_a_peek_only_after_fullscreen_and_shell_overlays() {
+        assert_eq!(esc_to(true, true, true), EscTo::Fullscreen);
+        assert_eq!(esc_to(false, true, true), EscTo::Peek);
+        // the command bar, a sheet or a menu holds the focus: it takes the Esc
+        assert_eq!(esc_to(false, false, true), EscTo::Route);
+        assert_eq!(esc_to(false, true, false), EscTo::Route);
+    }
     use super::*;
 
     fn ch(c: &str) -> Key {

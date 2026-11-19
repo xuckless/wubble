@@ -166,6 +166,12 @@ pub enum Applied {
     BoostsEnabled(bool),
     /// Every download asks where to save it (`settings::DOWNLOADS_ASK_WHERE`).
     AskWhereToSave(bool),
+    /// Calmer motion: the setting (the host combines it with the OS preference).
+    ReduceMotion(crate::motion::Calm),
+    /// Touch-sized rows: auto, always or never.
+    TouchSizing(crate::touch::Sizing),
+    /// Shift+click opens a peek.
+    Glance(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -301,6 +307,9 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         }
         k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         k if k == s::DOWNLOADS_ASK_WHERE.key => Applied::AskWhereToSave(flag(def, stored)),
+        k if k == s::REDUCE_MOTION.key => Applied::ReduceMotion(crate::motion::Calm::parse(v)),
+        k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
+        k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })

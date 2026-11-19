@@ -14,6 +14,12 @@ export struct TabItem {
     in-split: bool,
     // wubble: requests the blocker stopped on this tab's page.
     blocked: int,
+    // wubble: 0 a tab, 1 a folder's header (a negative id; `title` is its name, `count` its tabs,
+    // `collapsed` whether they are folded away). `depth` 1: a tab inside a folder.
+    kind: int,
+    depth: int,
+    count: int,
+    collapsed: bool,
 }
 
 // The border beam this frame (wubble_core::beam::Shape): head and tail length as fractions of
@@ -567,4 +573,20 @@ export struct BoostView {
     zapping: bool,
     // Why the site pattern is refused, or empty.
     error: string,
+}
+
+// The window's peek (glance-card.slint): its page's last frame and where the host lays the page
+// out in the content area (`card-y` is the card's top, over the header).
+export struct GlanceView {
+    open: bool,
+    id: int,
+    title: string,
+    frame: image,
+    clip-width: int,
+    clip-height: int,
+    x: length,
+    card-y: length,
+    y: length,
+    width: length,
+    height: length,
 }

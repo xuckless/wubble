@@ -67,9 +67,107 @@ impl SpaceSwipe {
     }
 }
 
+/// The kind of pointer the user is on: rows grow to 44 px under a finger (`Chrome.rowTouch`).
+/// Not in the design bucket (it has the token only): written new.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum InputKind {
+    #[default]
+    Mouse,
+    /// Last touched at this window position (logical px).
+    Touch { x: f64, y: f64 },
+}
+
+/// A pointer event as the input kind sees it (window position, logical px).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum InputEvent {
+    Touch { x: f64, y: f64 },
+    MouseMove { x: f64, y: f64 },
+}
+
+/// A mouse move within this many px of the last touch point is the touch's own emulated mouse
+/// event (Windows pen/touch compatibility, some X11 setups), not a real mouse.
+pub const EMULATED_SLOP: f64 = 2.0;
+
+/// The next input kind: a touch flips to touch, a real mouse move flips back.
+pub fn next(kind: InputKind, event: InputEvent) -> InputKind {
+    match (kind, event) {
+        (_, InputEvent::Touch { x, y }) => InputKind::Touch { x, y },
+        (InputKind::Touch { x: tx, y: ty }, InputEvent::MouseMove { x, y })
+            if (x - tx).abs() <= EMULATED_SLOP && (y - ty).abs() <= EMULATED_SLOP =>
+        {
+            kind
+        }
+        (_, InputEvent::MouseMove { .. }) => InputKind::Mouse,
+    }
+}
+
+/// The `ui.touch_sizing` setting: follow the input, or force one size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sizing {
+    #[default]
+    Auto,
+    Touch,
+    Mouse,
+}
+
+impl Sizing {
+    /// From the setting's stored choice; unknown values are `Auto`.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "touch" => Sizing::Touch,
+            "mouse" => Sizing::Mouse,
+            _ => Sizing::Auto,
+        }
+    }
+}
+
+/// Whether the chrome uses touch sizing (44 px rows).
+pub fn is_touch(sizing: Sizing, kind: InputKind) -> bool {
+    match sizing {
+        Sizing::Touch => true,
+        Sizing::Mouse => false,
+        Sizing::Auto => matches!(kind, InputKind::Touch { .. }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_touch_flips_to_touch_and_a_real_mouse_move_flips_back() {
+        let k = InputKind::Mouse;
+        let k = next(k, InputEvent::Touch { x: 10.0, y: 10.0 });
+        assert!(is_touch(Sizing::Auto, k));
+        // the touch's emulated mouse move, at the touch point: still touch
+        let k = next(k, InputEvent::MouseMove { x: 11.0, y: 9.0 });
+        assert!(is_touch(Sizing::Auto, k));
+        // a real move away
+        let k = next(k, InputEvent::MouseMove { x: 40.0, y: 10.0 });
+        assert_eq!(k, InputKind::Mouse);
+        assert!(!is_touch(Sizing::Auto, k));
+        // mouse moves stay mouse
+        assert_eq!(
+            next(k, InputEvent::MouseMove { x: 10.0, y: 10.0 }),
+            InputKind::Mouse
+        );
+    }
+
+    #[test]
+    fn the_setting_forces_a_size() {
+        let touch = InputKind::Touch { x: 0.0, y: 0.0 };
+        for (sizing, mouse, touched) in [
+            (Sizing::Auto, false, true),
+            (Sizing::Touch, true, true),
+            (Sizing::Mouse, false, false),
+        ] {
+            assert_eq!(is_touch(sizing, InputKind::Mouse), mouse);
+            assert_eq!(is_touch(sizing, touch), touched);
+        }
+        assert_eq!(Sizing::parse("touch"), Sizing::Touch);
+        assert_eq!(Sizing::parse("mouse"), Sizing::Mouse);
+        assert_eq!(Sizing::parse("x"), Sizing::Auto);
+    }
 
     #[test]
     fn a_swipe_switches_once_past_the_threshold() {

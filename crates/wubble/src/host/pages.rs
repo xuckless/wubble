@@ -78,6 +78,11 @@ pub(super) enum SheetKind {
         id: i64,
     },
     NewFolder,
+    /// A sidebar folder's name (not a bookmark: the model's folder).
+    TabFolder {
+        folder: wubble_core::space::FolderId,
+        name: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -247,6 +252,9 @@ fn sheet_view(kind: &SheetKind, rows: &[BookmarkRow], serial: i32) -> BookmarkSh
             rows.iter().find(|r| r.id == *id).and_then(|r| r.parent),
         ),
         SheetKind::NewFolder => ("New folder", "Create", true, String::new(), false, None),
+        SheetKind::TabFolder { name, .. } => {
+            ("Rename folder", "Save", true, name.clone(), false, None)
+        }
     };
     BookmarkSheetView {
         open: true,
@@ -737,6 +745,35 @@ impl Host {
         self.open_sheet(SheetKind::NewFolder);
     }
 
+    /// A sidebar folder's "Rename Folder": the same sheet, with its name.
+    pub(super) fn rename_folder_requested(&mut self, folder: wubble_core::space::FolderId) {
+        let name = self.model.spaces.iter().find_map(|s| {
+            s.items.iter().find_map(|i| match i {
+                wubble_core::space::Item::Folder(f) if f.id == folder => Some(f.name.clone()),
+                _ => None,
+            })
+        });
+        if let Some(name) = name {
+            self.open_sheet(SheetKind::TabFolder { folder, name });
+        }
+    }
+
+    /// A folder header's click: fold its tabs away, or show them.
+    pub(crate) fn toggle_folder(&mut self, folder: wubble_core::space::FolderId) {
+        let collapsed = self.model.spaces.iter().find_map(|s| {
+            s.items.iter().find_map(|i| match i {
+                wubble_core::space::Item::Folder(f) if f.id == folder => Some(f.collapsed),
+                _ => None,
+            })
+        });
+        if let Some(collapsed) = collapsed {
+            self.dispatch(wubble_core::model::Command::SetFolderCollapsed {
+                folder,
+                collapsed: !collapsed,
+            });
+        }
+    }
+
     /// Mod+D: the sheet for the visible web page. Not while an engine dialog waits for its
     /// answer (one sheet at a time).
     pub(crate) fn bookmark_page(&mut self) {
@@ -770,6 +807,17 @@ impl Host {
         let Some(kind) = b.sheet.take() else {
             return;
         };
+        if let SheetKind::TabFolder { folder, .. } = kind {
+            let name = name.trim();
+            if accept && !name.is_empty() {
+                self.dispatch(wubble_core::model::Command::RenameFolder {
+                    folder,
+                    name: name.to_owned(),
+                });
+            }
+            self.render_bookmarks();
+            return;
+        }
         let folder = (folder >= 0).then(|| i64::from(folder));
         for edit in sheet_edits(&kind, &b.rows, accept, remove, name, folder) {
             self.bookmarks_request(Some(edit));

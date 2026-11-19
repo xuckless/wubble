@@ -27,22 +27,34 @@ export component SheetFrame inherits Rectangle {
         keys.focus();
     }
 
-    visible: root.open;
+    // The exit is seen (Overlap: the old sheet shares the screen while it leaves): drawn until
+    // the panel has faded; the sheet owning it keeps its view (a latch) and only the open sheet
+    // answers (permission-prompt.slint's rule).
+    visible: root.open || panel.opacity > 0;
 
     // The scrim: the page under it gets no pointer events while the sheet waits.
     TouchArea {
+        enabled: root.open;
         scroll-event(e) => {
-            accept
+            root.open ? accept : reject
         }
     }
     Rectangle {
         background: Shell.scrim;
+        opacity: root.open ? 1 : 0;
+        animate opacity {
+            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+        }
     }
 
     keys := FocusScope {
         width: 0px;
         height: 0px;
         key-pressed(event) => {
+            if !root.open {
+                return reject;
+            }
             if event.text == Key.Escape {
                 root.cancelled();
                 return accept;
@@ -67,10 +79,12 @@ export component SheetFrame inherits Rectangle {
         transform-scale: root.open ? 1 : Shell.sheet-from;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: Shell.sheet-in;
-            easing: Motion.easeOut;
+            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
-        TouchArea { }
+        TouchArea {
+            enabled: root.open;
+        }
 
         body := VerticalLayout {
             padding: Shell.sheet-pad;
@@ -102,14 +116,18 @@ export component SheetFrame inherits Rectangle {
                 if root.cancel-text != "": SheetButton {
                     text: root.cancel-text;
                     clicked => {
-                        root.cancelled();
+                        if root.open {
+                            root.cancelled();
+                        }
                     }
                 }
                 SheetButton {
                     text: root.accept-text;
                     primary: true;
                     clicked => {
-                        root.accepted();
+                        if root.open {
+                            root.accepted();
+                        }
                     }
                 }
             }

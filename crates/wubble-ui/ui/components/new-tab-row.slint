@@ -11,7 +11,7 @@ export component NewTabRow inherits Rectangle {
     in property <bool> compact: false;
     callback activated();
 
-    height: Chrome.row;
+    height: Shell.row;
 
     body := Rectangle {
         x: root.compact ? (root.width - self.width) / 2 : 0px;

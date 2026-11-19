@@ -7,15 +7,31 @@ use std::collections::BTreeMap;
 
 use wubble_core::model::{Dest, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::{Item, Rgb, SpaceIcon, SpaceId};
+use wubble_core::space::{FolderId, Item, Rgb, SpaceIcon, SpaceId};
 use wubble_core::tab::{Tab, TabId};
 use wubble_core::url;
 use wubble_core::window::WindowId;
 
-/// One tab row or pinned tile.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What a sidebar row is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RowKind {
+    #[default]
+    Tab,
+    /// A folder's header (its id is [`folder_row_id`]): the chevron, the name, the count.
+    Folder,
+}
+
+/// One tab row or pinned tile, or a folder's header.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TabRow {
+    pub kind: RowKind,
+    /// The tab's id, or a folder header's negative id.
     pub id: i32,
+    /// 1 for a tab in a folder.
+    pub depth: u8,
+    /// A folder header: how many tabs it holds, and whether they are folded away.
+    pub count: u32,
+    pub collapsed: bool,
     pub title: String,
     pub url: String,
     pub audible: bool,
@@ -52,7 +68,8 @@ pub struct SpaceRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShellView {
     pub pinned: Vec<TabRow>,
-    /// The active Space's other tabs, folder tabs inline (no folder UI yet).
+    /// The active Space's other rows in order: tabs, and each folder's header followed by its
+    /// tabs (one level in) unless it is collapsed.
     pub tabs: Vec<TabRow>,
     pub spaces: Vec<SpaceRow>,
     pub active_tab: i32,
@@ -75,30 +92,52 @@ pub fn view_model(
         .and_then(|w| w.space())
         .unwrap_or_else(|| model.active_space());
     let space = model.spaces.iter().find(|s| s.id == space_id);
+    // a peek's tab is no row: the card over the page shows it
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
-        ids.filter_map(|id| {
-            let tab = model.tabs.get(&id)?;
-            let sound = audio.get(&id).copied().unwrap_or_default();
-            Some(TabRow {
-                id: slint_id(id.0)?,
-                title: tab_title(tab),
-                url: tab.url.clone(),
-                audible: tab.busy.contains(wubble_core::busy::Reason::Audible),
-                muted: sound.muted,
-                blocked: blocked.get(&id).copied().unwrap_or(0),
-                in_split: model.split_of(id).is_some(),
+        ids.filter(|&id| !model.is_glance(id))
+            .filter_map(|id| {
+                let tab = model.tabs.get(&id)?;
+                let sound = audio.get(&id).copied().unwrap_or_default();
+                Some(TabRow {
+                    id: slint_id(id.0)?,
+                    title: tab_title(tab),
+                    url: tab.url.clone(),
+                    audible: tab.busy.contains(wubble_core::busy::Reason::Audible),
+                    muted: sound.muted,
+                    blocked: blocked.get(&id).copied().unwrap_or(0),
+                    in_split: model.split_of(id).is_some(),
+                    ..TabRow::default()
+                })
             })
-        })
-        .collect()
+            .collect()
     };
     let (pinned, tabs) = match space {
-        Some(s) => (
-            rows(&mut s.pinned.iter().copied()),
-            rows(&mut s.items.iter().flat_map(|item| match item {
-                Item::Tab(t) => vec![*t],
-                Item::Folder(f) => f.tabs.clone(),
-            })),
-        ),
+        Some(s) => {
+            let mut list = vec![];
+            for item in &s.items {
+                match item {
+                    Item::Tab(t) => list.extend(rows(&mut std::iter::once(*t))),
+                    Item::Folder(f) => {
+                        list.push(TabRow {
+                            kind: RowKind::Folder,
+                            id: folder_row_id(f.id),
+                            title: f.name.clone(),
+                            count: u32::try_from(f.tabs.len()).unwrap_or(u32::MAX),
+                            collapsed: f.collapsed,
+                            ..TabRow::default()
+                        });
+                        if !f.collapsed {
+                            list.extend(
+                                rows(&mut f.tabs.iter().copied())
+                                    .into_iter()
+                                    .map(|r| TabRow { depth: 1, ..r }),
+                            );
+                        }
+                    }
+                }
+            }
+            (rows(&mut s.pinned.iter().copied()), list)
+        }
         None => (vec![], vec![]),
     };
     let spaces = model
@@ -129,17 +168,18 @@ pub fn view_model(
     }
 }
 
-/// Where a row dragged to slot `to` of the flat tab list ([`ShellView::tabs`]: the active
-/// Space's items with folder tabs inline) goes in the model. Dragged up, it goes before the
-/// row now at `to`; dragged down, after the row it passed (at `to` once it is taken out); in
-/// that row's folder if it has one, so the list reads as dropped. The very last slot is the
-/// end of the Space at the top level, out of any folder (a trailing folder can still be joined
-/// before its last tab). `None` for a tab that is not a row (pinned, another Space's, unknown).
+/// Where a row dragged to slot `to` of the sidebar's rows ([`ShellView::tabs`]: the active
+/// Space's items, each folder's header followed by its tabs unless collapsed) goes in the model.
+/// Dragged up, it goes before the row now at `to`; dragged down, after the row it passed (at `to`
+/// once it is taken out). Before a folder's header is the top level, above the folder; after an
+/// open folder's header is the folder's first place; after a collapsed one, the top level below
+/// it. The very last slot is the end of the Space at the top level, out of any folder. `None`
+/// for a tab that is not a row (pinned, another Space's, folded away, unknown).
 pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
     // the row's own Space: the one the window it was dragged in shows
     let (space, _) = model.location(tab)?;
     let space = model.spaces.iter().find(|s| s.id == space)?;
-    // The other rows in flat order, as (before it, after it), indices as after the detach.
+    // The other rows in order, as (before it, after it), indices as after the detach.
     let mut rows = vec![];
     let mut from = None;
     let mut items = 0;
@@ -150,20 +190,32 @@ pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
     for item in &space.items {
         match item {
             Item::Tab(t) if *t == tab => from = Some(rows.len()),
+            // a peek's tab is no row, but it holds its place among the items
+            Item::Tab(t) if model.is_glance(*t) => items += 1,
             Item::Tab(_) => {
                 rows.push((normal(items), normal(items + 1)));
                 items += 1;
             }
             Item::Folder(f) => {
-                for (index, _) in f.tabs.iter().filter(|&&t| t != tab).enumerate() {
-                    let at = |index| Dest::Folder {
-                        folder: f.id,
-                        index,
-                    };
-                    rows.push((at(index), at(index + 1)));
-                }
-                if let Some(i) = f.tabs.iter().position(|&t| t == tab) {
-                    from = Some(rows.len() - (f.tabs.len() - 1 - i));
+                let at = |index| Dest::Folder {
+                    folder: f.id,
+                    index,
+                };
+                if f.collapsed {
+                    rows.push((normal(items), normal(items + 1)));
+                } else {
+                    rows.push((normal(items), at(0)));
+                    let mut index = 0;
+                    for &t in &f.tabs {
+                        if t == tab {
+                            from = Some(rows.len());
+                            continue;
+                        }
+                        if !model.is_glance(t) {
+                            rows.push((at(index), at(index + 1)));
+                        }
+                        index += 1;
+                    }
                 }
                 items += 1;
             }
@@ -180,6 +232,19 @@ pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
         row.filter(|_| to < rows.len())
             .unwrap_or(normal(usize::MAX)),
     )
+}
+
+/// A folder header's row id: negative, so it never names a tab (`-2 - id`; -1 means none).
+pub fn folder_row_id(folder: FolderId) -> i32 {
+    i32::try_from(folder.0).map_or(i32::MIN, |id| -2 - id)
+}
+
+/// The folder a header row id names.
+pub fn folder_of_row(id: i32) -> Option<FolderId> {
+    (id <= -2)
+        .then(|| u32::try_from(-2_i64 - i64::from(id)).ok())
+        .flatten()
+        .map(FolderId)
 }
 
 /// What a tab is called: its title, else its host, else "New tab".
@@ -282,8 +347,26 @@ mod tests {
         );
         let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
         assert_eq!(titles(&v.pinned), ["a.test"]);
-        assert_eq!(titles(&v.tabs), ["c.test", "b.test"]);
+        assert_eq!(titles(&v.tabs), ["c.test", "f", "b.test"]);
+        let kinds: Vec<_> = v.tabs.iter().map(|r| (r.kind, r.depth)).collect();
+        assert_eq!(
+            kinds,
+            [(RowKind::Tab, 0), (RowKind::Folder, 0), (RowKind::Tab, 1)]
+        );
+        assert_eq!(v.tabs[1].id, folder_row_id(folder));
+        assert_eq!(v.tabs[1].count, 1);
         assert_eq!(v.active_tab, i32::try_from(c.0).unwrap());
+        // collapsed, the folder's tabs are folded away
+        let (m, _) = apply(
+            m,
+            Command::SetFolderCollapsed {
+                folder,
+                collapsed: true,
+            },
+        );
+        let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
+        assert_eq!(titles(&v.tabs), ["c.test", "f"]);
+        assert!(v.tabs[1].collapsed);
         assert_eq!((v.host.as_str(), v.path.as_str()), ("c.test", "/"));
     }
 
@@ -435,7 +518,7 @@ mod tests {
         let v = view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new());
         assert_eq!(
             titles(&v.tabs),
-            ["a.test", "b.test", "c.test", "d.test", "e.test"]
+            ["a.test", "b.test", "c.test", "f", "d.test", "e.test"]
         );
         (m, [a, b, c, d, e, p], folder)
     }
@@ -451,22 +534,22 @@ mod tests {
     }
 
     #[test]
-    fn a_dragged_row_lands_on_its_slot_of_the_flat_list() {
+    fn a_dragged_row_lands_on_its_slot_of_the_rows() {
         let (m, [a, b, c, d, e, _], f) = with_folder();
         let s = SpaceId(0);
-        // a down to slot 2: b c a d e
+        // a down to slot 2: b c a f d e
         assert_eq!(
             move_dest(&m, a, 2),
             Some(Dest::Normal { space: s, index: 2 })
         );
         assert_eq!(
             moved(m.clone(), a, 2),
-            ["b.test", "c.test", "a.test", "d.test", "e.test"]
+            ["b.test", "c.test", "a.test", "f", "d.test", "e.test"]
         );
         // c up to the top
         assert_eq!(
             moved(m.clone(), c, 0),
-            ["c.test", "a.test", "b.test", "d.test", "e.test"]
+            ["c.test", "a.test", "b.test", "f", "d.test", "e.test"]
         );
         // a to the last slot (the last `TabRows` reports): after the trailing folder, at the
         // top level
@@ -474,36 +557,75 @@ mod tests {
             space: s,
             index: usize::MAX,
         });
-        assert_eq!(move_dest(&m, a, 4), last);
+        assert_eq!(move_dest(&m, a, 5), last);
         assert_eq!(
-            moved(m.clone(), a, 4),
-            ["b.test", "c.test", "d.test", "e.test", "a.test"]
+            moved(m.clone(), a, 5),
+            ["b.test", "c.test", "f", "d.test", "e.test", "a.test"]
         );
         // d out of the trailing folder the same way
-        assert_eq!(move_dest(&m, d, 4), last);
+        assert_eq!(move_dest(&m, d, 5), last);
         // a into the trailing folder: before its last tab
         assert_eq!(
-            move_dest(&m, a, 3),
+            move_dest(&m, a, 4),
             Some(Dest::Folder {
                 folder: f,
                 index: 1
             })
         );
+        // a just below the folder's header: its first place
+        assert_eq!(
+            moved(m.clone(), a, 3),
+            ["b.test", "c.test", "f", "a.test", "d.test", "e.test"]
+        );
         // e within its folder, before d
         assert_eq!(
-            moved(m.clone(), e, 3),
-            ["a.test", "b.test", "c.test", "e.test", "d.test"]
+            moved(m.clone(), e, 4),
+            ["a.test", "b.test", "c.test", "f", "e.test", "d.test"]
+        );
+        // d up onto the header's slot: out of the folder, above it
+        assert_eq!(
+            moved(m.clone(), d, 3),
+            ["a.test", "b.test", "c.test", "d.test", "f", "e.test"]
         );
         // d out of the folder, up between a and b
         assert_eq!(
             moved(m.clone(), d, 1),
-            ["a.test", "d.test", "b.test", "c.test", "e.test"]
+            ["a.test", "d.test", "b.test", "c.test", "f", "e.test"]
         );
-        // b down to where e is: into the folder before e
+        // b down to where d is: into the folder after d
         assert_eq!(
-            moved(m.clone(), b, 3),
-            ["a.test", "c.test", "d.test", "b.test", "e.test"]
+            moved(m.clone(), b, 4),
+            ["a.test", "c.test", "f", "d.test", "b.test", "e.test"]
         );
+    }
+
+    #[test]
+    fn a_collapsed_folder_is_one_row() {
+        let (m, [a, _, _, d, ..], f) = with_folder();
+        let (m, _) = apply(
+            m,
+            Command::SetFolderCollapsed {
+                folder: f,
+                collapsed: true,
+            },
+        );
+        // its tabs are no rows
+        assert_eq!(move_dest(&m, d, 0), None);
+        // a down past the header: after the folder, at the top level
+        assert_eq!(moved(m.clone(), a, 3), ["b.test", "c.test", "f", "a.test"]);
+        assert_eq!(moved(m.clone(), a, 2), ["b.test", "c.test", "a.test", "f"]);
+    }
+
+    #[test]
+    fn folder_row_ids_are_negative_and_round_trip() {
+        for id in [0, 1, 7, 1_000_000] {
+            let row = folder_row_id(FolderId(id));
+            assert!(row <= -2);
+            assert_eq!(tab_id(row), None);
+            assert_eq!(folder_of_row(row), Some(FolderId(id)));
+        }
+        assert_eq!(folder_of_row(-1), None);
+        assert_eq!(folder_of_row(3), None);
     }
 
     #[test]

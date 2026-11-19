@@ -92,12 +92,15 @@ pub enum Action {
     Copy,
     Paste,
     SelectAll,
+    /// Widen or narrow the docked DevTools panel a step (its seam's keyboard nudge).
+    DockWider,
+    DockNarrower,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 60] = [
+const FIXED: [(&str, Action); 62] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -157,6 +160,8 @@ const FIXED: [(&str, Action); 60] = [
     ("copy", Action::Copy),
     ("paste", Action::Paste),
     ("select-all", Action::SelectAll),
+    ("dock-wider", Action::DockWider),
+    ("dock-narrower", Action::DockNarrower),
     ("quit", Action::Quit),
 ];
 
@@ -381,7 +386,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 78);
+        assert_eq!(all.len(), 80);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -408,7 +413,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 78);
+        assert_eq!(ids.len(), 80);
     }
 
     #[test]

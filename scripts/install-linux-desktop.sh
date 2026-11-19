@@ -24,7 +24,7 @@ refresh() {
 case "${1:-}" in
 --uninstall)
     rm -f "$apps/wubble.desktop"
-    for f in "$src"/hicolor/*/apps/wubble.*; do
+    for f in "$src"/hicolor/*/apps/wubble*; do
         rel=${f#"$src"/hicolor/}
         rm -f "$icons/$rel"
     done
@@ -39,7 +39,7 @@ case "${1:-}" in
         exec_path=$(cd "$(dirname "$exec_path")" && pwd)/$(basename "$exec_path")
     fi
     mkdir -p "$apps"
-    for f in "$src"/hicolor/*/apps/wubble.*; do
+    for f in "$src"/hicolor/*/apps/wubble*; do
         rel=${f#"$src"/hicolor/}
         mkdir -p "$icons/$(dirname "$rel")"
         cp "$f" "$icons/$rel"

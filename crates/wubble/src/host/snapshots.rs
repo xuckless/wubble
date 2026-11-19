@@ -78,6 +78,30 @@ impl Host {
             Ok(None) => {}
             Err(e) => eprintln!("wubble: snapshot of tab {}: {e}", tab.0),
         }
+        self.capture_exit_page(tab);
+    }
+
+    /// The hidden tab's last frame at full size, for its exit under the incoming page (the
+    /// driver plays it and drops it, `exit-page`). Only when it was this window's one pane and
+    /// motion is not reduced; a split's panes keep their places.
+    fn capture_exit_page(&mut self, tab: TabId) {
+        let panes = super::window::page_panes(&self.w.slots);
+        if wubble_core::motion::reduced() || panes != 1 || !self.w.frames.contains_key(&tab) {
+            return;
+        }
+        let Some(i) = self.w.slots.iter().position(|s| *s == Some(tab)) else {
+            return;
+        };
+        let presenter = &self.w.presenters[i];
+        match presenter.snapshot(u32::MAX) {
+            Ok(Some((image, _))) => {
+                if let Some(window) = self.w.window.upgrade() {
+                    window.set_exit_page(image);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("wubble: exit page of tab {}: {e}", tab.0),
+        }
     }
 
     /// `tab`'s snapshot, if it has one (the hover preview's thumbnail).

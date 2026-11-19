@@ -422,7 +422,8 @@ impl StoreClient {
 
     pub fn save(&self, model: &Model, ui: UiState) {
         self.send(Request::Save {
-            model: Box::new(model.clone()),
+            // a peek is never part of a session
+            model: Box::new(model.for_session()),
             ui,
         });
     }

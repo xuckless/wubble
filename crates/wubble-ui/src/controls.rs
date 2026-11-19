@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
-use wubble_core::controls::{Slider, Toggle};
+use wubble_core::controls::{Segmented, Slider, Toggle};
 
 use crate::{AppWindow, ControlView, Controls as Global};
 
@@ -24,6 +24,7 @@ const SWEEP_AFTER: usize = 64;
 enum Slot {
     Toggle(Toggle),
     Slider(Slider),
+    Segmented(Segmented),
 }
 
 impl Slot {
@@ -31,24 +32,35 @@ impl Slot {
         match self {
             Slot::Toggle(t) => t.step(dt),
             Slot::Slider(s) => s.step(dt),
+            Slot::Segmented(s) => s.step(dt),
         }
     }
 
     fn view(&self) -> ControlView {
-        // (x, scale x, scale y, origin, fill, value, held): one mapping for every control
-        let (x, sx, sy, origin, fill, value, held) = match self {
+        // (x, w, scale x, scale y, origin, fill, value, held): one mapping for every control
+        let (x, w, sx, sy, origin, fill, value, held) = match self {
             Slot::Toggle(t) => {
                 let v = t.view();
                 let on = if v.on { 1.0 } else { 0.0 };
-                (v.x, v.scale_x, v.scale_y, v.origin, v.fill, on, false)
+                (v.x, 0.0, v.scale_x, v.scale_y, v.origin, v.fill, on, false)
             }
             Slot::Slider(s) => {
                 let v = s.view();
-                (v.x, v.scale_x, v.scale_y, v.origin, 0.0, v.value, v.held)
+                (
+                    v.x, 0.0, v.scale_x, v.scale_y, v.origin, 0.0, v.value, v.held,
+                )
+            }
+            Slot::Segmented(s) => {
+                let v = s.view();
+                let selected = v.selected as f64;
+                (
+                    v.left, v.width, v.scale_x, v.scale_y, 0.5, 0.0, selected, v.held,
+                )
             }
         };
         ControlView {
             x: x as f32,
+            w: w as f32,
             scale_x: sx as f32,
             scale_y: sy as f32,
             origin: origin as f32,
@@ -128,8 +140,16 @@ impl Controls {
         match self.slot(id) {
             Some(Slot::Toggle(t)) => t.set(value > 0.5),
             Some(Slot::Slider(s)) => s.set(f64::from(value)),
+            Some(Slot::Segmented(s)) => s.set(value.max(0.0) as usize),
             None => {}
         }
+    }
+
+    fn segment(&mut self, id: i32, i: i32, left: f32, width: f32) {
+        if let (Some(Slot::Segmented(s)), Ok(i)) = (self.slot(id), usize::try_from(i)) {
+            s.set_segment(i, f64::from(left), f64::from(width));
+        }
+        self.write(id);
     }
 
     fn resize(&mut self, id: i32, travel: f32) {
@@ -144,6 +164,7 @@ impl Controls {
         match self.slot(id) {
             Some(Slot::Toggle(tg)) => tg.press(f64::from(px), t),
             Some(Slot::Slider(s)) => s.press(f64::from(px)),
+            Some(Slot::Segmented(s)) => s.press(f64::from(px), t),
             None => {}
         }
     }
@@ -153,6 +174,7 @@ impl Controls {
         match self.slot(id) {
             Some(Slot::Toggle(tg)) => tg.drag(f64::from(px), t),
             Some(Slot::Slider(s)) => s.drag(f64::from(px)),
+            Some(Slot::Segmented(s)) => s.drag(f64::from(px), t),
             None => {}
         }
     }
@@ -161,6 +183,7 @@ impl Controls {
         match self.slot(id) {
             Some(Slot::Toggle(t)) => t.release().map_or(-1.0, |on| if on { 1.0 } else { 0.0 }),
             Some(Slot::Slider(s)) => s.release().map_or(-1.0, |v| v as f32),
+            Some(Slot::Segmented(s)) => s.release().map_or(-1.0, |i| i as f32),
             None => -1.0,
         }
     }
@@ -231,10 +254,10 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     };
     let r = Rc::clone(&reg);
     g.on_acquire(move |kind, value| {
-        let slot = if kind == 0 {
-            Slot::Toggle(Toggle::new(value > 0.5))
-        } else {
-            Slot::Slider(Slider::new(f64::from(value), DEFAULT_TRAVEL))
+        let slot = match kind {
+            0 => Slot::Toggle(Toggle::new(value > 0.5)),
+            2 => Slot::Segmented(Segmented::new(value.max(0.0) as usize)),
+            _ => Slot::Slider(Slider::new(f64::from(value), DEFAULT_TRAVEL)),
         };
         r.borrow_mut().acquire(slot)
     });
@@ -245,6 +268,8 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     });
     let r = Rc::clone(&reg);
     g.on_resize(move |id, travel| r.borrow_mut().resize(id, travel));
+    let r = Rc::clone(&reg);
+    g.on_segment(move |id, i, left, width| r.borrow_mut().segment(id, i, left, width));
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_press(move |id, px| {
         r.borrow_mut().press(id, px);

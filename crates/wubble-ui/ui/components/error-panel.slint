@@ -23,11 +23,13 @@ export component ErrorPanel inherits Rectangle {
         keys.focus();
     }
 
-    visible: root.open;
+    // The exit is seen: drawn until the glass has faded; only the open panel answers.
+    visible: root.open || glass.opacity > 0;
 
     TouchArea {
+        enabled: root.open;
         scroll-event(e) => {
-            accept
+            root.open ? accept : reject
         }
     }
 
@@ -35,7 +37,7 @@ export component ErrorPanel inherits Rectangle {
         width: 0px;
         height: 0px;
         key-pressed(event) => {
-            if event.text == Key.Return {
+            if root.open && event.text == Key.Return {
                 root.primary();
                 return accept;
             }
@@ -43,14 +45,14 @@ export component ErrorPanel inherits Rectangle {
         }
     }
 
-    GlassPanel {
+    glass := GlassPanel {
         tier: GlassTier.thick;
         radius: 0px;
         over-content: true;
         opacity: root.open ? 1 : 0;
         animate opacity {
-            duration: Shell.sheet-in;
-            easing: Motion.easeOut;
+            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
 
         column := VerticalLayout {
@@ -97,13 +99,17 @@ export component ErrorPanel inherits Rectangle {
                     text: root.error.primary;
                     primary: true;
                     clicked => {
-                        root.primary();
+                        if root.open {
+                            root.primary();
+                        }
                     }
                 }
                 if root.error.secondary != "": SheetButton {
                     text: root.error.secondary;
                     clicked => {
-                        root.secondary();
+                        if root.open {
+                            root.secondary();
+                        }
                     }
                 }
             }

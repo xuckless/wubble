@@ -50,6 +50,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke autofill   # loopback sign-in page, fake keyring: fill from the key menu, submit, save prompt, vault row; exits; run by hand only
     cargo run -p wubble-engine --example block_smoke   # windowless: the request-filter hook cancels a script and runs the commit script (a stand-in filter, not wubble-blocker), exits; run by hand only
     cargo run -p wubble-engine --example gpu_crash_smoke   # windowless: kills the GPU process (chrome://gpucrash), frames must resume; run by hand only
+    cargo run -p wubble -- --smoke gallery --shot-dir DIR   # walks the shell through its surfaces on a seeded profile, one PNG each; run by hand only
     cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
@@ -58,6 +59,19 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
+
+The gallery (`gallery_smoke.rs`, `host/gallery.rs`) writes `DIR/NN-name.png` per scene in the
+order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, command bar (empty, with
+results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
+menu and save prompt, dialog sheet, error and certificate error pages, Settings (four scroll
+positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager.
+Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
+properties: the host rewrites those). Size and scale come from the environment:
+`WUBBLE_SHOT_SIZE=900x600` (logical; the design's 1360x880 by default) and
+`SLINT_SCALE_FACTOR=2` (the PNG is then physical, 2x). Surfaces that need a live page (split
+panes, DevTools docked, video strip, reader, boost editor, Little and Popup windows) are not
+scenes: use `--shot PNG` with their own smoke. Compare each PNG with its design counterpart
+(`browser/*.css`, `pages/*.css`, `notes/ref-settings.png`) before UI work is handed back.
 
 macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there; rsync the
 worktree without `target/` and `.git`; clippy needs `rustup component add clippy` once):

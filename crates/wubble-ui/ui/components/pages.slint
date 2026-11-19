@@ -500,6 +500,17 @@ export component PasswordsPage inherits Rectangle {
 
 // ─────────────────────────────────────────────────────────────────────────── task manager
 
+// A button column: the button keeps its own size, on the slot's middle.
+component TaskSlot inherits Rectangle {
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
 // A row's small grey column (state, memory, CPU).
 component TaskCell inherits Text {
     color: Palette.haze;
@@ -570,22 +581,32 @@ export component TasksPage inherits PageFrame {
                 width: Shell.task-cpu;
                 text: item.cpu;
             }
-            if item.tab >= 0: TextButton {
-                text: item.never-sleep ? "Allow sleep" : "Never sleep";
-                clicked => {
-                    root.action(item.tab, item.pid, TaskAction.never-sleep);
+            // A slot per button whether it shows or not, so the columns line up row to row.
+            TaskSlot {
+                width: Shell.task-sleep;
+                if item.tab >= 0: TextButton {
+                    text: item.never-sleep ? "Allow sleep" : "Never sleep";
+                    clicked => {
+                        root.action(item.tab, item.pid, TaskAction.never-sleep);
+                    }
                 }
             }
-            if item.can-discard: TextButton {
-                text: "Discard";
-                clicked => {
-                    root.action(item.tab, item.pid, TaskAction.discard);
+            TaskSlot {
+                width: Shell.task-discard;
+                if item.can-discard: TextButton {
+                    text: "Discard";
+                    clicked => {
+                        root.action(item.tab, item.pid, TaskAction.discard);
+                    }
                 }
             }
-            if item.can-end: TextButton {
-                text: "End";
-                clicked => {
-                    root.action(item.tab, item.pid, TaskAction.end);
+            TaskSlot {
+                width: Shell.task-end;
+                if item.can-end: TextButton {
+                    text: "End";
+                    clicked => {
+                        root.action(item.tab, item.pid, TaskAction.end);
+                    }
                 }
             }
         }

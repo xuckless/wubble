@@ -68,6 +68,8 @@ pub enum Plan {
     CloseTabs(Vec<TabId>),
     /// F12: DevTools docked or detached for the visible tab (`wubble_core::devtools`).
     DevTools,
+    /// The docked panel a step wider (1) or narrower (-1).
+    DockNudge(i8),
     /// A built-in on the visible page (`host/builtins.rs`).
     Builtin(Builtin),
     Quit,
@@ -190,6 +192,8 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ScreenshotVisible => builtin(Builtin::Shot(ShotRequest::Visible)),
         Action::ScreenshotFullPage => builtin(Builtin::Shot(ShotRequest::FullPage)),
         Action::NewBoost => builtin(Builtin::NewBoost),
+        Action::DockWider => Plan::DockNudge(1),
+        Action::DockNarrower => Plan::DockNudge(-1),
         Action::Quit => Plan::Quit,
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
@@ -256,6 +260,8 @@ mod tests {
     fn devtools_and_view_source_are_planned() {
         let m = with_tabs(1);
         assert_eq!(plan(Action::DevTools, &m), Plan::DevTools);
+        assert_eq!(plan(Action::DockWider, &m), Plan::DockNudge(1));
+        assert_eq!(plan(Action::DockNarrower, &m), Plan::DockNudge(-1));
         assert_eq!(
             plan(Action::DevTools, &Model::new(std::time::Instant::now())),
             Plan::Nothing

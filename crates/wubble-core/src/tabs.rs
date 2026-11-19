@@ -37,10 +37,10 @@ pub struct RowAnim {
 }
 
 impl RowAnim {
-    fn arrived(id: u64, slot: usize) -> Self {
+    fn arrived(id: u64, slot: usize, pitch: f64) -> Self {
         RowAnim {
             id,
-            y: spring(slot as f64 * TABS::pitch),
+            y: spring(slot as f64 * pitch),
             s: spring(1.0),
             enter: OVERLAP_IN,
         }
@@ -115,6 +115,9 @@ pub struct TabRows {
     ind_y: Spring,
     stretch: Stretch,
     drag: Option<Drag>,
+    /// wubble change: the row pitch, px ([`TABS::pitch`] by default; 44 + 4 on touch). Set by
+    /// [`TabRows::set_pitch`]: the row springs then carry every row to its new slot.
+    pub pitch: f64,
 }
 
 impl TabRows {
@@ -122,7 +125,7 @@ impl TabRows {
         let rows = ids
             .iter()
             .enumerate()
-            .map(|(i, &id)| RowAnim::arrived(id, i))
+            .map(|(i, &id)| RowAnim::arrived(id, i, TABS::pitch))
             .collect();
         TabRows {
             rows,
@@ -131,7 +134,14 @@ impl TabRows {
             ind_y: spring(active.unwrap_or(0) as f64 * TABS::pitch),
             stretch: Stretch::new(),
             drag: None,
+            pitch: TABS::pitch,
         }
+    }
+
+    /// wubble change: a new row pitch (touch sizing). Nothing jumps: the springs carry each row
+    /// and the indicator from where they are to their slots at the new pitch.
+    pub fn set_pitch(&mut self, pitch: f64) {
+        self.pitch = pitch;
     }
 
     /// Sync with the model: new rows start at their slot (they appear in place and fade in).
@@ -144,7 +154,7 @@ impl TabRows {
                 Some(j) => next.push(self.rows[j].clone()),
                 None => next.push(RowAnim {
                     enter: 0.0,
-                    ..RowAnim::arrived(id, i)
+                    ..RowAnim::arrived(id, i, self.pitch)
                 }),
             }
         }
@@ -206,7 +216,7 @@ impl TabRows {
             id,
             from: i,
             to: i,
-            y0: i as f64 * TABS::pitch,
+            y0: i as f64 * self.pitch,
             start: y,
             moved: false,
         });
@@ -228,8 +238,8 @@ impl TabRows {
             return false;
         }
         // 1:1 inside the list, rubber-banded past its ends (k 18)
-        let raw = d.from as f64 * TABS::pitch + dy;
-        let max = (n as f64 - 1.0) * TABS::pitch;
+        let raw = d.from as f64 * self.pitch + dy;
+        let max = (n as f64 - 1.0) * self.pitch;
         d.y0 = if raw < 0.0 {
             -18.0 * (1.0 - 1.0 / (-raw / 18.0 + 1.0))
         } else if raw > max {
@@ -237,7 +247,7 @@ impl TabRows {
         } else {
             raw
         };
-        d.to = clamp((d.y0 / TABS::pitch).round(), 0.0, n as f64 - 1.0) as usize;
+        d.to = clamp((d.y0 / self.pitch).round(), 0.0, n as f64 - 1.0) as usize;
         began
     }
 
@@ -302,7 +312,7 @@ impl TabRows {
             } else {
                 moving = step(
                     &mut r.y,
-                    slot.unwrap_or(0) as f64 * TABS::pitch,
+                    slot.unwrap_or(0) as f64 * self.pitch,
                     K::follow[0],
                     26.0,
                     dt,
@@ -320,7 +330,7 @@ impl TabRows {
         let act_id = self.active.and_then(|a| self.rows.get(a)).map(|r| r.id);
         let target = match (d, act_id) {
             (Some(d), Some(a)) if d.moved && d.id == a => d.y0,
-            _ => act_id.and_then(|a| self.slot_of(a)).unwrap_or(0) as f64 * TABS::pitch,
+            _ => act_id.and_then(|a| self.slot_of(a)).unwrap_or(0) as f64 * self.pitch,
         };
         moving = step(&mut self.ind_y, target, K::follow[0], K::follow[1], dt) || moving;
         moving = self.stretch.update(self.ind_y.x, dt) || moving;
@@ -421,6 +431,23 @@ mod tests {
         t.set_ids(&[7, 8], None);
         assert!(t.leaving.is_empty());
         assert!(t.rows.iter().all(|r| r.entrance() == 0.0));
+    }
+
+    #[test]
+    fn a_new_pitch_springs_rows_to_their_slots() {
+        let mut t = TabRows::new(&[1, 2, 3], Some(2));
+        t.set_pitch(48.0);
+        // nothing jumps: the rows are still where they were
+        assert_eq!(t.rows[2].y.x, 2.0 * TABS::pitch);
+        let mut n = 0;
+        while t.step(1.0 / 60.0) {
+            n += 1;
+            assert!(n < 10_000);
+        }
+        for (i, r) in t.rows.iter().enumerate() {
+            assert_eq!(r.y.x, i as f64 * 48.0);
+        }
+        assert_eq!(t.indicator().y, 96.0);
     }
 
     #[test]

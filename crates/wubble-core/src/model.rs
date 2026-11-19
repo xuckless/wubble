@@ -32,7 +32,7 @@ use crate::space::{
 };
 use crate::tab::{Liveness, Tab, TabId};
 use crate::tidy;
-use crate::window::{Geometry, Window, WindowId, WindowTarget};
+use crate::window::{Geometry, Shown, Window, WindowId, WindowTarget};
 
 mod windows;
 
@@ -42,6 +42,27 @@ pub enum Place {
     /// Index into the Space's top-level items.
     Normal(usize),
     Folder(FolderId, usize),
+}
+
+/// A link opened in a peek over its window's page (Shift+click): a card the user can close or
+/// promote. Its tab sits right after the opener like a background tab, but it is no row of the
+/// sidebar and no part of a saved session; it is on screen (Active) while the peek is open.
+/// Written new (the design bucket has no peek).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Glance {
+    pub window: WindowId,
+    /// The page the link was on; the peek closes when it leaves the window's screen.
+    pub opener: TabId,
+    pub tab: TabId,
+}
+
+/// What a peek becomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlanceTo {
+    /// A tab of its Space, shown.
+    Tab,
+    /// The pane beside its opener.
+    Split,
 }
 
 /// Where a moved tab goes. Pin state follows the destination; indices are clamped.
@@ -71,6 +92,8 @@ pub enum Command {
         opener: TabId,
     },
     CloseTab(TabId),
+    /// Closes each of these tabs (the tab menu's "Close Tabs Below", a folder's "Close Folder").
+    CloseTabs(Vec<TabId>),
     ActivateTab(TabId),
     MoveTab {
         tab: TabId,
@@ -88,6 +111,31 @@ pub enum Command {
     SetFolderCollapsed {
         folder: FolderId,
         collapsed: bool,
+    },
+    RenameFolder {
+        folder: FolderId,
+        name: String,
+    },
+    /// A new folder holding the tab, where the tab was (the tab menu's "New folder with tab").
+    /// A pinned tab or one in a folder goes into a new folder at the end of its Space.
+    FolderWithTab {
+        tab: TabId,
+        name: String,
+    },
+    /// Open `url` in a peek over `window`'s page `opener` (one peek per window: an open one is
+    /// closed first). A tab instead unless the window shows a Space with the opener on screen
+    /// and the opener is not a peek.
+    OpenGlance {
+        window: WindowId,
+        opener: TabId,
+        url: String,
+    },
+    /// Close the window's peek (its tab closes).
+    CloseGlance(WindowId),
+    /// The window's peek becomes a tab, or the pane beside its opener.
+    PromoteGlance {
+        window: WindowId,
+        to: GlanceTo,
     },
     /// A new tab on the same page in the same container, right after it, shown.
     DuplicateTab(TabId),
@@ -295,6 +343,8 @@ pub struct Model {
     /// The open windows, least recently focused first: the last one is focused, and the last
     /// Main one shows the active Space ([`Model::active_space`]). Never without a Main window.
     pub windows: Vec<Window>,
+    /// The open peeks, at most one per window (`Command::OpenGlance`).
+    pub glances: Vec<Glance>,
     /// The time hides are stamped with: set at creation and by `Command::Tick`,
     /// so `apply` itself never reads a clock.
     clock: Instant,
@@ -341,6 +391,7 @@ impl Model {
                 name: "Default".into(),
             }],
             tabs: BTreeMap::new(),
+            glances: vec![],
             clock: now,
             pressure: Pressure::None,
             wall_ms: 0,
@@ -399,6 +450,7 @@ impl Model {
             containers,
             tabs: tabs.into_iter().map(|t| (t.id, t)).collect(),
             windows,
+            glances: vec![],
             clock: now,
             pressure: Pressure::None,
             wall_ms: 0,
@@ -663,6 +715,18 @@ impl Model {
             return Err(format!("tab {t:?} in map but unplaced"));
         }
         self.check_windows()?;
+        for (i, g) in self.glances.iter().enumerate() {
+            if self.glances[..i].iter().any(|o| o.window == g.window) {
+                return Err(format!("two peeks in window {:?}", g.window));
+            }
+            if !self.tabs.contains_key(&g.tab) || !self.tabs.contains_key(&g.opener) {
+                return Err(format!("peek {g:?} names a gone tab"));
+            }
+            if self.spaces.iter().any(|s| s.active == Some(g.tab)) || self.split_of(g.tab).is_some()
+            {
+                return Err(format!("peek {g:?} is an ordinary tab"));
+            }
+        }
         let visible = self.visible_tabs();
         for t in self.tabs.values() {
             let shown = visible.contains(&t.id);
@@ -852,6 +916,13 @@ impl Model {
         let Some((si, _)) = self.place_of(tab) else {
             return vec![];
         };
+        // its peek goes first, so it is never the page that takes the closed one's place
+        let mut fx = vec![];
+        if let Some(g) = self.glances.iter().find(|g| g.opener == tab).copied() {
+            self.glances.retain(|o| o.tab != g.tab);
+            fx.extend(self.close_tab(g.tab));
+        }
+        self.glances.retain(|g| g.tab != tab);
         let was_active = self.spaces[si].active == Some(tab);
         // A closed pane leaves its split; the page that grows into its place takes focus.
         let heir = self.leave_split(tab);
@@ -863,7 +934,7 @@ impl Model {
         self.detach(tab);
         self.forget(&[tab]);
         self.spaces[si].active = next;
-        let mut fx = vec![Effect::CloseTab(tab)];
+        fx.push(Effect::CloseTab(tab));
         if was_active && self.spaces[si].id == self.active_space() {
             fx.push(self.show(next));
         }
@@ -919,6 +990,127 @@ impl Model {
         }
         fx.push(Effect::ActivateTab(tab));
         fx
+    }
+
+    /// The window's peek, if one is open.
+    pub fn glance_of(&self, window: WindowId) -> Option<Glance> {
+        self.glances.iter().copied().find(|g| g.window == window)
+    }
+
+    /// Whether `tab` is a peek's (no sidebar row, not saved).
+    pub fn is_glance(&self, tab: TabId) -> bool {
+        self.glances.iter().any(|g| g.tab == tab)
+    }
+
+    /// The model as a session keeps it: without the peeks and their tabs (a restart never
+    /// brings one back).
+    pub fn for_session(&self) -> Model {
+        let mut m = self.clone();
+        let gone: Vec<TabId> = m.glances.drain(..).map(|g| g.tab).collect();
+        for &t in &gone {
+            m.detach(t);
+        }
+        m.forget(&gone);
+        m
+    }
+
+    /// A peek needs a window showing a Space and an opener on screen there that is not itself a
+    /// peek; otherwise the link opens as a tab, as a plain click on it would (a Little or Popup
+    /// window, a link inside a peek).
+    fn open_glance(&mut self, window: WindowId, opener: TabId, url: String) -> Vec<Effect> {
+        let peekable = matches!(self.window(window).map(|w| w.shown), Some(Shown::Space(_)))
+            && self.window_tabs(window).contains(&opener)
+            && !self.is_glance(opener);
+        if !peekable {
+            return self.new_tab(url, None, Some(opener));
+        }
+        let mut fx = match self.glance_of(window) {
+            Some(g) => self.close_tab(g.tab),
+            None => vec![],
+        };
+        if let Some((tab, _, create)) = self.place_new_tab(url, None, Some(opener), None) {
+            self.glances.push(Glance {
+                window,
+                opener,
+                tab,
+            });
+            fx.push(create);
+        }
+        fx
+    }
+
+    fn promote_glance(&mut self, window: WindowId, to: GlanceTo) -> Vec<Effect> {
+        let Some(g) = self.glance_of(window) else {
+            return vec![];
+        };
+        self.glances.retain(|o| o.window != window);
+        if to == GlanceTo::Split {
+            let fx = self.split_with(g.tab);
+            if !fx.is_empty() || self.window_tabs(window).contains(&g.tab) {
+                return fx;
+            }
+        }
+        self.activate_tab(g.tab)
+    }
+
+    /// Peeks whose tab is gone are forgotten; one whose tab became an ordinary on-screen tab
+    /// (activated) is promoted; one whose opener left its window's screen (closed, another tab
+    /// or Space shown, the window closed) closes.
+    fn tidy_glances(&mut self) -> Vec<Effect> {
+        self.glances.retain(|g| self.tabs.contains_key(&g.tab));
+        let shown = |m: &Model, g: &Glance| -> Vec<TabId> {
+            match m.window(g.window).map(|w| w.shown) {
+                Some(Shown::Space(s)) => m.space_idx(s).map_or(vec![], |si| m.space_tabs(si)),
+                _ => vec![],
+            }
+        };
+        let promoted: Vec<TabId> = self
+            .glances
+            .iter()
+            .filter(|g| shown(self, g).contains(&g.tab))
+            .map(|g| g.tab)
+            .collect();
+        self.glances.retain(|g| !promoted.contains(&g.tab));
+        let stale: Vec<TabId> = self
+            .glances
+            .iter()
+            .filter(|g| !shown(self, g).contains(&g.opener))
+            .map(|g| g.tab)
+            .collect();
+        let mut fx = vec![];
+        for tab in stale {
+            fx.extend(self.close_tab(tab));
+        }
+        self.glances.retain(|g| self.tabs.contains_key(&g.tab));
+        fx
+    }
+
+    fn folder_with_tab(&mut self, tab: TabId, name: String) -> Vec<Effect> {
+        let Some((si, place)) = self.place_of(tab) else {
+            return vec![];
+        };
+        let id = FolderId(self.next_folder);
+        self.next_folder += 1;
+        let folder = |tabs| {
+            Item::Folder(Folder {
+                id,
+                name,
+                tabs,
+                collapsed: false,
+            })
+        };
+        if let Place::Normal(i) = place {
+            self.spaces[si].items[i] = folder(vec![tab]);
+            return vec![];
+        }
+        self.spaces[si].items.push(folder(vec![]));
+        self.move_tab(
+            tab,
+            Dest::Folder {
+                folder: id,
+                index: 0,
+            },
+        )
     }
 
     fn move_tab(&mut self, tab: TabId, to: Dest) -> Vec<Effect> {
@@ -1560,6 +1752,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             .into_iter()
             .collect(),
         Command::CloseTab(t) => m.close_tab(t),
+        Command::CloseTabs(tabs) => tabs.into_iter().flat_map(|t| m.close_tab(t)).collect(),
         Command::ActivateTab(t) => m.activate_tab(t),
         Command::MoveTab { tab, to } => m.move_tab(tab, to),
         Command::PinTab(t) => m.set_pinned(t, true),
@@ -1586,6 +1779,25 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
+        Command::RenameFolder { folder, name } => {
+            if let Some(si) = m.folder_space(folder)
+                && let Some(f) = m.spaces[si].folder_mut(folder)
+            {
+                f.name = name;
+            }
+            vec![]
+        }
+        Command::FolderWithTab { tab, name } => m.folder_with_tab(tab, name),
+        Command::OpenGlance {
+            window,
+            opener,
+            url,
+        } => m.open_glance(window, opener, url),
+        Command::CloseGlance(window) => m
+            .glance_of(window)
+            .map(|g| m.close_tab(g.tab))
+            .unwrap_or_default(),
+        Command::PromoteGlance { window, to } => m.promote_glance(window, to),
         Command::DuplicateTab(t) => m.duplicate_tab(t),
         Command::CloseOthers(t) => m.close_others(t),
         Command::NewSpace {
@@ -1711,6 +1923,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
         }
     };
     fx.extend(m.prune_windows());
+    fx.extend(m.tidy_glances());
     fx.extend(m.settle(&before));
     fx.extend(m.sync_keep());
     fx.extend(m.rejudge(&before));

@@ -27,6 +27,7 @@ import { MoveArea } from "window-frame.slint";
 import { Wobble } from "wobble.slint";
 import { Raised } from "raised.slint";
 import { Entering } from "entering.slint";
+import { FolderRow } from "folder-row.slint";
 import { SideEdges } from "model.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
@@ -193,7 +194,7 @@ export component Sidebar inherits Rectangle {
     callback scroll-thumb-move(length);
     callback scroll-thumb-up();
     // row geometry for Rust: slot i sits at i × pitch
-    out property <length> pitch: Chrome.row + Chrome.rowGap;
+    out property <length> pitch: Shell.row + Chrome.rowGap;
     property <length> list-height: max(0px, root.tabs.length * root.pitch - Chrome.rowGap);
 
     background: transparent;   // the glass under it is the scene's (app.slint), or none without it
@@ -393,12 +394,12 @@ export component Sidebar inherits Rectangle {
                         property <length> row-x: (self.width - self.row-w) / 2;
 
                         // the indicator: under the rows, stretched along y about `origin`, squashed along x
-                        property <length> h: Chrome.row * root.indicator-stretch;
+                        property <length> h: Shell.row * root.indicator-stretch;
                         property <length> w: self.row-w / Math.sqrt(root.indicator-stretch);
                         // .wb-tab-ind: raised, with its top highlight, rim and drop shadow
                         indicator := Raised {
                             x: (parent.width - parent.w) / 2;
-                            y: root.indicator-y + (Chrome.row - parent.h) * root.indicator-origin;
+                            y: root.indicator-y + (Shell.row - parent.h) * root.indicator-origin;
                             width: parent.w;
                             height: parent.h;
                             radius: Radius.sm;
@@ -415,11 +416,17 @@ export component Sidebar inherits Rectangle {
                             x: parent.row-x;
                             y: gone.y;
                             width: parent.row-w;
-                            height: Chrome.row;
+                            height: Shell.row;
                             opacity: 1 - gone.e;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale: 1 - Shell.tab-exit-shrink * gone.e;
-                            TabRow {
+                            if gone.tab.kind == 0: TabRow {
+                                x: root.compact ? 0px : gone.tab.depth * Shell.folder-indent;
+                                width: parent.width - self.x;
+                                tab: gone.tab;
+                                compact: root.compact;
+                            }
+                            if gone.tab.kind == 1: FolderRow {
                                 width: parent.width;
                                 tab: gone.tab;
                                 compact: root.compact;
@@ -431,15 +438,31 @@ export component Sidebar inherits Rectangle {
                             x: parent.row-x;
                             y: i < root.row-y.length ? root.row-y[i] : i * root.pitch;
                             width: parent.row-w;
-                            height: Chrome.row;
+                            height: Shell.row;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale: i < root.row-scale.length ? root.row-scale[i] : 1;
                             Entering {
                                 e: i < root.row-enter.length ? root.row-enter[i] : 1;
                                 width: parent.width;
                                 height: parent.height;
-                                TabRow {
+                                if tab.kind == 1: FolderRow {
                                     width: parent.width;
+                                    tab: tab;
+                                    compact: root.compact;
+                                    press(y) => {
+                                        root.tab-press(i, y);
+                                    }
+                                    release => {
+                                        root.tab-release(i);
+                                    }
+                                    context(x, y) => {
+                                        root.tab-context(tab.id, x, y);
+                                    }
+                                }
+                                // a tab in a folder sits one step in (none on the rail)
+                                if tab.kind == 0: TabRow {
+                                    x: root.compact ? 0px : tab.depth * Shell.folder-indent;
+                                    width: parent.width - self.x;
                                     tab: tab;
                                     selected: tab.id == root.active-tab-id;
                                     compact: root.compact;

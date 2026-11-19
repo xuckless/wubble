@@ -8,6 +8,7 @@ mod builtin_smoke;
 mod chooser;
 mod cli;
 mod clipboard;
+mod gallery_smoke;
 mod host;
 mod ime;
 mod input;
@@ -17,6 +18,7 @@ mod media_keys;
 mod media_smoke;
 mod menu;
 mod nav_smoke;
+mod os_motion;
 mod page_drag;
 mod page_error;
 mod page_smoke;
@@ -213,6 +215,10 @@ fn main() -> ExitCode {
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
+                Smoke::Gallery { dir } => {
+                    shot::request_dir(dir);
+                    Mode::Gallery
+                }
                 // handled above
                 Smoke::Boot | Smoke::Quit | Smoke::Session | Smoke::SessionPhase { .. } => {
                     unreachable!("{smoke:?} has its own arm")
@@ -437,6 +443,7 @@ struct Outcome {
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     pages_passed: bool,
+    gallery_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
     /// `--smoke media` reached its end.
@@ -479,6 +486,8 @@ enum Mode {
     Settings,
     /// `--smoke pages`.
     Pages,
+    /// `--smoke gallery` (on the pages smoke's seeded profile).
+    Gallery,
     /// `--smoke autofill`.
     Autofill,
     /// `--smoke media`.
@@ -609,13 +618,7 @@ impl WindowFactory {
             id,
             kind,
             window,
-            [
-                gpu.presenter(),
-                gpu.presenter(),
-                gpu.presenter(),
-                gpu.presenter(),
-                gpu.presenter(),
-            ],
+            std::array::from_fn(|_| gpu.presenter()),
             glass,
             panels,
         ))
@@ -751,15 +754,32 @@ fn connect_input(window: &AppWindow, win: WindowId) {
 fn connect_shell(window: &AppWindow, win: WindowId) {
     use wubble_core::model::Command as Cmd;
     let command = move |c: Cmd| with_host_in(win, |host| host.dispatch(c));
+    // A tab row picks its tab; a folder header folds the folder away or shows it.
     window.on_tab_activated(move |id| {
         if let Some(t) = shell::tab_id(id) {
             command(Cmd::ActivateTab(t));
+        } else if let Some(folder) = shell::folder_of_row(id) {
+            with_host_in(win, |host| host.toggle_folder(folder));
         }
     });
     window.on_tab_closed(move |id| {
         if let Some(t) = shell::tab_id(id) {
             command(Cmd::CloseTab(t));
         }
+    });
+    // The peek's card.
+    window.on_glance_closed(move || command(Cmd::CloseGlance(win)));
+    window.on_glance_to_tab(move || {
+        command(Cmd::PromoteGlance {
+            window: win,
+            to: wubble_core::model::GlanceTo::Tab,
+        })
+    });
+    window.on_glance_to_split(move || {
+        command(Cmd::PromoteGlance {
+            window: win,
+            to: wubble_core::model::GlanceTo::Split,
+        })
     });
     // A row dragged to slot `to` of the flat tab list.
     window.on_tab_moved(move |id, to| {
@@ -1035,7 +1055,7 @@ fn run(
     // thread then gets.
     let keyring: Box<dyn wubble_vault::KeyRing + Send> = match mode {
         Mode::Browse { .. } => Box::new(wubble_vault::OsKeyRing),
-        Mode::Pages => {
+        Mode::Pages | Mode::Gallery => {
             let keyring = wubble_vault::FakeKeyRing::default();
             pages_smoke::seed(&db, &keyring)?;
             Box::new(keyring)
@@ -1076,6 +1096,7 @@ fn run(
         split_smoke: None,
         settings_smoke: None,
         pages_smoke: None,
+        gallery_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
         media_smoke: None,
@@ -1166,6 +1187,13 @@ fn run(
             Some(bundled()),
             Checks {
                 pages_smoke: Some(pages_smoke::PagesSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Gallery => (
+            Some(bundled()),
+            Checks {
+                gallery_smoke: Some(gallery_smoke::Stage::Start),
                 ..none
             },
         ),
@@ -1393,6 +1421,7 @@ fn run(
         windows_passed: host.windows_passed,
         settings_passed: host.settings_passed,
         pages_passed: host.pages_passed,
+        gallery_passed: host.gallery_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,

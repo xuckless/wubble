@@ -104,6 +104,10 @@ pub enum Command {
     Model(TabCommand),
     /// Flip this tab's mute.
     ToggleMute(TabId),
+    /// Reload this tab's page.
+    ReloadTab(TabId),
+    /// Ask for a sidebar folder's new name.
+    RenameFolder(wubble_core::space::FolderId),
     /// Block, or stop blocking, on this site (the blocker's exceptions).
     ToggleBlocker(String),
     /// Show the tab in another window, or a new one.
@@ -572,6 +576,16 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
                 continue;
             }
             Run::Separator => (Command::Separator, String::new()),
+            Run::Reload(t) => (
+                Command::ReloadTab(t),
+                if visible {
+                    key(Action::Reload)
+                } else {
+                    String::new()
+                },
+            ),
+            Run::Copy(text) => (Command::CopyText(text), String::new()),
+            Run::RenameFolder(f) => (Command::RenameFolder(f), String::new()),
             Run::ToggleMute(t) => (
                 Command::ToggleMute(t),
                 if visible {
@@ -604,6 +618,25 @@ pub fn tab_entries(model: &Model, tab: TabId, facts: Facts, keymap: &Keymap) -> 
     // the split slot may have been empty: no doubled divider
     out.dedup_by(|a, b| a.command == Command::Separator && b.command == Command::Separator);
     out
+}
+
+/// A folder header's menu (`tabmenu::folder_entries`).
+pub fn folder_entries(model: &Model, folder: wubble_core::space::FolderId) -> Vec<Entry> {
+    tabmenu::folder_entries(model, folder)
+        .into_iter()
+        .map(|e| Entry {
+            label: e.label,
+            command: match e.run {
+                Run::Model(c) => Command::Model(TabCommand(c)),
+                Run::RenameFolder(f) => Command::RenameFolder(f),
+                _ => Command::Separator,
+            },
+            enabled: true,
+            icon: e.icon,
+            shortcut: String::new(),
+            danger: e.danger,
+        })
+        .collect()
 }
 
 /// The tab row's never-sleep switches: its Space, and its site (when it has one). A site that

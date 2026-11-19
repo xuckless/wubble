@@ -28,9 +28,14 @@ const fn def(key: &'static str, kind: SettingKind, default: &'static str) -> Set
     }
 }
 
-const DEFS: [SettingDef; 2] = [
+const DEFS: [SettingDef; 3] = [
     def("t.bool", SettingKind::Bool, "1"),
     def("t.float", SettingKind::Float { min: 0.0, max: 1.0 }, "0.5"),
+    def(
+        "t.choice",
+        SettingKind::Choice(&["one", "two", "three"]),
+        "one",
+    ),
 ];
 
 #[test]
@@ -90,4 +95,42 @@ fn toggle_and_slider_draw_their_springs() {
             .iter()
             .any(|v| v.value == 0.0 && v.x == 0.0 && v.fill == 0.0)
     );
+
+    // the segmented control (kind 2): its indicator sits on the chosen segment; a tap on the
+    // last one chooses it, and the indicator springs there
+    let seg_view = |app: &AppWindow| {
+        app.global::<Controls>()
+            .get_views()
+            .iter()
+            .find(|v| v.w > 0.0)
+            .expect("the segmented control took a slot and reported its segments")
+    };
+    let before = seg_view(&app);
+    assert_eq!(before.value, 0.0);
+    let seg = ElementHandle::find_by_element_id(&app, "SettingRow::segmented")
+        .next()
+        .unwrap();
+    let (p, s) = (seg.absolute_position(), seg.size());
+    let at = LogicalPosition::new(p.x + s.width - 12.0, p.y + s.height / 2.0);
+    app.window().dispatch_event(WindowEvent::PointerPressed {
+        position: at,
+        button,
+    });
+    app.window().dispatch_event(WindowEvent::PointerReleased {
+        position: at,
+        button,
+    });
+    mock_elapsed_time(Duration::from_millis(16));
+    assert_eq!(
+        changed.borrow().last().cloned(),
+        Some(("t.choice".to_string(), "three".to_string()))
+    );
+    let mut frames = 0;
+    while wired.frame(&app, now).0 && frames < 4000 {
+        now += Duration::from_millis(8);
+        frames += 1;
+    }
+    let after = seg_view(&app);
+    assert_eq!(after.value, 2.0);
+    assert!(after.x > before.x + 40.0, "{} -> {}", before.x, after.x);
 }

@@ -3,7 +3,13 @@
 // `icons.tsx` (xuckless/the-wallpaper-project @ 6c840da), named by its CSS rule. Nothing here
 // repeats a value tokens.slint already has.
 
+import { Chrome } from "tokens.slint";
+
 export global Shell {
+    // Touch sizing: the host sets it from the input kind (a touch flips it on, a mouse move off)
+    // or the setting; every row height reads `row`, so one flag resizes the chrome.
+    in property <bool> touch: false;
+    out property <length> row: touch ? Chrome.rowTouch : Chrome.row;
     // Selected text in every text field: the Space sky as a translucent fill with ink on top.
     // Slint's default selection foreground is dark, which vanished on the old dark fill.
     out property <color> selection-fill: rgba(124, 200, 255, 0.35);
@@ -34,6 +40,10 @@ export global Shell {
     out property <duration> icon-button-ms: 150ms;   // .wb-ib transition: color .15s
     // wubble.css wb-wob: the icon wobble on a hit
     out property <duration> wobble-ms: 550ms;
+    // The outgoing page rises this far as it leaves (webview.tsx `wb-out`).
+    out property <length> page-exit-shift: 5px;
+    // Chrome buttons release at a third of the squash token (touch.tsx Buttons).
+    out property <float> squash-chrome: 0.3333;
     // how far a press on bare chrome travels before it moves the window
     out property <length> move-threshold: 4px;
     // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
@@ -93,6 +103,9 @@ export global Shell {
     out property <float> icon-grid: 24;
     // .wb-tab-icon box (the favicon inside it is `icon`)
     out property <length> tab-icon: 18px;
+    // A tab inside a folder sits this far in (wubble: the design has no folders); the icon box
+    // plus its gap, so the favicon lines up under the folder's name.
+    out property <length> folder-indent: 14px;
     // .wb-address: icon 13 at stroke 1.9, pressed to .985 over .2 s
     out property <length> address-icon: 13px;
     out property <float> address-icon-stroke: 1.9;
@@ -451,6 +464,10 @@ export global Shell {
     out property <length> task-state: 88px;
     out property <length> task-memory: 96px;
     out property <length> task-cpu: 56px;
+    // The action columns: a button's slot, whether the row has it or not.
+    out property <length> task-sleep: 96px;
+    out property <length> task-discard: 72px;
+    out property <length> task-end: 48px;
     out property <length> page-indent: 20px;
     out property <length> page-favicon: 16px;
 }

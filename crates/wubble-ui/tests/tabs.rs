@@ -224,6 +224,57 @@ struct Calls {
 
 type Log = Rc<RefCell<Calls>>;
 
+/// A folder's header is a row of the same pitch with a negative id: a click reports that id (the
+/// host folds the folder), never a tab; its tabs sit one step in.
+fn folder_header_is_a_row(app: &AppWindow, driver: &Shared, log: &Log) {
+    let header = TabItem {
+        id: -2,
+        title: "Reading".into(),
+        kind: 1,
+        count: 2,
+        ..Default::default()
+    };
+    let inner = |id: i32| TabItem {
+        id,
+        title: format!("tab {id}").into(),
+        depth: 1,
+        ..Default::default()
+    };
+    let items = vec![header, inner(21), inner(22)];
+    app.set_tabs(ModelRc::from(items.as_slice()));
+    app.invoke_shell_model_changed();
+    pump();
+    settle(app, driver);
+    assert_eq!(rows(app), [0.0, 40.0, 80.0]);
+    let before = log.borrow().activated.len();
+    let y = row_centre(0);
+    press(app, ROW_X, y, PointerEventButton::Left);
+    release(app, ROW_X, y, PointerEventButton::Left);
+    assert_eq!(log.borrow().activated[before..], [-2]);
+    let y = row_centre(2);
+    press(app, ROW_X, y, PointerEventButton::Left);
+    release(app, ROW_X, y, PointerEventButton::Left);
+    assert_eq!(log.borrow().activated[before..], [-2, 22]);
+    settle(app, driver);
+}
+
+/// Touch sizing: one flag (`Shell.touch`) makes rows 44 px and the springs carry the rows to the
+/// new pitch; turning it off brings them back.
+fn touch_sizing_resizes_rows(app: &AppWindow, driver: &Shared) {
+    app.set_tabs(tabs([1, 2, 3]));
+    app.invoke_shell_model_changed();
+    settle(app, driver);
+    let shell = app.global::<wubble_ui::Shell>();
+    assert_eq!(shell.get_row(), 36.0);
+    shell.set_touch(true);
+    assert_eq!(shell.get_row(), 44.0);
+    settle(app, driver);
+    assert_eq!(rows(app), vec![0.0, 48.0, 96.0]);
+    shell.set_touch(false);
+    settle(app, driver);
+    assert_eq!(rows(app), vec![0.0, 40.0, 80.0]);
+}
+
 #[test]
 fn tab_list_scenarios() {
     init_integration_test_with_mock_time();
@@ -244,4 +295,6 @@ fn tab_list_scenarios() {
     tab_drag_emits_tab_moved(&app, &driver, &log);
     drag_survives_an_in_place_rerender(&app, &driver);
     tab_scroll_reaches_scroller(&app, &driver);
+    folder_header_is_a_row(&app, &driver, &log);
+    touch_sizing_resizes_rows(&app, &driver);
 }

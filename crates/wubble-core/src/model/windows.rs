@@ -42,9 +42,18 @@ impl Model {
     /// The tabs a window shows, left to right: its Space's split or active tab, or its own tab.
     pub fn window_tabs(&self, id: WindowId) -> Vec<TabId> {
         match self.window(id).map(|w| w.shown) {
-            Some(Shown::Space(s)) => self
-                .space_idx(s)
-                .map_or_else(Vec::new, |si| self.space_tabs(si)),
+            // the window's peek, over its page, last
+            Some(Shown::Space(s)) => {
+                let mut tabs = self
+                    .space_idx(s)
+                    .map_or_else(Vec::new, |si| self.space_tabs(si));
+                if let Some(g) = self.glance_of(id)
+                    && !tabs.contains(&g.tab)
+                {
+                    tabs.push(g.tab);
+                }
+                tabs
+            }
             Some(Shown::Little(t) | Shown::Popup(t)) => vec![t],
             None => vec![],
         }

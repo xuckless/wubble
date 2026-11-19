@@ -143,7 +143,7 @@ impl Host {
                 .filter(|(t, _)| *t == tab)
                 .zip(self.tips.pointer.filter(|(t, ..)| *t == tab))
                 .map(|((_, text), (_, x, y))| {
-                    let (ox, oy) = self.pane_origin(&window, tab);
+                    let (ox, oy) = self.view_origin(&window, tab);
                     let (x, y) = (ox + x, oy + y);
                     let at = (x + POINTER_OFFSET.0, y + POINTER_OFFSET.1, y, false);
                     (text.clone(), String::new(), at)

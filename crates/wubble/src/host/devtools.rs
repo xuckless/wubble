@@ -24,8 +24,6 @@ pub(super) struct Docked {
     /// The panel's view while the dock is [`Dock::Open`].
     pub view: Option<ViewId>,
     pub seam: SourceSeam,
-    /// Keys go to the panel, not the page: the last press was in it.
-    pub focused: bool,
     /// The frontend's page title.
     pub title: String,
 }
@@ -37,7 +35,6 @@ impl Docked {
             mode: Mode::of(port),
             view: None,
             seam: SourceSeam::default(),
-            focused: false,
             title: String::new(),
         }
     }
@@ -67,8 +64,7 @@ impl Host {
 
     /// The panel's view when keys go to it: the last press was in it.
     pub(super) fn keys_to_panel(&self) -> Option<ViewId> {
-        self.devtools
-            .focused
+        (self.key_pane == Some(PANEL_TAB))
             .then_some(self.devtools.view)
             .flatten()
     }
@@ -202,7 +198,9 @@ impl Host {
         seam.open = false;
         seam.held = false;
         seam.w = spring(0.0);
-        self.devtools.focused = false;
+        if self.key_pane == Some(PANEL_TAB) {
+            self.key_pane = None;
+        }
         for w in std::iter::once(&mut self.w).chain(self.parked.values_mut()) {
             w.frames.remove(&PANEL_TAB);
             w.slots.iter_mut().for_each(|s| {
@@ -293,6 +291,21 @@ impl Host {
             Dock::Detached { .. } => Panel::Detached,
             Dock::Closed | Dock::Resolving { .. } => Panel::Closed,
         }
+    }
+
+    /// The keyboard's nudge of the docked panel's seam (ArrowLeft widens: `dir` 1), with its
+    /// twang (`SourceSeam::nudge`). Nothing while no panel is docked.
+    pub(super) fn source_nudge(&mut self, dir: f64) {
+        if !self.devtools.seam.open {
+            return;
+        }
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let h =
+            f64::from(window.window().size().height) / f64::from(window.window().scale_factor());
+        self.devtools.seam.nudge(dir, h);
+        window.window().request_redraw();
     }
 
     /// The seam's pointer gestures (window pixels): the panel's edge is the last seam.

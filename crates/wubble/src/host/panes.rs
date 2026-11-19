@@ -9,7 +9,6 @@ use wubble_core::bow::{BOWED, EdgeTable};
 use wubble_core::devtools::PANEL_TAB;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
-use wubble_core::space::MAX_PANES;
 use wubble_core::split::{Bow, SPLIT, string_line};
 use wubble_core::stretch::{PaneEffect, PaneEvent, PaneSprings, PaneView, Px, transition};
 use wubble_core::tab::TabId;
@@ -18,8 +17,26 @@ use wubble_engine::view::{Layout, ScreenArea};
 use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
 use wubble_gfx::{Edge, FrameSize};
-use wubble_ui::{AppWindow, Palette, SplitPane, SplitSeam};
+use wubble_ui::{AppWindow, GlanceView, Palette, SplitPane, SplitSeam};
 
+/// The peek's card covers this much of the content area each way.
+const GLANCE_FRACTION: f64 = 0.86;
+/// The card's header strip (title and buttons) above the peek's page, logical px.
+const GLANCE_HEADER: f64 = 44.0;
+
+/// Where the window's peek shows its page, content-area logical px (`Host::glance_rect`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GlanceRect {
+    pub tab: TabId,
+    pub x: f64,
+    /// The card's top (its header's).
+    pub card_y: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
 use crate::menu::{self, MenuEvent};
@@ -124,8 +141,63 @@ impl Host {
         rects.into_iter().map(|r| r.on_pixels(scale)).collect()
     }
 
+    /// The window's peek and where its page sits in the content area (logical px): a card
+    /// centred over the page ([`GLANCE_FRACTION`] of the content area), its header on top.
+    pub(super) fn glance_rect(&self, window: &AppWindow) -> Option<GlanceRect> {
+        let g = self.model.glance_of(self.w.id)?;
+        let (width, height) = content_size(window);
+        let (w, h) = (width * GLANCE_FRACTION, height * GLANCE_FRACTION);
+        let card_y = (height - h) / 2.0;
+        Some(GlanceRect {
+            tab: g.tab,
+            x: (width - w) / 2.0,
+            card_y,
+            y: card_y + GLANCE_HEADER,
+            width: w,
+            height: (h - GLANCE_HEADER).max(0.0),
+        })
+    }
+
+    /// The peek's view layout: its page rect, with where it sits in the window.
+    fn glance_layout(&self, window: &AppWindow, r: &GlanceRect) -> Layout {
+        let scale = window.window().scale_factor();
+        let size = window.window().size();
+        let at = |v: f32| (f64::from(v) * f64::from(scale)).round() as i32;
+        Layout {
+            size: FrameSize::new(
+                physical(r.width as f32, scale),
+                physical(r.height as f32, scale),
+            ),
+            scale,
+            area: Some(ScreenArea {
+                window: FrameSize::new(size.width, size.height),
+                origin: (
+                    at(window.get_content_x() + r.x as f32),
+                    at(window.get_content_y() + r.y as f32),
+                ),
+            }),
+        }
+    }
+
+    /// Every view on screen and its layout: the panes, then the peek.
+    fn view_layouts(&self, window: &AppWindow) -> Vec<(TabId, Layout)> {
+        let mut out: Vec<(TabId, Layout)> = self
+            .pane_rects(window)
+            .iter()
+            .map(|r| (r.tab, self.layout_of(window, r)))
+            .collect();
+        out.extend(
+            self.glance_rect(window)
+                .map(|g| (g.tab, self.glance_layout(window, &g))),
+        );
+        out
+    }
+
     /// The layout of `tab`'s view: its pane's, or the whole content area for a tab not on screen.
     pub(super) fn pane_layout(&self, window: &AppWindow, tab: TabId) -> Layout {
+        if let Some(g) = self.glance_rect(window).filter(|g| g.tab == tab) {
+            return self.glance_layout(window, &g);
+        }
         let (width, _) = content_size(window);
         let rect = self
             .pane_rects(window)
@@ -157,24 +229,29 @@ impl Host {
         }
     }
 
-    /// Where `tab`'s pane starts in the window (logical px); the content area's corner when
-    /// it is not on screen.
-    pub(super) fn pane_origin(&self, window: &AppWindow, tab: TabId) -> (f32, f32) {
-        let x = self
-            .pane_rects(window)
-            .into_iter()
-            .find(|r| r.tab == tab)
-            .map_or(0.0, |r| r.x as f32);
-        (window.get_content_x() + x, window.get_content_y())
-    }
-
     /// The focused page's top left in the window, logical pixels: its menu, popup and IME
     /// candidates are placed from there.
     pub(super) fn focus_origin(&self, window: &AppWindow) -> (f32, f32) {
         match self.shown() {
-            Some(tab) => self.pane_origin(window, tab),
+            Some(t) => self.view_origin(window, t),
             None => (window.get_content_x(), window.get_content_y()),
         }
+    }
+
+    /// Where `tab`'s view's top left sits in the window (logical px): the peek's page in its
+    /// card, else its pane.
+    pub(super) fn view_origin(&self, window: &AppWindow, tab: TabId) -> (f32, f32) {
+        let (x, y) = match self.glance_rect(window).filter(|g| g.tab == tab) {
+            Some(g) => (g.x as f32, g.y as f32),
+            None => (
+                self.pane_rects(window)
+                    .into_iter()
+                    .find(|r| r.tab == tab)
+                    .map_or(0.0, |r| r.x as f32),
+                0.0,
+            ),
+        };
+        (window.get_content_x() + x, window.get_content_y() + y)
     }
 
     /// One frame of `dt` seconds of the split's strings. What they settled is dispatched later,
@@ -266,14 +343,13 @@ impl Host {
     /// Each view on screen gets its pane's layout; its pane follows the size the view now wants
     /// (the engine's `ViewState` owns it).
     fn lay_out_views(&mut self, window: &AppWindow) {
-        for rect in self.pane_rects(window) {
-            let layout = self.layout_of(window, &rect);
-            let Some(view) = self.tab_view(rect.tab) else {
+        for (tab, layout) in self.view_layouts(window) {
+            let Some(view) = self.tab_view(tab) else {
                 continue;
             };
             view.set_layout(layout);
             let wanted = view.wanted_frame();
-            if let (Some(frame), Some(wanted)) = (self.w.frames.get_mut(&rect.tab), wanted) {
+            if let (Some(frame), Some(wanted)) = (self.w.frames.get_mut(&tab), wanted) {
                 frame.view = transition(frame.view, px(wanted), PaneEvent::Layout).0;
             }
         }
@@ -404,6 +480,7 @@ impl Host {
     /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
     /// seam's grab mid-drag, survives).
     pub(super) fn render_panes(&mut self, window: &AppWindow) {
+        self.render_glance(window);
         let (_, height) = content_size(window);
         let focused = self.shown();
         let rects = self.pane_rects(window);
@@ -431,7 +508,7 @@ impl Host {
                     stretch_y: (sy - 1.0) as f32,
                     fill,
                     focused: if r.tab == PANEL_TAB {
-                        self.devtools.focused
+                        self.key_pane == Some(PANEL_TAB)
                     } else {
                         Some(r.tab) == focused
                     },
@@ -492,41 +569,65 @@ impl Host {
         window.set_focus_ring(ring.into());
     }
 
+    /// The peek's card (`glance-card.slint`): its page's last frame where the host lays it out.
+    fn render_glance(&self, window: &AppWindow) {
+        let view = match self.glance_rect(window) {
+            Some(r) => {
+                let frame = self.w.frames.get(&r.tab);
+                let tab = self.model.tabs.get(&r.tab);
+                GlanceView {
+                    open: true,
+                    id: crate::shell::pane_id(r.tab),
+                    title: tab.map(crate::shell::tab_title).unwrap_or_default().into(),
+                    frame: frame.map(|f| f.image.clone()).unwrap_or_default(),
+                    clip_width: frame.map_or(0, |f| slint_int(f.clip.width)),
+                    clip_height: frame.map_or(0, |f| slint_int(f.clip.height)),
+                    x: r.x as f32,
+                    card_y: r.card_y as f32,
+                    y: r.y as f32,
+                    width: r.width as f32,
+                    height: r.height as f32,
+                }
+            }
+            None => GlanceView {
+                open: false,
+                ..window.get_glance()
+            },
+        };
+        if window.get_glance() != view {
+            window.set_glance(view);
+        }
+    }
+
     /// The presenter slot of `tab`: its own while its frame is kept, else one no kept frame
     /// holds.
     fn slot_for(&mut self, tab: TabId) -> usize {
-        // the panel's presenter is the one after the pages'
-        if tab == PANEL_TAB {
-            self.w.slots[MAX_PANES] = Some(tab);
-            return MAX_PANES;
-        }
-        if let Some(i) = self.w.slots.iter().position(|s| *s == Some(tab)) {
-            return i;
-        }
-        let shown = self.framed_tabs();
-        let i = self.w.slots[..MAX_PANES]
-            .iter()
-            .position(|s| s.is_none_or(|t| !shown.contains(&t)))
-            .unwrap_or(MAX_PANES - 1);
-        self.w.slots[i] = Some(tab);
-        i
+        let own = if tab == PANEL_TAB {
+            Some(PANEL_SLOT)
+        } else if self.model.is_glance(tab) {
+            Some(PEEK_SLOT)
+        } else {
+            None
+        };
+        let framed = self.framed_tabs();
+        pick_slot(&mut self.w.slots, tab, own, &framed)
     }
 
     /// Takes each pane's new frame, if it has one, and the focused page's popup frame. Returns
     /// whether any pane got a frame.
     pub(super) fn present_panes(&mut self, window: &AppWindow) -> Result<bool, String> {
         let focused = self.shown();
+        let keys = self.key_page();
         let mut presented = false;
-        for rect in self.pane_rects(window) {
-            let layout = self.layout_of(window, &rect);
-            let Some(view) = self.tab_view(rect.tab) else {
+        for (tab, layout) in self.view_layouts(window) {
+            let Some(view) = self.tab_view(tab) else {
                 continue;
             };
             view.set_layout(layout);
             let wanted = view.wanted_frame().unwrap_or(layout.frame_size());
             let frame = view.take_frame();
             // The popup's placement comes from its events (`render_surfaces`).
-            let popup = (Some(rect.tab) == focused)
+            let popup = (Some(tab) == keys)
                 .then(|| view.take_popup_frame())
                 .flatten();
             if let Some(popup) = popup {
@@ -550,9 +651,9 @@ impl Host {
                 size
             };
             // `--measure` follows the focused page.
-            let measured = (Some(rect.tab) == focused)
-                .then(|| measure::Frame::of(&frame, layout.frame_size()));
-            let slot = self.slot_for(rect.tab);
+            let measured =
+                (Some(tab) == focused).then(|| measure::Frame::of(&frame, layout.frame_size()));
+            let slot = self.slot_for(tab);
             let blit = Instant::now();
             let image = self.w.presenters[slot]
                 .present(frame)
@@ -565,8 +666,8 @@ impl Host {
                 });
             }
             let wanted = px(wanted);
-            self.frame_arrived(rect.tab);
-            let entry = self.w.frames.entry(rect.tab).or_insert_with(|| PaneFrame {
+            self.frame_arrived(tab);
+            let entry = self.w.frames.entry(tab).or_insert_with(|| PaneFrame {
                 image: image.clone(),
                 clip,
                 view: PaneView::Live { size: px(size) },
@@ -715,9 +816,10 @@ impl Host {
 
     /// A tab row's right click at `x, y` (window, logical): its split entries, as the shell's
     /// menu on the focused page.
+    /// A folder header's right click opens the folder's menu.
     pub fn tab_context(&mut self, id: i32, x: f32, y: f32) {
         self.hover_dismiss();
-        let (Some(tab), Some(focused)) = (crate::shell::tab_id(id), self.shown()) else {
+        let Some(focused) = self.shown() else {
             return;
         };
         let Some(window) = self.w.window.upgrade() else {
@@ -725,10 +827,16 @@ impl Host {
         };
         let scale = window.window().scale_factor();
         let at = ((x * scale).round() as i32, (y * scale).round() as i32);
-        let facts = wubble_core::tabmenu::Facts {
-            muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+        let entries = if let Some(folder) = crate::shell::folder_of_row(id) {
+            menu::folder_entries(&self.model, folder)
+        } else if let Some(tab) = crate::shell::tab_id(id) {
+            let facts = wubble_core::tabmenu::Facts {
+                muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+            };
+            menu::tab_entries(&self.model, tab, facts, &self.keymap)
+        } else {
+            return;
         };
-        let entries = menu::tab_entries(&self.model, tab, facts, &self.keymap);
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }
