@@ -979,6 +979,8 @@ pub fn resize_size(base: (f32, f32), step: u32) -> (f32, f32) {
 struct Session {
     scenario: Scenario,
     seconds: u32,
+    /// From the first frame to the start of the recording.
+    warmup: Duration,
     recorder: Recorder,
     /// The first frame; recording starts at the first tick [`Scenario::warmup`] later.
     first_frame: Option<Instant>,
@@ -1005,10 +1007,11 @@ struct Session {
 }
 
 impl Session {
-    fn new(scenario: Scenario, seconds: u32) -> Self {
+    fn new(scenario: Scenario, seconds: u32, warmup: Option<Duration>) -> Self {
         Self {
             scenario,
             seconds,
+            warmup: warmup.unwrap_or_else(|| scenario.warmup()),
             recorder: Recorder::default(),
             first_frame: None,
             started: None,
@@ -1028,8 +1031,7 @@ impl Session {
 
     /// The warm-up after the first frame is over: recording may start.
     fn warm(&self, now: Instant) -> bool {
-        self.first_frame
-            .is_some_and(|t| now >= t + self.scenario.warmup())
+        self.first_frame.is_some_and(|t| now >= t + self.warmup)
     }
 
     fn recording(&self, now: Instant) -> bool {
@@ -1128,8 +1130,8 @@ fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
 }
 
 /// Starts recording `scenario` for `seconds` once the first frame arrives.
-pub fn begin(scenario: Scenario, seconds: u32) {
-    SESSION.set(Some(Session::new(scenario, seconds)));
+pub fn begin(scenario: Scenario, seconds: u32, warmup: Option<Duration>) {
+    SESSION.set(Some(Session::new(scenario, seconds, warmup)));
     STARTUP.store(scenario == Scenario::Startup, Ordering::Relaxed);
 }
 
@@ -1772,9 +1774,9 @@ mod tests {
 
     #[test]
     fn a_run_without_frames_reports_nothing() {
-        begin(Scenario::Scroll, 1);
+        begin(Scenario::Scroll, 1, None);
         assert_eq!(finish("test"), None);
-        begin(Scenario::Scroll, 1);
+        begin(Scenario::Scroll, 1, None);
         with_session(|s| s.first_frame = Some(Instant::now()));
         assert!(finish("test").is_some());
     }
@@ -1782,7 +1784,7 @@ mod tests {
     #[test]
     fn counts_and_cpu_times_cover_one_window() {
         // Startup takes no CPU samples (no thread, no meter): the window logic alone.
-        let mut s = Session::new(Scenario::Startup, 10);
+        let mut s = Session::new(Scenario::Startup, 10, None);
         let t0 = Instant::now();
         s.frame_arrived(t0);
         let warm = t0 + Scenario::Startup.warmup();

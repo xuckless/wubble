@@ -41,6 +41,11 @@ struct Cli {
     /// How long `--measure` runs.
     #[arg(long, value_name = "N", requires = "measure", default_value_t = DEFAULT_SECONDS)]
     seconds: NonZeroU32,
+    /// How long `--measure` waits after the first frame before it records, instead of the
+    /// scenario's own (`idle`: long enough to be past the pointer hold; to measure the frozen
+    /// liquid, past `Timing::still_after` and `ease_out` as well).
+    #[arg(long, value_name = "N", requires = "measure")]
+    warmup: Option<NonZeroU32>,
     /// `--measure` with CEF paced by external begin frames, one per Slint
     /// render, instead of CEF's own timer.
     #[arg(long, requires = "measure")]
@@ -243,6 +248,8 @@ pub enum Command {
 pub struct Measure {
     pub scenario: Scenario,
     pub seconds: NonZeroU32,
+    /// Seconds to wait before recording, over the scenario's own.
+    pub warmup: Option<NonZeroU32>,
     pub out: Option<PathBuf>,
     pub begin_frames: bool,
     pub load: LoadArgs,
@@ -294,6 +301,7 @@ impl TryFrom<Cli> for Command {
             return Ok(Command::Measure(Measure {
                 scenario,
                 seconds: cli.seconds,
+                warmup: cli.warmup,
                 out: cli.out,
                 begin_frames: cli.begin_frames,
                 load: LoadArgs {
@@ -674,6 +682,7 @@ mod tests {
         Some(Command::Measure(Measure {
             scenario,
             seconds: NonZeroU32::new(seconds).expect("test uses seconds > 0"),
+            warmup: None,
             out: out.map(PathBuf::from),
             begin_frames: false,
             load: LoadArgs::default(),
@@ -700,6 +709,17 @@ mod tests {
             );
         }
         assert_eq!(
+            parse(["wubble", "--measure", "idle", "--warmup", "20"])
+                .ok()
+                .and_then(|c| match c {
+                    Command::Measure(m) => m.warmup,
+                    _ => None,
+                }),
+            NonZeroU32::new(20)
+        );
+        assert!(parse(["wubble", "--warmup", "20"]).is_err());
+        assert!(parse(["wubble", "--measure", "idle", "--warmup", "0"]).is_err());
+        assert_eq!(
             parse([
                 "wubble",
                 "--measure",
@@ -717,6 +737,7 @@ mod tests {
             Some(Command::Measure(Measure {
                 scenario: Scenario::Video,
                 seconds: DEFAULT_SECONDS,
+                warmup: None,
                 out: None,
                 begin_frames: true,
                 load: LoadArgs::default(),

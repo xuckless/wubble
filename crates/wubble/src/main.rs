@@ -226,7 +226,11 @@ fn main() -> ExitCode {
             }
         }
         Command::Measure(m) => {
-            measure::begin(m.scenario, m.seconds.get());
+            measure::begin(
+                m.scenario,
+                m.seconds.get(),
+                m.warmup.map(|w| Duration::from_secs(w.get().into())),
+            );
             let load = (m.scenario == measure::Scenario::Load)
                 .then(|| load_server::LoadServer::start(0, false).map(|s| (s, m.load.variant)))
                 .transpose();
