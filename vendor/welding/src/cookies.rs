@@ -416,8 +416,9 @@ pub(crate) fn delete(
 
 /// Return this browser's cookie manager, never CEF's process-global manager.
 ///
-/// Every CEF producer receives a distinct RequestContext. Going through the
-/// browser host is what keeps the public cookie API in the same profile as the
+/// A producer's RequestContext is its own, or one it shares with other
+/// producers (wubble change 39, `SharedProfile`). Going through the browser
+/// host is what keeps the public cookie API in the same profile as the
 /// browser's navigation, local storage, cache, and permissions.
 #[cfg(feature = "cef-runtime")]
 fn manager(browser: &cef::Browser) -> Result<cef::CookieManager, crate::error::WeldError> {

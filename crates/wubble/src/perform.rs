@@ -180,6 +180,7 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ScreenshotVisible => builtin(Builtin::Shot(ShotRequest::Visible)),
         Action::ScreenshotFullPage => builtin(Builtin::Shot(ShotRequest::FullPage)),
         Action::NewBoost => builtin(Builtin::NewBoost),
+        Action::ClearBrowsingData => builtin(Builtin::ClearData),
         Action::Quit => Plan::Quit,
         Action::NewWindow => Plan::Model(Command::NewWindow { space: None }),
         Action::CloseWindow => Plan::Model(Command::CloseWindow(model.focused())),
@@ -335,6 +336,7 @@ mod tests {
                 Builtin::Shot(ShotRequest::FullPage),
             ),
             (Action::NewBoost, Builtin::NewBoost),
+            (Action::ClearBrowsingData, Builtin::ClearData),
         ] {
             assert_eq!(plan(action, &m), Plan::Builtin(want), "{action:?}");
         }
@@ -361,6 +363,7 @@ mod tests {
             Action::ScreenshotRegion,
             Action::CyclePageTheme,
             Action::NewBoost,
+            Action::ClearBrowsingData,
         ] {
             assert_eq!(plan(action, &m), Plan::Nothing, "{action:?}");
         }

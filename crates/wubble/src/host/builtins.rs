@@ -78,6 +78,8 @@ pub enum Builtin {
     Shot(ShotRequest),
     /// The Boost editor on a new Boost for the visible site.
     NewBoost,
+    /// The menu of what browsing data to clear (`Host::clear_data_menu`).
+    ClearData,
 }
 
 impl Host {
@@ -91,6 +93,7 @@ impl Host {
             Builtin::ToggleReader => self.reader_event(tab, ReaderEvent::Toggle),
             Builtin::Shot(request) => self.shot_event(tab, ShotEvent::Request(request)),
             Builtin::NewBoost => self.new_boost(),
+            Builtin::ClearData => self.clear_data_menu(tab),
         }
     }
 

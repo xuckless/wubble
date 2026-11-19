@@ -117,6 +117,7 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
         response_observer: None,
         features: Default::default(),
         profile: wubble_engine::app::ProfileKind::Throwaway,
+        containers: vec![],
     })
     .map_err(|e| e.to_string())?;
     engine.set_request_mode(mode);
@@ -131,6 +132,7 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
             frame_rate: 30,
             begin_frames: false,
             gpu: presenter.context().clone(),
+            container: wubble_core::space::ContainerId::DEFAULT,
         })
         .map_err(|e| e.to_string())?;
 

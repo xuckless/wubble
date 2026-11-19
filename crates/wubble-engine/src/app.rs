@@ -28,7 +28,9 @@ use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 use crate::filter::{ContentFilter, ResponseObserver};
 use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
+use crate::storage::{self, Profiles};
 use crate::view::{View, ViewConfig};
+use wubble_core::space::ContainerId;
 
 /// Sandbox off on every platform for now (TODO.md, M1 "Sandbox enabled").
 /// wubble-helper passes the same mode to its `execute_process`; keep them
@@ -62,6 +64,10 @@ pub struct EngineConfig {
     pub clipboard_bridge: bool,
     /// Whose profile `cache_dir` is.
     pub profile: ProfileKind,
+    /// Containers whose storage is brought up at start, before any window
+    /// (`storage`): the session's. Others come up when a view first needs
+    /// them.
+    pub containers: Vec<ContainerId>,
 }
 
 /// Whose profile CEF runs on.
@@ -271,6 +277,7 @@ impl EngineConfig {
             response_observer: None,
             features: PageFeatures::default(),
             profile: ProfileKind::User,
+            containers: vec![],
         })
     }
 }
@@ -567,6 +574,9 @@ pub struct Engine {
     page_events: PageQueue<ViewId>,
     content_filter: Option<Arc<dyn ContentFilter>>,
     response_observer: Option<Arc<dyn ResponseObserver>>,
+    /// One CEF request context per container in use (`storage`), released
+    /// when the shutdown begins.
+    profiles: Profiles,
 }
 
 impl Engine {
@@ -587,6 +597,8 @@ impl Engine {
                 path: helper.clone(),
             });
         }
+        // Deleted containers' storage goes before CEF can open any of it.
+        storage::sweep(&config.cache_dir);
         let runtime = CefRuntime::initialize(cef).map_err(|e| EngineError::Init(e.to_string()))?;
         let mut engine = Self {
             views: Vec::new(),
@@ -600,8 +612,18 @@ impl Engine {
             page_events: PageQueue::default(),
             content_filter: config.content_filter,
             response_observer: config.response_observer,
+            profiles: Profiles::new(config.cache_dir),
         };
         engine.apply(Event::Initialised);
+        // Outside any host callback: bringing a context up pumps CEF, which a
+        // macOS host cannot do from inside one.
+        if let Some(runtime) = &engine.runtime {
+            for container in config.containers {
+                if let Err(e) = engine.profiles.get(runtime, container) {
+                    eprintln!("wubble-engine: {e}");
+                }
+            }
+        }
         Ok(engine)
     }
 
@@ -625,6 +647,9 @@ impl Engine {
 
     /// Starts an orderly shutdown; keep calling [`Self::tick`] until [`Self::is_stopped`].
     pub fn request_shutdown(&mut self) {
+        // Open browsers keep their own context references until they close,
+        // which the shutdown waits for; none outlives `cef::shutdown`.
+        self.profiles.release();
         // Browsers CEF created since the last pump count before the quit.
         self.apply_extra();
         self.apply(Event::ShutdownRequested);
@@ -663,9 +688,11 @@ impl Engine {
         let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
             return Err(EngineError::NotRunning);
         };
+        let profile = self.profiles.get(runtime, config.container)?;
         let view = View::open(
             runtime,
             config,
+            profile,
             self.content_filter.clone(),
             self.response_observer.clone(),
             self.extra.client(),
@@ -675,6 +702,33 @@ impl Engine {
         self.views.push((id, view));
         self.apply(Event::BrowserOpened);
         Ok(id)
+    }
+
+    /// Deletes the cookies, HTTP cache and HTTP auth credentials of
+    /// `containers` now (the host passes one, or every one it has), bringing
+    /// up any not open yet. Site storage (local storage, IndexedDB, service
+    /// workers) stays: [`View::forget_site`] clears one site's, deleting the
+    /// container clears all of it.
+    pub fn clear_browsing_data(&mut self, containers: &[ContainerId]) -> Result<(), EngineError> {
+        let (State::Running { .. }, Some(runtime)) = (self.state, &self.runtime) else {
+            return Err(EngineError::NotRunning);
+        };
+        for container in containers {
+            let context = self.profiles.get(runtime, *container)?.request_context();
+            storage::clear(&context, *container);
+        }
+        Ok(())
+    }
+
+    /// `container` was deleted (its views are closing): its cookies go now,
+    /// the rest of its storage at the next start, before CEF opens it (its
+    /// files may still be open now).
+    pub fn forget_container(&mut self, container: ContainerId) {
+        if let Some(profile) = self.profiles.open(container) {
+            storage::clear(&profile.request_context(), container);
+        }
+        self.profiles.close(container);
+        storage::forget(self.profiles.root(), container);
     }
 
     /// How page requests are answered from now on. Requests already
@@ -872,6 +926,7 @@ mod tests {
             features: PageFeatures::default(),
             clipboard_bridge: false,
             profile: ProfileKind::User,
+            containers: vec![],
         }
     }
 
@@ -1134,6 +1189,7 @@ mod tests {
             response_observer: None,
             features: PageFeatures::default(),
             clipboard_bridge: false,
+            containers: vec![],
             profile: ProfileKind::Throwaway,
         })
         .err();

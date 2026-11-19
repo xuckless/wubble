@@ -39,12 +39,10 @@ use crate::{
 };
 
 #[cfg(feature = "cef-runtime")]
-use cef::rc::Rc;
+use cef::{ImplBrowser, ImplBrowserHost, ImplFrame, ImplListValue, ImplProcessMessage};
+// wubble change 39: the readiness handler moved to `profile`, shared by every platform.
 #[cfg(feature = "cef-runtime")]
-use cef::{
-    ImplBrowser, ImplBrowserHost, ImplFrame, ImplListValue, ImplProcessMessage,
-    ImplRequestContextHandler, RequestContextHandler, WrapRequestContextHandler,
-};
+use crate::profile::RequestContextReadyHandler;
 
 // ── Public config ─────────────────────────────────────────────────────────────
 
@@ -71,20 +69,6 @@ struct WeldRenderHandlerInner {
     cpu_paints: Arc<AtomicU64>,
     /// Held requests and the drag-source switch (wubble change).
     requests: Arc<crate::handlers::Requests>,
-}
-
-// CEF invokes this on its UI thread only after a RequestContext can create
-// browsers. A persistent child profile takes that asynchronous route on macOS,
-// unlike an in-memory context.
-#[cfg(feature = "cef-runtime")]
-cef::wrap_request_context_handler! {
-    struct RequestContextReadyHandler { ready: Arc<AtomicBool> }
-
-    impl RequestContextHandler {
-        fn on_request_context_initialized(&self, _request_context: Option<&mut cef::RequestContext>) {
-            self.ready.store(true, Ordering::Release);
-        }
-    }
 }
 
 // ── cef-runtime: render handler + client ─────────────────────────────────────
@@ -161,7 +145,9 @@ impl MacosCefProducer {
     ) -> Result<Self, WeldError> {
         #[cfg(feature = "cef-runtime")]
         {
-            if config.surface.user_data_dir.is_some() {
+            // wubble change 39: a shared profile is ready before the host
+            // creates browsers in it (`SharedProfile::is_ready`).
+            if config.surface.profile.is_none() && config.surface.user_data_dir.is_some() {
                 return Err(WeldError::SurfaceCreation(
                     "macOS persistent profiles initialize asynchronously; use \
                      MacosCefProducer::prepare_profile and \
@@ -169,7 +155,7 @@ impl MacosCefProducer {
                         .into(),
                 ));
             }
-            let mut request_context = crate::profile::create(_runtime, &config.surface)?;
+            let mut request_context = crate::profile::for_surface(_runtime, &config.surface)?;
             return Self::new_with_request_context(&config, host_ctx, &mut request_context);
         }
 
