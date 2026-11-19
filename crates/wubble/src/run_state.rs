@@ -102,7 +102,8 @@ impl Runner {
     fn step(&mut self, event: RunEvent) -> RunEffect {
         let timing = Timing::of(wubble_core::motion::reduced());
         let (next, effect) = run::transition(self.state, event, &timing);
-        if next != self.state {
+        // a change of state, not of the level or the calm time a state carries
+        if std::mem::discriminant(&next) != std::mem::discriminant(&self.state) {
             self.changed = true;
             crate::measure::count(crate::measure::Count::RunChange);
             if std::env::var_os("WUBBLE_TRACE").is_some() {
