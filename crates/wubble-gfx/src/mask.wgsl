@@ -1,7 +1,7 @@
 // The page with its bowed edges (mask.rs): the pane's last frame, filled and stretched as the
 // shell draws it at rest (SplitPane) with the stale frame cross-fading over it, cut by a rounded
 // rect whose left and right edges follow two edge tables (wubble_core::bow), with the design's
-// page colour where an edge bulges past the frame. Straight alpha out: femtovg treats a wgpu texture as not premultiplied.
+// page colour where an edge bulges past the frame. Straight alpha out: Slint's Skia renderer imports a wgpu texture as unpremultiplied.
 // The curve is the design's (`seam.ts clip`, `split.ts stringRect`); the edge as a cut is the
 // page's `clipPath` in `browser/chrome.tsx`. Prepend: the scene prelude (vs_fullscreen, sdRound)
 // and edge.wgsl (edgeAt).

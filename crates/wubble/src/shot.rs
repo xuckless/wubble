@@ -35,11 +35,22 @@ pub fn requested() -> bool {
 /// The window the shot is taken of; sized like the design's screenshot.
 pub fn attach(window: &AppWindow) {
     if let Some(path) = PATH.with(|p| p.borrow().clone()) {
-        window
-            .window()
-            .set_size(slint::LogicalSize::new(SIZE.0, SIZE.1));
+        let (w, h) = size();
+        window.window().set_size(slint::LogicalSize::new(w, h));
         SHOT.with(|s| *s.borrow_mut() = Some((path, window.as_weak())));
     }
+}
+
+/// [`SIZE`], or `WUBBLE_SHOT_SIZE=<w>x<h>` (logical px): to shoot at another window's size,
+/// such as a screenshot's.
+fn size() -> (f32, f32) {
+    std::env::var("WUBBLE_SHOT_SIZE")
+        .ok()
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or(SIZE)
 }
 
 /// The design's Spaces (`slint/tokens.slint` Spaces: names and accents) and a few tabs, two of

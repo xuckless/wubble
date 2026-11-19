@@ -12,15 +12,36 @@ pub fn valid_rgba(width: u32, height: u32, len: usize) -> bool {
     side.contains(&width) && side.contains(&height) && len == (width * height * 4) as usize
 }
 
+/// The longest side of the favicon image the shell is given: twice the side it
+/// draws a favicon at (`Shell.icon`, 16 px; checked in wubble-ui's tokens
+/// test). Slint's renderer samples an image bilinearly without mipmaps, so a
+/// 64 px icon drawn at 16 px skips three texels of four and its edges alias
+/// (jagged). At twice the drawn size, on whole pixels, the bilinear sample at
+/// scale 1 is the exact 2x2 average and at scale 2 the image is drawn 1:1.
+pub const SHELL_ICON_PX: u32 = 32;
+
 /// Straight-alpha RGBA pixels of any size made into a usable icon: returned
 /// as they are when both sides already fit, otherwise shrunk so the longer
 /// side is `MAX_ICON_PX`, keeping the aspect ratio. `None` only for an empty
 /// image or a byte count that does not match the size; never for being large.
+pub fn fit_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Option<(u32, u32, Vec<u8>)> {
+    shrink_rgba(width, height, rgba, MAX_ICON_PX)
+}
+
+/// Straight-alpha RGBA pixels returned as they are when both sides are at most
+/// `longest`, otherwise shrunk so the longer side is `longest`, keeping the
+/// aspect ratio. `None` only for an empty image or a byte count that does not
+/// match the size.
 ///
 /// The shrink is an area-average (box) filter over premultiplied alpha, so
 /// every source pixel counts by the area it covers and transparent pixels do
 /// not darken the edges.
-pub fn fit_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Option<(u32, u32, Vec<u8>)> {
+pub fn shrink_rgba(
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    longest_side: u32,
+) -> Option<(u32, u32, Vec<u8>)> {
     let expected = (width as usize)
         .checked_mul(height as usize)?
         .checked_mul(4)?;
@@ -28,11 +49,14 @@ pub fn fit_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Option<(u32, u32, Vec
         return None;
     }
     let longest = width.max(height);
-    if longest <= MAX_ICON_PX {
+    if longest_side == 0 {
+        return None;
+    }
+    if longest <= longest_side {
         return Some((width, height, rgba));
     }
     let scaled = |side: u32| {
-        ((u64::from(side) * u64::from(MAX_ICON_PX) + u64::from(longest) / 2) / u64::from(longest))
+        ((u64::from(side) * u64::from(longest_side) + u64::from(longest) / 2) / u64::from(longest))
             .max(1) as u32
     };
     let (w, h) = (scaled(width), scaled(height));
@@ -211,6 +235,23 @@ mod tests {
                 .all(|p| *p == [255, 0, 0, 128]),
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn the_shell_gets_twice_the_drawn_side() {
+        // a 64 px stored icon comes down to SHELL_ICON_PX; a 16 px one stays as it is
+        let (w, h, rgba) =
+            shrink_rgba(64, 64, solid(64, 64, [1, 2, 3, 255]), SHELL_ICON_PX).unwrap();
+        assert_eq!((w, h), (SHELL_ICON_PX, SHELL_ICON_PX));
+        assert!(valid_rgba(w, h, rgba.len()));
+        let (w, h, _) = shrink_rgba(64, 48, solid(64, 48, [9; 4]), SHELL_ICON_PX).unwrap();
+        assert_eq!((w, h), (32, 24));
+        let small = solid(16, 16, [9; 4]);
+        assert_eq!(
+            shrink_rgba(16, 16, small.clone(), SHELL_ICON_PX),
+            Some((16, 16, small))
+        );
+        assert_eq!(shrink_rgba(16, 16, solid(16, 16, [9; 4]), 0), None);
     }
 
     #[test]
