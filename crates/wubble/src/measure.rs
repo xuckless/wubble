@@ -100,6 +100,9 @@ pub enum Scenario {
     /// Loopback pages loaded cold and warm: the page's own timings and the first frame shown
     /// (`load_run`).
     Load,
+    /// The process tree's memory with no tab, 1, 10 and 50 tabs, then frozen and discarded
+    /// by the sleep policy (`memory.rs`).
+    Memory,
 }
 
 impl Scenario {
@@ -113,6 +116,7 @@ impl Scenario {
             Self::Idle => "idle",
             Self::Startup => "startup",
             Self::Load => "load",
+            Self::Memory => "memory",
         }
     }
 
@@ -124,7 +128,8 @@ impl Scenario {
             Self::Typing => include_str!("../assets/measure-typing.html"),
             Self::Idle | Self::Startup | Self::Load => include_str!("../assets/measure-idle.html"),
             // Windowless: `main` runs `blocking::measure` instead of a page.
-            Self::Blocker => "",
+            // The memory run opens its own pages.
+            Self::Blocker | Self::Memory => "",
         }
     }
 
@@ -1214,6 +1219,9 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
     if crate::load_run::active() {
         return crate::load_run::tick(host);
     }
+    if with_session(|s| s.scenario) == Some(Scenario::Memory) {
+        return host.memory_tick();
+    }
     count(Count::MeasureTick);
     let now = Instant::now();
     let Some((scenario, step, base)) = with_session(|s| {
@@ -1320,7 +1328,11 @@ pub fn finish(adapter: &str) -> Option<(String, String)> {
     if let Some(load) = crate::load_run::finish() {
         return Some(load);
     }
-    let mut session = SESSION.take().filter(|s| s.first_frame.is_some())?;
+    let session = SESSION.take()?;
+    if session.scenario == Scenario::Memory {
+        return crate::memory::finish();
+    }
+    let mut session = Some(session).filter(|s| s.first_frame.is_some())?;
     if session.scenario == Scenario::Startup {
         return Some(finish_startup(adapter));
     }

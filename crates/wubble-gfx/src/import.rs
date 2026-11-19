@@ -158,6 +158,16 @@ impl GpuContext {
         format!("{} ({}, {})", info.name, info.driver, info.driver_info)
     }
 
+    /// GPU memory wgpu's allocator holds on this device, in bytes: `(allocated, reserved)`, the
+    /// live allocations and the blocks they come from (reserved stays when allocations go).
+    /// Vulkan only (gpu-allocator); `None` on Metal, whose resources are counted in the
+    /// process's footprint. Textures imported from CEF's frames are not in it.
+    pub fn allocator_bytes(&self) -> Option<(u64, u64)> {
+        self.device
+            .generate_allocator_report()
+            .map(|r| (r.total_allocated_bytes, r.total_reserved_bytes))
+    }
+
     pub(crate) fn device(&self) -> &wgpu::Device {
         &self.device
     }

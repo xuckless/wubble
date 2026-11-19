@@ -78,8 +78,8 @@ impl Meter {
     /// The tree as of the last refresh, `root` first.
     fn tree(&self) -> Vec<Proc> {
         let processes = self.system.processes();
-        // Linux lists each thread as a process whose parent is its own process: a process's
-        // CPU time and memory already hold its threads', so threads are left out.
+        // Linux lists each thread as a task of its process, with the process as its parent and
+        // the process's memory: counted, every thread would add its process's RSS again.
         let table: Vec<(u32, Option<u32>)> = processes
             .iter()
             .filter(|(_, p)| p.thread_kind().is_none())
@@ -342,6 +342,13 @@ mod tests {
         );
         #[cfg(target_os = "linux")]
         assert_eq!(m.threads().first().map(|t| t.0), Some(std::process::id()));
+        // Threads are not processes of the tree: with one more running, it is still this
+        // process alone (no test here starts a child process).
+        let (stop, wait) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || wait.recv());
+        assert_eq!(m.sample().len(), 1);
+        drop(stop);
+        let _ = thread.join();
         // Never ends itself.
         assert!(!m.end(std::process::id()));
     }

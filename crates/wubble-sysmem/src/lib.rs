@@ -11,9 +11,13 @@
 //!   our tick instead of a dispatch source). Windows reads the low-memory resource notification
 //!   and `GlobalMemoryStatusEx`.
 //! - [`Meter`]: RSS and CPU of wubble's own process tree, through `sysinfo` (MIT).
+//! - [`memory`]: the tree with PSS/USS (Linux), footprint (macOS) and GPU memory (NVIDIA), for
+//!   `--measure memory`.
 
+mod detail;
 mod meter;
 
+pub use detail::{footprint, gpu_by_pid, memory, namespace_pid, rollup};
 pub use meter::{Meter, Proc, descendants, label};
 use wubble_core::pressure::Reading;
 

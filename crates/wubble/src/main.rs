@@ -1,3 +1,4 @@
+mod alloc_count;
 mod autofill_smoke;
 mod backdrop;
 mod bar;
@@ -19,6 +20,7 @@ mod load_server;
 mod measure;
 mod media_keys;
 mod media_smoke;
+mod memory;
 mod menu;
 mod nav_smoke;
 mod os_motion;
@@ -1110,7 +1112,14 @@ fn run(
         _ => None,
     };
     // `--smoke autofill`'s pages, and `--smoke block`'s (it needs an http page), on a loopback port.
-    let autofill_port = matches!(mode, Mode::Autofill | Mode::Block)
+    let memory_run = matches!(
+        mode,
+        Mode::Measure {
+            scenario: measure::Scenario::Memory,
+            ..
+        }
+    );
+    let autofill_port = (matches!(mode, Mode::Autofill | Mode::Block) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
@@ -1339,8 +1348,9 @@ fn run(
             begin_frames,
             ..
         } => (
-            // `--measure load` navigates from here to its own pages.
-            Some(page_url(scenario.page())),
+            // `--measure load` navigates from here to its own pages; the memory run starts on
+            // an empty window and opens its tabs itself.
+            (*scenario != measure::Scenario::Memory).then(|| page_url(scenario.page())),
             Checks {
                 begin_frames: *begin_frames,
                 ..none
@@ -1443,7 +1453,11 @@ fn run(
         blocking.start(profile, &loaded.settings.blocker);
     }
     measure::mark(measure::Stage::BlockerStarted);
-    let url = url.or_else(|| loaded.model.tabs.is_empty().then(bundled));
+    let url = url.or_else(|| (loaded.model.tabs.is_empty() && !memory_run).then(bundled));
+    if let Some(port) = autofill_port.filter(|_| memory_run) {
+        // `{}` is each tab's own site (`*.localhost` is loopback in Chromium).
+        memory::begin(format!("http://{{}}.localhost:{port}/memory"));
+    }
     let factory = WindowFactory {
         gpu: gpu.clone(),
         glass_scene: loaded.settings.glass_scene(),

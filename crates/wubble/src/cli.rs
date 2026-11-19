@@ -33,7 +33,9 @@ struct Cli {
     /// animation), `resize` (the window resizes itself), `typing` (keys and
     /// clicks, timed to the first frame that shows them), `idle` (a still page:
     /// renders, wake-ups, CPU and GPU), `startup` (start-up stages to the first
-    /// page pixels) or `blocker` (windowless). Exits by itself.
+    /// page pixels), `blocker` (the content blocker, windowless) or `memory` (the
+    /// process tree's memory with 0, 1, 10 and 50 tabs, then frozen and
+    /// discarded). Exits by itself.
     #[arg(long, value_name = "SCENARIO", value_enum, conflicts_with = "profile")]
     measure: Option<Scenario>,
     /// How long `--measure` runs.
@@ -679,6 +681,7 @@ mod tests {
             ("idle", Scenario::Idle),
             ("startup", Scenario::Startup),
             ("load", Scenario::Load),
+            ("memory", Scenario::Memory),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),

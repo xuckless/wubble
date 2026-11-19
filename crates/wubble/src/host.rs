@@ -28,6 +28,7 @@ mod gpu;
 mod hover;
 mod look;
 mod media;
+mod memory;
 mod pages;
 mod panes;
 mod parity;

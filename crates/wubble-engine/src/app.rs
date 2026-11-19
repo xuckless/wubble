@@ -419,7 +419,14 @@ pub fn prepare_process() {
 /// platform table must not add its own `enable-features`: merge it here.
 /// The `enable-features` switch is not here: [`PageFeatures::switches`] writes it, from the
 /// user's settings.
-const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
+///
+/// `disable-extensions`: CEF 156's Chrome runtime otherwise starts the extension system with
+/// two extension renderers and two helper processes of its own before any tab opens: about
+/// 60 MiB PSS (`--measure memory`, Linux, 1 and 10 tabs). wubble runs no extensions before M6
+/// (TODO.md Decided "Extensions"); Chromium's PDF viewer, a component extension, still opens
+/// (`--smoke builtins`), and DevTools still docks (`--smoke page`). Remove it with the M6
+/// extension pass.
+const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[("disable-extensions", None)];
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) struct Linux;
@@ -1121,6 +1128,7 @@ mod tests {
                     "enable-blink-features".to_string(),
                     Some("MiddleClickAutoscroll".to_string())
                 ),
+                ("disable-extensions".to_string(), None),
                 ("disable-gpu-memory-buffer-video-frames".to_string(), None),
             ]
         );
