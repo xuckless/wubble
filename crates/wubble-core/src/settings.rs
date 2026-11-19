@@ -497,6 +497,20 @@ pub const PROCESS_SPARE_RENDERER: SettingDef = SettingDef {
     section: Section::Performance,
     restart: true,
 };
+/// Hardware video decode on Linux with an NVIDIA GPU and the system package
+/// `libva-nvidia-driver` (`VaapiOnNvidiaGPUs`; no effect elsewhere or without the package).
+/// Off by default: the driver starts CUDA threads before Chromium starts the GPU process's
+/// seccomp sandbox, which then does not start at all (`chrome://gpu` "Sandboxed: false"). Software
+/// decode of 4K60 VP9 costs 130 to 290 % of a core, hardware 25 to 55 % (TODO.md "Decided", video
+/// decode on Linux).
+pub const VIDEO_HARDWARE_DECODE: SettingDef = SettingDef {
+    key: "video.hardware_decode",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Hardware video decode on Linux NVIDIA with libva-nvidia-driver (runs the GPU process without its sandbox)",
+    section: Section::Performance,
+    restart: true,
+};
 /// Chromium's remote debugging endpoint (`remote-debugging-port`), on 127.0.0.1 only. Off by
 /// default: with a port set, any program on this computer can read and drive every open tab.
 /// Docked DevTools is the frontend page served by that endpoint, so it needs the port; without
@@ -790,6 +804,7 @@ pub const ALL: &[&SettingDef] = &[
     &PROCESS_SITE_ISOLATION,
     &PROCESS_RENDERER_LIMIT,
     &PROCESS_SPARE_RENDERER,
+    &VIDEO_HARDWARE_DECODE,
     &DEVTOOLS_REMOTE_PORT,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
@@ -895,6 +910,7 @@ mod tests {
             &PROCESS_SITE_ISOLATION,
             &PROCESS_RENDERER_LIMIT,
             &PROCESS_SPARE_RENDERER,
+            &VIDEO_HARDWARE_DECODE,
         ] {
             assert!(d.restart && d.section == Section::Performance, "{}", d.key);
         }

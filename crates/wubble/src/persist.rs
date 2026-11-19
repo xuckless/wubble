@@ -200,7 +200,8 @@ impl Settings {
             renderer_limit: count(&defs::PROCESS_RENDERER_LIMIT),
             spare_renderer: on(&defs::PROCESS_SPARE_RENDERER),
             remote_debugging_port: defs::remote_port(count(&defs::DEVTOOLS_REMOTE_PORT)),
-            hw_video_decode: wubble_engine::app::hardware_video_decode_found(),
+            hw_video_decode: on(&defs::VIDEO_HARDWARE_DECODE)
+                && wubble_engine::app::hardware_video_decode_found(),
         }
     }
 
@@ -1740,6 +1741,9 @@ mod tests {
         );
         let features = loaded.settings.page_features();
         assert!(features.overlay_scrollbars && features.middle_click_autoscroll);
+        // Hardware decode runs the GPU process unsandboxed: never on without the setting,
+        // whatever driver is installed.
+        assert!(!features.hw_video_decode);
         client.shutdown();
     }
 }

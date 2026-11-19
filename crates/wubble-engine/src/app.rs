@@ -122,10 +122,11 @@ pub struct PageFeatures {
     /// `settings::DEVTOOLS_REMOTE_PORT` through `settings::remote_port`: Chromium's remote
     /// debugging endpoint, on 127.0.0.1. `None`: no socket is opened.
     pub remote_debugging_port: Option<u16>,
-    /// Hardware video decode through VA-API on NVIDIA (`VaapiOnNvidiaGPUs`): on when
-    /// [`hardware_video_decode_found`] says the driver is there. Chromium keeps VA-API off on
-    /// NVIDIA by default (crbug.com/1492880). Not a setting: a user who must keep a crashing
-    /// driver out sets `LIBVA_DRIVER_NAME` to anything else, which [`prepare_process`] keeps.
+    /// Hardware video decode through VA-API on NVIDIA (`VaapiOnNvidiaGPUs`):
+    /// `settings::VIDEO_HARDWARE_DECODE` (off by default) and [`hardware_video_decode_found`].
+    /// Chromium keeps VA-API off on NVIDIA by default (crbug.com/1492880). On, the GPU
+    /// process runs without its seccomp sandbox: libva-nvidia-driver starts CUDA threads in
+    /// Chromium's pre-sandbox initialisation, and the sandbox only starts on one thread.
     pub hw_video_decode: bool,
 }
 
@@ -242,7 +243,8 @@ impl PageFeatures {
                 self.hw_video_decode,
                 Enable("VaapiOnNvidiaGPUs"),
                 "NVDEC through libva-nvidia-driver (crbug.com/1492880 keeps it off by default): \
-                 4K60 VP9 measured 130 to 190 % of a core in software, 14 % on NVDEC",
+                 4K60 VP9 measured 130 to 290 % of a core in software, 25 to 55 % on NVDEC; the GPU \
+                 process then has no seccomp sandbox (CUDA threads exist when it would start)",
             ),
         ]
     }
