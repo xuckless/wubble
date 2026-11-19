@@ -1413,8 +1413,8 @@ impl Host {
         Ok(())
     }
 
-    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame. The
+    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the frosted
+    /// backdrop), not a flat fill, and be the scene's current frame. The
     /// smoke pins the glass at `Full` (`Host::new`), so the verdict never depends on the
     /// quality governor; the line says the level it checked.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {

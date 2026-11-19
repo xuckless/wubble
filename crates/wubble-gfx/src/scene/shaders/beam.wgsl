@@ -1,3 +1,4 @@
+// translates: core/gl/glsl.ts:100-129
 // Border beam and voice glow helpers, translated line for line from BEAM in core/gl/glsl.ts
 // (after Ultra Reactivate's border-beam and voice-glow). `perimeterAt` is the distortion-waves
 // renderer's arc-length parameterisation of a rounded rect. Prepended by render.rs.

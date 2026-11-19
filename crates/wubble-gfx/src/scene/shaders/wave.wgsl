@@ -1,3 +1,4 @@
+// translates: core/gl/glsl.ts:68-91
 // Wave lens, translated line for line from WAVE in core/gl/glsl.ts (after Ultra Reactivate's
 // distortion-waves renderer: its waveLens + waveBlurMask + waveBand). A wavefront at signed
 // distance d from each pixel lifts a Gaussian lens around the front, narrower ahead (d > 0) than

@@ -1,7 +1,10 @@
-// Refractive glass surfaces, translated line for line from GLASS in core/gl/scene.ts.
-// Rounded rects that lens the blurred backdrop toward the rim, split per channel (chromatic
-// dispersion), with a specular band, a pointer glow, a 1px inner rim, the touched sheen rim,
-// distortion waves from presses, a border beam and the voice glow (with bloom outside the rect).
+// translates: core/gl/scene.ts:129-274
+// Coloured frosted glass, translated line for line from GLASS in core/gl/scene.ts (598f814).
+// Copied from the-wallpaper-project src/wubble/slint/shaders/glass.wgsl (owner's code), which is
+// line for line with the web; one wubble branch, `uMaterial` 2, is marked below.
+// Rounded rects over the deepest blur levels: the light pulled toward a milky floor, the colour lifted,
+// a soft pointer light and a faint inner edge (no lens, no specular band, no hairline), plus the touched
+// sheen rim, distortion waves from presses, a border beam and the voice glow (with bloom outside the rect).
 // `uMaterial` 0 draws the effects only (beam, glow) for surfaces over live content;
 // 2 (wubble's, not the design's) is the flat fill of `Quality::Flat`.
 // This pass is what Slint itself cannot do (no backdrop blur): Slint draws the content on top.
@@ -33,33 +36,41 @@ struct GlassU {
 @group(0) @binding(0) var<uniform> U: GlassU;
 @group(0) @binding(1) var samp: sampler;
 // uBg is declared in the GLSL but never read there either; only the pyramid levels are used.
-@group(0) @binding(3) var uB1: texture_2d<f32>;
-@group(0) @binding(4) var uB2: texture_2d<f32>;
+@group(0) @binding(3) var uB2: texture_2d<f32>;  // render.rs binds b2 (⅛ res) here
+@group(0) @binding(4) var uB3: texture_2d<f32>;  // and b3 (1/16 res), the frost
 
 @vertex
 fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQuad, U.uView); }
 
+// Frosted: the two deepest blur levels only. thin 0 → 40% toward the deepest, regular 1 → 75%, thick 2 → all.
 fn bg(px: vec2<f32>, tier: f32) -> vec3<f32> {
   var uv = px / U.uView; uv.y = 1.0 - uv.y;
-  let a = textureSampleLevel(uB1, samp, uv, 0.0).rgb;
-  let b = textureSampleLevel(uB2, samp, uv, 0.0).rgb;
-  // thin 0 → the first blur level, regular 1 → 55% toward the second, thick 2 → the second; continuous in between
-  let t = select(0.55 + (tier - 1.0) * 0.45, tier * 0.55, tier < 1.0);
-  return mix(a, b, clamp(t, 0.0, 1.0));
+  let a = textureSampleLevel(uB2, samp, uv, 0.0).rgb;
+  let b = textureSampleLevel(uB3, samp, uv, 0.0).rgb;
+  return mix(a, b, clamp(0.4 + tier * 0.3, 0.0, 1.0));
 }
-fn sat(c: vec3<f32>, s: f32) -> vec3<f32> { let l = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)); return mix(vec3<f32>(l), c, s); }
+const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);
+// @source slint-glass-frost
+// Coloured frost: hue kept, detail and most contrast lost; light pulled toward a milky floor, colour lifted.
+const FROST = vec3<f32>(0.115, 0.85, 2.7); // milk floor, how much of the original light survives, colour lift
+fn frost(b: vec3<f32>, tier: f32) -> vec3<f32> {
+  let L = dot(b, LUMA);
+  let ch = b - vec3<f32>(L);
+  let floorL = FROST.x + 0.012 * tier;
+  return vec3<f32>(floorL + L * FROST.y) + ch * FROST.z;
+}
 
 @fragment
 fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   let vPx = fin.vPx;
-  let half_ = vec2<f32>(max(0.5, U.uRect.z * 0.5), U.uRect.w * 0.5); let c = U.uRect.xy + half_; let p = vPx - c;
+  let half_ = U.uRect.zw * 0.5; let c = U.uRect.xy + half_; let p = vPx - c;
   let r = min(U.uR, min(half_.x, half_.y));
   let d = sdRound(p, half_, r);
   let aa = 0.75 / U.uDpr;
   // soft drop shadow, grows with tier
   let sBlur = mix(24.0, 60.0, U.uTier * 0.5); let sOff = mix(10.0, 24.0, U.uTier * 0.5);
   let ds = sdRound(p - vec2<f32>(0.0, sOff * 0.5), half_ - 2.0, r);
-  let shadow = (1.0 - smoothstep(-sBlur * 0.3, sBlur, ds)) * mix(0.35, 0.55, U.uTier * 0.5) * U.uShadow;
+  let shadow = (1.0 - smoothstep(-sBlur * 0.3, sBlur, ds)) * mix(0.22, 0.38, U.uTier * 0.5) * U.uShadow;
   let inside = 1.0 - smoothstep(-aa, aa, d);
 
   // @source slint-glass-beam-wgsl
@@ -104,36 +115,33 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   }
 
   if (inside <= 0.0) {
-    let sa = shadow * U.uMaterial;
+    let sa = shadow * min(U.uMaterial, 1.0); // wubble change: the flat fill (2) casts glass's shadow
     return vec4<f32>(bloomC, clamp(bloomA, 0.0, 1.0)) * U.uAlpha + vec4<f32>(0.0, 0.0, 0.0, sa * U.uAlpha) * (1.0 - clamp(bloomA, 0.0, 1.0));
+  }
+  // wubble change: `uMaterial` 2 is the flat fill of the lowest quality level, not in the design: the
+  // frost of the backdrop at the panel's centre, the tint and the soft inner edge, plus the effects;
+  // no rim bend, waves, grain or pointer light.
+  if (U.uMaterial > 1.5) { // wubble change: the flat fill
+    var flat_ = frost(bg(c, U.uTier), U.uTier);
+    flat_ = mix(flat_, U.uTint * 0.55 + 0.1, 0.07 * step(0.001, dot(U.uTint, U.uTint)));
+    flat_ += exp(d / 1.6) * step(d, 0.0) * 0.035;
+    flat_ += fx;
+    let aF = inside * U.uAlpha;
+    return vec4<f32>(flat_ * aF, aF) + vec4<f32>(0.0, 0.0, 0.0, shadow * U.uAlpha) * (1.0 - aF);
   }
   if (U.uMaterial < 0.5) {
     // effects only, over live content
     let a0 = inside * U.uAlpha;
     return vec4<f32>(fx * a0, clamp(fxA, 0.0, 1.0) * a0);
   }
-  // wubble: `uMaterial` 2 is the flat fill of the lowest quality level, not in the design.
-  // One colour per panel (the blurred backdrop at its centre under the tier fill), the 1px rim
-  // and the effects: no lens, dispersion, waves, specular or pointer light.
-  if (U.uMaterial > 1.5) {
-    var fillF = vec4<f32>(0.11, 0.122, 0.157, 0.64);
-    if (U.uTier < 0.5) { fillF = vec4<f32>(1.0, 1.0, 1.0, 0.08); } else if (U.uTier < 1.5) { fillF = vec4<f32>(0.086, 0.098, 0.129, 0.42); }
-    var flat_ = mix(bg(c, U.uTier), fillF.rgb, fillF.a);
-    flat_ = mix(flat_, U.uTint, 0.10 * step(0.001, dot(U.uTint, U.uTint)));
-    flat_ += (1.0 - smoothstep(0.0, 1.25, -d)) * 0.1;
-    flat_ += fx;
-    let aF = inside * U.uAlpha;
-    return vec4<f32>(flat_ * aF, aF) + vec4<f32>(0.0, 0.0, 0.0, shadow * U.uAlpha) * (1.0 - aF);
-  }
 
   // normal from the SDF gradient
   let e = vec2<f32>(0.5, 0.0);
   let n = normalize(vec2<f32>(sdRound(p + e.xy, half_, r) - sdRound(p - e.xy, half_, r), sdRound(p + e.yx, half_, r) - sdRound(p - e.yx, half_, r)) + 1e-5);
-  // convex lens bezel: circular profile, strongest at the rim
+  // frosted glass doesn't lens: the rim only bends the light a little, so the edge stays soft
   let bezel = clamp(min(half_.x, half_.y) * 0.5, 6.0, 22.0);
   let t = clamp(1.0 + d / bezel, 0.0, 1.0);
-  let lens = 1.0 - sqrt(max(0.0, 1.0 - t * t));
-  let off = -n * lens * bezel * 1.1;
+  let off = -n * t * t * bezel * 0.35;
   // @source slint-glass-wave-wgsl
   // a press sends a distortion wave through the glass: lens push, extra blur, spectral split
   var disp = vec2<f32>(0.0); var wBand = 0.0; var wBlur = 0.0;
@@ -143,31 +151,27 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
     disp += h.disp; wBand = max(wBand, h.band); wBlur = max(wBlur, h.blur);
   }
   let tierB = min(2.0, U.uTier + wBlur * 1.2);
-  // chromatic dispersion: blue bends most
+  // the wave still splits the light spectrally as it passes (only the wave: resting frost has no dispersion)
   var col: vec3<f32>;
-  col.x = bg(vPx + off * 0.92 - disp * 0.85, tierB).r;
-  col.y = bg(vPx + off * 1.00 - disp * 1.00, tierB).g;
-  col.z = bg(vPx + off * 1.10 - disp * 1.18, tierB).b;
-  col = sat(col, mix(1.6, 2.0, U.uTier * 0.5));
-  // tint fill per tier: white 8% / #161921 42% / #1C1F28 64%
-  var fill = vec4<f32>(0.11, 0.122, 0.157, 0.64);
-  if (U.uTier < 0.5) { fill = vec4<f32>(1.0, 1.0, 1.0, 0.08); } else if (U.uTier < 1.5) { fill = vec4<f32>(0.086, 0.098, 0.129, 0.42); }
-  col = mix(col, fill.rgb, fill.a);
-  col = mix(col, U.uTint, 0.10 * step(0.001, dot(U.uTint, U.uTint)));
+  col.x = bg(vPx + off - disp * 0.85, tierB).r;
+  col.y = bg(vPx + off - disp * 1.00, tierB).g;
+  col.z = bg(vPx + off - disp * 1.18, tierB).b;
+  col = frost(col, U.uTier);
+  // the Space colour, lightly: the colour should mostly come from what's behind
+  col = mix(col, U.uTint * 0.55 + 0.1, 0.07 * step(0.001, dot(U.uTint, U.uTint)));
   // the wave's leading band catches a little film colour
   col += (thinFilm(320.0 + 140.0 * wBand, 0.85) * 0.12 + 0.03) * wBand;
-  // specular: white 10% to 0 over the top 42%
-  let top = clamp((p.y + half_.y) / (U.uRect.w * 0.42), 0.0, 1.0);
-  col += (1.0 - top) * (1.0 - top) * 0.10;
-  // pointer light sweeping across the surface
+  // pointer light: a broad, soft brightening in the frost (no specular band, no hotspot)
   let lp = U.uLight - c;
-  let glow = exp(-dot(p - lp, p - lp) / (2.0 * pow(max(U.uRect.z, U.uRect.w) * 0.35, 2.0)));
-  col += glow * 0.035;
-  // 1px inner rim: 22% at the top, 7% all round, brighter where it faces the light
-  let rim = 1.0 - smoothstep(0.0, 1.25, -d);
+  let gs = max(U.uRect.z, U.uRect.w) * 0.45;
+  let glow = exp(-dot(p - lp, p - lp) / (2.0 * gs * gs));
+  col += glow * 0.03;
+  // the edge: a faint, soft light just inside, a little brighter facing the pointer. No hairline.
+  let rim = exp(d / 1.6) * step(d, 0.0);
   let facing = max(0.0, dot(n, normalize(lp - p + 1e-4)));
-  let rimA = 0.07 + 0.15 * max(0.0, -n.y) + 0.18 * facing * facing;
-  col += rim * rimA;
+  col += rim * (0.035 + 0.05 * facing * facing);
+  // ±0.5/255 grain against 8-bit banding in the smooth frost
+  col += (fract(sin(dot(vPx, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
   // film rim: the brand sheen as a soft 1.5 px ring that drifts slowly round the edge, only when touched.
   // It matches the CSS .wb-film rim (a conic Sky → Lilac → Blush → Mint ring at 80%), not interference
   // colours: high-order film bands read as anodised metal on small controls.

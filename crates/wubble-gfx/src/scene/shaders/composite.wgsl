@@ -1,3 +1,4 @@
+// translates: core/gl/scene.ts:77-105
 // The living backdrop: dye → lit liquid on the dark ground, muted by `uMute` (SceneOptions
 // intensity, default 0.3), with tap ripples as distortion waves. Translated line for line from
 // COMPOSITE in core/gl/scene.ts. Drawn at HALF resolution into `bg` (RGBA16Float), which keeps

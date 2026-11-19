@@ -1,3 +1,4 @@
+// translates: core/gl/scene.ts:108-121
 // Separable Gaussian for the glass blur pyramid, translated from BLUR in core/gl/scene.ts.
 // Run twice per level: uStep = (1/src.w, 0) into the temp target, then (0, 1/tmp.h) into the
 // level. bg (half res) → b1 (quarter, σ 3.5) → b2 (eighth, σ 4.5). Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl (render.rs always prepends all four).

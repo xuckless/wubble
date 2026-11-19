@@ -42,8 +42,7 @@ struct Cli {
     #[arg(long, value_name = "N", requires = "measure", default_value_t = DEFAULT_SECONDS)]
     seconds: NonZeroU32,
     /// How long `--measure` waits after the first frame before it records, instead of the
-    /// scenario's own (`idle`: long enough to be past the pointer hold; to measure the frozen
-    /// liquid, past `Timing::still_after` and `ease_out` as well).
+    /// scenario's own (`idle`: long enough for the scene to have settled).
     #[arg(long, value_name = "N", requires = "measure")]
     warmup: Option<NonZeroU32>,
     /// `--measure` with CEF paced by external begin frames, one per Slint
@@ -87,8 +86,9 @@ struct Cli {
     /// per shell surface into.
     #[arg(long, value_name = "DIR", requires = "smoke", conflicts_with = "shot")]
     shot_dir: Option<PathBuf>,
-    /// Hand run only, for the design-fidelity harness (`tools/fidelity`): the liquid holds
-    /// still (its clock does not advance), so two runs shoot the same backdrop.
+    /// Hand run only, for the design-fidelity harness (`tools/fidelity`): the scene's clock does
+    /// not advance (the backdrop is the still dye either way; the harness's web side shows the
+    /// same dye), so two runs shoot the same picture.
     #[arg(long, requires = "smoke")]
     frozen_backdrop: bool,
     /// Hand run only, with `--smoke gallery`: seed the design's Spaces and tabs from this

@@ -104,8 +104,8 @@ const MAX_SCENE_DIFF: u32 = 4;
 
 /// The window shows the scene's current frame in `region` (where Slint draws nothing over it):
 /// `scene` is that frame read back, RGBA8 at the snapshot's size. Returns the mean difference.
-/// A frozen copy (Slint's rounded-clip layer cache) differs wherever the liquid moved or the
-/// glass changed.
+/// A frozen copy (Slint's rounded-clip layer cache) differs wherever the backdrop or the glass
+/// changed.
 pub fn check_shows_scene(
     snapshot: &SharedPixelBuffer<Rgba8Pixel>,
     scene: &[u8],

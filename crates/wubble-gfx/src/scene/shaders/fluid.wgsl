@@ -1,3 +1,4 @@
+// translates: core/gl/fluid.ts:9-108
 // Stable fluids (Stam 1999), translated line for line from core/gl/fluid.ts.
 // Semi-Lagrangian advection, vorticity confinement, divergence, Jacobi pressure, projection.
 // Carries RGB dye. Splat coordinates are 0..1 with y up (see common.wgsl: the textures keep the

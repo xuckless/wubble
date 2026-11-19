@@ -5,28 +5,33 @@
 //! `frame`) and `crate/examples/headless.rs` (the readback). Owner's code.
 //! Changed: built on the shared `GpuContext` device; no bubble, pop or
 //! W-field passes and no overlay mode; the backdrop work is skipped on the
-//! frames the quality level says (`Quality`), and its targets shrink with it.
+//! frames the quality level says (`Quality`), and its targets shrink with it;
+//! the still backdrop (`Backdrop::Still`, the browser window's).
 //!
 //! Per frame, back to front:
 //!   0. queued fluid ops (taps, resize seeds), then the ambient emitters and
-//!      the pointer push (splats)
+//!      the pointer push (splats); a still backdrop instead splats its dye table
+//!      afresh into a cleared dye when the palette or the shape changed
 //!   1. fluid step: curl → vorticity → divergence → pressure warm start (×0.8)
 //!      → Jacobi iterations → gradient subtract → advect velocity → advect dye
+//!      (not for a still backdrop)
 //!   2. composite the backdrop at half resolution into `bg`
-//!   3. blur pyramid: bg → b1 (¼ res, σ 3.5) → b2 (⅛ res, σ 4.5)
-//!   4. blit bg to `out`, then in the same render pass the glass quads and the
-//!      beam
+//!   3. blur pyramid: bg → b1 (¼ res, σ 3.5) → b2 (⅛ res, σ 4.5) → b3 (1/16 res,
+//!      σ 5, the frost), σ in texels of the level read ([`BLUR_SIGMA`])
+//!   4. blit bg to `out`, then in the same render pass the glass quads (the beam
+//!      inside its panel's glass)
 //!
-//! Steps 0-3 are the backdrop: they run only when `BackdropClock::tick` says
-//! so (every frame at `Full`/`HalfRes`), or when the pyramid is new, and step
-//! the time of the frames they skipped.
+//! Steps 0-3 are the backdrop: a living liquid runs them when `BackdropClock::tick`
+//! says so (every frame at `Full`/`HalfRes`), or when the pyramid is new, and steps
+//! the time of the frames they skipped; a still one only when its dye or ripples
+//! changed or the pyramid is new.
 //!
 //! Targets (logical-px based, so they don't grow with DPR):
 //!   vel / pres ping-pong, div, curl   RGBA16Float  sim res 96 on the short side
 //!   dye ping-pong                     RGBA16Float  dye res 256 on the short side
 //!   bg                                RGBA16Float  round(w/2 · scale) × round(h/2 · scale)
-//!   b1, b1t / b2, b2t                 RGBA16Float  ceil(bg/2) / ceil(bg/4)
-//!   out (shown by Slint)              RGBA8Unorm   w·dpr × h·dpr
+//!   b1, b1t / b2, b2t / b3, b3t       RGBA16Float  ceil(bg/2) / ceil(bg/4) / ceil(bg/8)
+//!   out (shown by Slint)              RGBA8Unorm   w·min(dpr, 2) × h·min(dpr, 2)
 //! `out` is Rgba8Unorm (not sRGB) on purpose: WebGL writes shader values
 //! straight to the canvas with no linear→sRGB encode, so a non-sRGB target
 //! reproduces the design's colours exactly.
@@ -39,8 +44,10 @@ use std::time::{Duration, Instant};
 
 use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
-use super::quality::{BackdropClock, Quality};
-use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
+use super::quality::{BackdropClock, MAX_DT, Quality};
+use super::state::{
+    Backdrop, FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms,
+};
 use crate::import::poll_once;
 use crate::{GfxError, GpuContext, bytes};
 
@@ -56,6 +63,18 @@ pub(super) const COMPOSITE_WGSL: &str = include_str!("shaders/composite.wgsl");
 pub(super) const BLUR_WGSL: &str = include_str!("shaders/blur.wgsl");
 pub(super) const BLIT_WGSL: &str = include_str!("shaders/blit.wgsl");
 pub(super) const GLASS_WGSL: &str = include_str!("shaders/glass.wgsl");
+
+/// The blur pyramid's σ per level, in texels of the level each blur reads (scene.ts `frame`,
+/// `blur(this.bg, ..., 3.5)`, `blur(this.b1, ..., 4.5)`, `blur(this.b2, ..., 5.0)`): about 7, 19 and
+/// 44 CSS px in all. Below `Quality::Full` the levels are `scale` as big, so each σ is multiplied
+/// by `scale` to keep the design's blur in CSS px (wubble: map.md W-01).
+pub const BLUR_SIGMA: [f32; 3] = [3.5, 4.5, 5.0];
+/// Each pyramid level's divisor of the composite's size (scene.ts `resize`: `hw / 2`, `/ 4`, `/ 8`).
+pub const PYRAMID_DIV: [u32; 3] = [2, 4, 8];
+/// Px around each glass quad for its shadow and bloom (scene.ts `drawGlass`, `const pad = 70`).
+pub const GLASS_PAD: f64 = 70.0;
+/// The highest device pixel ratio drawn at (scene.ts `resize`, `Math.min(devicePixelRatio, 2)`).
+pub const DPR_MAX: f32 = 2.0;
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -227,6 +246,8 @@ struct Pyramid {
     b1t: Target,
     b2: Target,
     b2t: Target,
+    b3: Target,
+    b3t: Target,
     scale: f32,
     /// Rendered at least once since allocation.
     drawn: bool,
@@ -236,14 +257,15 @@ impl Pyramid {
     fn new(d: &wgpu::Device, w: f32, h: f32, scale: f32) -> Self {
         let hw = ((w / 2.0 * scale).round() as u32).max(1);
         let hh = ((h / 2.0 * scale).round() as u32).max(1);
-        let (q1w, q1h) = (hw.div_ceil(2), hh.div_ceil(2));
-        let (q2w, q2h) = (hw.div_ceil(4), hh.div_ceil(4));
+        let [q1, q2, q3] = PYRAMID_DIV.map(|n| (hw.div_ceil(n), hh.div_ceil(n)));
         Pyramid {
             bg: target(d, hw, hh, HDR, "bg"),
-            b1: target(d, q1w, q1h, HDR, "b1"),
-            b1t: target(d, q1w, q1h, HDR, "b1t"),
-            b2: target(d, q2w, q2h, HDR, "b2"),
-            b2t: target(d, q2w, q2h, HDR, "b2t"),
+            b1: target(d, q1.0, q1.1, HDR, "b1"),
+            b1t: target(d, q1.0, q1.1, HDR, "b1t"),
+            b2: target(d, q2.0, q2.1, HDR, "b2"),
+            b2t: target(d, q2.0, q2.1, HDR, "b2t"),
+            b3: target(d, q3.0, q3.1, HDR, "b3"),
+            b3t: target(d, q3.0, q3.1, HDR, "b3t"),
             scale,
             drawn: false,
         }
@@ -415,6 +437,8 @@ pub struct Renderer {
     profiler: Option<GpuProfiler>,
     /// The GPU time of the latest frame whose timestamps came back, until taken.
     cost: Option<Duration>,
+    /// Backdrops (composite and pyramid) rendered so far: a count for tests and `--measure`.
+    backdrops: u64,
 }
 
 impl Renderer {
@@ -483,7 +507,14 @@ impl Renderer {
             last_frame: None,
             profiler,
             cost: None,
+            backdrops: 0,
         })
+    }
+
+    /// How many backdrops (composite and blur pyramid) have been rendered: a still backdrop
+    /// renders one only when its dye, its ripples or its size changed.
+    pub fn backdrops(&self) -> u64 {
+        self.backdrops
     }
 
     /// Whether frame costs are measured: the device has GPU timestamps.
@@ -542,9 +573,9 @@ impl Renderer {
     }
 
     /// Call from the window's rendering notifier on `BeforeRendering`, before
-    /// Slint draws: sizes the scene to the window, advances it by the time
-    /// since the last call (capped at `max_dt`: `MAX_DT`, or `run::max_dt` of the run
-    /// state) and renders it. wubble change: it no longer asks for the next frame; the host
+    /// Slint draws: sizes the scene to the window (at most [`DPR_MAX`]), advances it by the
+    /// time since the last call (capped at `MAX_DT`) and renders it. `pace` is 1, or 0 to hold
+    /// the scene's clock (`--frozen-backdrop`, the fidelity harness). wubble change: it no longer asks for the next frame; the host
     /// does, by the run state (`run.rs`, [`Renderer::animating`]). Returns the image to show at
     /// the back of the window when the output texture is new (first frame, resize);
     /// `Ok(None)` means the image already set is still the one, as in the design.
@@ -559,16 +590,15 @@ impl Renderer {
         &mut self,
         window: &slint::Window,
         now: Instant,
-        max_dt: f32,
         pace: f32,
     ) -> Result<Option<slint::Image>, GfxError> {
-        let dpr = window.scale_factor();
+        let dpr = window.scale_factor().min(DPR_MAX);
         let size = window.size().to_logical(dpr);
         let dt = self
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        let tex = self.render_paced(size.width, size.height, dpr, dt.min(max_dt), pace);
+        let tex = self.render_paced(size.width, size.height, dpr, dt.min(MAX_DT), pace);
         tex.map(|t| slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string())))
             .transpose()
     }
@@ -580,10 +610,10 @@ impl Renderer {
         self.render_paced(w, h, dpr, dt, 1.0)
     }
 
-    /// [`Renderer::render_under_ui`] with the liquid running at `pace` (0 to 1, `run::pace`) of
-    /// its speed: its clock, its ambient emitters and its fluid step get `dt * pace`, while the
-    /// rest (glass waves, ripples, the palette crossfade, the light) gets the whole `dt`, so a
-    /// tap right after a wake does not play in slow motion.
+    /// [`Renderer::render_under_ui`] with the scene's clock running at `pace` (0 to 1) of its
+    /// speed: its clock, its ambient emitters and its fluid step get `dt * pace`, while the rest
+    /// (glass waves, ripples, the palette crossfade, the light) gets the whole `dt`. The fidelity
+    /// harness holds it at 0.
     pub fn render_paced(
         &mut self,
         w: f32,
@@ -717,14 +747,27 @@ impl Renderer {
             .map(|p| p.begin_query("wubble scene", &mut enc));
         let (vw, vh, t) = (self.scene.w, self.scene.h, self.scene.time);
 
-        if let Some(dt) = self.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn) {
+        let (dye, still) = self.scene.take_still_work();
+        let backdrop = match self.scene.opts.backdrop {
+            Backdrop::Liquid => self.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn),
+            Backdrop::Still => (still || !sz.pyramid.drawn).then_some(0.0),
+        };
+        if let Some(dt) = backdrop {
             let f = &mut sz.fluid;
-            // 0. splats (queued taps first, then emitters and the pointer: the TS order)
-            for op in self.scene.fluid_ops(dt) {
-                self.fluid_op(&mut enc, f, op);
+            if self.scene.opts.backdrop == Backdrop::Liquid {
+                // 0. splats (queued taps first, then emitters and the pointer: the TS order)
+                for op in self.scene.fluid_ops(dt) {
+                    self.fluid_op(&mut enc, f, op);
+                }
+                // 1. the fluid step
+                self.fluid_step(&mut enc, f, dt);
+            } else if dye {
+                // 0. the still dye, afresh in the current palette
+                self.clear(&mut enc, &f.dye.read.view);
+                for op in self.scene.still_ops() {
+                    self.fluid_op(&mut enc, f, op);
+                }
             }
-            // 1. the fluid step
-            self.fluid_step(&mut enc, f, dt);
 
             // 2. composite the backdrop at half resolution
             let mut cu = CompositeU {
@@ -746,19 +789,19 @@ impl Renderer {
             );
             self.run(&mut enc, &self.p.comp, &b, &py.bg.view);
 
-            // 3. blur pyramid for the glass
-            self.blur(&mut enc, &py.bg, &py.b1t, &py.b1, 3.5);
-            self.blur(&mut enc, &py.b1, &py.b2t, &py.b2, 4.5);
+            // 3. blur pyramid for the glass: σ in texels, scaled so its CSS px stay the design's
+            let [s1, s2, s3] = BLUR_SIGMA.map(|s| s * py.scale);
+            self.blur(&mut enc, &py.bg, &py.b1t, &py.b1, s1);
+            self.blur(&mut enc, &py.b1, &py.b2t, &py.b2, s2);
+            self.blur(&mut enc, &py.b2, &py.b3t, &py.b3, s3); // the frost: ≈44 CSS px σ in all
             py.drawn = true;
+            self.backdrops += 1;
         }
 
-        // 4. one pass on the output: backdrop, glass, beam
+        // 4. one pass on the output: backdrop, then the glass (the beam inside its panel's)
         let py = &sz.pyramid;
         let blit = self.bind(&self.p.blit, &[Res::Tex(2, &py.bg.view)]);
-        let surfaces: Vec<GlassSurface> = (self.scene.glass.iter().cloned())
-            .chain(self.scene.beam_surface())
-            .filter(|s| s.alpha > 0.001 && s.w >= 1.0 && s.h >= 1.0)
-            .collect();
+        let surfaces = self.scene.surfaces();
         let mut glass = Vec::with_capacity(surfaces.len());
         for s in &surfaces {
             let gu = self.glass_u(s);
@@ -767,8 +810,8 @@ impl Renderer {
                 &self.p.glass,
                 &[
                     Res::U(u.0, u.1),
-                    Res::Tex(3, &py.b1.view),
-                    Res::Tex(4, &py.b2.view),
+                    Res::Tex(3, &py.b2.view),
+                    Res::Tex(4, &py.b3.view),
                 ],
             ));
         }
@@ -831,7 +874,7 @@ impl Renderer {
     /// page's: its fields stay zero. Under `Quality::Flat` full glass is sent
     /// as `uMaterial` 2, the flat fill (the one change to glass.wgsl).
     fn glass_u(&self, s: &GlassSurface) -> GlassU {
-        let pad = 70.0;
+        let pad = GLASS_PAD;
         let (u_wave, u_wave_n) = wave_uniforms(&s.waves);
         GlassU {
             u_quad: [
@@ -884,10 +927,55 @@ impl Renderer {
         }
     }
 
+    /// Clears a target to transparent black (a still dye before its splats).
+    fn clear(&self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView) {
+        enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: out,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+
+    /// The dye half of `Fluid.splat`: `value` added to the dye around (x, y).
+    fn dye_splat(&mut self, enc: &mut wgpu::CommandEncoder, f: &mut FluidTargets, u: FluidU) {
+        let s = self.arena.push(&u);
+        let b = self.bind(
+            &self.p.splat,
+            &[Res::U(s.0, s.1), Res::Tex(3, &f.dye.read.view)],
+        );
+        self.run(enc, &self.p.splat, &b, &f.dye.write.view);
+        f.dye.swap();
+    }
+
     // @source slint-render-fluid-ops
-    /// `Fluid.splat` and `Fluid.ripple`.
+    /// `Fluid.splat` and `Fluid.ripple`; wubble: `FluidOp::Dye`, a splat of dye only.
     fn fluid_op(&mut self, enc: &mut wgpu::CommandEncoder, f: &mut FluidTargets, op: FluidOp) {
         match op {
+            FluidOp::Dye {
+                x,
+                y,
+                color,
+                radius,
+            } => {
+                let u = FluidU {
+                    u_point: [x, y],
+                    u_radius: radius,
+                    u_value: color,
+                    ..self.fluid_u(f)
+                };
+                self.dye_splat(enc, f, u);
+            }
             FluidOp::Splat {
                 x,
                 y,
@@ -912,13 +1000,7 @@ impl Renderer {
                 f.vel.swap();
                 if let Some(c) = color {
                     u.u_value = c;
-                    let s = self.arena.push(&u);
-                    let b = self.bind(
-                        &self.p.splat,
-                        &[Res::U(s.0, s.1), Res::Tex(3, &f.dye.read.view)],
-                    );
-                    self.run(enc, &self.p.splat, &b, &f.dye.write.view);
-                    f.dye.swap();
+                    self.dye_splat(enc, f, u);
                 }
             }
             FluidOp::Ripple {
@@ -1187,6 +1269,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_glass_reads_the_two_deepest_levels_where_the_frame_binds_them() {
+        let m = validated(GLASS_WGSL);
+        let binding = |name: &str| {
+            m.global_variables
+                .iter()
+                .find(|(_, v)| v.name.as_deref() == Some(name))
+                .and_then(|(_, v)| v.binding.as_ref())
+                .map(|b| b.binding)
+        };
+        // `frame` binds b2 at 3 and b3 at 4
+        assert_eq!((binding("uB2"), binding("uB3")), (Some(3), Some(4)));
     }
 
     #[test]

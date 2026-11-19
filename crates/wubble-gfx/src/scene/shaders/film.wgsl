@@ -1,3 +1,4 @@
+// translates: core/gl/glsl.ts:12-55
 // Shared WGSL chunks, translated line for line from core/gl/glsl.ts (FILM, NOISE, SDF).
 // WGSL has no #include: render.rs prepends common.wgsl, this file, wave.wgsl and beam.wgsl
 // to each shader source with `concat!(include_str!(..))`.
