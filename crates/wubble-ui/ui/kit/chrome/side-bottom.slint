@@ -1,0 +1,106 @@
+// design: browser/chrome.tsx:294-300, browser/browser.css:85-89 @598f814
+// The sidebar's footer (`.wb-side-bottom`): the Space switcher, then the icon buttons pushed to
+// the far end (`.wb-spaces + .wb-ib { margin-left: auto }`), each `.wb-ib` 36 x 36, radius 12,
+// side by side; on the rail a column 10 apart (`.wb-side-bottom-rail`). The design's buttons are
+// Source and Settings: wubble's Source is the page's developer tools, and wubble adds its
+// downloads list first while there are downloads (derived: notes/fidelity/derived-review.md).
+// Developer tools give way when the row has no room for all three (F12 still opens them).
+
+import { BrowserCss } from "../gen/css.slint";
+import { IconButton } from "../controls/icon-button.slint";
+import { Glyph } from "../controls/icon.slint";
+import { SpaceSwitcher } from "space-switcher.slint";
+import { SpaceItem } from "../../components/model.slint";
+
+export component SideBottom inherits Rectangle {
+    in property <[SpaceItem]> spaces;
+    in property <int> active: -1;
+    in property <bool> vertical: false;
+    in property <length> capsule-offset: 0px;
+    in property <float> capsule-stretch: 1;
+    in property <float> capsule-origin: 0.3;
+    in property <bool> has-downloads: false;
+    callback space-picked(int);
+    callback downloads-requested();
+    callback dev-tools-requested();
+    callback settings-requested();
+
+    property <length> ib: BrowserCss.wb-side-bottom-gt-wb-ib--width;
+    property <length> gap: BrowserCss.wb-side-bottom-rail--gap;
+    property <bool> tools: root.vertical || !root.has-downloads || root.width >= strip.span + 3 * root.ib;
+    property <int> buttons: (root.has-downloads ? 1 : 0) + (root.tools ? 1 : 0) + 1;
+    // the buttons' places, in order: the row from the far end, the column under the Spaces
+    function place(k: int) -> length {
+        return root.vertical ? strip.span + root.gap + k * (root.ib + root.gap) : root.width - (root.buttons - k) * root.ib;
+    }
+    // where the parts fall, in window px (the alignment the tests pin, the drop targets, the
+    // downloads popover's anchor)
+    out property <length> spaces-x: strip.absolute-position.x;
+    out property <length> spaces-y: strip.absolute-position.y;
+    out property <length> spaces-w: strip.width;
+    out property <length> pitch: strip.pitch;
+    out property <length> downloads-x: downloads.absolute-position.x;
+    out property <length> downloads-y: downloads.absolute-position.y;
+    out property <length> downloads-w: downloads.width;
+    out property <length> settings-x: settings.absolute-position.x;
+    out property <length> settings-w: settings.width;
+    height: root.vertical ? strip.span + root.buttons * (root.ib + root.gap) : BrowserCss.wb-space--height;
+
+    strip := SpaceSwitcher {
+        x: root.vertical ? (root.width - self.width) / 2 : 0px;
+        y: 0px;
+        spaces: root.spaces;
+        active: root.active;
+        vertical: root.vertical;
+        offset: root.capsule-offset;
+        stretch: root.capsule-stretch;
+        origin: root.capsule-origin;
+        picked(id) => {
+            root.space-picked(id);
+        }
+    }
+    // wubble: the downloads list (the design has no downloads), first of the buttons
+    downloads := IconButton {
+        visible: root.has-downloads;
+        width: root.ib;
+        height: BrowserCss.wb-side-bottom-gt-wb-ib--height;
+        border-radius: BrowserCss.wb-side-bottom-gt-wb-ib--border-radius;
+        x: root.vertical ? (root.width - self.width) / 2 : root.place(0);
+        y: root.vertical ? root.place(0) : 0px;
+        icon-path: Glyph.download;
+        tip-action: "open-downloads";
+        label: "Downloads";
+        clicked => {
+            root.downloads-requested();
+        }
+    }
+    // the design's Source button (`code`): wubble's is the page's developer tools
+    dev-tools := IconButton {
+        visible: root.tools;
+        width: root.ib;
+        height: BrowserCss.wb-side-bottom-gt-wb-ib--height;
+        border-radius: BrowserCss.wb-side-bottom-gt-wb-ib--border-radius;
+        x: root.vertical ? (root.width - self.width) / 2 : root.place(root.buttons - 2);
+        y: root.vertical ? root.place(root.buttons - 2) : 0px;
+        icon-path: Glyph.code;
+        tip-action: "dev-tools";
+        label: "Developer tools";
+        clicked => {
+            root.dev-tools-requested();
+        }
+    }
+    // Settings, always at the far end
+    settings := IconButton {
+        width: root.ib;
+        height: BrowserCss.wb-side-bottom-gt-wb-ib--height;
+        border-radius: BrowserCss.wb-side-bottom-gt-wb-ib--border-radius;
+        x: root.vertical ? (root.width - self.width) / 2 : root.place(root.buttons - 1);
+        y: root.vertical ? root.place(root.buttons - 1) : 0px;
+        icon-path: Glyph.settings;
+        tip-action: "open-settings";
+        label: "Settings";
+        clicked => {
+            root.settings-requested();
+        }
+    }
+}

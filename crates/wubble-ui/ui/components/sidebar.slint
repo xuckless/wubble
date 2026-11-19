@@ -22,7 +22,8 @@ import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "../kit/chrome/address-pill.slint";
 import { Favs } from "../kit/chrome/favs.slint";
-import { SpaceSwitcher, SpaceName } from "../kit/chrome/space-switcher.slint";
+import { SpaceName } from "../kit/chrome/space-switcher.slint";
+import { SideBottom } from "../kit/chrome/side-bottom.slint";
 import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
@@ -139,13 +140,13 @@ export component Sidebar inherits Rectangle {
         rows-end: rows.absolute-position.x + rows.width,
         new-tab: new-tab.absolute-position.x,
         new-tab-end: new-tab.absolute-position.x + new-tab.width,
-        spaces: strip.absolute-position.x,
-        spaces-end: strip.absolute-position.x + strip.width,
-        downloads: downloads.absolute-position.x,
-        downloads-end: downloads.absolute-position.x + downloads.width,
-        downloads-y: downloads.absolute-position.y,
-        settings: settings.absolute-position.x,
-        settings-end: settings.absolute-position.x + settings.width,
+        spaces: switcher.spaces-x,
+        spaces-end: switcher.spaces-x + switcher.spaces-w,
+        downloads: switcher.downloads-x,
+        downloads-end: switcher.downloads-x + switcher.downloads-w,
+        downloads-y: switcher.downloads-y,
+        settings: switcher.settings-x,
+        settings-end: switcher.settings-x + switcher.settings-w,
     };
     out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
@@ -157,7 +158,7 @@ export component Sidebar inherits Rectangle {
     callback settings-requested();
     // Right of the download button, level with its top, in window coordinates: the popover opens
     // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
-    out property <Origin> downloads-anchor: { x: downloads.absolute-position.x + downloads.width + Shell.prompt-gap, y: downloads.absolute-position.y };
+    out property <Origin> downloads-anchor: { x: switcher.downloads-x + switcher.downloads-w + Shell.prompt-gap, y: switcher.downloads-y };
     // the tab list's scroller
     in property <length> scroll-y;
     in property <length> thumb-top;
@@ -176,9 +177,9 @@ export component Sidebar inherits Rectangle {
     callback tab-track(int, int, length, length);
     // The Space strip's first icon in window px, the step to the next and whether they run
     // down (rail) instead of across: where a dragged tab can be dropped onto a Space.
-    out property <length> space-strip-x: strip.absolute-position.x;
-    out property <length> space-strip-y: strip.absolute-position.y;
-    out property <length> space-pitch: Shell.space-tile + Shell.space-gap;
+    out property <length> space-strip-x: switcher.spaces-x;
+    out property <length> space-strip-y: switcher.spaces-y;
+    out property <length> space-pitch: switcher.pitch;
     out property <length> space-tile: Shell.space-tile;
     callback tab-drag(length);
     callback tab-release(int);
@@ -538,79 +539,26 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // .wb-side-bottom: the Space switcher (.wb-spaces): the drawn icons, in a row, or a column
-        // on the rail, with the capsule that follows the active one and stretches between them;
-        // and at the far end the secondary action (the design's Source button, wubble's the
-        // downloads button), under the column on the rail (.wb-side-bottom-rail)
-        switcher := Rectangle {
-            property <length> pitch: Shell.space-tile + Shell.space-gap;
-            property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            // the buttons at the end of the row, in order (chrome.tsx @ 21838b8: Source, then
-            // Settings, side by side; .wb-side-bottom-rail stacks them 10 apart under the Spaces)
-            // dev tools gives way when the row has no room for all three (downloads shown on a
-            // narrow sidebar); F12 still opens them
-            property <bool> tools: root.compact || !root.has-downloads || self.width >= self.span + 3 * Shell.side-bottom-button;
-            property <int> buttons: (root.has-downloads ? 1 : 0) + (self.tools ? 1 : 0) + 1;
-            property <length> rail-pitch: Shell.side-bottom-button + Shell.side-bottom-gap-rail;
-            height: root.compact ? self.span + self.buttons * self.rail-pitch : Shell.space-tile;
-
-            // wubble: the downloads list (the design has no downloads), first of the buttons
-            downloads := IconButton {
-                visible: root.has-downloads;
-                width: Shell.side-bottom-button;
-                height: Shell.side-bottom-button;
-                border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - parent.buttons * self.width;
-                y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
-                icon-path: Glyph.download;
-                tip-action: "open-downloads";
-                label: "Downloads";
-                clicked => {
-                    root.downloads-requested();
-                }
+        // .wb-side-bottom: the Space switcher and the buttons at the far end (kit SideBottom)
+        switcher := SideBottom {
+            spaces: root.spaces;
+            active: root.space-index;
+            vertical: root.compact;
+            capsule-offset: root.capsule-offset;
+            capsule-stretch: root.capsule-stretch;
+            capsule-origin: root.capsule-origin;
+            has-downloads: root.has-downloads;
+            space-picked(id) => {
+                root.space-switched(id);
             }
-            // the design's Source button (`code`): wubble's is the page's dev tools
-            dev-tools := IconButton {
-                visible: parent.tools;
-                width: Shell.side-bottom-button;
-                height: Shell.side-bottom-button;
-                border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - 2 * self.width;
-                y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
-                icon-path: Glyph.code;
-                tip-action: "dev-tools";
-                label: "Developer tools";
-                clicked => {
-                    root.action("dev-tools");
-                }
+            downloads-requested => {
+                root.downloads-requested();
             }
-            // the settings entry, always at the far end
-            settings := IconButton {
-                width: Shell.side-bottom-button;
-                height: Shell.side-bottom-button;
-                border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
-                y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
-                icon-path: Glyph.settings;
-                tip-action: "open-settings";
-                label: "Settings";
-                clicked => {
-                    root.settings-requested();
-                }
+            dev-tools-requested => {
+                root.action("dev-tools");
             }
-
-            strip := SpaceSwitcher {
-                x: root.compact ? (parent.width - self.width) / 2 : 0px;
-                y: 0px;
-                spaces: root.spaces;
-                active: root.space-index;
-                vertical: root.compact;
-                offset: root.capsule-offset;
-                stretch: root.capsule-stretch;
-                origin: root.capsule-origin;
-                picked(id) => {
-                    root.space-switched(id);
-                }
+            settings-requested => {
+                root.settings-requested();
             }
         }
     }
