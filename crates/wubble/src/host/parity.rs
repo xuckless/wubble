@@ -13,7 +13,7 @@ use wubble_engine::input::{KeyInput, Point};
 use wubble_ui::{AppWindow, CommandBarState};
 
 use super::Host;
-use crate::clipboard::Buffer;
+use crate::clipboard::{Bridge as _, Buffer};
 use crate::menu::{Command as MenuCommand, Menu};
 use crate::parity::{self, Action, Button, HostCheck, HostOp, Input, Mods, Parity, Step};
 use crate::with_host;
@@ -323,7 +323,10 @@ impl Host {
         match step {
             Step::Click(b, mods, p) => {
                 let p = at(p);
-                self.parity_pointer(mods, vec![moved(p), press(p, b), release(p, b)]);
+                self.parity_pointer(
+                    mods.for_click(wubble_core::keys::Platform::current()),
+                    vec![moved(p), press(p, b), release(p, b)],
+                );
             }
             Step::Clicks(n, p) => {
                 let p = at(p);

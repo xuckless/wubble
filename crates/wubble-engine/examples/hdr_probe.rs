@@ -81,12 +81,6 @@ fn run(dir: &Path) -> Result<(), String> {
     std::fs::write(dir.join("pq-hdr-8bit.mp4"), VIDEO_8BIT).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("sdr.mp4"), SDR_VIDEO).map_err(|e| e.to_string())?;
 
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe_dir = exe
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("no exe dir")?
-        .to_path_buf();
     let gpu = GpuContext::new().map_err(|e| format!("no GPU device: {e}"))?;
     println!("hdr probe: gpu {}", gpu.describe());
     println!(
@@ -94,17 +88,9 @@ fn run(dir: &Path) -> Result<(), String> {
         std::env::var("WUBBLE_PROBE_SWITCHES").ok()
     );
     let mut presenter = gpu.presenter();
-    let mut engine = Engine::start(EngineConfig {
-        exe_dir,
-        cache_dir: dir.join("cache"),
-        pump_scheduler: None,
-        content_filter: None,
-        response_observer: None,
-        features: Default::default(),
-        clipboard_bridge: false,
-        profile: wubble_engine::app::ProfileKind::Throwaway,
-    })
-    .map_err(|e| e.to_string())?;
+    let mut engine =
+        Engine::start(EngineConfig::for_example(dir.join("cache")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     let id = engine
         .open_view(ViewConfig {
             url: format!("file://{}", page.display()),

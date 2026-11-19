@@ -19,6 +19,12 @@ serde_json.workspace = true
 # uses). Default features: without a backend winit refuses to build alone.
 winit = "0.30"
 
+# The CEF-aware `NSApplication` subclass (`mac_app.rs`); both already in Cargo.lock through cef
+# (MIT OR Apache-2.0 OR Zlib).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.3"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSEvent"] }
+
 [dev-dependencies]
 # Seals the test segment the writer decrypts (wubble-core's own AES-128 crates).
 aes = "0.9.4"

@@ -52,30 +52,12 @@ fn run(dir: &Path) -> Result<(), String> {
     let page = dir.join("smoke.html");
     std::fs::write(&page, PAGE).map_err(|e| e.to_string())?;
 
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    // macOS: wubble.app/Contents/MacOS, as the bundled wubble.
-    // Elsewhere: target/<profile>/examples/frame_smoke -> target/<profile>.
-    let exe_dir = if cfg!(target_os = "macos") {
-        exe.parent()
-    } else {
-        exe.parent().and_then(Path::parent)
-    }
-    .ok_or("no exe dir")?
-    .to_path_buf();
     let gpu = GpuContext::new().map_err(|e| format!("no GPU device: {e}"))?;
     println!("frame smoke: gpu {}", gpu.describe());
     let mut presenter = gpu.presenter();
-    let mut engine = Engine::start(EngineConfig {
-        exe_dir,
-        cache_dir: dir.join("cache"),
-        pump_scheduler: None,
-        content_filter: None,
-        clipboard_bridge: false,
-        response_observer: None,
-        features: Default::default(),
-        profile: wubble_engine::app::ProfileKind::Throwaway,
-    })
-    .map_err(|e| e.to_string())?;
+    let mut engine =
+        Engine::start(EngineConfig::for_example(dir.join("cache")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     let id = engine
         .open_view(ViewConfig {
             url: format!("file://{}", page.display()),

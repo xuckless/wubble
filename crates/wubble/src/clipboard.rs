@@ -7,18 +7,9 @@
 //! `PageEvent::Clipboard`). The window has both. smithay-clipboard (MIT) is the
 //! crate Slint's winit backend uses for the same job; it carries text only.
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the
-//! bridge is off; the shell's own copies then go through Slint.
-
-#[cfg(target_os = "linux")]
-use slint::winit_030::WinitWindowAccessor;
-#[cfg(target_os = "linux")]
-use slint::winit_030::winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-
-#[cfg(target_os = "linux")]
-type Wayland = smithay_clipboard::Clipboard;
-/// No Wayland clipboard off Linux.
-#[cfg(not(target_os = "linux"))]
-enum Wayland {}
+//! bridge is off for the pages; on X11 the shell's own copies go through Slint,
+//! on macOS and Windows through arboard (the same system clipboard, which the
+//! parity smoke also reads back).
 
 /// Which clipboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,63 +25,131 @@ pub fn bridge_needed(wayland_display: Option<&std::ffi::OsStr>) -> bool {
     cfg!(target_os = "linux") && wayland_display.is_some_and(|d| !d.is_empty())
 }
 
-#[derive(Default)]
-pub struct Clipboard {
-    /// Opened on first use: the window's Wayland connection exists by then.
-    wayland: Option<Wayland>,
-}
+/// The host side of the pages' clipboard. One impl per OS, chosen by cfg into [`Clipboard`].
+pub trait Bridge: Default {
+    /// Opens the clipboard now, before the window takes keyboard focus: the compositor
+    /// offers the selection to a client when focus enters, so a clipboard opened later has
+    /// nothing to paste until the selection changes.
+    fn open(&mut self, window: &slint::Window);
 
-impl Clipboard {
-    #[cfg(not(target_os = "linux"))]
-    fn wayland(&mut self, _window: &slint::Window) -> Option<&Wayland> {
-        None
-    }
-
-    #[cfg(target_os = "linux")]
-    fn wayland(&mut self, window: &slint::Window) -> Option<&Wayland> {
-        if self.wayland.is_none() {
-            let display = window
-                .with_winit_window(|w| match w.display_handle().map(|h| h.as_raw()) {
-                    Ok(RawDisplayHandle::Wayland(h)) => Some(h.display.as_ptr()),
-                    _ => None,
-                })
-                .flatten()?;
-            // Safety: the display is winit's live `wl_display`, which outlives
-            // the window and so this clipboard (the host drops it first).
-            self.wayland = Some(unsafe { smithay_clipboard::Clipboard::new(display) });
-        }
-        self.wayland.as_ref()
-    }
-
-    /// Opens the Wayland clipboard now, before the window takes keyboard focus: the
-    /// compositor offers the selection to a client when focus enters, so a clipboard
-    /// opened later has nothing to paste until the selection changes.
-    pub fn open(&mut self, window: &slint::Window) {
-        self.wayland(window);
-    }
-
-    /// Puts `text` on `buffer`; false when the window is not a Wayland one.
-    pub fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool {
-        let Some(clipboard) = self.wayland(window) else {
-            return false;
-        };
-        #[cfg(not(target_os = "linux"))]
-        let _ = (clipboard, buffer, text);
-        #[cfg(target_os = "linux")]
-        match buffer {
-            Buffer::Clipboard => clipboard.store(text),
-            Buffer::Primary => clipboard.store_primary(text),
-        }
-        true
-    }
+    /// Puts `text` on `buffer`; false when this window has no host clipboard, and the
+    /// caller copies through Slint instead.
+    fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool;
 
     /// The text on `buffer`, if any.
-    pub fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
-        let clipboard = self.wayland(window)?;
-        #[cfg(not(target_os = "linux"))]
-        return match *clipboard {};
-        #[cfg(target_os = "linux")]
-        {
+    fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String>;
+}
+
+#[cfg(target_os = "linux")]
+pub type Clipboard = wayland::Wayland;
+#[cfg(not(target_os = "linux"))]
+pub type Clipboard = Arboard;
+
+/// macOS and Windows: the system clipboard through arboard (MIT OR Apache-2.0). Chromium's own
+/// clipboard serves the pages there, so this carries only the shell's own copies and the parity
+/// smoke's reads. They have no primary selection.
+#[cfg(not(target_os = "linux"))]
+#[derive(Default)]
+pub struct Arboard {
+    /// Opened on first use.
+    clipboard: Option<arboard::Clipboard>,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Arboard {
+    fn get(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new()
+                .inspect_err(|e| eprintln!("wubble: no system clipboard: {e}"))
+                .ok();
+        }
+        self.clipboard.as_mut()
+    }
+
+    fn store_text(&mut self, buffer: Buffer, text: &str) -> bool {
+        match (buffer, self.get()) {
+            (Buffer::Clipboard, Some(clipboard)) => clipboard
+                .set_text(text)
+                .inspect_err(|e| eprintln!("wubble: clipboard: {e}"))
+                .is_ok(),
+            _ => false,
+        }
+    }
+
+    fn load_text(&mut self, buffer: Buffer) -> Option<String> {
+        match (buffer, self.get()) {
+            (Buffer::Clipboard, Some(clipboard)) => clipboard
+                .get_text()
+                .inspect_err(|e| log::debug!("clipboard: nothing to paste: {e}"))
+                .ok(),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Bridge for Arboard {
+    fn open(&mut self, _window: &slint::Window) {
+        self.get();
+    }
+
+    fn store(&mut self, _window: &slint::Window, buffer: Buffer, text: &str) -> bool {
+        self.store_text(buffer, text)
+    }
+
+    fn load(&mut self, _window: &slint::Window, buffer: Buffer) -> Option<String> {
+        self.load_text(buffer)
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod wayland {
+    use super::{Bridge, Buffer};
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+
+    /// The window's Wayland clipboard; none under X11, where Chromium's own works.
+    #[derive(Default)]
+    pub struct Wayland {
+        /// Opened on first use: the window's Wayland connection exists by then.
+        clipboard: Option<smithay_clipboard::Clipboard>,
+    }
+
+    impl Wayland {
+        fn get(&mut self, window: &slint::Window) -> Option<&smithay_clipboard::Clipboard> {
+            if self.clipboard.is_none() {
+                let display = window
+                    .with_winit_window(|w| match w.display_handle().map(|h| h.as_raw()) {
+                        Ok(RawDisplayHandle::Wayland(h)) => Some(h.display.as_ptr()),
+                        _ => None,
+                    })
+                    .flatten()?;
+                // Safety: the display is winit's live `wl_display`, which outlives
+                // the window and so this clipboard (the host drops it first).
+                self.clipboard = Some(unsafe { smithay_clipboard::Clipboard::new(display) });
+            }
+            self.clipboard.as_ref()
+        }
+    }
+
+    impl Bridge for Wayland {
+        fn open(&mut self, window: &slint::Window) {
+            self.get(window);
+        }
+
+        fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool {
+            let Some(clipboard) = self.get(window) else {
+                return false;
+            };
+            match buffer {
+                Buffer::Clipboard => clipboard.store(text),
+                Buffer::Primary => clipboard.store_primary(text),
+            }
+            true
+        }
+
+        fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
+            let clipboard = self.get(window)?;
             let text = match buffer {
                 Buffer::Clipboard => clipboard.load(),
                 Buffer::Primary => clipboard.load_primary(),
@@ -114,5 +173,28 @@ mod tests {
         );
         assert!(!bridge_needed(Some(OsStr::new(""))));
         assert!(!bridge_needed(None));
+    }
+
+    /// There is no primary selection here: storing to it fails and loading from it is empty,
+    /// without touching the system clipboard.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn arboard_has_no_primary_selection() {
+        let mut bridge = Arboard::default();
+        assert!(!bridge.store_text(Buffer::Primary, "wubble clipboard test"));
+        assert_eq!(bridge.load_text(Buffer::Primary), None);
+    }
+
+    /// What is stored is what loads back. Overwrites the system clipboard and races any other
+    /// app writing to it, so it runs by hand only (`cargo test -- --ignored`); the parity smoke
+    /// covers the round trip.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    #[ignore = "overwrites the system clipboard"]
+    fn arboard_stores_and_loads_text() {
+        let mut bridge = Arboard::default();
+        let text = "wubble clipboard test";
+        assert!(bridge.store_text(Buffer::Clipboard, text));
+        assert_eq!(bridge.load_text(Buffer::Clipboard).as_deref(), Some(text));
     }
 }

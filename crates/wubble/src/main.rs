@@ -43,6 +43,7 @@ mod suggest_fx;
 mod surface;
 mod tabs_smoke;
 mod ui_loop;
+mod verdict;
 mod video_smoke;
 mod windows_smoke;
 
@@ -63,6 +64,7 @@ use slint::ComponentHandle;
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use split_smoke::SplitSmoke;
 use tabs_smoke::TabsSmoke;
+use verdict::Verdict;
 use wubble_core::seam::Seam;
 use wubble_engine::app::{self, Engine, EngineConfig, EngineError, ProfileKind, PumpScheduler};
 use wubble_engine::input::Point;
@@ -124,6 +126,8 @@ use wubble_core::model::Command as Cmd;
 use wubble_core::window::{WindowId, WindowKind};
 
 fn main() -> ExitCode {
+    // Before anything touches the OS's application object (winit, CEF).
+    app::prepare_process();
     let command = match cli::parse_with_shot(std::env::args_os()) {
         Ok((command, shot)) => {
             shot::request(shot);
@@ -137,11 +141,8 @@ fn main() -> ExitCode {
             profile,
             downloads,
         } => match browse(url, profile, downloads) {
-            Ok(Outcome { failure: None, .. }) => ExitCode::SUCCESS,
-            Ok(Outcome {
-                failure: Some(e), ..
-            })
-            | Err(e) => {
+            Ok(code) => code,
+            Err(e) => {
                 eprintln!("wubble: {e}");
                 ExitCode::FAILURE
             }
@@ -166,310 +167,6 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Command::Smoke(Smoke::Nav) => {
-            match with_smoke_dir(|config, dir| run(Mode::Nav, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    nav_title: Some(title),
-                    ..
-                }) => {
-                    println!("smoke: nav ok {title}");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: nav FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: nav FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Tabs) => {
-            match with_smoke_dir(|config, dir| run(Mode::Tabs, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    tabs_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: tabs ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: tabs FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: tabs FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Windows) => {
-            match with_smoke_dir(|config, dir| run(Mode::Windows, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    windows_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: windows ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: windows FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: windows FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Split) => {
-            match with_smoke_dir(|config, dir| run(Mode::Split, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    split_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: split ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: split FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: split FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Page) => {
-            match with_smoke_dir(|config, dir| run(Mode::Page, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    page_zoom: Some(zoom),
-                    ..
-                }) => {
-                    println!("smoke: page ok zoom={zoom}%");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: page FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: page FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Parity) => {
-            match with_smoke_dir(|config, dir| run(Mode::Parity, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    parity_passed: Some(gaps),
-                    ..
-                }) => {
-                    println!("smoke: parity ok; known gaps: {}", gaps.join(", "));
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: parity FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: parity FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Block) => {
-            match with_smoke_dir(|config, dir| run(Mode::Block, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    blocked_seen: Some(blocked),
-                    ..
-                }) => {
-                    println!("smoke: block ok");
-                    log::debug!("block smoke counted {blocked}");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: block FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: block FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Settings) => {
-            match with_smoke_dir(|config, dir| run(Mode::Settings, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    settings_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: settings ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: settings FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: settings FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Pages) => {
-            match with_smoke_dir(|config, dir| run(Mode::Pages, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    pages_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: pages ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: pages FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: pages FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Autofill) => {
-            match with_smoke_dir(|config, dir| run(Mode::Autofill, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    autofill_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: autofill ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: autofill FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: autofill FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Media) => {
-            match with_smoke_dir(|config, dir| run(Mode::Media, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    media_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: media ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: media FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: media FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(Smoke::Builtins) => {
-            match with_smoke_dir(|config, dir| run(Mode::Builtins, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    builtins_passed: Some(what),
-                    ..
-                }) => {
-                    println!("smoke: builtins ok ({what})");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: builtins FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: builtins FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Command::Smoke(smoke @ (Smoke::Video | Smoke::Boost)) => {
-            let (mode, name) = match smoke {
-                Smoke::Video => (Mode::Video, "video"),
-                _ => (Mode::Boost, "boost"),
-            };
-            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    video_passed: Some(_),
-                    ..
-                }) => {
-                    println!("smoke: {name} ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: {name} FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: {name} FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
-        }
         Command::Smoke(Smoke::Session) => match smoke_session() {
             Ok(()) => {
                 println!("smoke: session ok");
@@ -481,28 +178,7 @@ fn main() -> ExitCode {
             }
         },
         Command::Smoke(Smoke::SessionPhase { phase, profile }) => {
-            let outcome = with_smoke_dir(|config, _| run(Mode::Session(phase), config, &profile));
-            match outcome {
-                Ok(Outcome {
-                    failure: None,
-                    session_passed: true,
-                    ..
-                }) => {
-                    println!("smoke: session phase {phase:?} ok");
-                    ExitCode::SUCCESS
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("smoke: session phase {phase:?} FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("smoke: session phase {phase:?} FAILED: the window closed first");
-                    ExitCode::FAILURE
-                }
-            }
+            with_smoke_dir(|config, _| report_run(Mode::Session(phase), config, &profile))
         }
         Command::Measure(m) if m.scenario == measure::Scenario::Blocker => {
             println!("{}", blocking::measure());
@@ -515,58 +191,34 @@ fn main() -> ExitCode {
                 begin_frames: m.begin_frames,
                 out: m.out,
             };
-            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
-                Ok(Outcome {
-                    failure: None,
-                    measured: Some(Ok(())),
-                    ..
-                }) => ExitCode::SUCCESS,
-                Ok(Outcome {
-                    failure: None,
-                    measured: Some(Err(e)),
-                    ..
-                }) => {
-                    eprintln!("measure: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome {
-                    failure: Some(e), ..
-                })
-                | Err(e) => {
-                    eprintln!("measure: FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-                Ok(Outcome { .. }) => {
-                    eprintln!("measure: FAILED: nothing was recorded");
-                    ExitCode::FAILURE
-                }
-            }
+            with_smoke_dir(|config, dir| report_run(mode, config, dir))
         }
-        Command::Smoke(Smoke::Frames { frames, url }) => {
-            let mode = Mode::Frames {
-                frames: frames.get().into(),
-                url,
+        Command::Smoke(smoke) => {
+            let mode = match smoke {
+                Smoke::Frames { frames, url } => Mode::Frames {
+                    frames: frames.get().into(),
+                    url,
+                },
+                Smoke::Nav => Mode::Nav,
+                Smoke::Tabs => Mode::Tabs,
+                Smoke::Windows => Mode::Windows,
+                Smoke::Split => Mode::Split,
+                Smoke::Page => Mode::Page,
+                Smoke::Parity => Mode::Parity,
+                Smoke::Block => Mode::Block,
+                Smoke::Settings => Mode::Settings,
+                Smoke::Pages => Mode::Pages,
+                Smoke::Autofill => Mode::Autofill,
+                Smoke::Media => Mode::Media,
+                Smoke::Builtins => Mode::Builtins,
+                Smoke::Video => Mode::Video,
+                Smoke::Boost => Mode::Boost,
+                // handled above
+                Smoke::Boot | Smoke::Quit | Smoke::Session | Smoke::SessionPhase { .. } => {
+                    unreachable!("{smoke:?} has its own arm")
+                }
             };
-            match with_smoke_dir(|config, dir| run(mode, config, dir)) {
-                Ok(Outcome { stats, failure, .. }) => {
-                    println!("{}", stats.summary_line());
-                    match failure {
-                        None if stats.is_success() => ExitCode::SUCCESS,
-                        None => {
-                            eprintln!("smoke: frames FAILED: no zero-copy frames");
-                            ExitCode::FAILURE
-                        }
-                        Some(e) => {
-                            eprintln!("smoke: frames FAILED: {e}");
-                            ExitCode::FAILURE
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("smoke: frames FAILED: {e}");
-                    ExitCode::FAILURE
-                }
-            }
+            with_smoke_dir(|config, dir| report_run(mode, config, dir))
         }
     }
 }
@@ -648,7 +300,7 @@ fn browse(
     url: Option<String>,
     profile: Option<PathBuf>,
     downloads: Option<PathBuf>,
-) -> Result<Outcome, Box<dyn std::error::Error>> {
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
     // One browser per profile, decided before anything opens the store or starts CEF.
     std::fs::create_dir_all(&profile.dir)?;
@@ -657,7 +309,7 @@ fn browse(
         .clone()
         .map_or(instance::Message::Focus, instance::Message::Open);
     let listener = match instance::claim(&socket, &message) {
-        Ok(instance::Claim::Forwarded) => return Ok(Outcome::default()),
+        Ok(instance::Claim::Forwarded) => return Ok(ExitCode::SUCCESS),
         Ok(instance::Claim::Primary(listener)) => Some(listener),
         Err(e) => {
             eprintln!("wubble: running without the single-instance socket: {e}");
@@ -674,16 +326,14 @@ fn browse(
         downloads,
         listener,
     };
-    run(mode, config, &profile.dir)
+    Ok(report_run(mode, config, &profile.dir))
 }
 
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
 /// cache inside it, so concurrent smokes (lanes, CI jobs, a smoke next to an
 /// open browser) never share CEF's singleton lock, and it doubles as the
 /// smoke's throwaway profile.
-fn with_smoke_dir<T>(
-    f: impl FnOnce(Result<EngineConfig, EngineError>, &Path) -> Result<T, Box<dyn std::error::Error>>,
-) -> Result<T, Box<dyn std::error::Error>> {
+fn with_smoke_dir<T>(f: impl FnOnce(Result<EngineConfig, EngineError>, &Path) -> T) -> T {
     let dir = std::env::temp_dir().join(format!("wubble-smoke-{}", std::process::id()));
     let profile = Profile { dir: dir.clone() };
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
@@ -1331,12 +981,26 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_boost_act(move |name| with_host_in(win, |host| host.boost_act(&name)));
 }
 
-fn run(
+/// Runs `mode`'s window and gives its exit code. The verdict is printed before CEF is torn down
+/// (`verdict.rs`).
+fn report_run(
     mut mode: Mode,
     config: Result<EngineConfig, EngineError>,
     profile: &Path,
-) -> Result<Outcome, Box<dyn std::error::Error>> {
-    let listener = match &mut mode {
+) -> ExitCode {
+    match run(&mut mode, config, profile) {
+        Ok(code) => code,
+        Err(e) => Verdict::of_error(&mode, e).print(),
+    }
+}
+
+/// [`report_run`]'s window: `Err` only when it could not start or lost its host.
+fn run(
+    mode: &mut Mode,
+    config: Result<EngineConfig, EngineError>,
+    profile: &Path,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let listener = match mode {
         Mode::Browse { listener, .. } => listener.take(),
         _ => None,
     };
@@ -1377,6 +1041,7 @@ fn run(
     let gpu = GpuContext::new()?;
     eprintln!("wubble: GPU {}", gpu.describe());
     wubble_ui::window::no_os_window_restoration();
+    wubble_ui::window::no_automatic_tabbing();
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("skia-wgpu".into())
@@ -1425,15 +1090,15 @@ fn run(
     };
     // `url` is opened in a new tab; without one a fresh profile gets the
     // bundled page and a restored session opens nothing new.
-    let (url, checks) = match mode {
-        Mode::Browse { url, .. } => (url, none),
+    let (url, checks) = match &*mode {
+        Mode::Browse { url, .. } => (url.clone(), none),
         Mode::Frames { frames, url } => {
             // Only the bundled page has known colours to check against.
             let check_pixels = url.is_none();
             (
-                Some(url.unwrap_or_else(bundled)),
+                Some(url.clone().unwrap_or_else(bundled)),
                 Checks {
-                    quit_after: Some(frames),
+                    quit_after: Some(*frames),
                     check_pixels,
                     ..none
                 },
@@ -1557,7 +1222,7 @@ fn run(
         Mode::Session(phase) => (
             None,
             Checks {
-                session_smoke: Some(SessionSmoke::new(phase)),
+                session_smoke: Some(SessionSmoke::new(*phase)),
                 ..none
             },
         ),
@@ -1568,7 +1233,7 @@ fn run(
         } => (
             Some(page_url(scenario.page())),
             Checks {
-                begin_frames,
+                begin_frames: *begin_frames,
                 ..none
             },
         ),
@@ -1702,11 +1367,13 @@ fn run(
     let mut host = HOST.take().ok_or("the host went missing")?;
     host.shutdown(ui);
     drop(host.timer);
-    drain(&mut host.engine);
-    result?;
-    Ok(Outcome {
+    let outcome = Outcome {
         stats: host.stats.clone(),
-        failure: host.failure.take().map(Into::into),
+        failure: host
+            .failure
+            .take()
+            .map(Into::into)
+            .or_else(|| result.err().map(Into::into)),
         nav_title: host.nav_title.take(),
         tabs_passed: host.tabs_passed,
         split_passed: host.split_passed,
@@ -1722,5 +1389,8 @@ fn run(
         builtins_passed: host.builtins_passed.take(),
         video_passed: host.video_passed.take(),
         measured,
-    })
+    };
+    let code = Verdict::of(mode, &outcome).print();
+    drain(&mut host.engine);
+    Ok(code)
 }

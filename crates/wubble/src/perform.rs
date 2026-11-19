@@ -11,6 +11,8 @@ use wubble_core::tab::TabId;
 use wubble_core::shot::ShotRequest;
 use wubble_core::window::WindowTarget;
 
+use wubble_engine::page::EditCommand;
+
 use crate::host::Builtin;
 use crate::surface::FindEvent;
 
@@ -35,6 +37,8 @@ pub enum ViewOp {
     ZoomOut,
     ZoomReset,
     ToggleMute,
+    /// An edit command on the view's focused frame.
+    Edit(EditCommand),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +126,12 @@ pub fn plan(action: Action, model: &Model) -> Plan {
         Action::ZoomOut => view(ViewOp::ZoomOut),
         Action::ZoomReset => view(ViewOp::ZoomReset),
         Action::ToggleMute => view(ViewOp::ToggleMute),
+        Action::Undo => view(ViewOp::Edit(EditCommand::Undo)),
+        Action::Redo => view(ViewOp::Edit(EditCommand::Redo)),
+        Action::Cut => view(ViewOp::Edit(EditCommand::Cut)),
+        Action::Copy => view(ViewOp::Edit(EditCommand::Copy)),
+        Action::Paste => view(ViewOp::Edit(EditCommand::Paste)),
+        Action::SelectAll => view(ViewOp::Edit(EditCommand::SelectAll)),
         Action::Print => visible.map_or(Plan::Nothing, |_| Plan::Print),
         Action::Fullscreen => Plan::Fullscreen,
         Action::CopyUrl => visible

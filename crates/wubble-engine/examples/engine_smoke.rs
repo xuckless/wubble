@@ -99,26 +99,11 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
     std::fs::write(&page, PAGE).map_err(|e| e.to_string())?;
     let download_to = dir.join("downloaded.txt");
 
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    // target/<profile>/examples/engine_smoke -> target/<profile>
-    let exe_dir = exe
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("no exe dir")?
-        .to_path_buf();
     let gpu = GpuContext::new().map_err(|e| format!("no GPU device: {e}"))?;
     let presenter = gpu.presenter();
-    let mut engine = Engine::start(EngineConfig {
-        exe_dir,
-        cache_dir: dir.join("cache"),
-        pump_scheduler: None,
-        content_filter: None,
-        clipboard_bridge: false,
-        response_observer: None,
-        features: Default::default(),
-        profile: wubble_engine::app::ProfileKind::Throwaway,
-    })
-    .map_err(|e| e.to_string())?;
+    let mut engine =
+        Engine::start(EngineConfig::for_example(dir.join("cache")).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     engine.set_request_mode(mode);
     let view = engine
         .open_view(ViewConfig {

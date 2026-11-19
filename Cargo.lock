@@ -8582,6 +8582,8 @@ dependencies = [
  "cbc",
  "cef",
  "dpi",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
  "serde_json",
  "welding",
  "winit",
@@ -8650,6 +8652,7 @@ version = "0.0.0"
 dependencies = [
  "i-slint-backend-testing",
  "i-slint-renderer-skia",
+ "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "slint",
  "slint-build",

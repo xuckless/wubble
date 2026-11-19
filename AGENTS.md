@@ -73,12 +73,19 @@ wrap them in `timeout`. Console smoke loop: log in at the Mac console as `pixlbo
 `cd ~/wubble-b6 && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
 (above), then:
 
-    for s in boot nav tabs session frames=120 split page block; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s > /tmp/wubble-$s.log 2>&1; echo "exit $?"; grep -E '^smoke|panicked|^wubble:' /tmp/wubble-$s.log; done; pgrep -fl MacOS/wubble
+    for s in boot nav tabs session frames=120 split page settings pages autofill windows media video boost builtins quit block parity; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s > /tmp/wubble-$s.log 2>&1; echo "exit $?"; grep -E '^smoke|panicked|^wubble:' /tmp/wubble-$s.log; done; pgrep -fl MacOS/wubble
 
 Each section ends `exit 0` with its `smoke:` lines (`frames=120`: `smoke: pixels ok` and
 `smoke: glass ok`); `exit 124` is a hang killed by `timeout`; any other exit is a crash
 (full output in `/tmp/wubble-<smoke>.log`). A `panicked` line about handling an event
 while another is handled is the cue for a dispatch2 main-queue pump. `pgrep` prints nothing.
+`block_smoke` runs like `frame_smoke` (bundled with `--exe`, over plain ssh).
+
+Job runner: when the owner leaves `~/wubble-runner/run.sh` running in a Terminal at the console,
+a window smoke runs from ssh as a job: `printf "wubble-<dir>\n<timeout s>\n<args>\n" >
+~/wubble-runner/queue/<name>.job` runs `~/wubble-<dir>/target/debug/bundle/wubble.app/Contents/MacOS/wubble <args>`
+(only `wubble-*` dirs) and writes `/tmp/wubble-runner-out/<name>.log` and `.exit` (124 = timeout).
+It runs one job at a time for every lane; it cannot run the examples (they replace the bundle's binary).
 
 Window runs over ssh, when the owner has started `~/wubble-runner/run.sh` in their GUI session: `printf "wubble-<dir>\n<timeout s>\n<args>\n" > ~/wubble-runner/queue/<fresh name>.job` runs `~/wubble-<dir>/target/debug/bundle/wubble.app/Contents/MacOS/wubble <args>` there (no environment variables: use flags; write output files to `/tmp`).
 Poll for `/tmp/wubble-runner-out/<name>.exit` (124 = timeout), read `<name>.log`; keep runs under 30 s and few (windows open on the owner's screen), and `rm -rf target/debug/bundle` before re-bundling (an in-place rewrite of the binary gets it killed, exit 137).

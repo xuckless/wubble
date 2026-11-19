@@ -90,11 +90,7 @@ impl Host {
 
     /// The context menu's Inspect at `at`, physical pixels relative to the view.
     pub(super) fn inspect_at(&mut self, tab: TabId, at: (i32, i32)) {
-        // the detached window is the only way to reveal a node, and it is Linux-only for now:
-        // elsewhere the docked panel stays as it is
-        if !cfg!(target_os = "linux") {
-            return;
-        }
+        // the detached window is the only way to reveal a node (Decided "DevTools")
         let scale = self
             .w
             .window

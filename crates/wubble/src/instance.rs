@@ -124,7 +124,7 @@ pub fn claim(path: &Path, message: &Message) -> io::Result<Claim> {
             .create_sync()
         {
             Ok(listener) => return Ok(Claim::Primary(listener)),
-            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {}
+            Err(e) if taken(&e) => {}
             Err(e) => return Err(e),
         }
         match Stream::connect(path.to_fs_name::<GenericFilePath>()?) {
@@ -148,6 +148,18 @@ pub fn claim(path: &Path, message: &Message) -> io::Result<Claim> {
         io::ErrorKind::AddrInUse,
         "the instance socket stays taken",
     ))
+}
+
+/// Whether binding failed because another start holds the name. A named pipe that exists
+/// fails interprocess's first-instance create with `ERROR_ACCESS_DENIED`, which std reads as
+/// `PermissionDenied`; a Unix socket file that exists gives `AddrInUse`.
+fn taken(e: &io::Error) -> bool {
+    let kind = if cfg!(windows) {
+        io::ErrorKind::PermissionDenied
+    } else {
+        io::ErrorKind::AddrInUse
+    };
+    e.kind() == kind
 }
 
 #[cfg(unix)]
@@ -250,7 +262,6 @@ mod tests {
         assert_ne!(hashed, other);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_second_start_forwards_and_a_stale_socket_is_reclaimed() {
         let dir = tempfile::tempdir().unwrap();
@@ -263,14 +274,17 @@ mod tests {
         let url = Message::Open("https://a.test/".into());
         assert!(matches!(claim(&path, &url).unwrap(), Claim::Forwarded));
         assert_eq!(rx.recv().unwrap(), url);
-        // a crash leaves the file with nobody listening
-        let dir = tempfile::tempdir().unwrap();
-        let path = socket_path(dir.path(), &runtime_dir());
-        drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
-        assert!(path.exists());
-        assert!(matches!(
-            claim(&path, &Message::Focus).unwrap(),
-            Claim::Primary(_)
-        ));
+        // a crash leaves the file with nobody listening (a named pipe leaves nothing)
+        #[cfg(unix)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let path = socket_path(dir.path(), &runtime_dir());
+            drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+            assert!(path.exists());
+            assert!(matches!(
+                claim(&path, &Message::Focus).unwrap(),
+                Claim::Primary(_)
+            ));
+        }
     }
 }

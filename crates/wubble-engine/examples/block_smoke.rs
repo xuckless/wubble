@@ -91,25 +91,12 @@ fn run(dir: &Path) -> Result<(), String> {
     std::fs::write(&page, PAGE).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("blocked.js"), SCRIPT).map_err(|e| e.to_string())?;
 
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    // target/<profile>/examples/block_smoke -> target/<profile>
-    let exe_dir = exe
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("no exe dir")?
-        .to_path_buf();
     let gpu = GpuContext::new().map_err(|e| format!("no GPU device: {e}"))?;
     let presenter = gpu.presenter();
     let filter = Arc::new(Filter::default());
     let mut engine = Engine::start(EngineConfig {
-        exe_dir,
-        cache_dir: dir.join("cache"),
-        pump_scheduler: None,
         content_filter: Some(filter.clone()),
-        clipboard_bridge: false,
-        response_observer: None,
-        features: Default::default(),
-        profile: wubble_engine::app::ProfileKind::Throwaway,
+        ..EngineConfig::for_example(dir.join("cache")).map_err(|e| e.to_string())?
     })
     .map_err(|e| e.to_string())?;
     let view = engine

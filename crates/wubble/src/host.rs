@@ -77,6 +77,7 @@ use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::block_smoke::{self, BlockSmoke};
 use crate::blocking::Blocking;
+use crate::clipboard::Bridge as _;
 use crate::ime::Ime;
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};
@@ -1662,6 +1663,7 @@ impl Host {
                         let muted = view.is_muted();
                         view.set_muted(!muted);
                     }
+                    ViewOp::Edit(command) => view.edit(command),
                 }
                 if matches!(op, ViewOp::ZoomIn | ViewOp::ZoomOut | ViewOp::ZoomReset) {
                     let percent = view.zoom_percent();

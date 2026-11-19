@@ -10,21 +10,27 @@
 //! [`Effect::ShutdownCef`]. Closing the last browser while running does not:
 //! a count reaching zero is never a reason to stop.
 
+use super::{Current, Platform};
+
 /// Pump turns ([`Event::Tick`]) a shutdown waits for its browsers' closed
 /// reports before it gives up on them ([`Effect::AbandonCef`]). A count, not a
 /// clock: it only ends a quit that would otherwise hang. A DevTools window
-/// closes in a few hundred turns of the host's drain loop; an idle turn took
-/// about 4 us on the owner's Linux machine, so this is seconds, not a hang.
-pub const SHUTDOWN_TURNS: u32 = 1 << 22;
+/// closes in a few hundred turns of the host's drain loop; this is about 16 s
+/// of idle turns on this OS (`Platform::TURNS_PER_SECOND`).
+pub const SHUTDOWN_TURNS: u32 = Current::TURNS_PER_SECOND * 16;
 
 /// Pump turns between the last browser's closed report and `cef::shutdown`.
 /// `OnBeforeClose` of a Chrome-style browser (a DevTools window) comes before
 /// Chromium deletes its `Browser` and native window, which takes more pumping
 /// (on Wayland, a round trip to the compositor); `cef::shutdown` before that
 /// crashed in `TabDragServiceImpl` under `BrowserManagerService::Shutdown`.
-/// A count, not a clock: an idle turn of the drain loop took about 4 us on the
-/// owner's Linux machine, so this is tens of milliseconds there.
-pub const SETTLE_TURNS: u32 = 1 << 14;
+/// A count, not a clock: half a second of idle turns on this OS
+/// (`Platform::TURNS_PER_SECOND`). On macOS an idle turn takes a frame, so the
+/// earlier fixed `1 << 14` turns (65 ms on Linux) was 273 s there.
+pub const SETTLE_TURNS: u32 = Current::TURNS_PER_SECOND / 2;
+
+// Settling is a short wait inside the shutdown budget.
+const _: () = assert!(0 < SETTLE_TURNS && SETTLE_TURNS < SHUTDOWN_TURNS);
 
 /// Where the CEF runtime is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
