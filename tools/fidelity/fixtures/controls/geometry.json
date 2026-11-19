@@ -1,0 +1,53 @@
+{
+ "source": "pages/touch.tsx (touch harness), pages/settings.tsx (Ctrl+,), browser/chrome.tsx @598f814: [width, height] CSS px at rest",
+ "boxes": {
+  "button-pri": [
+   128.9375,
+   44
+  ],
+  "button-glass": [
+   97.90625,
+   44
+  ],
+  "button-ghost": [
+   78.71875,
+   44
+  ],
+  "toggle-lg": [
+   92,
+   52
+  ],
+  "check-row": [
+   256,
+   36
+  ],
+  "check-box": [
+   22,
+   22
+  ],
+  "checks": [
+   280,
+   136
+  ],
+  "toggle-sm": [
+   50,
+   30
+  ],
+  "hold": [
+   156,
+   40
+  ],
+  "kbd": [
+   35.203125,
+   26
+  ],
+  "icon-button": [
+   30,
+   30
+  ],
+  "confirm": [
+   168,
+   44
+  ]
+ }
+}
