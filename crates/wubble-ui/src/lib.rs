@@ -126,6 +126,8 @@ mod tests {
         let app = AppWindow::new().unwrap();
         // the kit menu keeps its highlight and keys in the controls registry
         let _controls = crate::controls::wire(&app);
+        // the command bar's machine runs in the driver
+        let _driver = crate::driver::wire(&app, wubble_core::seam::Seam::new());
         app.window()
             .set_size(slint::LogicalSize::new(1280.0, 800.0));
         command_bar_lifecycle(&app);
@@ -377,19 +379,45 @@ mod tests {
         assert_eq!(app.get_command_results().row_count(), 3);
         assert_eq!(app.get_command_shown_rows(), 3);
 
-        // A second Enter while closing must not choose again.
+        // A pick closes the bar at once (command.tsx `go`: `d.command = null`); a second
+        // Enter chooses nothing.
         press(app, "\n");
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
         press(app, "\n");
         assert_eq!(chosen.get(), 1);
-        // The close timer is the dropdown's out duration (176 ms).
-        mock_elapsed_time(Duration::from_millis(170));
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
-        mock_elapsed_time(Duration::from_millis(10));
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
-        // A second Escape while closing must not dismiss again.
+        // The opener prefills the query after the open (the host's `open_bar` on the URL): the
+        // input selects that text, so typing replaces all of it, whatever it held before.
+        app.set_command_query("news".into());
+        let w = app.as_weak();
+        app.on_address_focus_requested(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_command_query("https://example.com/".into());
+            }
+        });
+        app.invoke_request_address_focus();
+        settle();
+        press(app, "x");
+        assert_eq!(app.get_command_query(), "x");
+        // the same for New tab with a prefilled query (`search_for`: the bar on the text)
+        press(app, Key::Escape);
+        settle();
+        let w = app.as_weak();
+        app.on_new_tab_requested(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_command_query("some words".into());
+            }
+        });
+        app.invoke_request_new_tab();
+        settle();
+        press(app, "y");
+        assert_eq!(app.get_command_query(), "y");
+        press(app, Key::Escape);
+        settle();
+        dismissed.set(0);
+
+        // Escape runs the exit: the dropdown's out duration (176 ms); a second Escape while it
+        // closes does not dismiss again.
         app.invoke_request_address_focus();
         settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
@@ -398,9 +426,12 @@ mod tests {
         app.set_command_results(ModelRc::from(nine.as_slice()));
         assert_eq!(app.get_command_shown_rows(), 7);
         press(app, Key::Escape);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
         press(app, Key::Escape);
         assert_eq!(dismissed.get(), 1);
-        settle();
+        mock_elapsed_time(Duration::from_millis(170));
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        mock_elapsed_time(Duration::from_millis(10));
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
     }
 }

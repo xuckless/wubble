@@ -1,0 +1,94 @@
+// design: browser/command.tsx:127-133, browser/browser.css:169-172 @598f814
+// The command bar's head (`.wb-cmd-head`): a bare row in the thick panel, no glass of its own:
+// padding 0 4 0 12, gap 10, the search icon (18, mist), and the input (`.wb-cmd-in`) 52 high at
+// 17 px in ink, its placeholder haze. The design's microphone and "Show code" buttons are not
+// wubble's (no voice, no Source panel). Keys go to the caller: Up / Down / Enter / Escape.
+
+import { BrowserCss } from "../gen/css.slint";
+import { Tsx } from "../gen/tokens.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+
+export component CommandHead inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    out property <bool> has-focus: input.has-focus;
+    callback edited(string);
+    callback accepted();
+    // Up (-1) / Down (+1)
+    callback step(int);
+    callback escaped();
+    public function take-focus() {
+        input.focus();
+        input.select-all();
+    }
+    public function drop-focus() {
+        input.clear-focus();
+    }
+    height: BrowserCss.wb-cmd-in--height;
+
+    HorizontalLayout {
+        padding-left: BrowserCss.wb-cmd-head--padding-left;
+        padding-right: BrowserCss.wb-cmd-head--padding-right;
+        spacing: BrowserCss.wb-cmd-head--gap;
+        Rectangle {
+            width: Tsx.cmd-head-icon;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: Glyph.search;
+                size: Tsx.cmd-head-icon;
+                tint: BrowserCss.wb-cmd-head--color;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            min-width: BrowserCss.wb-cmd-in--min-width;
+            input := TextInput {
+                accessible-label: "Search or type an address";
+                height: parent.height;
+                vertical-alignment: center;
+                font-family: Role.wb-cmd-in.family;
+                font-size: Role.wb-cmd-in.size;
+                font-weight: Role.wb-cmd-in.weight;
+                color: BrowserCss.wb-cmd-in--color;
+                selection-background-color: Shell.selection-fill;
+                selection-foreground-color: Shell.selection-ink;
+                single-line: true;
+                edited => {
+                    root.edited(self.text);
+                }
+                accepted => {
+                    root.accepted();
+                }
+                key-pressed(event) => {
+                    if (event.text == Key.UpArrow) {
+                        root.step(-1);
+                        return accept;
+                    }
+                    if (event.text == Key.DownArrow) {
+                        root.step(1);
+                        return accept;
+                    }
+                    if (event.text == Key.Escape) {
+                        root.escaped();
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+            // `.wb-cmd-in::placeholder`
+            KitText {
+                role: Role.wb-cmd-in;
+                text: root.placeholder;
+                color: BrowserCss.wb-cmd-in-placeholder--color;
+                vertical-alignment: center;
+                overflow: elide;
+                width: parent.width;
+                height: parent.height;
+                visible: input.text == "";
+            }
+        }
+    }
+}

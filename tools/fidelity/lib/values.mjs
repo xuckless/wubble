@@ -152,6 +152,12 @@ export function readDecl(prop, value, R) {
           if (v.some(x => x === null)) return null;
           if (f === 'scale' && v.length === 2) { put(`${name}-x`, { t: 'float', v: v[0] }); put(`${name}-y`, { t: 'float', v: v[1] }); }
           else put(name, { t: 'float', v: v[0] });
+        } else if (/^translate/.test(f) && a.length === 1 && /^calc\(/.test(a[0])) {
+          // `calc(-100% - 16px)`: the share of the element's own size and the length past it
+          const m = /^calc\((-?[\d.]+)%\s*([+-])\s*([\d.]+)px\)$/.exec(a[0]);
+          if (!m) return null;
+          put(`${name}-pct`, { t: 'float', v: Number(m[1]) / 100 });
+          put(name, { t: 'length', v: (m[2] === '-' ? -1 : 1) * Number(m[3]) });
         } else if (/^translate/.test(f) || f === 'blur') {
           const v = a.map(x => R.length(x) ?? R.percent(x));
           if (v.some(x => !x)) return null;
@@ -212,8 +218,20 @@ export function readDecl(prop, value, R) {
       return out.length ? out : null;
     }
     case 'font': return null;
+    // unitless: a bare `0` is a number here, never a length
+    case 'opacity': {
+      const v = R.percent(value) ?? (R.num(value) !== null ? { t: 'float', v: R.num(value) } : null);
+      return v ? [['', v]] : null;
+    }
     default: {
       if (words.length === 1) {
+        // `min(600px, calc(100% - 32px))`: the cap and the inset from the container's edges
+        const mn = /^min\(([\d.]+)px,\s*calc\(100%\s*-\s*([\d.]+)px\)\)$/.exec(value);
+        if (mn) {
+          put('-max', { t: 'length', v: Number(mn[1]) });
+          put('-inset', { t: 'length', v: Number(mn[2]) });
+          return out;
+        }
         const m = /^clamp\(([^,]+),([^,]+),([^,]+)\)$/.exec(value);
         if (m) {
           put('-min', R.length(m[1].trim()));

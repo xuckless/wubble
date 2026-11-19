@@ -63,7 +63,9 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         space(10, "Home"),
         space(11, "Work"),
     ])));
-    app.set_space_index(1);
+    app.set_active_space_id(11);
+    // the command bar's machine runs in the driver (which reads the active Space's row)
+    let _driver = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
     pump();
 
     let log: Rc<RefCell<Vec<String>>> = Rc::default();

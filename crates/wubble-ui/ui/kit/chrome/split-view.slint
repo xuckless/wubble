@@ -8,7 +8,7 @@ import { BrowserCss } from "../gen/css.slint";
 import { Shell } from "../derived.slint";
 import { StatusBubble } from "../../components/status-bubble.slint";
 import { PressableButton } from "../controls/button.slint";
-import { SeamStrip } from "../controls/seam.slint";
+import { SeamStrip, SeamKind } from "../controls/seam.slint";
 
 // @source slint-split-view
 // Split view (wubble_core::split): 2–3 pages side by side, divided by rubber strings. Rust owns every
@@ -194,8 +194,9 @@ export component SplitView inherits Rectangle {
         stroke: root.accent;
         stroke-width: BrowserCss.wb-split-ring--stroke-width * Shell.beam-unit;   // CSS user units: one logical px
     }
-    // each seam: the string (always drawn), its full-height grab strip and pill (kit SeamStrip)
+    // each seam: its held line (nothing at rest), its full-height grab strip and pill (kit SeamStrip)
     for s[j] in root.seams: SeamStrip {
+        kind: SeamKind.split;
         width: root.width;
         height: root.height;
         seam-x: s.x;

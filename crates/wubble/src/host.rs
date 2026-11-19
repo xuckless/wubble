@@ -2481,8 +2481,8 @@ impl Host {
                 };
                 let height = window.get_content_height();
                 match self.w.panes.seams(height.into()).first() {
-                    Some(&(x, _, _)) => {
-                        let (x, y) = (x as f32, height / 2.0);
+                    Some(seam) => {
+                        let (x, y) = (seam.x as f32, height / 2.0);
                         self.split_grab(0, x, y);
                         self.split_drag(x - by, y);
                     }
@@ -2869,16 +2869,17 @@ impl Host {
                 self.input.pointer = None;
                 self.w.glass.borrow_mut().pointer_leave();
             }
-            // A left press on the shell sends a wave through the scene: through the glass under
-            // it, else through the liquid. Not over the page, which covers the scene (the
-            // design's web view never ripples the backdrop). Raw, so the side buttons navigate
-            // over the shell too, without a wave.
+            // A left press on a favourite sends a wave through its glass (chrome.tsx `Fav`
+            // onPointerDown: the design's only wave in the window). Not over the page, which
+            // covers the scene. Raw, so the side buttons navigate over the shell too, without a
+            // wave.
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
                 if input::taps_backdrop(*button)
+                    && window.get_fav_hovered()
                     && !self
                         .input
                         .pointer

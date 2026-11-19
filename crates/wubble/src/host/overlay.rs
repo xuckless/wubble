@@ -88,7 +88,7 @@ impl Host {
                 Setup::Peek => {
                     window.invoke_dismiss_command_bar();
                     window.invoke_sidebar_mode_requested(SidebarMode::Hidden.into());
-                    window.set_peek(true);
+                    window.invoke_peek_cue(wubble_ui::PeekCue::EdgeEntered);
                     // the pointer rests on the peek, so it stays out
                     window
                         .window()
@@ -98,7 +98,6 @@ impl Host {
                 }
                 Setup::Quiet => {
                     window.invoke_dismiss_command_bar();
-                    window.set_peek(false);
                     window.invoke_sidebar_mode_requested(SidebarMode::Extended.into());
                     window
                         .window()

@@ -1,0 +1,123 @@
+// design: browser/command.tsx:138-143, browser/browser.css:175-180, core/wubble.css:53-57 @598f814
+// One command bar row (`.wb-cmd-row`): 44 high, padding 0 12, gap 12; the icon box 18 (mist),
+// the label 14 in ink filling the row, the hint 12 in haze at most 45 % wide, both cut with an
+// ellipsis. No fill and no press of its own: the bar's one selection glides under it; the
+// pointer entering selects it (`onPointerEnter={() => setSel(i)}`). It enters on `wb-in`
+// (.24 s ease-out, from 7 px below at .98, clear and blurred 4) after 60 ms and 30 ms more per
+// row. wubble's rows: the hint is the result's shortcut when it has one, else its subtitle
+// (derived: notes/fidelity/derived-review.md); the favicon when the result has one, else the
+// kind's glyph.
+
+import { BrowserCss } from "../gen/css.slint";
+import { Motion, Tsx } from "../gen/tokens.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { Replay } from "../motion/tween.slint";
+import { OverlapLook } from "../motion/overlap.slint";
+import { CommandKind, CommandResult } from "../../components/model.slint";
+
+export component CommandRow inherits Rectangle {
+    in property <CommandResult> item;
+    // its place in the list: the entrance's stagger
+    in property <int> index;
+    // the bar is open: each opening plays the entrance again
+    in property <bool> shown;
+    in property <bool> active: false;
+    callback activated();
+    callback hovered();
+
+    height: BrowserCss.wb-cmd-row--height;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.item.title;
+    accessible-description: root.item.subtitle;
+    accessible-item-index: root.index;
+    accessible-item-selected: root.active;
+    accessible-action-default => {
+        root.activated();
+    }
+
+    pure function icon(kind: CommandKind) -> string {
+        if (kind == CommandKind.open-tab) {
+            return Glyph.globe;
+        }
+        if (kind == CommandKind.history) {
+            return Glyph.reload;
+        }
+        if (kind == CommandKind.bookmark) {
+            return Glyph.arrow;
+        }
+        if (kind == CommandKind.search) {
+            return Glyph.search;
+        }
+        return Glyph.code;
+    }
+    property <string> hint: root.item.shortcut != "" ? root.item.shortcut : root.item.subtitle;
+
+    rp := Replay {
+        on: root.shown;
+        in-ms: BrowserCss.wb-cmd-row--animation-duration;
+        out-ms: 0ms;
+        in-easing: BrowserCss.wb-cmd-row--animation-easing;
+        delay: Tsx.cmd-row-lead + Motion.overlap-stagger * root.index;
+    }
+    out property <float> entered: rp.run;
+    ta := TouchArea {
+        changed has-hover => {
+            if self.has-hover {
+                root.hovered();
+            }
+        }
+        clicked => {
+            root.activated();
+        }
+    }
+    OverlapLook {
+        e: root.shown ? rp.run : 1;
+        width: root.width;
+        height: root.height;
+        HorizontalLayout {
+            padding-left: BrowserCss.wb-cmd-row--padding-left;
+            padding-right: BrowserCss.wb-cmd-row--padding-right;
+            spacing: BrowserCss.wb-cmd-row--gap;
+            // `.wb-cmd-icon`
+            Rectangle {
+                width: BrowserCss.wb-cmd-icon--width;
+                if root.item.icon.width > 0: Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    source: root.item.icon;
+                    width: Shell.icon;
+                    height: Shell.icon;
+                }
+                if root.item.icon.width == 0: Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    path: root.icon(root.item.kind);
+                    tint: BrowserCss.wb-cmd-icon--color;
+                }
+            }
+            // `.wb-cmd-label`
+            KitText {
+                role: Role.wb-cmd-row;
+                text: root.item.title;
+                horizontal-stretch: 1;
+                min-width: BrowserCss.wb-cmd-label--min-width;
+                color: BrowserCss.wb-cmd-row--color;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            // `.wb-cmd-hint`: at most 45 % of the row
+            if root.hint != "": KitText {
+                role: Role.wb-cmd-hint;
+                text: root.hint;
+                max-width: root.width * BrowserCss.wb-cmd-hint--max-width;
+                color: BrowserCss.wb-cmd-hint--color;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+        }
+    }
+}

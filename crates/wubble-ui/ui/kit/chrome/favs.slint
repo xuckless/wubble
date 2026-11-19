@@ -1,0 +1,128 @@
+// design: browser/chrome.tsx:68-81, browser/browser.css:49-55, core/wubble.css:46-49 @598f814
+// The favourites (`.wb-favs`, `Fav`): four columns 8 apart, each tile 44 high, thin glass radius
+// 12 with the film rim on hover; on the rail one 40 px column, 6 apart, tiles 40 high. The icon
+// (18) grows to 1.1 on hover over .36 s on the spring ease (`.wb-fav > .wb-icon`); the tile is
+// pressed to .97 (`.wb-press`); a click wobbles the icon (`wb-wob-a/b`). A press sends a wave
+// through the tile's glass (`layer.scene.wave`): the host does it while `hovered-id` names a tile.
+// `hovered-id` is a binding over the pointer and the tiles' layout, so a tile closed or moved
+// under the pointer never leaves a stale id behind.
+// wubble's favourites are its pinned tabs: the active one's tile takes the selected fill, its
+// icon ink (derived: notes/fidelity/derived-review.md).
+
+import { Palette, Glass } from "../gen/tokens.slint";
+import { BrowserCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { Wobble } from "../motion/wobble.slint";
+import { Press } from "../motion/press.slint";
+import { Calm } from "../motion/calm.slint";
+import { GlassTier, GlassKeys, TabItem } from "../../components/model.slint";
+
+export component Favs inherits Rectangle {
+    in property <[TabItem]> tabs;
+    in property <int> active-tab-id: -1;
+    in property <bool> compact: false;
+    // The scene draws the tiles' glass.
+    in property <bool> over-wgpu: false;
+    // The window x range the sidebar shows: the tiles' glass is cut to it (GlassPanel `clip-start`).
+    in property <length> glass-clip-start: -Shell.no-clip;
+    in property <length> glass-clip-end: Shell.no-clip;
+    // the tab under the pointer, -1 when none (the host waves the glass on a press there)
+    out property <int> hovered-id: root.tile-at(area.has-hover, area.mouse-x, area.mouse-y);
+    callback activated(int);
+
+    property <int> cols: root.compact ? 1 : Shell.fav-columns;
+    property <length> gap: root.compact ? BrowserCss.wb-favs-rail--gap : BrowserCss.wb-favs--gap;
+    property <length> tile-w: root.compact ? BrowserCss.wb-favs-rail--grid-template-columns-1 : (root.width - (root.cols - 1) * root.gap) / root.cols;
+    property <length> tile-h: root.compact ? BrowserCss.wb-favs-rail-wb-fav--height : BrowserCss.wb-fav--height;
+    property <int> rows: ceil(root.tabs.length / root.cols);
+
+    height: max(0px, root.rows * (root.tile-h + root.gap) - root.gap);
+
+    pure function tile-x(i: int) -> length {
+        return root.compact ? (root.width - root.tile-w) / 2 : mod(i, root.cols) * (root.tile-w + root.gap);
+    }
+    pure function tile-y(i: int) -> length {
+        return floor(i / root.cols) * (root.tile-h + root.gap);
+    }
+    // the id of the tile at (x, y), -1 over a gap or nothing
+    pure function tile-at(over: bool, x: length, y: length) -> int {
+        let i = (root.compact ? 0 : floor(x / (root.tile-w + root.gap))) + floor(y / (root.tile-h + root.gap)) * root.cols;
+        if !over || x < 0 || y < 0 || i >= root.tabs.length {
+            return -1;
+        }
+        let tx = x - root.tile-x(i);
+        let ty = y - root.tile-y(i);
+        return tx >= 0 && tx < root.tile-w && ty >= 0 && ty < root.tile-h ? root.tabs[i].id : -1;
+    }
+
+    // the pointer over the grid (TouchArea hover reaches the tiles' parent too)
+    area := TouchArea {
+        width: 100%;
+        height: 100%;
+        for tab[i] in root.tabs: tile := GlassPanel {
+            // chrome.tsx `Fav`: each click wobbles the icon once more
+            property <bool> hit: false;
+            property <bool> active: tab.id == root.active-tab-id;
+            x: root.tile-x(i);
+            y: root.tile-y(i);
+            width: root.tile-w;
+            height: root.tile-h;
+            key: GlassKeys.favourites + tab.id;
+            accessible-role: AccessibleRole.tab;
+            accessible-label: tab.title;
+            accessible-item-selectable: true;
+            accessible-item-selected: tile.active;
+            accessible-action-default => {
+                root.activated(tab.id);
+            }
+            over-wgpu: root.over-wgpu;
+            clip-start: root.glass-clip-start;
+            clip-end: root.glass-clip-end;
+            tier: GlassTier.thin;
+            radius: BrowserCss.wb-fav--border-radius;
+            hover: ta.has-hover;
+            pressed: ta.pressed;
+            background: tile.active ? Shell.selected-fill : root.over-wgpu ? transparent : Glass.thin.fill;
+            press := Press {
+                pressed: ta.pressed;
+            }
+            scale: press.scale;
+
+            ta := TouchArea {
+                clicked => {
+                    tile.hit = !tile.hit;
+                    root.activated(tab.id);
+                }
+            }
+
+            // `.wb-icon`
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: Shell.fav-icon;
+                height: Shell.fav-icon;
+                transform-origin: { x: self.width / 2, y: self.height / 2 };
+                transform-scale: ta.has-hover ? BrowserCss.wb-fav-hover-gt-wb-icon--scale : 1;
+                animate transform-scale {
+                    duration: Calm.ms(BrowserCss.wb-fav-gt-wb-icon--transition-scale-duration);
+                    easing: BrowserCss.wb-fav-gt-wb-icon--transition-scale-easing;
+                }
+                Wobble {
+                    hit: tile.hit;
+                    if tab.favicon.width > 0: Image {
+                        source: tab.favicon;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                    if tab.favicon.width == 0: Icon {
+                        path: Glyph.page(tab.url);
+                        size: Shell.fav-icon;
+                        tint: tile.active ? Palette.ink : Palette.mist;
+                    }
+                }
+            }
+        }
+    }
+}
