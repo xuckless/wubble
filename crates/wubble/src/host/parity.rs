@@ -47,6 +47,21 @@ impl Default for ParityRun {
     }
 }
 
+/// Links the smoke handed to "the OS" (`Host::external_opener`): recorded, never opened.
+static OPENED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The parity smoke's opener: records the link instead of starting an app.
+pub(crate) fn record_opened(url: &str) {
+    OPENED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(url.to_owned());
+}
+
+fn opened() -> Vec<String> {
+    OPENED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// `WUBBLE_PARITY_TRACE=1`: what the smoke sends and hears, on stderr.
 fn trace(line: &str) {
     if std::env::var_os("WUBBLE_PARITY_TRACE").is_some() {
@@ -472,6 +487,16 @@ impl Host {
                     self.parity_input(window, Step::Click(Button::Left, parity::NONE, p));
                 }
             }
+            HostOp::AnswerPrompt(allow) => {
+                if let Some(tab) = self.model.visible_tab() {
+                    let answer = crate::prompt::PermissionEvent::Answer {
+                        allow,
+                        remember: false,
+                    };
+                    self.apply_permission(tab, answer);
+                    self.render_surfaces(window);
+                }
+            }
             HostOp::ZoomReset => {
                 if let Some(view) = self.view()
                     && view.zoom_percent() != 100
@@ -505,7 +530,17 @@ impl Host {
                     format!("primary selection holds {got:?}"),
                 )
             }
-            HostCheck::ClipboardImage => Err("the clipboard bridge carries text only".into()),
+            // Read back as another app pastes it: a second clipboard client, not the
+            // worker that put it there.
+            HostCheck::ClipboardImage => {
+                let got = arboard::Clipboard::new()
+                    .and_then(|mut c| c.get_image())
+                    .map(|i| (i.width, i.height));
+                is(
+                    matches!(got, Ok((8, 8))),
+                    format!("clipboard image {got:?}"),
+                )
+            }
             HostCheck::BarOpen(want) => {
                 let open = window.get_command_bar_state() == CommandBarState::Open;
                 is(open == want, format!("command bar open: {open}"))
@@ -575,9 +610,32 @@ impl Host {
                 let dragging = !self.drag_idle();
                 is(dragging == want, format!("page drag running: {dragging}"))
             }
-            HostCheck::Tooltip(_) => Err("no tooltip support".into()),
-            HostCheck::Status(_) => Err("no status bubble".into()),
-            HostCheck::External(_) => Err("no external protocol handling".into()),
+            HostCheck::Tooltip(want) => {
+                let got = self.page_tip_shown();
+                is(got.as_deref() == Some(want), format!("tooltip {got:?}"))
+            }
+            HostCheck::Status(want) => {
+                let got = self.status.shown().map(|(_, url)| url.to_owned());
+                is(
+                    got.as_deref() == Some(want),
+                    format!("status bubble {got:?}"),
+                )
+            }
+            HostCheck::Prompt(want) => {
+                let open = self
+                    .model
+                    .visible_tab()
+                    .and_then(|t| self.surfaces.get(&t))
+                    .is_some_and(|s| s.permission != crate::prompt::PermissionPrompt::None);
+                is(open == want, format!("permission prompt open: {open}"))
+            }
+            HostCheck::External(want) => {
+                let got = opened().last().cloned();
+                is(
+                    got.as_deref().is_some_and(|u| u.starts_with(want)),
+                    format!("last link handed to the OS: {got:?}"),
+                )
+            }
         }
     }
 }

@@ -22,6 +22,9 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+mod external;
+mod gpu;
+mod hover;
 mod media;
 mod pages;
 mod panes;
@@ -29,10 +32,12 @@ mod parity;
 mod preview;
 mod settings;
 mod snapshots;
+mod status;
 mod surfaces;
 mod swipe;
 mod tab_drag;
 mod tasks;
+mod tooltip;
 mod videos;
 mod window;
 pub use media::MediaObserver;
@@ -433,6 +438,14 @@ pub struct Host {
     tidy_undo: Option<(SpaceId, Vec<Item>)>,
     /// The tab hover preview and the thumbnails it shows.
     preview: preview::Preview,
+    /// The link status bubble (`host/status.rs`).
+    status: status::Status,
+    /// The window's tooltip (`host/tooltip.rs`).
+    tips: tooltip::Tips,
+    /// How links to other apps are opened (`host/external.rs`).
+    pub(crate) external_opener: external::Opener,
+    /// The GPU process's id, watched on the lifecycle tick (`host/gpu.rs`).
+    gpu: gpu::GpuWatch,
     /// Probed busy reasons per frame (`host/busy.rs`).
     busy: busy::BusyFrames,
     /// The memory pressure source and its gauge, read on the lifecycle tick.
@@ -502,6 +515,13 @@ impl Host {
                 videos::Videos::for_smoke(endpoint, crate::video_smoke::SMOKE_VIDEO.into())
             }
             None => videos::Videos::default(),
+        };
+        // `--smoke parity` records the links it would hand to the OS (and saves without the save
+        // dialog, below).
+        let external_opener: external::Opener = if checks.parity.is_some() {
+            parity::record_opened
+        } else {
+            external::open_with_os
         };
         let mut host = Self {
             engine,
@@ -594,6 +614,10 @@ impl Host {
             routing_rules: vec![],
             tidy_undo: None,
             preview: preview::Preview::new(),
+            status: status::Status::new(),
+            tips: tooltip::Tips::new(),
+            external_opener,
+            gpu: gpu::GpuWatch::default(),
             busy: busy::BusyFrames::default(),
             pressure: busy::PressureGauge::system(),
             snapshots: snapshots::Snapshots::default(),
@@ -605,6 +629,8 @@ impl Host {
             video_passed: None,
         };
         host.replay_settings();
+        // `--smoke parity` drives Save As without an OS dialog.
+        host.downloads.never_ask = host.checks.parity.is_some();
         if host.checks.check_pixels {
             // The glass check is a correctness check of the scene's full rendering: the governor
             // would otherwise pick the level from how fast this machine runs (and at `Flat` the
@@ -746,6 +772,15 @@ impl Host {
 
     /// The only way tabs change: apply, then execute the effects.
     pub fn dispatch(&mut self, command: Command) {
+        // A tab is never opened or loaded for a link another app handles: the user asked for
+        // it (typed, a bookmark, a menu row), so it goes to the app as if clicked.
+        if let Some((opener, url)) = external_target(&command)
+            && let Some(tab) = opener.or_else(|| self.shown())
+        {
+            let url = url.to_owned();
+            self.external_link(tab, url, Some(true));
+            return;
+        }
         if persist::changes_session(&command) {
             self.save = self.save.changed();
         }
@@ -1423,6 +1458,11 @@ impl Host {
     /// window, or held back for the address pill).
     fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
         use wubble_core::popup::{self, Outcome};
+        // A `target=_blank` mailto: link opens the app and no tab, as in Chromium.
+        if wubble_engine::page::is_external(&request.url) {
+            self.external_link(tab, request.url, Some(request.gesture));
+            return;
+        }
         let site = self.site_of(tab);
         let remembered = site
             .as_deref()
@@ -1938,6 +1978,7 @@ impl Host {
         }
         self.save_download_progress();
         self.passwords_tick(now);
+        self.gpu_check();
     }
 
     // ----- smokes
@@ -2841,6 +2882,9 @@ impl Host {
         if let Some(view) = self.pane_view(pane) {
             view.mouse_move(point, &modifiers, now);
         }
+        if let Some(tab) = crate::shell::tab_id(pane) {
+            self.tip_pointer(tab, point.x, point.y);
+        }
         self.media_pointer(pane, Some(point));
     }
 
@@ -2870,6 +2914,9 @@ impl Host {
         }
         if pressed && let Some(window) = self.w.window.upgrade() {
             self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
+        }
+        if pressed {
+            self.tip_dismiss();
         }
         if pressed && let Some(tab) = crate::shell::tab_id(pane) {
             // keys follow the pane that was pressed: the DevTools panel or a page
@@ -2994,6 +3041,20 @@ fn tidy_summary(before: &[Item], after: &[Item]) -> (usize, usize) {
     (tabs, folders)
 }
 
+/// The URL a command would open a tab for or load, when another app handles it (and the tab
+/// the user asked from, if any): such a command is handed to `Host::external_link` instead.
+fn external_target(command: &Command) -> Option<(Option<TabId>, &str)> {
+    let (opener, url) = match command {
+        Command::Navigate { tab, url } => (Some(*tab), url),
+        Command::NewTab { url, opener, .. } => (*opener, url),
+        Command::BackgroundTab { url, opener } => (Some(*opener), url),
+        Command::OpenBeside { url } => (None, url),
+        _ => return None,
+    };
+    let external = InternalPage::from_url(url).is_none() && wubble_engine::page::is_external(url);
+    external.then_some((opener, url.as_str()))
+}
+
 fn new_tab(url: String, opener: Option<TabId>) -> Command {
     Command::NewTab {
         url,
@@ -3015,6 +3076,33 @@ mod tests {
         );
         let t = m.visible_tab().unwrap();
         (m, t)
+    }
+
+    #[test]
+    fn links_to_other_apps_open_no_tab_and_load_nothing() {
+        let t = TabId(7);
+        let nav = |url: &str| Command::Navigate {
+            tab: t,
+            url: url.into(),
+        };
+        assert_eq!(
+            external_target(&nav("mailto:a@b.test")),
+            Some((Some(t), "mailto:a@b.test"))
+        );
+        assert_eq!(
+            external_target(&new_tab("magnet:?xt=1".into(), None)),
+            Some((None, "magnet:?xt=1"))
+        );
+        assert_eq!(
+            external_target(&Command::BackgroundTab {
+                url: "tel:1".into(),
+                opener: t
+            }),
+            Some((Some(t), "tel:1"))
+        );
+        assert_eq!(external_target(&nav("https://a.test/")), None);
+        assert_eq!(external_target(&nav("wubble://settings")), None);
+        assert_eq!(external_target(&Command::CloseTab(t)), None);
     }
 
     #[test]

@@ -186,6 +186,11 @@ export struct PermissionView {
     open: bool,
     title: string,
     lines: [string],
+    // The remember toggle's words and the two buttons' (an external link's prompt says
+    // "Always for <site> and <scheme> links", Cancel and Open).
+    remember: string,
+    allow: string,
+    block: string,
     serial: int,
 }
 
@@ -304,6 +309,17 @@ export struct EntryItem {
     key: string,
 }
 
+// One filter list of the settings page's "Filter lists" section. `key` names a custom list
+// (its URL) for removing it; `id` a catalog list for switching it. `note`: licence, rules, age.
+export struct FilterListItem {
+    id: string,
+    title: string,
+    note: string,
+    enabled: bool,
+    custom: bool,
+    key: string,
+}
+
 // One row of the flat list the page shows; `section` names the section the row opens (empty
 // for the rest of it), `first` / `last` round the section's card.
 export struct SettingItem {
@@ -388,6 +404,21 @@ export struct PreviewView {
     address: string,
     thumb: image,
     y: length,
+}
+
+// The window's one tooltip (tooltip.slint): a page's `title` or a shell button's name and
+// shortcut, hung from (anchor-x, anchor-y) in window px; `centered`: anchor-x is its centre.
+// `anchor-top`: the top of what it hangs from (the button's top, the pointer), which it sits
+// above when there is no room below. `jump`: the first one appears in place, later ones glide.
+export struct TipView {
+    shown: bool,
+    text: string,
+    shortcut: string,
+    anchor-x: length,
+    anchor-y: length,
+    anchor-top: length,
+    centered: bool,
+    jump: bool,
 }
 
 // One row of the Task manager (wubble_core::tasks::TaskRow): a tab (`tab` >= 0) or another

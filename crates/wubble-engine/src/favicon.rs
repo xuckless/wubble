@@ -56,12 +56,54 @@ pub(crate) fn accept(url: &str, width: i32, height: i32, rgba: Vec<u8>) -> Optio
     })
 }
 
-/// Images finished downloading, taken by `View::drain_events`.
-pub(crate) type Sink = Arc<Mutex<Vec<FaviconImage>>>;
+/// An image as raw pixels at full size (Copy Image): straight RGBA,
+/// row-major, `rgba.len() == width * height * 4`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rgba {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// The largest image `View::download_image` hands over: 16 Mpx, 64 MiB of RGBA.
+pub const MAX_IMAGE_PIXELS: u64 = 16 << 20;
+
+/// The pixels of a full-size image, or why there are none: empty, too large
+/// or a byte count that does not match its size.
+pub(crate) fn accept_full(width: i32, height: i32, rgba: Vec<u8>) -> Result<Rgba, String> {
+    let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
+        return Err("no image".into());
+    };
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels == 0 || rgba.len() as u64 != pixels * 4 {
+        return Err("no image".into());
+    }
+    if pixels > MAX_IMAGE_PIXELS {
+        return Err("the image is too large".into());
+    }
+    Ok(Rgba {
+        width,
+        height,
+        rgba,
+    })
+}
+
+/// Images finished downloading, as the events they become, taken by
+/// `View::drain_events`.
+pub(crate) type Sink = Arc<Mutex<Vec<crate::page::PageEvent>>>;
+
+/// What a download is for: the page icon (shrunk, no cookies) or Copy Image
+/// (full size, the page's cookies).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Purpose {
+    Icon,
+    Full,
+}
 
 cef::wrap_download_image_callback! {
     pub(crate) struct FaviconCallback {
         sink: Sink,
+        purpose: Purpose,
     }
 
     impl DownloadImageCallback {
@@ -71,38 +113,62 @@ cef::wrap_download_image_callback! {
             _http_status_code: ::std::os::raw::c_int,
             image: Option<&mut cef::Image>,
         ) {
+            use crate::page::PageEvent;
             let url = image_url.map(|u| u.to_string()).unwrap_or_default();
-            let Some(image) = image else {
-                eprintln!("wubble-engine: favicon {url}: download failed");
-                return;
+            let read = image.map(|image| {
+                let (mut width, mut height) = (0, 0);
+                let bitmap = image.as_bitmap(
+                    1.0,
+                    ColorType::RGBA_8888,
+                    AlphaType::POSTMULTIPLIED,
+                    Some(&mut width),
+                    Some(&mut height),
+                );
+                // `data` copies into the Vec's length, so it must be sized first.
+                bitmap.map(|bitmap| {
+                    let mut bytes = vec![0u8; bitmap.size()];
+                    let read = bitmap.data(Some(&mut bytes), 0) == bytes.len();
+                    (width, height, if read { bytes } else { Vec::new() })
+                })
+            });
+            let event = match (self.purpose, read.flatten()) {
+                (Purpose::Icon, None) => {
+                    eprintln!("wubble-engine: favicon {url}: download failed");
+                    return;
+                }
+                (Purpose::Icon, Some((width, height, bytes))) => {
+                    match accept(&url, width, height, bytes) {
+                        Some(icon) => PageEvent::FaviconImage(icon),
+                        None => {
+                            eprintln!("wubble-engine: favicon {url}: unreadable {width}x{height} bitmap");
+                            return;
+                        }
+                    }
+                }
+                (Purpose::Full, None) => PageEvent::ImageDownloaded {
+                    url,
+                    image: Err("download failed".into()),
+                },
+                (Purpose::Full, Some((width, height, bytes))) => PageEvent::ImageDownloaded {
+                    url,
+                    image: accept_full(width, height, bytes),
+                },
             };
-            let (mut width, mut height) = (0, 0);
-            let bitmap = image.as_bitmap(
-                1.0,
-                ColorType::RGBA_8888,
-                AlphaType::POSTMULTIPLIED,
-                Some(&mut width),
-                Some(&mut height),
-            );
-            // `data` copies into the Vec's length, so it must be sized first.
-            let Some(bitmap) = bitmap else {
-                eprintln!("wubble-engine: favicon {url}: no bitmap");
-                return;
-            };
-            let mut bytes = vec![0u8; bitmap.size()];
-            let read = bitmap.data(Some(&mut bytes), 0) == bytes.len();
-            match accept(&url, width, height, bytes).filter(|_| read) {
-                Some(icon) => self.sink.lock().unwrap_or_else(|e| e.into_inner()).push(icon),
-                None => eprintln!("wubble-engine: favicon {url}: unreadable {width}x{height} bitmap"),
-            }
+            self.sink.lock().unwrap_or_else(|e| e.into_inner()).push(event);
         }
     }
 }
 
-/// Starts the download; the result lands in `sink`.
-pub(crate) fn fetch(host: &impl cef::ImplBrowserHost, url: &str, sink: &Sink) {
-    let mut callback = FaviconCallback::new(sink.clone());
-    host.download_image(Some(&url.into()), 1, MAX_ICON_PX, 0, Some(&mut callback));
+/// Starts the download; the result lands in `sink`. An icon is fetched as
+/// a favicon (no cookies) and bounded to `MAX_ICON_PX`; a full image with the
+/// page's cookies and no bound (`max_image_size` 0).
+pub(crate) fn fetch(host: &impl cef::ImplBrowserHost, url: &str, sink: &Sink, purpose: Purpose) {
+    let mut callback = FaviconCallback::new(sink.clone(), purpose);
+    let (is_favicon, max) = match purpose {
+        Purpose::Icon => (1, MAX_ICON_PX),
+        Purpose::Full => (0, 0),
+    };
+    host.download_image(Some(&url.into()), is_favicon, max, 0, Some(&mut callback));
 }
 
 #[cfg(test)]
@@ -125,5 +191,17 @@ mod tests {
         assert!(accept("u", -1, 3, vec![0; 12]).is_none());
         assert!(accept("u", 2, 3, vec![0; 23]).is_none());
         assert!(accept("u", 2, 3, vec![]).is_none());
+    }
+
+    #[test]
+    fn a_full_image_keeps_its_size_and_refuses_empty_wrong_or_huge_ones() {
+        let ok = accept_full(300, 2, vec![0; 2400]).unwrap();
+        assert_eq!((ok.width, ok.height, ok.rgba.len()), (300, 2, 2400));
+        assert!(accept_full(0, 2, vec![]).is_err());
+        assert!(accept_full(-1, 2, vec![0; 8]).is_err());
+        assert!(accept_full(2, 2, vec![0; 15]).is_err());
+        let side = 4097; // just over 16 Mpx
+        let huge = accept_full(side, side, vec![0; (side * side * 4) as usize]);
+        assert_eq!(huge, Err("the image is too large".into()));
     }
 }

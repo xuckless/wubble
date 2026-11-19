@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 
+use wubble_core::external;
 use wubble_core::site::{self, Decision, Permission, SitePermissions, Verdict};
 use wubble_engine::page::{PermissionKind, RequestId};
 
@@ -40,33 +41,72 @@ pub fn permission_of(kind: PermissionKind) -> Option<Permission> {
     })
 }
 
-/// One permission request as the page made it.
+/// One request the prompt asks about: the page's, as it made it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PermissionRequest {
-    pub id: RequestId,
-    /// The requesting origin as the engine reported it.
+    /// The requesting origin as the engine reported it; for a link, the page's URL.
     pub origin: String,
-    /// The engine's kinds, answered back unchanged.
-    pub kinds: Vec<PermissionKind>,
+    pub ask: Ask,
+}
+
+/// What is asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// The engine's request: answered back to it under `id` with `kinds` unchanged.
+    Engine {
+        id: RequestId,
+        kinds: Vec<PermissionKind>,
+    },
+    /// A link to open in another app (`wubble_core::external`): the host's own question,
+    /// never answered to the engine.
+    ExternalLink { url: String },
 }
 
 impl PermissionRequest {
-    /// The key decisions are remembered under; `None` for opaque origins.
+    /// The key decisions are remembered under; `None` for opaque origins. An external link's
+    /// is per site and scheme.
     pub fn site(&self) -> Option<String> {
-        site::origin_of(&self.origin)
+        match &self.ask {
+            Ask::ExternalLink { url } => external::key_for(url, &self.origin),
+            Ask::Engine { .. } => site::origin_of(&self.origin),
+        }
     }
 
     /// The kinds as the prompt knows them; `None` if any is never prompted
     /// for.
     pub fn asked(&self) -> Option<Vec<Permission>> {
-        let mut asked: Vec<Permission> = self
-            .kinds
+        let kinds = match &self.ask {
+            Ask::ExternalLink { .. } => return Some(vec![Permission::ExternalLinks]),
+            Ask::Engine { kinds, .. } => kinds,
+        };
+        let mut asked: Vec<Permission> = kinds
             .iter()
             .map(|&k| permission_of(k))
             .collect::<Option<_>>()?;
         asked.sort();
         asked.dedup();
         Some(asked)
+    }
+
+    /// Tells this request apart from the one shown before it, so a new prompt starts with
+    /// its toggle off: the engine's id, or the link's hash.
+    pub fn serial(&self) -> i32 {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        match &self.ask {
+            Ask::Engine { id, .. } => i32::try_from(id.0).unwrap_or(i32::MAX),
+            Ask::ExternalLink { url } => {
+                let mut h = DefaultHasher::new();
+                (url, &self.origin).hash(&mut h);
+                h.finish() as i32
+            }
+        }
+    }
+
+    fn engine_id(&self) -> Option<RequestId> {
+        match self.ask {
+            Ask::Engine { id, .. } => Some(id),
+            Ask::ExternalLink { .. } => None,
+        }
     }
 
     /// What it gets before anyone is asked.
@@ -101,24 +141,46 @@ pub enum PermissionEvent {
     },
     /// CEF gave up on these requests; welding answered them.
     Dismissed(Vec<RequestId>),
+    /// The page committed a new document: links the old one asked to open are dropped
+    /// unanswered (the engine dismisses its own requests itself).
+    PageChanged,
     /// The view closed; welding answered every held request.
     ViewGone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PermissionAnswer {
-    pub id: RequestId,
-    /// The kinds granted: all of the request's, or none (deny).
-    pub granted: Vec<PermissionKind>,
+    pub reply: Reply,
     /// A decision to remember: (site, kinds, decision).
     pub remember: Option<(String, Vec<Permission>, Decision)>,
 }
 
+/// Who an answer goes to and what it says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reply {
+    /// To the engine: the kinds granted, all of the request's or none (deny).
+    Engine {
+        id: RequestId,
+        granted: Vec<PermissionKind>,
+    },
+    /// To the host: open the link in its app, or not.
+    External { url: String, open: bool },
+}
+
 impl PermissionAnswer {
     fn new(request: &PermissionRequest, grant: bool) -> Self {
+        let reply = match &request.ask {
+            Ask::Engine { id, kinds } => Reply::Engine {
+                id: *id,
+                granted: if grant { kinds.clone() } else { vec![] },
+            },
+            Ask::ExternalLink { url } => Reply::External {
+                url: url.clone(),
+                open: grant,
+            },
+        };
         Self {
-            id: request.id,
-            granted: if grant { request.kinds.clone() } else { vec![] },
+            reply,
             remember: None,
         }
     }
@@ -134,6 +196,13 @@ pub fn permission(
     use PermissionEvent::*;
     use PermissionPrompt::Open;
     match (state, event) {
+        // A link already waiting is not asked about twice.
+        (Open { shown, queued }, Requested(new))
+            if matches!(new.ask, Ask::ExternalLink { .. })
+                && (shown == new || queued.contains(&new)) =>
+        {
+            (Open { shown, queued }, vec![])
+        }
         (state, Requested(new)) => match (new.verdict(table), state) {
             (Verdict::Grant, state) => (state, vec![PermissionAnswer::new(&new, true)]),
             (Verdict::Deny, state) => (state, vec![PermissionAnswer::new(&new, false)]),
@@ -146,6 +215,8 @@ pub fn permission(
         (Open { shown, queued }, Answer { allow, remember }) => {
             let mut answer = PermissionAnswer::new(&shown, allow);
             let mut table = table.clone();
+            // Chromium's "always" applies to Open only: a link refused once is asked again.
+            let remember = remember && (allow || matches!(shown.ask, Ask::Engine { .. }));
             if remember && let (Some(site), Some(asked)) = (shown.site(), shown.asked()) {
                 let decision = if allow {
                     Decision::Allow
@@ -161,17 +232,33 @@ pub fn permission(
             let (next, more) = next_prompt(queued, &table);
             (next, [vec![answer], more].concat())
         }
-        (Open { shown, mut queued }, Dismissed(ids)) => {
-            queued.retain(|r| !ids.contains(&r.id));
-            if ids.contains(&shown.id) {
-                next_prompt(queued, table)
-            } else {
-                (Open { shown, queued }, vec![])
-            }
+        (Open { shown, queued }, Dismissed(ids)) => {
+            let gone = |r: &PermissionRequest| r.engine_id().is_some_and(|id| ids.contains(&id));
+            drop_requests(shown, queued, gone, table)
         }
-        (_, ViewGone) | (PermissionPrompt::None, Answer { .. } | Dismissed(_)) => {
+        (Open { shown, queued }, PageChanged) => {
+            let link = |r: &PermissionRequest| matches!(r.ask, Ask::ExternalLink { .. });
+            drop_requests(shown, queued, link, table)
+        }
+        (_, ViewGone) | (PermissionPrompt::None, Answer { .. } | Dismissed(_) | PageChanged) => {
             (PermissionPrompt::None, vec![])
         }
+    }
+}
+
+/// The prompt without the requests `gone` picks, unanswered; the next one is shown if the
+/// shown one went.
+fn drop_requests(
+    shown: PermissionRequest,
+    mut queued: VecDeque<PermissionRequest>,
+    gone: impl Fn(&PermissionRequest) -> bool,
+    table: &SitePermissions,
+) -> (PermissionPrompt, Vec<PermissionAnswer>) {
+    queued.retain(|r| !gone(r));
+    if gone(&shown) {
+        next_prompt(queued, table)
+    } else {
+        (PermissionPrompt::Open { shown, queued }, vec![])
     }
 }
 
@@ -192,21 +279,65 @@ fn next_prompt(
     (PermissionPrompt::None, answers)
 }
 
-/// What the prompt says: the site, and one line per kind.
-pub fn permission_text(r: &PermissionRequest) -> (String, Vec<&'static str>) {
+/// What the prompt says and its controls are called.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptText {
+    pub title: String,
+    pub lines: Vec<String>,
+    /// The "remember" toggle.
+    pub remember: String,
+    pub allow: &'static str,
+    pub block: &'static str,
+}
+
+/// The longest link an external-link prompt shows whole.
+const LINK_CHARS: usize = 80;
+
+/// What the prompt says: the site, and one line per kind; for a link to another app,
+/// Chromium's "Open <app>?" with the scheme for the app (wubble does not look the app up), the
+/// link, and "Always for <site> and <scheme> links". No toggle (`remember` empty) where
+/// nothing could be remembered: an opaque origin.
+pub fn permission_text(r: &PermissionRequest) -> PromptText {
     let site = wubble_core::url::address_parts(&r.origin).0;
-    let site = if site.is_empty() || site.ends_with(':') {
-        "This page".to_string()
-    } else {
-        site.to_string()
-    };
+    let named = !(site.is_empty() || site.ends_with(':'));
+    let rememberable = r.site().is_some();
+    if let Ask::ExternalLink { url } = &r.ask {
+        let scheme = external::scheme(url).unwrap_or_default();
+        return PromptText {
+            title: format!("Open {scheme} link?"),
+            lines: vec![
+                format!(
+                    "{} wants to open this link in another app:",
+                    if named { site } else { "This page" }
+                ),
+                wubble_core::url::elide_middle(url, LINK_CHARS).into_owned(),
+            ],
+            remember: if rememberable {
+                format!("Always for {site} and {scheme} links")
+            } else {
+                String::new()
+            },
+            allow: "Open",
+            block: "Cancel",
+        };
+    }
     let lines = r
         .asked()
         .unwrap_or_default()
         .into_iter()
-        .map(Permission::ask_text)
+        .map(|p| p.ask_text().to_string())
         .collect();
-    (format!("{site} wants to"), lines)
+    PromptText {
+        title: format!("{} wants to", if named { site } else { "This page" }),
+        lines,
+        remember: if rememberable {
+            "Remember for this site".into()
+        } else {
+            String::new()
+        },
+        allow: "Allow",
+        block: "Block",
+    }
 }
 
 // ------------------------------------------------------------------- auth
@@ -289,9 +420,11 @@ mod tests {
 
     fn request(id: u32, kinds: &[PermissionKind]) -> PermissionRequest {
         PermissionRequest {
-            id: RequestId(id),
             origin: "https://a.test/".into(),
-            kinds: kinds.to_vec(),
+            ask: Ask::Engine {
+                id: RequestId(id),
+                kinds: kinds.to_vec(),
+            },
         }
     }
 
@@ -301,8 +434,10 @@ mod tests {
 
     fn granted(id: u32, kinds: &[PermissionKind]) -> PermissionAnswer {
         PermissionAnswer {
-            id: RequestId(id),
-            granted: kinds.to_vec(),
+            reply: Reply::Engine {
+                id: RequestId(id),
+                granted: kinds.to_vec(),
+            },
             remember: None,
         }
     }
@@ -323,10 +458,16 @@ mod tests {
             StorageAccess,
         ];
         let mapped: Vec<Permission> = prompted.iter().filter_map(|&k| permission_of(k)).collect();
-        // Every kind but the save-password and popup decisions, which no prompt asks for.
+        // Every kind but the save-password and popup decisions, which no prompt asks for, and
+        // external links, which the host asks about itself.
         let asked = Permission::ALL
             .iter()
-            .filter(|&&p| !matches!(p, Permission::SavePasswords | Permission::Popups))
+            .filter(|&&p| {
+                !matches!(
+                    p,
+                    Permission::SavePasswords | Permission::Popups | Permission::ExternalLinks
+                )
+            })
             .count();
         assert_eq!(mapped.len(), asked);
         for never in [
@@ -460,7 +601,7 @@ mod tests {
 
     fn shown(s: &PermissionPrompt) -> Option<u32> {
         match s {
-            PermissionPrompt::Open { shown, .. } => Some(shown.id.0),
+            PermissionPrompt::Open { shown, .. } => shown.engine_id().map(|id| id.0),
             PermissionPrompt::None => None,
         }
     }
@@ -495,9 +636,8 @@ mod tests {
             remember: true,
         };
         let (s, a) = permission(s, remember, &t);
-        let ids: Vec<u32> = a.iter().map(|a| a.id.0).collect();
-        assert_eq!(ids, [1, 2]);
-        assert!(a.iter().all(|a| a.granted.is_empty()));
+        let replies: Vec<&Reply> = a.iter().map(|a| &a.reply).collect();
+        assert_eq!(replies, [&granted(1, &[]).reply, &granted(2, &[]).reply]);
         assert_eq!(shown(&s), Some(3));
     }
 
@@ -535,9 +675,149 @@ mod tests {
 
     #[test]
     fn prompt_text() {
-        let (title, lines) = permission_text(&request(1, &[MicStream, CameraStream]));
-        assert_eq!(title, "a.test wants to");
-        assert_eq!(lines, ["Use your camera", "Use your microphone"]);
+        let t = permission_text(&request(1, &[MicStream, CameraStream]));
+        assert_eq!(t.title, "a.test wants to");
+        assert_eq!(t.lines, ["Use your camera", "Use your microphone"]);
+        assert_eq!((t.allow, t.block), ("Allow", "Block"));
+    }
+
+    fn mailto() -> PermissionRequest {
+        PermissionRequest {
+            origin: "https://a.test/".into(),
+            ask: Ask::ExternalLink {
+                url: "mailto:x@y.test".into(),
+            },
+        }
+    }
+
+    fn opened(open: bool) -> Reply {
+        Reply::External {
+            url: "mailto:x@y.test".into(),
+            open,
+        }
+    }
+
+    #[test]
+    fn an_external_link_is_asked_about_and_remembered_per_site_and_scheme() {
+        let t = permission_text(&mailto());
+        assert_eq!(t.title, "Open mailto link?");
+        assert_eq!(
+            t.lines,
+            [
+                "a.test wants to open this link in another app:",
+                "mailto:x@y.test"
+            ]
+        );
+        assert_eq!(t.remember, "Always for a.test and mailto links");
+        assert_eq!((t.allow, t.block), ("Open", "Cancel"));
+
+        let table = SitePermissions::default();
+        let (s, a) = permission(
+            PermissionPrompt::None,
+            PermissionEvent::Requested(mailto()),
+            &table,
+        );
+        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
+        let (s, a) = permission(
+            s,
+            PermissionEvent::Answer {
+                allow: true,
+                remember: true,
+            },
+            &table,
+        );
+        assert_eq!(s, PermissionPrompt::None);
+        assert_eq!(
+            a,
+            vec![PermissionAnswer {
+                reply: opened(true),
+                remember: Some((
+                    "mailto:https://a.test".into(),
+                    vec![Permission::ExternalLinks],
+                    Decision::Allow
+                )),
+            }]
+        );
+        // Remembered: the next one opens without a prompt.
+        let mut table = table;
+        table.set(
+            "mailto:https://a.test",
+            Permission::ExternalLinks,
+            Decision::Allow,
+        );
+        let (s, a) = permission(
+            PermissionPrompt::None,
+            PermissionEvent::Requested(mailto()),
+            &table,
+        );
+        assert_eq!(s, PermissionPrompt::None);
+        assert_eq!(a[0].reply, opened(true));
+    }
+
+    #[test]
+    fn a_cancelled_link_is_never_remembered() {
+        let table = SitePermissions::default();
+        let (s, _) = permission(
+            PermissionPrompt::None,
+            PermissionEvent::Requested(mailto()),
+            &table,
+        );
+        let cancel = PermissionEvent::Answer {
+            allow: false,
+            remember: true,
+        };
+        let (_, a) = permission(s, cancel, &table);
+        assert_eq!(
+            a,
+            [PermissionAnswer {
+                reply: opened(false),
+                remember: None
+            }]
+        );
+    }
+
+    #[test]
+    fn a_link_on_an_opaque_page_has_no_toggle() {
+        let file = PermissionRequest {
+            origin: "file:///x.html".into(),
+            ..mailto()
+        };
+        assert_eq!(permission_text(&file).remember, "");
+        let data = PermissionRequest {
+            origin: "data:text/html,x".into(),
+            ..request(1, &[Geolocation])
+        };
+        assert_eq!(permission_text(&data).remember, "");
+    }
+
+    #[test]
+    fn a_new_page_drops_links_and_a_repeated_link_is_asked_once() {
+        let t = SitePermissions::default();
+        let (s, _) = permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t);
+        let (s, _) = permission(s, PermissionEvent::Requested(mailto()), &t);
+        let (s, a) = permission(s, PermissionEvent::Requested(mailto()), &t);
+        assert!(a.is_empty());
+        let PermissionPrompt::Open { queued, .. } = &s else {
+            panic!("open")
+        };
+        assert_eq!(queued.len(), 1, "the second click is not queued again");
+        let (s, a) = permission(s, PermissionEvent::PageChanged, &t);
+        assert!(a.is_empty());
+        assert_eq!(
+            s,
+            permission(PermissionPrompt::None, ask(1, &[CameraStream]), &t).0,
+            "the engine's request stays, the link goes"
+        );
+        let (s, _) = permission(
+            PermissionPrompt::None,
+            PermissionEvent::Requested(mailto()),
+            &t,
+        );
+        assert_eq!(
+            permission(s, PermissionEvent::PageChanged, &t),
+            (PermissionPrompt::None, vec![]),
+            "a shown link goes too"
+        );
     }
 
     fn challenge(id: u32) -> AuthEvent {

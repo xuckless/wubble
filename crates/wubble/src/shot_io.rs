@@ -1,5 +1,6 @@
 //! A screenshot's bytes to their places, off the Slint thread: the PNG Chromium returned
-//! (base64) to a file in the downloads folder and/or, decoded to RGBA, onto the clipboard.
+//! (base64) to a file in the downloads folder and/or, decoded to RGBA, onto the clipboard; and
+//! Copy Image's pixels onto the clipboard.
 //!
 //! One worker thread owns the clipboard for the app's life: on X11 and Wayland the copying
 //! program serves the image until something else is copied, so its owner must outlive the copy.
@@ -10,12 +11,24 @@ use std::sync::mpsc;
 
 use base64::Engine as _;
 
-/// What to do with one screenshot.
+/// The image of one job.
+pub enum Picture {
+    /// A PNG, base64 (`Page.captureScreenshot`'s `data`), written to `path` if given.
+    Png {
+        base64: String,
+        path: Option<PathBuf>,
+    },
+    /// Straight RGBA rows (Copy Image's `View::download_image`).
+    Rgba {
+        width: u32,
+        height: u32,
+        bytes: Vec<u8>,
+    },
+}
+
+/// What to do with one screenshot or copied image.
 pub struct Job {
-    /// The PNG, base64 (`Page.captureScreenshot`'s `data`).
-    pub png_base64: String,
-    /// Write it here.
-    pub path: Option<PathBuf>,
+    pub picture: Picture,
     /// Put it on the clipboard.
     pub clipboard: bool,
 }
@@ -62,20 +75,32 @@ impl Saver {
 }
 
 fn run(job: Job, clipboard: &mut Option<arboard::Clipboard>) -> Saved {
-    let Ok(png) = base64::engine::general_purpose::STANDARD.decode(job.png_base64.trim()) else {
-        eprintln!("wubble: screenshot: the image is not base64");
-        return Saved::default();
-    };
-    let file = job.path.map(|path| match std::fs::write(&path, &png) {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("wubble: screenshot {}: {e}", path.display());
-            false
+    // The file is written now; the pixels are decoded only for the clipboard.
+    let (file, size, pixels) = match job.picture {
+        Picture::Png { base64, path } => {
+            let Ok(png) = base64::engine::general_purpose::STANDARD.decode(base64.trim()) else {
+                eprintln!("wubble: screenshot: the image is not base64");
+                return Saved::default();
+            };
+            let file = path.map(|path| {
+                std::fs::write(&path, &png)
+                    .map_err(|e| eprintln!("wubble: screenshot {}: {e}", path.display()))
+                    .is_ok()
+            });
+            (file, png_size(&png), job.clipboard.then(|| rgba(&png)))
         }
-    });
-    let size = png_size(&png);
-    let copied = job.clipboard.then(|| {
-        let (width, height, bytes) = match rgba(&png) {
+        Picture::Rgba {
+            width,
+            height,
+            bytes,
+        } => (
+            None,
+            Some((width, height)),
+            job.clipboard.then_some(Ok((width, height, bytes))),
+        ),
+    };
+    let copied = pixels.map(|decoded| {
+        let (width, height, bytes) = match decoded {
             Ok(image) => image,
             Err(e) => {
                 eprintln!("wubble: screenshot: {e}");
@@ -96,7 +121,7 @@ fn run(job: Job, clipboard: &mut Option<arboard::Clipboard>) -> Saved {
             }),
         };
         result
-            .map_err(|e| eprintln!("wubble: screenshot to the clipboard: {e}"))
+            .map_err(|e| eprintln!("wubble: image to the clipboard: {e}"))
             .is_ok()
     });
     Saved {
@@ -179,8 +204,10 @@ mod tests {
         let path = dir.path().join("shot.png");
         let png = tiny_png();
         let job = Job {
-            png_base64: base64::engine::general_purpose::STANDARD.encode(&png),
-            path: Some(path.clone()),
+            picture: Picture::Png {
+                base64: base64::engine::general_purpose::STANDARD.encode(&png),
+                path: Some(path.clone()),
+            },
             clipboard: false,
         };
         let saved = run(job, &mut None);
@@ -194,8 +221,10 @@ mod tests {
         );
         assert_eq!(std::fs::read(path).unwrap(), png);
         let bad = Job {
-            png_base64: "***".into(),
-            path: None,
+            picture: Picture::Png {
+                base64: "***".into(),
+                path: None,
+            },
             clipboard: false,
         };
         assert_eq!(run(bad, &mut None), Saved::default());

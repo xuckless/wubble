@@ -155,6 +155,27 @@ pub(crate) fn send_frame_message(
     Ok(())
 }
 
+/// Runs `script` in the frame `frame_id`, or in the main frame when the id
+/// is empty or that frame is gone (wubble change 43). Shared by the three
+/// platform producers.
+pub(crate) fn run_in_frame(
+    browser: &cef::Browser,
+    frame_id: &str,
+    script: &str,
+    source_url: &str,
+) -> Result<(), WeldError> {
+    let id: cef::CefString = frame_id.into();
+    let frame = (!frame_id.is_empty())
+        .then(|| browser.frame_by_identifier(Some(&id)))
+        .flatten()
+        .or_else(|| browser.main_frame())
+        .ok_or_else(|| WeldError::BrowserOp("the page has no frame".into()))?;
+    let code: cef::CefString = script.into();
+    let url: cef::CefString = source_url.into();
+    frame.execute_java_script(Some(&code), Some(&url), 0);
+    Ok(())
+}
+
 // ── Defaults ──────────────────────────────────────────────────────────────
 
 impl Answer for cef::AuthCallback {
@@ -573,9 +594,34 @@ cef::wrap_request_handler! {
     }
 
     impl RequestHandler {
+        // wubble change 40: a navigation to a scheme Chromium does not
+        // handle is cancelled here and handed to the host, with its gesture
+        // bit; otherwise CEF fails it with ERR_UNKNOWN_URL_SCHEME and commits
+        // an error page in place of the page the link was on.
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            user_gesture: ::std::os::raw::c_int,
+            _is_redirect: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            let Some(request) = request else { return 0 };
+            let url = cef_string(request.url());
+            if !chromium_handles(&url) {
+                push(&self.events, NavigationEvent::ProtocolExecution {
+                    url,
+                    user_gesture: Some(user_gesture != 0),
+                });
+                return 1;
+            }
+            0
+        }
+
         // wubble change: a resource-request handler only when the host set
         // a filter or a response observer (change 36), so without either
-        // CEF's default handling is untouched.
+        // CEF's default handling is untouched (it never runs an OS app:
+        // `allow_os_execution` defaults to false).
         // Shape from cefclient `ClientHandler::GetResourceRequestHandler`
         // (chromiumembedded/cef, BSD-3-Clause); no code copied.
         fn resource_request_handler(
@@ -597,6 +643,7 @@ cef::wrap_request_handler! {
                 opt_string(request_initiator),
                 is_navigation != 0,
                 Arc::new(Mutex::new(None)),
+                self.events.clone(),
             ))
         }
 
@@ -759,9 +806,32 @@ cef::wrap_resource_request_handler! {
         // wubble change 35: what `RequestAction::Serve` decided, taken by
         // `resource_handler` (CEF calls it after `on_before_resource_load`).
         served: Arc<Mutex<Option<Served>>>,
+        // wubble change 40.
+        events: Arc<WebEventQueue>,
     }
 
     impl ResourceRequestHandler {
+        // wubble change 40: an unknown scheme never goes to the OS from
+        // here; the host asks the user and opens it itself. Called on the
+        // IO thread, and the answer is synchronous, hence the event. Only a
+        // scheme `chromium_handles` wrongly claims gets here (the rest were
+        // cancelled in `on_before_browse`); CEF gives no gesture bit, so the
+        // host treats it as made without one.
+        fn on_protocol_execution(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut cef::Request>,
+            allow_os_execution: Option<&mut ::std::os::raw::c_int>,
+        ) {
+            if let Some(allow) = allow_os_execution {
+                *allow = 0;
+            }
+            let Some(request) = request else { return };
+            let url = cef_string(request.url());
+            push(&self.events, NavigationEvent::ProtocolExecution { url, user_gesture: None });
+        }
+
         // Called on the IO thread; the only place CEF lets the request be
         // changed (a changed URL is a redirect).
         fn on_before_resource_load(
@@ -859,6 +929,22 @@ cef::wrap_resource_request_handler! {
             Some(WeldServedResource::new(Arc::new(served), Arc::new(Mutex::new(0))))
         }
     }
+}
+
+/// wubble change 40: whether Chromium loads `url` itself rather than handing
+/// it to an OS app: the web, local and data schemes and its own pages
+/// (`url/url_constants.h`, `content/public/common/url_constants.h`). An
+/// unknown scheme that is missing here still reaches the host, through
+/// `on_protocol_execution`. Public so a host can tell, before it opens a tab
+/// or loads a URL, that the URL belongs to another app.
+pub fn chromium_handles(url: &str) -> bool {
+    let Some((scheme, _)) = url.split_once(':') else { return true };
+    const HANDLED: &[&str] = &[
+        "http", "https", "ws", "wss", "file", "data", "blob", "filesystem", "about",
+        "javascript", "chrome", "chrome-untrusted", "chrome-error", "chrome-extension",
+        "devtools", "view-source",
+    ];
+    HANDLED.iter().any(|s| s.eq_ignore_ascii_case(scheme))
 }
 
 /// wubble change 35: a response given as a `data:` URL.
@@ -1001,6 +1087,8 @@ cef::wrap_download_handler! {
                         id: request,
                         download: id,
                         url,
+                        // wubble change 41
+                        original_url: cef_string(item.original_url()),
                         suggested_filename: suggested,
                         total_bytes_expected,
                     });
@@ -1188,7 +1276,7 @@ cef::wrap_context_menu_handler! {
         fn run_context_menu(
             &self,
             _browser: Option<&mut cef::Browser>,
-            _frame: Option<&mut cef::Frame>,
+            frame: Option<&mut cef::Frame>,
             params: Option<&mut cef::ContextMenuParams>,
             model: Option<&mut cef::MenuModel>,
             callback: Option<&mut cef::RunContextMenuCallback>,
@@ -1216,6 +1304,8 @@ cef::wrap_context_menu_handler! {
                 page_url: cef_string(params.page_url()),
                 selection_text: cef_string(params.selection_text()),
                 frame_url: cef_string(params.frame_url()),
+                // wubble change 42
+                frame_id: frame.map(|f| cef_string(f.identifier())).unwrap_or_default(),
                 media: crate::surface::context_menu_media(*params.media_type().as_ref() as i64),
                 has_image_contents: params.has_image_contents() != 0,
                 editable: params.is_editable() != 0,
@@ -1375,9 +1465,19 @@ cef::wrap_dialog_handler! {
 // wubble change: the request filter's top-page rule.
 #[cfg(test)]
 mod request_filter_tests {
-    use super::{Served, top_url};
+    use super::{Served, chromium_handles, top_url};
 
     // wubble change 35.
+    #[test]
+    fn only_schemes_chromium_lacks_go_to_the_host() {
+        for url in ["https://a/", "HTTP://a", "file:///x", "data:,x", "about:blank", "chrome://gpu", "blob:https://a/1", ""] {
+            assert!(chromium_handles(url), "{url}");
+        }
+        for url in ["mailto:a@b", "tel:123", "magnet:?xt=1", "slack://open", "ftp://a/"] {
+            assert!(!chromium_handles(url), "{url}");
+        }
+    }
+
     #[test]
     fn served_data_urls_decode_base64_only() {
         let gif = Served::from_data_url("data:image/gif;base64,R0lGODlhAQABAAAAACw=").unwrap();

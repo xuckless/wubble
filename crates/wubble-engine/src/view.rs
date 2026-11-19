@@ -661,7 +661,9 @@ impl View {
                         is_main,
                         pid,
                     };
-                    if let Some(event) = frame_message(frame, text) {
+                    if let Some((FrameChannel::Cosmetic, body)) = FrameChannel::split(&text) {
+                        self.answer_cosmetic(&frame, body);
+                    } else if let Some(event) = frame_message(frame, text) {
                         self.emit_page(event, mode);
                     }
                 }
@@ -707,9 +709,8 @@ impl View {
         let (next, event) = popup::transition(self.popup, placement);
         self.popup = next;
         self.page.extend(event);
-        let icons = std::mem::take(&mut *self.favicons.lock().unwrap_or_else(|e| e.into_inner()));
-        self.page
-            .extend(icons.into_iter().map(PageEvent::FaviconImage));
+        let images = std::mem::take(&mut *self.favicons.lock().unwrap_or_else(|e| e.into_inner()));
+        self.page.extend(images);
         if let Some(composition) = self.producer.poll_ime_composition() {
             self.page.push(crate::ime::bounds(composition));
         }
@@ -764,24 +765,42 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
-            Route::PageCommitted(url) => {
-                self.inject_page_script(&url);
-                self.page.push(PageEvent::Committed);
-            }
+            Route::PageCommitted => self.page.push(PageEvent::Committed),
         }
     }
 
-    /// Runs the content filter's script for the page that just committed
-    /// (cosmetic filtering), in the main frame.
-    fn inject_page_script(&mut self, url: &str) {
-        let Some(script) = self.filter.as_ref().and_then(|f| f.page_script(url)) else {
+    /// Answers a frame's `cosmetic.js` with the content filter's rules
+    /// (`cosmetic::Request`): the data goes back on the channel, scriptlets
+    /// run in the frame from here.
+    fn answer_cosmetic(&mut self, frame: &crate::page::FrameInfo, body: &str) {
+        use crate::cosmetic::{Request, reply_text};
+        use crate::filter::FrameCosmetic;
+        let Some(filter) = self.filter.clone() else {
             return;
         };
-        if let Err(e) = self.producer.execute_script(&script, url) {
-            eprintln!(
-                "wubble-engine: view {}: page script not run: {e}",
-                self.browser_id
-            );
+        // A main frame is its own page; a subframe's page is the view's.
+        let top = if frame.is_main {
+            frame.url.clone()
+        } else {
+            self.nav.page.url.clone()
+        };
+        let reply = match Request::parse(body) {
+            Some(Request::Hello) => {
+                let mut given = filter.frame_cosmetic(&top, &frame.url);
+                if let Some(script) = given.script.take() {
+                    self.run_script_in(&frame.id, &script);
+                }
+                given
+            }
+            // `generic` stays off: the page already reports names.
+            Some(Request::Names { classes, ids }) => FrameCosmetic {
+                css: filter.generic_hide(&top, &frame.url, &classes, &ids),
+                ..FrameCosmetic::default()
+            },
+            None => return,
+        };
+        if reply != FrameCosmetic::default() {
+            self.send_frame_message(&frame.id, FrameChannel::Cosmetic, &reply_text(&reply));
         }
     }
 
@@ -930,6 +949,22 @@ impl View {
 
     pub fn cancel_download(&mut self, id: DownloadId) {
         self.apply_download(id, DownloadInput::Cancel, RequestMode::AskHost);
+    }
+
+    /// Asks Chromium for a fresh frame of the page (after the GPU process restarted, the
+    /// frames it had handed over are gone).
+    pub fn repaint(&mut self) {
+        if let Err(e) = self.producer.request_repaint() {
+            eprintln!("wubble-engine: view {}: repaint: {e}", self.browser_id);
+        }
+    }
+
+    /// Fetches the image at `url` at full size with the page's cookies (CEF
+    /// `BrowserHost::DownloadImage`); it arrives as
+    /// [`PageEvent::ImageDownloaded`]. For Copy Image.
+    pub fn download_image(&mut self, url: &str) {
+        let sink = self.favicons.clone();
+        self.send(|host| crate::favicon::fetch(host, url, &sink, crate::favicon::Purpose::Full));
     }
 
     /// Downloads `url` as a new download (CEF `BrowserHost::StartDownload`);
@@ -1161,6 +1196,21 @@ impl View {
         }
     }
 
+    /// Runs `script` (statements) in the frame `frame` (a context menu's
+    /// [`ContextMenu::frame`]), the main frame when it is empty or gone.
+    pub fn run_script_in(&mut self, frame: &str, script: &str) {
+        if !self.is_open() {
+            return;
+        }
+        let url = self.nav.page.url.clone();
+        if let Err(e) = self.producer.execute_script_in_frame(frame, script, &url) {
+            eprintln!(
+                "wubble-engine: view {}: script not run: {e}",
+                self.browser_id
+            );
+        }
+    }
+
     /// Runs `script` (statements) in the page's main frame, with no answer.
     pub fn run_script(&mut self, script: &str) {
         if !self.is_open() {
@@ -1377,7 +1427,9 @@ impl View {
             NavEffect::Stop => self.producer.stop(),
             NavEffect::FetchFavicon(url) => {
                 let sink = self.favicons.clone();
-                self.send(|host| crate::favicon::fetch(host, url, &sink));
+                self.send(|host| {
+                    crate::favicon::fetch(host, url, &sink, crate::favicon::Purpose::Icon)
+                });
                 Ok(())
             }
             NavEffect::Repaint => self.producer.request_repaint(),
@@ -1437,9 +1489,9 @@ enum Route {
     ObserveZoom,
     /// The renderer process ended.
     Crashed,
-    /// The main frame committed a load of this URL (welding reports
-    /// `LoadStart` for the main frame only).
-    PageCommitted(String),
+    /// The main frame committed a load (welding reports `LoadStart` for the
+    /// main frame only).
+    PageCommitted,
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1461,6 +1513,8 @@ fn frame_message(frame: crate::page::FrameInfo, text: String) -> Option<PageEven
             frame: frame.id,
             request: clipboard_request(body)?,
         },
+        // Answered by the engine itself (`View::answer_cosmetic`).
+        FrameChannel::Cosmetic => return None,
         FrameChannel::Zoom => PageEvent::WheelZoom {
             zoom_in: match body {
                 "in" => true,
@@ -1491,7 +1545,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
     match event {
         E::AddressChanged { url } => vec![Route::Nav(NavInput::Address(url)), Route::ObserveZoom],
         E::TitleChanged { title } => one(Route::Nav(NavInput::Title(title))),
-        E::LoadStart { url } => one(Route::PageCommitted(url)),
+        E::LoadStart { .. } => one(Route::PageCommitted),
         E::LoadingStateChanged {
             loading,
             can_go_back,
@@ -1567,6 +1621,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             page_url,
             selection_text,
             frame_url,
+            frame_id,
             media,
             has_image_contents,
             editable,
@@ -1587,6 +1642,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
                 has_image: has_image_contents,
                 page_url,
                 frame_url,
+                frame: frame_id,
                 selection_text,
                 editable: editable || targets.contains(&welding::ContextMenuTarget::Editable),
                 edit: EditFlags(edit_flags),
@@ -1597,6 +1653,14 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             }),
         })),
         E::ContextMenuDismissed => one(Route::Page(PageEvent::ContextMenuDismissed)),
+        E::StatusChanged { text } => one(Route::Page(PageEvent::LinkStatus(text))),
+        E::Tooltip { text } => one(Route::Page(PageEvent::Tooltip(text))),
+        E::ProtocolExecution { url, user_gesture } => {
+            one(Route::Page(PageEvent::ExternalProtocol {
+                url,
+                gesture: user_gesture,
+            }))
+        }
         E::PermissionRequested {
             id,
             origin,
@@ -1654,6 +1718,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             id,
             download,
             url,
+            original_url,
             suggested_filename,
             total_bytes_expected,
         } => one(Route::Download(
@@ -1661,6 +1726,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             DownloadInput::Offered {
                 request: RequestId(id),
                 url,
+                original_url,
                 suggested_name: suggested_filename,
                 total: total_bytes_expected,
             },
@@ -2188,6 +2254,7 @@ mod tests {
             FrameChannel::Clipboard,
             FrameChannel::Zoom,
             FrameChannel::Probes,
+            FrameChannel::Cosmetic,
         ] {
             assert_eq!(
                 FrameChannel::split(&channel.join("x\ny")),
@@ -2361,6 +2428,7 @@ mod tests {
             page_url: "https://p/".into(),
             selection_text: "sel".into(),
             frame_url: "https://p/".into(),
+            frame_id: "7-ABC".into(),
             media: welding::ContextMenuMedia::Image,
             has_image_contents: true,
             editable: false,
@@ -2382,6 +2450,7 @@ mod tests {
         assert_eq!(id, RequestId(8));
         assert_eq!((menu.x, menu.y), (10, 20));
         assert_eq!(menu.media_url, "https://i.png");
+        assert_eq!(menu.frame, "7-ABC");
         assert_eq!(menu.media, crate::page::MediaKind::Image);
         assert!(menu.editable, "the Editable target counts as editable");
         assert!(menu.edit.allows(EditFlags::CAN_PASTE));
@@ -2390,15 +2459,40 @@ mod tests {
         assert_eq!(menu.items[0].command, 114);
     }
 
-    /// The cosmetic-filter hook: a main-frame commit asks for the page
-    /// script, the end of the load does not.
     #[test]
-    fn a_main_frame_commit_routes_to_the_page_script() {
+    fn status_tooltip_and_external_links_are_page_events() {
+        assert_eq!(
+            route_one(NavigationEvent::StatusChanged {
+                text: "https://a/".into()
+            }),
+            Route::Page(PageEvent::LinkStatus("https://a/".into()))
+        );
+        assert_eq!(
+            route_one(NavigationEvent::Tooltip {
+                text: String::new()
+            }),
+            Route::Page(PageEvent::Tooltip(String::new()))
+        );
+        assert_eq!(
+            route_one(NavigationEvent::ProtocolExecution {
+                url: "mailto:a@b".into(),
+                user_gesture: Some(true),
+            }),
+            Route::Page(PageEvent::ExternalProtocol {
+                url: "mailto:a@b".into(),
+                gesture: Some(true),
+            })
+        );
+    }
+
+    /// A main-frame commit is reported, the end of the load is not.
+    #[test]
+    fn a_main_frame_commit_is_reported() {
         assert_eq!(
             route_one(NavigationEvent::LoadStart {
                 url: "https://site.test/".into()
             }),
-            Route::PageCommitted("https://site.test/".into())
+            Route::PageCommitted
         );
         assert!(
             route(NavigationEvent::LoadEnd {
@@ -2416,6 +2510,7 @@ mod tests {
                 id: 2,
                 download: 11,
                 url: "u".into(),
+                original_url: "o".into(),
                 suggested_filename: "f".into(),
                 total_bytes_expected: None,
             }),
@@ -2424,6 +2519,7 @@ mod tests {
                 DownloadInput::Offered {
                     request: RequestId(2),
                     url: "u".into(),
+                    original_url: "o".into(),
                     suggested_name: "f".into(),
                     total: None,
                 }

@@ -6,7 +6,10 @@
 //! binaries). It opens one windowless view on a temporary `file://` page that
 //! calls `alert`, `confirm` and `prompt`, asks for geolocation, starts a
 //! download and has a `<select>`; it answers each request, opens the select
-//! and a context menu with synthetic clicks, and exits with
+//! and a context menu with synthetic clicks, then loads a second page and
+//! checks the hovered link's status text, a `title` tooltip, a `mailto:`
+//! link handed to the host (with no error page after it) and a full-size
+//! image download, and exits with
 //! `engine smoke: ok` or the step that failed. No window is shown. The
 //! deadline only bounds a hang; nothing here measures speed.
 //!
@@ -50,6 +53,19 @@ window.onload = () => {
 };
 </script>
 </body></html>"#;
+
+/// The second page: a link, a `title`, a `mailto:` link and a data-URL image
+/// for the status, tooltip, external-protocol and image-download events.
+const BEHAVIOURS: &str = r#"<!doctype html>
+<html><body style="margin:0">
+<a href="https://example.invalid/a/long/path" style="position:absolute;left:0;top:0;width:200px;height:40px;display:block">link</a>
+<div title="tip text" style="position:absolute;left:0;top:100px;width:200px;height:40px">tip</div>
+<a href="mailto:nobody@example.invalid" style="position:absolute;left:0;top:200px;width:200px;height:40px;display:block">mail</a>
+<script>window.onload = () => console.log("smoke behaviours ready");</script>
+</body></html>"#;
+
+/// An 8x8 PNG (the parity page's).
+const PNG_8X8: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGM4YWODFTEMLQkAZZlQAVIPr1MAAAAASUVORK5CYII=";
 
 /// The steps in order; each is passed when its event arrives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +135,12 @@ fn run(dir: &Path, mode: RequestMode) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let outcome = drive(&mut engine, view, &download_to, mode);
+    let mut outcome = drive(&mut engine, view, &download_to, mode);
+    if outcome.is_ok() && mode == RequestMode::AskHost {
+        let page = dir.join("behaviours.html");
+        std::fs::write(&page, BEHAVIOURS).map_err(|e| e.to_string())?;
+        outcome = behaviours(&mut engine, view, &format!("file://{}", page.display()));
+    }
     engine.request_shutdown();
     while !engine.is_stopped() {
         engine.tick();
@@ -300,6 +321,127 @@ fn handle(
         (step, _) => step,
     };
     Ok(next)
+}
+
+/// The page behaviours wubble draws itself: the hovered link's status text,
+/// a `title` tooltip, a `mailto:` link handed back instead of opened, and a
+/// full-size image download. Each stage waits for its event.
+fn behaviours(engine: &mut Engine, view: ViewId, url: &str) -> Result<(), String> {
+    #[derive(Debug, PartialEq)]
+    enum Stage {
+        Ready,
+        Status,
+        Tooltip,
+        Mailto,
+        /// The load error CEF reports for the `mailto:` must not arrive.
+        Settle,
+        Image,
+        Done,
+    }
+    engine.view(view).ok_or("view gone")?.load(url);
+    let start = Instant::now();
+    let mut stage = Stage::Ready;
+    let mut image = None;
+    while stage != Stage::Done {
+        if start.elapsed() > DEADLINE {
+            return Err(format!("no event for stage {stage:?}"));
+        }
+        engine.tick();
+        let mut next = None;
+        for (id, event) in engine.take_page_events() {
+            if id != view {
+                continue;
+            }
+            match (&stage, event) {
+                (Stage::Ready, PageEvent::Console { message, .. })
+                    if message == "smoke behaviours ready" =>
+                {
+                    next = Some(Stage::Status);
+                }
+                (Stage::Status, PageEvent::LinkStatus(text)) if !text.is_empty() => {
+                    println!("engine smoke: status {text:?}");
+                    if !text.contains("example.invalid") {
+                        return Err(format!("status text {text:?}"));
+                    }
+                    next = Some(Stage::Tooltip);
+                }
+                (Stage::Tooltip, PageEvent::Tooltip(text)) if !text.is_empty() => {
+                    println!("engine smoke: tooltip {text:?} after {:?}", start.elapsed());
+                    if text != "tip text" {
+                        return Err(format!("tooltip {text:?}"));
+                    }
+                    next = Some(Stage::Mailto);
+                }
+                (Stage::Mailto, PageEvent::ExternalProtocol { url, gesture }) => {
+                    println!("engine smoke: external {url} gesture {gesture:?}");
+                    if url != "mailto:nobody@example.invalid" {
+                        return Err(format!("external {url}"));
+                    }
+                    next = Some(Stage::Settle);
+                }
+                (Stage::Settle, PageEvent::Console { message, .. })
+                    if message == "smoke settled" =>
+                {
+                    next = Some(Stage::Image);
+                }
+                (_, PageEvent::LoadFailed { url, code, .. }) => {
+                    return Err(format!("load failed {url} ({code})"));
+                }
+                (_, PageEvent::ImageDownloaded { url, image: got }) => {
+                    let got = got.map(|i| (i.width, i.height));
+                    println!("engine smoke: image {} {got:?}", &url[..20.min(url.len())]);
+                    image = Some(got);
+                }
+                _ => {}
+            }
+        }
+        if let Some(n) = next {
+            let view_ref = engine.view(view).ok_or("view gone")?;
+            match n {
+                Stage::Status => {
+                    view_ref.download_image(PNG_8X8);
+                    view_ref.focus(true);
+                }
+                Stage::Mailto => {
+                    click(engine, view, MouseButton::Left, Point { x: 20.0, y: 220.0 })
+                }
+                Stage::Settle => {
+                    view_ref.run_script("setTimeout(() => console.log('smoke settled'), 500)")
+                }
+                _ => {}
+            }
+            stage = n;
+        }
+        // Chromium drops input that comes before the page's first frames, so
+        // the pointer keeps resting where the stage needs it.
+        if let Some(point) = match stage {
+            Stage::Status => Some(Point { x: 20.0, y: 20.0 }),
+            Stage::Tooltip => Some(Point { x: 20.0, y: 120.0 }),
+            _ => None,
+        } {
+            hover(engine, view, point);
+        }
+        if stage == Stage::Image {
+            match image {
+                Some(Ok((8, 8))) => stage = Stage::Done,
+                Some(other) => return Err(format!("image {other:?}")),
+                None => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+fn hover(engine: &mut Engine, view: ViewId, point: Point) {
+    let Some(view) = engine.view(view) else {
+        return;
+    };
+    let up = Modifiers {
+        keys: ModifiersState::empty(),
+        buttons: Buttons::default(),
+    };
+    view.mouse_move(point, &up, Duration::ZERO);
 }
 
 fn answer(ok: bool, next: Step) -> Result<Step, String> {

@@ -170,6 +170,8 @@ fn answer(mut stream: TcpStream, port: u16) -> std::io::Result<()> {
         "/" => LOGIN_PAGE.replace("{PORT}", &port.to_string()),
         "/welcome" => WELCOME_PAGE.to_owned(),
         "/frame" => FRAME_PAGE.to_owned(),
+        // `--smoke block` is served from here too: it needs an http page.
+        "/block" | "/block/next" => crate::BLOCK_PAGE.to_owned(),
         _ => {
             return stream.write_all(
                 b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",

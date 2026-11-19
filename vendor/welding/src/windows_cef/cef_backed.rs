@@ -620,6 +620,28 @@ cef::wrap_display_handler! {
             ));
         }
 
+
+        // wubble change 39: the hovered link's URL for the status bubble.
+        fn on_status_message(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            value: Option<&cef::CefString>,
+        ) {
+            let text = value.map(|v| v.to_string()).unwrap_or_default();
+            self.inner.events.push(CefSurfaceEvent::Navigation(crate::surface::NavigationEvent::StatusChanged { text }));
+        }
+
+        // wubble change 39: under windowless rendering the host draws tooltips.
+        fn on_tooltip(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            text: Option<&mut cef::CefString>,
+        ) -> ::std::os::raw::c_int {
+            let text = text.map(|t| t.to_string()).unwrap_or_default();
+            self.inner.events.push(CefSurfaceEvent::Navigation(crate::surface::NavigationEvent::Tooltip { text }));
+            1
+        }
+
         // wubble change: the page entered or left fullscreen.
         fn on_fullscreen_mode_change(
             &self,

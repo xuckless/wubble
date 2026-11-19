@@ -23,7 +23,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use wubble_engine::app::{Engine, EngineConfig};
-use wubble_engine::filter::{ContentFilter, RequestAction, RequestInfo, RequestKind};
+use wubble_engine::filter::{
+    ContentFilter, FrameCosmetic, RequestAction, RequestInfo, RequestKind,
+};
 use wubble_engine::page::PageEvent;
 use wubble_engine::view::{Layout, ViewConfig};
 use wubble_gfx::{FrameSize, GpuContext};
@@ -37,7 +39,7 @@ const PAGE: &str = r#"<!doctype html>
 
 const SCRIPT: &str = "console.log('smoke script ran');";
 
-/// What the filter injects on commit.
+/// What the filter runs in a frame whose context was created.
 const PAGE_SCRIPT: &str = "console.log('smoke page script ran');";
 
 /// How long a hang may last before the smoke gives up.
@@ -63,9 +65,16 @@ impl ContentFilter for Filter {
         RequestAction::Allow
     }
 
-    fn page_script(&self, _top_url: &str) -> Option<String> {
+    fn frame_cosmetic(&self, _top_url: &str, _frame_url: &str) -> FrameCosmetic {
         self.page_scripts.fetch_add(1, Ordering::Relaxed);
-        Some(PAGE_SCRIPT.into())
+        FrameCosmetic {
+            script: Some(PAGE_SCRIPT.into()),
+            ..FrameCosmetic::default()
+        }
+    }
+
+    fn generic_hide(&self, _: &str, _: &str, _: &[String], _: &[String]) -> Vec<String> {
+        Vec::new()
     }
 }
 

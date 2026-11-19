@@ -3,20 +3,15 @@
 //! writer of. A timer is armed only while the machine waits for a deadline. Each tab's snapshot,
 //! taken when the tab is hidden (`host/snapshots.rs`), stands for it on the card.
 
-use std::time::{Duration, Instant};
-
-use wubble_core::hovercard::{self, Effect, Event, Hover};
+use wubble_core::hovercard::{Effect, Event, Hover, TAB_CARD};
 use wubble_core::tab::TabId;
 
 use super::Host;
-use crate::with_host;
+use super::hover::HoverClock;
 
 /// What the preview holds of its own.
 pub(super) struct Preview {
-    state: Hover,
-    timer: slint::Timer,
-    /// The monotonic zero of the machine's milliseconds.
-    epoch: Instant,
+    clock: HoverClock<TabId>,
     /// The row the pointer is on and its top, window px.
     over: Option<(TabId, f32)>,
 }
@@ -24,15 +19,13 @@ pub(super) struct Preview {
 impl Preview {
     pub fn new() -> Self {
         Self {
-            state: Hover::Idle,
-            timer: slint::Timer::default(),
-            epoch: Instant::now(),
+            clock: HoverClock::new(TAB_CARD),
             over: None,
         }
     }
 
     fn now(&self) -> u64 {
-        self.epoch.elapsed().as_millis() as u64
+        self.clock.now()
     }
 
     /// Drops what belongs to tabs that are gone.
@@ -52,7 +45,7 @@ impl Host {
         let now = self.preview.now();
         if on {
             self.preview.over = Some((tab, y));
-            self.hover_event(Event::Enter { tab, now });
+            self.hover_event(Event::Enter { key: tab, now });
         } else if self.preview.over.is_some_and(|(t, _)| t == tab) {
             // (a leave of a row already replaced by the next one is stale)
             self.preview.over = None;
@@ -62,7 +55,7 @@ impl Host {
 
     /// A press, drag, menu, scroll or tab switch: no card.
     pub(super) fn hover_dismiss(&mut self) {
-        if self.preview.state != Hover::Idle {
+        if self.preview.clock.state() != Hover::Idle {
             self.hover_event(Event::Dismiss);
         }
     }
@@ -72,20 +65,8 @@ impl Host {
         self.hover_event(Event::Tick { now });
     }
 
-    fn hover_event(&mut self, event: Event) {
-        let (state, effect) = hovercard::transition(self.preview.state, event);
-        self.preview.state = state;
-        match hovercard::deadline(state) {
-            Some(at) => {
-                let wait = at.saturating_sub(self.preview.now());
-                self.preview.timer.start(
-                    slint::TimerMode::SingleShot,
-                    Duration::from_millis(wait),
-                    || with_host(|host| host.hover_tick()),
-                );
-            }
-            None => self.preview.timer.stop(),
-        }
+    fn hover_event(&mut self, event: Event<TabId>) {
+        let (_, effect) = self.preview.clock.step(event, Self::hover_tick);
         match effect {
             Some(Effect::Show(tab)) => self.render_preview(Some(tab)),
             Some(Effect::Hide) => self.render_preview(None),

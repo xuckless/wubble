@@ -1,0 +1,62 @@
+import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+
+// The hovered link's URL at the page pane's bottom-left (Chromium's status bubble), one per
+// pane. Written from scratch: the design repo has no status bubble. Its timing and shape are
+// Chromium's `status_bubble_views.cc` (BSD-3-Clause; numbers only): the host shows it 80 ms
+// after a link is hovered and hides it 250 ms after the pointer left the link
+// (`wubble_core::hovercard::STATUS_BUBBLE`); it fades in over 120 ms and out over 200 ms. It is
+// capsule-shaped, as the design's README asks of tooltips and the address pill, and shows the
+// host as the address pill does (ink, the rest in mist), the rest already cut in the middle by
+// the host (`wubble_core::url::status_parts`). Pointer events pass through to the page.
+//
+// When the pointer comes near it (Chromium's 20 px `kMousePadding`) it moves to the pane's
+// right edge, as Firefox's `statuspanel[mirror]` does (Chromium slides it down instead); the
+// parent says so through `mirrored`, from the pointer it already tracks.
+export component StatusBubble inherits Rectangle {
+    in property <bool> shown;
+    in property <string> host;
+    in property <string> rest;
+    in property <bool> mirrored;
+    // The pane it sits in.
+    in property <length> pane-width;
+    in property <length> pane-height;
+
+    width: min(row.preferred-width, root.pane-width / 3 + 2 * Shell.status-pad);
+    height: Shell.status-height;
+    x: root.mirrored ? root.pane-width - self.width - Shell.status-margin : Shell.status-margin;
+    y: root.pane-height - self.height - Shell.status-margin;
+    animate x { duration: Shell.status-move; easing: Motion.easeInOut; }
+    opacity: root.shown ? 1 : 0;
+    animate opacity {
+        duration: root.shown ? Shell.status-in : Shell.status-out;
+        easing: root.shown ? Motion.easeOut : Motion.easeIn;
+    }
+    visible: self.opacity > 0;
+    border-radius: self.height / 2;
+    background: Palette.deep.with-alpha(0.94);
+    border-width: Shell.status-border;
+    border-color: Palette.rim;
+
+    row := HorizontalLayout {
+        padding-left: Shell.status-pad;
+        padding-right: Shell.status-pad;
+        alignment: start;
+        Text {
+            text: root.host;
+            color: Palette.ink;
+            font-family: Fonts.ui;
+            font-size: Shell.status-text;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.rest;
+            color: Palette.mist;
+            font-family: Fonts.ui;
+            font-size: Shell.status-text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}

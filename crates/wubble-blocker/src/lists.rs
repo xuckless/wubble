@@ -17,6 +17,7 @@
 //! applied after every load.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -227,6 +228,99 @@ fn key_path(cache: &Path) -> PathBuf {
     key.into()
 }
 
+/// One row of the settings page's filter-list manager.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListRow {
+    /// The catalog id, or the custom list's file stem.
+    pub id: String,
+    pub title: String,
+    pub licence: String,
+    /// The list's URL.
+    pub url: String,
+    /// One of the user's own lists (can be removed).
+    pub custom: bool,
+    /// The list is in use.
+    pub enabled: bool,
+    /// Its category's own setting (cookie notices, tracking parameters) is off.
+    pub category_off: bool,
+    /// A snapshot inside the binary stands in until a copy is downloaded.
+    pub bundled: bool,
+    /// Rules in the list; `None` until counted.
+    pub rules: Option<u32>,
+    /// When the downloaded copy was fetched (unix seconds); `None`: never.
+    pub updated: Option<u64>,
+}
+
+/// The catalog's lists, then `selection`'s custom lists, as rows. `last_fetch`
+/// is [`crate::last_fetch`]'s answer and `rules` [`rule_counts`]'.
+pub fn rows(
+    selection: &Selection,
+    last_fetch: &BTreeMap<String, u64>,
+    rules: &BTreeMap<String, u32>,
+) -> Vec<ListRow> {
+    let catalog = catalog::LISTS.iter().map(|def| ListRow {
+        id: def.id.to_owned(),
+        title: def.title.to_owned(),
+        licence: def.licence.to_owned(),
+        url: def.url.to_owned(),
+        custom: false,
+        enabled: selection.includes(def),
+        category_off: match def.category {
+            catalog::Category::Cookies => !selection.cookie_banners,
+            catalog::Category::Tracking => !selection.strip_params,
+            _ => false,
+        },
+        bundled: def.bundled.is_some(),
+        rules: rules.get(def.id).copied(),
+        updated: last_fetch.get(def.id).copied(),
+    });
+    let custom = selection.custom.iter().map(|url| {
+        let spec = ListSpec::custom(url);
+        ListRow {
+            title: url.trim_start_matches("https://").to_owned(),
+            licence: String::new(),
+            url: url.clone(),
+            custom: true,
+            enabled: true,
+            category_off: false,
+            bundled: false,
+            rules: rules.get(&spec.id).copied(),
+            updated: last_fetch.get(&spec.id).copied(),
+            id: spec.id,
+        }
+    });
+    catalog.chain(custom).collect()
+}
+
+/// Rules in a list's text: lines that are not blank, `!` comments or `[`
+/// headers. adblock exposes no count without its `debug-info` feature.
+pub fn count_rules(text: &str) -> u32 {
+    let n = text
+        .lines()
+        .filter(|l| {
+            let l = l.trim_start();
+            !l.is_empty() && !l.starts_with('!') && !l.starts_with('[')
+        })
+        .count();
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// Rules per list id, for the lists `sources` names (catalog lists by id,
+/// a custom list's file by its stem). Reads every list: off the UI thread.
+pub fn rule_counts(sources: &[Source]) -> BTreeMap<String, u32> {
+    sources
+        .iter()
+        .filter_map(|source| {
+            let id = match (source.def, &source.origin) {
+                (Some(def), _) => def.id.to_owned(),
+                (None, Origin::File(path)) => path.file_stem()?.to_string_lossy().into_owned(),
+                (None, _) => return None,
+            };
+            Some((id, count_rules(&source.read()?)))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +523,43 @@ mod tests {
         assert!(key.starts_with(KEY_SCHEME));
         assert!(key.contains("\neasylist bundled "), "{key}");
         assert_eq!(key, cache_key(&bundled_sources(&Selection::default())));
+    }
+}
+
+#[cfg(test)]
+mod row_tests {
+    use super::*;
+
+    #[test]
+    fn counts_skip_comments_headers_and_blanks() {
+        assert_eq!(count_rules("[Adblock Plus 2.0]\n! c\n\n||a^\n  ##.x\n"), 2);
+        assert_eq!(count_rules(""), 0);
+    }
+
+    #[test]
+    fn rows_follow_the_selection() {
+        let rows_of = |s: &Selection| rows(s, &BTreeMap::new(), &BTreeMap::new());
+        let all = rows_of(&Selection::default());
+        assert_eq!(all.len(), catalog::LISTS.len());
+        let on = |rows: &[ListRow], id: &str| rows.iter().find(|r| r.id == id).unwrap().enabled;
+        assert!(on(&all, "ublock-filters"));
+
+        let mut s = Selection::default();
+        s.lists.insert("ublock-filters".into(), 0);
+        s.cookie_banners = false;
+        let r = rows_of(&s);
+        assert!(!on(&r, "ublock-filters"));
+        let cookies = r.iter().find(|r| r.id == "easylist-cookies").unwrap();
+        assert!(!cookies.enabled && cookies.category_off);
+
+        s.custom = vec!["https://lists.test/x.txt".into()];
+        let id = ListSpec::custom(&s.custom[0]).id;
+        let fetched = BTreeMap::from([(id.clone(), 5)]);
+        let counts = BTreeMap::from([(id.clone(), 7)]);
+        let r = rows(&s, &fetched, &counts);
+        let custom = r.last().unwrap();
+        assert!(custom.custom && custom.enabled && custom.id == id);
+        assert_eq!((custom.updated, custom.rules), (Some(5), Some(7)));
+        assert_eq!(rows_of(&s).last().unwrap().updated, None);
     }
 }

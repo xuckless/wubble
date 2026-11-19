@@ -497,6 +497,16 @@ impl Keymap {
             .find(|(_, a, _)| *a == action)
             .map(|&(c, _, _)| c)
     }
+
+    /// What a shell button's tooltip says for `action`: its name and its shortcut (empty
+    /// without one), drawn apart by the tooltip.
+    pub fn tooltip_text(&self, action: Action) -> (String, String) {
+        let chord = self.shortcut_for(action);
+        (
+            action.label(),
+            chord.map(|c| c.to_string()).unwrap_or_default(),
+        )
+    }
 }
 
 // ----------------------------------------------------------------- editor
@@ -705,6 +715,20 @@ pub fn overrides_from_json(s: &str) -> Result<Vec<Override>, serde_json::Error> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tooltip_names_the_action_and_its_shortcut() {
+        let km = Keymap::defaults(Platform::Linux);
+        assert_eq!(
+            km.tooltip_text(Action::Reload),
+            (Action::Reload.label(), "Ctrl+R".to_string())
+        );
+        let unbound = Action::all()
+            .into_iter()
+            .find(|&a| km.shortcut_for(a).is_none())
+            .expect("an action without a shortcut");
+        assert_eq!(km.tooltip_text(unbound), (unbound.label(), String::new()));
+    }
 
     const PLATFORMS: [Platform; 3] = [Platform::Linux, Platform::Windows, Platform::Mac];
 

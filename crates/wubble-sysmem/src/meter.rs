@@ -74,6 +74,45 @@ impl Meter {
             .collect()
     }
 
+    /// The id of Chromium's GPU process among wubble's children, refreshing only the process
+    /// list and command lines (no memory or CPU). It still reads every process on the system
+    /// (about 10 ms on a desktop's 800), so it belongs off the UI thread. `None` when there is
+    /// none now. On macOS and Windows it is the child launched with
+    /// `--type=gpu-process`; on Linux Chromium forks it from its unsandboxed zygote, so its
+    /// command line is the zygote's, and it is the process that runs Viz's compositor thread
+    /// (`VizCompositorThread`, named `VizCompositorTh` by the kernel's 15-character limit).
+    pub fn gpu_pid(&mut self) -> Option<u32> {
+        let kind = ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet);
+        // Threads are needed only to find Viz's on Linux.
+        #[cfg(not(target_os = "linux"))]
+        let kind = kind.without_tasks();
+        self.system
+            .refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+        let processes = self.system.processes();
+        let table: Vec<(u32, Option<u32>)> = processes
+            .iter()
+            .map(|(pid, p)| (pid.as_u32(), p.parent().map(Pid::as_u32)))
+            .collect();
+        let tree = descendants(self.root, &table);
+        let get = |pid: u32| processes.get(&Pid::from_u32(pid));
+        let labelled = tree.iter().copied().find(|&pid| {
+            get(pid).is_some_and(|p| {
+                let args: Vec<String> = p
+                    .cmd()
+                    .iter()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .collect();
+                label(&args, pid == self.root) == "GPU"
+            })
+        });
+        labelled.or_else(|| {
+            tree.iter().find_map(|&pid| {
+                let p = get(pid)?;
+                (p.name() == VIZ_THREAD).then(|| p.parent().map(Pid::as_u32))?
+            })
+        })
+    }
+
     /// Ends `pid` (SIGKILL / TerminateProcess) if it is one of wubble's child processes as of the
     /// last sample, never wubble itself or anything outside its tree. Whether it was signalled.
     pub fn end(&self, pid: u32) -> bool {
@@ -91,6 +130,9 @@ impl Meter {
                 .is_some_and(|p| p.kill())
     }
 }
+
+/// The kernel's name of Viz's compositor thread, which runs in the GPU process.
+const VIZ_THREAD: &str = "VizCompositorTh";
 
 /// `root` and every process descending from it in `table` (pid, parent), root first, then in
 /// breadth-first order by pid. Empty when `root` is not in the table.

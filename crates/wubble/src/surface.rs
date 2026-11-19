@@ -375,6 +375,17 @@ pub enum Routed {
     WheelZoom {
         zoom_in: bool,
     },
+    /// The hovered link's URL for the status bubble; empty: none.
+    Status(String),
+    /// A `title` tooltip under the pointer; empty: none.
+    Tooltip(String),
+    /// A link to a scheme another app handles (`wubble_core::external`).
+    External {
+        url: String,
+        gesture: Option<bool>,
+    },
+    /// Copy Image's pixels, or why there are none.
+    Image(Result<wubble_engine::favicon::Rgba, String>),
     Ignore,
 }
 
@@ -424,9 +435,11 @@ pub fn route(event: PageEvent) -> Routed {
             origin,
             permissions,
         } => Routed::Permission(PermissionEvent::Requested(PermissionRequest {
-            id,
             origin,
-            kinds: permissions,
+            ask: prompt::Ask::Engine {
+                id,
+                kinds: permissions,
+            },
         })),
         PageEvent::AuthRequested {
             id,
@@ -480,6 +493,10 @@ pub fn route(event: PageEvent) -> Routed {
             text: pdf_notice(&path, ok),
             path,
         },
+        PageEvent::LinkStatus(text) => Routed::Status(text),
+        PageEvent::Tooltip(text) => Routed::Tooltip(text),
+        PageEvent::ExternalProtocol { url, gesture } => Routed::External { url, gesture },
+        PageEvent::ImageDownloaded { image, .. } => Routed::Image(image),
     }
 }
 
@@ -892,6 +909,7 @@ mod tests {
                 id: RequestId(1),
                 download: wubble_engine::page::DownloadId(1),
                 url: String::new(),
+                original_url: String::new(),
                 suggested_name: String::new(),
                 total: None,
             },
@@ -948,9 +966,11 @@ mod tests {
             popup: Some(Rect::default()),
             permission: PermissionPrompt::Open {
                 shown: PermissionRequest {
-                    id: RequestId(3),
                     origin: "https://a.test".into(),
-                    kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
+                    ask: prompt::Ask::Engine {
+                        id: RequestId(3),
+                        kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
+                    },
                 },
                 queued: Default::default(),
             },

@@ -6,6 +6,8 @@
 //! one), so their copies and pastes come here (wubble-helper `clipboard.js`,
 //! `PageEvent::Clipboard`). The window has both. smithay-clipboard (MIT) is the
 //! crate Slint's winit backend uses for the same job; it carries text only.
+//! Images (Copy Image, screenshots) go through the one worker that owns an
+//! `arboard` clipboard for them (`shot_io`), which offers `image/png`.
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the
 //! bridge is off for the pages; on X11 the shell's own copies go through Slint,
 //! on macOS and Windows through arboard (the same system clipboard, which the

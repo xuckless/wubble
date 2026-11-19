@@ -208,6 +208,33 @@ export global Shell {
     out property <length> sheet-input: 40px;
     out property <duration> sheet-in: 300ms;
     out property <float> sheet-from: 0.95;
+    // The link status bubble (status-bubble.slint): Chromium's status bubble, capsule-shaped.
+    out property <length> status-height: 24px;
+    out property <length> status-pad: 10px;
+    out property <length> status-margin: 6px;
+    out property <length> status-text: 12px;
+    // Chromium's fades (kShowFadeDuration 120, kHideFadeDuration 200) and pointer padding
+    // (kMousePadding 20); the move to the right edge, Firefox's mirror, over 160 ms.
+    out property <duration> status-in: 120ms;
+    out property <duration> status-out: 200ms;
+    out property <duration> status-move: 160ms;
+    out property <length> status-dodge: 20px;
+    out property <length> status-border: 1px;
+    // The tooltip (tooltip.slint): the design's dock tooltip (touch.css `.tp-tip`, touch.tsx
+    // `DOCK.glideMs`), 8 px from what it labels, kept 4 px inside the window.
+    out property <length> tip-height: 30px;
+    out property <length> tip-pad: 11px;
+    out property <length> tip-radius: 10px;
+    out property <length> tip-text: 12.5px;
+    out property <length> tip-rise: 4px;
+    out property <length> tip-gap: 8px;
+    out property <length> tip-edge: 4px;
+    out property <duration> tip-glide: 260ms;
+    // .tp-tip / .tp-tip.show: opacity in .16 s, rise in .2 s (ease-out); out .13 s / .16 s.
+    out property <duration> tip-fade-in: 160ms;
+    out property <duration> tip-fade-out: 130ms;
+    out property <duration> tip-rise-in: 200ms;
+    out property <duration> tip-rise-out: 160ms;
     // .ur-o-toast: 46 high, padding 0 12, radius 14, 14 / 540; rises 14 px from .95 over a
     // 400 ms spring. Shown for 1.5 s (Chromium's zoom bubble closes after 1.5 s).
     out property <length> toast-height: 46px;

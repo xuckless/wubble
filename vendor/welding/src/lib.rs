@@ -123,6 +123,9 @@ pub use linux_cef::{LinuxCefConfig as PlatformCefConfig, LinuxCefProducer as Pla
 
 // ── Flat re-exports ───────────────────────────────────────────────────────────
 
+// wubble change 40: whether a URL is Chromium's to load or another app's.
+#[cfg(feature = "cef-runtime")]
+pub use handlers::chromium_handles;
 pub use auth::AuthId;
 pub use view::ScreenArea;
 pub use downloads::DownloadId;

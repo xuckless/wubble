@@ -7,6 +7,7 @@
 
 pub mod app;
 pub mod cdp;
+pub mod cosmetic;
 pub mod devtools;
 pub mod download;
 pub mod drag;

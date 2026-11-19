@@ -81,8 +81,17 @@ pub enum Command {
     Search(String),
     /// Open DevTools on the element at this point (physical px, view-relative).
     Inspect { x: i32, y: i32 },
-    /// Act on the media element at this point (physical px, view-relative).
-    Media { op: MediaOp, x: i32, y: i32 },
+    /// Act on the media element at this point (physical px, view-relative), in the frame CEF
+    /// named (`frame`, empty: the main frame), whose source is `source`.
+    Media {
+        op: MediaOp,
+        x: i32,
+        y: i32,
+        frame: String,
+        source: String,
+    },
+    /// Put the image at the URL on the clipboard (`View::download_image`).
+    CopyImage(String),
     /// Put the tab beside the focused page (split view).
     SplitWith(TabId),
     /// Take the tab out of its split.
@@ -193,7 +202,13 @@ impl Ctx<'_> {
     }
     fn media_op(&self, op: MediaOp) -> Command {
         let (x, y) = self.at();
-        Command::Media { op, x, y }
+        Command::Media {
+            op,
+            x,
+            y,
+            frame: self.menu.frame.clone(),
+            source: self.menu.media_url.clone(),
+        }
     }
     /// "Video" or "Audio", for the media entries' labels.
     fn kind(&self) -> &'static str {
@@ -220,20 +235,28 @@ pub fn search_label(engine: Option<&str>, text: &str) -> String {
     )
 }
 
-/// The script that does `op` to the video or audio element at `x, y`
-/// (physical px, view-relative). CEF has no media-player API, so this is
-/// Chromium's `MediaPlayerAction` done from the page's side; physical px are
-/// CSS px times `devicePixelRatio` (the device scale times the zoom).
-pub fn media_script(op: MediaOp, x: i32, y: i32) -> String {
+/// The script that does `op` to the video or audio element the menu was opened on, run in
+/// the frame that holds it (`View::run_script_in`). CEF has no media-player API, so this is
+/// Chromium's `MediaPlayerAction` done from the page's side. In the main frame the element is
+/// the one at `x, y` (physical px, view-relative: CSS px times `devicePixelRatio`, the device
+/// scale times the zoom); in a subframe the point is the view's, not the frame's, and CEF does
+/// not say where the frame sits, so the element is the one playing `source` (the menu's media
+/// URL, its `currentSrc`), or the frame's only one. Twins playing the same source in one frame
+/// get the first.
+pub fn media_script(op: MediaOp, x: i32, y: i32, source: &str) -> String {
     let act = match op {
         MediaOp::PlayPause => "m.paused ? m.play() : m.pause()",
         MediaOp::Mute => "m.muted = !m.muted",
         MediaOp::Loop => "m.loop = !m.loop",
         MediaOp::Controls => "m.controls = !m.controls",
     };
+    let source = serde_json::to_string(source).unwrap_or_else(|_| "\"\"".into());
     format!(
-        "(() => {{ const e = document.elementFromPoint({x} / devicePixelRatio, {y} / devicePixelRatio); \
-         const m = e && e.closest('video, audio'); if (m) {{ {act}; }} }})()"
+        "(() => {{ const all = [...document.querySelectorAll('video, audio')]; \
+         const e = window === window.top \
+         ? document.elementFromPoint({x} / devicePixelRatio, {y} / devicePixelRatio) : null; \
+         const m = (e && e.closest('video, audio')) || all.find(m => m.currentSrc === {source}) \
+         || (all.length === 1 ? all[0] : null); if (m) {{ {act}; }} }})()"
     )
 }
 
@@ -272,8 +295,8 @@ macro_rules! row {
 /// `AppendCopyItem`, `AppendSearchProvider`, `AppendPageItems`,
 /// `AppendDeveloperItems`). Spelling suggestions go first and come from the
 /// request itself. Left out, with the reason in TODO.md: "Open Link in New
-/// Window" (one window), "Copy Image" (the clipboard carries text only),
-/// "Picture in Picture" (CEF's windowless views have no PiP window).
+/// Window" (one window), "Picture in Picture" (CEF's windowless views have no
+/// PiP window).
 const ROWS: &[Row] = &[
     row!(1, "Open Link in New Tab", |c| c.link(), always, |c| {
         Command::OpenInNewTab(c.menu.link_url.clone())
@@ -290,6 +313,14 @@ const ROWS: &[Row] = &[
     row!(2, "Save Image As\u{2026}", |c| c.image(), always, |c| {
         Command::SaveAs(c.menu.media_url.clone())
     }),
+    // Chromium shows it only for an image that has loaded (`has_image_contents`).
+    row!(
+        2,
+        "Copy Image",
+        |c| c.image() && c.menu.has_image,
+        always,
+        |c| { Command::CopyImage(c.menu.media_url.clone()) }
+    ),
     row!(2, "Copy Image Address", |c| c.image(), always, |c| {
         Command::CopyText(c.menu.media_url.clone())
     }),
@@ -1291,12 +1322,23 @@ mod tests {
                 "-",
                 "Open Image in New Tab",
                 "Save Image As\u{2026}",
+                "Copy Image",
                 "Copy Image Address",
                 "-",
                 "Take Screenshot of Element",
                 "Inspect"
             ]
         );
+        assert_eq!(
+            e[6].command,
+            Command::CopyImage("https://a.test/i.png".into())
+        );
+        // An image that has not loaded has nothing to copy.
+        let unloaded = ContextMenu {
+            has_image: false,
+            ..m.clone()
+        };
+        assert!(!labels(&entries(&unloaded, NavFlags::default())).contains(&"Copy Image"));
     }
 
     #[test]
@@ -1446,7 +1488,9 @@ mod tests {
             Command::Media {
                 op: MediaOp::PlayPause,
                 x: 7,
-                y: 9
+                y: 9,
+                frame: String::new(),
+                source: "https://a.test/v.webm".into(),
             }
         );
         assert!(e[2].enabled);
@@ -1463,12 +1507,21 @@ mod tests {
     }
 
     #[test]
-    fn media_scripts_act_on_the_element_under_the_point() {
-        let s = media_script(MediaOp::Loop, 30, 40);
+    fn media_scripts_act_on_the_element_under_the_point_or_by_its_source() {
+        let s = media_script(MediaOp::Loop, 30, 40, "https://a.test/v\".mp4");
         assert!(
             s.contains("elementFromPoint(30 / devicePixelRatio, 40 / devicePixelRatio)"),
             "{s}"
         );
+        assert!(
+            s.contains("window === window.top"),
+            "only the main frame uses the point: {s}"
+        );
+        assert!(
+            s.contains(r#"m.currentSrc === "https://a.test/v\".mp4""#),
+            "a subframe's element by its source, quoted: {s}"
+        );
+        assert!(s.contains("all.length === 1 ? all[0]"), "{s}");
         assert!(s.contains("m.loop = !m.loop"), "{s}");
     }
 

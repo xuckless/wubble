@@ -14,6 +14,33 @@
   onload="document.title = 'wubble block served'"
   onerror="document.title = 'wubble block refused'"></script>
 <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="8" height="8" alt="">
-<p>bundled page for <code>--smoke block</code></p>
+<!-- The generic rule `##.cookie-notice` hides the first element only once the page's
+     collector has reported the class name; `.kept` has no rule. The page checks itself
+     (count-bounded polls), retitles, then navigates itself once to prove the rule applies
+     to a page-initiated navigation as well. Served from loopback: adblock gives no cosmetic
+     rules to a bundled page. -->
+<div class="cookie-notice">We use cookies</div>
+<div class="kept">kept</div>
+<p>page for <code>--smoke block</code></p>
+<script>
+(function () {
+  var next = location.pathname.slice(-5) === '/next';
+  var tries = 0;
+  function shown(selector) {
+    return getComputedStyle(document.querySelector(selector)).display !== 'none';
+  }
+  function poll() {
+    if (!shown('.cookie-notice') && shown('.kept')) {
+      document.title = next ? 'wubble block hidden again' : 'wubble block hidden';
+      if (!next) setTimeout(function () { location.href = '/block/next'; }, 0);
+    } else if (++tries > 500) {
+      document.title = 'wubble block not hidden';
+    } else {
+      setTimeout(poll, 20);
+    }
+  }
+  poll();
+})();
+</script>
 </body>
 </html>

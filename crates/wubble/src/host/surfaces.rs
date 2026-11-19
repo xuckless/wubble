@@ -28,7 +28,7 @@ use crate::clipboard::{Bridge as _, Buffer};
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
 use crate::page_error::{self, ErrorEffect, ErrorEvent, PageError};
-use crate::prompt::{self, Auth, AuthEvent, PermissionEvent, PermissionPrompt, Secret};
+use crate::prompt::{self, Auth, AuthEvent, PermissionEvent, PermissionPrompt, Reply, Secret};
 use crate::screen::{self, Screen, ScreenEffect, ScreenEvent};
 use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, Routed};
 
@@ -143,7 +143,10 @@ impl Host {
             Routed::Frozen { frozen, ok } => self.frozen_answered(tab, frozen, ok),
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
-            Routed::Committed => self.busy_page_started(tab),
+            Routed::Committed => {
+                self.apply_permission(tab, PermissionEvent::PageChanged);
+                self.busy_page_started(tab);
+            }
             Routed::ImeBounds(rect) if visible => {
                 place_candidates(window, self.focus_origin(window), rect)
             }
@@ -191,6 +194,10 @@ impl Host {
                     Action::ZoomOut
                 })
             }
+            Routed::Status(text) => self.link_status(tab, text),
+            Routed::Tooltip(text) => self.page_tooltip(tab, text),
+            Routed::External { url, gesture } => self.external_link(tab, url, gesture),
+            Routed::Image(image) => self.copy_image_done(window, image),
             Routed::WheelZoom { .. } | Routed::ImeBounds(_) | Routed::Ignore => {}
         }
         self.render_surfaces(window);
@@ -230,8 +237,17 @@ impl Host {
                         .set_site_permission(site, kind, *decision, now_ms());
                 }
             }
-            if let Some(view) = self.tab_view(tab) {
-                view.answer_permission(answer.id, &answer.granted);
+            match answer.reply {
+                Reply::External { url, open } => {
+                    if open {
+                        self.open_in_app(&url);
+                    }
+                }
+                Reply::Engine { id, granted } => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.answer_permission(id, &granted);
+                    }
+                }
             }
         }
     }
@@ -330,16 +346,23 @@ impl Host {
                     self.open_routed(url, Some(tab));
                 }
                 MenuEffect::Run(MenuCommand::CopyText(text)) => self.copy(&text),
-                MenuEffect::Run(MenuCommand::SaveAs(url)) => {
-                    if let Some(view) = self.tab_view(tab) {
-                        view.start_download(&url);
-                    }
-                }
+                MenuEffect::Run(MenuCommand::SaveAs(url)) => self.save_as(tab, url),
                 MenuEffect::Run(MenuCommand::Search(text)) => self.search_for(tab, text),
                 MenuEffect::Run(MenuCommand::Inspect { x, y }) => self.inspect_at(tab, (x, y)),
-                MenuEffect::Run(MenuCommand::Media { op, x, y }) => {
+                MenuEffect::Run(MenuCommand::Media {
+                    op,
+                    x,
+                    y,
+                    frame,
+                    source,
+                }) => {
                     if let Some(view) = self.tab_view(tab) {
-                        view.run_script(&menu::media_script(op, x, y));
+                        view.run_script_in(&frame, &menu::media_script(op, x, y, &source));
+                    }
+                }
+                MenuEffect::Run(MenuCommand::CopyImage(url)) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.download_image(&url);
                     }
                 }
                 MenuEffect::Run(MenuCommand::SplitWith(t)) => self.dispatch(Command::SplitWith(t)),
@@ -879,13 +902,16 @@ fn permission_view(p: &PermissionPrompt) -> PermissionView {
     match p {
         PermissionPrompt::None => PermissionView::default(),
         PermissionPrompt::Open { shown: r, .. } => {
-            let (title, lines) = prompt::permission_text(r);
+            let t = prompt::permission_text(r);
             PermissionView {
                 open: true,
-                title: title.into(),
-                lines: model(lines.into_iter().map(Into::into).collect()),
-                // Unique per request, so a new prompt resets the toggle.
-                serial: i32::try_from(r.id.0).unwrap_or(i32::MAX),
+                title: t.title.into(),
+                lines: model(t.lines.into_iter().map(Into::into).collect()),
+                remember: t.remember.into(),
+                allow: t.allow.into(),
+                block: t.block.into(),
+                // Per request, so a new prompt resets the toggle.
+                serial: r.serial(),
             }
         }
     }

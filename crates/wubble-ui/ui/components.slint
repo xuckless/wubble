@@ -23,6 +23,7 @@ import { Palette, Spaces, Radius, Spacing, Chrome, Glass, GlassTierStyle, Fonts,
 import { GlassTier, GlassItem, GlassLayer, TabItem } from "components/model.slint";
 import { Icon, IconPaths } from "components/icon.slint";
 import { Shell } from "app-tokens.slint";
+import { StatusBubble } from "components/status-bubble.slint";
 
 // @source slint-space-icons
 // The three Space icons: 24×24 stroke icons, 1.7 stroke, round caps and joins. The same path
@@ -571,6 +572,11 @@ export struct SplitPane {
     prev-clip-width: int,
     prev-clip-height: int,
     prev-opacity: float,
+    // wubble change: the hovered link's status bubble (status-bubble.slint): shown, the host
+    // and the rest of the URL, already cut to fit.
+    status-shown: bool,
+    status-host: string,
+    status-rest: string,
 }
 
 export struct SplitSeam {
@@ -662,6 +668,18 @@ export component SplitView inherits Rectangle {
                     root.pointer-left(p.id, self.mouse-x, self.mouse-y);
                 }
             }
+        }
+        // wubble change: the link status bubble, under the pane's own controls; it moves to the
+        // right edge while the pointer is near its place (Chromium's 20 px padding).
+        StatusBubble {
+            shown: p.status-shown;
+            host: p.status-host;
+            rest: p.status-rest;
+            pane-width: parent.width;
+            pane-height: parent.height;
+            mirrored: touch.has-hover
+                && touch.mouse-x < Shell.status-margin + self.width + Shell.status-dodge
+                && touch.mouse-y > parent.height - Shell.status-margin - self.height - Shell.status-dodge;
         }
         if p.closable: PressableButton {
             x: parent.width - self.width - Spacing.s2;

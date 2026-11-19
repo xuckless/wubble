@@ -74,6 +74,38 @@ pub fn address_parts(url: &str) -> (&str, &str) {
     }
 }
 
+/// `text` cut to at most `max_chars` characters by replacing its middle with `…`, keeping
+/// as much of the start and the end as fit (the start gets the odd one). Slint elides only at
+/// the end; the status bubble wants the end of a path too (Chromium's `ElideUrl` keeps both
+/// ends of the path). `max_chars` below 2 leaves only the ellipsis.
+pub fn elide_middle(text: &str, max_chars: usize) -> std::borrow::Cow<'_, str> {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.into();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let tail = keep / 2;
+    let head = keep - tail;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - tail).collect();
+    format!("{start}\u{2026}{end}").into()
+}
+
+/// The status bubble's two parts for `url`: the host whole (emphasised, as the address pill
+/// shows it) and the rest cut in the middle so both fit in `max_chars` characters. A host
+/// longer than that is cut too and the rest dropped.
+pub fn status_parts(url: &str, max_chars: usize) -> (String, String) {
+    let (host, rest) = address_parts(url);
+    let host_len = host.chars().count();
+    if host_len >= max_chars {
+        return (elide_middle(host, max_chars).into_owned(), String::new());
+    }
+    (
+        host.to_string(),
+        elide_middle(rest, max_chars - host_len).into_owned(),
+    )
+}
+
 /// The key favicons (and other per-site caches) are filed under:
 /// `scheme://host[:port]`, lowercase, default port elided. Only `http` and
 /// `https` pages have one; the userinfo, path, query and fragment are dropped.
@@ -180,6 +212,38 @@ mod tests {
         for (url, parts) in cases {
             assert_eq!(address_parts(url), parts, "{url}");
         }
+    }
+
+    #[test]
+    fn status_parts_keep_the_host_and_cut_the_path() {
+        let url = "https://example.com/a/very/long/path/to/a/file.html";
+        assert_eq!(
+            status_parts(url, 100),
+            (
+                "example.com".into(),
+                "/a/very/long/path/to/a/file.html".into()
+            )
+        );
+        let (host, rest) = status_parts(url, 25);
+        assert_eq!(host, "example.com");
+        assert_eq!(rest, "/a/very\u{2026}e.html");
+        assert_eq!(rest.chars().count() + host.chars().count(), 25);
+        assert_eq!(
+            status_parts("mailto:someone@example.com", 100),
+            ("mailto:".into(), "someone@example.com".into())
+        );
+        assert_eq!(status_parts(url, 5), ("ex\u{2026}om".into(), String::new()));
+    }
+
+    #[test]
+    fn elide_middle_keeps_both_ends() {
+        assert_eq!(elide_middle("/a/b", 10), "/a/b");
+        assert_eq!(elide_middle("/a/b", 4), "/a/b");
+        assert_eq!(elide_middle("/abcdefgh", 6), "/ab\u{2026}gh");
+        // characters, not bytes
+        assert_eq!(elide_middle("/ääääääää", 4), "/ä\u{2026}ä");
+        assert_eq!(elide_middle("/abc", 1), "\u{2026}");
+        assert_eq!(elide_middle("/abc", 0), "\u{2026}");
     }
 
     #[test]

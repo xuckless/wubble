@@ -1568,6 +1568,19 @@ pub trait CefSurfaceProducer {
     /// requiring a CDP round-trip.
     fn execute_script(&mut self, script: &str, source_url: &str) -> Result<(), WeldError>;
 
+    /// Runs `script` in the frame `frame_id` (from
+    /// [`NavigationEvent::ContextMenuRequested`]), or in the main frame when
+    /// the id is empty or that frame is gone. wubble change 43.
+    fn execute_script_in_frame(
+        &mut self,
+        frame_id: &str,
+        script: &str,
+        source_url: &str,
+    ) -> Result<(), WeldError> {
+        let _ = frame_id;
+        self.execute_script(script, source_url)
+    }
+
     /// Hands `text` to the context script's registered function in the frame
     /// `frame_id` (from a [`CefSurfaceEvent::FrameMessage`]). `Err` when the
     /// browser or that frame is gone. wubble change, see `WUBBLE_CHANGES.md`
@@ -2034,6 +2047,10 @@ pub enum NavigationEvent {
         selection_text: String,
         /// wubble change: the URL of the frame clicked in.
         frame_url: String,
+        /// wubble change 42: CEF's identifier of the frame clicked in (for
+        /// [`CefSurfaceProducer::execute_script_in_frame`]); empty when
+        /// CEF gave no frame.
+        frame_id: String,
         /// wubble change: the media element clicked on.
         media: ContextMenuMedia,
         /// wubble change: whether the click was on an image that has loaded.
@@ -2145,6 +2162,9 @@ pub enum NavigationEvent {
         id: RequestId,
         download: DownloadId,
         url: String,
+        /// wubble change 41: the URL the download was started for, before
+        /// redirects (what `start_download` was given).
+        original_url: String,
         suggested_filename: String,
         total_bytes_expected: Option<u64>,
     },
@@ -2197,6 +2217,20 @@ pub enum NavigationEvent {
     /// came from was left, or a permission prompt was dismissed): close
     /// whatever shows them; answering them now fails. wubble change.
     RequestsDismissed { ids: Vec<RequestId> },
+    /// CEF's `OnStatusMessage`: the text a browser shows in its status
+    /// bubble, which is the hovered link's URL; empty hides it. wubble
+    /// change 39.
+    StatusChanged { text: String },
+    /// CEF's `OnTooltip`: a `title` tooltip to draw near the pointer (under
+    /// windowless rendering the host draws it); empty hides it. wubble
+    /// change 39.
+    Tooltip { text: String },
+    /// A navigation or request to a scheme Chromium has no handler for
+    /// (`mailto:`, `tel:`, an app's own scheme). welding never lets CEF
+    /// hand it to the OS; the host decides and opens it itself.
+    /// `user_gesture` is what `OnBeforeBrowse` said for the same URL, when
+    /// it ran for it. wubble change 40.
+    ProtocolExecution { url: String, user_gesture: Option<bool> },
 }
 
 /// Which JS dialog a page opened. wubble change.

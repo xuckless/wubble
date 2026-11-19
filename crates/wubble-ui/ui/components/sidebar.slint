@@ -507,6 +507,7 @@ export component Sidebar inherits Rectangle {
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - parent.buttons * self.width;
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.download;
+                tip-action: "open-downloads";
                 clicked => {
                     root.downloads-requested();
                 }
@@ -520,6 +521,7 @@ export component Sidebar inherits Rectangle {
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - 2 * self.width;
                 y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.code;
+                tip-action: "dev-tools";
                 clicked => {
                     root.action("dev-tools");
                 }
@@ -532,6 +534,7 @@ export component Sidebar inherits Rectangle {
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
                 y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.settings;
+                tip-action: "open-settings";
                 clicked => {
                     root.settings-requested();
                 }

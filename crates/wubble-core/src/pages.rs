@@ -464,6 +464,21 @@ pub struct BlockerBadge {
     pub visible: bool,
 }
 
+/// How long ago `then` was, as a short phrase ("3 days ago"); times in the future read as "just
+/// now". Unix seconds both.
+pub fn relative_age(now: u64, then: u64) -> String {
+    let secs = now.saturating_sub(then);
+    let (n, unit) = match secs {
+        0..60 => return "just now".into(),
+        60..3_600 => (secs / 60, "minute"),
+        3_600..86_400 => (secs / 3_600, "hour"),
+        86_400..2_592_000 => (secs / 86_400, "day"),
+        2_592_000..31_536_000 => (secs / 2_592_000, "month"),
+        _ => (secs / 31_536_000, "year"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
 pub fn blocker_state(count: u32, page_url: &str, exceptions: &[String]) -> BlockerBadge {
     let site_allowed = crate::zoom::host_of(page_url).is_some_and(|h| exceptions.contains(&h));
     BlockerBadge {
@@ -736,7 +751,13 @@ pub fn sites_view(
         permissions: permissions
             .iter()
             .map(|(o, k, d)| Entry {
-                label: format!("{o}: {} ({d:?})", k.ask_text()),
+                label: match crate::external::parse_key(o) {
+                    // links to other apps are kept per site and scheme
+                    Some((scheme, site)) if k == crate::site::Permission::ExternalLinks => {
+                        format!("{site}: Open {scheme} links in another app ({d:?})")
+                    }
+                    _ => format!("{o}: {} ({d:?})", k.ask_text()),
+                },
                 key: permission_key(o, k),
             })
             .collect(),
@@ -1291,5 +1312,44 @@ mod tests {
                 ("https://b.test", Permission::Camera)
             ]
         );
+        // A link to another app is named by its site and scheme.
+        perms.set(
+            "mailto:https://a.test",
+            Permission::ExternalLinks,
+            Decision::Allow,
+        );
+        let v = sites_view(&Default::default(), &perms);
+        let row = v.permissions.last().unwrap();
+        assert_eq!(
+            row.label,
+            "https://a.test: Open mailto links in another app (Allow)"
+        );
+        assert_eq!(
+            parse_permission_key(&row.key),
+            Some(("mailto:https://a.test", Permission::ExternalLinks))
+        );
+    }
+}
+
+#[cfg(test)]
+mod relative_age_tests {
+    use super::relative_age;
+
+    #[test]
+    fn ages_read_in_the_largest_unit() {
+        const NOW: u64 = 1_000_000_000;
+        for (ago, text) in [
+            (0, "just now"),
+            (59, "just now"),
+            (60, "1 minute ago"),
+            (7_200, "2 hours ago"),
+            (86_400, "1 day ago"),
+            (3 * 86_400, "3 days ago"),
+            (40 * 86_400, "1 month ago"),
+            (800 * 86_400, "2 years ago"),
+        ] {
+            assert_eq!(relative_age(NOW, NOW - ago), text, "{ago}");
+        }
+        assert_eq!(relative_age(NOW, NOW + 500), "just now");
     }
 }

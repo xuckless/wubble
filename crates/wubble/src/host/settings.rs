@@ -9,6 +9,8 @@
 
 use std::collections::HashMap;
 
+use wubble_blocker::ListRow;
+use wubble_blocker::catalog::Selection;
 use wubble_core::action::Action;
 use wubble_core::apply::{self, Applied};
 use wubble_core::keys::{self, Capture, CaptureEvent, Chord, Override, Platform};
@@ -18,7 +20,7 @@ use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
 use wubble_core::space::{Rgb, SpaceIcon, SpaceId};
 use wubble_store::{KeybindingOverrides, SiteZoom, text_of};
-use wubble_ui::{AboutView, AppWindow, CaptureView, SpaceSetting};
+use wubble_ui::{AboutView, AppWindow, CaptureView, FilterListItem, SpaceSetting};
 
 use super::{Host, now_ms};
 use crate::input;
@@ -93,6 +95,19 @@ impl Host {
             }
             Applied::BlockerEnabled(on) => self.blocking.set_enabled(on),
             Applied::BlockerExceptions(hosts) => self.blocking.set_exceptions(&hosts),
+            Applied::BlockerLists {
+                lists,
+                cookie_banners,
+                strip_params,
+                custom,
+            } => {
+                self.blocking.reselect(Selection {
+                    lists,
+                    cookie_banners,
+                    strip_params,
+                    custom,
+                });
+            }
             Applied::ExpireHistory => self.store.expire_history(now_ms()),
             Applied::ZoomDefault(percent) => {
                 self.zoom_default = percent;
@@ -121,6 +136,7 @@ impl Host {
             Applied::PageThemes { default, sites } => self.set_page_themes(default, sites),
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
+            Applied::AskWhereToSave(on) => self.downloads.ask_where = on,
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
             Applied::Video {
                 controls,
@@ -179,6 +195,29 @@ impl Host {
     pub(crate) fn setting_entry_added(&mut self, key: &str, entry: &str) {
         if let Some(text) = apply::with_entry(key, &self.settings.stored, entry) {
             self.write_setting(key, &text);
+        }
+    }
+
+    /// The lists' state changed on the blocker's thread (a rebuild or an update ended).
+    pub(crate) fn filter_lists_changed(&mut self) {
+        self.render_settings();
+    }
+
+    /// A catalog list's switch: its entry in `blocker.lists`.
+    pub(crate) fn filter_list_toggled(&mut self, id: &str, on: bool) {
+        let text = lists_with(&self.settings.stored, id, on);
+        self.write_setting(defs::BLOCKER_LISTS.key, &text);
+    }
+
+    /// "Update now": fetches the lists, then says how it went.
+    pub(crate) fn filter_lists_update(&mut self) {
+        let started = self.blocking.update_now(|text| {
+            let _ = slint::invoke_from_event_loop(move || {
+                crate::with_host(|host| host.toast_with(&text, "", false));
+            });
+        });
+        if started.is_some() {
+            self.render_settings();
         }
     }
 
@@ -302,6 +341,47 @@ impl Host {
     }
 }
 
+/// `blocker.lists` with `id` set to `on`, as the stored text.
+fn lists_with(stored: &HashMap<String, String>, id: &str, on: bool) -> String {
+    let mut map: std::collections::BTreeMap<String, u32> = stored
+        .get(defs::BLOCKER_LISTS.key)
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
+    map.insert(id.to_owned(), u32::from(on));
+    serde_json::to_string(&map).expect("a map of numbers serialises")
+}
+
+/// The Filter lists section's rows: the title, and a note of licence, rule count and age.
+fn filter_list_items(rows: &[ListRow], now: u64) -> Vec<FilterListItem> {
+    rows.iter()
+        .map(|row| {
+            let mut parts: Vec<String> = Vec::new();
+            if !row.licence.is_empty() {
+                parts.push(row.licence.clone());
+            }
+            if let Some(rules) = row.rules {
+                parts.push(format!("{rules} rules"));
+            }
+            parts.push(match (row.updated, row.bundled) {
+                (Some(then), _) => format!("updated {}", pages::relative_age(now, then)),
+                (None, true) => "bundled snapshot".into(),
+                (None, false) => "not downloaded yet".into(),
+            });
+            if row.category_off {
+                parts.push("its own switch above is off".into());
+            }
+            FilterListItem {
+                id: row.id.as_str().into(),
+                title: row.title.as_str().into(),
+                note: parts.join(" \u{b7} ").into(),
+                enabled: row.enabled,
+                custom: row.custom,
+                key: row.url.as_str().into(),
+            }
+        })
+        .collect()
+}
+
 /// The page's models, each synced in place (`crate::bind::sync`), so a row keeps its
 /// instance, focus and edit across a re-render.
 fn render_page(window: &AppWindow, host: &Host) {
@@ -380,7 +460,83 @@ fn render_page(window: &AppWindow, host: &Host) {
         entries(&sites.permissions),
         |m| window.set_settings_site_permissions(m),
     );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    crate::bind::sync(
+        window.get_settings_filter_lists(),
+        filter_list_items(&host.blocking.list_rows(), now),
+        |m| window.set_settings_filter_lists(m),
+    );
+    window.set_settings_filter_busy(host.blocking.is_busy());
     if window.get_settings_about().version.is_empty() {
         window.set_settings_about(about());
+    }
+}
+
+#[cfg(test)]
+mod filter_list_tests {
+    use super::*;
+
+    fn row(id: &str) -> ListRow {
+        ListRow {
+            id: id.into(),
+            title: id.into(),
+            licence: "GPL-3.0".into(),
+            url: format!("https://l.test/{id}"),
+            custom: false,
+            enabled: true,
+            category_off: false,
+            bundled: true,
+            rules: None,
+            updated: None,
+        }
+    }
+
+    #[test]
+    fn rows_become_a_title_and_a_note() {
+        let now = 1_000_000;
+        let items = filter_list_items(
+            &[
+                row("a"),
+                ListRow {
+                    rules: Some(12),
+                    updated: Some(now - 3 * 86_400),
+                    ..row("b")
+                },
+                ListRow {
+                    custom: true,
+                    licence: String::new(),
+                    bundled: false,
+                    category_off: true,
+                    ..row("c")
+                },
+            ],
+            now,
+        );
+        let notes: Vec<String> = items.iter().map(|i| i.note.to_string()).collect();
+        assert_eq!(
+            notes,
+            [
+                "GPL-3.0 \u{b7} bundled snapshot",
+                "GPL-3.0 \u{b7} 12 rules \u{b7} updated 3 days ago",
+                "not downloaded yet \u{b7} its own switch above is off",
+            ]
+        );
+        assert!(items[2].custom && items[2].key == "https://l.test/c");
+    }
+
+    #[test]
+    fn a_toggle_writes_one_entry_into_the_stored_map() {
+        let mut stored = HashMap::new();
+        assert_eq!(lists_with(&stored, "easylist", false), r#"{"easylist":0}"#);
+        stored.insert(
+            defs::BLOCKER_LISTS.key.to_owned(),
+            r#"{"easylist":0}"#.into(),
+        );
+        assert_eq!(
+            lists_with(&stored, "urlhaus-1", true),
+            r#"{"easylist":0,"urlhaus-1":1}"#
+        );
     }
 }

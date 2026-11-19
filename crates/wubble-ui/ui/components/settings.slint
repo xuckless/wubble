@@ -18,7 +18,7 @@
 import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { PressableButton, SpaceIcon, WubbleScroller } from "../components.slint";
-import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView } from "model.slint";
+import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, FilterListItem } from "model.slint";
 import { PageScroll } from "page-scroll.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { IconButton } from "nav-buttons.slint";
@@ -889,6 +889,9 @@ export component SettingsPage inherits Rectangle {
     // the Sites lists: each line and what removing it names (a host, a decision's index)
     in property <[EntryItem]> site-zoom;
     in property <[EntryItem]> site-permissions;
+    // the Filter lists section: every list, and whether one is rebuilding or downloading
+    in property <[FilterListItem]> filter-lists;
+    in property <bool> filter-busy;
     in property <AboutView> about;
     // the search box has text: only the matching rows show, the other sections are left out
     in property <bool> searching;
@@ -906,6 +909,8 @@ export component SettingsPage inherits Rectangle {
     callback space-icon-chosen(int, string);
     callback site-zoom-removed(string);
     callback site-permission-removed(string);
+    callback filter-list-toggled(string, bool);
+    callback filter-lists-update();
 
     public function take-focus() {
         search.take-focus();
@@ -937,7 +942,8 @@ export component SettingsPage inherits Rectangle {
     property <int> shortcuts: root.table;
     property <int> spaces-at: root.table + 1;
     property <int> sites-at: root.table + 2;
-    property <int> about-at: root.table + 3;
+    property <int> lists-at: root.table + 3;
+    property <int> about-at: root.table + 4;
     property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
     // the section the reader is in: the last one past the tracking line, the last at the end,
     // or the one picked in the list until the page is scrolled by hand
@@ -1213,6 +1219,79 @@ export component SettingsPage inherits Rectangle {
                 }
 
                 if !root.searching: Section {
+                    index: root.lists-at;
+                    top: self.y + root.main-top;
+                    scroll: page.scroll;
+                    goto-serial: root.goto-serial;
+                    goto-index: root.goto-index;
+                    passed(i, p) => {
+                        root.passed(i, p);
+                    }
+                    jump(t) => {
+                        root.jump(t);
+                    }
+                    padding-bottom: Shell.section-below;
+                    spacing: Shell.section-head-below;
+                    SectionHead {
+                        text: "Filter lists";
+                    }
+                    Card {
+                        Line {
+                            label: root.filter-busy ? "Working on the filter lists" : "Update the lists";
+                            note: "Downloads every list switched on. Lists are only fetched when you ask or when they are kept up to date.";
+                            VerticalLayout {
+                                alignment: center;
+                                TextButton {
+                                    text: "Update now";
+                                    enabled: !root.filter-busy;
+                                    clicked => {
+                                        root.filter-lists-update();
+                                    }
+                                }
+                            }
+                        }
+                        for list in root.filter-lists: Line {
+                            label: list.title;
+                            note: list.note;
+                            if list.custom: VerticalLayout {
+                                alignment: center;
+                                IconButton {
+                                    icon-path: IconPaths.close;
+                                    clicked => {
+                                        root.entry-removed("blocker.custom_lists", list.key);
+                                    }
+                                }
+                            }
+                            if !list.custom: VerticalLayout {
+                                alignment: center;
+                                Toggle {
+                                    on: list.enabled;
+                                    accent: root.accent;
+                                    toggled => {
+                                        root.filter-list-toggled(list.id, !list.enabled);
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            padding-left: Shell.row-pad-x;
+                            padding-right: Shell.row-pad-x;
+                            padding-top: Shell.row-pad-y;
+                            padding-bottom: Shell.row-pad-y;
+                            Field {
+                                placeholder: "Add a list by its https:// address";
+                                accepted(t) => {
+                                    if t != "" {
+                                        root.entry-added("blocker.custom_lists", t);
+                                    }
+                                    self.text = "";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !root.searching: Section {
                     index: root.about-at;
                     top: self.y + root.main-top;
                     scroll: page.scroll;
@@ -1346,6 +1425,7 @@ export component SettingsPage inherits Rectangle {
                         { title: "Keyboard shortcuts", icon: IconPaths.keyboard, shown: root.bindings.length > 0 },
                         { title: "Spaces", icon: IconPaths.stack, shown: !root.searching },
                         { title: "Sites", icon: IconPaths.lock, shown: !root.searching },
+                        { title: "Filter lists", icon: IconPaths.shield, shown: !root.searching },
                         { title: "About", icon: IconPaths.bubble, shown: !root.searching },
                     ]: Rectangle {
                         height: root.pitch;

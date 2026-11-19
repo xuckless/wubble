@@ -697,6 +697,11 @@ fn connect_input(window: &AppWindow, win: WindowId) {
     window.on_web_pointer_moved(move |pane, x, y| {
         with_host_in(win, |host| host.pointer_moved(pane, point(x, y)))
     });
+    window
+        .global::<wubble_ui::Tips>()
+        .on_hover(move |id, x, top, bottom, on| {
+            with_host_in(win, |host| host.shell_tip(&id, x, (top, bottom), on))
+        });
     window.on_web_pointer_left(move |pane, x, y| {
         with_host_in(win, |host| host.pointer_left(pane, point(x, y)))
     });
@@ -902,6 +907,10 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
     window.on_site_permission_removed(move |i| {
         with_host_in(win, |host| host.site_permission_removed(&i))
     });
+    window.on_filter_list_toggled(move |id, on| {
+        with_host_in(win, |host| host.filter_list_toggled(&id, on))
+    });
+    window.on_filter_lists_update(move || with_host_in(win, |host| host.filter_lists_update()));
 }
 
 /// The native pages' intents (history, bookmarks, downloads): each becomes one host call.
@@ -1004,8 +1013,8 @@ fn run(
         Mode::Browse { listener, .. } => listener.take(),
         _ => None,
     };
-    // `--smoke autofill`'s pages, on a loopback port.
-    let autofill_port = matches!(mode, Mode::Autofill)
+    // `--smoke autofill`'s pages, and `--smoke block`'s (it needs an http page), on a loopback port.
+    let autofill_port = matches!(mode, Mode::Autofill | Mode::Block)
         .then(autofill_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
@@ -1161,7 +1170,7 @@ fn run(
             },
         ),
         Mode::Block => (
-            Some(page_url(BLOCK_PAGE)),
+            autofill_port.map(|port| format!("http://127.0.0.1:{port}/block")),
             Checks {
                 block_smoke: Some(block_smoke::BlockSmoke::default()),
                 ..none
@@ -1261,6 +1270,9 @@ fn run(
         );
     }
     let blocking = blocking::Blocking::new();
+    blocking.on_lists_changed(|| {
+        let _ = slint::invoke_from_event_loop(|| with_host(Host::filter_lists_changed));
+    });
     let media_observer = host::MediaObserver::new();
     let engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),

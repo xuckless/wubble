@@ -6,7 +6,8 @@ import { CheckBox } from "check-box.slint";
 import { SheetButton } from "sheet-button.slint";
 
 // A site asks for a permission: "<site> wants to", one line per kind, a "Remember for this site"
-// toggle, Block and Allow. Placed by the parent under the address pill, where Chromium puts its
+// toggle, Block and Allow; or a link wants another app: "Open mailto link?", the link, "Always
+// for <site> and mailto links", Cancel and Open (the host's words, `prompt::permission_text`). Placed by the parent under the address pill, where Chromium puts its
 // bubble; not modal (the page stays usable, as Chromium's bubble is), and it never takes the
 // keyboard, so no keystroke meant for the page answers it (keyjacking). Written from scratch: the
 // design repo has no permission prompt. Looks and timings are the context menu's and the dialog
@@ -20,6 +21,7 @@ export component PermissionPrompt inherits Rectangle {
     property <PermissionView> shown;
     changed open => {
         if root.open {
+            root.remember = false;
             root.shown = root.prompt;
         }
     }
@@ -75,8 +77,9 @@ export component PermissionPrompt inherits Rectangle {
                 font-size: Type.body.size;
                 wrap: word-wrap;
             }
-            CheckBox {
-                text: "Remember for this site";
+            // No toggle where nothing could be remembered (the host leaves it empty).
+            if root.shown.remember != "": CheckBox {
+                text: root.shown.remember;
                 checked <=> root.remember;
             }
             Rectangle {
@@ -86,7 +89,7 @@ export component PermissionPrompt inherits Rectangle {
                 alignment: end;
                 spacing: Spacing.s2;
                 SheetButton {
-                    text: "Block";
+                    text: root.shown.block;
                     clicked => {
                         if root.open {
                             root.answered(false, root.remember);
@@ -94,7 +97,7 @@ export component PermissionPrompt inherits Rectangle {
                     }
                 }
                 SheetButton {
-                    text: "Allow";
+                    text: root.shown.allow;
                     primary: true;
                     clicked => {
                         if root.open {

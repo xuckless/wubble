@@ -34,10 +34,13 @@ pub enum Permission {
     /// Opening windows and tabs without a click (`popup::decide`). Asked through the address
     /// pill's notice, not the permission prompt.
     Popups,
+    /// Handing links of one scheme (`mailto:`, `tel:`) to another app. Remembered per site and
+    /// scheme, under the origin `external::key` makes (`mailto:https://a.test`).
+    ExternalLinks,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 13] = [
+    pub const ALL: [Permission; 14] = [
         Self::Camera,
         Self::Microphone,
         Self::Geolocation,
@@ -51,6 +54,7 @@ impl Permission {
         Self::PointerLock,
         Self::SavePasswords,
         Self::Popups,
+        Self::ExternalLinks,
     ];
 
     /// The stored name. Stable: never rename one.
@@ -69,6 +73,7 @@ impl Permission {
             Self::PointerLock => "pointer-lock",
             Self::SavePasswords => "password-save",
             Self::Popups => "popups",
+            Self::ExternalLinks => "external-links",
         }
     }
 
@@ -92,6 +97,7 @@ impl Permission {
             Self::PointerLock => "Use and move your mouse",
             Self::SavePasswords => "Save your passwords",
             Self::Popups => "Open pop-ups and new tabs",
+            Self::ExternalLinks => "Open links in another app",
         }
     }
 }

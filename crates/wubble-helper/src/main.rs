@@ -16,6 +16,9 @@ const ZOOM: (&str, &str) = ("zoom", include_str!("zoom.js"));
 /// `probes.js`: what in the frame must keep its tab awake (browser side
 /// `crates/wubble/src/host/busy.rs`).
 const PROBES: (&str, &str) = ("probes", include_str!("probes.js"));
+/// `cosmetic.js`: element hiding for the content blocker (browser side wubble-engine
+/// `cosmetic.rs`; MPL-2.0 parts ported from Brave, see the file).
+const COSMETIC: (&str, &str) = ("cosmetic", include_str!("cosmetic.js"));
 /// `clipboard.js`: the page clipboard through the window, only when the browser
 /// passed [`CLIPBOARD_SWITCH`] (browser side `crates/wubble/src/clipboard.rs`).
 const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
@@ -57,7 +60,7 @@ fn main() {
     // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
     let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
     let clipboard = std::env::args().any(|a| a.strip_prefix("--") == Some(CLIPBOARD_SWITCH));
-    let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES]
+    let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES, COSMETIC]
         .into_iter()
         .chain(clipboard.then_some(CLIPBOARD))
         .collect();
@@ -91,15 +94,27 @@ mod tests {
 
     #[test]
     fn every_script_is_one_function_expression_on_its_channel() {
-        let script = compose(&[AUTOFILL, ZOOM, PROBES, CLIPBOARD]);
+        let script = compose(&[AUTOFILL, ZOOM, PROBES, COSMETIC, CLIPBOARD]);
         assert!(script.starts_with("(function (send, register) {"));
         assert!(script.trim_end().ends_with("})"));
         assert!(script.contains("[\"autofill\", "));
         assert!(script.contains("[\"clipboard\", "));
         assert!(script.contains("[\"zoom\", "));
         assert!(script.contains("[\"probes\", "));
+        assert!(script.contains("[\"cosmetic\", "));
         // No script ends in a statement terminator inside the array.
         assert!(!script.contains("});,"));
+    }
+
+    /// The cosmetic script is data-driven: nothing it receives is evaluated.
+    #[test]
+    fn the_cosmetic_script_evaluates_nothing() {
+        let text = COSMETIC.1;
+        assert!(text.contains("(function (send, register) {"));
+        assert!(text.trim_end().ends_with("})"));
+        for banned in ["eval(", "new Function", "innerHTML", "document.write"] {
+            assert!(!text.contains(banned), "{banned}");
+        }
     }
 
     #[test]
