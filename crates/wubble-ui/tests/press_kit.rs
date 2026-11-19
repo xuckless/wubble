@@ -30,6 +30,10 @@ slint::slint! {
     import { ConfirmButton } from "ui/kit/controls/confirm-button.slint";
     import { KbdCap } from "ui/kit/controls/kbd.slint";
     import { Glyph } from "ui/kit/controls/icon.slint";
+    import { Spin } from "ui/kit/motion/tween.slint";
+    import { Calm } from "ui/kit/motion/calm.slint";
+    import { Controls } from "ui/components/controls/registry.slint";
+    export { Calm, Controls }
     export component Probe inherits Window {
         width: 1360px;
         height: 1600px;
@@ -150,6 +154,21 @@ slint::slint! {
         out property <bool> disabled-off: !off.accessible-enabled && !hold.accessible-enabled;
         out property <bool> live-polite: confirm.accessible-live-region == AccessibleLiveness.polite;
         out property <bool> focused-button: pri.keyboard-focused;
+        // an enabled hold, for the pointer chord
+        HoldButton {
+            x: 0px;
+            y: 1500px;
+            width: 200px;
+            height: 40px;
+            text: "Hold";
+            done-text: "Done";
+        }
+        // the confirm button's busy spinner
+        spin := Spin {
+            running: true;
+            ms: 800ms;
+        }
+        out property <float> spin-turn: spin.turn;
         // the specimen took its size (every stage laid out)
         out property <float> specimen-height: spec.preferred-height / 1px;
     }
@@ -239,6 +258,28 @@ fn kit_controls_geometry_and_keyboard() {
         p.get_on() && p.get_switch_checked(),
         "Enter flips the focused toggle"
     );
+    // held keys: a `<button>`'s keyboard click comes once per press (Space on its release),
+    // never on the repeats
+    let w = p.window();
+    w.dispatch_event(WindowEvent::KeyPressed { text: " ".into() });
+    for _ in 0..3 {
+        w.dispatch_event(WindowEvent::KeyPressRepeated { text: " ".into() });
+    }
+    assert!(p.get_on(), "Space flips on its release, not its press");
+    w.dispatch_event(WindowEvent::KeyReleased { text: " ".into() });
+    assert!(!p.get_on(), "held Space flips once");
+    w.dispatch_event(WindowEvent::KeyPressed {
+        text: Key::Return.into(),
+    });
+    for _ in 0..3 {
+        w.dispatch_event(WindowEvent::KeyPressRepeated {
+            text: Key::Return.into(),
+        });
+    }
+    w.dispatch_event(WindowEvent::KeyReleased {
+        text: Key::Return.into(),
+    });
+    assert!(p.get_on(), "held Enter flips once");
     key(&p, Key::Tab); // the lg toggle
     key(&p, Key::Tab);
     assert!(p.get_focused_button());
@@ -264,4 +305,54 @@ fn kit_controls_geometry_and_keyboard() {
         2,
         "the enabled one takes it (the pointer reaches the probe)"
     );
+
+    // ── a chord: only the left button's up ends a press (the web's `pointerup` comes when the
+    // last button goes up) ──
+    let releases = std::rc::Rc::new(std::cell::Cell::new(0));
+    let r = releases.clone();
+    p.global::<Controls>().on_release(move |_| {
+        r.set(r.get() + 1);
+        -1.0
+    });
+    for (x, y) in [(10.0, 1520.0), (10.0, 70.0)] {
+        let position = LogicalPosition::new(x, y);
+        let w = p.window();
+        w.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        w.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Right,
+        });
+        w.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Right,
+        });
+        assert_eq!(
+            releases.get(),
+            0,
+            "the right button's up at {y} ends nothing"
+        );
+        w.dispatch_event(WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        });
+        assert_eq!(
+            releases.get(),
+            1,
+            "the left button's up at {y} ends the press"
+        );
+        releases.set(0);
+        mock_elapsed_time(Duration::from_millis(16));
+    }
+
+    // ── the busy spinner: turns, but rests under reduced motion (the web's one 1 ms run) ──
+    mock_elapsed_time(Duration::from_millis(200));
+    assert!(p.get_spin_turn() > 0.0, "it turns");
+    p.global::<Calm>().set_reduced(true);
+    for _ in 0..5 {
+        mock_elapsed_time(Duration::from_micros(8_333));
+        assert_eq!(p.get_spin_turn(), 0.0, "reduced: the ring stays still");
+    }
 }

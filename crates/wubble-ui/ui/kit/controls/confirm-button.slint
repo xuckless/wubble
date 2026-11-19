@@ -43,11 +43,11 @@ export component ConfirmButton inherits Button {
     changed hit => {
         pulse.hit = !pulse.hit;
     }
+    // the machine decides (`Effect::Run`): clicks are ignored unless idle
     clicked => {
-        if root.phase == 0 {
+        if Controls.press(root.slot, 0) {
             root.run();
         }
-        Controls.press(root.slot, 0);
     }
 
     kind: ButtonKind.glass;

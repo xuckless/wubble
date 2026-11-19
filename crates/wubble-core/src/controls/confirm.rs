@@ -45,6 +45,8 @@ pub struct State {
     pub phase: Phase,
     /// How long the busy label shows, ms (`ms`; 0: straight to done, as without a busy label).
     pub busy_ms: f64,
+    /// Counts [`Effect::Pulse`], so a view that only sees the latest state replays each pulse.
+    pub pulses: i32,
 }
 
 impl State {
@@ -52,6 +54,7 @@ impl State {
         Self {
             phase: Phase::Idle,
             busy_ms,
+            pulses: 0,
         }
     }
 
@@ -61,7 +64,8 @@ impl State {
     }
 }
 
-fn done(fx: &mut Vec<Effect>) -> Phase {
+fn done(s: &mut State, fx: &mut Vec<Effect>) -> Phase {
+    s.pulses = s.pulses.wrapping_add(1);
     fx.push(Effect::Pulse);
     Phase::Done {
         left_ms: CONFIRM::doneMs,
@@ -77,14 +81,14 @@ pub fn transition(mut s: State, ev: Event) -> (State, Vec<Effect>) {
             s.phase = if s.busy_ms > 0.0 {
                 Phase::Busy { left_ms: s.busy_ms }
             } else {
-                done(&mut fx)
+                done(&mut s, &mut fx)
             };
         }
         (_, Event::Click) | (Phase::Idle, Event::Tick(_)) => {}
         (Phase::Busy { left_ms }, Event::Tick(dt)) => {
             let left = left_ms - dt * 1000.0;
             s.phase = if left <= 0.0 {
-                done(&mut fx)
+                done(&mut s, &mut fx)
             } else {
                 Phase::Busy { left_ms: left }
             };
@@ -145,6 +149,7 @@ mod tests {
         let (s, fx) = transition(State::new(0.0), Event::Click);
         assert_eq!(fx, [Effect::Run, Effect::Pulse]);
         assert_eq!(s.phase.index(), 2);
+        assert_eq!(s.pulses, 1, "the state counts the pulse");
     }
 
     #[test]

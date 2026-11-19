@@ -49,6 +49,10 @@ pub struct State {
     k: Spring,
     disabled: bool,
     moving: bool,
+    /// How many times each effect has been emitted, so a view that only sees the latest state
+    /// still sees every completion and every pulse.
+    dones: i32,
+    pulses: i32,
 }
 
 impl Default for State {
@@ -66,6 +70,10 @@ pub struct View {
     pub scale_y: f64,
     pub done: bool,
     pub held: bool,
+    /// Counts [`Effect::Done`]: the action runs on each change.
+    pub dones: i32,
+    /// Counts [`Effect::Pulse`]: the pulse replays on each change.
+    pub pulses: i32,
 }
 
 impl State {
@@ -76,6 +84,8 @@ impl State {
             k: spring(1.0),
             disabled: false,
             moving: false,
+            dones: 0,
+            pulses: 0,
         }
     }
 
@@ -90,6 +100,8 @@ impl State {
             scale_y: squash_of(self.k.x),
             done: matches!(self.phase, Phase::Done { .. }),
             held: self.phase == Phase::Held,
+            dones: self.dones,
+            pulses: self.pulses,
         }
     }
 }
@@ -129,6 +141,8 @@ pub fn transition(mut s: State, ev: Event) -> (State, Vec<Effect>) {
                         left_ms: HOLD::doneMs,
                     };
                     s.k.v += HOLD::strike;
+                    s.dones = s.dones.wrapping_add(1);
+                    s.pulses = s.pulses.wrapping_add(1);
                     fx.push(Effect::Done);
                     fx.push(Effect::Pulse);
                 }
@@ -184,6 +198,11 @@ mod tests {
         assert!(at == frames || at == frames + 1, "{at} vs {frames}");
         assert!(s.view().done);
         assert_eq!(s.view().p, 1.0);
+        assert_eq!(
+            (s.view().dones, s.view().pulses),
+            (1, 1),
+            "the view counts each effect"
+        );
     }
 
     #[test]

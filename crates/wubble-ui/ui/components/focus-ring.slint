@@ -25,16 +25,28 @@ export component FocusRing inherits Rectangle {
 
 // A control's keyboard focus: reached by Tab (never by a click, so the ring is focus-visible
 // only), Space or Enter activates; any other key goes to `other-key` (unset: rejected, so it
-// reaches the parent). Its `has-focus` shows the control's FocusRing.
+// reaches the parent). Its `has-focus` shows the control's FocusRing. `native-button`: a web
+// `<button>`'s keyboard click instead, once per key press: Space on its release, Enter on its
+// press, key repeats ignored.
 export component FocusKeys inherits FocusScope {
+    in property <bool> native-button: false;
     callback activate();
     callback other-key(KeyEvent) -> EventResult;
     focus-on-click: false;
     key-pressed(e) => {
         if e.text == " " || e.text == Key.Return {
-            root.activate();
+            if !root.native-button || (e.text == Key.Return && !e.repeat) {
+                root.activate();
+            }
             return accept;
         }
         return root.other-key(e);
+    }
+    key-released(e) => {
+        if root.native-button && e.text == " " {
+            root.activate();
+            return accept;
+        }
+        return reject;
     }
 }

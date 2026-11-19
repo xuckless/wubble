@@ -25,14 +25,8 @@ enum Slot {
     Toggle(Toggle),
     Slider(Slider),
     Segmented(Segmented),
-    /// The machine's state and the pulses it has asked for.
-    Hold(hold::State, i32),
-    Confirm(confirm::State, i32),
-}
-
-/// Counts the pulse effects into `hit`.
-fn pulses<E: PartialEq>(hit: &mut i32, fx: &[E], pulse: &E) {
-    *hit = hit.wrapping_add(fx.iter().filter(|e| *e == pulse).count() as i32);
+    Hold(hold::State),
+    Confirm(confirm::State),
 }
 
 impl Slot {
@@ -41,17 +35,14 @@ impl Slot {
             Slot::Toggle(t) => t.step(dt),
             Slot::Slider(s) => s.step(dt),
             Slot::Segmented(s) => s.step(dt),
-            Slot::Hold(s, hit) => {
-                let (n, fx) = hold::transition(*s, hold::Event::Tick(dt));
-                *s = n;
-                pulses(hit, &fx, &hold::Effect::Pulse);
-                n.moving()
+            // the effects are counted in the state, so the view carries them (`dones`, `pulses`)
+            Slot::Hold(s) => {
+                *s = hold::transition(*s, hold::Event::Tick(dt)).0;
+                s.moving()
             }
-            Slot::Confirm(s, hit) => {
-                let (n, fx) = confirm::transition(*s, confirm::Event::Tick(dt));
-                *s = n;
-                pulses(hit, &fx, &confirm::Effect::Pulse);
-                n.moving()
+            Slot::Confirm(s) => {
+                *s = confirm::transition(*s, confirm::Event::Tick(dt)).0;
+                s.moving()
             }
         }
     }
@@ -83,7 +74,7 @@ impl Slot {
                     ..rest
                 };
             }
-            Slot::Hold(s, hit) => {
+            Slot::Hold(s) => {
                 let v = s.view();
                 return ControlView {
                     scale_x: v.scale_x as f32,
@@ -91,14 +82,15 @@ impl Slot {
                     value: v.p as f32,
                     held: v.held,
                     phase: if v.done { 2 } else { i32::from(v.held) },
-                    hit: *hit,
+                    hit: v.pulses,
+                    done: v.dones,
                     ..rest
                 };
             }
-            Slot::Confirm(s, hit) => {
+            Slot::Confirm(s) => {
                 return ControlView {
                     phase: s.phase.index(),
-                    hit: *hit,
+                    hit: s.pulses,
                     ..rest
                 };
             }
@@ -200,9 +192,7 @@ impl Controls {
             Some(Slot::Toggle(t)) => t.set(value > 0.5),
             Some(Slot::Slider(s)) => s.set(f64::from(value)),
             Some(Slot::Segmented(s)) => s.set(value.max(0.0) as usize),
-            Some(Slot::Hold(s, _)) => {
-                *s = hold::transition(*s, hold::Event::Disable(value > 0.5)).0
-            }
+            Some(Slot::Hold(s)) => *s = hold::transition(*s, hold::Event::Disable(value > 0.5)).0,
             Some(Slot::Confirm(..)) | None => {}
         }
     }
@@ -223,21 +213,35 @@ impl Controls {
         self.write(id);
     }
 
-    fn press(&mut self, id: i32, px: f32) {
+    /// Returns whether the press asks the control to run its action (confirm: `Effect::Run`).
+    fn press(&mut self, id: i32, px: f32) -> bool {
         let t = self.ms();
-        match self.slot(id) {
-            Some(Slot::Toggle(tg)) => tg.press(f64::from(px), t),
-            Some(Slot::Slider(s)) => s.press(f64::from(px)),
-            Some(Slot::Segmented(s)) => s.press(f64::from(px), t),
-            Some(Slot::Hold(s, _)) => *s = hold::transition(*s, hold::Event::Start).0,
-            Some(Slot::Confirm(s, hit)) => {
+        let run = match self.slot(id) {
+            Some(Slot::Toggle(tg)) => {
+                tg.press(f64::from(px), t);
+                false
+            }
+            Some(Slot::Slider(s)) => {
+                s.press(f64::from(px));
+                false
+            }
+            Some(Slot::Segmented(s)) => {
+                s.press(f64::from(px), t);
+                false
+            }
+            Some(Slot::Hold(s)) => {
+                *s = hold::transition(*s, hold::Event::Start).0;
+                false
+            }
+            Some(Slot::Confirm(s)) => {
                 let (n, fx) = confirm::transition(*s, confirm::Event::Click);
                 *s = n;
-                pulses(hit, &fx, &confirm::Effect::Pulse);
+                fx.contains(&confirm::Effect::Run)
             }
-            None => {}
-        }
+            None => false,
+        };
         self.write(id);
+        run
     }
 
     fn drag(&mut self, id: i32, px: f32) {
@@ -255,7 +259,7 @@ impl Controls {
             Some(Slot::Toggle(t)) => t.release().map_or(-1.0, |on| if on { 1.0 } else { 0.0 }),
             Some(Slot::Slider(s)) => s.release().map_or(-1.0, |v| v as f32),
             Some(Slot::Segmented(s)) => s.release().map_or(-1.0, |i| i as f32),
-            Some(Slot::Hold(s, _)) => {
+            Some(Slot::Hold(s)) => {
                 *s = hold::transition(*s, hold::Event::End).0;
                 -1.0
             }
@@ -336,9 +340,8 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
             2 => Slot::Segmented(Segmented::new(value.max(0.0) as usize)),
             3 => Slot::Hold(
                 hold::transition(hold::State::new(), hold::Event::Disable(value > 0.5)).0,
-                0,
             ),
-            4 => Slot::Confirm(confirm::State::new(f64::from(value.max(0.0))), 0),
+            4 => Slot::Confirm(confirm::State::new(f64::from(value.max(0.0)))),
             _ => Slot::Slider(Slider::new(f64::from(value), DEFAULT_TRAVEL)),
         };
         r.borrow_mut().acquire(slot)
@@ -354,8 +357,9 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     g.on_segment(move |id, i, left, width| r.borrow_mut().segment(id, i, left, width));
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_press(move |id, px| {
-        r.borrow_mut().press(id, px);
+        let run = r.borrow_mut().press(id, px);
         w();
+        run
     });
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_drag(move |id, px| {
@@ -448,14 +452,14 @@ mod tests {
     #[test]
     fn a_hold_slot_fills_completes_once_and_resets() {
         let mut c = Controls::new();
-        let id = c.acquire(Slot::Hold(hold::State::new(), 0));
-        c.press(id, 0.0);
+        let id = c.acquire(Slot::Hold(hold::State::new()));
+        assert!(!c.press(id, 0.0), "a hold runs at the end, not the press");
         settle(&mut c);
         let v = c.views.row_data(0).unwrap();
         assert_eq!(
-            (v.hit, v.phase, v.value),
-            (1, 0, 0.0),
-            "done, pulsed, back to idle"
+            (v.done, v.hit, v.phase, v.value),
+            (1, 1, 0, 0.0),
+            "done once, pulsed once, back to idle"
         );
         // disabled: a press does nothing
         c.set_value(id, 1.0);
@@ -467,10 +471,10 @@ mod tests {
     #[test]
     fn a_confirm_slot_runs_busy_then_done() {
         let mut c = Controls::new();
-        let id = c.acquire(Slot::Confirm(confirm::State::new(400.0), 0));
-        c.press(id, 0.0);
+        let id = c.acquire(Slot::Confirm(confirm::State::new(400.0)));
+        assert!(c.press(id, 0.0), "the idle click runs the action");
         assert_eq!(c.views.row_data(0).unwrap().phase, 1, "busy at once");
-        c.press(id, 0.0);
+        assert!(!c.press(id, 0.0), "a click while busy does not run it");
         settle(&mut c);
         let v = c.views.row_data(0).unwrap();
         assert_eq!(

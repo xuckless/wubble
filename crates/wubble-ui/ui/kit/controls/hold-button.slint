@@ -79,6 +79,10 @@ export component HoldButton inherits Rectangle {
     property <int> hit: root.v.hit;
     changed hit => {
         pulse.hit = !pulse.hit;
+    }
+    // the machine's `Effect::Done`, counted in its view
+    property <int> dones: root.v.done;
+    changed dones => {
         root.done();
     }
 
@@ -168,7 +172,8 @@ export component HoldButton inherits Rectangle {
             if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
                 Controls.press(root.slot, 0);
             }
-            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+            // the left button's up only: a chorded button's up is not the web's `pointerup`
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) || e.kind == PointerEventKind.cancel {
                 Controls.release(root.slot);
             }
         }

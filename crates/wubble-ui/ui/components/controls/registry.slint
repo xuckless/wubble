@@ -28,6 +28,8 @@ export struct ControlView {
     phase: int,
     // Counts the pulses (hold: done; confirm: done), so a control replays it on each change.
     hit: int,
+    // Counts the hold button's completions (`Effect::Done`): it runs `done` on each change.
+    done: int,
 }
 
 export global Controls {
@@ -44,8 +46,9 @@ export global Controls {
     // The segmented control's segment `i` laid out at (left, width), px.
     callback segment(int, int, length, length);
     // Pointer along the travel, px; `t` the time base the toggle measures its fling with.
-    // Hold: press starts, release ends the hold. Confirm: press is the click.
-    callback press(int, length);
+    // Hold: press starts, release ends the hold. Confirm: press is the click. Returns whether
+    // the control runs its action now (confirm: the machine's `Effect::Run`; the others: false).
+    callback press(int, length) -> bool;
     callback drag(int, length);
     // The value it lands on (toggle 0/1, slider 0..100, segment index), or -1 when it was not
     // held (or, segmented, landed on no segment).

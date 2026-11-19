@@ -118,6 +118,7 @@ export component Toggle inherits Rectangle {
         }
     }
     keys := FocusKeys {
+        native-button: true;
         activate => {
             root.toggled();
         }
@@ -127,7 +128,8 @@ export component Toggle inherits Rectangle {
             if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
                 Controls.press(root.slot, self.mouse-x);
             }
-            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+            // the left button's up only: a chorded button's up is not the web's `pointerup`
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) || e.kind == PointerEventKind.cancel {
                 let landed = Controls.release(root.slot);
                 if landed >= 0 && (landed > 0.5) != root.on {
                     root.toggled();

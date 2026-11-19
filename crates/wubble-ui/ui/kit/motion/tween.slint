@@ -76,11 +76,13 @@ export component Glide {
 
 // A CSS animation that runs forever while `running` (the busy spinner's `st-spin`, .8 s linear
 // infinite, pages/settings.css:114-115): `turn` is how far round, 0..1, from the window's
-// animation clock. Stopped, it rests at 0 and asks for no frames.
+// animation clock. Stopped, it rests at 0 and asks for no frames. Under reduced motion it rests
+// too: the design cuts every animation to one 1 ms iteration (core/wubble.css:74), so the turn
+// runs once and the ring stays still.
 export component Spin {
     in property <bool> running;
     in property <duration> ms;
-    out property <float> turn: root.running ? mod(animation-tick() / Calm.ms(root.ms), 1) : 0;
+    out property <float> turn: root.running && !Calm.reduced ? mod(animation-tick() / root.ms, 1) : 0;
     width: 0px;
     height: 0px;
 }
