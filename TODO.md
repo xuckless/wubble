@@ -355,6 +355,17 @@ Measured by hand on the owner's machines, never in tests. Each item starts with 
 - [ ] CPU and GPU at idle and during video: no redraw when nothing changes, scene paused when hidden, glass cost
 - [ ] Release build settings (LTO, codegen units, symbols) and binary size
 
+## Feel pass (before release, never blocks the building blocks; owner, 2026-11-18)
+
+Every widget gets the design's feel, not only the sidebar: stretchy bubble physics, liquid
+glass and the glowing ring. During the build-out a plain, correct widget is acceptable; this
+pass upgrades them. Source: the design repo and `~/Dev/wubble-wt/notes/motion-audit.md`.
+
+- [ ] Stretch and squash (bubble physics) on every pressable and moving surface: context menu, tab row menu, address pill menu, popovers (downloads, permissions, autofill, blocked pop-ups), dialog and save sheets, toasts, the command bar, tooltips, the video strip, the find bar, Settings controls
+- [ ] Liquid glass (the wgpu scene's glass tiers, pointer light, tap waves) under every floating surface, with the flat Slint fallback kept
+- [ ] The glowing ring and border beam wherever something is focused, loading or newly opened: text fields, prompts, the command bar, menus on open
+- [ ] One audit at the end: walk every surface in the gallery smoke and mark each against the three effects above
+
 ## M6 — Own engine: ungoogled Chromium + CEF
 
 Needs ~150 GB free and several hours per full build per platform.
