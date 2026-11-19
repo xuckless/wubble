@@ -122,8 +122,8 @@
       dirty = false;
       lastRun = now();
       runProcedural();
-    } else if (filters.length && dirty) {
-      schedule();
+    } else if (filters.length && dirty && !timer) {
+      timer = later(tick, PROCEDURAL_EVERY - (now() - lastRun));
     }
     if (total >= MAX_TOTAL) generic = false;
   }
@@ -283,9 +283,14 @@
         try { filters.push(compile(json)); } catch (e) {}
       }
     }
-    if (reply.generic === true && !generic) generic = true;
+    // Only the first "generic" starts the collector: the page's own batches
+    // are answered without it, and a spent MAX_TOTAL stays off.
+    const starting = reply.generic === true && !generic && total < MAX_TOTAL;
+    if (starting) generic = true;
+    const watching = observer;
     if (generic || filters.length) observe();
-    if (generic && observer) { scanAll(); schedule(); }
+    // A new observer scans by itself; a running one must be told.
+    if (starting && watching) { scanAll(); schedule(); }
   });
   send('hello');
 })

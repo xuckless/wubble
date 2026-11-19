@@ -8,6 +8,8 @@
 //! filters (adblock's JSON) for the page's executor, and whether to keep
 //! asking. The answer is data only; scriptlets travel by `run_script_in`.
 
+use crate::filter::FrameCosmetic;
+
 /// Names per batch the engine reads; a longer batch is cut.
 pub const MAX_NAMES: usize = 512;
 /// Longest class name or id read; a longer one is skipped.
@@ -53,26 +55,15 @@ impl Request {
     }
 }
 
-/// The answer to a [`Request`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Reply {
-    /// Stylesheet rules to add.
-    pub css: Vec<String>,
-    /// Procedural filters for the page's executor (adblock's JSON).
-    pub procedural: Vec<String>,
-    /// The page should keep asking about new class names and ids.
-    pub generic: bool,
-}
-
-impl Reply {
-    pub fn to_text(&self) -> String {
-        serde_json::json!({
-            "css": self.css,
-            "procedural": self.procedural,
-            "generic": self.generic,
-        })
-        .to_string()
-    }
+/// The answer to a [`Request`]: the frame's rules as JSON, scriptlets left out
+/// (they run from the browser, not through the page).
+pub fn reply_text(rules: &FrameCosmetic) -> String {
+    serde_json::json!({
+        "css": rules.css,
+        "procedural": rules.procedural,
+        "generic": rules.generic,
+    })
+    .to_string()
 }
 
 #[cfg(test)]
@@ -125,12 +116,14 @@ mod tests {
 
     #[test]
     fn replies_round_trip_through_json() {
-        let reply = Reply {
+        let reply = FrameCosmetic {
             css: vec![".a{display:none!important}".into()],
             procedural: vec![r#"{"selector":[]}"#.into()],
+            script: Some("never sent".into()),
             generic: true,
         };
-        let value: serde_json::Value = serde_json::from_str(&reply.to_text()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&reply_text(&reply)).unwrap();
+        assert!(value.get("script").is_none());
         assert_eq!(value["css"][0], ".a{display:none!important}");
         assert_eq!(value["procedural"][0], r#"{"selector":[]}"#);
         assert_eq!(value["generic"], true);

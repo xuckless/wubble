@@ -778,7 +778,8 @@ impl View {
     /// (`cosmetic::Request`): the data goes back on the channel, scriptlets
     /// run in the frame from here.
     fn answer_cosmetic(&mut self, frame: &crate::page::FrameInfo, body: &str) {
-        use crate::cosmetic::{Reply, Request};
+        use crate::cosmetic::{Request, reply_text};
+        use crate::filter::FrameCosmetic;
         let Some(filter) = self.filter.clone() else {
             return;
         };
@@ -790,25 +791,21 @@ impl View {
         };
         let reply = match Request::parse(body) {
             Some(Request::Hello) => {
-                let given = filter.frame_cosmetic(&top, &frame.url);
-                if let Some(script) = &given.script {
-                    self.run_script_in(&frame.id, script);
+                let mut given = filter.frame_cosmetic(&top, &frame.url);
+                if let Some(script) = given.script.take() {
+                    self.run_script_in(&frame.id, &script);
                 }
-                Reply {
-                    css: given.css,
-                    procedural: given.procedural,
-                    generic: given.generic,
-                }
+                given
             }
-            Some(Request::Names { classes, ids }) => Reply {
+            // `generic` stays off: the page already reports names.
+            Some(Request::Names { classes, ids }) => FrameCosmetic {
                 css: filter.generic_hide(&top, &frame.url, &classes, &ids),
-                generic: true,
-                ..Reply::default()
+                ..FrameCosmetic::default()
             },
             None => return,
         };
-        if reply != Reply::default() {
-            self.send_frame_message(&frame.id, FrameChannel::Cosmetic, &reply.to_text());
+        if reply != FrameCosmetic::default() {
+            self.send_frame_message(&frame.id, FrameChannel::Cosmetic, &reply_text(&reply));
         }
     }
 

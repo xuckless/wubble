@@ -194,7 +194,7 @@ impl Blocking {
         let this = self.clone();
         let work = move || {
             if compiled {
-                this.count_rules(&sources);
+                this.count_rules(&sources, generation);
             } else {
                 this.run_rebuild(generation);
             }
@@ -260,7 +260,7 @@ impl Blocking {
                 let blocker = Blocker::compile(&sources, Some(&cache));
                 if newest() {
                     self.replace_blocker(blocker);
-                    self.count_rules(&sources);
+                    self.count_rules(&sources, generation);
                 }
             }
         }
@@ -268,17 +268,30 @@ impl Blocking {
 
     /// [`Self::rebuild`] counted as running, then the page told.
     fn run_rebuild(&self, generation: u64) {
-        self.rebuilding.fetch_add(1, Ordering::SeqCst);
+        self.begin_rebuild();
         self.rebuild(generation);
+        self.end_rebuild();
+    }
+
+    fn begin_rebuild(&self) {
+        self.rebuilding.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn end_rebuild(&self) {
         self.rebuilding.fetch_sub(1, Ordering::SeqCst);
         self.notify();
     }
 
-    /// Records the rules in each source list.
-    fn count_rules(&self, sources: &[Source]) {
+    /// Records the rules in each source list, unless a newer rebuild than
+    /// `generation` was asked for (its counts would be overwritten).
+    fn count_rules(&self, sources: &[Source], generation: u64) {
         let rules = wubble_blocker::rule_counts(sources);
-        self.state().rules = rules;
-        self.notify();
+        let mut lists = self.state();
+        if self.generation.load(Ordering::SeqCst) == generation {
+            lists.rules = rules;
+            drop(lists);
+            self.notify();
+        }
     }
 
     /// Switches to `selection` (the list settings changed): rebuilds on a
@@ -295,17 +308,16 @@ impl Blocking {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let this = self.clone();
         // Counted now, so the page shows "rebuilding" before the thread runs.
-        self.rebuilding.fetch_add(1, Ordering::SeqCst);
+        self.begin_rebuild();
         let spawned = std::thread::Builder::new()
             .name("wubble-blocker-rebuild".into())
             .spawn(move || {
                 this.rebuild(generation);
-                this.rebuilding.fetch_sub(1, Ordering::SeqCst);
-                this.notify();
+                this.end_rebuild();
             });
         spawned
             .inspect_err(|e| {
-                self.rebuilding.fetch_sub(1, Ordering::SeqCst);
+                self.end_rebuild();
                 eprintln!("wubble: blocker not rebuilt: {e}");
             })
             .ok()
@@ -464,6 +476,14 @@ impl Blocking {
 
     /// The cosmetic data of a frame's URL, as a page with shields on gets it.
     fn cosmetic_of(&self, frame_url: &str) -> Arc<Cosmetic> {
+        self.cosmetic_with(&self.current(), frame_url)
+    }
+
+    /// [`Self::cosmetic_of`] computed on `blocker`; cached only while it is
+    /// still the current engine (checked under the cache lock, which
+    /// [`Self::replace_blocker`] takes after the swap), so a swap during the
+    /// computation cannot leave stale rules behind.
+    fn cosmetic_with(&self, blocker: &Arc<Blocker>, frame_url: &str) -> Arc<Cosmetic> {
         if let Some(found) = self
             .cosmetic
             .lock()
@@ -472,12 +492,14 @@ impl Blocking {
         {
             return found.clone();
         }
-        let made = Arc::new(self.current().cosmetic(frame_url, Shields::On));
+        let made = Arc::new(blocker.cosmetic(frame_url, Shields::On));
         let mut cache = self.cosmetic.lock().unwrap_or_else(PoisonError::into_inner);
-        if cache.len() >= COSMETIC_CACHE {
-            cache.clear();
+        if Arc::ptr_eq(blocker, &self.current()) {
+            if cache.len() >= COSMETIC_CACHE {
+                cache.clear();
+            }
+            cache.insert(frame_url.to_owned(), made.clone());
         }
-        cache.insert(frame_url.to_owned(), made.clone());
         made
     }
 
@@ -1049,6 +1071,21 @@ example.com#@#.cookie-notice
         assert!(hide("https://a.test/", &["cookie-notice"], &[]).is_empty());
         b.set_enabled(false);
         assert!(hide("https://b.test/", &["cookie-notice"], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_stale_engine_leaves_nothing_in_the_cosmetic_cache() {
+        let b = blocking(COSMETIC_LIST);
+        let url = "https://example.com/";
+        let old = b.current();
+        b.replace_blocker(Blocker::from_lists(&["example.com##.other\n"]));
+        // The lookup began on the old engine and ends after the swap.
+        assert!(!b.cosmetic_with(&old, url).hide_selectors.is_empty());
+        assert!(b.cosmetic.lock().unwrap().is_empty());
+        assert_eq!(
+            b.frame_cosmetic(url, url).css,
+            [".other{display:none!important}"]
+        );
     }
 
     #[test]
