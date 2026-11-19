@@ -1328,6 +1328,8 @@ mod tests {
         }
     }
 
+    // Unix paths: `Path::is_absolute` and the `:` list separator are the host OS's.
+    #[cfg(unix)]
     #[test]
     fn linux_data_dir_follows_xdg() {
         let dir = |vars: &[(&str, &str)]| xdg_data_dir(&lookup(vars));
@@ -1346,6 +1348,8 @@ mod tests {
 
     #[test]
     fn mac_and_windows_data_dirs() {
+        // A Unix path is not absolute on Windows.
+        #[cfg(unix)]
         assert_eq!(
             mac_data_dir(&lookup(&[("HOME", "/Users/u")])),
             Some(PathBuf::from("/Users/u/Library/Application Support/wubble"))
@@ -1453,6 +1457,8 @@ mod tests {
         );
     }
 
+    // Unix paths: `Path::is_absolute` and the `:` list separator are the host OS's.
+    #[cfg(unix)]
     #[test]
     fn the_nvidia_vaapi_driver_is_found_where_libva_looks() {
         let nvidia = "/proc/driver/nvidia/version";
