@@ -328,8 +328,9 @@ impl Host {
 
     // ----- `--smoke autofill`
 
-    /// One step of the smoke with what the visible tab shows now.
-    pub(super) fn autofill_smoke_worked(&mut self) {
+    /// One step of the smoke with what the visible tab shows now; `painted`: this run put a
+    /// new frame on screen.
+    pub(super) fn autofill_smoke_worked(&mut self, painted: bool) {
         if self.checks.autofill_smoke.is_none() {
             return;
         }
@@ -348,7 +349,11 @@ impl Host {
             view.prompt,
             Some((SaveKind::New, ref user, _)) if user == autofill_smoke::NEW_USER
         );
-        self.autofill_smoke_step(autofill_smoke::Input::Worked { chip, save_prompt });
+        self.autofill_smoke_step(autofill_smoke::Input::Worked {
+            chip,
+            save_prompt,
+            painted,
+        });
     }
 
     pub(super) fn autofill_smoke_step(&mut self, input: autofill_smoke::Input) {

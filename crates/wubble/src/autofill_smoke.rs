@@ -3,8 +3,9 @@
 //! a login seeded for that origin in a vault on the fake keyring. The smoke
 //! opens the key menu and picks the login as a click on its row would; the
 //! page confirms the fill in its title, then stands in for the user signing
-//! in as someone else (it types another account). A click on the page's
-//! submit button posts the form; the next page has no form, so the save
+//! in as someone else (it types another account). Once a frame painted after
+//! the fill is on screen (the fill can land before the page's first paint,
+//! and Chromium drops input a document gets before then), a click on the page's submit button posts the form; the next page has no form, so the save
 //! prompt must offer the new login. The smoke saves it and reads the row
 //! back from the vault. Bounded by counts of CEF work runs, never by time.
 
@@ -41,6 +42,10 @@ pub enum Step {
     Chip,
     /// Picked: waiting for the page to see the fill.
     Filled,
+    /// Filled: waiting for a frame the page painted since, as a user sees the
+    /// page before clicking it (Chromium drops input that reaches a document
+    /// before its first paint).
+    Shown,
     /// Submitted: waiting for the save prompt.
     Prompt,
     /// Saved: waiting for the vault's row.
@@ -70,6 +75,8 @@ pub enum Input<'a> {
         chip: bool,
         /// The prompt asks to save a new login.
         save_prompt: bool,
+        /// A new frame reached the screen on this run.
+        painted: bool,
     },
     Title(&'a str),
     /// The vault holds the new login with its password, and the seeded one.
@@ -97,7 +104,8 @@ pub fn next(state: AutofillSmoke, input: Input) -> (AutofillSmoke, Vec<Action>) 
     let to = |step| AutofillSmoke::At { step, runs: 0 };
     match (step, input) {
         (Step::Chip, Input::Worked { chip: true, .. }) => (to(Step::Filled), vec![Action::Pick]),
-        (Step::Filled, Input::Title(title)) if title == FILLED_TITLE => {
+        (Step::Filled, Input::Title(title)) if title == FILLED_TITLE => (to(Step::Shown), vec![]),
+        (Step::Shown, Input::Worked { painted: true, .. }) => {
             (to(Step::Prompt), vec![Action::Submit])
         }
         (
@@ -191,7 +199,19 @@ mod tests {
     use super::*;
 
     fn worked(chip: bool, save_prompt: bool) -> Input<'static> {
-        Input::Worked { chip, save_prompt }
+        Input::Worked {
+            chip,
+            save_prompt,
+            painted: true,
+        }
+    }
+
+    fn unpainted() -> Input<'static> {
+        Input::Worked {
+            chip: false,
+            save_prompt: false,
+            painted: false,
+        }
     }
 
     fn run(inputs: &[Input]) -> (AutofillSmoke, Vec<Action>) {
@@ -211,6 +231,7 @@ mod tests {
             worked(true, false),
             Input::Title("sign in"),
             Input::Title(FILLED_TITLE),
+            worked(false, false),
             worked(false, false),
             worked(false, true),
             Input::ReadBack(true),
@@ -234,11 +255,34 @@ mod tests {
         assert_eq!(actions, [Action::Pick]);
     }
 
+    /// A fill can land before the page's first paint; a click then would be
+    /// dropped by Chromium, so the submit waits for a frame painted after it.
+    #[test]
+    fn the_submit_waits_for_the_page_on_screen() {
+        let (s, actions) = run(&[
+            worked(true, false),
+            Input::Title(FILLED_TITLE),
+            unpainted(),
+            unpainted(),
+        ]);
+        assert_eq!(actions, [Action::Pick]);
+        assert_eq!(
+            s,
+            AutofillSmoke::At {
+                step: Step::Shown,
+                runs: 2
+            }
+        );
+        let (_, actions) = next(s, worked(false, false));
+        assert_eq!(actions, [Action::Submit]);
+    }
+
     #[test]
     fn a_missing_row_fails() {
         let (s, actions) = run(&[
             worked(true, false),
             Input::Title(FILLED_TITLE),
+            worked(false, false),
             worked(false, true),
             Input::ReadBack(false),
         ]);

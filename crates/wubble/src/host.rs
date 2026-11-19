@@ -1196,11 +1196,13 @@ impl Host {
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
         }
+        let presented = self.stats.accelerated;
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
+        let presented = self.stats.accelerated != presented;
         self.split_smoke_step(&window);
-        self.autofill_smoke_worked();
+        self.autofill_smoke_worked(presented);
         self.builtin_smoke_worked();
         self.video_smoke_worked();
         let framed = self.shown().is_some_and(|t| self.w.frames.contains_key(&t));
