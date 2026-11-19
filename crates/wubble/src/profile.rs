@@ -63,10 +63,7 @@ mod tests {
         let default = || -> Option<PathBuf> { panic!("not looked up") };
         // absolute on every OS (`/p` is not on Windows, where it gains the current drive)
         let dir = std::env::temp_dir().join("p");
-        assert_eq!(
-            choose(Some(dir.clone()), default),
-            Some(Profile { dir })
-        );
+        assert_eq!(choose(Some(dir.clone()), default), Some(Profile { dir }));
         assert_eq!(
             choose(None, || Some("/data/wubble".into())),
             Some(Profile {

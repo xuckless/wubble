@@ -363,6 +363,12 @@ pub struct FrameInfo {
 /// What the host learns about a page beyond navigation, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PageEvent {
+    /// An accessibility tree change (CEF's `OnAccessibilityTreeChange`), as the JSON CEF
+    /// wrote of its value; only after [`crate::view::View::set_accessibility`] turned it on.
+    /// `wubble_ax::AxValue::from_json` reads it.
+    AxTree(String),
+    /// An accessibility location change (`OnAccessibilityLocationChange`), likewise.
+    AxLocation(String),
     /// A frame's clipboard request, when the engine runs with
     /// `EngineConfig::clipboard_bridge` (wubble-helper `clipboard.js` on
     /// [`FrameChannel::Clipboard`]). `frame` names the frame for the answer.

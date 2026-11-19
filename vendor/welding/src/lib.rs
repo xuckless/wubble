@@ -89,6 +89,9 @@ mod cef_input;
 // wubble change: the platform-independent CEF handlers.
 #[cfg(feature = "cef-runtime")]
 mod handlers;
+// wubble change 50: the accessibility handler.
+#[cfg(feature = "cef-runtime")]
+mod accessibility;
 #[cfg(feature = "cef-runtime")]
 mod drag;
 // wubble change, see `WUBBLE_CHANGES.md`.

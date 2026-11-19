@@ -6,17 +6,7 @@ use serde_json::{Value, json};
 use value::{parse_locations, parse_updates};
 
 fn ax(v: &Value) -> AxValue {
-    match v {
-        Value::Null => AxValue::Null,
-        Value::Bool(b) => AxValue::Bool(*b),
-        Value::Number(n) => match n.as_i64() {
-            Some(i) => AxValue::Int(i as i32),
-            None => AxValue::Double(n.as_f64().unwrap()),
-        },
-        Value::String(s) => AxValue::String(s.clone()),
-        Value::Array(a) => AxValue::List(a.iter().map(ax).collect()),
-        Value::Object(o) => AxValue::Dict(o.iter().map(|(k, v)| (k.clone(), ax(v))).collect()),
-    }
+    AxValue::of(v)
 }
 
 /// A small page: a heading, a paragraph with a link, a text field, a button, inside a
@@ -389,4 +379,163 @@ fn frames_keep_their_own_subtree_grafted_at_their_host() {
         ]}]}),
     );
     assert_eq!(tree.trees.keys().collect::<Vec<_>>(), ["tree-b"]);
+}
+
+// ----- the real tree (`ax_smoke`'s dump of CEF 156, checked in)
+
+/// `cargo run -p wubble-engine --example ax_smoke -- --dump FILE` on its bundled page, the
+/// page's temporary path replaced.
+const AX_SMOKE: &str = include_str!("fixtures/ax_smoke.jsonl");
+
+fn smoke_tree() -> PageTree {
+    let mut tree = PageTree::default();
+    for line in AX_SMOKE.lines().filter(|l| !l.is_empty()) {
+        let v = AxValue::from_json(line).expect("CEF's JSON");
+        tree.apply(&parse_updates(&v));
+    }
+    tree
+}
+
+#[test]
+fn the_real_tree_reads_in_document_order() {
+    let lines: Vec<String> = smoke_tree()
+        .flatten(usize::MAX)
+        .iter()
+        .map(|i| i.line())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "heading 1 \"Welcome\" @8,21 784x37",
+            "staticText \"Read the\" @8,80 60x17",
+            "link \"docs\" @68,80 29x17",
+            "staticText \"first.\" @98,80 34x17",
+            "heading 2 \"Sign in\" @8,118 784x27",
+            "staticText \"Email\" @8,167 38x17",
+            "textField \"Email\" value=\"a@b\" @50,166 185x21",
+            "checkBox \"Remember me\" checked @243,168 13x13",
+            "button \"Send\" @361,166 47x21",
+            "link \"Help\" @8,187 31x17",
+        ]
+    );
+}
+
+#[test]
+fn the_real_tree_maps_to_accesskit() {
+    let v = AxValue::from_json(AX_SMOKE.lines().next().unwrap()).unwrap();
+    let mut tree = PageTree::default();
+    let u = tree.apply(&parse_updates(&v)).expect("an update");
+    let role = |r: Role| u.nodes.iter().filter(|(_, n)| n.role() == r).count();
+    assert_eq!(role(Role::RootWebArea), 1);
+    assert_eq!(role(Role::Heading), 2);
+    assert_eq!(role(Role::Link), 2);
+    assert_eq!(role(Role::TextInput), 1);
+    assert_eq!(role(Role::CheckBox), 1);
+    assert_eq!(role(Role::Button), 1);
+    assert_eq!(role(Role::Form), 1);
+    let check = u
+        .nodes
+        .iter()
+        .find(|(_, n)| n.role() == Role::CheckBox)
+        .unwrap();
+    assert_eq!(check.1.toggled(), Some(Toggled::True));
+    assert_eq!(check.1.label(), Some("Remember me"));
+    let h1 = u
+        .nodes
+        .iter()
+        .find(|(_, n)| n.role() == Role::Heading)
+        .unwrap();
+    assert_eq!((h1.1.label(), h1.1.level()), (Some("Welcome"), Some(1)));
+    // The root's offset container is 0 (none): its bounds are the page's.
+    assert_eq!(u.tree.as_ref().map(|t| t.root), Some(NodeId(15)));
+    // The text field takes a value (`setValue`); nothing in this tree has `doDefault`.
+    let field = u
+        .nodes
+        .iter()
+        .find(|(_, n)| n.role() == Role::TextInput)
+        .unwrap();
+    assert!(field.1.supports_action(Action::SetValue));
+}
+
+#[test]
+fn the_page_focus_is_the_focused_tree_s_node() {
+    // The page document's tree data names the focused frame tree and its node.
+    let page = json!({
+        "ax_tree_id": "page",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "page", "focus_id": 1, "focused_tree_id": "frame" },
+            "root_id": 1,
+            "nodes": [
+                { "id": 1, "role": "rootWebArea", "child_ids": [2],
+                  "location": { "x": 0.0, "y": 0.0, "width": 800.0, "height": 600.0 } },
+                { "id": 2, "role": "iframe", "offset_container_id": 1,
+                  "location": { "x": 100.0, "y": 50.0, "width": 300.0, "height": 200.0 },
+                  "attributes": { "childTreeId": "frame" } }
+            ]
+        }]
+    });
+    let frame = json!({
+        "ax_tree_id": "frame",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "frame", "parent_tree_id": "page", "focus_id": 1 },
+            "root_id": "1",
+            "nodes": [
+                { "id": "1", "role": "rootWebArea", "child_ids": ["2"],
+                  "location": { "x": 0.0, "y": 0.0, "width": 300.0, "height": 200.0 } },
+                { "id": "2", "role": "button", "offset_container_id": "1",
+                  "location": { "x": 10.0, "y": 20.0, "width": 50.0, "height": 20.0 },
+                  "attributes": { "name": "In frame" } }
+            ]
+        }]
+    });
+    let mut tree = PageTree::default();
+    tree.apply(&parse_updates(&ax(&page)));
+    tree.apply(&parse_updates(&ax(&frame)));
+    let items = tree.flatten(usize::MAX);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let b = &items[0];
+    // String ids read as ints (cefclient's `CastToInt`); the frame placed at its host.
+    assert_eq!(
+        (b.tree.as_str(), b.id, b.name.as_str()),
+        ("frame", 2, "In frame")
+    );
+    assert_eq!((b.bounds.x, b.bounds.y), (110.0, 70.0));
+    assert!(!b.focused, "the focus is the frame's root, not the button");
+    let focus = json!({
+        "ax_tree_id": "page",
+        "updates": [{
+            "has_tree_data": true,
+            "tree_data": { "tree_id": "page", "focus_id": 2, "focused_tree_id": "frame" },
+            "nodes": []
+        }]
+    });
+    tree.apply(&parse_updates(&ax(&focus)));
+    assert!(tree.flatten(usize::MAX)[0].focused);
+}
+
+#[test]
+fn flatten_skips_the_hidden_and_stops_at_the_cap() {
+    let mut tree = PageTree::default();
+    first(&mut tree, page());
+    let all = tree.flatten(usize::MAX);
+    assert_eq!(
+        all.iter().map(|i| i.kind).collect::<Vec<_>>(),
+        [Kind::Heading, Kind::Link, Kind::TextField, Kind::Button]
+    );
+    assert!(all[2].focused, "focus_id 6 of the page's own tree data");
+    assert_eq!(all[0].level, 2);
+    // the link: scrolled container 3 at (0, 100), scrolled 50
+    assert_eq!((all[1].bounds.x, all[1].bounds.y), (5.0, 110.0));
+    assert_eq!(tree.flatten(2).len(), 2);
+    let hide = json!({
+        "ax_tree_id": "tree-a",
+        "updates": [{ "nodes": [
+            { "id": 7, "role": "button", "state": ["invisible"], "offset_container_id": 3,
+              "attributes": { "name": "Send" } }
+        ] }]
+    });
+    tree.apply(&parse_updates(&ax(&hide)));
+    assert_eq!(tree.flatten(usize::MAX).len(), 3);
 }

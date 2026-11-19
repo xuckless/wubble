@@ -2062,6 +2062,12 @@ pub enum NavigationEvent {
     /// wubble change 49: CEF's `OnScrollOffsetChanged`, the page's root
     /// scroll offset in DIP, after it changed.
     ScrollOffset { x: f64, y: f64 },
+    /// wubble change 50: an accessibility tree update CEF's
+    /// `OnAccessibilityTreeChange` handed over (only once the host enabled
+    /// accessibility on the browser host), as `cef_write_json` wrote the value.
+    AccessibilityTree { json: String },
+    /// wubble change 50: `OnAccessibilityLocationChange`, likewise.
+    AccessibilityLocation { json: String },
     /// How a page search is going. Chromium reports progressively: several of
     /// these arrive for one search as more of the page is scanned, and
     /// `final_update` marks the last.

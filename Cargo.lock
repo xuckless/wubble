@@ -8608,6 +8608,7 @@ dependencies = [
  "serde_json",
  "welding",
  "winit",
+ "wubble-ax",
  "wubble-core",
  "wubble-gfx",
  "wubble-sysmem",

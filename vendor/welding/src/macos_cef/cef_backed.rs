@@ -281,6 +281,11 @@ cef::wrap_render_handler! {
                 crate::surface::NavigationEvent::ScrollOffset { x, y },
             );
         }
+
+        // wubble change 50: the accessibility tree, once the host enables it.
+        fn accessibility_handler(&self) -> Option<cef::AccessibilityHandler> {
+            Some(crate::accessibility::handler(&self.handler.events))
+        }
     }
 }
 

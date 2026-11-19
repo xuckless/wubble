@@ -222,6 +222,9 @@ pub struct View {
     wheel: WheelRemainder,
     /// The page's root horizontal scroll offset (DIP), as CEF last reported it.
     scroll_x: f64,
+    /// The accessibility tree wanted ([`View::set_accessibility`]), and whether CEF has been
+    /// told: the browser host may not exist yet when it is asked.
+    accessibility: (bool, bool),
     /// KEYUPs owed for keys pressed and not yet released, sent if focus
     /// leaves first so no key sticks.
     held_keys: Vec<(PhysicalKey, CefKey)>,
@@ -310,6 +313,7 @@ impl View {
             clicks: ClickTracker::default(),
             wheel: WheelRemainder::default(),
             scroll_x: 0.0,
+            accessibility: (false, true),
             held_keys: Vec::new(),
             page: Vec::new(),
             popup: PopupWidget::default(),
@@ -826,7 +830,10 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
-            Route::PageCommitted => self.page.push(PageEvent::Committed),
+            Route::PageCommitted => {
+                self.tell_accessibility();
+                self.page.push(PageEvent::Committed);
+            }
         }
     }
 
@@ -1117,6 +1124,33 @@ impl View {
 
     pub fn zoom_out(&mut self) {
         self.zoom_step(welding::ZoomCommand::Out);
+    }
+
+    /// Turns the page's accessibility tree on or off (CEF's TreeOnly mode for a windowless
+    /// browser: the renderer computes the whole tree and reports it as
+    /// [`PageEvent::AxTree`] and [`PageEvent::AxLocation`]). Off by default: it costs CPU and
+    /// memory on every page, so only while an assistive technology runs or a setting asks.
+    pub fn set_accessibility(&mut self, on: bool) {
+        if self.accessibility != (on, true) {
+            self.accessibility = (on, false);
+            self.tell_accessibility();
+        }
+    }
+
+    /// Tells CEF the accessibility state wanted, once its browser host exists (else at the next
+    /// commit).
+    fn tell_accessibility(&mut self) {
+        let (on, told) = self.accessibility;
+        if told {
+            return;
+        }
+        let state = if on {
+            cef::State::ENABLED
+        } else {
+            cef::State::DISABLED
+        };
+        self.send(|host| host.set_accessibility_state(state));
+        self.accessibility.1 = self.host.is_some();
     }
 
     /// Clamped to 25..=500 %.
@@ -1881,6 +1915,8 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             one(Route::Page(PageEvent::DragCursor(DragOps(operation.0))))
         }
         E::ScrollOffset { x, .. } => one(Route::ScrollX(x)),
+        E::AccessibilityTree { json } => one(Route::Page(PageEvent::AxTree(json))),
+        E::AccessibilityLocation { json } => one(Route::Page(PageEvent::AxLocation(json))),
         _ => vec![],
     }
 }

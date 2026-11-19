@@ -432,6 +432,8 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::Frozen { frozen, ok } => Routed::Frozen { frozen, ok },
         PageEvent::TargetId(id) => Routed::TargetId(id),
         PageEvent::Committed => Routed::Committed,
+        // not asked for yet (`View::set_accessibility`)
+        PageEvent::AxTree(_) | PageEvent::AxLocation(_) => Routed::Ignore,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
         PageEvent::PermissionRequested {
             id,

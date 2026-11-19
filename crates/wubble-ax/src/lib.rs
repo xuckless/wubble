@@ -19,6 +19,7 @@
 //! Slint's own mapping (i-slint-backend-winit 1.19 `accesskit.rs`, MIT OR GPL-3.0) and
 //! Chromium's `ui/accessibility/ax_enums.mojom` names (BSD-3-Clause); no code is copied.
 
+pub mod flat;
 pub mod value;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,6 +28,7 @@ use accesskit::{
     Action, ActionRequest, Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate, Uuid,
 };
 
+pub use flat::{AxItem, Kind};
 pub use value::{AxNode, AxValue, Bounds, LocationChange, Updates};
 
 /// Chromium role name to AccessKit role. Roles not listed are generic containers, which
@@ -125,6 +127,11 @@ pub struct PageTree {
     /// The page's own document (the tree with no parent).
     root: String,
     trees: BTreeMap<String, DocTree>,
+    /// The page's focus as the page document's tree data names it (`focused_tree_id`,
+    /// `focus_id`): a node of a frame's tree when a frame has it. As cefclient takes it
+    /// (`OsrAccessibilityHelper::UpdateFocusedNode`, BSD-3-Clause): only from an update that
+    /// carries both.
+    focus: Option<(String, i32)>,
 }
 
 impl PageTree {
@@ -141,6 +148,11 @@ impl PageTree {
                 .cloned()
                 .collect();
             self.trees.retain(|t, _| keep.contains(t));
+        }
+        for change in &updates.changes {
+            if let (Some(tree), Some(id)) = (&change.focused_tree, change.focus_id) {
+                self.focus = Some((tree.clone(), id));
+            }
         }
         self.trees
             .entry(updates.tree_id.clone())
@@ -414,6 +426,10 @@ impl DocTree {
                     .map(|c| node_id(*c))
                     .collect::<Vec<_>>(),
             );
+        }
+        // a field's value is set as the page sets it (`setValue`, seen on text fields)
+        if n.actions.iter().any(|a| a == "setValue") {
+            node.add_action(Action::SetValue);
         }
         if CLICKABLE.contains(&role) || n.actions.iter().any(|a| a == "doDefault") {
             node.add_action(Action::Click);

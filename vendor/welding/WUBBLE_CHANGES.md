@@ -456,6 +456,14 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    as `NavigationEvent::ScrollOffset { x, y }` (Linux, macOS, Windows
    `*/cef_backed.rs`, `surface.rs`), so the host can tell whether a page took
    a sideways scroll before it turns a two-finger swipe into back or forward.
+50. **Accessibility tree.** New `accessibility.rs` (cef-runtime): a
+   `WeldAccessibilityHandler` whose `OnAccessibilityTreeChange` and
+   `OnAccessibilityLocationChange` write CEF's value as JSON (`cef_write_json`)
+   and queue `NavigationEvent::AccessibilityTree { json }` /
+   `AccessibilityLocation { json }` (`surface.rs`); the render handlers of
+   all three platforms return it from `GetAccessibilityHandler`
+   (`*/cef_backed.rs`). Nothing turns accessibility on: CEF calls the handler
+   only after the host's `BrowserHost::set_accessibility_state(ENABLED)`.
 
 ## Not changed, on purpose
 
