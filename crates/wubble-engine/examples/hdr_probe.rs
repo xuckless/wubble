@@ -148,7 +148,6 @@ fn run(dir: &Path) -> Result<(), String> {
             return Err(format!("CEF did not shut down ({outcome:?})"));
         }
         engine.tick();
-        std::thread::sleep(Duration::from_millis(2));
     }
     outcome
 }
