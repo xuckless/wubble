@@ -126,6 +126,8 @@ mod tests {
         let app = AppWindow::new().unwrap();
         // the kit menu keeps its highlight and keys in the controls registry
         let _controls = crate::controls::wire(&app);
+        // the command bar's machine runs in the driver
+        let _driver = crate::driver::wire(&app, wubble_core::seam::Seam::new());
         app.window()
             .set_size(slint::LogicalSize::new(1280.0, 800.0));
         command_bar_lifecycle(&app);
@@ -376,19 +378,15 @@ mod tests {
         assert_eq!(app.get_command_results().row_count(), 3);
         assert_eq!(app.get_command_shown_rows(), 3);
 
-        // A second Enter while closing must not choose again.
+        // A pick closes the bar at once (command.tsx `go`: `d.command = null`); a second
+        // Enter chooses nothing.
         press(app, "\n");
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
         press(app, "\n");
         assert_eq!(chosen.get(), 1);
-        // The close timer is the dropdown's out duration (176 ms).
-        mock_elapsed_time(Duration::from_millis(170));
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
-        mock_elapsed_time(Duration::from_millis(10));
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
-        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
-        // A second Escape while closing must not dismiss again.
+        // Escape runs the exit: the dropdown's out duration (176 ms); a second Escape while it
+        // closes does not dismiss again.
         app.invoke_request_address_focus();
         settle();
         assert_eq!(app.get_command_bar_state(), CommandBarState::Open);
@@ -397,9 +395,12 @@ mod tests {
         app.set_command_results(ModelRc::from(nine.as_slice()));
         assert_eq!(app.get_command_shown_rows(), 7);
         press(app, Key::Escape);
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
         press(app, Key::Escape);
         assert_eq!(dismissed.get(), 1);
-        settle();
+        mock_elapsed_time(Duration::from_millis(170));
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closing);
+        mock_elapsed_time(Duration::from_millis(10));
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
     }
 }

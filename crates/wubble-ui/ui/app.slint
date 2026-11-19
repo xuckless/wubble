@@ -14,8 +14,8 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
-import { CommandBar } from "components/command-bar.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { CommandBar } from "kit/chrome/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
 import { GlanceView } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
@@ -53,7 +53,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { PeekCue, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -335,16 +335,31 @@ export component AppWindow inherits Window {
     in property <TipView> tip;
     // A row was dragged to a new slot: (tab id, its new index in `tabs`).
     callback tab-moved(int, int);
-    out property <CommandBarState> command-bar-state <=> bar.state;
-    // Where the bar grows from (window coordinates); set when it opens.
-    in-out property <Origin> command-origin <=> bar.origin;
+    // The command bar's life: wubble_core::chrome::CommandBar, run by the driver from the cues
+    // below; its state, mode and origin are written back here.
+    in property <CommandBarState> command-bar-state <=> bar.state;
+    in property <CommandMode> command-mode <=> bar.mode;
+    // Where the bar grows from (window coordinates).
+    in property <Origin> command-origin <=> bar.origin;
+    callback command-open(CommandMode, Origin);
+    // how long the exit runs (`wb-pop-out`): the driver's timer settles the machine after it
+    out property <duration> command-exit: bar.exit;
+    callback command-close();
+    callback command-pick();
+    // the driver's effects (CommandEffect::FocusInput, RestoreFocus)
+    public function command-focus-input() {
+        bar.focus-input();
+    }
+    public function command-release-keys() {
+        bar.release-keys();
+    }
     in property <[CommandResult]> command-results <=> bar.results;
     in-out property <string> command-query <=> bar.query;
     // The command bar's beam while you type (the driver; wubble_core::beam::Thinking).
     in property <BeamShape> command-beam <=> bar.beam;
     callback command-query-changed <=> bar.query-changed;
-    callback command-result-chosen <=> bar.result-chosen;
-    callback command-dismissed <=> bar.dismissed;
+    callback command-result-chosen(int);
+    callback command-dismissed();
     // Intents: the bar opens itself; Rust may prefill the query.
     callback new-tab-requested();
     callback space-switched <=> sidebar.space-switched;
@@ -353,8 +368,7 @@ export component AppWindow inherits Window {
     callback beside-requested();
 
     public function request-new-tab() {
-        root.command-origin = sidebar.new-tab-origin;
-        bar.dispatch(CommandBarEvent.open);
+        root.command-open(CommandMode.new, sidebar.new-tab-origin);
         root.new-tab-requested();
     }
 
@@ -366,14 +380,12 @@ export component AppWindow inherits Window {
     callback sidebar-mode-requested(SidebarMode);
 
     public function request-address-focus() {
-        root.command-origin = sidebar.address-origin;
-        bar.dispatch(CommandBarEvent.open);
+        root.command-open(CommandMode.here, sidebar.address-origin);
         root.address-focus-requested();
     }
 
     public function request-beside() {
-        root.command-origin = sidebar.address-origin;
-        bar.dispatch(CommandBarEvent.open);
+        root.command-open(CommandMode.split, sidebar.address-origin);
         root.beside-requested();
     }
 
@@ -386,7 +398,7 @@ export component AppWindow inherits Window {
             return;
         }
         if root.command-bar-state != CommandBarState.closed {
-            bar.dispatch(CommandBarEvent.close);
+            root.command-close();
         }
         if region == FocusRegion.sidebar {
             sidebar.take-focus();
@@ -397,7 +409,7 @@ export component AppWindow inherits Window {
 
     // Closes the bar as Esc does (`--smoke windows`, before it reads the page's pixels).
     public function dismiss-command-bar() {
-        bar.dispatch(CommandBarEvent.close);
+        root.command-close();
     }
 
     // ── The page's own UI (wubble surface.rs, menu.rs, screen.rs): the visible tab's surfaces,
@@ -1182,6 +1194,16 @@ export component AppWindow inherits Window {
                 }
             }
             bar := CommandBar {
+                // `here` shows the open site's host (chrome.tsx: a site, not wubble's own pages)
+                here-host: root.address-host == "wubble" || root.address-host == "data" ? "" : root.address-host;
+                result-chosen(i) => {
+                    root.command-result-chosen(i);
+                    root.command-pick();
+                }
+                dismissed => {
+                    root.command-dismissed();
+                    root.command-close();
+                }
                 closed => {
                     web-focus.focus();
                 }

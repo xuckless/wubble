@@ -133,6 +133,12 @@ function cssTables() {
         base = (rule.at ? `${slug(rule.at.replace(/^@\w+/, ''))}-` : '') + slug(first);
       }
       if (!/^[a-z]/.test(base)) base = `r-${base}`;
+      // a keyframe step between the ends: where it falls in the run (`60%` -> .6)
+      const step = rule.at.startsWith('@keyframes') && /^([\d.]+)%$/.exec(rule.selector.trim());
+      if (step && rule.decls.length && !['0', '100'].includes(step[1]) && !seen.has(`${base}--at`)) {
+        seen.add(`${base}--at`);
+        props.push({ id: `${base}--at`, t: 'float', v: Number(step[1]) / 100, line: rule.decls[0].line, src: `${rule.at} ${rule.selector}` });
+      }
       // a width query's breakpoint, once per query, so the kit switches where the design does
       const q = /^@(?:container|media)\b.*\(max-width:\s*([\d.]+)px\)/.exec(rule.at);
       const qid = q && `${slug(rule.at.replace(/^@\w+/, ''))}--query-max-width`;
@@ -557,6 +563,14 @@ const TSX = () => {
     'hold-done-icon': { t: 'length', ...tsxValue('pages/settings.tsx', 'class="st-hold-done"', /size=\{([\d.]+)\}/) },
     'confirm-done-icon': { t: 'length', ...tsxValue('pages/settings.tsx', 'class="st-ok"><Icon name="check"', /size=\{([\d.]+)\}/) },
     'confirm-done-ms': { t: 'duration', ...tsxValue('pages/settings.tsx', "setSt('idle')", /setSt\('idle'\), (\d+)\)/) },
+    // the command bar (command.tsx): the rows' entrance lead before the stagger, the most rows,
+    // the head's search icon; where it grows from (chrome.tsx `onOpen`): the pill's left + 40,
+    // the New tab row's left + 20
+    'cmd-row-lead': { t: 'duration', ...tsxValue('browser/command.tsx', 'animationDelay:', /\$\{(\d+) \+ i \* CMD\.stagger\}ms/) },
+    'cmd-rows': { t: 'float', ...tsxValue('browser/command.tsx', 'const CMD = ', /rows: (\d+)/) },
+    'cmd-head-icon': { t: 'length', ...tsxValue('browser/command.tsx', '<Icon name="search" size=', /size=\{(\d+)\}/) },
+    'address-origin-dx': { t: 'length', ...tsxValue('browser/chrome.tsx', 'onOpen({ x: r.left + ', /r\.left \+ (\d+)/) },
+    'new-tab-origin-dx': { t: 'length', ...tsxValue('browser/chrome.tsx', "openCommand('new')({ x: r.left + ", /r\.left \+ (\d+)/) },
   };
 };
 function tsxSlint() {

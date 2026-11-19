@@ -9,7 +9,7 @@
 // edge. wubble's own chips (pop-ups, media, blocker shield and count, reader, bookmark star) sit
 // at the right end in the same 13 px icon and 8 px gap (derived: notes/fidelity/derived-review.md).
 
-import { Palette } from "../gen/tokens.slint";
+import { Palette, Tsx } from "../gen/tokens.slint";
 import { BrowserCss } from "../gen/css.slint";
 import { Role } from "../gen/text.slint";
 import { Shell } from "../derived.slint";
@@ -92,7 +92,7 @@ export component AddressPill inherits Rectangle {
     // button's right edge (chrome.tsx `openCommand`).
     out property <Origin> origin: root.compact
         ? { x: rail.absolute-position.x + rail.width, y: rail.absolute-position.y + rail.height / 2 }
-        : { x: root.absolute-position.x + Shell.command-origin-dx, y: root.absolute-position.y + root.height / 2 };
+        : { x: root.absolute-position.x + Tsx.address-origin-dx, y: root.absolute-position.y + root.height / 2 };
     callback activated();
     // wubble: the chips at the pill's right end.
     in property <bool> bookmarkable: false;

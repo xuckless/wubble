@@ -15,6 +15,9 @@ slint::slint! {
     import { AddressPill } from "ui/kit/chrome/address-pill.slint";
     import { Favs } from "ui/kit/chrome/favs.slint";
     import { SpaceTint, SpaceSwitcher } from "ui/kit/chrome/space-switcher.slint";
+    import { CommandBar } from "ui/kit/chrome/command-bar.slint";
+    import { CommandBarState, CommandMode, CommandResult } from "ui/components/model.slint";
+    export { CommandBarState, CommandMode, CommandResult }
     export component Probe inherits Window {
         width: 400px;
         height: 300px;
@@ -35,6 +38,20 @@ slint::slint! {
         }
         out property <length> spaces-w: spaces.width;
         out property <length> spaces-h: spaces.height;
+        in property <bool> bar-on;
+        in property <CommandMode> bar-mode;
+        in property <[CommandResult]> bar-results;
+        bar := CommandBar {
+            visible: root.bar-on;
+            state: root.bar-on ? CommandBarState.open : CommandBarState.closed;
+            mode: root.bar-mode;
+            here-host: "example.com";
+            results: root.bar-results;
+        }
+        out property <int> bar-selected: bar.selected-row;
+        out property <bool> bar-empty: bar.empty-shown;
+        out property <string> bar-placeholder: bar.placeholder;
+        public function bar-focus() { bar.focus-input(); }
         out property <length> origin-x: pill.origin.x;
         out property <length> origin-y: pill.origin.y;
     }
@@ -123,6 +140,61 @@ fn spaces(p: &Probe) {
     p.set_compact(false);
 }
 
+fn key(p: &Probe, k: slint::platform::Key) {
+    let text: slint::SharedString = k.into();
+    p.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    p.window().dispatch_event(WindowEvent::KeyReleased { text });
+    mock_elapsed_time(Duration::from_millis(1));
+}
+
+/// command.tsx: the pointer selects a row, Up / Down stop at both ends, no rows show the empty
+/// line, the placeholder follows the mode.
+fn command_bar(p: &Probe) {
+    use slint::platform::Key;
+    let row = |t: &str| CommandResult {
+        title: t.into(),
+        ..Default::default()
+    };
+    p.set_bar_results(slint::ModelRc::from(
+        [row("a"), row("b"), row("c")].as_slice(),
+    ));
+    p.set_bar_on(true);
+    run_out();
+    p.invoke_bar_focus();
+    assert_eq!(p.get_bar_selected(), 0);
+    assert!(!p.get_bar_empty());
+    key(p, Key::UpArrow);
+    assert_eq!(p.get_bar_selected(), 0, "clamped at the top");
+    for _ in 0..4 {
+        key(p, Key::DownArrow);
+    }
+    assert_eq!(p.get_bar_selected(), 2, "clamped at the bottom");
+    // the panel: 72 from the top, padding 6, the head 52, the list's 4; rows 44 high
+    let row_y = |i: f32| 72.0 + 6.0 + 52.0 + 4.0 + 22.0 + 44.0 * i;
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(200.0, row_y(1.0)),
+        },
+    );
+    assert_eq!(p.get_bar_selected(), 1, "hover selects");
+    at(p, WindowEvent::PointerExited);
+    p.set_bar_results(slint::ModelRc::default());
+    mock_elapsed_time(Duration::from_millis(1));
+    assert!(p.get_bar_empty());
+    for (mode, want) in [
+        (CommandMode::Here, "example.com"),
+        (CommandMode::New, "Search or type an address"),
+        (CommandMode::Split, "Open beside this page"),
+    ] {
+        p.set_bar_mode(mode);
+        assert_eq!(p.get_bar_placeholder(), want);
+    }
+    p.set_bar_on(false);
+    run_out();
+}
+
 #[test]
 fn chrome_kit_parts_follow_the_design() {
     init_integration_test_with_mock_time();
@@ -132,4 +204,5 @@ fn chrome_kit_parts_follow_the_design() {
     address_pill(&p);
     favourites(&p);
     spaces(&p);
+    command_bar(&p);
 }

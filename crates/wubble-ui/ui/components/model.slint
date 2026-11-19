@@ -64,17 +64,18 @@ export struct CommandResult {
     icon: image,
 }
 
-// Lifecycle of the command bar overlay. Written only by CommandBar.dispatch.
+// The command bar's life (mirrors wubble_core::chrome::CommandBar; the driver writes it).
 export enum CommandBarState {
     closed,
     open,
     closing,
 }
 
-export enum CommandBarEvent {
-    open,
-    close,
-    settle,
+// What the command bar opens for (mirrors wubble_core::chrome::CommandMode).
+export enum CommandMode {
+    here,
+    new,
+    split,
 }
 
 // Mirrors wubble_core::seam::SidebarMode; the seam (Rust) owns it.

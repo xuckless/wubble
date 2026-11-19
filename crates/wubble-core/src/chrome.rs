@@ -1,6 +1,6 @@
 //! The chrome's pure rules (the design's `browser/chrome.tsx` and `command.tsx`): what the
-//! address pill shows, when the sidebar is compact, and the hidden sidebar's peek. Pure, no
-//! timers: the host runs the effects.
+//! address pill shows, when the sidebar is compact, the hidden sidebar's peek and the command
+//! bar's life. Pure, no timers: the host runs the effects.
 
 use crate::seam::SidebarMode;
 use crate::url;
@@ -94,6 +94,97 @@ pub fn peek(state: Peek, event: PeekEvent) -> (Peek, Vec<PeekEffect>) {
     }
 }
 
+/// What the command bar opens for (command.tsx `cmd.mode`): `Here` replaces the shown page (the
+/// address pill), `New` opens a tab (New tab), `Split` opens beside the focused page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandMode {
+    Here,
+    New,
+    Split,
+}
+
+/// Where it was opened from, window px: the panel grows from there (`cmd.from`).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// The command bar's life (command.tsx): open, then on its way out (`leaving`, the `wb-pop-out`
+/// exit), then gone.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum CommandBar {
+    #[default]
+    Closed,
+    Open {
+        mode: CommandMode,
+        from: Point,
+    },
+    Closing {
+        mode: CommandMode,
+        from: Point,
+    },
+}
+
+impl CommandBar {
+    pub fn mode(self) -> Option<CommandMode> {
+        match self {
+            CommandBar::Closed => None,
+            CommandBar::Open { mode, .. } | CommandBar::Closing { mode, .. } => Some(mode),
+        }
+    }
+
+    pub fn from(self) -> Option<Point> {
+        match self {
+            CommandBar::Closed => None,
+            CommandBar::Open { from, .. } | CommandBar::Closing { from, .. } => Some(from),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CommandEvent {
+    /// The address pill, New tab, the start page's search or an action opened it.
+    Open { mode: CommandMode, from: Point },
+    /// Escape, a click on the scrim, the keys going elsewhere (`close`).
+    Close,
+    /// The exit ran its course (`setTimeout(..., CMD.out)`).
+    Settled,
+    /// A row was chosen (`go` / an action's `run`): the bar goes at once (`d.command = null`).
+    Pick,
+    /// "Open beside…": the open bar turns to picking a page beside (`d.command.mode = 'split'`).
+    SetMode(CommandMode),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandEffect {
+    /// Show the bar as the state says (and stop an exit under way).
+    Show,
+    /// The input takes the keys, its text selected (`input.focus()`).
+    FocusInput,
+    /// Run the exit (`wb-pop-out`, the dropdown's out duration), then `Settled`.
+    StartExit,
+    /// Gone.
+    Hide,
+    /// The keys go back where they were, if the bar held them.
+    RestoreFocus,
+}
+
+/// One step of the command bar.
+pub fn command(state: CommandBar, event: CommandEvent) -> (CommandBar, Vec<CommandEffect>) {
+    use CommandBar::*;
+    use CommandEffect::*;
+    use CommandEvent as E;
+    match (state, event) {
+        (_, E::Open { mode, from }) => (Open { mode, from }, vec![Show, FocusInput]),
+        (Open { mode, from }, E::Close) => (Closing { mode, from }, vec![StartExit]),
+        (Closing { .. }, E::Settled) => (Closed, vec![Hide, RestoreFocus]),
+        (Open { .. }, E::Pick) => (Closed, vec![Hide, RestoreFocus]),
+        (Open { from, .. }, E::SetMode(mode)) => (Open { mode, from }, vec![Show, FocusInput]),
+        (s, _) => (s, vec![]),
+    }
+}
+
 /// What the address pill shows for `url`: the host in ink and the rest in haze (chrome.tsx
 /// `addressOf`). wubble's own pages read `wubble` + `://settings`; no page (a new tab, the start
 /// page) reads `wubble` + `://start`, as the design's; a `data:` page (bundled pages) is named
@@ -129,6 +220,119 @@ mod tests {
         SidebarMode::Rail,
         SidebarMode::Hidden,
     ];
+
+    const AT: Point = Point { x: 48.0, y: 74.0 };
+
+    fn open(mode: CommandMode) -> CommandEvent {
+        CommandEvent::Open { mode, from: AT }
+    }
+
+    #[test]
+    fn the_bar_opens_takes_the_keys_and_grows_from_its_point() {
+        use CommandEffect::*;
+        let (s, fx) = command(CommandBar::Closed, open(CommandMode::New));
+        assert_eq!(
+            s,
+            CommandBar::Open {
+                mode: CommandMode::New,
+                from: AT
+            }
+        );
+        assert_eq!(fx, [Show, FocusInput]);
+        assert_eq!((s.mode(), s.from()), (Some(CommandMode::New), Some(AT)));
+        assert_eq!(
+            (CommandBar::Closed.mode(), CommandBar::Closed.from()),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn close_runs_the_exit_then_settles_closed() {
+        use CommandEffect::*;
+        let s = command(CommandBar::Closed, open(CommandMode::Here)).0;
+        let (s, fx) = command(s, CommandEvent::Close);
+        assert!(matches!(
+            s,
+            CommandBar::Closing {
+                mode: CommandMode::Here,
+                ..
+            }
+        ));
+        assert_eq!(fx, [StartExit]);
+        // `if (leaving) return`: a second close does nothing
+        assert_eq!(command(s, CommandEvent::Close), (s, vec![]));
+        assert_eq!(command(s, CommandEvent::Pick), (s, vec![]));
+        let (s, fx) = command(s, CommandEvent::Settled);
+        assert_eq!(s, CommandBar::Closed);
+        assert_eq!(fx, [Hide, RestoreFocus]);
+    }
+
+    #[test]
+    fn a_pick_closes_at_once() {
+        use CommandEffect::*;
+        let s = command(CommandBar::Closed, open(CommandMode::New)).0;
+        assert_eq!(
+            command(s, CommandEvent::Pick),
+            (CommandBar::Closed, vec![Hide, RestoreFocus])
+        );
+    }
+
+    #[test]
+    fn opening_again_while_it_closes_brings_it_back() {
+        use CommandEffect::*;
+        let s = command(CommandBar::Closed, open(CommandMode::Here)).0;
+        let s = command(s, CommandEvent::Close).0;
+        let (s, fx) = command(s, open(CommandMode::Split));
+        assert_eq!(
+            s,
+            CommandBar::Open {
+                mode: CommandMode::Split,
+                from: AT
+            }
+        );
+        assert_eq!(fx, [Show, FocusInput]);
+    }
+
+    #[test]
+    fn settled_only_ends_an_exit() {
+        let open_bar = command(CommandBar::Closed, open(CommandMode::Here)).0;
+        for s in [CommandBar::Closed, open_bar] {
+            assert_eq!(command(s, CommandEvent::Settled), (s, vec![]));
+        }
+    }
+
+    #[test]
+    fn closed_ignores_all_but_open() {
+        for e in [
+            CommandEvent::Close,
+            CommandEvent::Settled,
+            CommandEvent::Pick,
+            CommandEvent::SetMode(CommandMode::Split),
+        ] {
+            assert_eq!(command(CommandBar::Closed, e), (CommandBar::Closed, vec![]));
+        }
+    }
+
+    #[test]
+    fn open_beside_turns_the_open_bar_to_split() {
+        use CommandEffect::*;
+        let s = command(CommandBar::Closed, open(CommandMode::Here)).0;
+        let (s, fx) = command(s, CommandEvent::SetMode(CommandMode::Split));
+        assert_eq!(
+            s,
+            CommandBar::Open {
+                mode: CommandMode::Split,
+                from: AT
+            }
+        );
+        assert_eq!(fx, [Show, FocusInput]);
+        // not while it leaves
+        let closing = command(s, CommandEvent::Close).0;
+        assert_eq!(
+            command(closing, CommandEvent::SetMode(CommandMode::New)),
+            (closing, vec![])
+        );
+    }
 
     #[test]
     fn compact_is_the_designs_expression() {

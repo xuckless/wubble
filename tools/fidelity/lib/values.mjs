@@ -225,6 +225,13 @@ export function readDecl(prop, value, R) {
     }
     default: {
       if (words.length === 1) {
+        // `min(600px, calc(100% - 32px))`: the cap and the inset from the container's edges
+        const mn = /^min\(([\d.]+)px,\s*calc\(100%\s*-\s*([\d.]+)px\)\)$/.exec(value);
+        if (mn) {
+          put('-max', { t: 'length', v: Number(mn[1]) });
+          put('-inset', { t: 'length', v: Number(mn[2]) });
+          return out;
+        }
         const m = /^clamp\(([^,]+),([^,]+),([^,]+)\)$/.exec(value);
         if (m) {
           put('-min', R.length(m[1].trim()));

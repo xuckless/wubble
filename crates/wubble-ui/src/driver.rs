@@ -29,7 +29,9 @@ use std::time::Instant;
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
 use wubble_core::beam::{self, Beam};
 use wubble_core::bow::{BOWED, EdgeTable};
-use wubble_core::chrome::{self, Peek, PeekEffect, PeekEvent};
+use wubble_core::chrome::{
+    self, CommandBar, CommandEffect, CommandEvent, Peek, PeekEffect, PeekEvent,
+};
 use wubble_core::motion::{DT_CAP, OVERLAP_IN, ease, overlap_in, tween};
 
 /// The outgoing page's exit, s: the design's `wb-out` (`webview.tsx`, 190 ms in-out).
@@ -40,8 +42,8 @@ use wubble_core::tabs::{self, SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
 use crate::{
-    AppWindow, BeamShape, Chrome, GlassItem, GlassLayer, LeavingRow, PageScroll, PeekCue, Radius,
-    Shell, SidebarMode, TabItem, sync,
+    AppWindow, BeamShape, Chrome, CommandBarState, CommandMode, GlassItem, GlassLayer, LeavingRow,
+    Origin, PageScroll, PeekCue, Radius, Shell, SidebarMode, TabItem, sync,
 };
 
 impl From<seam::SidebarMode> for SidebarMode {
@@ -115,6 +117,8 @@ pub struct Driver {
     last: Option<Instant>,
     /// The hidden sidebar's peek (wubble_core::chrome::Peek); `peek_timer` runs its `Arm`.
     peek: Peek,
+    /// The command bar's life (wubble_core::chrome::CommandBar); `exit_timer` runs its exit.
+    command: CommandBar,
 }
 
 /// The rows' tab ids and the active tab's row.
@@ -197,6 +201,7 @@ impl Driver {
             clock_ms: 0.0,
             last: None,
             peek: Peek::Idle,
+            command: CommandBar::Closed,
         };
         driver.advance(window, 0.0);
         driver
@@ -559,6 +564,64 @@ fn peek_step(driver: &Shared, window: &AppWindow, timer: &Rc<slint::Timer>, even
     window.window().request_redraw();
 }
 
+/// One step of the command bar (wubble_core::chrome::command), its effects run: the state, mode
+/// and origin written, the exit timed (the dropdown's out duration), the keys moved.
+fn command_step(
+    driver: &Shared,
+    window: &AppWindow,
+    timer: &Rc<slint::Timer>,
+    event: CommandEvent,
+) {
+    let state = driver.borrow().command;
+    let (state, effects) = chrome::command(state, event);
+    driver.borrow_mut().command = state;
+    window.set_command_bar_state(match state {
+        CommandBar::Closed => CommandBarState::Closed,
+        CommandBar::Open { .. } => CommandBarState::Open,
+        CommandBar::Closing { .. } => CommandBarState::Closing,
+    });
+    if let Some(mode) = state.mode() {
+        window.set_command_mode(match mode {
+            chrome::CommandMode::Here => CommandMode::Here,
+            chrome::CommandMode::New => CommandMode::New,
+            chrome::CommandMode::Split => CommandMode::Split,
+        });
+    }
+    if let Some(from) = state.from() {
+        window.set_command_origin(Origin {
+            x: from.x as f32,
+            y: from.y as f32,
+        });
+    }
+    for effect in effects {
+        match effect {
+            CommandEffect::Show | CommandEffect::Hide => timer.stop(),
+            CommandEffect::FocusInput => window.invoke_command_focus_input(),
+            CommandEffect::RestoreFocus => window.invoke_command_release_keys(),
+            CommandEffect::StartExit => {
+                let (d, w, t) = (
+                    Rc::downgrade(driver),
+                    window.as_weak(),
+                    Rc::downgrade(timer),
+                );
+                timer.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(
+                        u64::try_from(window.get_command_exit()).unwrap_or(0),
+                    ),
+                    move || {
+                        if let (Some(d), Some(w), Some(t)) = (d.upgrade(), w.upgrade(), t.upgrade())
+                        {
+                            command_step(&d, &w, &t, CommandEvent::Settled);
+                        }
+                    },
+                );
+            }
+        }
+    }
+    window.window().request_redraw();
+}
+
 /// Connect the Slint callbacks to a new driver whose seam starts as `seam`, and the panels'
 /// reports to a new glass registry. Separate from [`install`] so tests can drive it without a
 /// renderer.
@@ -684,6 +747,35 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
             s.set_mode(w, mode);
             None
         })
+    });
+
+    // the command bar: opened, closed and picked, into its machine
+    let exit_timer = Rc::new(slint::Timer::default());
+    let (d, w, t) = (Rc::clone(&driver), window.as_weak(), Rc::clone(&exit_timer));
+    window.on_command_open(move |mode, from| {
+        let Some(w) = w.upgrade() else { return };
+        let mode = match mode {
+            CommandMode::Here => chrome::CommandMode::Here,
+            CommandMode::New => chrome::CommandMode::New,
+            CommandMode::Split => chrome::CommandMode::Split,
+        };
+        let from = chrome::Point {
+            x: f64::from(from.x),
+            y: f64::from(from.y),
+        };
+        command_step(&d, &w, &t, CommandEvent::Open { mode, from });
+    });
+    let (d, w, t) = (Rc::clone(&driver), window.as_weak(), Rc::clone(&exit_timer));
+    window.on_command_close(move || {
+        if let Some(w) = w.upgrade() {
+            command_step(&d, &w, &t, CommandEvent::Close);
+        }
+    });
+    let (d, w, t) = (Rc::clone(&driver), window.as_weak(), exit_timer);
+    window.on_command_pick(move || {
+        if let Some(w) = w.upgrade() {
+            command_step(&d, &w, &t, CommandEvent::Pick);
+        }
     });
 
     // the hidden sidebar's peek: the pointer's cues and the mode, into the machine

@@ -13,7 +13,7 @@
 //   scroll-y, thumb-*  the tab list's scroller
 // Nothing here tweens a value Rust owns; only hover fades and the 0.97 press use `animate`.
 
-import { Palette, Radius, Space, Chrome, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
+import { Palette, Radius, Space, Chrome, Fonts, Type, Motion, Tsx } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { TabRow } from "../kit/chrome/tab-row.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
@@ -150,7 +150,7 @@ export component Sidebar inherits Rectangle {
         settings: switcher.settings-x,
         settings-end: switcher.settings-x + switcher.settings-w,
     };
-    out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
+    out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Tsx.new-tab-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
     out property <Origin> address-below: { x: pill.absolute-position.x, y: pill.absolute-position.y + pill.height };
     // There are downloads to list: the download button shows in the footer.
