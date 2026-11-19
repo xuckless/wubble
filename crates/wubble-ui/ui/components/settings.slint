@@ -3,373 +3,90 @@
 // control by `row.control`, and the section list beside the rows comes from the rows' sections,
 // so a new setting is a table row and no UI code.
 //
-// Look and layout: the design repo's settings page, `src/wubble/pages/settings.css` and
-// `settings.tsx` (xuckless/the-wallpaper-project @ 21838b8, owner's code): a pinned column (the
-// title, a search capsule, the section list whose indicator tracks the section you read) beside
-// the sections, each a display-font heading over a card of rows (label, note, control). The
-// controls are the design's touch kit at the settings row's size (`pages/touch.css` .tp-tg-sm,
-// .tp-seg in .st-seg, .tp-sl in .st-slider) and the swatches with their ring (.st-swatches).
-// The toggle and the slider are the springy ports in `controls/` (`wubble_core::controls`);
-// the other springs (the liquid indicator, the travelling ring) are not ported: Slint `animate`
-// moves them. Written for wubble, the design having none: the stepper,
-// the list editor and the chord recorder row. Reused: the port's PressableButton, the kit Icon and
-// WubbleScroller, wubble's IconButton, Icon and Raised.
+// Composition only: the look is the design's settings page (`pages/settings.tsx`,
+// `settings.css`), translated in the kit (`kit/settings/*`: frame, title, count, nav and its
+// indicator, section head, card, row, lead, reset, empty search) and its controls
+// (`kit/controls/*`: Toggle sm, Segmented compact, Select, ElasticSlider compact, Swatches,
+// Kbd, Button, IconButton, the derived Field). This file lays them out and binds the rows.
+// The other native pages and sheets take their Field, Segmented, Stepper, TextButton, Card,
+// SectionHeader, PageFrame and EntryList from here: thin compositions of the same kit parts.
 
-import { Palette, Motion, Space, Fonts, Type, Radius, Glass, Keyframes } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { PressableButton } from "../kit/controls/button.slint";
 import { Mark } from "../kit/chrome/mark.slint";
-import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, FilterListItem } from "model.slint";
-import { PageScroll } from "page-scroll.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { IconButton } from "nav-buttons.slint";
-import { Raised, Chip } from "raised.slint";
-import { Toggle } from "controls/toggle.slint";
-import { Slider } from "controls/slider.slint";
-import { Controls, ControlView } from "controls/registry.slint";
-import { Keys } from "../kit/motion/keys.slint";
-import { TouchCss, SettingsCss } from "../kit/gen/css.slint";
-import { Calm } from "../kit/motion/calm.slint";
-import { KitText } from "../kit/text.slint";
-import { Role } from "../kit/gen/text.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { IconButton } from "../kit/controls/icon-button.slint";
+import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
+import { ElasticSlider } from "../kit/controls/slider.slint";
+import { Segmented as KitSegmented } from "../kit/controls/segmented.slint";
+import { Select } from "../kit/controls/select.slint";
+import { Swatches } from "../kit/controls/swatches.slint";
+import { Kbd } from "../kit/controls/kbd.slint";
+import { Button, ButtonKind } from "../kit/controls/button.slint";
+import { Field } from "../kit/controls/field.slint";
+import { Fold } from "../kit/motion/fold.slint";
+import { PageTitle, SearchCount, PageScroller, SettingsLayout } from "../kit/settings/page.slint";
+import { NavRow, NavIndicator } from "../kit/settings/nav.slint";
+import { SectionHead, SectionHeader, CardSlice, Card, Row, RowText, RowNameText, RowNote, RowControls, NoteTone, Lead, MonoNote, NothingMatches, SpaceColours } from "../kit/settings/section.slint";
+import { ResetButton } from "../kit/settings/reset.slint";
 
-// .tp-seg in .st-seg: a chip with one segment per word, each as wide as its label; the chosen
-// one is the ink indicator with the dark label. The indicator is the design's liquid one
-// (`pages/touch-kit.tsx` Segmented, @source touch-space): it follows on the follow spring,
-// stretches along its travel, can be grabbed and flung, and the dark labels are a second layer
-// clipped to it, so the label turns dark exactly where the indicator covers it. Physics:
-// `wubble_core::controls::Segmented` through `Controls` (kind 2).
-export component Segmented inherits Rectangle {
-    in property <[string]> labels;
-    in property <int> selected: -1;
-    callback chosen(int);
+export { Field, SectionHeader, Card }
 
-    property <int> slot: -1;
-    property <ControlView> v: Controls.view(root.slot);
-    property <int> gen: Controls.generation;
-    property <bool> shown: root.selected >= 0 && root.v.w > 0;
-    // the indicator's rectangle (already stretched about its trailing side by the machine)
-    property <length> ind-h: Shell.seg-height * root.v.scale-y;
-    property <length> ind-y: Shell.seg-pad + (Shell.seg-height - root.ind-h) / 2;
-    property <length> ind-r: Shell.seg-inner-radius * min(root.v.scale-x, root.v.scale-y);
+// The settings row's segmented control (`.st-seg`), for every caller.
+export component Segmented inherits KitSegmented {
+    compact: true;
+}
 
-    init => {
-        root.slot = Controls.acquire(2, max(0, root.selected));
-    }
-    changed selected => {
-        Controls.set-value(root.slot, max(0, root.selected));
-    }
-    changed gen => {
-        Controls.alive(root.slot);
-    }
+// A quiet text button (`.st-reset`, always on): a toast's action, Remove, Replace.
+export component TextButton inherits ResetButton { }
 
-    width: row.preferred-width;
-    height: Shell.seg-height + 2 * Shell.seg-pad;
-
-    Chip {
-        radius: Shell.seg-radius;
+// A number typed in a field: Enter applies it, clamped to the range.
+component NumberField inherits Field {
+    in property <float> value;
+    in property <float> min;
+    in property <float> max;
+    callback set(float);
+    width: Shell.stepper-field;
+    numeric: true;
+    text: root.value;
+    accepted(t) => {
+        root.set(Math.clamp(t.to-float(), root.min, root.max));
+        self.text = root.value;
     }
-    if root.shown: Rectangle {
-        x: root.v.x * Shell.px;
-        y: root.ind-y;
-        width: root.v.w * Shell.px;
-        height: root.ind-h;
-        border-radius: root.ind-r;
-        background: Palette.ink;
-        drop-shadow-blur: Shell.seg-shadow-blur;
-        drop-shadow-offset-y: Shell.seg-shadow-y;
-        drop-shadow-color: Shell.seg-shadow;
-    }
-    row := HorizontalLayout {
-        padding: Shell.seg-pad;
-        for label[i] in root.labels: seg := Rectangle {
-            property <bool> hot: ta.has-hover && ta.mouse-x >= self.x && ta.mouse-x < self.x + self.width;
-            init => {
-                Controls.segment(root.slot, i, self.x, self.width);
-            }
-            changed x => {
-                Controls.segment(root.slot, i, self.x, self.width);
-            }
-            changed width => {
-                Controls.segment(root.slot, i, self.x, self.width);
-            }
-            accessible-role: AccessibleRole.button;
-            accessible-label: label;
-            accessible-action-default => {
-                root.chosen(i);
-            }
-            HorizontalLayout {
-                padding-left: Shell.seg-label-pad;
-                padding-right: Shell.seg-label-pad;
-                Text {
-                    text: label;
-                    color: seg.hot ? Palette.ink : Palette.mist;
-                    font-family: Fonts.ui;
-                    font-size: Shell.seg-label;
-                    font-weight: 500;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    animate color {
-                        duration: Calm.ms(Shell.seg-label-ms);
-                        easing: Motion.ease-out;
-                    }
-                }
-            }
-        }
-    }
-    // the dark labels, clipped to the indicator (the design's `.tp-seg-top` clip-path)
-    if root.shown: Rectangle {
-        x: root.v.x * Shell.px;
-        y: root.ind-y;
-        width: root.v.w * Shell.px;
-        height: root.ind-h;
-        border-radius: root.ind-r;
-        clip: true;
-        HorizontalLayout {
-            x: -parent.x;
-            y: -parent.y;
-            width: root.width;
-            height: root.height;
-            padding: Shell.seg-pad;
-            for label in root.labels: HorizontalLayout {
-                padding-left: Shell.seg-label-pad;
-                padding-right: Shell.seg-label-pad;
-                Text {
-                    text: label;
-                    color: Palette.abyss;
-                    font-family: Fonts.ui;
-                    font-size: Shell.seg-label;
-                    font-weight: 500;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-        }
-    }
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        pointer-event(e) => {
-            if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
-                Controls.press(root.slot, self.mouse-x);
-            }
-            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
-                let landed = Controls.release(root.slot);
-                if landed >= 0 && round(landed) != root.selected {
-                    root.chosen(round(landed));
-                }
-            }
-        }
-        moved => {
-            if self.pressed {
-                Controls.drag(root.slot, self.mouse-x);
-            }
-        }
+    changed value => {
+        self.text = root.value;
     }
 }
 
-// A one-line text field on a chip; with `icon-path`, the icon leads. `capsule` is the search
-// (.st-search: 40 high, radius 20, the clear button at its end while it has text).
-export component Field inherits Rectangle {
-    in-out property <string> text <=> input.text;
-    in property <string> placeholder;
-    in property <string> icon-path: "";
-    in property <bool> numeric: false;
-    in property <bool> capsule: false;
-    // Masked text (a password).
-    in property <bool> secret: false;
-    callback edited(string);
-    callback accepted(string);
-    // Escape in the field: a sheet around it cancels.
-    callback escaped();
-    public function take-focus() {
-        input.focus();
-    }
-
-    height: root.capsule ? Shell.search-height : Shell.field-height;
-
-    Chip {
-        radius: root.capsule ? root.height / 2 : Radius.sm;
-    }
-
-    property <length> start: root.capsule ? Shell.search-pad-start : Space.s3;
-    property <length> end: root.capsule ? Shell.search-pad-end : Space.s3;
-    property <length> lead: root.icon-path == "" ? root.start : root.start + Shell.icon + Space.s2;
-    property <length> trail: root.capsule && input.text != "" ? Shell.search-clear + Space.s2 : 0px;
-    property <length> font: root.capsule ? Shell.search-font : Type.body.size;
-    if root.icon-path != "": Icon {
-        x: root.start;
-        y: (parent.height - self.height) / 2;
-        path: root.icon-path;
-        tint: Palette.mist;
-    }
-    Text {
-        x: root.lead;
-        width: parent.width - self.x - root.end;
-        height: parent.height;
-        visible: input.text == "";
-        text: root.placeholder;
-        color: Palette.haze;
-        font-family: Fonts.ui;
-        font-size: root.font;
-        vertical-alignment: center;
-        horizontal-alignment: root.numeric ? right : left;
-        overflow: elide;
-    }
-    input := TextInput {
-        x: root.lead;
-        width: parent.width - self.x - root.end - root.trail;
-        height: parent.height;
-        color: Palette.ink;
-        selection-background-color: Shell.selection-fill;
-        selection-foreground-color: Shell.selection-ink;
-        font-family: Fonts.ui;
-        font-size: root.font;
-        vertical-alignment: center;
-        horizontal-alignment: root.numeric ? right : left;
-        single-line: true;
-        accessible-label: root.placeholder;
-        input-type: root.secret ? InputType.password : root.numeric ? InputType.decimal : InputType.text;
-        edited => {
-            root.edited(self.text);
-        }
-        accepted => {
-            root.accepted(self.text);
-        }
-        key-pressed(event) => {
-            if event.text == Key.Escape {
-                if root.capsule && self.text != "" {
-                    self.text = "";
-                    root.edited("");
-                    return accept;
-                }
-                root.escaped();
-                return accept;
-            }
-            return reject;
-        }
-    }
-    // .st-clear
-    if root.capsule && input.text != "": clear := Rectangle {
-        x: parent.width - self.width - root.end;
-        y: (parent.height - self.height) / 2;
-        width: Shell.search-clear;
-        height: Shell.search-clear;
-        border-radius: self.width / 2;
-        background: Shell.search-clear-fill;
-        Icon {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            path: Glyph.close;
-            size: Shell.search-clear-icon;
-            tint: Palette.ink;
-        }
-        TouchArea {
-            clicked => {
-                input.text = "";
-                root.edited("");
-                input.focus();
-            }
-        }
-    }
-}
-
-// A whole number in a range: minus, the number (typed, Enter applies), plus. Written from
-// scratch: the touch kit has no stepper.
+// A whole number in a range: the row's slider when the range is short, else the number typed
+// in a field (wubble's: the design has no stepper; `SettingsLayout`).
 export component Stepper inherits HorizontalLayout {
     in property <float> value;
     in property <float> min;
     in property <float> max;
     in property <float> step: 1;
+    in property <color> accent: SettingsLayout.accent;
     callback set(float);
 
-    spacing: Space.s1;
     alignment: end;
-    IconButton {
-        icon-path: Glyph.minus;
-        label: "Less";
-        enabled: root.value > root.min;
-        y: (parent.height - self.height) / 2;
-        clicked => {
-            root.set(Math.max(root.min, root.value - root.step));
+    if root.max - root.min <= SettingsLayout.slider-range: ElasticSlider {
+        compact: true;
+        value: root.value;
+        min: root.min;
+        max: root.max;
+        step: root.step;
+        accent: root.accent;
+        edited(v) => {
+            root.set(v);
         }
     }
-    number := Field {
-        width: Shell.stepper-field;
-        numeric: true;
-        text: root.value;
-        accepted(t) => {
-            root.set(t.to-float());
-            self.text = root.value;
+    if root.max - root.min > SettingsLayout.slider-range: NumberField {
+        value: root.value;
+        min: root.min;
+        max: root.max;
+        set(v) => {
+            root.set(v);
         }
-    }
-    IconButton {
-        icon-path: Glyph.plus;
-        label: "More";
-        enabled: root.value < root.max;
-        y: (parent.height - self.height) / 2;
-        clicked => {
-            root.set(Math.min(root.max, root.value + root.step));
-        }
-    }
-    changed value => {
-        number.text = root.value;
-    }
-}
-
-// .st-reset: a quiet text button (a row's Reset, a list's Remove), ink on a faint fill on hover.
-export component TextButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    callback clicked();
-    out property <bool> hovered: ta.has-hover;
-
-    height: Shell.reset-height;
-    min-width: label.preferred-width + 2 * Shell.reset-pad;
-    border-radius: Shell.reset-radius;
-    background: ta.has-hover && root.enabled ? Shell.reset-hover : transparent;
-    opacity: root.enabled ? 1 : Shell.icon-button-disabled;
-    animate background {
-        duration: Calm.ms(Shell.icon-button-ms);
-        easing: Motion.ease-out;
-    }
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
-    property <float> press: ta.pressed ? Motion.press-scale : 1;
-    animate press {
-        duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
-        easing: Motion.ease-out;
-    }
-    transform-scale-x: root.press * sq.sx;
-    transform-scale-y: root.press * sq.sy;
-    sq := Keys {
-        keys: Keyframes.button-squash;
-        length: TouchCss.tp-btn-body-sq-a--animation-duration;
-    }
-    property <bool> down: ta.pressed;
-    changed down => {
-        if !self.down {
-            sq.hit = !sq.hit;
-        }
-    }
-    accessible-role: AccessibleRole.button;
-    accessible-label: root.text;
-    accessible-action-default => {
-        root.clicked();
-    }
-    ta := TouchArea {
-        enabled: root.enabled;
-        clicked => {
-            root.clicked();
-        }
-    }
-    label := Text {
-        text: root.text;
-        color: ta.has-hover && root.enabled ? Palette.ink : Palette.mist;
-        font-family: Fonts.ui;
-        font-size: Shell.reset-font;
-        font-weight: 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
     }
 }
 
@@ -382,22 +99,16 @@ export component EntryList inherits VerticalLayout {
     callback removed(string);
     callback added(string);
 
-    spacing: Space.s1;
-    if root.entries.length == 0 && !root.can-add: Text {
+    spacing: SettingsLayout.entry-gap;
+    if root.entries.length == 0 && !root.can-add: RowNote {
         text: root.empty;
-        color: Palette.haze;
-        font-family: Fonts.ui;
-        font-size: Shell.row-note;
     }
     for entry in root.entries: HorizontalLayout {
-        spacing: Space.s2;
-        Text {
+        spacing: SettingsLayout.entry-gap;
+        RowNote {
             horizontal-stretch: 1;
             text: entry.label;
-            color: Palette.mist;
-            font-family: Fonts.ui;
-            font-size: Shell.row-note;
-            vertical-alignment: center;
+            wrap: no-wrap;
             overflow: elide;
         }
         IconButton {
@@ -419,229 +130,118 @@ export component EntryList inherits VerticalLayout {
     }
 }
 
-// .st-sec-head h2: a section's title, in the display face.
-export component SectionHeader inherits KitText {
-    role: Role.st-sec-head-h2;
-    color: Palette.ink;
-    vertical-alignment: center;
-}
-
-// .st-sec-head: the title's line over a section's card.
-component SectionHead inherits HorizontalLayout {
-    in property <string> text;
-    height: Shell.section-head;
-    padding-left: Shell.section-head-in;
-    padding-right: Shell.section-head-end;
-    SectionHeader {
-        text: root.text;
-    }
-}
-
-// .st-card: a section's rows on a faint raised card.
-export component Card inherits Raised {
-    // room round content that is not rows (rows pad themselves: .st-row padding 11 14)
-    in property <length> content-pad: 0px;
-    radius: Radius.lg;
-    fill: Shell.settings-card;
-    highlight: Shell.card-highlight;
-    VerticalLayout {
-        padding-left: Shell.card-pad + root.content-pad;
-        padding-right: Shell.card-pad + root.content-pad;
-        padding-top: Shell.card-pad;
-        padding-bottom: Shell.card-pad;
-        spacing: 0px;
-        @children
-    }
-}
-
-// .st-row: a label with its note under it on the left, the controls on the right.
-export component Line inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> note;
-    in property <color> note-color: Palette.mist;
-
-    min-height: Shell.settings-row;
-    padding-left: Shell.row-pad-x;
-    padding-right: Shell.row-pad-x;
-    padding-top: Shell.row-pad-y;
-    padding-bottom: Shell.row-pad-y;
-    spacing: Shell.row-gap;
-    VerticalLayout {
-        horizontal-stretch: 1;
-        alignment: center;
-        spacing: Shell.row-note-above;
-        // each line at the page's line height (wubble.css body: 1.45), as the CSS lays it out
-        Text {
-            text: root.label;
-            min-height: Shell.row-title * Type.body.line-height;
-            color: Palette.ink;
-            font-family: Fonts.ui;
-            font-size: Shell.row-title;
-            font-weight: 500;
-            vertical-alignment: center;
-            wrap: word-wrap;
-        }
-        if root.note != "": Text {
-            text: root.note;
-            min-height: Shell.row-note * Type.body.line-height;
-            color: root.note-color;
-            font-family: Fonts.ui;
-            font-size: Shell.row-note;
-            vertical-alignment: center;
-            wrap: word-wrap;
-        }
-    }
-    HorizontalLayout {
-        alignment: end;
-        spacing: Space.s3;
-        @children
-    }
-}
-
 // One generated row: the control follows `row.control`. A toggle row is a target as a whole
-// (.st-row.tap: white 4 % on hover, a click anywhere flips it).
-export component SettingRow inherits Rectangle {
+// (`.st-row.tap`: a click anywhere flips it).
+component SettingRow inherits VerticalLayout {
     in property <SettingItem> setting;
-    in property <color> accent: Palette.sky;
+    in property <color> accent;
+    // the page's view, in window coordinates (where a Select's menu may open)
+    in property <length> view-top;
+    in property <length> view-bottom;
     callback changed(string, string);
     callback reset(string);
     callback entry-removed(string, string);
     callback entry-added(string, string);
 
-    property <bool> tap: root.setting.control == SettingControl.toggle;
     property <bool> listed: root.setting.control == SettingControl.list || root.setting.control == SettingControl.map;
-    border-radius: Radius.md;
-    background: root.tap && row-ta.has-hover ? Shell.row-tap-hover : transparent;
-    animate background {
-        duration: Calm.ms(Shell.icon-button-ms);
-        easing: Motion.ease-out;
-    }
-    row-ta := TouchArea {
-        enabled: root.tap;
-        clicked => {
+    padding-bottom: root.listed ? Shell.row-pad-y : 0px;
+    Row {
+        tap: root.setting.control == SettingControl.toggle;
+        tapped => {
             root.changed(root.setting.key, root.setting.on ? "0" : "1");
         }
-    }
-    VerticalLayout {
-        padding-bottom: root.listed ? Shell.row-pad-y : 0px;
-        Line {
-            label: root.setting.label;
+        RowText {
+            title: root.setting.label;
             note: root.setting.restart ? "Applies after a restart" : "";
-            note-color: Palette.amber;
-            if root.setting.changed: VerticalLayout {
-                alignment: center;
-                TextButton {
-                    text: "Reset";
-                    clicked => {
-                        root.reset(root.setting.key);
-                    }
-                }
-            }
-            if root.setting.control == SettingControl.toggle: VerticalLayout {
-                alignment: center;
-                toggle := Toggle {
-                    on: root.setting.on;
-                    accent: root.accent;
-                    toggled => {
-                        root.changed(root.setting.key, root.setting.on ? "0" : "1");
-                    }
-                }
-            }
-            if root.setting.control == SettingControl.segmented: VerticalLayout {
-                alignment: center;
-                segmented := Segmented {
-                    labels: root.setting.labels;
-                    selected: root.setting.selected;
-                    chosen(i) => {
-                        root.changed(root.setting.key, root.setting.words[i]);
-                    }
-                }
-            }
-            if root.setting.control == SettingControl.stepper: VerticalLayout {
-                alignment: center;
-                stepper := Stepper {
-                    value: root.setting.number;
-                    min: root.setting.min;
-                    max: root.setting.max;
-                    step: root.setting.step;
-                    set(v) => {
-                        root.changed(root.setting.key, Math.round(v));
-                    }
-                }
-            }
-            // wubble: a one-line text row (a folder path), applied on Enter; the settings field.
-            if root.setting.control == SettingControl.text: VerticalLayout {
-                alignment: center;
-                Field {
-                    width: Shell.slider-width;
-                    text: root.setting.value;
-                    placeholder: "Default";
-                    accepted(t) => {
-                        root.changed(root.setting.key, t);
-                    }
-                }
-            }
-            if root.setting.control == SettingControl.slider: VerticalLayout {
-                alignment: center;
-                slider := Slider {
-                    value: root.setting.number;
-                    min: root.setting.min;
-                    max: root.setting.max;
-                    accent: root.accent;
-                    set(v) => {
-                        root.changed(root.setting.key, v);
-                    }
-                }
-            }
+            tone: NoteTone.restart;
         }
-        if root.listed: HorizontalLayout {
-            padding-left: Shell.row-pad-x;
-            padding-right: Shell.row-pad-x;
-            entries := EntryList {
-                entries: root.setting.entries;
-                can-add: root.setting.control == SettingControl.list;
-                placeholder: "Add";
-                removed(k) => {
-                    root.entry-removed(root.setting.key, k);
+        RowControls {
+            if root.setting.changed: ResetButton {
+                enter: true;
+                clicked => {
+                    root.reset(root.setting.key);
                 }
-                added(t) => {
-                    root.entry-added(root.setting.key, t);
+            }
+            if root.setting.control == SettingControl.toggle: toggle := Toggle {
+                size: ToggleSize.sm;
+                on: root.setting.on;
+                accent: root.accent;
+                label: root.setting.label;
+                toggled => {
+                    root.changed(root.setting.key, root.setting.on ? "0" : "1");
+                }
+            }
+            if root.setting.control == SettingControl.segmented && root.setting.options.length == 0: segmented := Segmented {
+                labels: root.setting.labels;
+                selected: root.setting.selected;
+                label: root.setting.label;
+                chosen(i) => {
+                    root.changed(root.setting.key, root.setting.words[i]);
+                }
+            }
+            if root.setting.control == SettingControl.segmented && root.setting.options.length > 0: select := Select {
+                options: root.setting.options;
+                value: root.setting.selected;
+                label: root.setting.label;
+                accent: root.accent;
+                view-top: root.view-top;
+                view-bottom: root.view-bottom;
+                picked(i) => {
+                    root.changed(root.setting.key, root.setting.words[i]);
+                }
+            }
+            if root.setting.control == SettingControl.stepper: stepper := Stepper {
+                value: root.setting.number;
+                min: root.setting.min;
+                max: root.setting.max;
+                step: root.setting.step;
+                accent: root.accent;
+                set(v) => {
+                    root.changed(root.setting.key, Math.round(v));
+                }
+            }
+            // wubble: a one-line text row (a folder path), applied on Enter
+            if root.setting.control == SettingControl.text: Field {
+                width: Shell.slider-width;
+                text: root.setting.value;
+                placeholder: "Default";
+                accepted(t) => {
+                    root.changed(root.setting.key, t);
+                }
+            }
+            if root.setting.control == SettingControl.slider: slider := ElasticSlider {
+                compact: true;
+                value: root.setting.number;
+                min: root.setting.min;
+                max: root.setting.max;
+                step: SettingsLayout.float-step;
+                accent: root.accent;
+                label: root.setting.label;
+                edited(v) => {
+                    root.changed(root.setting.key, v);
                 }
             }
         }
     }
-}
-
-// .st-page kbd: a chord as a key cap.
-component Kbd inherits Raised {
-    in property <string> text;
-    in property <bool> armed;
-    height: Shell.kbd;
-    min-width: max(Shell.kbd, cap.preferred-width + 2 * Shell.kbd-pad);
-    radius: Shell.kbd-radius;
-    fill: root.armed ? Shell.track : Shell.kbd-fill;
-    highlight: Shell.kbd-highlight;
-    // inset 0 -1px 0: the cap's lower lip
-    Rectangle {
-        y: parent.height - Shell.hairline;
-        x: Shell.kbd-radius / 2;
-        width: parent.width - Shell.kbd-radius;
-        height: Shell.hairline;
-        background: Shell.kbd-shade;
-    }
-    cap := Text {
-        text: root.text;
-        color: Palette.ink;
-        font-family: Fonts.ui;
-        font-size: Shell.kbd-font;
-        font-weight: 500;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    if root.listed: HorizontalLayout {
+        padding-left: Shell.row-pad-x;
+        padding-right: Shell.row-pad-x;
+        entries := EntryList {
+            entries: root.setting.entries;
+            can-add: root.setting.control == SettingControl.list;
+            placeholder: "Add";
+            removed(k) => {
+                root.entry-removed(root.setting.key, k);
+            }
+            added(t) => {
+                root.entry-added(root.setting.key, t);
+            }
+        }
     }
 }
 
 // One action's shortcut: click the chord to record a new one; Reset when it was changed.
-component BindingRow inherits Line {
+component BindingRow inherits Row {
     in property <BindingItem> item;
     in property <CaptureView> capture;
     callback record(string);
@@ -651,41 +251,35 @@ component BindingRow inherits Line {
 
     property <bool> armed: root.capture.armed && root.capture.action == root.item.action;
     property <bool> asking: root.capture.conflict && root.capture.action == root.item.action;
-    label: root.item.label;
-    note: root.asking ? root.capture.chord + " runs " + root.capture.other + " now" : "";
-    note-color: Palette.coral;
-    if root.asking: VerticalLayout {
-        alignment: center;
-        TextButton {
+    RowText {
+        title: root.item.label;
+        note: root.asking ? root.capture.chord + " runs " + root.capture.other + " now" : "";
+        tone: NoteTone.conflict;
+    }
+    RowControls {
+        if root.asking: Button {
+            kind: ButtonKind.ghost;
             text: "Replace";
             clicked => {
                 root.confirm();
             }
         }
-    }
-    if root.asking || root.armed: VerticalLayout {
-        alignment: center;
-        TextButton {
+        if root.asking || root.armed: Button {
+            kind: ButtonKind.ghost;
             text: "Cancel";
             clicked => {
                 root.cancel();
             }
         }
-    }
-    if root.item.changed && !root.armed && !root.asking: VerticalLayout {
-        alignment: center;
-        TextButton {
-            text: "Reset";
+        if root.item.changed && !root.armed && !root.asking: ResetButton {
+            enter: true;
             clicked => {
                 root.reset(root.item.action);
             }
         }
-    }
-    VerticalLayout {
-        alignment: center;
+        // the chord's key caps (`.st-combo`); a click records a new one
         chord := Kbd {
-            text: root.armed ? "Press a shortcut" : root.item.chord == "" ? "None" : root.item.chord;
-            armed: root.armed;
+            keys: root.armed ? ["Press a shortcut"] : root.item.chord == "" ? ["None"] : root.item.keys;
             accessible-role: AccessibleRole.button;
             accessible-label: root.item.label;
             accessible-action-default => {
@@ -701,108 +295,9 @@ component BindingRow inherits Line {
     }
 }
 
-// .st-swatches: the colours as dots; the chosen one ringed in ink.
-component Swatches inherits HorizontalLayout {
-    in property <[color]> colours;
-    in property <color> value;
-    callback chosen(color);
-    spacing: Shell.swatch-gap;
-    for c in root.colours: Rectangle {
-        width: Shell.swatch-target;
-        height: Shell.swatch-target;
-        border-radius: self.width / 2;
-        border-width: c == root.value ? Shell.swatch-ring : 0px;
-        border-color: Palette.ink;
-        sw-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.chosen(c);
-            }
-        }
-        Raised {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: Shell.swatch;
-            height: Shell.swatch;
-            radius: self.width / 2;
-            fill: c;
-            highlight: Shell.swatch-highlight;
-            drop-shadow-offset-y: Shell.swatch-shadow-y;
-            drop-shadow-blur: Shell.swatch-shadow-blur;
-            drop-shadow-color: Shell.swatch-shadow;
-            transform-origin: { x: self.width / 2, y: self.height / 2 };
-            transform-scale: sw-ta.has-hover ? Shell.swatch-hover : 1;
-            animate transform-scale {
-                duration: Calm.ms(Shell.control-ms);
-                easing: Motion.ease-out;
-            }
-        }
-    }
-}
-
-// .st-nav-btn: a section in the list; the current one ink, its icon in the Space colour.
-component NavRow inherits Rectangle {
-    in property <string> title;
-    in property <string> icon-path;
-    in property <bool> on;
-    in property <bool> enabled: true;
-    in property <color> accent;
-    callback picked();
-
-    height: Shell.nav-row;
-    opacity: root.enabled ? 1 : Shell.nav-disabled;
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale: ta.pressed ? Motion.press-scale : 1;
-    animate transform-scale {
-        duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
-        easing: Motion.ease-out;
-    }
-    accessible-role: AccessibleRole.tab;
-    accessible-label: root.title;
-    accessible-action-default => {
-        root.picked();
-    }
-    ta := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => {
-            root.picked();
-        }
-    }
-    HorizontalLayout {
-        padding-left: Shell.nav-pad;
-        padding-right: Shell.nav-pad;
-        spacing: Shell.nav-icon-gap;
-        Rectangle {
-            width: Shell.icon;
-            Icon {
-                y: (parent.height - self.height) / 2;
-                path: root.icon-path;
-                tint: root.on ? root.accent : root.on || ta.has-hover ? Palette.ink : Palette.mist;
-                animate tint {
-                    duration: Calm.ms(Shell.control-ms);
-                    easing: Motion.ease-out;
-                }
-            }
-        }
-        Text {
-            text: root.title;
-            color: root.on || ta.has-hover ? Palette.ink : Palette.mist;
-            font-family: Fonts.ui;
-            font-size: Shell.nav-font;
-            vertical-alignment: center;
-            overflow: elide;
-            animate color {
-                duration: Calm.ms(Shell.icon-button-ms);
-                easing: Motion.ease-out;
-            }
-        }
-    }
-}
-
 // A section's start on the page: it reports when its top passes the tracking line (the nav's
 // current section is the last one past it) and scrolls the page to itself when picked.
-component Section inherits VerticalLayout {
+component Section inherits Rectangle {
     in property <int> index;
     in property <bool> start: true;
     // the top in the page's content coordinates, and the page's scroll
@@ -810,6 +305,7 @@ component Section inherits VerticalLayout {
     in property <length> scroll;
     in property <int> goto-serial;
     in property <int> goto-index;
+    in property <length> below;
     callback passed(int, bool);
     callback jump(length);
     property <bool> past: root.start && root.top <= root.scroll + Shell.settings-spy;
@@ -821,87 +317,10 @@ component Section inherits VerticalLayout {
             root.jump(root.top);
         }
     }
-}
-
-// The scroller every native page shares: the page's colour on the design's scroll physics
-// (the PageScroll global, stepped by the driver). The open page reports its sizes there and
-// takes its input from here; `wheeled` is any scroll by hand (wheel, touch, thumb).
-component PageScroller inherits Rectangle {
-    in property <bool> open;
-    // where the content is (rubber-banded past the ends), and how far it can go
-    out property <length> scroll: root.open ? PageScroll.y : 0px;
-    out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
-    callback wheeled();
-    background: Palette.web;
-    public function wheel(d: length) {
-        PageScroll.wheel(d);
-        root.wheeled();
-    }
-    // glide to `y` (scroller.tsx `to`)
-    public function to(y: length) {
-        PageScroll.to(y);
-    }
-    // back to the top at once
-    public function reset() {
-        PageScroll.reset();
-    }
-    changed open => {
-        if root.open {
-            PageScroll.reset();
-            root.report();
-        }
-    }
-    function report() {
-        if root.open {
-            PageScroll.viewport = scroller.viewport-height;
-            PageScroll.content = scroller.content-height;
-        }
-    }
-    scroller := WubbleScroller {
-        content-y: root.scroll;
-        thumb-visible: root.open && PageScroll.thumb-visible;
-        thumb-height: PageScroll.thumb-height;
-        thumb-top: PageScroll.thumb-top;
-        changed viewport-height => {
-            root.report();
-        }
-        changed content-height => {
-            root.report();
-        }
-        wheel(d) => {
-            root.wheel(d);
-        }
-        touch-down(y) => {
-            PageScroll.touch-down(y);
-            root.wheeled();
-        }
-        touch-move(y) => {
-            PageScroll.touch-move(y);
-        }
-        touch-up => {
-            PageScroll.touch-up();
-        }
-        thumb-down(y) => {
-            PageScroll.thumb-down(y);
-            root.wheeled();
-        }
-        thumb-move(y) => {
-            PageScroll.thumb-move(y);
-        }
-        thumb-up => {
-            PageScroll.thumb-up();
-        }
+    VerticalLayout {
+        padding-bottom: root.below;
         @children
     }
-}
-
-// The page's title in the display face (.st-pin h1); smaller when the page (the design's
-// `.tp-page` container) is `narrow`, at most the settings.css query's 759 px wide.
-component PageTitle inherits KitText {
-    in property <bool> narrow;
-    role: root.narrow ? Role.st-title-narrow : Role.st-title;
-    color: Palette.ink;
-    vertical-alignment: center;
 }
 
 // The frame the other native pages share: the page's colour, one scroller, a centred column
@@ -936,18 +355,17 @@ export component PageFrame inherits Rectangle {
                 spacing: 0px;
 
                 HorizontalLayout {
-                    spacing: Space.s6;
+                    spacing: SettingsLayout.title-gap;
                     padding-bottom: Shell.settings-title-below;
                     PageTitle {
                         text: root.title;
-                        narrow: root.width <= SettingsCss.max-width-759px--query-max-width;
+                        narrow: root.width <= SettingsLayout.narrow;
                     }
                     search := Field {
                         horizontal-stretch: 1;
                         capsule: true;
                         visible: root.searchable;
                         max-width: root.searchable ? Shell.settings-width : 0px;
-                        icon-path: Glyph.search;
                         placeholder: root.placeholder;
                         edited(q) => {
                             page.reset();
@@ -976,7 +394,7 @@ global SectionIcons {
 export component SettingsPage inherits Rectangle {
     in property <bool> open;
     // the Space colour: toggles, the slider's fill, the current section's icon
-    in property <color> accent: Palette.sky;
+    in property <color> accent: SettingsLayout.accent;
     // the generated rows, flat: each section's first row names it
     in property <[SettingItem]> rows;
     in property <[BindingItem]> bindings;
@@ -1018,8 +436,6 @@ export component SettingsPage inherits Rectangle {
 
     visible: root.open;
 
-    // The Space colours, in the design's order (settings.tsx SWATCHES).
-    property <[color]> swatches: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.amber, Palette.coral];
     // a click on a Space's tile picks the next of the three icons
     pure function next-icon(icon: string) -> string {
         return icon == "personal" ? "work" : icon == "work" ? "study" : "personal";
@@ -1041,6 +457,7 @@ export component SettingsPage inherits Rectangle {
     property <int> lists-at: root.table + 3;
     property <int> about-at: root.table + 4;
     property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
+    property <int> matches: root.rows.length + root.bindings.length;
     // the section the reader is in: the last one past the tracking line, the last at the end,
     // or the one picked in the list until the page is scrolled by hand
     property <int> tracked: 0;
@@ -1062,6 +479,12 @@ export component SettingsPage inherits Rectangle {
     function jump(top: length) {
         page.to(top - Shell.settings-pin);
     }
+    function search-for(q: string) {
+        page.reset();
+        root.tracked = 0;
+        root.picked = -1;
+        root.query-changed(q);
+    }
 
     page := PageScroller {
         open: root.open;
@@ -1079,6 +502,7 @@ export component SettingsPage inherits Rectangle {
 
                 // A flat list (rows keep their instance across a re-render); each section's
                 // first row carries its heading, each row draws its slice of the section's card.
+                // A row with a Select sits over the rows after it, so its menu hangs over them.
                 for row in root.rows: setting-row := Section {
                     index: row.section-index;
                     start: row.first;
@@ -1086,44 +510,36 @@ export component SettingsPage inherits Rectangle {
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
+                    below: row.last ? Shell.section-below : 0px;
+                    z: row.options.length > 0 ? 1 : 0;
                     passed(i, p) => {
                         root.passed(i, p);
                     }
                     jump(t) => {
                         root.jump(t);
                     }
-                    padding-bottom: row.last ? Shell.section-below : 0px;
-                    if row.first: VerticalLayout {
-                        padding-bottom: Shell.section-head-below;
-                        SectionHead {
-                            text: row.section;
-                        }
+                    if row.first: SectionHead {
+                        text: row.section;
                     }
-                    Raised {
-                        fill: Shell.settings-card;
-                        highlight: row.first ? Shell.card-highlight : transparent;
-                        top-radius: row.first ? Radius.lg : 0px;
-                        bottom-radius: row.last ? Radius.lg : 0px;
-                        VerticalLayout {
-                            padding-left: Shell.card-pad;
-                            padding-right: Shell.card-pad;
-                            padding-top: row.first ? Shell.card-pad : 0px;
-                            padding-bottom: row.last ? Shell.card-pad : 0px;
-                            SettingRow {
-                                setting: row;
-                                accent: root.accent;
-                                changed(k, v) => {
-                                    root.setting-changed(k, v);
-                                }
-                                reset(k) => {
-                                    root.setting-reset(k);
-                                }
-                                entry-removed(k, e) => {
-                                    root.entry-removed(k, e);
-                                }
-                                entry-added(k, e) => {
-                                    root.entry-added(k, e);
-                                }
+                    CardSlice {
+                        first: row.first;
+                        last: row.last;
+                        SettingRow {
+                            setting: row;
+                            accent: root.accent;
+                            view-top: page.absolute-position.y;
+                            view-bottom: page.absolute-position.y + page.height;
+                            changed(k, v) => {
+                                root.setting-changed(k, v);
+                            }
+                            reset(k) => {
+                                root.setting-reset(k);
+                            }
+                            entry-removed(k, e) => {
+                                root.entry-removed(k, e);
+                            }
+                            entry-added(k, e) => {
+                                root.entry-added(k, e);
                             }
                         }
                     }
@@ -1135,14 +551,13 @@ export component SettingsPage inherits Rectangle {
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
+                    below: Shell.section-below;
                     passed(i, p) => {
                         root.passed(i, p);
                     }
                     jump(t) => {
                         root.jump(t);
                     }
-                    padding-bottom: Shell.section-below;
-                    spacing: Shell.section-head-below;
                     SectionHead {
                         text: "Keyboard shortcuts";
                     }
@@ -1172,87 +587,41 @@ export component SettingsPage inherits Rectangle {
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
+                    below: Shell.section-below;
                     passed(i, p) => {
                         root.passed(i, p);
                     }
                     jump(t) => {
                         root.jump(t);
                     }
-                    padding-bottom: Shell.section-below;
-                    spacing: Shell.section-head-below;
                     SectionHead {
                         text: "Spaces";
                     }
                     Card {
                         // a Space's row: its icon on a tile (a click picks the next icon), its
                         // name (typed, Enter renames), its colours
-                        for space in root.spaces: HorizontalLayout {
-                            min-height: Shell.settings-row;
-                            padding-left: Shell.row-pad-x;
-                            padding-right: Shell.row-pad-x;
-                            padding-top: Shell.row-pad-y;
-                            padding-bottom: Shell.row-pad-y;
-                            spacing: Shell.row-gap;
-                            VerticalLayout {
-                                alignment: center;
-                                lead := Rectangle {
-                                    width: Shell.lead;
-                                    height: Shell.lead;
-                                    border-radius: Shell.control-radius;
-                                    background: Shell.lead-fill;
-                                    accessible-role: AccessibleRole.button;
-                                    accessible-label: space.name + " icon";
-                                    accessible-action-default => {
-                                        root.space-icon-chosen(space.id, root.next-icon(space.icon));
-                                    }
-                                    lead-ta := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.space-icon-chosen(space.id, root.next-icon(space.icon));
-                                        }
-                                    }
-                                    Icon {
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        size: Shell.lead-icon;
-                                        path: Glyph.space(space.icon);
-                                        tint: space.tint;
-                                    }
+                        for space in root.spaces: Row {
+                            Lead {
+                                icon-path: Glyph.space(space.icon);
+                                tint: space.tint;
+                                label: space.name + " icon";
+                                clicked => {
+                                    root.space-icon-chosen(space.id, root.next-icon(space.icon));
                                 }
                             }
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                alignment: center;
-                                spacing: Shell.row-note-above;
-                                TextInput {
-                                    text: space.name;
-                                    accessible-label: "Space name";
-                                    min-height: Shell.row-title * Type.body.line-height;
-                                    vertical-alignment: center;
-                                    color: Palette.ink;
-                                    font-family: Fonts.ui;
-                                    font-size: Shell.row-title;
-                                    font-weight: 500;
-                                    single-line: true;
-                                    accepted => {
-                                        root.space-renamed(space.id, self.text);
-                                    }
-                                }
-                                Text {
-                                    text: "Its colour tints the window's glass and the backdrop.";
-                                    min-height: Shell.row-note * Type.body.line-height;
-                                    vertical-alignment: center;
-                                    color: Palette.mist;
-                                    font-family: Fonts.ui;
-                                    font-size: Shell.row-note;
-                                    wrap: word-wrap;
+                            RowNameText {
+                                name: space.name;
+                                label: "Space name";
+                                note: "Its colour tints the window's glass and the backdrop.";
+                                renamed(n) => {
+                                    root.space-renamed(space.id, n);
                                 }
                             }
-                            VerticalLayout {
-                                alignment: center;
+                            RowControls {
                                 Swatches {
-                                    colours: root.swatches;
+                                    colours: SpaceColours.all;
                                     value: space.tint;
+                                    label: space.name + " colour";
                                     chosen(c) => {
                                         root.space-tinted(space.id, c);
                                     }
@@ -1268,20 +637,21 @@ export component SettingsPage inherits Rectangle {
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
+                    below: Shell.section-below;
                     passed(i, p) => {
                         root.passed(i, p);
                     }
                     jump(t) => {
                         root.jump(t);
                     }
-                    padding-bottom: Shell.section-below;
-                    spacing: Shell.section-head-below;
                     SectionHead {
                         text: "Sites";
                     }
                     Card {
-                        Line {
-                            label: "Zoom levels";
+                        Row {
+                            RowText {
+                                title: "Zoom levels";
+                            }
                         }
                         HorizontalLayout {
                             padding-left: Shell.row-pad-x;
@@ -1295,8 +665,10 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
-                        Line {
-                            label: "Permissions";
+                        Row {
+                            RowText {
+                                title: "Permissions";
+                            }
                         }
                         HorizontalLayout {
                             padding-left: Shell.row-pad-x;
@@ -1319,24 +691,24 @@ export component SettingsPage inherits Rectangle {
                     scroll: page.scroll;
                     goto-serial: root.goto-serial;
                     goto-index: root.goto-index;
+                    below: Shell.section-below;
                     passed(i, p) => {
                         root.passed(i, p);
                     }
                     jump(t) => {
                         root.jump(t);
                     }
-                    padding-bottom: Shell.section-below;
-                    spacing: Shell.section-head-below;
                     SectionHead {
                         text: "Filter lists";
                     }
                     Card {
-                        Line {
-                            label: root.filter-busy ? "Working on the filter lists" : "Update the lists";
-                            note: "Downloads every list switched on. Lists are only fetched when you ask or when they are kept up to date.";
-                            VerticalLayout {
-                                alignment: center;
-                                TextButton {
+                        Row {
+                            RowText {
+                                title: root.filter-busy ? "Working on the filter lists" : "Update the lists";
+                                note: "Downloads every list switched on. Lists are only fetched when you ask or when they are kept up to date.";
+                            }
+                            RowControls {
+                                Button {
                                     text: "Update now";
                                     enabled: !root.filter-busy;
                                     clicked => {
@@ -1345,23 +717,28 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
-                        for list in root.filter-lists: Line {
-                            label: list.title;
-                            note: list.note;
-                            if list.custom: VerticalLayout {
-                                alignment: center;
-                                IconButton {
+                        for list in root.filter-lists: Row {
+                            tap: !list.custom;
+                            tapped => {
+                                root.filter-list-toggled(list.id, !list.enabled);
+                            }
+                            RowText {
+                                title: list.title;
+                                note: list.note;
+                            }
+                            RowControls {
+                                if list.custom: IconButton {
                                     icon-path: Glyph.close;
+                                    label: "Remove";
                                     clicked => {
                                         root.entry-removed("blocker.custom_lists", list.key);
                                     }
                                 }
-                            }
-                            if !list.custom: VerticalLayout {
-                                alignment: center;
-                                Toggle {
+                                if !list.custom: Toggle {
+                                    size: ToggleSize.sm;
                                     on: list.enabled;
                                     accent: root.accent;
+                                    label: list.title;
                                     toggled => {
                                         root.filter-list-toggled(list.id, !list.enabled);
                                     }
@@ -1398,24 +775,28 @@ export component SettingsPage inherits Rectangle {
                     jump(t) => {
                         root.jump(t);
                     }
-                    spacing: Shell.section-head-below;
                     SectionHead {
                         text: "About";
                     }
                     Card {
-                        Line {
-                            label: "wubble " + root.about.version;
-                            note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
-                            Mark {
-                                size: Shell.about-mark;
+                        Row {
+                            RowText {
+                                title: "wubble " + root.about.version;
+                                note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+                            }
+                            RowControls {
+                                Mark {
+                                    size: Shell.about-mark;
+                                }
                             }
                         }
-                        Line {
-                            label: "Licence";
-                            note: root.about.licence;
-                            VerticalLayout {
-                                alignment: center;
-                                TextButton {
+                        Row {
+                            RowText {
+                                title: "Licence";
+                                note: root.about.licence;
+                            }
+                            RowControls {
+                                Button {
                                     text: root.notices-open ? "Hide notices" : "Third-party notices";
                                     clicked => {
                                         root.notices-open = !root.notices-open;
@@ -1427,12 +808,26 @@ export component SettingsPage inherits Rectangle {
                             padding-left: Shell.row-pad-x;
                             padding-right: Shell.row-pad-x;
                             padding-bottom: Shell.row-pad-y;
-                            Text {
+                            MonoNote {
                                 text: root.about.notices;
-                                color: Palette.mist;
-                                font-family: Fonts.mono;
-                                font-size: Type.label.size;
-                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                // `.st-empty`: the search left nothing
+                Fold {
+                    open: root.searching && root.matches == 0;
+                    content-height: empty.preferred-height;
+                    empty := NothingMatches {
+                        text: "Nothing matches “" + search.text + "”.";
+                        Button {
+                            kind: ButtonKind.ghost;
+                            text: "Clear search";
+                            clicked => {
+                                search.text = "";
+                                root.search-for("");
+                                search.take-focus();
                             }
                         }
                     }
@@ -1460,18 +855,14 @@ export component SettingsPage inherits Rectangle {
                 padding-bottom: Shell.settings-title-below;
                 PageTitle {
                     text: "Settings";
-                    narrow: root.width <= SettingsCss.max-width-759px--query-max-width;
+                    narrow: root.width <= SettingsLayout.narrow;
                 }
             }
             search := Field {
                 capsule: true;
-                icon-path: Glyph.search;
                 placeholder: "Search settings";
                 edited(q) => {
-                    page.reset();
-                    root.tracked = 0;
-                    root.picked = -1;
-                    root.query-changed(q);
+                    root.search-for(q);
                 }
             }
             // .st-count: how many rows the search leaves
@@ -1479,29 +870,17 @@ export component SettingsPage inherits Rectangle {
                 padding-top: Shell.count-above;
                 padding-bottom: Shell.count-below;
                 padding-left: Shell.count-in;
-                Text {
-                    height: Shell.count-height;
-                    text: !root.searching ? "" : root.rows.length + root.bindings.length == 0 ? "No matches" : root.rows.length + root.bindings.length == 1 ? "1 setting" : (root.rows.length + root.bindings.length) + " settings";
-                    color: Palette.mist;
-                    font-family: Fonts.ui;
-                    font-size: Shell.count-font;
-                    vertical-alignment: center;
+                SearchCount {
+                    text: !root.searching ? "" : root.matches == 0 ? "No matches" : root.matches == 1 ? "1 setting" : root.matches + " settings";
                 }
             }
             // .st-nav: the table's sections (one per first row), then the page's own
             nav := Rectangle {
                 height: (root.about-at + 1) * root.pitch - Shell.nav-row-gap;
-                // .st-nav-ind
-                Raised {
-                    y: root.current * root.pitch;
-                    height: Shell.nav-row;
-                    radius: Shell.control-radius;
-                    fill: Shell.nav-fill;
-                    highlight: Shell.nav-highlight;
-                    animate y {
-                        duration: Calm.ms(Shell.control-ms);
-                        easing: Motion.ease-out;
-                    }
+                // made as the page opens (its spring's slot needs the wired `Controls`)
+                if root.open: NavIndicator {
+                    y: 0px;
+                    index: root.current;
                 }
                 VerticalLayout {
                     alignment: start;
@@ -1510,7 +889,6 @@ export component SettingsPage inherits Rectangle {
                         visible: row.first;
                         NavRow {
                             y: 0px;
-                            height: Shell.nav-row;
                             title: row.section;
                             icon-path: SectionIcons.of(row.section);
                             on: root.current == row.section-index;
@@ -1530,7 +908,6 @@ export component SettingsPage inherits Rectangle {
                         height: root.pitch;
                         NavRow {
                             y: 0px;
-                            height: Shell.nav-row;
                             title: extra.title;
                             icon-path: extra.icon;
                             enabled: extra.shown;

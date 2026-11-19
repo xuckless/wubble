@@ -58,6 +58,8 @@ fn settings_page_scenarios() {
     let app = AppWindow::new().unwrap();
     // Tall enough for every row of the page: the element queries see only what is on screen.
     app.window().set_size(LogicalSize::new(1280.0, 6000.0));
+    // the kit controls' machines (the engine's Select is the kit menu)
+    let _wired = wubble_ui::driver::wire(&app, wubble_core::seam::Seam::new());
     app.set_page(InternalPageKind::Settings);
 
     // The shipped table: a row per visible setting.
@@ -79,7 +81,9 @@ fn settings_page_scenarios() {
         ("SettingRow::toggle", 1),
         ("SettingRow::stepper", 1),
         ("SettingRow::slider", 1),
-        ("SettingRow::segmented", 2),
+        // the engine picks from a Select, as the design's; the other choice is segmented
+        ("SettingRow::segmented", 1),
+        ("SettingRow::select", 1),
         ("SettingRow::entries", 2),
     ] {
         assert_eq!(count(&app, id), n, "{id}");
@@ -97,12 +101,18 @@ fn settings_page_scenarios() {
     toggle.invoke_accessible_default_action();
     pump();
     let y = ElementHandle::find_by_accessible_label(&app, "Y")
-        .next()
+        .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Tab))
         .unwrap();
     y.invoke_accessible_default_action();
     pump();
+    // the engine's Select opens its menu, whose row picks the engine
+    let engine = ElementHandle::find_by_accessible_label(&app, "t.engine")
+        .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Combobox))
+        .unwrap();
+    engine.invoke_accessible_default_action();
+    pump();
     let duck = ElementHandle::find_by_accessible_label(&app, "DuckDuckGo")
-        .next()
+        .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem))
         .unwrap();
     duck.invoke_accessible_default_action();
     pump();
