@@ -2,7 +2,7 @@ import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { SheetButton } from "sheet-button.slint";
-import { ErrorView, GlassTier } from "model.slint";
+import { ErrorView, GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
 // The error panel over the page: a failed load ("This site can't be reached", Reload), a refused
@@ -46,6 +46,9 @@ export component ErrorPanel inherits Rectangle {
     }
 
     glass := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.error;
+        over-layer: GlassOver.card;
         tier: GlassTier.thick;
         radius: 0px;
         over-content: true;

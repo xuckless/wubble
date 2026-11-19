@@ -97,6 +97,8 @@ pub fn renderer(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> Rendere
                     tint: [0.0; 3],
                     shadow: 0.6,
                     beam: hover,
+                    layer: None,
+                    alpha: 1.0,
                 };
                 let bar = Rect::new(16.0, 110.0, 100.0, 30.0);
                 r.scene.set_glass(&[

@@ -26,7 +26,10 @@ export component GlassPanel inherits Rectangle {
     in property <bool> focused: false;
     in property <bool> film: root.hover || root.pressed || root.focused;   // touched: hover / press / drag / focus
     in property <color> tint: transparent;   // the Space colour at 10% on sidebar glass
-    in property <bool> over-wgpu: false;     // the wgpu glass pass draws the material underneath
+    // wubble change: the overlay layer the scene draws this panel's glass in, above the page
+    // (GlassOver; 0 under the page). An overlay is on the scene whenever the scene draws overlays.
+    in property <int> over-layer: 0;
+    in property <bool> over-wgpu: root.over-layer > 0 && GlassLayer.over-on;     // the wgpu glass pass draws the material underneath
     in property <bool> over-content: false;  // over live web content: thick uses Glass.thickOverContent
     // wubble change: the scene's glass, as data. `key` orders the scene's list (GlassKeys);
     // `present` is the panel's own say whether it shows.
@@ -34,7 +37,8 @@ export component GlassPanel inherits Rectangle {
     in property <bool> present: true;
     // The press scale, about the centre. A property of its own (callers animate it): Slint
     // reads an unbound transform-scale as 0. `absolute-position` maps the origin through the
-    // transform (scaled origin), but `width` and `height` stay unscaled.
+    // transform (scaled origin), but `width` and `height` stay unscaled. `item` reads the
+    // transform-scale itself, so an overlay that animates it directly (its entrance) is followed.
     in property <float> scale: 1;
     transform-scale: root.scale;
     // wubble change: the window x range a clipping parent shows (the sidebar clips its
@@ -45,15 +49,17 @@ export component GlassPanel inherits Rectangle {
         key: root.key,
         x: max(root.absolute-position.x, root.clip-start),
         y: root.absolute-position.y,
-        width: max(0px, root.width * root.scale - max(0px, root.clip-start - root.absolute-position.x) - max(0px, root.absolute-position.x + root.width * root.scale - root.clip-end)),
-        height: root.height * root.scale,
-        radius: root.radius * root.scale,
+        width: max(0px, root.width * root.transform-scale - max(0px, root.clip-start - root.absolute-position.x) - max(0px, root.absolute-position.x + root.width * root.transform-scale - root.clip-end)),
+        height: root.height * root.transform-scale,
+        radius: root.radius * root.transform-scale,
         tier: root.tier,
         pressed: root.pressed,
         hover: root.hover,
         focus: root.focused,
         tint: root.tint,
-        present: root.over-wgpu && root.present && root.visible && min(root.absolute-position.x + root.width * root.scale, root.clip-end) > max(root.absolute-position.x, root.clip-start) && root.height > 0,
+        present: root.over-wgpu && root.present && root.visible && root.opacity > 0 && min(root.absolute-position.x + root.width * root.transform-scale, root.clip-end) > max(root.absolute-position.x, root.clip-start) && root.height > 0,
+        layer: root.over-layer,
+        alpha: root.opacity,
     };
     property <int> generation: GlassLayer.generation;
     init => {

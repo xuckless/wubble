@@ -31,6 +31,7 @@ mod hover;
 mod look;
 mod media;
 mod memory;
+mod overlay;
 mod pages;
 mod panes;
 mod parity;
@@ -289,6 +290,8 @@ pub struct Checks {
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
     /// `--smoke ax`.
     pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
+    /// `--smoke overlay` (`host/overlay.rs`).
+    pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
     /// Views paint on external begin frames from [`Host::pace`].
@@ -507,6 +510,9 @@ pub struct Host {
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     pub ax_passed: Option<usize>,
+    /// `--smoke overlay` passed.
+    pub overlay_passed: bool,
+    overlay_timer: slint::Timer,
 }
 
 impl Host {
@@ -681,6 +687,8 @@ impl Host {
             ax: ax::WebAx::default(),
             video_passed: None,
             ax_passed: None,
+            overlay_passed: false,
+            overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
             glance_enabled: true,
         };
@@ -1255,6 +1263,7 @@ impl Host {
         self.pages_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
+            self.overlay_ready();
         }
         let presented = self.stats.accelerated;
         if let Err(e) = self.show_frame(&window) {

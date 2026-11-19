@@ -1,7 +1,7 @@
 import { Palette, Spacing, Fonts, Type, Motion, Radius } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier, BoostView } from "model.slint";
+import { GlassTier, BoostView, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
 import { IconPaths } from "icon.slint";
 import { Field, Segmented, TextButton } from "settings.slint";
@@ -83,6 +83,10 @@ export component BoostPanel inherits Rectangle {
     property <int> loaded: -1;
 
     GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.boost;
+        over-layer: GlassOver.card;
+        present: root.view.open;
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
         over-content: true;

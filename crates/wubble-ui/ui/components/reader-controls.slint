@@ -1,7 +1,7 @@
 import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier } from "model.slint";
+import { GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
 import { IconPaths } from "icon.slint";
 import { Segmented } from "settings.slint";
@@ -27,6 +27,10 @@ export component ReaderControls inherits Rectangle {
     height: panel.height;
 
     panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.reader;
+        over-layer: GlassOver.card;
+        present: root.open;
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
         over-content: true;

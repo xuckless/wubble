@@ -9,6 +9,8 @@
 //! Left out: bubbles, pops, `stir`, the voice glow and overlay mode (the
 //! deferred start page and web overlay layer).
 
+use super::pages::OverLayer;
+
 // @source slint-rng (minis.rs)
 /// xorshift64* in [0, 1), standing in for `Math.random()`.
 #[derive(Clone, Debug)]
@@ -121,6 +123,11 @@ pub struct GlassRect {
     /// This panel carries the border beam (the address bar): the beam is drawn in its own glass
     /// pass, `col += fx` (scene.ts GLASS), as the design does.
     pub beam: bool,
+    /// wubble: an overlay's glass, drawn above the page in that layer's image; `None` is under
+    /// the page (the window's glass, the address bar, favourites).
+    pub layer: Option<OverLayer>,
+    /// The panel's own opacity (its entrance fade): `GlassSurface::alpha`.
+    pub alpha: f32,
 }
 
 // @source slint-render-scene-types (render.rs)
@@ -146,6 +153,8 @@ pub struct GlassSurface {
     pub beam: Option<Beam>,
     /// 1 = full glass; 0 = effects only (beam, glow) for surfaces drawn over live content
     pub material: f64,
+    /// wubble: the overlay layer it is drawn in (`GlassRect::layer`); `None` under the page.
+    pub layer: Option<OverLayer>,
 }
 
 impl Default for GlassSurface {
@@ -165,6 +174,7 @@ impl Default for GlassSurface {
             waves: vec![],
             beam: None,
             material: 1.0,
+            layer: None,
         }
     }
 }
@@ -192,6 +202,8 @@ pub fn surface_of(g: &GlassRect) -> GlassSurface {
         film: if touched { 1.0 } else { 0.0 },
         shadow: g.shadow.into(),
         tint: g.tint,
+        alpha: g.alpha.clamp(0.0, 1.0).into(),
+        layer: g.layer,
         ..Default::default()
     }
 }
@@ -835,6 +847,8 @@ mod tests {
             tint: [0.0; 3],
             shadow: 0.6,
             beam: false,
+            layer: None,
+            alpha: 1.0,
         }
     }
 
@@ -1085,6 +1099,25 @@ mod tests {
             rect(0.0, 0.0, 10.0, 10.0),
         ]);
         assert_eq!(s.surfaces().len(), 1);
+    }
+
+    #[test]
+    fn a_panel_s_layer_and_opacity_reach_its_surface_and_opacity_0_draws_nothing() {
+        let menu = GlassRect {
+            layer: Some(OverLayer::Top),
+            alpha: 0.4,
+            ..rect(10.0, 10.0, 100.0, 50.0)
+        };
+        let g = surface_of(&menu);
+        assert_eq!((g.layer, g.alpha), (Some(OverLayer::Top), 0.4f32 as f64));
+        assert_eq!(surface_of(&rect(0.0, 0.0, 9.0, 9.0)).layer, None);
+        // out of range opacities are held to 0..1
+        assert_eq!(surface_of(&GlassRect { alpha: 3.0, ..menu }).alpha, 1.0);
+        let mut s = sized();
+        s.set_glass(&[GlassRect { alpha: 0.0, ..menu }, menu]);
+        let drawn = s.surfaces();
+        assert_eq!(drawn.len(), 1);
+        assert_eq!(drawn[0].layer, Some(OverLayer::Top));
     }
 
     fn still() -> Scene {

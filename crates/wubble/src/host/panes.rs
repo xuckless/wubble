@@ -16,8 +16,9 @@ use wubble_core::window::WindowId;
 use wubble_engine::view::{Layout, ScreenArea};
 use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
+use wubble_gfx::scene::{PagePane, PageRect as ScenePage, Rect};
 use wubble_gfx::{Edge, FrameSize};
-use wubble_ui::{AppWindow, GlanceView, Palette, SplitPane, SplitSeam};
+use wubble_ui::{AppWindow, GlanceView, Palette, Radius, SplitPane, SplitSeam};
 
 /// The peek's card covers this much of the content area each way.
 const GLANCE_FRACTION: f64 = 0.86;
@@ -600,6 +601,38 @@ impl Host {
             window.set_seams(m)
         });
         window.set_focus_ring(ring.into());
+        self.sync_scene_pages(window);
+    }
+
+    /// The scene's view of the panes (`Glass::set_pages`): each pane's card in the window and
+    /// its latest frame, the presenter's texture itself (no copy). Overlay glass over a pane
+    /// frosts it; the window's glass picks up its light. Panes without a frame are left out.
+    fn sync_scene_pages(&self, window: &AppWindow) {
+        let (_, height) = content_size(window);
+        let (cx, cy) = (window.get_content_x(), window.get_content_y());
+        let radius = if window.get_page_fullscreen() {
+            0.0
+        } else {
+            window.global::<Radius>().get_md()
+        };
+        let pages: Vec<PagePane> = self
+            .pane_rects(window)
+            .into_iter()
+            .filter_map(|r| {
+                let frame = self.w.frames.get(&r.tab)?;
+                Some(PagePane {
+                    rect: ScenePage {
+                        rect: Rect::new(cx + r.x as f32, cy, r.width as f32, height as f32),
+                        radius,
+                    },
+                    texture: frame.image.to_wgpu_30_texture()?,
+                    clip: (frame.clip.width, frame.clip.height),
+                })
+            })
+            .collect();
+        if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
+            glass.set_pages(window, pages);
+        }
     }
 
     /// The peek's card (`glance-card.slint`): its page's last frame where the host lays it out.

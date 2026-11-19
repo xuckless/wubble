@@ -128,6 +128,10 @@ enum SmokeArg {
         wired: bool,
     },
     Ax,
+    /// `overlay` or `overlay=dark`.
+    Overlay {
+        dark: bool,
+    },
     SessionPhase(Phase),
 }
 
@@ -154,6 +158,8 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "codecs" => Ok(SmokeArg::Codecs { wired: true }),
         Some(("codecs", "bare")) => Ok(SmokeArg::Codecs { wired: false }),
         None if value == "ax" => Ok(SmokeArg::Ax),
+        None if value == "overlay" => Ok(SmokeArg::Overlay { dark: false }),
+        Some(("overlay", "dark")) => Ok(SmokeArg::Overlay { dark: true }),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -163,7 +169,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost`, `codecs`, `codecs=bare`, `ax` or `session-phase=1|2`"
+             `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -223,6 +229,10 @@ pub enum Smoke {
     /// Pages for screen readers: `a11y.web` on, the bundled page's accessible items, a click
     /// and a field's value through them.
     Ax,
+    /// Overlay glass over the bundled green and red page (`dark`: the dark one) frosts the
+    /// page; the window's glass picks up its light (`overlay_smoke.rs`). `dir`: `--shot-dir`,
+    /// one PNG per step.
+    Overlay { dark: bool, dir: Option<PathBuf> },
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -321,7 +331,9 @@ impl TryFrom<Cli> for Command {
                 },
             }));
         }
-        if cli.shot_dir.is_some() != matches!(cli.smoke, Some(SmokeArg::Gallery)) {
+        let gallery = matches!(cli.smoke, Some(SmokeArg::Gallery));
+        let overlay = matches!(cli.smoke, Some(SmokeArg::Overlay { .. }));
+        if cli.shot_dir.is_some() != gallery && !overlay {
             return conflict("--smoke gallery and --shot-dir go together");
         }
         let smoke = match (cli.smoke, cli.url, cli.profile) {
@@ -370,6 +382,10 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
             (Some(SmokeArg::Codecs { wired }), None, None) => Smoke::Codecs { wired },
             (Some(SmokeArg::Ax), None, None) => Smoke::Ax,
+            (Some(SmokeArg::Overlay { dark }), None, None) => Smoke::Overlay {
+                dark,
+                dir: cli.shot_dir,
+            },
         };
         Ok(Command::Smoke(smoke))
     }
@@ -599,6 +615,20 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--smoke", "ax"]).ok(),
             Some(Command::Smoke(Smoke::Ax))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "overlay"]).ok(),
+            Some(Command::Smoke(Smoke::Overlay {
+                dark: false,
+                dir: None
+            }))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "overlay=dark", "--shot-dir", "/tmp/o"]).ok(),
+            Some(Command::Smoke(Smoke::Overlay {
+                dark: true,
+                dir: Some(PathBuf::from("/tmp/o"))
+            }))
         );
     }
 

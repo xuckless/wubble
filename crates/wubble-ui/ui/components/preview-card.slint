@@ -1,7 +1,7 @@
 import { Palette, Motion, Fonts } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier } from "model.slint";
+import { GlassTier, GlassKeys, GlassOver } from "model.slint";
 
 // The tab hover preview: title, address and the page's last frame, on thick glass beside the
 // sidebar at the hovered row. Written from scratch: the design repo has no tooltip or hover card
@@ -22,6 +22,9 @@ export component PreviewCard inherits Rectangle {
     visible: root.shown || panel.opacity > 0;
 
     panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.preview;
+        over-layer: GlassOver.card;
         tier: GlassTier.thick;
         radius: Shell.preview-radius;
         over-content: true;

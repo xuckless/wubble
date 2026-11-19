@@ -2,7 +2,7 @@ import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
-import { GlassTier } from "model.slint";
+import { GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { SheetButton } from "sheet-button.slint";
 import { IconButton } from "nav-buttons.slint";
 
@@ -56,6 +56,9 @@ export component AutofillMenu inherits Rectangle {
     }
 
     menu-panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.autofill-menu;
+        over-layer: GlassOver.top;
         x: 0px;
         y: chip.height + Shell.prompt-gap;
         width: Shell.menu-width;
@@ -111,6 +114,9 @@ export component AutofillMenu inherits Rectangle {
     }
 
     prompt-panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.autofill-prompt;
+        over-layer: GlassOver.top;
         width: root.width;
         height: prompt.preferred-height;
         visible: root.prompting || self.opacity > 0;

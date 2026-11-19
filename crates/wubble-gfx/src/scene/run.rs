@@ -88,16 +88,17 @@ pub fn transition(s: RunState, e: RunEvent) -> (RunState, RunEffect) {
 }
 
 /// Whether a window render also renders the scene. The window renders for more than the scene
-/// (a page's new frame, the shell's springs), and the glass never samples the page: in
-/// [`RunState::Still`] only `changed` (the glass list, the window's size) renders it, so a page's
-/// frames (a video) do not. `covered` (the page fills the window: page fullscreen) and
-/// [`RunState::Paused`] never do; the last scene image stays.
-pub fn scene_due(state: RunState, covered: bool, changed: bool) -> bool {
+/// (a page's new frame, the shell's springs): in [`RunState::Still`] only `changed` (the glass
+/// list, the window's size) or `page_due` renders it. `page_due` is the page blur's verdict
+/// (`pages::page_blur` says `Build`): a page frame under an overlay, or the ambience's update;
+/// a page's frames with neither (a video, nothing open) do not. `covered` (the page fills the
+/// window: page fullscreen) and [`RunState::Paused`] never do; the last scene image stays.
+pub fn scene_due(state: RunState, covered: bool, changed: bool, page_due: bool) -> bool {
     match state {
         _ if covered => false,
         RunState::Paused => false,
         RunState::Running => true,
-        RunState::Still => changed,
+        RunState::Still => changed || page_due,
     }
 }
 
@@ -173,24 +174,25 @@ mod tests {
     #[test]
     fn the_scene_renders_only_when_due() {
         let cases = [
-            // (state, covered, changed, due)
-            (Running, false, false, true),
-            (Running, false, true, true),
-            // Still: only a change; the page's frames never
-            (Still, false, false, false),
-            (Still, false, true, true),
-            (Paused, false, false, false),
-            (Paused, false, true, false),
+            // (state, covered, changed, page_due, due)
+            (Running, false, false, false, true),
+            (Running, false, true, false, true),
+            // Still: only a change or the page blur's verdict; a page frame alone never
+            (Still, false, false, false, false),
+            (Still, false, true, false, true),
+            (Still, false, false, true, true),
+            (Paused, false, false, false, false),
+            (Paused, false, true, true, false),
             // covered: never
-            (Running, true, false, false),
-            (Running, true, true, false),
-            (Still, true, true, false),
+            (Running, true, false, false, false),
+            (Running, true, true, true, false),
+            (Still, true, true, true, false),
         ];
-        for (state, covered, changed, due) in cases {
+        for (state, covered, changed, page_due, due) in cases {
             assert_eq!(
-                scene_due(state, covered, changed),
+                scene_due(state, covered, changed, page_due),
                 due,
-                "{state:?} covered={covered} changed={changed}"
+                "{state:?} covered={covered} changed={changed} page_due={page_due}"
             );
         }
     }

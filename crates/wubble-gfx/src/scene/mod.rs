@@ -49,9 +49,11 @@
 //! - A transparent Slint background (`Window { background: transparent; }`)
 //!   and transparent glass panels: the glass material is in the scene image,
 //!   so Slint draws only their content. Any opaque Slint fill hides it.
-//! - The web view stays opaque above the scene with its own radius and gap:
-//!   glass refracts the backdrop, never web pixels. Glass over the page is
-//!   effects only (the beam is drawn that way).
+//! - The web view stays opaque above the scene with its own radius and gap. The
+//!   scene also gets each pane's latest frame ([`Renderer::set_pages`]): overlay
+//!   glass over a pane frosts the page, drawn above it in one image per
+//!   [`OverLayer`] ([`Frame::over`]); the glass under the page picks up the page's
+//!   light at its edge (the ambience). See [`pages`].
 //! - No OS window transparency: the scene image is opaque.
 //! - Frames from the host by the run state ([`run`]): every vsync while something moves,
 //!   none once nothing does (`Still`) or while the window is hidden. A still backdrop's
@@ -65,11 +67,13 @@
 //! the design's with the voice uniforms sent as zero, plus one branch:
 //! `uMaterial` 2, the flat fill of [`Quality::Flat`].
 
+pub mod pages;
 mod quality;
 mod render;
 pub mod run;
 mod state;
 
+pub use pages::{OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur};
 pub use quality::{
     AVG_WEIGHT, BackdropClock, CACHED_REFRESH_CALLS, DOWN_FRACTION, FIT_FRACTION, Governor,
     HELP_FRACTION, HOLD_FRAMES, MAX_BACKDROP_DT, MAX_BACKOFF, MAX_DT, PROBE_FRAMES, Quality,
@@ -77,7 +81,8 @@ pub use quality::{
 };
 pub(crate) use render::with_prelude;
 pub use render::{
-    BLUR_SIGMA, DPR_MAX, GLASS_PAD, PYRAMID_DIV, Renderer, out_size, readback_rgba8, view_of,
+    AMBIENCE_HZ, AMBIENCE_LEVEL, AMBIENCE_STRENGTH, BLUR_SIGMA, DPR_MAX, Frame, GLASS_PAD,
+    PYRAMID_DIV, PagePane, Renderer, ambience_every, out_size, readback_rgba8, view_of,
 };
 pub use state::{
     Backdrop, Beam, Blob, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, STILL_DYE,

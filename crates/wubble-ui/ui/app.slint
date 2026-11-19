@@ -12,7 +12,7 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
 import { GlanceView } from "components/model.slint";
@@ -52,7 +52,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -89,6 +89,17 @@ export component AppWindow inherits Window {
     // The living backdrop and the glass (wubble_gfx::scene), rendered by the host each frame
     // into one opaque wgpu texture; shown at the very back while GlassLayer.scene-active.
     in property <image> scene;
+    // The scene's overlay glass, above the page (wubble_gfx::scene::OverLayer, GlassOver): one
+    // window-sized image per layer, empty while the layer has no glass.
+    in property <image> over-card;
+    in property <image> over-peek;
+    in property <image> over-top;
+    // The scene draws the overlays' glass (GlassLayer.over-on): not over a fullscreen page,
+    // where the scene does not render.
+    property <bool> over-on: GlassLayer.scene-active && !root.page-fullscreen;
+    changed over-on => {
+        GlassLayer.over-on = self.over-on;
+    }
     // The pages on screen, left to right (one, or the panes of a split): each one's frame,
     // supplied by wubble-gfx as a wgpu-backed image, and where it sits in the content area. The
     // host writes them; a pane's id is its tab's.
@@ -828,129 +839,6 @@ export component AppWindow inherits Window {
                     root.ax-action(id, name, value);
                 }
             }
-            if !root.pip: VideoControls {
-                video: root.video;
-                rates: root.video-rates;
-                command(name, value) => {
-                    root.video-command(name, value);
-                }
-                hovered(over) => {
-                    root.video-hovered(over);
-                }
-            }
-            if root.pip: PipControls {
-                paused: root.video.paused;
-                command(name, value) => {
-                    root.pip-command(name, value);
-                }
-                begin-move => {
-                    root.window-begin-move();
-                }
-            }
-            if root.pip-card: PipCard {
-                open: true;
-                title: root.pip-title;
-                command(name, value) => {
-                    root.pip-command(name, value);
-                }
-            }
-            find-ui := FindBar {
-                x: parent.width - self.width - Spacing.s3;
-                y: Spacing.s3;
-                find: root.find;
-                edited(q) => {
-                    root.find-edited(q);
-                }
-                step(forward) => {
-                    root.find-step(forward);
-                }
-                closed => {
-                    root.find-closed();
-                }
-            }
-            // Beside the sidebar at the hovered row, kept inside the content area.
-            PreviewCard {
-                x: Spacing.s3;
-                y: max(Spacing.s3, min(root.preview.y - parent.absolute-position.y, parent.height - self.height - Spacing.s3));
-                shown: root.preview.shown;
-                title: root.preview.title;
-                address: root.preview.address;
-                thumb: root.preview.thumb;
-            }
-            ReaderControls {
-                x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
-                y: parent.height - self.height - Spacing.s4;
-                open: root.reader-on;
-                size: root.reader-size;
-                column: root.reader-width;
-                font: root.reader-font;
-                theme: root.reader-theme;
-                setting(key, value) => {
-                    root.reader-setting(key, value);
-                }
-                closed => {
-                    root.reader-toggled();
-                }
-            }
-            ShotOverlay {
-                active: root.shot-picking;
-                pane-x: root.shot-pane-x;
-                pane-width: root.shot-pane-width;
-                picked(ax, ay, bx, by) => {
-                    root.shot-picked(ax, ay, bx, by);
-                }
-                capture(full) => {
-                    root.shot-capture(full);
-                }
-                cancelled => {
-                    root.shot-cancelled();
-                }
-            }
-            BoostPanel {
-                x: parent.width - self.width - Spacing.s3;
-                y: Spacing.s3;
-                height: parent.height - 2 * Spacing.s3;
-                view: root.boost;
-                text-edited(field, text) => {
-                    root.boost-text(field, text);
-                }
-                number(field, value) => {
-                    root.boost-number(field, value);
-                }
-                tint(c) => {
-                    root.boost-tint(c);
-                }
-                act(name) => {
-                    root.boost-act(name);
-                }
-            }
-            Toast {
-                x: (parent.width - self.width) / 2;
-                y: Spacing.s4;
-                widest: min(Shell.toast-max-width, parent.width - 2 * Spacing.s4);
-                text: root.toast-text;
-                serial: root.toast-serial;
-                action: root.toast-action;
-                sticky: root.toast-sticky;
-                hide-serial: root.toast-hide-serial;
-                action-shown: root.toast-action-shown;
-                acted => {
-                    root.toast-acted();
-                }
-                closed => {
-                    root.toast-closed();
-                }
-            }
-            // Over the page and its find bar, under the dialog: the page's error.
-            error-ui := ErrorPanel {
-                error: root.page-error;
-                primary => {
-                    root.error-primary();
-                }
-                secondary => {
-                    root.error-secondary();
-                }
-            }
             // The settings page fills the content area of its tab (no web view under it).
             settings-ui := SettingsPage {
                 open: root.settings-open;
@@ -1083,7 +971,142 @@ export component AppWindow inherits Window {
                     root.passwords-import-requested();
                 }
             }
+            // The scene's glass of the overlays in the card (GlassOver.card), above the pages and
+            // under each overlay's own content: window-sized, so placed back at the window's origin.
+            if root.over-on && root.over-card.width > 0: Image {
+                x: -content.x;
+                y: -content.y;
+                width: root.width;
+                height: root.height;
+                source: root.over-card;
+                image-fit: fill;
+            }
+            if !root.pip: VideoControls {
+                video: root.video;
+                rates: root.video-rates;
+                command(name, value) => {
+                    root.video-command(name, value);
+                }
+                hovered(over) => {
+                    root.video-hovered(over);
+                }
+            }
+            if root.pip: PipControls {
+                paused: root.video.paused;
+                command(name, value) => {
+                    root.pip-command(name, value);
+                }
+                begin-move => {
+                    root.window-begin-move();
+                }
+            }
+            if root.pip-card: PipCard {
+                open: true;
+                title: root.pip-title;
+                command(name, value) => {
+                    root.pip-command(name, value);
+                }
+            }
+            find-ui := FindBar {
+                x: parent.width - self.width - Spacing.s3;
+                y: Spacing.s3;
+                find: root.find;
+                edited(q) => {
+                    root.find-edited(q);
+                }
+                step(forward) => {
+                    root.find-step(forward);
+                }
+                closed => {
+                    root.find-closed();
+                }
+            }
+            // Beside the sidebar at the hovered row, kept inside the content area.
+            PreviewCard {
+                x: Spacing.s3;
+                y: max(Spacing.s3, min(root.preview.y - parent.absolute-position.y, parent.height - self.height - Spacing.s3));
+                shown: root.preview.shown;
+                title: root.preview.title;
+                address: root.preview.address;
+                thumb: root.preview.thumb;
+            }
+            ReaderControls {
+                x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
+                y: parent.height - self.height - Spacing.s4;
+                open: root.reader-on;
+                size: root.reader-size;
+                column: root.reader-width;
+                font: root.reader-font;
+                theme: root.reader-theme;
+                setting(key, value) => {
+                    root.reader-setting(key, value);
+                }
+                closed => {
+                    root.reader-toggled();
+                }
+            }
+            ShotOverlay {
+                active: root.shot-picking;
+                pane-x: root.shot-pane-x;
+                pane-width: root.shot-pane-width;
+                picked(ax, ay, bx, by) => {
+                    root.shot-picked(ax, ay, bx, by);
+                }
+                capture(full) => {
+                    root.shot-capture(full);
+                }
+                cancelled => {
+                    root.shot-cancelled();
+                }
+            }
+            BoostPanel {
+                x: parent.width - self.width - Spacing.s3;
+                y: Spacing.s3;
+                height: parent.height - 2 * Spacing.s3;
+                view: root.boost;
+                text-edited(field, text) => {
+                    root.boost-text(field, text);
+                }
+                number(field, value) => {
+                    root.boost-number(field, value);
+                }
+                tint(c) => {
+                    root.boost-tint(c);
+                }
+                act(name) => {
+                    root.boost-act(name);
+                }
+            }
+            Toast {
+                x: (parent.width - self.width) / 2;
+                y: Spacing.s4;
+                widest: min(Shell.toast-max-width, parent.width - 2 * Spacing.s4);
+                text: root.toast-text;
+                serial: root.toast-serial;
+                action: root.toast-action;
+                sticky: root.toast-sticky;
+                hide-serial: root.toast-hide-serial;
+                action-shown: root.toast-action-shown;
+                acted => {
+                    root.toast-acted();
+                }
+                closed => {
+                    root.toast-closed();
+                }
+            }
+            // Over the page and its find bar, under the dialog: the page's error.
+            error-ui := ErrorPanel {
+                error: root.page-error;
+                primary => {
+                    root.error-primary();
+                }
+                secondary => {
+                    root.error-secondary();
+                }
+            }
             bookmark-sheet := BookmarkSheet {
+                glass-key: GlassKeys.bookmark-sheet;
+                glass-layer: GlassOver.card;
                 sheet: root.bookmark-sheet-view;
                 folders: root.bookmark-folders;
                 answered(accept, remove, name, folder) => {
@@ -1091,6 +1114,8 @@ export component AppWindow inherits Window {
                 }
             }
             print-sheet := PrintSheet {
+                glass-key: GlassKeys.print-sheet;
+                glass-layer: GlassOver.card;
                 sheet: root.print-sheet-view;
                 edited(d, p, l, pa, m, s, b, c) => {
                     root.print-sheet-edited(d, p, l, pa, m, s, b, c);
@@ -1138,6 +1163,8 @@ export component AppWindow inherits Window {
             }
             // Tab-modal: over the page and its find bar, under the command bar.
             sheet := DialogSheet {
+                glass-key: GlassKeys.dialog;
+                glass-layer: GlassOver.card;
                 dialog: root.dialog;
                 answered(accept, text, secret) => {
                     root.dialog-answered(accept, text, secret);
@@ -1192,12 +1219,25 @@ export component AppWindow inherits Window {
                 tier: GlassTier.thick;
                 radius: Radius.lg;
                 over-content: true;
+                key: GlassKeys.peek;
+                over-layer: GlassOver.peek;
                 visible: root.hidden-at-rest;
                 opacity: root.peek-alpha;
                 GlowRing {
                     radius: Radius.lg;
                     strength: root.peek-glow;
                 }
+            }
+
+            // The scene's glass of the peek (GlassOver.peek), over the page, under the sidebar's
+            // content: window-sized, so placed back at the window's origin.
+            if root.over-on && root.over-peek.width > 0: Image {
+                x: -zone.x;
+                y: -zone.y;
+                width: root.width;
+                height: root.height;
+                source: root.over-peek;
+                image-fit: fill;
             }
 
             sidebar := Sidebar {
@@ -1261,6 +1301,15 @@ export component AppWindow inherits Window {
                 root.seam-double-clicked();
             }
         }
+    }
+
+    // The scene's glass of the window-level overlays (GlassOver.top: menus, popovers, prompts),
+    // above the page and the sidebar, under their own content.
+    if root.over-on && root.over-top.width > 0: Image {
+        width: 100%;
+        height: 100%;
+        source: root.over-top;
+        image-fit: fill;
     }
 
     // The page's popup widget may leave the page's rectangle (not the window's). It belongs to
@@ -1402,5 +1451,6 @@ export component AppWindow inherits Window {
 
     init => {
         web-focus.focus();
+        GlassLayer.over-on = root.over-on;
     }
 }

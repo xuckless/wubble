@@ -2,7 +2,7 @@ import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
-import { GlassTier, MenuEntry } from "model.slint";
+import { GlassTier, MenuEntry, GlassKeys, GlassOver } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 
 // The page's context menu; fills its parent (the window) so a click anywhere outside the panel
@@ -113,6 +113,9 @@ export component ContextMenu inherits Rectangle {
     }
 
     panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.menu;
+        over-layer: GlassOver.top;
         width: Shell.menu-width;
         height: list.preferred-height;
         x: root.place(root.at-x, self.width, root.width);

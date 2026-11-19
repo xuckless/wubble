@@ -30,6 +30,11 @@ pub fn request_dir(dir: PathBuf) {
     DIR.with(|d| *d.borrow_mut() = Some(dir));
 }
 
+/// Whether `--shot-dir` was given.
+pub fn has_dir() -> bool {
+    DIR.with(|d| d.borrow().is_some())
+}
+
 /// The gallery's file for scene `index` (counted from 0): `dir/NN-name.png`, so a listing
 /// sorts in the order the scenes were shot.
 pub fn scene_path(dir: &std::path::Path, index: usize, name: &str) -> PathBuf {

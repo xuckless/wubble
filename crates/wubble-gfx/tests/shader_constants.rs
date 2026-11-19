@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use wubble_gfx::scene::{BLUR_SIGMA, DPR_MAX, GLASS_PAD, PYRAMID_DIV};
 
 const CHANGE: &str = "// wubble change:";
+/// The header of a shader that is wubble's own, with no design counterpart.
+const WUBBLE_ONLY: &str = "// translates: wubble-only";
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -252,9 +254,16 @@ fn shaders() -> Vec<(String, String)> {
 #[test]
 fn every_shader_has_the_numbers_of_the_glsl_it_translates() {
     let all = shaders();
-    assert_eq!(all.len(), 9, "the scene's nine shaders");
+    assert_eq!(all.len(), 10, "the scene's ten shaders");
+    // wubble's own passes (the page in the scene) translate nothing: there is no GLSL to cite
+    let own: Vec<&str> = all
+        .iter()
+        .filter(|(_, w)| w.starts_with(&format!("{WUBBLE_ONLY}\n")))
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert_eq!(own, ["page.wgsl"], "wubble's own shaders");
     let mut errors = vec![];
-    for (name, wgsl) in &all {
+    for (name, wgsl) in all.iter().filter(|(n, _)| !own.contains(&n.as_str())) {
         let glsl = glsl_numbers(name, &header(name, wgsl));
         let (numbers, changed) = wgsl_numbers(wgsl);
         errors.extend(

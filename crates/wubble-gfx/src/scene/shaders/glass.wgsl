@@ -27,7 +27,9 @@ struct GlassU {
   uWaveN: i32,
   uVoiceAmt: f32,
   uMaterial: f32,    // 1 full glass, 0 effects only, 2 flat fill (wubble)
-  _p0: f32, _p1: f32, _p2: f32,
+  uAmb: f32,         // wubble change: the ambience, how much of the page-inclusive blur is mixed in
+  uAmbLevel: f32,    // wubble change: which of its levels: 0 the ⅛ one, 1 the 1/16 (the falloff)
+  _p2: f32,
   uBeam: vec4<f32>,  // head, length (fractions of the perimeter), strength, hue
   uVoice: vec4<f32>, // low, mid, high, phase
   uWave: array<vec4<f32>, 4>,
@@ -38,6 +40,9 @@ struct GlassU {
 // uBg is declared in the GLSL but never read there either; only the pyramid levels are used.
 @group(0) @binding(3) var uB2: texture_2d<f32>;  // render.rs binds b2 (⅛ res) here
 @group(0) @binding(4) var uB3: texture_2d<f32>;  // and b3 (1/16 res), the frost
+// wubble change: the page-inclusive pyramid's b2 and b3 (render.rs `P`, pages.rs), for the ambience
+@group(0) @binding(5) var uP2: texture_2d<f32>;
+@group(0) @binding(6) var uP3: texture_2d<f32>;
 
 @vertex
 fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQuad, U.uView); }
@@ -45,8 +50,12 @@ fn vs_glass(@builtin(vertex_index) vi: u32) -> QuadOut { return quadVs(vi, U.uQu
 // Frosted: the two deepest blur levels only. thin 0 → 40% toward the deepest, regular 1 → 75%, thick 2 → all.
 fn bg(px: vec2<f32>, tier: f32) -> vec3<f32> {
   var uv = px / U.uView; uv.y = 1.0 - uv.y;
-  let a = textureSampleLevel(uB2, samp, uv, 0.0).rgb; // wubble change: level 0 explicitly (textureSampleLevel)
-  let b = textureSampleLevel(uB3, samp, uv, 0.0).rgb; // wubble change: level 0 explicitly
+  var a = textureSampleLevel(uB2, samp, uv, 0.0).rgb; // wubble change: level 0 explicitly (textureSampleLevel)
+  var b = textureSampleLevel(uB3, samp, uv, 0.0).rgb; // wubble change: level 0 explicitly
+  if (U.uAmb > 0.0) { // wubble change: ambience, the page's light past its edge (owner-requested, no web counterpart)
+    let pg = mix(textureSampleLevel(uP2, samp, uv, 0.0).rgb, textureSampleLevel(uP3, samp, uv, 0.0).rgb, U.uAmbLevel); // wubble change: P's levels
+    a = mix(a, pg, U.uAmb); b = mix(b, pg, U.uAmb); // wubble change: mixed into both levels
+  }
   return mix(a, b, clamp(0.4 + tier * 0.3, 0.0, 1.0));
 }
 const LUMA = vec3<f32>(0.2126, 0.7152, 0.0722);

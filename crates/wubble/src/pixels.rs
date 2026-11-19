@@ -171,9 +171,52 @@ pub fn check_swatches(
     })
 }
 
+/// The mean colour of `region` (0-255 per channel), every pixel counted: `--smoke overlay`'s
+/// glass under an overlay.
+pub fn mean_rgb(
+    snapshot: &SharedPixelBuffer<Rgba8Pixel>,
+    region: Region,
+) -> Result<[f32; 3], String> {
+    let (width, height) = (snapshot.width(), snapshot.height());
+    let right = region.x.saturating_add(region.width).min(width);
+    let bottom = region.y.saturating_add(region.height).min(height);
+    if region.x >= right || region.y >= bottom {
+        return Err(format!(
+            "region {region:?} is empty inside the {width}x{height} snapshot"
+        ));
+    }
+    let pixels = snapshot.as_slice();
+    let mut sum = [0u64; 3];
+    for y in region.y..bottom {
+        for p in &pixels[(y * width + region.x) as usize..(y * width + right) as usize] {
+            sum[0] += u64::from(p.r);
+            sum[1] += u64::from(p.g);
+            sum[2] += u64::from(p.b);
+        }
+    }
+    let n = (u64::from(right - region.x) * u64::from(bottom - region.y)) as f32;
+    Ok(sum.map(|c| c as f32 / n))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mean_colour_counts_every_pixel_of_the_region() {
+        // left half red, right half blue
+        let b = buffer(64, 64, |x, _| {
+            if x < 32 {
+                Rgba8Pixel::new(200, 0, 0, 255)
+            } else {
+                Rgba8Pixel::new(0, 0, 100, 255)
+            }
+        });
+        assert_eq!(mean_rgb(&b, ALL), Ok([100.0, 0.0, 50.0]));
+        let left = Region { width: 16, ..ALL };
+        assert_eq!(mean_rgb(&b, left), Ok([200.0, 0.0, 0.0]));
+        assert!(mean_rgb(&b, Region { x: 64, ..ALL }).is_err());
+    }
 
     fn buffer(
         width: u32,

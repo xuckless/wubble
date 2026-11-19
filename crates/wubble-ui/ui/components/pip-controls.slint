@@ -1,7 +1,7 @@
 import { Spacing, Motion } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier } from "model.slint";
+import { GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
 import { IconPaths } from "icon.slint";
 import { MoveArea } from "window-frame.slint";
@@ -30,6 +30,9 @@ export component PipControls inherits Rectangle {
 
         // Inside the area, so the area keeps its hover while the pointer is on a button.
         strip := GlassPanel {
+            // the scene draws its glass above the page (GlassPanel `over-layer`)
+            key: GlassKeys.pip-strip;
+            over-layer: GlassOver.card;
             property <bool> open: area.has-hover;
             tier: GlassTier.thick;
             radius: Shell.menu-radius;

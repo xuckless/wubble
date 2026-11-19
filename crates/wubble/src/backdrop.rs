@@ -7,7 +7,10 @@
 //! UI and its image is the window's bottom layer. The scene is fed from data only: the glass
 //! list the panels report (`wubble_ui::glass`), the active Space's tint, the address pill's
 //! beam (`address-beam`, the driver's), the pointer (from the host's winit filter) and, for the quality governor, each
-//! frame's load ([`frame_load`]).
+//! frame's load ([`frame_load`]). The panes' latest frames go to it too ([`Glass::set_pages`]):
+//! overlay glass over a pane frosts the page, and the window's glass picks up the page's light
+//! (`wubble_gfx::scene::pages`). Overlay glass comes back as one image per layer, shown above
+//! the page (`over-card`, `over-peek`, `over-top`).
 
 use std::time::{Duration, Instant};
 
@@ -17,8 +20,8 @@ use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
-    Backdrop, Beam, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
-    out_size, view_of,
+    Backdrop, Beam, GlassRect, Governor, OverLayer, PageBlur, PagePane, Quality, Rect, Renderer,
+    SceneOptions, Signal, Tier, out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
 use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
@@ -102,6 +105,8 @@ pub struct SceneHost {
     image_error_logged: bool,
     /// When the scene draws (`run_state`): running, still or paused.
     run: crate::run_state::Runner,
+    /// Wakes the window when the page blur is due later (`PageBlur::After`: the ambience's rate).
+    page_wake: slint::Timer,
 }
 
 /// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value, `scene` the
@@ -155,6 +160,7 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
                 pointer: None,
                 image_error_logged: false,
                 run: Default::default(),
+                page_wake: slint::Timer::default(),
             }))
         }
         Err(reason) => {
@@ -172,6 +178,8 @@ pub struct Keys {
     pub address: i32,
     /// The first favourite tile; a tile's key is this plus its tab id.
     pub favourites: i32,
+    /// The first overlay's key: every overlay's is at least this.
+    pub overlays: i32,
 }
 
 impl Keys {
@@ -181,6 +189,7 @@ impl Keys {
             window: k.get_sidebar(),
             address: k.get_address(),
             favourites: k.get_favourites(),
+            overlays: k.get_overlays(),
         }
     }
 
@@ -191,7 +200,7 @@ impl Keys {
         match key {
             k if k == self.window => 1.0,
             k if k == self.address => 0.0,
-            k if k >= self.favourites => 0.3,
+            k if k >= self.favourites && k < self.overlays => 0.3,
             _ => 0.6,
         }
     }
@@ -215,6 +224,8 @@ pub fn to_rect(item: &GlassItem, keys: &Keys) -> GlassRect {
         shadow: keys.shadow(item.key),
         // the beam runs round the address pill's glass
         beam: item.key == keys.address,
+        layer: OverLayer::from_index(item.layer),
+        alpha: item.alpha,
     }
 }
 
@@ -312,11 +323,9 @@ impl Glass {
         if window.get_address_beam().strength > 0.0 || (tint.is_some() && tint != s.tint) {
             s.run.wake_if_still(window);
         }
-        if !scene_due(
-            s.run.state(),
-            window.get_page_fullscreen(),
-            glass.is_some() || resized,
-        ) {
+        let covered = window.get_page_fullscreen();
+        let page_due = s.schedule_pages(window, now, covered);
+        if !scene_due(s.run.state(), covered, glass.is_some() || resized, page_due) {
             return false;
         }
         let since = s
@@ -353,9 +362,22 @@ impl Glass {
         let full_rate = steady && s.run.state() == RunState::Running;
         let interval = since.filter(|_| full_rate);
         match s.renderer.before_rendering(window.window(), now, pace) {
-            // a new texture only (first frame, resize): see `Renderer::before_rendering`
-            Ok(Some(image)) => window.set_scene(image),
-            Ok(None) => {}
+            // new textures only (first frame, resize, a layer's glass appearing or gone): see
+            // `Renderer::before_rendering`
+            Ok(frame) => {
+                if let Some(image) = frame.scene {
+                    window.set_scene(image);
+                }
+                for (layer, image) in OverLayer::ALL.into_iter().zip(frame.over) {
+                    if let Some(image) = image {
+                        match layer {
+                            OverLayer::Card => window.set_over_card(image),
+                            OverLayer::Peek => window.set_over_peek(image),
+                            OverLayer::Top => window.set_over_top(image),
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 if !std::mem::replace(&mut s.image_error_logged, true) {
                     eprintln!("wubble: glass: scene image: {e}");
@@ -368,6 +390,35 @@ impl Glass {
         s.run
             .frame_done(window, animating, glass.is_some() || resized);
         true
+    }
+
+    /// The panes under the glass, left to right, with their latest frames (the host's, on every
+    /// frame presented and every layout): the page blur follows them when an overlay is over a
+    /// pane or for the ambience, and asks for the frame that builds it.
+    pub fn set_pages(&mut self, window: &AppWindow, pages: Vec<PagePane>) {
+        if let Glass::Scene(s) = self {
+            s.renderer.set_pages(pages);
+            if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
+                window.window().request_redraw();
+            }
+        }
+    }
+
+    /// How many times the page blur has been built (the overlay smoke's count).
+    pub fn pages_built(&self) -> Option<u64> {
+        match self {
+            Glass::Scene(s) => Some(s.renderer.pages_built()),
+            Glass::SlintOnly => None,
+        }
+    }
+
+    /// The ambience's strength (the overlay smoke's control: 0 off), drawn on the next frame.
+    pub fn set_ambience(&mut self, window: &AppWindow, strength: f32) {
+        if let Glass::Scene(s) = self {
+            s.renderer.set_ambience(strength);
+            s.run.wake_if_still(window);
+            window.window().request_redraw();
+        }
     }
 
     /// A window event that changes when the scene draws (`run_state::event_of`).
@@ -403,6 +454,30 @@ impl Glass {
 }
 
 impl SceneHost {
+    /// The page blur's verdict now (`PageBlur`): whether the next frame builds it, else arms the
+    /// wake-up for when it is due (the ambience's rate). Nothing while a page fills the window.
+    fn schedule_pages(&mut self, window: &AppWindow, now: Instant, covered: bool) -> bool {
+        if covered {
+            return false;
+        }
+        match self.renderer.page_verdict(now) {
+            PageBlur::Build => true,
+            PageBlur::Skip => false,
+            PageBlur::After(d) => {
+                if !self.page_wake.running() {
+                    let w = window.as_weak();
+                    self.page_wake
+                        .start(slint::TimerMode::SingleShot, d, move || {
+                            if let Some(w) = w.upgrade() {
+                                w.window().request_redraw();
+                            }
+                        });
+                }
+                false
+            }
+        }
+    }
+
     fn set_items(&mut self, window: &AppWindow, items: &[GlassItem]) {
         let keys = Keys::of(window);
         let rects: Vec<GlassRect> = items.iter().map(|i| to_rect(i, &keys)).collect();
@@ -463,6 +538,8 @@ mod tests {
             focus: true,
             tint: Default::default(),
             present: true,
+            layer: 0,
+            alpha: 1.0,
         };
         assert_eq!(
             to_rect(&item, &KEYS),
@@ -476,8 +553,20 @@ mod tests {
                 tint: [0.0; 3],
                 shadow: 0.6,
                 beam: false,
+                layer: None,
+                alpha: 1.0,
             }
         );
+        // an overlay's layer and entrance fade
+        let menu = GlassItem {
+            key: 1_000_330,
+            layer: 3,
+            alpha: 0.5,
+            ..item.clone()
+        };
+        let r = to_rect(&menu, &KEYS);
+        assert_eq!((r.layer, r.alpha), (Some(OverLayer::Top), 0.5));
+        assert_eq!(r.shadow, 0.6, "useGlass's");
         // a Space colour is mixed in (0..1); transparent is none
         let tinted = GlassItem {
             tint: slint::Color::from_rgb_u8(255, 0, 51),
@@ -493,6 +582,7 @@ mod tests {
         window: 0,
         address: 1,
         favourites: 100,
+        overlays: 1_000_000,
     };
 
     #[test]
@@ -501,6 +591,7 @@ mod tests {
         assert_eq!(KEYS.shadow(1), 0.0, "the address bar");
         assert_eq!(KEYS.shadow(100), 0.3, "a favourite");
         assert_eq!(KEYS.shadow(107), 0.3);
+        assert_eq!(KEYS.shadow(1_000_120), 0.6, "an overlay");
         assert_eq!(KEYS.shadow(3), 0.6, "useGlass's default");
     }
 

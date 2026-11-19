@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble overlay smoke</title>
+<style>
+  /* `--smoke overlay`: green across the top (under the command bar), red below (under the
+     menus, the peek and the sidebar's edge); `#dark` is the same, dark. A small box keeps the
+     page repainting, away from everything the smoke samples. */
+  :root { --top: #10c838; --rest: #e01818; }
+  :root.dark { --top: #0a3a14; --rest: #4a0808; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: var(--rest); }
+  .top { position: absolute; left: 0; right: 0; top: 0; height: 30%; background: var(--top); }
+  .tick { position: absolute; right: 8px; bottom: 8px; width: 12px; height: 12px;
+          background: #808080; animation: tick 1s linear infinite; }
+  @keyframes tick { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+<script>
+  if (location.hash === "#dark") document.documentElement.classList.add("dark");
+</script>
+</head>
+<body>
+<div class="top"></div>
+<div class="tick"></div>
+</body>
+</html>

@@ -122,14 +122,18 @@ fn check_drag_frame(app: &AppWindow, scene: &[GlassItem], frame: usize) {
     check_inside(app, scene, frame);
 }
 
-/// Every glass the scene holds but the window's lies inside the sidebar, which clips what it
-/// shows (none may reach under the page), and the address pill's is the pill Slint shows: none on the rail,
-/// where the pill is a search button without glass (.wb-rail-addr).
+/// Every glass under the page the scene holds but the window's lies inside the sidebar, which
+/// clips what it shows (none may reach under the page; an overlay's is drawn above it), and the
+/// address pill's is the pill Slint shows: none on the rail, where the pill is a search button
+/// without glass (.wb-rail-addr).
 fn check_inside(app: &AppWindow, scene: &[GlassItem], frame: usize) {
     let keys = app.global::<GlassKeys>();
     let edges = app.get_side_edges();
     let near = |a: f32, b: f32| (a - b).abs() < 0.01;
-    for item in scene.iter().filter(|i| i.key != keys.get_sidebar()) {
+    for item in scene
+        .iter()
+        .filter(|i| i.key != keys.get_sidebar() && i.layer == 0)
+    {
         assert!(
             item.x >= edges.start - 0.01 && item.x + item.width <= edges.end + 0.01,
             "frame {frame}: glass {item:?} reaches outside the sidebar {edges:?}"
