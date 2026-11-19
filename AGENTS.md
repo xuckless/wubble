@@ -144,12 +144,9 @@ tools: `tools/fidelity/README.md`. Rules for every agent:
   against a baseline of today's violations (`kit_lock_baseline.txt`) that only shrinks: a new
   violation fails; after clearing some, lower it with
   `KIT_LOCK_WRITE=1 cargo test -p wubble-ui --test kit_lock`. Never raise it or delete it.
-- **Measure.** `tools/fidelity/run.sh [OUT]` serves the design, shoots its scenes headless on a
-  fixed 1/120 s clock (`scenes.json`), shoots wubble's gallery on the design's parity profile
-  (`--parity`, `--frozen-backdrop`) and writes `scores.csv` (SSIM, CIEDE2000) and contact sheets
-  (web | wubble | ΔE). The bar is SSIM >= 0.90 and mean ΔE <= 3 at 1x and 2x plus frame-by-frame
-  motion; the owner's eye is the final judge. Attach the contact sheets of every surface you
-  touched to your report. Scores are reported, never asserted in tests.
+- **Look.** There is no scoring tool: take `--shot` / `--shot-dir` PNGs of every surface you
+  touched (and of the plain window with nothing open) and compare each by eye with the web design
+  before handing work back; attach them to your report. The owner's eye is the final judge.
 
 ## Code principles
 
