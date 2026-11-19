@@ -1,0 +1,155 @@
+// derived: the settings page's ground (kit/settings/page.slint, Palette.web), OverlapLayer, KitText title/body/st-path-wb-mono, Fold (motion/fold.slint), Button pri/ghost, Icon
+// The error page in place of the page (wubble-only.md: error and certificate-error pages): the
+// content area on the settings page's opaque ground (the page under it is hidden and gets no
+// input; no glass), a centred column in the settings page's roles and inks: the design's globe in
+// mist (a refused certificate: the lock in coral), the title in the title role (the row title's
+// ink), the summary in the body role (the row note's mist); the technical detail in the mono role
+// and the path's ink, folded away under a ghost "Details" button on its own line (kit Fold; a
+// certificate panel opens with it unfolded); then a kit Button row: the primary (Reload, Go
+// back) and a ghost secondary. The ground fades in with the sheets' 220 ms; the column arrives
+// by Overlap. Enter is the primary
+// (Go back on a certificate panel: proceeding is never the default).
+// derived (notes/fidelity/derived-review.md "Error page"): the column (440 wide, a third down,
+// gap 12), the 40 px icon, the Details fold.
+
+import { Palette, Space, Motion } from "../../gen/tokens.slint";
+import { SettingsCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { Tween } from "../../motion/tween.slint";
+import { Fold } from "../../motion/fold.slint";
+import { OverlapLayer } from "../../motion/overlap.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { Button, ButtonKind } from "../../controls/button.slint";
+import { ErrorView } from "../../../components/model.slint";
+
+export component AErrorPanel inherits Rectangle {
+    in property <ErrorView> error;
+    callback primary();
+    callback secondary();
+    out property <bool> open: root.error.open;
+    out property <bool> details-open;
+    out property <float> progress: tw.t;
+
+    // each error opens with its detail folded, a certificate's unfolded
+    changed error => {
+        if root.error.open {
+            root.details-open = root.error.cert;
+        }
+    }
+
+    public function take-focus() {
+        keys.focus();
+    }
+
+    tw := Tween {
+        on: root.open;
+        in-ms: Shell.sheet-in;
+        out-ms: Motion.dropdown-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+
+    // The exit is seen: drawn until the ground has faded; only the open panel answers.
+    visible: root.open || tw.t > 0;
+
+    TouchArea {
+        enabled: root.open;
+        scroll-event(e) => {
+            root.open ? accept : reject
+        }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if root.open && event.text == Key.Return {
+                root.primary();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // `.st-page`'s ground: the page under it is replaced, not frosted
+    Rectangle {
+        background: Palette.web;
+        opacity: tw.t;
+
+        OverlapLayer {
+            shown: root.open;
+            column := VerticalLayout {
+                x: (parent.width - self.width) / 2;
+                y: max(Space.s6, (parent.height - self.preferred-height) / 3);
+                width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
+                height: self.preferred-height;
+                spacing: Space.s3;
+                Icon {
+                    path: root.error.cert ? Glyph.lock : Glyph.globe;
+                    size: Shell.error-icon;
+                    tint: root.error.cert ? Palette.coral : Palette.mist;
+                }
+                KitText {
+                    role: Role.title;
+                    text: root.error.title;
+                    color: SettingsCss.st-row-title--color;
+                    wrap: word-wrap;
+                }
+                KitText {
+                    role: Role.body;
+                    text: root.error.summary;
+                    color: SettingsCss.st-row-note--color;
+                    wrap: word-wrap;
+                }
+                // the fold's toggle on its own line: the row below keeps at most two buttons
+                if root.error.detail != "": HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        kind: ButtonKind.ghost;
+                        text: root.details-open ? "Hide details" : "Details";
+                        enabled: root.open;
+                        clicked => {
+                            root.details-open = !root.details-open;
+                        }
+                    }
+                }
+                if root.error.detail != "": Fold {
+                    open: root.details-open;
+                    content-height: detail.preferred-height;
+                    detail := KitText {
+                        width: parent.width;
+                        role: Role.st-path-wb-mono;
+                        text: root.error.detail;
+                        color: SettingsCss.st-path-wb-mono--color;
+                        wrap: word-wrap;
+                    }
+                }
+                Rectangle {
+                    height: Space.s3;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: Space.s2;
+                    Button {
+                        kind: ButtonKind.pri;
+                        text: root.error.primary;
+                        enabled: root.open;
+                        clicked => {
+                            root.primary();
+                        }
+                    }
+                    if root.error.secondary != "": Button {
+                        kind: ButtonKind.ghost;
+                        text: root.error.secondary;
+                        enabled: root.open;
+                        clicked => {
+                            root.secondary();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,16 +1,12 @@
-import { Palette, Motion, Space, Fonts, Type, Chrome } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { PressableButton } from "../kit/controls/button.slint";
-import { FindView, GlassTier, GlassKeys, GlassOver } from "model.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { FindView, GlassKeys, GlassOver } from "model.slint";
+import { ACapsuleBar } from "../kit/overlay/a/a-capsule-bar.slint";
 
-// Find in page: a strip at the content's top right, as Chromium places its find bar. Written
-// from scratch: the design repo has no find bar. The surface is Ultra Reactivate's
-// `.ur-o-surface` (radius 14, enters at .95 over 200 ms) on thick glass over content; the
-// buttons are the port's PressableButton. Enter steps to the next match, Shift+Enter to the
-// previous, Escape closes (Chromium find_bar_view.cc, Firefox findbar.js behaviour).
+// Find in page: a capsule at the content's top right, as Chromium places its find bar. Derived
+// from the kit (notes/fidelity/wubble-only.md): the Capsule bar (kit/overlay/a/a-capsule-bar.slint),
+// the search capsule's thin glass and ring, the count in the number role, kit IconButtons.
+// Enter steps to the next match, Shift+Enter to the previous, Escape closes (Chromium
+// find_bar_view.cc, Firefox findbar.js behaviour).
 export component FindBar inherits Rectangle {
     in property <FindView> find;
     callback edited(string);
@@ -18,124 +14,33 @@ export component FindBar inherits Rectangle {
     callback step(bool);
     callback closed();
 
-    property <bool> open: root.find.open;
-
     public function take-focus() {
-        input.focus();
-        input.select-all();
+        bar.take-focus();
     }
 
-    // The query follows the model when it opens (the last search) or the host changes it.
-    property <string> model-query: root.find.query;
-    changed model-query => {
-        if input.text != root.model-query {
-            input.text = root.model-query;
-        }
-    }
-
-    // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
-    // the panel has faded.
-    visible: root.open || panel.opacity > 0;
+    // The exit is seen (Overlap: the old state shares the screen while it leaves).
+    visible: bar.mounted;
     width: Shell.find-width;
-    height: Shell.find-height;
+    height: bar.height;
 
-    panel := GlassPanel {
+    bar := ACapsuleBar {
+        open: root.find.open;
         // the scene draws its glass above the page (GlassPanel `over-layer`)
         key: GlassKeys.find;
-        over-layer: GlassOver.card;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        transform-origin: { x: self.width, y: 0px };
-        transform-scale: root.open ? 1 : Motion.dropdown-from;
-        opacity: root.open ? 1 : 0;
-        animate transform-scale, opacity {
-            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
-            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
+        layer: GlassOver.card;
+        query: root.find.query;
+        counter: root.find.counter;
+        // the host says when a finished search found nothing (`FindBar::none`)
+        none: root.find.none;
+        placeholder: "Find in page";
+        edited(q) => {
+            root.edited(q);
         }
-        TouchArea { }
-
-        HorizontalLayout {
-            padding-left: Space.s3;
-            padding-right: Space.s1;
-            spacing: Space.s1;
-            input := TextInput {
-                accessible-label: "Find in page";
-                horizontal-stretch: 1;
-                vertical-alignment: center;
-                single-line: true;
-                color: Palette.ink;
-                selection-background-color: Shell.selection-fill;
-                selection-foreground-color: Shell.selection-ink;
-                font-family: Fonts.ui;
-                font-size: Type.body.size;
-                edited => {
-                    root.edited(self.text);
-                }
-                key-pressed(event) => {
-                    if event.text == Key.Return {
-                        root.step(!event.modifiers.shift);
-                        return accept;
-                    }
-                    if event.text == Key.Escape {
-                        root.closed();
-                        return accept;
-                    }
-                    return reject;
-                }
-                Text {
-                    text: "Find in page";
-                    visible: input.text == "";
-                    color: Palette.haze;
-                    font-family: Fonts.ui;
-                    font-size: Type.body.size;
-                    vertical-alignment: center;
-                    height: parent.height;
-                }
-            }
-            Text {
-                text: root.find.counter;
-                vertical-alignment: center;
-                color: Palette.haze;
-                font-family: Fonts.ui;
-                font-size: Type.label.size;
-            }
-            PressableButton {
-                padding-x: Space.s1;
-                width: Chrome.controls;
-                label: "Previous match";
-                clicked => {
-                    root.step(false);
-                }
-                Icon {
-                    path: Glyph.chevron-up;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-            PressableButton {
-                padding-x: Space.s1;
-                width: Chrome.controls;
-                label: "Next match";
-                clicked => {
-                    root.step(true);
-                }
-                Icon {
-                    path: Glyph.chevron-down;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-            PressableButton {
-                padding-x: Space.s1;
-                width: Chrome.controls;
-                label: "Close find";
-                clicked => {
-                    root.closed();
-                }
-                Icon {
-                    path: Glyph.close;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
+        step(forward) => {
+            root.step(forward);
+        }
+        closed => {
+            root.closed();
         }
     }
 }

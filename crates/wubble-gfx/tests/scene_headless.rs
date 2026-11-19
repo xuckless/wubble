@@ -590,3 +590,116 @@ fn overlay_glass_frosts_the_page_and_the_window_glass_picks_up_its_light() {
     let (l, d) = (px(&lit, far.0, far.1), px(&dark, far.0, far.1));
     assert!((redness(l) - redness(d)).abs() <= 4, "{l:?} against {d:?}");
 }
+
+/// A renderer on the browser window's still backdrop, nothing else: no glass, no pointer, no
+/// taps, so every frame away from the start page's card is the same.
+fn still(device: &wgpu::Device, queue: &wgpu::Queue) -> wubble_gfx::scene::Renderer {
+    use wubble_gfx::scene::{Backdrop, Renderer, SceneOptions};
+    Renderer::from_device(
+        device.clone(),
+        queue.clone(),
+        SceneOptions {
+            backdrop: Backdrop::Still,
+            ..SceneOptions::default()
+        },
+    )
+    .expect("the scene builds on the test device")
+}
+
+fn frame(
+    r: &mut wubble_gfx::scene::Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (u32, Vec<u8>) {
+    let (w, h, dpr) = VIEW;
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    let tex = r.output().expect("rendered");
+    (
+        tex.width(),
+        wubble_gfx::scene::readback_rgba8(device, queue, tex),
+    )
+}
+
+#[test]
+fn the_start_page_lives_inside_its_card_and_nowhere_else() {
+    use wubble_gfx::scene::{BubbleDraw, Rect, StartCard, StartDraw, StartFx};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    // the page card right of a 120 px sidebar; the bubble in its middle, page-local px
+    let card = (120.0, 20.0, 180.0, 160.0);
+    let (c, r) = ([90.0, 80.0], 40.0);
+    let ext = r * 1.7 + 4.0;
+    let draw = StartDraw {
+        card: StartCard {
+            rect: Rect::new(card.0, card.1, card.2, card.3),
+            radius: 12.0,
+        },
+        bubbles: vec![BubbleDraw {
+            quad: [c[0] - ext, c[1] - ext, ext * 2.0, ext * 2.0],
+            c,
+            r,
+            body: 1.0,
+            alpha: 1.0,
+            has_w: true,
+            w_inv: [1.0, 0.0, 0.0, 1.0],
+            w_scale: r / 51.0,
+            ..Default::default()
+        }],
+        pops: vec![],
+        time: 0.0,
+        pace: 1.0,
+    };
+    let mut plain = still(&device, &queue);
+    let mut live = still(&device, &queue);
+    // a W field: the distance grows to the right (alpha), so the tube crosses the bubble
+    let n = 64u32;
+    let w: Vec<u8> = (0..n * n)
+        .flat_map(|i| [0, 0, 0, ((i % n) * 255 / n) as u8])
+        .collect();
+    live.set_wfield(&w, n);
+    live.start_frame(draw.clone());
+    assert!(
+        live.animating(),
+        "a shown start page keeps the scene running"
+    );
+    let (width, a) = frame(&mut plain, &device, &queue);
+    let (_, b) = frame(&mut live, &device, &queue);
+    let sidebar = (0.0, 0.0, card.0 - 2.0, VIEW.1);
+    assert_eq!(
+        region(&a, width, sidebar),
+        region(&b, width, sidebar),
+        "outside the card the still backdrop is untouched"
+    );
+    let bubble = (card.0 + c[0] - 20.0, card.1 + c[1] - 20.0, 40.0, 40.0);
+    assert_ne!(
+        region(&a, width, bubble),
+        region(&b, width, bubble),
+        "the card shows the start page"
+    );
+    assert!(live.start_texture().is_some());
+    // the liquid lives, poked and stirred: the card moves, the sidebar does not
+    live.start_effect(StartFx::Ripple {
+        x: 40.0,
+        y: 40.0,
+        reach: 260.0,
+        strength: 1.0,
+    });
+    live.start_effect(StartFx::Light { x: 60.0, y: 60.0 });
+    live.start_frame(draw.clone());
+    let (_, b2) = frame(&mut live, &device, &queue);
+    assert_eq!(region(&b, width, sidebar), region(&b2, width, sidebar));
+    let page = (card.0 + 4.0, card.1 + 4.0, card.2 - 8.0, card.3 - 8.0);
+    assert_ne!(region(&b, width, page), region(&b2, width, page));
+    // no start page: the layer goes, and the window settles as if it never was
+    live.start_end();
+    assert!(!live.start_shown() && live.start_texture().is_none());
+    let (_, c2) = frame(&mut live, &device, &queue);
+    let (_, a2) = frame(&mut plain, &device, &queue);
+    assert!(
+        c2 == a2,
+        "without the start page the frame is the plain one"
+    );
+    assert!(!live.animating());
+}

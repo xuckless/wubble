@@ -1,0 +1,184 @@
+// derived: GlassPanel thick card, Shell.scrim (the command bar's scrim), Button pri/glass, IconButton, KitText st-row-title, the Popover's entrance (Motion.dropdown)
+// The peek (wubble-only.md: glance card; Shift+click on a link): the page in a card on thick
+// glass over the page it was opened from, the command bar's scrim under it; a header with its
+// title in the row-title role, a glass "Open in split", a primary "Open as tab" and a close
+// IconButton. The host lays the page out (`Host::glance_rect`) and hands its frame here; pointer
+// events on it go back as the page's own (`pane` = its tab). Esc or a click on the scrim closes
+// it. It grows in as the Popover does (.95, 220 ms ease-out; out 176 ms ease-in-out) and leaves
+// with its view (the latch every sheet uses).
+// derived (notes/fidelity/derived-review.md "Glance card"): the card's 8 px frame round the page,
+// radius lg (page md), the header the host sizes.
+
+import { Palette, Radius, Space, Motion } from "../../gen/tokens.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { ADropTween } from "a-motion.slint";
+import { Button, ButtonKind } from "../../controls/button.slint";
+import { IconButton } from "../../controls/icon-button.slint";
+import { Glyph } from "../../controls/icon.slint";
+import { GlanceView, GlassTier, GlassOver } from "../../../components/model.slint";
+
+export component AGlanceCard inherits Rectangle {
+    in property <int> key: -1;
+    in property <int> layer: GlassOver.card;
+    out property <float> progress: tw.t;
+    out property <bool> glass-present: card.item.present;
+    in property <GlanceView> glance;
+    in property <MouseCursor> cursor;
+    callback closed();
+    callback to-tab();
+    callback to-split();
+    callback pointer-moved(int, length, length);
+    callback pointer-left(int, length, length);
+    callback pointer-pressed(int, PointerEventButton, length, length);
+    callback pointer-released(int, PointerEventButton, length, length);
+    callback pointer-cancelled(int);
+    callback scrolled(int, length, length, length, length);
+
+    property <bool> open: root.glance.open;
+    // What the card shows: the open peek, kept while it leaves.
+    property <GlanceView> held;
+    changed glance => {
+        if root.glance.open {
+            root.held = root.glance;
+        }
+    }
+    property <GlanceView> g: root.open ? root.glance : root.held;
+
+    tw := ADropTween {
+        on: root.open;
+    }
+    visible: root.open || tw.t > 0;
+
+    // the scrim: a click on it closes the peek
+    Rectangle {
+        background: Shell.scrim;
+        opacity: tw.t;
+        TouchArea {
+            enabled: root.open;
+            clicked => {
+                root.closed();
+            }
+            scroll-event(e) => {
+                accept
+            }
+        }
+    }
+
+    card := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: root.key;
+        over-layer: root.layer;
+        present: root.visible && tw.t > 0;
+        x: root.g.x - Space.s2;
+        y: root.g.card-y;
+        width: root.g.width + 2 * Space.s2;
+        height: root.g.y + root.g.height + Space.s2 - root.g.card-y;
+        tier: GlassTier.thick;
+        radius: Radius.lg;
+        over-content: true;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        scale: 1 - (1 - Motion.dropdown-from) * (1 - tw.t);
+        opacity: tw.t;
+        TouchArea {
+            enabled: root.open;
+        }
+
+        HorizontalLayout {
+            x: Space.s2;
+            y: 0px;
+            width: root.g.width;
+            height: root.g.y - root.g.card-y;
+            spacing: Space.s2;
+            alignment: stretch;
+            KitText {
+                horizontal-stretch: 1;
+                role: Role.st-row-title;
+                text: root.g.title;
+                vertical-alignment: center;
+                overflow: elide;
+                color: Palette.ink;
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    kind: ButtonKind.glass;
+                    text: "Open in split";
+                    clicked => {
+                        if root.open {
+                            root.to-split();
+                        }
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    kind: ButtonKind.pri;
+                    text: "Open as tab";
+                    clicked => {
+                        if root.open {
+                            root.to-tab();
+                        }
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon-path: Glyph.close;
+                    label: "Close peek";
+                    clicked => {
+                        if root.open {
+                            root.closed();
+                        }
+                    }
+                }
+            }
+        }
+
+        page := Rectangle {
+            x: Space.s2;
+            y: root.g.y - root.g.card-y;
+            width: root.g.width;
+            height: root.g.height;
+            border-radius: Radius.md;
+            clip: true;
+            background: Palette.web;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.g.frame;
+                source-clip-width: root.g.clip-width;
+                source-clip-height: root.g.clip-height;
+                image-fit: fill;
+            }
+            TouchArea {
+                enabled: root.open;
+                mouse-cursor: root.cursor;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down {
+                        root.pointer-pressed(root.g.id, event.button, self.mouse-x, self.mouse-y);
+                    } else if event.kind == PointerEventKind.up {
+                        root.pointer-released(root.g.id, event.button, self.mouse-x, self.mouse-y);
+                    } else if event.kind == PointerEventKind.move {
+                        root.pointer-moved(root.g.id, self.mouse-x, self.mouse-y);
+                    } else {
+                        root.pointer-cancelled(root.g.id);
+                    }
+                }
+                scroll-event(event) => {
+                    root.scrolled(root.g.id, self.mouse-x, self.mouse-y, event.delta-x, event.delta-y);
+                    accept
+                }
+                changed has-hover => {
+                    if !self.has-hover {
+                        root.pointer-left(root.g.id, self.mouse-x, self.mouse-y);
+                    }
+                }
+            }
+        }
+    }
+}

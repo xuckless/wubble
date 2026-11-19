@@ -1,0 +1,97 @@
+// derived: MenuRow, MenuHighlight (controls/menu.slint), APopover (a-popover.slint), tp-menu padding and width
+// A menu's rows without the menu's machine (wubble-only.md: the autofill menu): the touch
+// kit's rows (`.tp-mrow`, 36 high, entering behind the body) and its one highlight gliding to
+// the hovered row, appearing in place when it arrives while no row was lit (`jump`) and fading
+// when the pointer leaves the list. Pointer only: the list never takes the keyboard (it shows
+// over a page's form, whose keys stay the page's). `picked(i)` is the intent.
+
+import { TouchCss } from "../../gen/css.slint";
+import { MenuRow, MenuHighlight } from "../../controls/menu.slint";
+import { APopover } from "a-popover.slint";
+
+export component AMenuList inherits Rectangle {
+    in property <bool> shown;
+    in property <[string]> rows;
+    in property <string> icon;
+    in property <string> label: "Menu";
+    callback picked(int);
+    // the hovered row (-1 none)
+    out property <int> hot: -1;
+    property <bool> jump;
+    height: list.preferred-height;
+    changed shown => {
+        root.hot = -1;
+    }
+    accessible-role: AccessibleRole.list;
+    accessible-label: root.label;
+    area := TouchArea {
+        enabled: root.shown;
+        changed has-hover => {
+            if !self.has-hover {
+                root.hot = -1;
+            }
+        }
+        MenuHighlight {
+            on: root.hot >= 0;
+            jump: root.jump;
+            panel-width: root.width;
+            top: TouchCss.tp-menu--padding + root.hot * TouchCss.wb-tp-mrow--height;
+        }
+        list := VerticalLayout {
+            padding: TouchCss.tp-menu--padding;
+            for row[i] in root.rows: MenuRow {
+                shown: root.shown;
+                index: i;
+                icon: root.icon;
+                label: row;
+                accessible-role: AccessibleRole.list-item;
+                accessible-label: row;
+                accessible-item-index: i;
+                accessible-item-count: root.rows.length;
+                accessible-action-default => {
+                    root.picked(i);
+                }
+                TouchArea {
+                    enabled: root.shown;
+                    changed has-hover => {
+                        if self.has-hover {
+                            root.jump = root.hot < 0;
+                            root.hot = i;
+                        }
+                    }
+                    clicked => {
+                        root.picked(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The rows on the Popover: the touch menu's width (236), growing from its top left.
+export component AMenuPopover inherits Rectangle {
+    in property <bool> open;
+    in property <int> key: -1;
+    in property <[string]> rows;
+    in property <string> icon;
+    in property <string> label: "Menu";
+    callback picked(int);
+    out property <bool> mounted: pop.mounted;
+    out property <bool> glass-present: pop.glass-present;
+    width: TouchCss.tp-menu--width;
+    height: list.height;
+    visible: pop.mounted;
+    pop := APopover {
+        open: root.open;
+        key: root.key;
+        list := AMenuList {
+            shown: root.open;
+            rows: root.rows;
+            icon: root.icon;
+            label: root.label;
+            picked(i) => {
+                root.picked(i);
+            }
+        }
+    }
+}

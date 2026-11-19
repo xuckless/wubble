@@ -1,18 +1,12 @@
-import { Palette, Motion, Fonts, Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier, GlassKeys, GlassOver } from "model.slint";
-import { IconButton } from "nav-buttons.slint";
-import { Glyph } from "../kit/controls/icon.slint";
-import { TextButton } from "settings.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { GlassKeys, GlassOver } from "model.slint";
+import { AToast } from "../kit/overlay/a/a-toast.slint";
 
 // A brief notice: the zoom level after Ctrl +/-/0, "Press Esc to exit full screen". One
-// component for both. Written from scratch: the design repo has no toast. Look and motion are
-// Ultra Reactivate's `.ur-o-toast` (src/ultra-reactivate/overlays.css, the owner's library):
-// 46 high, radius 14, rising 14 px from .95 on a 400 ms spring; on thick glass over content.
-// The host bumps `serial` with each notice; it shows for Shell.toast-shown, a later one restarts
-// the time. Pointer events pass through to the page.
+// component for both. Derived from the kit (notes/fidelity/wubble-only.md; the design has no
+// toast): the Toast (kit/overlay/a/a-toast.slint), a thick glass capsule arriving and leaving by
+// Overlap. The host bumps `serial` with each notice; it shows for Shell.toast-shown, a later one
+// restarts the time. Pointer events pass through to the page.
 //
 // With an `action` (SponsorBlock's "Skipped sponsor: Undo", its one-time "Turn on" question) the
 // notice carries a button, stays a while longer, and takes the pointer over itself only. A
@@ -48,76 +42,27 @@ export component Toast inherits Rectangle {
         }
     }
 
-    // Sized to the text, up to the widest a notice grows (and the room it is given): a longer
-    // text wraps onto more lines and the glass grows down to hold them.
+    // Sized to the text, up to the widest a notice grows (and the room it is given).
     in property <length> widest: Shell.toast-max-width;
-    width: min(root.widest, row.preferred-width);
-    height: max(Shell.toast-height, row.preferred-height);
+    width: body.width;
+    height: body.height;
 
-    pill := GlassPanel {
+    body := AToast {
+        shown: root.shown;
+        text: root.text;
+        action: root.action;
+        sticky: root.sticky;
+        widest: root.widest;
         // the scene draws its glass above the page (GlassPanel `over-layer`)
         key: GlassKeys.toast;
-        over-layer: GlassOver.card;
-        tier: GlassTier.thick;
-        radius: Shell.toast-radius;
-        over-content: true;
-        y: root.shown ? 0px : Shell.toast-rise;
-        transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: root.shown ? 1 : Motion.dropdown-from;
-        opacity: root.shown ? 1 : 0;
-        animate y, transform-scale {
-            duration: Calm.ms(root.shown ? Shell.toast-in : Shell.toast-out);
-            easing: root.shown ? Motion.ease-spring : Motion.ease-in;
+        layer: GlassOver.card;
+        acted => {
+            root.shown = false;
+            root.acted();
         }
-        animate opacity {
-            duration: Calm.ms(root.shown ? Motion.dropdown-in : Shell.toast-out);
-            easing: root.shown ? Motion.ease-out : Motion.ease-in;
-        }
-        // Only a notice with a button takes the pointer.
-        if root.shown && root.action != "": TouchArea { }
-        row := HorizontalLayout {
-            // a wrapped text's lines clear the glass's top and bottom
-            padding-top: Space.s3;
-            padding-bottom: Space.s3;
-            padding-left: Shell.toast-pad;
-            padding-right: root.action == "" ? Shell.toast-pad : Space.s2;
-            spacing: Space.s2;
-            alignment: center;
-            // One label per text, made anew for each: Slint 1.19 drops its text measurements
-            // on a new surface or scale factor (`TextLayoutCache::clear_all`, which drops their
-            // dependency trackers without marking what depended on them dirty), and a layout
-            // measured before that no longer hears of its text changing. The toast's row was measured empty at start-up, so every
-            // later notice kept the empty pill and its text ran out of it. A new label is a new
-            // measurement the row depends on.
-            for text in [root.text]: label := Text {
-                text: text;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                wrap: word-wrap;
-                color: Palette.ink;
-                font-family: Fonts.ui;
-                font-size: Shell.toast-font;
-                font-weight: Shell.toast-weight;
-            }
-            if root.action != "": TextButton {
-                y: (parent.height - self.height) / 2;
-                text: root.action;
-                enabled: root.shown;
-                clicked => {
-                    root.shown = false;
-                    root.acted();
-                }
-            }
-            if root.action != "" && root.sticky: IconButton {
-                y: (parent.height - self.height) / 2;
-                icon-path: Glyph.close;
-                label: "Close";
-                enabled: root.shown;
-                clicked => {
-                    root.shown = false;
-                    root.closed();
-                }
-            }
+        closed => {
+            root.shown = false;
+            root.closed();
         }
     }
 }

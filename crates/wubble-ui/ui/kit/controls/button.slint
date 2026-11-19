@@ -64,13 +64,13 @@ export component PressableButton inherits Rectangle {
     }
 
     // a transition between two colours, as CSS interpolates them (premultiplied: to or from
-    // clear, only the alpha runs)
+    // clear, only the alpha runs; `transparentize` scales the 0..1 alpha: `.alpha` is 0..255)
     pure function mix(a: color, b: color, t: float) -> color {
         if a.alpha == 0 {
-            return b.with-alpha(b.alpha * t);
+            return b.transparentize(1 - t);
         }
         if b.alpha == 0 {
-            return a.with-alpha(a.alpha * (1 - t));
+            return a.transparentize(t);
         }
         return b.mix(a, t);
     }

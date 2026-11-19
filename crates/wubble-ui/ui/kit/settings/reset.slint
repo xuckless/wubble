@@ -1,0 +1,92 @@
+// design: pages/settings.css:50-54, pages/settings.tsx:579 @598f814
+// Reset (`.st-reset`): a quiet text button, 28 high, 0 11 padding, radius 9, 13 px at 500 in
+// mist; under the pointer white .07 and ink (.15 s). It enters like a popover while `on`: from
+// .95, clear and blurred 4 px into place over .24 s ease-out, and leaves 20 % faster (.19 s
+// ease-in-out); while off it takes no pointer. One made already on with `enter` plays the
+// entrance as it appears. Pressed by `.wb-press`. wubble's quiet text
+// buttons elsewhere (a toast's action, Replace, Cancel) are the same button, always on.
+
+import { SettingsCss, BrowserCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+import { Calm } from "../motion/calm.slint";
+import { Tween } from "../motion/tween.slint";
+import { Press } from "../motion/press.slint";
+import { OverlapLook } from "../motion/overlap.slint";
+
+export component ResetButton inherits Rectangle {
+    in property <string> text: "Reset";
+    in property <bool> on: true;
+    in property <bool> enabled: true;
+    // made already on (a row that just changed): play the entrance once it is shown
+    in property <bool> enter;
+    callback clicked();
+    out property <bool> hovered: ta.has-hover;
+
+    property <bool> live: root.on && root.enabled;
+    height: SettingsCss.wb-st-reset--height;
+    min-width: label.preferred-width + SettingsCss.wb-st-reset--padding-left + SettingsCss.wb-st-reset--padding-right;
+    preferred-width: self.min-width;
+    // as wide as its label, wherever it is laid out
+    horizontal-stretch: 0;
+    // disabled: the house's disabled look (`.wb-ib:disabled`), the design has none for it
+    opacity: root.enabled ? 1 : BrowserCss.wb-ib-disabled--opacity;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.text;
+    accessible-enabled: root.live;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    property <bool> arrived: !root.enter;
+    init => {
+        // the curve's first value is the hidden one, so the arrival animates
+        let start = show.t;
+        root.arrived = start >= 0;
+    }
+    show := Tween {
+        on: root.on && root.arrived;
+        in-ms: SettingsCss.wb-st-reset-on--transition-opacity-duration;
+        out-ms: SettingsCss.wb-st-reset--transition-opacity-duration;
+        in-easing: SettingsCss.wb-st-reset-on--transition-opacity-easing;
+        out-easing: SettingsCss.wb-st-reset--transition-opacity-easing;
+    }
+    press := Press {
+        pressed: ta.pressed;
+    }
+    look := OverlapLook {
+        e: show.t;
+        entering: root.on;
+        shift-in: 0px;
+        shift-out: 0px;
+        scale-from: SettingsCss.wb-st-reset--scale;
+        blur-from: SettingsCss.wb-st-reset--filter-blur;
+        visible: show.t > 0;
+        Rectangle {
+            border-radius: SettingsCss.wb-st-reset--border-radius;
+            background: ta.has-hover && root.live ? SettingsCss.st-reset-hover--background : SettingsCss.wb-st-reset--background;
+            animate background {
+                duration: Calm.ms(SettingsCss.wb-st-reset-on--transition-background-color-duration);
+            }
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            transform-scale: press.scale;
+            label := KitText {
+                role: Role.wb-st-reset;
+                text: root.text;
+                color: ta.has-hover && root.live ? SettingsCss.st-reset-hover--color : SettingsCss.wb-st-reset--color;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                animate color {
+                    duration: Calm.ms(SettingsCss.wb-st-reset-on--transition-color-duration);
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.live;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

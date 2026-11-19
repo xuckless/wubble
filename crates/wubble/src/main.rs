@@ -50,6 +50,7 @@ mod shot;
 mod shot_io;
 mod split_smoke;
 mod sponsor_net;
+mod start_smoke;
 mod suggest_fx;
 mod surface;
 mod tabs_smoke;
@@ -280,6 +281,12 @@ fn main() -> ExitCode {
                 Smoke::Parity => Mode::Parity,
                 Smoke::Block => Mode::Block,
                 Smoke::Settings => Mode::Settings,
+                Smoke::Start { dir } => {
+                    if let Some(dir) = dir {
+                        shot::request_dir(dir);
+                    }
+                    Mode::Start
+                }
                 Smoke::Pages => Mode::Pages,
                 Smoke::Autofill => Mode::Autofill,
                 Smoke::Media => Mode::Media,
@@ -538,6 +545,8 @@ struct Outcome {
     windows_passed: bool,
     /// `--smoke settings` reached its end.
     settings_passed: bool,
+    /// `--smoke start` reached its end.
+    start_passed: bool,
     pages_passed: bool,
     gallery_passed: bool,
     /// `--smoke autofill` reached its end.
@@ -584,6 +593,8 @@ enum Mode {
     Block,
     /// `--smoke settings`.
     Settings,
+    /// `--smoke start`.
+    Start,
     /// `--smoke pages`.
     Pages,
     /// `--smoke gallery` (on the pages smoke's seeded profile).
@@ -905,6 +916,19 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
             command(Cmd::SwitchSpace(s));
         }
     });
+    // The start page (host/start.rs): its stage's pointer and the front's intents.
+    {
+        use crate::host::start::StagePointer;
+        let bridge = window.global::<wubble_ui::StartBridge>();
+        let pointer = move |p| with_host_in(win, |host| host.start_pointer(p));
+        bridge.on_stage_down(move |x, y| pointer(StagePointer::Down(x.into(), y.into())));
+        bridge.on_stage_move(move |x, y| pointer(StagePointer::Move(x.into(), y.into())));
+        bridge.on_stage_up(move || pointer(StagePointer::Up));
+        bridge.on_stage_leave(move || pointer(StagePointer::Leave));
+        bridge.on_search_clicked(move |_, _| with_host_in(win, |host| host.start_search()));
+        // a tile: its site in the start tab
+        bridge.on_site_activated(move |url| with_host_in(win, |host| host.page_opened(&url)));
+    }
     let weak = window.as_weak();
     window.on_new_tab_requested(move || {
         if let Some(window) = weak.upgrade() {
@@ -1216,6 +1240,7 @@ fn run(
         block_smoke: None,
         split_smoke: None,
         settings_smoke: None,
+        start_smoke: None,
         pages_smoke: None,
         gallery_smoke: None,
         autofill_smoke: None,
@@ -1307,6 +1332,13 @@ fn run(
             Some(bundled()),
             Checks {
                 settings_smoke: Some(settings_smoke::SettingsSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Start => (
+            Some(bundled()),
+            Checks {
+                start_smoke: Some(start_smoke::StartSmoke::default()),
                 ..none
             },
         ),
@@ -1635,6 +1667,7 @@ fn run(
         parity_passed: host.parity_passed,
         windows_passed: host.windows_passed,
         settings_passed: host.settings_passed,
+        start_passed: host.start_passed,
         pages_passed: host.pages_passed,
         gallery_passed: host.gallery_passed,
         session_passed: host.session_passed,
