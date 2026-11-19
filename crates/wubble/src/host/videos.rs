@@ -467,8 +467,15 @@ impl Host {
         for effect in effects {
             match effect {
                 VideoEffect::Page(cmd) => {
+                    // As the user's own action: the controls' clicks and the keys are, and a
+                    // page lets only such a call start a video with its sound on (Chromium's
+                    // autoplay policy); `View::eval` is none, so play after unmute did nothing.
+                    let params = serde_json::json!({
+                        "expression": page_script(cmd),
+                        "userGesture": true,
+                    });
                     if let Some(view) = self.tab_view(tab) {
-                        view.eval(&page_script(cmd));
+                        view.cdp("Runtime.evaluate", &params);
                     }
                 }
                 VideoEffect::RememberRate(rate) => {
