@@ -1,0 +1,38 @@
+// The squash token (`wb-sq-a` / `wb-sq-b` in core/wubble.css, `SQUASH` / `squashAt` in
+// pages/touch-kit.tsx, @source touch-squash; the owner's design repo): 1.30×0.78 → 0.93×1.07 →
+// 1.03×0.98 over 500 ms, each stretch eased out. `wubble_core::motion::SQUASH_KEYS` is the source
+// of truth for the keys (a test checks this table equals it); the Wobble pattern (wobble.slint)
+// runs it: one tween runs a phase 0 → 1 and the keys are interpolated from it; each flip of `hit`
+// plays it once more. Chrome buttons release at a third of its strength (touch.tsx Buttons: "so
+// chrome only bounces once"); the check box squashes at full strength as it fills.
+// Not a wrapper: callers multiply `sx` / `sy` into their own transform, so the press and the
+// squash never fight over one property. Cut under reduced motion.
+
+import { Calm } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+
+export component Squash {
+    // Flip to play the squash.
+    in property <bool> hit: false;
+    // 1 = the token; 1/3 for chrome buttons.
+    in property <float> amp: 1;
+    out property <float> sx: Calm.reduced ? 1 : 1 + (root.kx[root.seg] + (root.kx[root.seg + 1] - root.kx[root.seg]) * root.e - 1) * root.amp;
+    out property <float> sy: Calm.reduced ? 1 : 1 + (root.ky[root.seg] + (root.ky[root.seg + 1] - root.ky[root.seg]) * root.e - 1) * root.amp;
+
+    width: 0px;
+    height: 0px;
+    property <float> phase: root.hit ? 1 : 0;
+    animate phase {
+        duration: Shell.squash-ms;
+        easing: linear;
+    }
+    // How far along the keys: 1 (at rest) until the first flip.
+    property <float> t: root.hit ? root.phase : 1 - root.phase;
+    // squash-keys: t, sx, sy (motion::SQUASH_KEYS)
+    property <[float]> kt: [0, 0.28, 0.58, 0.8, 1];
+    property <[float]> kx: [1, 1.3, 0.93, 1.03, 1];
+    property <[float]> ky: [1, 0.78, 1.07, 0.98, 1];
+    property <int> seg: root.t > root.kt[3] ? 3 : root.t > root.kt[2] ? 2 : root.t > root.kt[1] ? 1 : 0;
+    property <float> u: (root.t - root.kt[root.seg]) / (root.kt[root.seg + 1] - root.kt[root.seg]);
+    property <float> e: 1 - (1 - root.u) * (1 - root.u);
+}

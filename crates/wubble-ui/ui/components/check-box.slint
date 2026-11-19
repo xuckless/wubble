@@ -1,11 +1,12 @@
 import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
+import { Squash } from "squash.slint";
 
 // A check box and its label, one target. Mint when checked, the tick drawn over it. Its motion
 // is the design's checkbox (pages/touch.tsx `Checks`, touch.css `.tp-ck`, the owner's design
 // repo): the fill is a circle growing out of the box's centre (240 ms ease-out; out 190 ms
 // in-out), the tick lands 70 ms behind it and leaves first, and pressing squeezes the box
-// (1.12 × 0.9 over 120 ms, back over 200 ms).
+// (1.12 × 0.9 over 120 ms, back over 200 ms); the box squashes as it fills (the squash token).
 export component CheckBox inherits Rectangle {
     in property <string> text;
     in-out property <bool> checked;
@@ -15,6 +16,12 @@ export component CheckBox inherits Rectangle {
     ta := TouchArea {
         clicked => {
             root.checked = !root.checked;
+        }
+    }
+    sq := Squash {}
+    changed checked => {
+        if root.checked {
+            sq.hit = !sq.hit;
         }
     }
     Rectangle {
@@ -30,12 +37,15 @@ export component CheckBox inherits Rectangle {
         }
         clip: true;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale-x: ta.pressed ? 1.12 : 1;
-        transform-scale-y: ta.pressed ? 0.9 : 1;
-        animate transform-scale-x, transform-scale-y {
+        // pressing squeezes; filling squashes (the squash token, squash.slint)
+        property <float> px: ta.pressed ? 1.12 : 1;
+        property <float> py: ta.pressed ? 0.9 : 1;
+        animate px, py {
             duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
             easing: Motion.easeOut;
         }
+        transform-scale-x: self.px * sq.sx;
+        transform-scale-y: self.py * sq.sy;
         // clip-path: circle(0 → 75%) at the centre
         Rectangle {
             property <length> d: root.checked ? parent.width * 1.5 : 0px;

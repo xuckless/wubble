@@ -5,15 +5,18 @@
 // and the registry frees the slots nobody answered for (the GlassLayer sweep, glass.rs).
 
 export struct ControlView {
-    // Along the travel, px of the design's control (the Rust machine's units).
+    // Along the travel, px of the design's control (the Rust machine's units). The segmented
+    // control's indicator: its left.
     x: float,
+    // The segmented control's indicator width, px (0 for the others).
+    w: float,
     scale-x: float,
     scale-y: float,
     // Transform origin across the knob, 0 (left) .. 1 (right).
     origin: float,
     // The toggle's accent bloom, 0..1.
     fill: float,
-    // The slider's value shown, 0..100.
+    // The slider's value shown, 0..100; the segment chosen.
     value: float,
     held: bool,
 }
@@ -21,16 +24,20 @@ export struct ControlView {
 export global Controls {
     in property <[ControlView]> views;
     in property <int> generation;
-    // kind: 0 toggle (value 0/1), 1 slider (value 0..100). Returns the slot.
+    // kind: 0 toggle (value 0/1), 1 slider (value 0..100), 2 segmented (value the segment).
+    // Returns the slot.
     callback acquire(int, float) -> int;
     // The setting changed from outside: the control springs to it.
     callback set-value(int, float);
     // The slider's travel, px.
     callback resize(int, length);
+    // The segmented control's segment `i` laid out at (left, width), px.
+    callback segment(int, int, length, length);
     // Pointer along the travel, px; `t` the time base the toggle measures its fling with.
     callback press(int, length);
     callback drag(int, length);
-    // The value it lands on (toggle 0/1, slider 0..100), or -1 when it was not held.
+    // The value it lands on (toggle 0/1, slider 0..100, segment index), or -1 when it was not
+    // held (or, segmented, landed on no segment).
     callback release(int) -> float;
     callback alive(int);
 

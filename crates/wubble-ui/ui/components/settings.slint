@@ -25,13 +25,38 @@ import { IconButton } from "nav-buttons.slint";
 import { Raised, Chip } from "raised.slint";
 import { Toggle } from "controls/toggle.slint";
 import { Slider } from "controls/slider.slint";
+import { Controls, ControlView } from "controls/registry.slint";
+import { Squash } from "squash.slint";
 
 // .tp-seg in .st-seg: a chip with one segment per word, each as wide as its label; the chosen
-// one is the ink tile with the dark label.
+// one is the ink indicator with the dark label. The indicator is the design's liquid one
+// (`pages/touch-kit.tsx` Segmented, @source touch-space): it follows on the follow spring,
+// stretches along its travel, can be grabbed and flung, and the dark labels are a second layer
+// clipped to it, so the label turns dark exactly where the indicator covers it. Physics:
+// `wubble_core::controls::Segmented` through `Controls` (kind 2).
 export component Segmented inherits Rectangle {
     in property <[string]> labels;
     in property <int> selected: -1;
     callback chosen(int);
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <int> gen: Controls.generation;
+    property <bool> shown: root.selected >= 0 && root.v.w > 0;
+    // the indicator's rectangle (already stretched about its trailing side by the machine)
+    property <length> ind-h: Shell.seg-height * root.v.scale-y;
+    property <length> ind-y: Shell.seg-pad + (Shell.seg-height - root.ind-h) / 2;
+    property <length> ind-r: Shell.seg-inner-radius * min(root.v.scale-x, root.v.scale-y);
+
+    init => {
+        root.slot = Controls.acquire(2, max(0, root.selected));
+    }
+    changed selected => {
+        Controls.set-value(root.slot, max(0, root.selected));
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
 
     width: row.preferred-width;
     height: Shell.seg-height + 2 * Shell.seg-pad;
@@ -39,38 +64,41 @@ export component Segmented inherits Rectangle {
     Chip {
         radius: Shell.seg-radius;
     }
+    if root.shown: Rectangle {
+        x: root.v.x * Shell.px;
+        y: root.ind-y;
+        width: root.v.w * Shell.px;
+        height: root.ind-h;
+        border-radius: root.ind-r;
+        background: Palette.ink;
+        drop-shadow-blur: Shell.seg-shadow-blur;
+        drop-shadow-offset-y: Shell.seg-shadow-y;
+        drop-shadow-color: Shell.seg-shadow;
+    }
     row := HorizontalLayout {
         padding: Shell.seg-pad;
-        for label[i] in root.labels: Rectangle {
+        for label[i] in root.labels: seg := Rectangle {
+            property <bool> hot: ta.has-hover && ta.mouse-x >= self.x && ta.mouse-x < self.x + self.width;
+            init => {
+                Controls.segment(root.slot, i, self.x, self.width);
+            }
+            changed x => {
+                Controls.segment(root.slot, i, self.x, self.width);
+            }
+            changed width => {
+                Controls.segment(root.slot, i, self.x, self.width);
+            }
             accessible-role: button;
             accessible-label: label;
             accessible-action-default => {
                 root.chosen(i);
-            }
-            Rectangle {
-                border-radius: Shell.seg-inner-radius;
-                background: Palette.ink;
-                drop-shadow-blur: Shell.seg-shadow-blur;
-                drop-shadow-offset-y: Shell.seg-shadow-y;
-                drop-shadow-color: Shell.seg-shadow;
-                opacity: i == root.selected ? 1 : 0;
-                animate opacity {
-                    duration: Shell.control-ms;
-                    easing: Motion.easeOut;
-                }
-            }
-            ta := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.chosen(i);
-                }
             }
             HorizontalLayout {
                 padding-left: Shell.seg-label-pad;
                 padding-right: Shell.seg-label-pad;
                 Text {
                     text: label;
-                    color: i == root.selected ? Palette.abyss : ta.has-hover ? Palette.ink : Palette.mist;
+                    color: seg.hot ? Palette.ink : Palette.mist;
                     font-family: Fonts.ui;
                     font-size: Shell.seg-label;
                     font-weight: 500;
@@ -81,6 +109,54 @@ export component Segmented inherits Rectangle {
                         easing: Motion.easeOut;
                     }
                 }
+            }
+        }
+    }
+    // the dark labels, clipped to the indicator (the design's `.tp-seg-top` clip-path)
+    if root.shown: Rectangle {
+        x: root.v.x * Shell.px;
+        y: root.ind-y;
+        width: root.v.w * Shell.px;
+        height: root.ind-h;
+        border-radius: root.ind-r;
+        clip: true;
+        HorizontalLayout {
+            x: -parent.x;
+            y: -parent.y;
+            width: root.width;
+            height: root.height;
+            padding: Shell.seg-pad;
+            for label in root.labels: HorizontalLayout {
+                padding-left: Shell.seg-label-pad;
+                padding-right: Shell.seg-label-pad;
+                Text {
+                    text: label;
+                    color: Palette.abyss;
+                    font-family: Fonts.ui;
+                    font-size: Shell.seg-label;
+                    font-weight: 500;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(e) => {
+            if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                Controls.press(root.slot, self.mouse-x);
+            }
+            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                let landed = Controls.release(root.slot);
+                if landed >= 0 && round(landed) != root.selected {
+                    root.chosen(round(landed));
+                }
+            }
+        }
+        moved => {
+            if self.pressed {
+                Controls.drag(root.slot, self.mouse-x);
             }
         }
     }
@@ -250,10 +326,21 @@ export component TextButton inherits Rectangle {
         easing: Motion.easeOut;
     }
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale: ta.pressed ? Motion.pressScale : 1;
-    animate transform-scale {
+    property <float> press: ta.pressed ? Motion.pressScale : 1;
+    animate press {
         duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
         easing: Motion.easeOut;
+    }
+    transform-scale-x: root.press * sq.sx;
+    transform-scale-y: root.press * sq.sy;
+    sq := Squash {
+        amp: Shell.squash-chrome;
+    }
+    property <bool> down: ta.pressed;
+    changed down => {
+        if !self.down {
+            sq.hit = !sq.hit;
+        }
     }
     accessible-role: button;
     accessible-label: root.text;

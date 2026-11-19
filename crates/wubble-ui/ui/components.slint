@@ -23,6 +23,7 @@ import { Palette, Spaces, Radius, Spacing, Chrome, Glass, GlassTierStyle, Fonts,
 import { GlassTier, GlassItem, GlassLayer, TabItem } from "components/model.slint";
 import { Icon, IconPaths } from "components/icon.slint";
 import { Shell } from "app-tokens.slint";
+import { Squash } from "components/squash.slint"; // wubble change
 
 // @source slint-space-icons
 // The three Space icons: 24×24 stroke icons, 1.7 stroke, round caps and joins. The same path
@@ -189,10 +190,22 @@ export component PressableButton inherits Rectangle {
     animate background { duration: 150ms; easing: Motion.easeOut; }
 
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale: touch.pressed ? Motion.pressScale : 1;
-    animate transform-scale {
+    // wubble change: the release squash (wubble.css `wb-sq` at a third, squash.slint) times the
+    // press, on one transform.
+    property <float> press: touch.pressed ? Motion.pressScale : 1;
+    animate press {
         duration: touch.pressed ? Motion.pressMs : Motion.pressRelease;
         easing: Motion.easeOut;
+    }
+    transform-scale-x: root.press * sq.sx;
+    transform-scale-y: root.press * sq.sy;
+    sq := Squash {
+        amp: Shell.squash-chrome;
+    }
+    changed pressed => {
+        if !self.pressed {
+            sq.hit = !sq.hit;
+        }
     }
 
     touch := TouchArea {
