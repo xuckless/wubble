@@ -178,15 +178,6 @@ components/settings.slint	token	Motion	15
 components/settings.slint	token	Palette	37
 components/settings.slint	token	Radius	5
 components/settings.slint	token	Type	6
-components/shot-overlay.slint	font	font-family	2
-components/shot-overlay.slint	font	font-size	2
-components/shot-overlay.slint	paint	background	5
-components/shot-overlay.slint	paint	border-color	1
-components/shot-overlay.slint	paint	border-width	1
-components/shot-overlay.slint	text	Text	2
-components/shot-overlay.slint	token	Fonts	2
-components/shot-overlay.slint	token	Palette	4
-components/shot-overlay.slint	token	Type	2
 components/sidebar.slint	animate	animate	1
 components/sidebar.slint	font	font-family	1
 components/sidebar.slint	font	font-size	1
