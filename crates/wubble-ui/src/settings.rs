@@ -7,7 +7,7 @@ use wubble_core::omnibox::ENGINES;
 use wubble_core::pages::{Control, Entry, SectionView, SettingRow};
 use wubble_core::settings::{Section, SettingKind};
 
-use crate::{BindingItem, EntryItem, SettingControl, SettingItem};
+use crate::{BindingItem, EntryItem, MenuEntry, SettingControl, SettingItem};
 
 fn strings<I: IntoIterator<Item = S>, S: Into<SharedString>>(items: I) -> ModelRc<SharedString> {
     ModelRc::from(std::rc::Rc::new(VecModel::from(
@@ -26,12 +26,6 @@ pub fn section_title(section: Section) -> &'static str {
         Section::Performance => "Performance",
         Section::Hidden => "",
     }
-}
-
-/// The ± step of a stepper over `min..=max`: about a hundredth of the range, a power of ten.
-pub fn stepper_step(min: u32, max: u32) -> u32 {
-    let digits = (max - min).max(1).ilog10();
-    10u32.pow(digits.saturating_sub(1))
 }
 
 /// What a segment shows for a stored word: an engine's name, or the word capitalised.
@@ -78,18 +72,33 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         }
         Control::Segmented(words) => {
             item.control = SettingControl::Segmented;
+            let labels: Vec<String> = words.iter().map(|w| word_label(row.kind, w)).collect();
             item.selected = words
                 .iter()
                 .position(|w| *w == row.value)
                 .map_or(-1, |i| i as i32);
-            item.labels = strings(words.iter().map(|w| word_label(row.kind, w)));
+            // The engine is picked from a Select, as the design's. None chosen yet (the stored
+            // default, "ask on first run") keeps `selected` at -1: the Select shows the first
+            // engine's label, and picking any engine, the first too, stores it.
+            if row.kind == SettingKind::SearchEngine {
+                item.options = ModelRc::from(std::rc::Rc::new(VecModel::from(
+                    labels
+                        .iter()
+                        .map(|l| MenuEntry {
+                            label: l.as_str().into(),
+                            enabled: true,
+                            ..Default::default()
+                        })
+                        .collect::<Vec<_>>(),
+                )));
+            }
+            item.labels = strings(labels);
             item.words = strings(words.iter().copied());
         }
         Control::Stepper { min, max } => {
             item.control = SettingControl::Stepper;
             item.number = row.value.parse().unwrap_or(min as f32);
             (item.min, item.max) = (min as f32, max as f32);
-            item.step = stepper_step(min, max) as f32;
         }
         Control::Slider { min, max } => {
             item.control = SettingControl::Slider;
@@ -128,6 +137,11 @@ pub fn binding_items(rows: &[BindingRow]) -> Vec<BindingItem> {
             action: r.action.id().into(),
             label: r.action.label().into(),
             chord: r.chord.map(|c| c.to_string()).unwrap_or_default().into(),
+            keys: strings(
+                r.chord
+                    .map(|c| c.to_string().split('+').map(str::to_owned).collect())
+                    .unwrap_or_else(Vec::new),
+            ),
             changed: r.overridden,
         })
         .collect()
@@ -138,14 +152,6 @@ mod tests {
     use super::*;
     use slint::Model;
     use std::collections::HashMap;
-
-    #[test]
-    fn steps_are_about_a_hundredth_of_the_range() {
-        assert_eq!(stepper_step(25, 500), 10);
-        assert_eq!(stepper_step(10, 86_400), 1000);
-        assert_eq!(stepper_step(0, 9), 1);
-        assert_eq!(stepper_step(5, 5), 1);
-    }
 
     #[test]
     fn every_row_of_the_table_maps_to_its_control() {
@@ -179,8 +185,44 @@ mod tests {
                 .find(|r| r.key == "search.engine")
                 .unwrap(),
         );
-        assert_eq!(engine.selected, -1, "no engine chosen yet");
+        assert_eq!(
+            engine.selected, -1,
+            "no engine chosen yet: none is selected, so picking the first stores it"
+        );
         let labels: Vec<String> = engine.labels.iter().map(|s| s.to_string()).collect();
         assert_eq!(labels, ["Google", "DuckDuckGo"]);
+        let options: Vec<String> = engine.options.iter().map(|o| o.label.to_string()).collect();
+        assert_eq!(options, labels, "the engine's Select rows");
+        let archive = items
+            .iter()
+            .find(|i| i.control == SettingControl::Segmented && i.key != "search.engine")
+            .expect("a segmented row");
+        assert_eq!(
+            archive.options.row_count(),
+            0,
+            "segmented rows have no Select"
+        );
+    }
+
+    #[test]
+    fn a_stored_engine_is_selected() {
+        let stored = HashMap::from([("search.engine".to_string(), "duckduckgo".to_string())]);
+        let page = wubble_core::pages::settings_page(&stored);
+        let engine = page
+            .iter()
+            .flat_map(|s| &s.rows)
+            .find(|r| r.key == "search.engine")
+            .unwrap();
+        assert_eq!(setting_item(engine).selected, 1);
+    }
+
+    #[test]
+    fn a_chord_is_one_key_cap_per_key() {
+        let rows = wubble_core::keys::binding_rows(wubble_core::keys::Platform::Linux, &[]);
+        let items = binding_items(&rows);
+        let with_chord = items.iter().find(|i| i.chord.contains('+')).unwrap();
+        let keys: Vec<String> = with_chord.keys.iter().map(|k| k.to_string()).collect();
+        assert_eq!(keys.join("+"), with_chord.chord.as_str());
+        assert!(keys.len() >= 2);
     }
 }

@@ -1,0 +1,142 @@
+// derived: MenuHighlight look (.tp-menu-hl), MenuRow text roles (.tp-mrow, .tp-mrow-sub), AProgress (a-progress.slint), IconButton
+// One download on the downloads popover (wubble-only.md): the menu row's anatomy, 16 px glyph
+// (mint when done, ink while bytes come, haze otherwise), the name in the row role, the detail
+// in the row note role and sub-row haze, the progress track while there are bytes to come, and
+// kit IconButtons for what its state allows (pause, resume, cancel, retry, open, show in folder,
+// remove). Hovered, the menu's highlight lies under it (fading in .12 s). `action` is the
+// intent; the host acts.
+
+import { Palette, Space, TouchMenu } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { KitText } from "../../text.slint";
+import { Tween } from "../../motion/tween.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { IconButton } from "../../controls/icon-button.slint";
+import { DownloadItem, DownloadAction, DownloadStatus } from "../../../components/model.slint";
+import { AProgress } from "a-progress.slint";
+
+export component ADownloadRow inherits Rectangle {
+    in property <DownloadItem> item;
+    callback action(int, DownloadAction);
+    // Still has bytes to come (`DownloadState::is_active`).
+    property <bool> active: root.item.status == DownloadStatus.running || root.item.status == DownloadStatus.paused || root.item.status == DownloadStatus.interrupted;
+    property <bool> done: root.item.status == DownloadStatus.complete;
+    out property <bool> hovered: hover.has-hover;
+    hl := Tween {
+        on: hover.has-hover;
+        in-ms: TouchCss.tp-menu-hl--transition-opacity-duration;
+        out-ms: TouchCss.tp-menu-hl--transition-opacity-duration;
+        in-easing: ease;
+        out-easing: ease;
+    }
+    Rectangle {
+        border-radius: TouchCss.tp-menu-hl--border-radius;
+        background: TouchCss.tp-menu-hl--background;
+        opacity: hl.t * TouchCss.tp-menu-hl-on--opacity;
+    }
+    hover := TouchArea { }
+    HorizontalLayout {
+        padding-left: TouchCss.wb-tp-mrow--padding-left;
+        padding-right: Space.s1;
+        spacing: TouchCss.wb-tp-mrow--gap;
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                size: TouchMenu.row-icon;
+                path: Glyph.download;
+                tint: root.done ? Palette.mint : root.active ? Palette.ink : Palette.haze;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Space.s1;
+            KitText {
+                role: Role.wb-tp-mrow;
+                text: root.item.name;
+                color: TouchCss.wb-tp-mrow--color;
+                overflow: elide;
+            }
+            KitText {
+                role: Role.st-row-note;
+                text: root.item.detail;
+                color: TouchCss.tp-mrow-tp-mrow-sub--color;
+                overflow: elide;
+            }
+            if root.active: AProgress {
+                value: root.item.progress;
+            }
+        }
+        if root.item.status == DownloadStatus.running: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.pause;
+                label: "Pause";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.pause);
+                }
+            }
+        }
+        if root.item.status == DownloadStatus.paused || root.item.status == DownloadStatus.interrupted: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.play;
+                label: "Resume";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.resume);
+                }
+            }
+        }
+        if root.active: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.close;
+                label: "Cancel";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.cancel);
+                }
+            }
+        }
+        if root.item.status == DownloadStatus.cancelled || root.item.status == DownloadStatus.failed: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.reload;
+                label: "Retry";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.retry);
+                }
+            }
+        }
+        if root.done: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.arrow;
+                label: "Open";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.open);
+                }
+            }
+        }
+        if root.done: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.folder;
+                label: "Show in folder";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.reveal);
+                }
+            }
+        }
+        if !root.active: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon-path: Glyph.trash;
+                label: "Remove from list";
+                clicked => {
+                    root.action(root.item.id, DownloadAction.remove);
+                }
+            }
+        }
+    }
+}

@@ -169,6 +169,7 @@ impl Host {
                     query: "wubble".into(),
                     matches: 7,
                     active: 2,
+                    done: true,
                 }
             }
             Overlay::Permission => {

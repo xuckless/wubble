@@ -1,0 +1,71 @@
+// derived: GlassPanel thin capsule, KitText wb-address-text (.wb-address-text, span haze), Tooltip motion (.tp-tip / .tp-tip-show)
+// The hovered link's address at the pane's bottom-left (wubble-only.md: status bubble): a thin
+// glass capsule with the address pill's text (UI face 13, the host in ink, the rest in haze, as
+// `.wb-address-text` and its `span`), arriving and leaving as the touch kit's tooltip does
+// (opacity .16 s / .13 s, from 4 px down at .95 over .2 s / .16 s). When the parent says
+// `mirrored` (the pointer came near it) it glides to the pane's right edge. Pointer events pass
+// through to the page. The host times it (Chromium's status bubble delays, `wubble_core::hovercard`).
+// derived (notes/fidelity/derived-review.md "Status bubble"): 24 high, 10 px side padding, 6 px
+// from the pane's edges, at most a third of the pane wide; no scene key (the Slint frost).
+
+import { Motion } from "../../gen/tokens.slint";
+import { BrowserCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { ATipMotion } from "a-motion.slint";
+import { Calm } from "../../motion/calm.slint";
+import { GlassTier } from "../../../components/model.slint";
+
+export component AStatusBubble inherits Rectangle {
+    in property <bool> shown;
+    in property <string> host;
+    in property <string> rest;
+    in property <bool> mirrored;
+    // The pane it sits in.
+    in property <length> pane-width;
+    in property <length> pane-height;
+    out property <float> progress: tip.fade;
+
+    tip := ATipMotion {
+        shown: root.shown;
+    }
+
+    width: min(row.preferred-width, root.pane-width / 3 + 2 * Shell.status-pad);
+    height: Shell.status-height;
+    x: root.mirrored ? root.pane-width - self.width - Shell.status-margin : Shell.status-margin;
+    y: root.pane-height - self.height - Shell.status-margin;
+    animate x {
+        duration: Calm.ms(Shell.status-move);
+        easing: Motion.ease-in-out;
+    }
+    visible: tip.fade > 0;
+    opacity: tip.fade;
+
+    GlassPanel {
+        y: tip.shift;
+        tier: GlassTier.thin;
+        radius: self.height / 2;
+        transform-origin: { x: self.width / 2, y: self.height };
+        scale: tip.scale;
+        row := HorizontalLayout {
+            padding-left: Shell.status-pad;
+            padding-right: Shell.status-pad;
+            alignment: start;
+            KitText {
+                role: Role.wb-address-text;
+                text: root.host;
+                color: BrowserCss.wb-address-text--color;
+                vertical-alignment: center;
+            }
+            KitText {
+                role: Role.wb-address-text;
+                text: root.rest;
+                color: BrowserCss.wb-address-text-span--color;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}

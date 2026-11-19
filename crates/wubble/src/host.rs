@@ -39,6 +39,7 @@ mod preview;
 mod print;
 mod settings;
 mod snapshots;
+pub(crate) mod start;
 mod status;
 mod surfaces;
 mod swipe;
@@ -280,6 +281,7 @@ pub struct Checks {
     pub block_smoke: Option<BlockSmoke>,
     pub split_smoke: Option<SplitSmoke>,
     pub settings_smoke: Option<SettingsSmoke>,
+    pub start_smoke: Option<crate::start_smoke::StartSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
     pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
@@ -364,6 +366,7 @@ pub struct Host {
     pub parity_passed: Option<Vec<&'static str>>,
     pub windows_passed: bool,
     pub settings_passed: bool,
+    pub start_passed: bool,
     pub pages_passed: bool,
     /// `--smoke gallery` shot every scene.
     pub gallery_passed: bool,
@@ -607,6 +610,7 @@ impl Host {
             parity_passed: None,
             windows_passed: false,
             settings_passed: false,
+            start_passed: false,
             pages_passed: false,
             gallery_passed: false,
             gallery_timer: slint::Timer::default(),
@@ -1000,14 +1004,16 @@ impl Host {
             }
             Call::CaptureSnapshot(tab) => self.capture_snapshot(tab),
             Call::ReleaseSnapshot(tab) => self.snapshots.release(tab),
-            // In the window showing the active Space, where what is chosen opens. Later,
-            // outside the host: opening the bar calls back into it.
+            // Nothing left to show (a new window on an empty Space, its last tab closed): the
+            // window showing the active Space opens the start page (TODO.md Decided "Start
+            // page"). Later, outside the host: it is a command of its own.
             Call::ShowCommandBar => {
-                self.enter(self.model.main_window());
-                let _ = self
-                    .w
-                    .window
-                    .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
+                let id = self.model.main_window();
+                let _ = slint::invoke_from_event_loop(move || {
+                    crate::with_host_in(id, |host| {
+                        host.dispatch(new_tab(InternalPage::Start.url().into(), None));
+                    });
+                });
             }
             Call::Quit => quit(),
             Call::ForgetContainer(c) => self.engine.forget_container(c),
@@ -1262,6 +1268,7 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
+        self.start_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
             self.overlay_ready();
@@ -2227,7 +2234,17 @@ impl Host {
 
     /// What `--smoke windows` waits on, across every window.
     fn windows_seen(&mut self) -> crate::windows_smoke::Seen {
-        let visible = self.model.visible_tabs();
+        // the tabs on screen with a page: a start page has no view and no frame
+        let internal: Vec<TabId> = self
+            .model
+            .tabs
+            .values()
+            .filter(|t| InternalPage::from_url(&t.url).is_some())
+            .map(|t| t.id)
+            .collect();
+        let web = |t: &TabId| !internal.contains(t);
+        let shown = self.model.visible_tabs();
+        let visible: Vec<TabId> = shown.iter().copied().filter(|t| web(t)).collect();
         let views_agree = self.model.tabs.keys().all(|t| {
             let shown = self
                 .views
@@ -2237,15 +2254,19 @@ impl Host {
         }) && self.engine.visible_views() == visible.len();
         self.record_geometry();
         let newest = self.model.windows.iter().map(|w| w.id).max();
-        let (mut framed, mut bars, mut bar_in_newest, mut ghosts) = (true, 0, false, 0);
+        let (mut framed, mut bars, mut start_in_newest, mut ghosts) = (true, 0, false, 0);
         for id in self.window_ids() {
             if self.enter(id) {
                 let tabs = self.model.window_tabs(id);
-                framed &= tabs.iter().all(|t| self.w.frames.contains_key(t));
+                framed &= tabs
+                    .iter()
+                    .filter(|t| web(t))
+                    .all(|t| self.w.frames.contains_key(t));
+                start_in_newest |=
+                    Some(id) == newest && self.shown_page() == Some(InternalPage::Start);
                 if let Some(window) = self.w.window.upgrade() {
                     let open = window.get_command_bar_state() != CommandBarState::Closed;
                     bars += usize::from(open);
-                    bar_in_newest |= open && Some(id) == newest;
                     ghosts += usize::from(!window.get_drag_ghost().is_empty());
                 }
             }
@@ -2262,9 +2283,9 @@ impl Host {
             open_windows: 1 + self.parked.len(),
             views_agree,
             framed,
-            shown: visible.len(),
+            shown: shown.len(),
             bars,
-            bar_in_newest,
+            start_in_newest,
             ghosts,
             geometry: self.model.windows.iter().all(|w| w.geometry.is_some()),
         }
@@ -2292,12 +2313,6 @@ impl Host {
                     .copied()
                     .find(|t| !visible.contains(t));
                 if let (Some(tab), Some(to)) = (hidden, second) {
-                    // Esc on the bar the new window opened for its empty Space, as a user would
-                    if self.enter(to)
-                        && let Some(window) = self.w.window.upgrade()
-                    {
-                        window.invoke_dismiss_command_bar();
-                    }
                     self.smoke_drag(tab, to);
                 }
             }
@@ -2568,7 +2583,7 @@ impl Host {
             Some(InternalPage::Passwords) => window.get_logins().row_count(),
             Some(InternalPage::Archive) => window.get_archive_lines().row_count(),
             Some(InternalPage::Tasks) => window.get_tasks().row_count(),
-            Some(InternalPage::Settings) | None => 0,
+            Some(InternalPage::Settings | InternalPage::Start) | None => 0,
         };
         let seen = pages_smoke::Seen {
             ready: self.frame_rate.is_some(),
@@ -2588,6 +2603,7 @@ impl Host {
                 InternalPage::Archive => Action::OpenArchive,
                 InternalPage::Tasks => Action::OpenTasks,
                 InternalPage::Settings => Action::OpenSettings,
+                InternalPage::Start => Action::NewTab,
             }),
             // The page's own button callback, as a click sends it: later, outside the host.
             Some(pages_smoke::Action::Unlock) => {
