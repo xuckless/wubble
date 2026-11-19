@@ -68,7 +68,9 @@ export component ElasticSlider inherits VerticalLayout {
     property <float> span: Math.max(root.max - root.min, root.step);
     property <length> kx: root.live ? root.v.x * Shell.px : Math.clamp((root.value - root.min) / root.span, 0, 1) * track.width;
     property <length> bx: root.live ? root.v.bubble-x * Shell.px : root.kx;
-    property <string> text: root.shown + root.unit;
+    // as many decimals as the step has (`String(v)` of a snapped value in the TSX)
+    property <int> decimals: root.step >= 1 ? 0 : Math.ceil(-Math.log(root.step, 10) - 0.0001);
+    property <string> text: root.shown.to-fixed(root.decimals) + root.unit;
 
     init => {
         root.slot = Controls.acquire(1, root.value);

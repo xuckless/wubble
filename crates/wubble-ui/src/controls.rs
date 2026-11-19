@@ -406,6 +406,24 @@ mod tests {
     }
 
     #[test]
+    fn keys_reach_the_slider_in_its_domain_and_the_swatches_clamp() {
+        let mut c = Controls::new();
+        let id = c.acquire(Slot::Slider(Slider::new(110.0, 240.0, Cfg::default())));
+        c.configure(id, 50.0, 200.0, 10.0);
+        c.set_value(id, 110.0);
+        assert_eq!(c.key(id, 1, false), 120.0, "ArrowRight: one step");
+        assert_eq!(c.key(id, 1, true), 200.0, "Shift: ten steps, clamped");
+        assert_eq!(c.key(id, 6, false), 50.0, "Home");
+        assert_eq!(c.views.row_data(0).unwrap().value, 50.0);
+        let sw = c.acquire(Slot::Swatches(Ring::new(0)));
+        c.configure(sw, 0.0, 3.0, 1.0);
+        assert_eq!(c.key(sw, 0, false), 0.0, "clamped at the first");
+        assert_eq!((c.key(sw, 1, false), c.key(sw, 1, false)), (1.0, 2.0));
+        assert_eq!(c.key(sw, 1, false), 2.0, "clamped at the last");
+        assert_eq!(c.key(sw, 4, false), 2.0, "PageUp moves no swatch");
+    }
+
+    #[test]
     fn a_toggle_tap_flips_and_settles() {
         let mut c = Controls::new();
         let id = c.acquire(Slot::Toggle(Toggle::new(false)));
