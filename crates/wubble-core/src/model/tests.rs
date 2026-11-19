@@ -563,6 +563,103 @@ fn folder_with_tab_takes_its_place_and_renames() {
     );
 }
 
+// ----- peeks
+
+fn peek(m: Model, opener: TabId) -> (Model, TabId) {
+    let w = m.focused();
+    let (m, fx) = run(
+        m,
+        Command::OpenGlance {
+            window: w,
+            opener,
+            url: "https://peek.test/".into(),
+        },
+    );
+    let Some(Effect::CreateTab { tab, .. }) = fx.last().cloned() else {
+        panic!("no CreateTab: {fx:?}")
+    };
+    (m, tab)
+}
+
+#[test]
+fn a_peek_is_on_screen_over_its_opener_and_closes() {
+    let (m, ids) = with_tabs(2);
+    let opener = ids[1];
+    let (m, g) = peek(m, opener);
+    let w = m.focused();
+    assert_eq!(m.glance_of(w).map(|g| g.tab), Some(g));
+    assert_eq!(m.window_tabs(w), [opener, g], "the peek is on screen, last");
+    assert_eq!(m.tabs[&g].lifecycle.liveness, Liveness::Active);
+    assert_eq!(m.visible_tab(), Some(opener), "the opener keeps the keys");
+    // a second peek replaces the first
+    let (m, g2) = peek(m, opener);
+    assert!(!m.tabs.contains_key(&g));
+    assert_eq!(m.glance_of(w).map(|g| g.tab), Some(g2));
+    let (m, fx) = run(m, Command::CloseGlance(w));
+    assert_eq!(fx, [Effect::CloseTab(g2)]);
+    assert_eq!(m.glance_of(w), None);
+    assert_eq!(m.visible_tab(), Some(opener));
+    // only over a page on screen
+    let (m, fx) = run(
+        m,
+        Command::OpenGlance {
+            window: w,
+            opener: ids[0],
+            url: "https://x.test/".into(),
+        },
+    );
+    assert!(fx.is_empty() && m.glances.is_empty());
+}
+
+#[test]
+fn a_peek_closes_when_its_opener_leaves_the_screen() {
+    let (m, ids) = with_tabs(2);
+    let (m, g) = peek(m, ids[1]);
+    let (m, _) = run(m, Command::ActivateTab(ids[0]));
+    assert!(m.glances.is_empty() && !m.tabs.contains_key(&g));
+    let (m, g) = peek(m, ids[0]);
+    let (m, _) = run(m, Command::CloseTab(ids[0]));
+    assert!(m.glances.is_empty() && !m.tabs.contains_key(&g));
+}
+
+#[test]
+fn a_peek_becomes_a_tab_or_a_pane() {
+    let (m, ids) = with_tabs(2);
+    let w = m.focused();
+    let (m, g) = peek(m, ids[1]);
+    let (m, _) = run(
+        m,
+        Command::PromoteGlance {
+            window: w,
+            to: GlanceTo::Tab,
+        },
+    );
+    assert!(m.glances.is_empty());
+    assert_eq!(m.visible_tab(), Some(g));
+    let (m, g2) = peek(m, g);
+    let (m, _) = run(
+        m,
+        Command::PromoteGlance {
+            window: w,
+            to: GlanceTo::Split,
+        },
+    );
+    assert!(m.glances.is_empty());
+    assert_eq!(m.window_tabs(w), [g, g2], "beside its opener");
+}
+
+#[test]
+fn a_peek_is_no_part_of_a_session() {
+    let (m, ids) = with_tabs(2);
+    let (m, g) = peek(m, ids[1]);
+    let saved = m.for_session();
+    assert!(saved.glances.is_empty());
+    assert!(!saved.tabs.contains_key(&g));
+    assert!(!saved.order(s0()).contains(&g));
+    saved.check().expect("a saved model holds");
+    assert!(m.tabs.contains_key(&g), "the live model keeps it");
+}
+
 // ----- random sequences
 
 struct Xorshift(u64);

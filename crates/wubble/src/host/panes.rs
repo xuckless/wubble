@@ -18,7 +18,24 @@ use wubble_engine::view::{Layout, ScreenArea};
 use wubble_gfx::mask::{MaskJob, Prev};
 use wubble_gfx::pacing::PaceEvent;
 use wubble_gfx::{Edge, FrameSize};
-use wubble_ui::{AppWindow, Palette, SplitPane, SplitSeam};
+use wubble_ui::{AppWindow, GlanceView, Palette, SplitPane, SplitSeam};
+
+/// The peek's card covers this much of the content area each way.
+const GLANCE_FRACTION: f64 = 0.86;
+/// The card's header strip (title and buttons) above the peek's page, logical px.
+const GLANCE_HEADER: f64 = 44.0;
+
+/// Where the window's peek shows its page, content-area logical px (`Host::glance_rect`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct GlanceRect {
+    pub tab: TabId,
+    pub x: f64,
+    /// The card's top (its header's).
+    pub card_y: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
 
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
@@ -124,8 +141,63 @@ impl Host {
         rects.into_iter().map(|r| r.on_pixels(scale)).collect()
     }
 
+    /// The window's peek and where its page sits in the content area (logical px): a card
+    /// centred over the page ([`GLANCE_FRACTION`] of the content area), its header on top.
+    pub(super) fn glance_rect(&self, window: &AppWindow) -> Option<GlanceRect> {
+        let g = self.model.glance_of(self.w.id)?;
+        let (width, height) = content_size(window);
+        let (w, h) = (width * GLANCE_FRACTION, height * GLANCE_FRACTION);
+        let card_y = (height - h) / 2.0;
+        Some(GlanceRect {
+            tab: g.tab,
+            x: (width - w) / 2.0,
+            card_y,
+            y: card_y + GLANCE_HEADER,
+            width: w,
+            height: (h - GLANCE_HEADER).max(0.0),
+        })
+    }
+
+    /// The peek's view layout: its page rect, with where it sits in the window.
+    fn glance_layout(&self, window: &AppWindow, r: &GlanceRect) -> Layout {
+        let scale = window.window().scale_factor();
+        let size = window.window().size();
+        let at = |v: f32| (f64::from(v) * f64::from(scale)).round() as i32;
+        Layout {
+            size: FrameSize::new(
+                physical(r.width as f32, scale),
+                physical(r.height as f32, scale),
+            ),
+            scale,
+            area: Some(ScreenArea {
+                window: FrameSize::new(size.width, size.height),
+                origin: (
+                    at(window.get_content_x() + r.x as f32),
+                    at(window.get_content_y() + r.y as f32),
+                ),
+            }),
+        }
+    }
+
+    /// Every view on screen and its layout: the panes, then the peek.
+    fn view_layouts(&self, window: &AppWindow) -> Vec<(TabId, Layout)> {
+        let mut out: Vec<(TabId, Layout)> = self
+            .pane_rects(window)
+            .iter()
+            .map(|r| (r.tab, self.layout_of(window, r)))
+            .collect();
+        out.extend(
+            self.glance_rect(window)
+                .map(|g| (g.tab, self.glance_layout(window, &g))),
+        );
+        out
+    }
+
     /// The layout of `tab`'s view: its pane's, or the whole content area for a tab not on screen.
     pub(super) fn pane_layout(&self, window: &AppWindow, tab: TabId) -> Layout {
+        if let Some(g) = self.glance_rect(window).filter(|g| g.tab == tab) {
+            return self.glance_layout(window, &g);
+        }
         let (width, _) = content_size(window);
         let rect = self
             .pane_rects(window)
@@ -256,14 +328,13 @@ impl Host {
     /// Each view on screen gets its pane's layout; its pane follows the size the view now wants
     /// (the engine's `ViewState` owns it).
     fn lay_out_views(&mut self, window: &AppWindow) {
-        for rect in self.pane_rects(window) {
-            let layout = self.layout_of(window, &rect);
-            let Some(view) = self.tab_view(rect.tab) else {
+        for (tab, layout) in self.view_layouts(window) {
+            let Some(view) = self.tab_view(tab) else {
                 continue;
             };
             view.set_layout(layout);
             let wanted = view.wanted_frame();
-            if let (Some(frame), Some(wanted)) = (self.w.frames.get_mut(&rect.tab), wanted) {
+            if let (Some(frame), Some(wanted)) = (self.w.frames.get_mut(&tab), wanted) {
                 frame.view = transition(frame.view, px(wanted), PaneEvent::Layout).0;
             }
         }
@@ -394,6 +465,7 @@ impl Host {
     /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
     /// seam's grab mid-drag, survives).
     fn render_panes(&mut self, window: &AppWindow) {
+        self.render_glance(window);
         let (_, height) = content_size(window);
         let focused = self.shown();
         let rects = self.pane_rects(window);
@@ -476,6 +548,36 @@ impl Host {
         window.set_focus_ring(ring.into());
     }
 
+    /// The peek's card (`glance-card.slint`): its page's last frame where the host lays it out.
+    fn render_glance(&self, window: &AppWindow) {
+        let view = match self.glance_rect(window) {
+            Some(r) => {
+                let frame = self.w.frames.get(&r.tab);
+                let tab = self.model.tabs.get(&r.tab);
+                GlanceView {
+                    open: true,
+                    id: crate::shell::pane_id(r.tab),
+                    title: tab.map(crate::shell::tab_title).unwrap_or_default().into(),
+                    frame: frame.map(|f| f.image.clone()).unwrap_or_default(),
+                    clip_width: frame.map_or(0, |f| slint_int(f.clip.width)),
+                    clip_height: frame.map_or(0, |f| slint_int(f.clip.height)),
+                    x: r.x as f32,
+                    card_y: r.card_y as f32,
+                    y: r.y as f32,
+                    width: r.width as f32,
+                    height: r.height as f32,
+                }
+            }
+            None => GlanceView {
+                open: false,
+                ..window.get_glance()
+            },
+        };
+        if window.get_glance() != view {
+            window.set_glance(view);
+        }
+    }
+
     /// The presenter slot of `tab`: its own while its frame is kept, else one no kept frame
     /// holds.
     fn slot_for(&mut self, tab: TabId) -> usize {
@@ -501,16 +603,15 @@ impl Host {
     pub(super) fn present_panes(&mut self, window: &AppWindow) -> Result<bool, String> {
         let focused = self.shown();
         let mut presented = false;
-        for rect in self.pane_rects(window) {
-            let layout = self.layout_of(window, &rect);
-            let Some(view) = self.tab_view(rect.tab) else {
+        for (tab, layout) in self.view_layouts(window) {
+            let Some(view) = self.tab_view(tab) else {
                 continue;
             };
             view.set_layout(layout);
             let wanted = view.wanted_frame().unwrap_or(layout.frame_size());
             let frame = view.take_frame();
             // The popup's placement comes from its events (`render_surfaces`).
-            let popup = (Some(rect.tab) == focused)
+            let popup = (Some(tab) == focused)
                 .then(|| view.take_popup_frame())
                 .flatten();
             if let Some(popup) = popup {
@@ -534,9 +635,9 @@ impl Host {
                 size
             };
             // `--measure` follows the focused page.
-            let measured = (Some(rect.tab) == focused)
-                .then(|| measure::Frame::of(&frame, layout.frame_size()));
-            let slot = self.slot_for(rect.tab);
+            let measured =
+                (Some(tab) == focused).then(|| measure::Frame::of(&frame, layout.frame_size()));
+            let slot = self.slot_for(tab);
             let blit = Instant::now();
             let image = self.w.presenters[slot]
                 .present(frame)
@@ -549,8 +650,8 @@ impl Host {
                 });
             }
             let wanted = px(wanted);
-            self.frame_arrived(rect.tab);
-            let entry = self.w.frames.entry(rect.tab).or_insert_with(|| PaneFrame {
+            self.frame_arrived(tab);
+            let entry = self.w.frames.entry(tab).or_insert_with(|| PaneFrame {
                 image: image.clone(),
                 clip,
                 view: PaneView::Live { size: px(size) },

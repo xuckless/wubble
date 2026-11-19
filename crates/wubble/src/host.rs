@@ -1435,8 +1435,17 @@ impl Host {
         let remembered = site
             .as_deref()
             .and_then(|o| self.site_permissions.get(o, Permission::Popups));
-        match popup::decide(request.opened, request.gesture, remembered) {
+        let glance = self.glance_enabled;
+        match popup::decide(request.opened, request.gesture, remembered, glance) {
             Outcome::Tab { foreground: true } => self.dispatch(new_tab(request.url, Some(tab))),
+            Outcome::Glance => match self.model.window_of(tab) {
+                Some(window) => self.dispatch(Command::OpenGlance {
+                    window,
+                    opener: tab,
+                    url: request.url,
+                }),
+                None => self.dispatch(new_tab(request.url, Some(tab))),
+            },
             Outcome::Tab { foreground: false } => self.dispatch(Command::BackgroundTab {
                 url: request.url,
                 opener: tab,
@@ -2719,6 +2728,14 @@ impl Host {
         {
             return EventResult::PreventDefault;
         }
+        // Esc closes the window's peek.
+        if key.pressed
+            && key.unmodified == Key::Named(NamedKey::Escape)
+            && self.model.glance_of(self.w.id).is_some()
+        {
+            self.dispatch(Command::CloseGlance(self.w.id));
+            return EventResult::PreventDefault;
+        }
         // Esc leaves page fullscreen before anything else sees it.
         if key.pressed
             && key.unmodified == Key::Named(NamedKey::Escape)
@@ -2898,7 +2915,11 @@ impl Host {
                     self.sync_focus(&window);
                 }
             }
-            if self.shown() != Some(tab) && self.model.window_tabs(self.w.id).contains(&tab) {
+            // a press in the peek stays a peek: its buttons promote it
+            if self.shown() != Some(tab)
+                && !self.model.is_glance(tab)
+                && self.model.window_tabs(self.w.id).contains(&tab)
+            {
                 self.dispatch(Command::ActivateTab(tab));
             }
         }

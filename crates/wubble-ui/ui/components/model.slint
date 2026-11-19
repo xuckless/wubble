@@ -543,3 +543,19 @@ export struct BoostView {
     // Why the site pattern is refused, or empty.
     error: string,
 }
+
+// The window's peek (glance-card.slint): its page's last frame and where the host lays the page
+// out in the content area (`card-y` is the card's top, over the header).
+export struct GlanceView {
+    open: bool,
+    id: int,
+    title: string,
+    frame: image,
+    clip-width: int,
+    clip-height: int,
+    x: length,
+    card-y: length,
+    y: length,
+    width: length,
+    height: length,
+}

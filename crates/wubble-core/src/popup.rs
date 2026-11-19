@@ -31,6 +31,9 @@ pub enum Outcome {
     PopupWindow,
     /// Nothing opens; the address pill offers to allow it.
     Blocked,
+    /// A peek over the opener's page (`model::Glance`): Shift+click on a link. A tab instead when
+    /// the setting is off.
+    Glance,
 }
 
 /// Each request with and without a user gesture. Every (`Opened`, gesture) pair has one row.
@@ -49,24 +52,30 @@ pub const ROWS: &[(Opened, bool, Outcome)] = &[
     (Opened::BackgroundTab, false, Outcome::Blocked),
     (Opened::PopupWindow, true, Outcome::PopupWindow),
     (Opened::PopupWindow, false, Outcome::Blocked),
-    // a page asking for a whole new window gets a tab: windows are the user's
-    (Opened::Window, true, Outcome::Tab { foreground: true }),
+    // a page asking for a whole new window gets a peek (a tab with peeks off): windows are
+    // the user's. In practice this is Shift+click on a link.
+    (Opened::Window, true, Outcome::Glance),
     (Opened::Window, false, Outcome::Blocked),
 ];
 
 /// The table's answer, then the site's remembered choice: an allowed site opens without a
 /// gesture what a gesture would have opened. A click always opens (Chromium's rule too: the
 /// popup setting only judges requests without one), so a blocked site differs from an
-/// undecided one only in that the pill does not offer to allow it again.
-pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>) -> Outcome {
+/// undecided one only in that the pill does not offer to allow it again. With `glance` off (the
+/// `glance.enabled` setting), a peek is a foreground tab.
+pub fn decide(opened: Opened, gesture: bool, site: Option<Decision>, glance: bool) -> Outcome {
     let row = |g: bool| {
         ROWS.iter()
             .find(|(o, rg, _)| *o == opened && *rg == g)
             .map_or(Outcome::Blocked, |(_, _, out)| *out)
     };
-    match site {
+    let out = match site {
         Some(Decision::Allow) => row(true),
         Some(Decision::Block) | None => row(gesture),
+    };
+    match out {
+        Outcome::Glance if !glance => Outcome::Tab { foreground: true },
+        out => out,
     }
 }
 
@@ -98,18 +107,20 @@ mod tests {
     #[test]
     fn the_table() {
         for &(o, g, out) in ROWS {
-            assert_eq!(decide(o, g, None), out, "{o:?} gesture={g}");
+            assert_eq!(decide(o, g, None, true), out, "{o:?} gesture={g}");
         }
         assert_eq!(
-            decide(Opened::PopupWindow, true, None),
+            decide(Opened::PopupWindow, true, None, true),
             Outcome::PopupWindow
         );
+        assert_eq!(decide(Opened::Window, true, None, true), Outcome::Glance);
         assert_eq!(
-            decide(Opened::Window, true, None),
-            Outcome::Tab { foreground: true }
+            decide(Opened::Window, true, None, false),
+            Outcome::Tab { foreground: true },
+            "peeks off: a tab"
         );
         for o in ALL {
-            assert_eq!(decide(o, false, None), Outcome::Blocked, "{o:?}");
+            assert_eq!(decide(o, false, None, true), Outcome::Blocked, "{o:?}");
         }
     }
 
@@ -117,14 +128,17 @@ mod tests {
     fn the_site_choice_wins() {
         for o in ALL {
             assert_eq!(
-                decide(o, false, Some(Decision::Allow)),
-                decide(o, true, None),
+                decide(o, false, Some(Decision::Allow), true),
+                decide(o, true, None, true),
                 "allowed: as with a gesture"
             );
-            assert_eq!(decide(o, false, Some(Decision::Block)), Outcome::Blocked);
             assert_eq!(
-                decide(o, true, Some(Decision::Block)),
-                decide(o, true, None),
+                decide(o, false, Some(Decision::Block), true),
+                Outcome::Blocked
+            );
+            assert_eq!(
+                decide(o, true, Some(Decision::Block), true),
+                decide(o, true, None, true),
                 "a click still opens"
             );
         }

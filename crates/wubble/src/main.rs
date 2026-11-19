@@ -1110,6 +1110,20 @@ fn connect_shell(window: &AppWindow, win: WindowId) {
             command(Cmd::CloseTab(t));
         }
     });
+    // The peek's card.
+    window.on_glance_closed(move || command(Cmd::CloseGlance(win)));
+    window.on_glance_to_tab(move || {
+        command(Cmd::PromoteGlance {
+            window: win,
+            to: wubble_core::model::GlanceTo::Tab,
+        })
+    });
+    window.on_glance_to_split(move || {
+        command(Cmd::PromoteGlance {
+            window: win,
+            to: wubble_core::model::GlanceTo::Split,
+        })
+    });
     // A row dragged to slot `to` of the flat tab list.
     window.on_tab_moved(move |id, to| {
         if let (Some(tab), Ok(to)) = (shell::tab_id(id), usize::try_from(to)) {

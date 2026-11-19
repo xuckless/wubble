@@ -7,6 +7,8 @@ import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
 import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
+import { GlanceCard } from "components/glance-card.slint";
+import { GlanceView } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
@@ -35,7 +37,7 @@ import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
 import "fonts/GeistMono-Variable.ttf";
 
-export { AutofillAnswer, AutofillView, PageScroll, Calm, Shell }
+export { AutofillAnswer, AutofillView, PageScroll, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
 export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
 
@@ -184,6 +186,11 @@ export component AppWindow inherits Window {
     // driver's progress, 0..1 (1 at rest).
     in property <image> exit-page;
     in property <float> exit-t: 1;
+    // The window's peek (Shift+click): the host's card view; its buttons are intents.
+    in property <GlanceView> glance;
+    callback glance-closed();
+    callback glance-to-tab();
+    callback glance-to-split();
     in property <int> selected-row <=> sidebar.selected;
     in property <length> indicator-y <=> sidebar.indicator-y;
     in property <float> indicator-stretch <=> sidebar.indicator-stretch;
@@ -980,6 +987,38 @@ export component AppWindow inherits Window {
                 folders: root.bookmark-folders;
                 answered(accept, remove, name, folder) => {
                     root.bookmark-sheet-answered(accept, remove, name, folder);
+                }
+            }
+            // The peek: over the page, under the sheets and the command bar.
+            GlanceCard {
+                glance: root.glance;
+                cursor: root.cursors[root.web-cursor];
+                closed => {
+                    root.glance-closed();
+                }
+                to-tab => {
+                    root.glance-to-tab();
+                }
+                to-split => {
+                    root.glance-to-split();
+                }
+                pointer-pressed(pane, button, x, y) => {
+                    root.web-pointer-pressed(pane, button, x, y);
+                }
+                pointer-released(pane, button, x, y) => {
+                    root.web-pointer-released(pane, button, x, y);
+                }
+                pointer-moved(pane, x, y) => {
+                    root.web-pointer-moved(pane, x, y);
+                }
+                pointer-left(pane, x, y) => {
+                    root.web-pointer-left(pane, x, y);
+                }
+                pointer-cancelled(pane) => {
+                    root.web-pointer-cancelled(pane);
+                }
+                scrolled(pane, x, y, dx, dy) => {
+                    root.web-scrolled(pane, x, y, dx, dy);
                 }
             }
             // Tab-modal: over the page and its find bar, under the command bar.

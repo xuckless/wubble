@@ -92,22 +92,24 @@ pub fn view_model(
         .and_then(|w| w.space())
         .unwrap_or_else(|| model.active_space());
     let space = model.spaces.iter().find(|s| s.id == space_id);
+    // a peek's tab is no row: the card over the page shows it
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
-        ids.filter_map(|id| {
-            let tab = model.tabs.get(&id)?;
-            let sound = audio.get(&id).copied().unwrap_or_default();
-            Some(TabRow {
-                id: slint_id(id.0)?,
-                title: tab_title(tab),
-                url: tab.url.clone(),
-                audible: tab.busy.contains(wubble_core::busy::Reason::Audible),
-                muted: sound.muted,
-                blocked: blocked.get(&id).copied().unwrap_or(0),
-                in_split: model.split_of(id).is_some(),
-                ..TabRow::default()
+        ids.filter(|&id| !model.is_glance(id))
+            .filter_map(|id| {
+                let tab = model.tabs.get(&id)?;
+                let sound = audio.get(&id).copied().unwrap_or_default();
+                Some(TabRow {
+                    id: slint_id(id.0)?,
+                    title: tab_title(tab),
+                    url: tab.url.clone(),
+                    audible: tab.busy.contains(wubble_core::busy::Reason::Audible),
+                    muted: sound.muted,
+                    blocked: blocked.get(&id).copied().unwrap_or(0),
+                    in_split: model.split_of(id).is_some(),
+                    ..TabRow::default()
+                })
             })
-        })
-        .collect()
+            .collect()
     };
     let (pinned, tabs) = match space {
         Some(s) => {
@@ -188,6 +190,8 @@ pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
     for item in &space.items {
         match item {
             Item::Tab(t) if *t == tab => from = Some(rows.len()),
+            // a peek's tab is no row, but it holds its place among the items
+            Item::Tab(t) if model.is_glance(*t) => items += 1,
             Item::Tab(_) => {
                 rows.push((normal(items), normal(items + 1)));
                 items += 1;
@@ -201,11 +205,16 @@ pub fn move_dest(model: &Model, tab: TabId, to: usize) -> Option<Dest> {
                     rows.push((normal(items), normal(items + 1)));
                 } else {
                     rows.push((normal(items), at(0)));
-                    for (index, _) in f.tabs.iter().filter(|&&t| t != tab).enumerate() {
-                        rows.push((at(index), at(index + 1)));
-                    }
-                    if let Some(i) = f.tabs.iter().position(|&t| t == tab) {
-                        from = Some(rows.len() - (f.tabs.len() - 1 - i));
+                    let mut index = 0;
+                    for &t in &f.tabs {
+                        if t == tab {
+                            from = Some(rows.len());
+                            continue;
+                        }
+                        if !model.is_glance(t) {
+                            rows.push((at(index), at(index + 1)));
+                        }
+                        index += 1;
                     }
                 }
                 items += 1;
