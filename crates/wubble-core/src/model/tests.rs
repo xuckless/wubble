@@ -904,6 +904,15 @@ fn random_command(r: &mut Xorshift, m: &Model) -> (Command, bool) {
         },
         14 => return (Command::NewContainer { name: "c".into() }, false),
         15 => container(r).map(Command::DeleteContainer),
+        16 => tab(r).map(|tab| Command::OpenPip { tab }),
+        17 => {
+            let c = if r.below(2) == 0 {
+                Command::ClosePip
+            } else {
+                Command::ReturnPip
+            };
+            return (c, false);
+        }
         18 => tab(r).map(Command::RendererGone),
         19 => tab(r).map(|tab| match r.below(3) {
             0 => Command::Navigate {
@@ -1039,7 +1048,8 @@ fn random_sequences_keep_invariants() {
                 (removed, added),
                 "{label}: effects vs tab set"
             );
-            most_panes = most_panes.max(after.visible_tabs().len());
+            let panes = after.windows.iter().map(|w| after.window_tabs(w.id).len());
+            most_panes = most_panes.max(panes.max().unwrap_or(0));
             m = after;
         }
     }
@@ -3022,4 +3032,187 @@ fn a_folder_collapses_and_expands() {
         },
     );
     assert!(!collapsed(&m));
+}
+
+// ----- picture-in-picture windows
+
+fn pip(m: Model, tab: TabId) -> (Model, WindowId) {
+    let (m, fx) = run(m, Command::OpenPip { tab });
+    let w = opened(&fx);
+    (m, w)
+}
+
+#[test]
+fn a_pip_window_frames_its_tab_and_its_main_window_leaves_it_out() {
+    let (m, t) = with_tabs(2);
+    let main = m.focused();
+    let (m, p) = pip(m, t[1]);
+    assert_eq!(m.window(p).unwrap().kind(), WindowKind::Pip);
+    assert_eq!(m.window(p).unwrap().owner(), Some(t[1]));
+    assert_eq!(
+        m.window(p).unwrap().tab(),
+        None,
+        "not a Little or Popup tab"
+    );
+    assert_eq!(m.pip_tab(), Some(t[1]));
+    assert_eq!(m.window_tabs(p), [t[1]]);
+    assert_eq!(m.window_tabs(main), Vec::<TabId>::new(), "a card there");
+    assert_eq!(active(&m), Some(t[1]), "still its Space's active tab");
+    assert_eq!(m.visible_tabs(), [t[1]]);
+    assert_eq!(m.tabs[&t[1]].lifecycle.liveness, Liveness::Active);
+    assert_eq!(m.focused(), main, "it takes no focus");
+    assert_eq!(m.window_of(t[1]), Some(p));
+    shown_once(&m);
+    // The Main window keeps it as its tab (the address, the card) but sends it no keys.
+    assert_eq!(m.window_tab(main), Some(t[1]));
+    assert_eq!(m.window_key_tab(main), None);
+    assert_eq!(m.window_key_tab(p), Some(t[1]));
+    // Another tab in the Main window: both on screen, each in one window.
+    let (m, _) = run(m, Command::ActivateTab(t[0]));
+    assert_eq!(m.window_tabs(main), [t[0]]);
+    assert_eq!(m.window_tabs(p), [t[1]]);
+    assert_eq!(m.tabs[&t[1]].lifecycle.liveness, Liveness::Active);
+    shown_once(&m);
+}
+
+#[test]
+fn pip_is_refused_for_what_it_cannot_show() {
+    let (m, t) = with_tabs(2);
+    let (m, _) = pip(m, t[1]);
+    let before = m.clone();
+    // One at a time.
+    let (m, fx) = run(m, Command::OpenPip { tab: t[0] });
+    assert!(fx.is_empty());
+    assert_eq!(m, before);
+    let (m, t) = with_tabs(2);
+    let unknown = TabId(999);
+    let (m2, fx) = run(m.clone(), Command::OpenPip { tab: unknown });
+    assert!(fx.is_empty());
+    assert_eq!(m2, m);
+    // A peek.
+    let (m, g) = peek(m, t[1]);
+    let before = m.clone();
+    let (m, fx) = run(m, Command::OpenPip { tab: g });
+    assert!(fx.is_empty());
+    assert_eq!(m, before);
+    // A Popup window's tab.
+    let (m, fx) = run(
+        m,
+        Command::OpenPopupWindow {
+            url: "https://p.test".into(),
+            opener: t[0],
+            size: None,
+        },
+    );
+    let popup_tab = m.window(opened(&fx)).unwrap().tab().unwrap();
+    let before = m.clone();
+    let (m, fx) = run(m, Command::OpenPip { tab: popup_tab });
+    assert!(fx.is_empty());
+    assert_eq!(m, before);
+}
+
+#[test]
+fn closing_the_pip_window_puts_the_tab_back() {
+    let (m, t) = with_tabs(2);
+    let main = m.focused();
+    let (m, p) = pip(m, t[1]);
+    let (m, fx) = run(m, Command::ClosePip);
+    assert_eq!(fx, vec![Effect::WindowClosed(p)]);
+    assert_eq!(m.window_tabs(main), [t[1]]);
+    assert_eq!(m.pip_tab(), None);
+    // The window's own close does the same, and the tab stays.
+    let (m, p) = pip(m, t[1]);
+    let (m, fx) = run(m, Command::CloseWindow(p));
+    assert_eq!(fx, vec![Effect::WindowClosed(p)]);
+    assert!(m.tabs.contains_key(&t[1]));
+    assert_eq!(m.window_tabs(main), [t[1]]);
+    // Nothing to close.
+    let (_, fx) = run(m, Command::ClosePip);
+    assert!(fx.is_empty());
+}
+
+#[test]
+fn return_shows_the_tab_where_it_lives() {
+    let (m, t) = with_tabs(2);
+    let main = m.focused();
+    let (m, _) = pip(m, t[1]);
+    let (m, _) = run(m, Command::ActivateTab(t[0]));
+    let (m, fx) = run(m, Command::ReturnPip);
+    assert!(fx.contains(&Effect::ActivateTab(t[1])));
+    assert_eq!(m.window_tabs(main), [t[1]]);
+    assert_ne!(m.tabs[&t[0]].lifecycle.liveness, Liveness::Active);
+    // From another Space: the window goes back to the tab's.
+    let (m, s1) = add_space(m, D);
+    let (m, _) = pip(m, t[1]);
+    let (m, _) = run(m, Command::SwitchSpace(s1));
+    assert_eq!(m.window_tabs(main), Vec::<TabId>::new());
+    assert_eq!(m.visible_tabs(), [t[1]], "still in its window");
+    let (m, _) = run(m, Command::ReturnPip);
+    assert_eq!(m.active_space(), s0());
+    assert_eq!(m.window_tabs(main), [t[1]]);
+    assert_eq!(m.windows.len(), 1);
+}
+
+#[test]
+fn the_pip_window_goes_with_its_tab_and_remembers_its_place() {
+    let (m, t) = with_tabs(2);
+    let (m, p) = pip(m, t[1]);
+    let g = Geometry {
+        width: 480,
+        height: 270,
+        pos: Some((10, 20)),
+    };
+    let (m, _) = run(
+        m,
+        Command::ResizeWindow {
+            window: p,
+            geometry: g,
+        },
+    );
+    let (m, fx) = run(m, Command::CloseTab(t[1]));
+    assert!(fx.contains(&Effect::WindowClosed(p)));
+    assert_eq!(m.pip_window(), None);
+    let (m, p) = pip(m, t[0]);
+    assert_eq!(
+        m.window(p).unwrap().geometry,
+        Some(g),
+        "where the last one was"
+    );
+    // Not part of a session: only Main windows are kept (wubble-store `session`).
+    assert!(m.window(p).unwrap().space().is_none());
+}
+
+#[test]
+fn a_pip_pane_leaves_its_split_on_screen() {
+    let (m, t) = with_tabs(3);
+    let main = m.focused();
+    let (m, _) = run(m, Command::SplitWith(t[1]));
+    assert_eq!(m.window_tabs(main).len(), 2);
+    let (m, _) = pip(m, t[1]);
+    assert_eq!(
+        m.window_tabs(main),
+        [t[2]],
+        "the other pane fills the window"
+    );
+    shown_once(&m);
+}
+
+#[test]
+fn check_holds_one_pip_window_of_a_placed_tab() {
+    let (m, t) = with_tabs(2);
+    let (mut m, _) = pip(m, t[1]);
+    m.check().expect("one Pip window");
+    let mut two = m.clone();
+    two.windows.insert(
+        0,
+        Window {
+            id: WindowId(9),
+            shown: Shown::Pip(t[0]),
+            geometry: None,
+        },
+    );
+    two.next_window = 10;
+    assert!(two.check().is_err(), "two Pip windows");
+    m.windows[0].shown = Shown::Pip(TabId(99));
+    assert!(m.check().is_err(), "an unknown tab");
 }

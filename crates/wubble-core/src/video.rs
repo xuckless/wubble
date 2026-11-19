@@ -260,6 +260,8 @@ pub enum VideoCmd {
     Mute,
     /// Seek to this fraction of the video.
     Seek(f64),
+    /// Seek by this many seconds (the picture-in-picture window's back and forward buttons).
+    SeekBy(f64),
     Pip,
     Frame,
     Save,
@@ -560,6 +562,12 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                     effects.push(VideoEffect::Page(PageCmd::Seek(to)));
                 }
                 VideoCmd::Seek(_) => {}
+                VideoCmd::SeekBy(delta) if video.duration.is_finite() => {
+                    let to = (video.time + delta).clamp(0.0, video.duration);
+                    video.time = to;
+                    effects.push(VideoEffect::Page(PageCmd::Seek(to)));
+                }
+                VideoCmd::SeekBy(_) => {}
                 VideoCmd::Pip => effects.push(VideoEffect::Pip),
                 VideoCmd::Frame => effects.push(VideoEffect::Frame),
                 VideoCmd::Save if can_save => effects.push(VideoEffect::Save),
@@ -910,6 +918,13 @@ mod tests {
         assert_eq!(e[0], VideoEffect::Page(PageCmd::Toggle));
         let (s, e) = cmd(s, VideoCmd::Seek(0.5), 4);
         assert_eq!(e[0], VideoEffect::Page(PageCmd::Seek(5.0)));
+        // By seconds from there, kept inside the video.
+        let (s, e) = cmd(s, VideoCmd::SeekBy(-10.0), 4);
+        assert_eq!(e[0], VideoEffect::Page(PageCmd::Seek(0.0)));
+        let (s, e) = cmd(s, VideoCmd::SeekBy(3.0), 4);
+        assert_eq!(e[0], VideoEffect::Page(PageCmd::Seek(3.0)));
+        let (s, e) = cmd(s, VideoCmd::SeekBy(30.0), 4);
+        assert_eq!(e[0], VideoEffect::Page(PageCmd::Seek(10.0)));
         let (s, e) = cmd(s, VideoCmd::Frame, 5);
         assert_eq!(e[0], VideoEffect::Frame);
         let (s, e) = cmd(s, VideoCmd::Pip, 6);

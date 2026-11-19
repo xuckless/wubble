@@ -75,7 +75,7 @@ use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
-use wubble_core::window::WindowId;
+use wubble_core::window::{WindowId, WindowKind};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, KeyInput, Point};
@@ -753,6 +753,10 @@ impl Host {
         if let Some(gone) = self.parked.remove(&id) {
             self.aux().remove_window(id);
             let _ = gone.handle.hide();
+            // picture-in-picture's window went, whoever closed it
+            if gone.kind == WindowKind::Pip {
+                self.pip_window_closed();
+            }
         }
     }
 
@@ -990,6 +994,8 @@ impl Host {
             }
         }
         self.enter_focused();
+        // once per change, not per window: a tab switch is picture-in-picture's cue
+        self.media_after_change();
     }
 
     /// The open windows, the one the host is in first.
@@ -1040,8 +1046,8 @@ impl Host {
         window.set_address_popups_blocked(i32::try_from(held).unwrap_or(i32::MAX));
         self.render_surfaces(&window);
         self.render_builtins(&window);
-        self.media_after_change();
         self.render_video(&window);
+        self.render_pip(&window);
         self.render_boost(&window);
         let nav = self.view().map(|view| {
             (
@@ -1146,7 +1152,7 @@ impl Host {
         input::key_page(
             self.key_pane,
             self.model.glance_of(self.w.id).map(|g| g.tab),
-            self.shown(),
+            self.model.window_key_tab(self.w.id),
         )
     }
 

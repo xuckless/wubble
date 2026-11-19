@@ -265,6 +265,16 @@ pub enum Command {
         window: WindowId,
         space: SpaceId,
     },
+    /// Picture-in-picture: `tab`'s frames in a Pip window of their own, unfocused (the tab stays
+    /// its Space's; its Main window shows a card for it). Ignored for an unknown tab, a peek, a
+    /// Little or Popup window's tab, or while a Pip window is open.
+    OpenPip {
+        tab: TabId,
+    },
+    /// The Pip window closes; its tab is shown in its Space's window again.
+    ClosePip,
+    /// The Pip window closes and its tab is shown and focused where it lives.
+    ReturnPip,
     /// Hidden tabs are judged by this policy from the next tick on.
     SetSleepPolicy(SleepPolicy),
     /// Tabs of this Space are never put to sleep (or are again).
@@ -347,6 +357,9 @@ pub struct Model {
     pub windows: Vec<Window>,
     /// The open peeks, at most one per window (`Command::OpenGlance`).
     pub glances: Vec<Glance>,
+    /// Where the last Pip window was (`Command::ResizeWindow` on it), for the next one in this
+    /// run.
+    pub pip_geometry: Option<Geometry>,
     /// The time hides are stamped with: set at creation and by `Command::Tick`,
     /// so `apply` itself never reads a clock.
     clock: Instant,
@@ -394,6 +407,7 @@ impl Model {
             }],
             tabs: BTreeMap::new(),
             glances: vec![],
+            pip_geometry: None,
             clock: now,
             pressure: Pressure::None,
             wall_ms: 0,
@@ -453,6 +467,7 @@ impl Model {
             tabs: tabs.into_iter().map(|t| (t.id, t)).collect(),
             windows,
             glances: vec![],
+            pip_geometry: None,
             clock: now,
             pressure: Pressure::None,
             wall_ms: 0,
@@ -1064,7 +1079,13 @@ impl Model {
         self.glances.retain(|g| self.tabs.contains_key(&g.tab));
         let shown = |m: &Model, g: &Glance| -> Vec<TabId> {
             match m.window(g.window).map(|w| w.shown) {
-                Some(Shown::Space(s)) => m.space_idx(s).map_or(vec![], |si| m.space_tabs(si)),
+                // an opener in picture-in-picture is off its window's screen
+                Some(Shown::Space(s)) => m.space_idx(s).map_or(vec![], |si| {
+                    let pip = m.pip_tab();
+                    let mut tabs = m.space_tabs(si);
+                    tabs.retain(|t| Some(*t) != pip);
+                    tabs
+                }),
                 _ => vec![],
             }
         };
@@ -1876,11 +1897,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             vec![]
         }
         Command::ResizeWindow { window, geometry } => {
-            if let Some(w) = m.windows.iter_mut().find(|w| w.id == window) {
-                w.geometry = Some(geometry);
-            }
+            m.resize_window(window, geometry);
             vec![]
         }
+        Command::OpenPip { tab } => m.open_pip(tab),
+        Command::ClosePip => m.close_pip(),
+        Command::ReturnPip => m.return_pip(),
         Command::MoveTabToWindow { tab, to } => m.move_tab_to_window(tab, to),
         Command::OpenPopupWindow { url, opener, size } => m.open_popup_window(url, opener, size),
         Command::OpenLittle { url, space } => m.open_little(url, space),

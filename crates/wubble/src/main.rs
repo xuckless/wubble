@@ -618,10 +618,10 @@ impl WindowFactory {
             with_host_in(id, |host| host.dispatch(Cmd::CloseWindow(id)));
             slint::CloseRequestResponse::KeepWindowShown
         });
-        // Little and Popup windows show their page alone.
+        // Little, Popup and Pip windows show their page alone.
         let ui = match kind {
             WindowKind::Main => ui,
-            WindowKind::Little | WindowKind::Popup => persist::UiState {
+            WindowKind::Little | WindowKind::Popup | WindowKind::Pip => persist::UiState {
                 mode: wubble_core::seam::SidebarMode::Hidden,
                 ..ui
             },
@@ -1023,6 +1023,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.video_command(&name, value))
     });
     window.on_video_hovered(move |over| with_host_in(win, |host| host.video_hovered(over)));
+    window.on_pip_command(move |name, value| {
+        with_host_in(win, |host| host.pip_command(&name, value))
+    });
     window.on_toast_acted(move || with_host_in(win, Host::toast_acted));
     window.on_toast_closed(move || with_host_in(win, Host::toast_closed));
     window

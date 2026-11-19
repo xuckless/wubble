@@ -29,6 +29,8 @@ import { ReaderControls } from "components/reader-controls.slint";
 import { VideoControls } from "components/video-controls.slint";
 import { BoostPanel } from "components/boost-panel.slint";
 import { PopupLayer } from "components/popup-layer.slint";
+import { PipControls } from "components/pip-controls.slint";
+import { PipCard } from "components/pip-card.slint";
 import { Sidebar } from "components/sidebar.slint";
 import { GlowRing } from "components/glow-ring.slint";
 import { AutoscrollCursor } from "components/autoscroll-cursor.slint";
@@ -47,17 +49,27 @@ export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, Comma
 export component AppWindow inherits Window {
     title: "wubble";
     icon: @image-url("../../../assets/icons/linux/hicolor/128x128/apps/wubble.png");
-    preferred-width: Shell.window-width;
-    preferred-height: Shell.window-height;
-    min-width: Chrome.windowMinW;
-    min-height: Chrome.windowMinH;
+    preferred-width: root.pip ? Shell.pip-width : Shell.window-width;
+    preferred-height: root.pip ? Shell.pip-height : Shell.window-height;
+    min-width: root.pip ? Shell.pip-min-width : Chrome.windowMinW;
+    min-height: root.pip ? Shell.pip-min-height : Chrome.windowMinH;
     // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
     // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
     // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
     in property <bool> native-frame: false;
-    // What the window is (wubble_core::window::WindowKind::index): 0 Main, 1 Little, 2 Popup.
+    // What the window is (wubble_core::window::WindowKind::index): 0 Main, 1 Little, 2 Popup,
+    // 3 Pip.
     in property <int> window-kind: 0;
+    // Picture-in-picture: the page alone, edge to edge, over other windows (a hint Wayland
+    // ignores), with its own controls on hover.
+    out property <bool> pip: root.window-kind == 3;
+    always-on-top: root.pip;
     no-frame: !root.native-frame;
+    // A Main window's tab plays in the picture-in-picture window: a card stands in for it.
+    in property <bool> pip-card;
+    in property <string> pip-title;
+    // The Pip window's controls and the card's button (host `pip_command`).
+    callback pip-command(string, float);
     background: transparent;
     default-font-family: Fonts.ui;
     default-font-size: Type.body.size;
@@ -619,7 +631,7 @@ export component AppWindow inherits Window {
         }
     }
     // The pointer is in the strip a hidden sidebar peeks from.
-    property <bool> at-edge: !root.page-fullscreen && (edge.has-hover || edges.west-hovered);
+    property <bool> at-edge: !root.page-fullscreen && !root.pip && (edge.has-hover || edges.west-hovered);
     // Hidden and closed, or peeking (chrome.tsx: the peek panel shows at once, even mid-close).
     property <bool> hidden-at-rest: root.sidebar-mode == SidebarMode.hidden && (root.peek || root.sidebar-width <= Shell.sidebar-open);
     property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
@@ -717,15 +729,15 @@ export component AppWindow inherits Window {
         // Nor does Tab stop on it: it is the window, not a control.
         focus-on-tab-navigation: false;
         // In page fullscreen the page fills the window, square.
-        property <length> gap: root.page-fullscreen ? 0px : Chrome.inset;
+        property <length> gap: root.page-fullscreen || root.pip ? 0px : Chrome.inset;
         content := Rectangle {
             // On whole physical pixels, so the page's frame is shown 1:1: the seam's spring and
             // a dragged width are fractional, and a fractional rectangle resamples the page.
-            x: root.page-fullscreen ? 0px : round((Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px)) / 1phx) * 1phx;
+            x: root.page-fullscreen || root.pip ? 0px : round((Chrome.inset + (root.sidebar-width > Shell.sidebar-open ? root.sidebar-width + Chrome.inset : 0px)) / 1phx) * 1phx;
             y: parent.gap;
             width: round((parent.width - self.x - parent.gap) / 1phx) * 1phx;
             height: parent.height - 2 * parent.gap;
-            border-radius: root.page-fullscreen ? 0px : Radius.md;
+            border-radius: root.page-fullscreen || root.pip ? 0px : Radius.md;
             clip: !root.edge-bowed;
             // Between split panes the window's glass shows (the design's `.wb-split` web view).
             background: root.panes.length > 1 || root.edge-bowed ? transparent : Palette.web;
@@ -796,7 +808,7 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            VideoControls {
+            if !root.pip: VideoControls {
                 video: root.video;
                 rates: root.video-rates;
                 command(name, value) => {
@@ -804,6 +816,22 @@ export component AppWindow inherits Window {
                 }
                 hovered(over) => {
                     root.video-hovered(over);
+                }
+            }
+            if root.pip: PipControls {
+                paused: root.video.paused;
+                command(name, value) => {
+                    root.pip-command(name, value);
+                }
+                begin-move => {
+                    root.window-begin-move();
+                }
+            }
+            if root.pip-card: PipCard {
+                open: true;
+                title: root.pip-title;
+                command(name, value) => {
+                    root.pip-command(name, value);
                 }
             }
             find-ui := FindBar {
@@ -1108,7 +1136,7 @@ export component AppWindow inherits Window {
             x: 0px;
             width: Chrome.peekEdge + Chrome.inset;
             height: parent.height;
-            enabled: root.sidebar-mode == SidebarMode.hidden && !root.page-fullscreen;
+            enabled: root.sidebar-mode == SidebarMode.hidden && !root.page-fullscreen && !root.pip;
         }
         Timer {
             interval: Shell.peek-in;
