@@ -246,10 +246,6 @@ components/toast.slint	text	Text	1
 components/toast.slint	token	Fonts	1
 components/toast.slint	token	Motion	6
 components/toast.slint	token	Palette	1
-components/video-controls.slint	animate	animate	2
-components/video-controls.slint	paint	background	5
-components/video-controls.slint	token	Motion	8
-components/video-controls.slint	token	Palette	3
 kit/chrome/split-view.slint	kit-literal	14px	1
 kit/chrome/split-view.slint	kit-literal	1px	2
 kit/chrome/split-view.slint	kit-literal	28px	2

@@ -1,0 +1,56 @@
+// derived: the Menu body (controls/menu.slint `.tp-menu`: thick glass, radius 16, from .95 and blurred at its trigger, 220 ms in / 176 ms out) without its rows, keys or scrim
+// A menu's panel for a list the shell lays out itself (the video strip's speeds: their rows are
+// BChoiceRows on a bare BChoiceList, so each keeps the element id the video smoke clicks). It
+// grows from `origin` in the panel as the Menu does and shrinks back on the same transition; its
+// scene glass is present only while it shows. Its own area keeps its hover over all its rows.
+// derived (notes/fidelity/derived-review.md "Overlays B"): the Menu's body with the shell's rows.
+
+import { Motion } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Tween } from "../../motion/tween.slint";
+import { OverlapLook } from "../../motion/overlap.slint";
+import { GlassTier } from "../../../components/model.slint";
+
+export component BMenuPanel inherits Rectangle {
+    in property <bool> shown;
+    in property <int> key: -1;
+    in property <int> layer;
+    in property <length> origin-x: self.width / 2;
+    in property <length> origin-y;
+    out property <bool> hovered: area.has-hover;
+    out property <float> progress: tw.t;
+
+    width: TouchCss.tp-menu--width;
+    visible: tw.t > 0;
+
+    tw := Tween {
+        on: root.shown;
+        in-ms: Motion.dropdown-in;
+        out-ms: Motion.dropdown-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+    OverlapLook {
+        e: tw.t;
+        entering: root.shown;
+        shift-in: 0px;
+        shift-out: 0px;
+        scale-from: Motion.dropdown-from;
+        origin-x: root.origin-x;
+        origin-y: root.origin-y;
+        GlassPanel {
+            key: root.key;
+            over-layer: root.layer;
+            present: tw.t > 0;
+            tier: GlassTier.thick;
+            radius: TouchCss.tp-menu--border-radius;
+            over-content: true;
+            clip: true;
+            area := TouchArea {
+                enabled: root.shown;
+                @children
+            }
+        }
+    }
+}

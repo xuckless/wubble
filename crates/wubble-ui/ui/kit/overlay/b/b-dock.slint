@@ -1,0 +1,212 @@
+// derived: .tp-dock (pages/touch.css:92) on GlassPanel thin (material/glass.slint), Tween + OverlapLook (motion/overlap.slint), IconButton (controls/icon-button.slint)
+// The strip of buttons over a video and in the picture-in-picture window (wubble-only.md §27,
+// §28: "the touch Dock"): the dock's body (padding 6, gap 2, radius 18: concentric with the 12
+// of its tiles) in thin glass, holding the shell's `.wb-ib` icon buttons (30, not the touch
+// page's 44 tiles: a strip over a small video stays small) and whatever else the strip lays
+// out in its row. It shows and hides as Overlap (`wb-in` / `wb-out`: 7 px up and from .98,
+// blurred, 240 ms in, 190 ms out), a transition, so a hover that comes back mid-exit turns it
+// round; its scene glass is present only while the look shows (`present` from the progress).
+// Its controls sit inside its touch area, so the pointer on a button is still on the strip.
+// derived (notes/fidelity/derived-review.md "Overlays B"): thin glass for the dock (the spec's
+// "thin Glass capsule"; the touch page's dock is regular), the 30 px tiles, no gliding tooltip
+// (the shell's one tooltip, kit Tooltip, is the host's), no gaussian swell of neighbours.
+//
+// BDockText: a strip button that shows a value instead of an icon (the video's speed, "1.5×"):
+// the `.wb-ib` body (30 high, radius 9, white .07 on hover) around the value in the number role
+// (`.wb-mono` at the slider output's 13 / 500, G5), swapped across as it changes (`.tp-sw-x`).
+//
+// BDockValue: a number the strip shows between its buttons (the reader's text size), in the
+// number role, swapped across as it changes; not a button.
+//
+// BDockLabel: a word of help at the strip's start (the screenshot picker's hint), in the menu
+// row's type and mist, inset as a menu row's label.
+//
+// BDockTab: the strip tucked away: a thin-glass tile as high as the strip at the page's right
+// edge with a chevron, sliding in from the edge and out to it on the same Overlap curve.
+
+import { Motion, Fonts, Palette } from "../../gen/tokens.slint";
+import { TouchCss, BrowserCss } from "../../gen/css.slint";
+import { Role, TextRole } from "../../gen/text.slint";
+import { KitText } from "../../text.slint";
+import { PressableButton } from "../../controls/button.slint";
+import { CrossfadeText } from "../../motion/crossfade.slint";
+import { Shell } from "../../derived.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Tween } from "../../motion/tween.slint";
+import { OverlapLook } from "../../motion/overlap.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { GlassTier } from "../../../components/model.slint";
+
+export component BDock inherits Rectangle {
+    in property <bool> shown;
+    // the scene's glass (GlassKeys, GlassOver)
+    in property <int> key: -1;
+    in property <int> layer;
+    // the strip takes the pointer while shown
+    in property <bool> interactive: true;
+    // kept in the tree while hidden (clear), so its buttons still answer a screen reader's
+    // action, which comes without a hover (the picture-in-picture window's strip)
+    in property <bool> reachable-hidden;
+    out property <bool> hovered: area.has-hover;
+    // the show's eased progress (1: in place)
+    out property <float> progress: tw.t;
+    // the row's preferred width (the strip sizes to its buttons)
+    out property <length> row-width: row.preferred-width;
+
+    // its row's height: the 30 px tiles, or taller controls a strip holds (the reader's)
+    height: max(2 * TouchCss.tp-dock--padding + Shell.icon-button, row.preferred-height);
+    visible: root.reachable-hidden || tw.t > 0;
+
+    tw := Tween {
+        on: root.shown;
+        in-ms: Motion.overlap-in;
+        out-ms: Motion.overlap-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+    OverlapLook {
+        e: tw.t;
+        entering: root.shown;
+        GlassPanel {
+            key: root.key;
+            over-layer: root.layer;
+            present: tw.t > 0;
+            tier: GlassTier.thin;
+            radius: TouchCss.tp-dock--border-radius;
+            over-content: true;
+            area := TouchArea {
+                enabled: root.interactive;
+                row := HorizontalLayout {
+                    padding: TouchCss.tp-dock--padding;
+                    spacing: TouchCss.tp-dock--gap;
+                    @children
+                }
+            }
+        }
+    }
+}
+
+export component BDockTab inherits Rectangle {
+    in property <bool> shown;
+    in property <int> key: -1;
+    in property <int> layer;
+    callback clicked();
+    callback entered();
+    out property <bool> hovered: tab-area.has-hover;
+    out property <float> progress: tw.t;
+
+    visible: tw.t > 0;
+
+    tw := Tween {
+        on: root.shown;
+        in-ms: Motion.overlap-in;
+        out-ms: Motion.overlap-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+    OverlapLook {
+        e: tw.t;
+        entering: root.shown;
+        // in from the page's edge and back out to it (`.tp-sw-x`'s across shift, outward)
+        along-x: true;
+        shift-in: root.width;
+        shift-out: root.width;
+        scale-from: 1;
+        GlassPanel {
+            key: root.key;
+            over-layer: root.layer;
+            present: tw.t > 0;
+            tier: GlassTier.thin;
+            radius: TouchCss.tp-dock--border-radius / 2;
+            over-content: true;
+            tab-area := TouchArea {
+                enabled: root.shown;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.clicked();
+                }
+                changed has-hover => {
+                    if self.has-hover {
+                        root.entered();
+                    }
+                }
+            }
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                path: Glyph.chevron-left;
+                tint: TouchCss.wb-tp-dock-btn--color;
+            }
+        }
+    }
+}
+
+export component BDockText inherits PressableButton {
+    in property <string> value;
+    property <TextRole> number: {
+        family: Fonts.mono,
+        size: Role.tp-sl-label-output.size,
+        weight: Role.tp-sl-label-output.weight,
+        line-height: Role.tp-sl-label-output.line-height,
+    };
+    height: BrowserCss.wb-ib--height;
+    padding-x: TouchCss.wb-tp-mrow--padding-left;
+    border-radius: BrowserCss.wb-ib--border-radius;
+    fill: BrowserCss.wb-ib--background;
+    hover-fill: BrowserCss.wb-ib-hover-not-disabled--background;
+    rest-ink: Palette.ink;
+    hover-ink: BrowserCss.wb-ib-hover-not-disabled--color;
+    accessible-label: root.label != "" ? root.label : root.value;
+    // one cell as wide as the value now (the leaving one may overhang it as it goes)
+    Rectangle {
+        width: measure.preferred-width;
+        measure := KitText {
+            role: root.number;
+            text: root.value;
+            visible: false;
+        }
+        CrossfadeText {
+            role: root.number;
+            text: root.value;
+            ink: root.ink;
+            along-x: true;
+        }
+    }
+}
+
+export component BDockValue inherits Rectangle {
+    in property <string> value;
+    property <TextRole> number: {
+        family: Fonts.mono,
+        size: Role.tp-sl-label-output.size,
+        weight: Role.tp-sl-label-output.weight,
+        line-height: Role.tp-sl-label-output.line-height,
+    };
+    width: measure.preferred-width;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.value;
+    measure := KitText {
+        role: root.number;
+        text: root.value;
+        visible: false;
+    }
+    CrossfadeText {
+        role: root.number;
+        text: root.value;
+        ink: Palette.ink;
+        align: center;
+        along-x: true;
+    }
+}
+
+export component BDockLabel inherits HorizontalLayout {
+    in property <string> text;
+    padding-left: TouchCss.wb-tp-mrow--padding-left;
+    padding-right: TouchCss.wb-tp-mrow--padding-left;
+    KitText {
+        role: Role.wb-tp-mrow;
+        text: root.text;
+        color: TouchCss.wb-tp-dock-btn--color;
+        vertical-alignment: center;
+    }
+}
