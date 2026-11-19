@@ -15,7 +15,7 @@ import { BSidePanel, BCode, BoostTints } from "../kit/overlay/b/b-panel.slint";
 // and a script (monospace), when the script runs, a tint and its strength, a font, on/off, and
 // the element zapper. The design has no editor (wubble-only.md §29): the panel is the Source
 // panel (kit/overlay/b/b-panel.slint) holding a settings card (on, runs), the sheet fields, code
-// areas, Swatches and an ElasticSlider for the tint, Delete as a HoldButton (destructive means
+// areas, a Tint toggle row over Swatches and an ElasticSlider for the tint, Delete as a HoldButton (destructive means
 // hold) and Done as `pri`; the site error is a coral note. CSS applies to the page as it is
 // typed; a script on Done (the page reloads).
 // Intents only: `text-edited(field, text)` for name, site, css, js, font; `number(field, value)`
@@ -142,13 +142,29 @@ export component BoostPanel inherits Rectangle {
                 }
             }
         }
-        if root.built: BGroup {
-            label: "Tint";
+        // The tint: a Toggle row (as in settings) is its on and off, and the Swatches and the
+        // strength show only while it is on (the Swatches have no "none": their ring would stay
+        // on a colour that is not applied). Off and on again both ask for the shown colour: the
+        // host takes the chosen swatch again as no tint, and a new one as that tint.
+        if root.built: BCard {
+            BRow {
+                title: "Tint";
+                Toggle {
+                    size: ToggleSize.sm;
+                    label: "Tint";
+                    on: root.view.tint-on;
+                    toggled => {
+                        root.tint(root.view.tint);
+                    }
+                }
+            }
+        }
+        if root.built && root.view.tint-on: BGroup {
             Swatches {
-                label: "Tint";
+                label: "Tint colour";
                 colours: root.swatches;
                 names: BoostTints.names;
-                value: root.view.tint-on ? root.view.tint : transparent;
+                value: root.view.tint;
                 chosen(c) => {
                     root.tint(c);
                 }
@@ -157,7 +173,9 @@ export component BoostPanel inherits Rectangle {
                 compact: true;
                 label: "Strength";
                 unit: "%";
-                min: 0;
+                // off is the toggle's: a strength of 0 would read as off and take the slider
+                // away under the pointer
+                min: 1;
                 max: 100;
                 value: root.view.strength;
                 edited(v) => {
