@@ -45,7 +45,7 @@ fn tokens_match_physics() {
     );
     assert_eq!(f64::from(app.get_row_pitch()), TABS::pitch);
     assert_eq!(
-        token("app-tokens.slint", "space-tile") + token("app-tokens.slint", "space-gap"),
+        token("kit/derived.slint", "space-tile") + token("kit/derived.slint", "space-gap"),
         SpaceSwitcher::PITCH
     );
 
@@ -67,6 +67,6 @@ fn tokens_match_physics() {
     // so the renderer's bilinear sample is an exact 2x2 average at scale 1.
     let shell_icon = f64::from(wubble_core::favicon::SHELL_ICON_PX);
     for name in ["icon", "page-favicon"] {
-        assert_eq!(2.0 * token("app-tokens.slint", name), shell_icon, "{name}");
+        assert_eq!(2.0 * token("kit/derived.slint", name), shell_icon, "{name}");
     }
 }

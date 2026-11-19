@@ -3,8 +3,15 @@
 // once the sidebar has width, the seam over both. Peek is from chrome.tsx (the port has none).
 
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing, Calm } from "tokens.slint";
-import { Shell } from "app-tokens.slint";
-import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
+import { Shell } from "kit/derived.slint";
+import { Seam } from "kit/controls/seam.slint";
+import { GlassPanel } from "kit/material/glass.slint";
+import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
+// The generated kit (tools/fidelity/extract.mjs), imported so every build compiles it; the
+// lanes move call sites onto it.
+import { Palette as GenPalette } from "kit/gen/tokens.slint";
+import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
+import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
 import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";

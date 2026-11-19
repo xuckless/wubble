@@ -14,8 +14,11 @@
 // Nothing here tweens a value Rust owns; only hover fades and the 0.97 press use `animate`.
 
 import { Palette, Radius, Spacing, Chrome, Fonts, Type, Motion } from "../tokens.slint";
-import { Shell } from "../app-tokens.slint";
-import { TabRow, WubbleScroller, SpaceIcon, PressableButton } from "../components.slint";
+import { Shell } from "../kit/derived.slint";
+import { TabRow } from "../kit/chrome/tab-row.slint";
+import { WubbleScroller } from "../kit/controls/scroller.slint";
+import { SpaceIcon } from "../kit/chrome/space-icon.slint";
+import { PressableButton } from "../kit/controls/button.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "address-pill.slint";

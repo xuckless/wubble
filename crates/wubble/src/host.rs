@@ -366,6 +366,8 @@ pub struct Host {
     pub gallery_passed: bool,
     /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
     gallery_timer: slint::Timer,
+    /// When the gallery's scene was shown: a burst's frames are timed from it.
+    gallery_burst_start: std::time::Instant,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
     pub(crate) input: InputState,
@@ -601,6 +603,7 @@ impl Host {
             pages_passed: false,
             gallery_passed: false,
             gallery_timer: slint::Timer::default(),
+            gallery_burst_start: std::time::Instant::now(),
             settings_read: None,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...

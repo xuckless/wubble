@@ -73,8 +73,9 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --no-sandbox   # CEF without its sandbox, debugging only (warned at start)
 
 The gallery (`gallery_smoke.rs`, `host/gallery.rs`) writes `DIR/NN-name.png` per scene in the
-order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, command bar (empty, with
-results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
+order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, a tab row and the new-tab row
+hovered, the command bar opening (a burst: `DIR/NN-name/fKKK.png` with `times.txt`), command bar
+(empty, with results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
 menu and save prompt, dialog sheet, toast, error and certificate error pages, Settings (four scroll
 positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager.
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
@@ -116,6 +117,38 @@ It runs one job at a time for every lane; it cannot run the examples (they repla
 
 Window runs over ssh, when the owner has started `~/wubble-runner/run.sh` in their GUI session: `printf "wubble-<dir>\n<timeout s>\n<args>\n" > ~/wubble-runner/queue/<fresh name>.job` runs `~/wubble-<dir>/target/debug/bundle/wubble.app/Contents/MacOS/wubble <args>` there (no environment variables: use flags; write output files to `/tmp`).
 Poll for `/tmp/wubble-runner-out/<name>.exit` (124 = timeout), read `<name>.log`; keep runs under 30 s and few (windows open on the owner's screen), and `rm -rf target/debug/bundle` before re-bundling (an in-place rewrite of the binary gets it killed, exit 137).
+
+## Design fidelity
+
+The web version of the design (`~/Dev/wubble-wt/ref/the-wallpaper-project/src/wubble`:
+`browser/`, `core/`, `pages/`) is the truth for look, motion, effects and widget behaviour; its
+`slint/` port is a head start only where it is line-for-line with the web. wubble's repo is the
+truth for features and wording. Plan and lanes: `~/Dev/wubble-wt/notes/fidelity/kit-plan.md`;
+tools: `tools/fidelity/README.md`. Rules for every agent:
+
+- **Compose only kit components.** UI is drawn only by `crates/wubble-ui/ui/kit/**`. A shell
+  `.slint` file (everything else) lays out kit components and binds models: no fills, borders,
+  shadows, gradients, `Path`s, `animate`, font settings, raw `Text`, design token groups
+  (`Palette.`, `Glass.`, `Motion.`, ...) or literals. Need a look the kit lacks? Translate the
+  design's widget into a kit file; never draw it in the shell.
+- **Derive, never invent.** Every kit file starts with `// design: <file>:<lines> @<commit>`
+  (the web source it translates, statement for statement, shaders included) or `// derived:
+  <kit parts it composes>` for a wubble-only surface (rules in `notes/fidelity/wubble-only.md`).
+  A derived piece that needs a primitive the design does not have waits for the owner.
+- **Values are generated.** Colours, lengths, durations, easings, springs, keyframes and icon
+  paths come from `ui/kit/gen/*.slint` and `wubble_core::kit_gen`, written by
+  `node tools/fidelity/extract.mjs`; nobody edits them by hand. When the clone moves: pull it,
+  rerun the generator (`--check` says what is stale), commit the regenerated files.
+- **The lock.** `crates/wubble-ui/tests/kit_lock.rs` (in `cargo test`) enforces the rules above
+  against a baseline of today's violations (`kit_lock_baseline.txt`) that only shrinks: a new
+  violation fails; after clearing some, lower it with
+  `KIT_LOCK_WRITE=1 cargo test -p wubble-ui --test kit_lock`. Never raise it or delete it.
+- **Measure.** `tools/fidelity/run.sh [OUT]` serves the design, shoots its scenes headless on a
+  fixed 1/120 s clock (`scenes.json`), shoots wubble's gallery on the design's parity profile
+  (`--parity`, `--frozen-backdrop`) and writes `scores.csv` (SSIM, CIEDE2000) and contact sheets
+  (web | wubble | ΔE). The bar is SSIM >= 0.90 and mean ΔE <= 3 at 1x and 2x plus frame-by-frame
+  motion; the owner's eye is the final judge. Attach the contact sheets of every surface you
+  touched to your report. Scores are reported, never asserted in tests.
 
 ## Code principles
 

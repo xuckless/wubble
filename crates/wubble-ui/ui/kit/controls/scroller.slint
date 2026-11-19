@@ -1,0 +1,66 @@
+// design: browser/scroller.tsx:1-181, browser/browser.css:126-130 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Palette, Motion } from "../../tokens.slint";
+
+// @source slint-scroller
+// A scroll view on Wubble physics (scroller.rs) instead of Flickable's: wheel, keys and touch go
+// to Rust, and Rust writes back the content offset (rubber-banded past the ends) and the thumb,
+// which squashes at the ends like the content. Slint's wheel delta is positive when scrolling
+// toward the top on most backends, the opposite of the web's deltaY, so it's negated here.
+export component WubbleScroller inherits Rectangle {
+    in property <length> content-y;      // ScrollRender.shown
+    in property <length> thumb-top;
+    in property <length> thumb-height;
+    in property <bool> thumb-visible;
+    out property <length> viewport-height: self.height;
+    out property <length> content-height: content.preferred-height;
+    callback wheel(length);              // web-style deltaY in px
+    // wubble change: both parts of every scroll, web sign, for the Space swipe (which needs the
+    // vertical travel to tell a swipe from a list scroll's drift)
+    callback wheel-xy(length, length);
+    callback touch-down(length);
+    callback touch-move(length);
+    callback touch-up();
+    callback thumb-down(length);
+    callback thumb-move(length);
+    callback thumb-up();
+
+    clip: true;
+    TouchArea {
+        scroll-event(e) => {
+            root.wheel(-e.delta-y);
+            root.wheel-xy(-e.delta-x, -e.delta-y);
+            accept
+        }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down) { root.touch-down(self.mouse-y); }
+            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.touch-up(); }
+        }
+        moved => { if (self.pressed) { root.touch-move(self.mouse-y); } }
+    }
+    content := VerticalLayout {
+        y: -root.content-y;
+        width: root.width;
+        height: self.preferred-height;
+        @children
+    }
+    Rectangle {
+        x: root.width - 7px;
+        y: root.thumb-top;
+        width: 4px;
+        height: root.thumb-height;
+        border-radius: 2px;
+        background: Palette.mist;
+        opacity: root.thumb-visible ? 0.55 : 0;
+        animate opacity { duration: root.thumb-visible ? 150ms : 300ms; easing: Motion.easeOut; }
+        TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { root.thumb-down(self.absolute-position.y + self.mouse-y); }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.thumb-up(); }
+            }
+            moved => { if (self.pressed) { root.thumb-move(self.absolute-position.y + self.mouse-y); } }
+        }
+    }
+}

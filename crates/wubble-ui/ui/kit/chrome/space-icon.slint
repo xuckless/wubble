@@ -1,0 +1,34 @@
+// design: slint/space-icons.json:1-6, browser/icons.tsx:31-41 @598f814
+// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
+// @ 6c840da, with the marked `wubble change`s), unchanged.
+
+import { Palette, Motion } from "../../tokens.slint";
+
+// @source slint-space-icons
+// The three Space icons: 24×24 stroke icons, 1.7 stroke, round caps and joins. The same path
+// data is in space-icons.json for the web app. Never a letter in a square.
+export global SpaceIconPaths {
+    // Personal: a small house with an arched door
+    out property <string> personal: "M4 10.5 12 4l8 6.5M6 9v9.5A1.5 1.5 0 0 0 7.5 20h9a1.5 1.5 0 0 0 1.5-1.5V9M10 20v-4a2 2 0 0 1 4 0v4";
+    // Work: a briefcase with a handle, a belt line and a clasp
+    out property <string> work: "M5 7.5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2ZM9 7.5V6a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 6v1.5M3 12.5h18M12 11v3";
+    // Study: an open book, two curved pages on a spine
+    out property <string> study: "M12 7C10.2 5.4 7.4 4.7 4 5v12.5c3.4-.3 6.2.4 8 2M12 7c1.8-1.6 4.6-2.3 8-2v12.5c-3.4-.3-6.2.4-8 2M12 7v12.5";
+}
+
+export component SpaceIcon inherits Path {
+    // "personal" | "work" | "study"
+    in property <string> kind: "personal";
+    in property <color> tint: Palette.ink;
+    width: 24px;
+    height: 24px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: root.kind == "work" ? SpaceIconPaths.work : root.kind == "study" ? SpaceIconPaths.study : SpaceIconPaths.personal;
+    fill: transparent;
+    stroke: root.tint;
+    // Slint strokes in logical px, not viewbox units: keep the icon at 24px (or scale this too).
+    stroke-width: 1.7px;
+    stroke-line-cap: round;
+    animate stroke { duration: 150ms; easing: Motion.easeOut; }
+}

@@ -23,6 +23,7 @@ pub mod hints;
 pub mod hovercard;
 pub mod import;
 pub mod keys;
+pub mod kit_gen;
 pub mod lifecycle;
 pub mod media;
 pub mod memreport;

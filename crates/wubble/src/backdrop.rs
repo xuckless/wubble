@@ -298,11 +298,17 @@ impl Glass {
         // Idle frames are slow on purpose, and the first frame after a change of run state
         // follows a gap (an idle tick, a pause): neither says anything about the frame's load.
         let steady = !s.run.take_changed();
+        // `--frozen-backdrop` (fidelity harness): the liquid's clock never advances.
+        let pace = if crate::shot::frozen_backdrop() {
+            0.0
+        } else {
+            s.run.pace()
+        };
         let full_rate = steady && matches!(s.run.state(), RunState::Running { .. });
         let interval = since.filter(|_| full_rate);
         match s
             .renderer
-            .before_rendering(window.window(), now, s.run.max_dt(), s.run.pace())
+            .before_rendering(window.window(), now, s.run.max_dt(), pace)
         {
             // a new texture only (first frame, resize): see `Renderer::before_rendering`
             Ok(Some(image)) => window.set_scene(image),
