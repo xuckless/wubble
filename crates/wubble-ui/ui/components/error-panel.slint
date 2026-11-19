@@ -1,122 +1,16 @@
-import { Palette, Motion, Space, Fonts, Type } from "../kit/gen/tokens.slint";
-import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { SheetButton } from "sheet-button.slint";
-import { ErrorView, GlassTier, GlassKeys, GlassOver } from "model.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { GlassKeys, GlassOver } from "model.slint";
+import { AErrorPanel } from "../kit/overlay/a/a-error-panel.slint";
 
 // The error panel over the page: a failed load ("This site can't be reached", Reload), a refused
 // certificate ("Your connection is not private", Go back, and Proceed only where allowed) or a
 // crashed page (Reload). Fills its parent (the content area) on thick glass, so the page under it
-// gets no input; a centred column like Chromium's error and interstitial pages. Written from
-// scratch: the design repo has no error page. Type and buttons are the dialog sheet's (Ultra
-// Reactivate `.ur-o-dialog`); the lock and reload glyphs are the design's icons (icons.tsx).
-// Enter is the primary button (Go back on a certificate panel: proceeding is never the default).
-export component ErrorPanel inherits Rectangle {
-    in property <ErrorView> error;
-    callback primary();
-    callback secondary();
-
-    property <bool> open: root.error.open;
-
-    public function take-focus() {
-        keys.focus();
-    }
-
-    // The exit is seen: drawn until the glass has faded; only the open panel answers.
-    visible: root.open || glass.opacity > 0;
-
-    TouchArea {
-        enabled: root.open;
-        scroll-event(e) => {
-            root.open ? accept : reject
-        }
-    }
-
-    keys := FocusScope {
-        width: 0px;
-        height: 0px;
-        key-pressed(event) => {
-            if root.open && event.text == Key.Return {
-                root.primary();
-                return accept;
-            }
-            return reject;
-        }
-    }
-
-    glass := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
-        key: GlassKeys.error;
-        over-layer: GlassOver.card;
-        tier: GlassTier.thick;
-        radius: 0px;
-        over-content: true;
-        opacity: root.open ? 1 : 0;
-        animate opacity {
-            duration: Calm.ms(root.open ? Shell.sheet-in : Motion.dropdown-out);
-            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
-        }
-
-        column := VerticalLayout {
-            x: (parent.width - self.width) / 2;
-            y: max(Space.s6, (parent.height - self.preferred-height) / 3);
-            width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
-            height: self.preferred-height;
-            spacing: Space.s3;
-            Icon {
-                path: root.error.cert ? Glyph.lock : Glyph.globe;
-                size: Shell.error-icon;
-                tint: root.error.cert ? Palette.coral : Palette.mist;
-            }
-            Text {
-                text: root.error.title;
-                color: Palette.ink;
-                font-family: Fonts.ui;
-                font-size: Type.title.size;
-                font-weight: Type.title.weight;
-                wrap: word-wrap;
-            }
-            Text {
-                text: root.error.summary;
-                color: Palette.mist;
-                font-family: Fonts.ui;
-                font-size: Shell.sheet-body;
-                wrap: word-wrap;
-            }
-            Text {
-                visible: self.text != "";
-                text: root.error.detail;
-                color: Palette.haze;
-                font-family: Fonts.mono;
-                font-size: Type.label.size;
-                wrap: word-wrap;
-            }
-            Rectangle {
-                height: Space.s3;
-            }
-            HorizontalLayout {
-                alignment: start;
-                spacing: Space.s2;
-                SheetButton {
-                    text: root.error.primary;
-                    primary: true;
-                    clicked => {
-                        if root.open {
-                            root.primary();
-                        }
-                    }
-                }
-                if root.error.secondary != "": SheetButton {
-                    text: root.error.secondary;
-                    clicked => {
-                        if root.open {
-                            root.secondary();
-                        }
-                    }
-                }
-            }
-        }
-    }
+// gets no input; a centred column like Chromium's error and interstitial pages. Derived from the
+// kit (notes/fidelity/wubble-only.md; the design has no error page): the Error page
+// (kit/overlay/a/a-error-panel.slint), the settings page's roles, kit Buttons, the detail in a
+// Fold. Enter is the primary button (Go back on a certificate panel: proceeding is never the
+// default). Its interface is the kit body's: `error`, `primary()`, `secondary()`, `take-focus()`.
+export component ErrorPanel inherits AErrorPanel {
+    // the scene draws its glass above the page (GlassPanel `over-layer`)
+    key: GlassKeys.error;
+    layer: GlassOver.card;
 }

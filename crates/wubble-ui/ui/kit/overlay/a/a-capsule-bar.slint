@@ -1,0 +1,168 @@
+// derived: SearchCapsule anatomy (controls/search-capsule.slint, .st-search), APopover (a-popover.slint), CrossfadeText along-x, IconButton
+// The capsule bar (wubble-only.md: the find bar): the search capsule's thin glass, radius 20,
+// 40 high, padding 0 6 0 14, gap 8, its 16 px mist search icon and 14 px input (placeholder
+// haze), the film ring while focused or holding a query; then the match count in the mono
+// number role (`.wb-mono` at the capsule's count size, 12.5), swapped across as it changes
+// (`.tp-sw-x`) and coral while a query finds nothing; then kit IconButtons for previous, next and
+// close. It grows from its top right corner as the Popover does. Its keys are the find bar's
+// (Chromium find_bar_view.cc, Firefox findbar.js): Return steps to the next match, Shift+Return
+// to the previous, Escape closes. The search capsule itself is not reused: its Escape clears the
+// query and its `accepted` carries no modifiers.
+// derived (notes/fidelity/derived-review.md "Capsule bar"): the count's role (mono family at
+// .st-count's size) and the no-match coral.
+
+import { Palette, TouchMenu } from "../../gen/tokens.slint";
+import { SettingsCss } from "../../gen/css.slint";
+import { Role, TextRole } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { IconButton } from "../../controls/icon-button.slint";
+import { CrossfadeText } from "../../motion/crossfade.slint";
+import { GlassTier } from "../../../components/model.slint";
+import { APopover } from "a-popover.slint";
+
+export component ACapsuleBar inherits Rectangle {
+    in property <bool> open;
+    in property <int> key: -1;
+    in property <int> layer;
+    // the query the host holds (the last search when it opens)
+    in property <string> query;
+    // "n of m"; `none` says the query found nothing
+    in property <string> counter;
+    in property <bool> none;
+    in property <string> placeholder;
+    callback edited(string);
+    // true: next, false: previous
+    callback step(bool);
+    callback closed();
+    out property <bool> mounted: pop.mounted;
+    out property <bool> ring: input.has-focus || input.text != "";
+    out property <bool> glass-present: pop.glass-present;
+    out property <color> count-ink: root.none && input.text != "" ? Palette.coral : Palette.haze;
+
+    public function take-focus() {
+        input.focus();
+        input.select-all();
+    }
+    changed query => {
+        if input.text != root.query {
+            input.text = root.query;
+        }
+    }
+
+    property <TextRole> count-role: {
+        family: Role.wb-mono.family,
+        size: Role.st-count.size,
+        weight: Role.st-count.weight,
+        line-height: Role.st-count.line-height,
+    };
+    height: SettingsCss.st-search--height;
+    visible: pop.mounted;
+
+    pop := APopover {
+        open: root.open;
+        key: root.key;
+        layer: root.layer;
+        tier: GlassTier.thin;
+        radius: SettingsCss.st-search--border-radius;
+        film: root.ring;
+        origin-x: root.width;
+        HorizontalLayout {
+            padding-left: SettingsCss.st-search--padding-left;
+            padding-right: SettingsCss.st-search--padding-right;
+            spacing: SettingsCss.st-search--gap;
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.search-icon;
+                    path: Glyph.search;
+                    tint: SettingsCss.st-search--color;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                KitText {
+                    role: Role.st-search-input;
+                    text: root.placeholder;
+                    visible: input.text == "";
+                    color: SettingsCss.st-search-input-placeholder--color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                input := TextInput {
+                    accessible-label: root.placeholder;
+                    font-family: Role.st-search-input.family;
+                    font-size: Role.st-search-input.size;
+                    font-weight: Role.st-search-input.weight;
+                    color: SettingsCss.st-search-input--color;
+                    selection-background-color: Shell.selection-fill;
+                    selection-foreground-color: Shell.selection-ink;
+                    vertical-alignment: center;
+                    single-line: true;
+                    edited => {
+                        root.edited(self.text);
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Return {
+                            root.step(!event.modifiers.shift);
+                            return accept;
+                        }
+                        if event.text == Key.Escape {
+                            root.closed();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            Rectangle {
+                width: measure.preferred-width;
+                measure := KitText {
+                    role: root.count-role;
+                    text: root.counter;
+                    opacity: 0;
+                    accessible-role: AccessibleRole.none;
+                }
+                CrossfadeText {
+                    text: root.counter;
+                    role: root.count-role;
+                    ink: root.count-ink;
+                    along-x: true;
+                    accessible-role: AccessibleRole.text;
+                    accessible-label: root.counter;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon-path: Glyph.chevron-up;
+                    label: "Previous match";
+                    clicked => {
+                        root.step(false);
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon-path: Glyph.chevron-down;
+                    label: "Next match";
+                    clicked => {
+                        root.step(true);
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon-path: Glyph.close;
+                    label: "Close find";
+                    clicked => {
+                        root.closed();
+                    }
+                }
+            }
+        }
+    }
+}

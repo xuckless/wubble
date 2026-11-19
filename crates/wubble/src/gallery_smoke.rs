@@ -114,9 +114,21 @@ pub const SCENES: &[Scene] = &[
     over("tab-row-menu", Overlay::TabMenu),
     over("site-menu", Overlay::SiteMenu),
     over("downloads-popover", Overlay::Downloads),
+    Scene {
+        pointer: Some(DOWNLOAD_ROW),
+        ..over("downloads-popover-hover", Overlay::Downloads)
+    },
     over("find-bar", Overlay::Find),
     over("permission-prompt", Overlay::Permission),
+    Scene {
+        pointer: Some(PERMISSION_BLOCK),
+        ..over("permission-prompt-hover", Overlay::Permission)
+    },
     over("autofill-menu", Overlay::AutofillMenu),
+    Scene {
+        pointer: Some(AUTOFILL_ROW),
+        ..over("autofill-menu-hover", Overlay::AutofillMenu)
+    },
     over("autofill-save", Overlay::AutofillSave),
     over("dialog-sheet", Overlay::Dialog),
     over("toast", Overlay::Toast),
@@ -154,6 +166,11 @@ pub const SCENES: &[Scene] = &[
 /// (`--parity`: four favourites, the Space name, five tabs), logical px.
 const TAB_ROW: (u16, u16) = (130, 248);
 const NEW_TAB_ROW: (u16, u16) = (130, 408);
+// Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the
+// autofill menu's first login.
+const DOWNLOAD_ROW: (u16, u16) = (330, 835);
+const PERMISSION_BLOCK: (u16, u16) = (204, 298);
+const AUTOFILL_ROW: (u16, u16) = (120, 162);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
 
