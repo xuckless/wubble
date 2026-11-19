@@ -1329,6 +1329,8 @@ fn run(
         ),
         Mode::Builtins => {
             // A file:// PDF: Chromium's viewer, as for a downloaded one.
+            // The store thread makes the profile directory too, but not before this runs.
+            std::fs::create_dir_all(profile)?;
             let pdf = profile.join("doc.pdf");
             std::fs::write(&pdf, DOC_PDF)?;
             (
