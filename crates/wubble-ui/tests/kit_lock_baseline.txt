@@ -348,10 +348,6 @@ components/video-controls.slint	animate	animate	2
 components/video-controls.slint	paint	background	5
 components/video-controls.slint	token	Motion	8
 components/video-controls.slint	token	Palette	3
-components/window-lights.slint	animate	animate	3
-components/window-lights.slint	paint	background	1
-components/window-lights.slint	token	Motion	5
-components/window-lights.slint	token	Palette	4
 kit/chrome/split-view.slint	kit-literal	1.5px	1
 kit/chrome/split-view.slint	kit-literal	14px	1
 kit/chrome/split-view.slint	kit-literal	1px	5
@@ -373,7 +369,7 @@ kit/derived.slint	kit-literal	10px	6
 kit/derived.slint	kit-literal	11.5px	1
 kit/derived.slint	kit-literal	11px	4
 kit/derived.slint	kit-literal	1280px	1
-kit/derived.slint	kit-literal	12px	7
+kit/derived.slint	kit-literal	12px	6
 kit/derived.slint	kit-literal	135px	1
 kit/derived.slint	kit-literal	13px	5
 kit/derived.slint	kit-literal	140px	1
@@ -421,14 +417,14 @@ kit/derived.slint	kit-literal	5px	4
 kit/derived.slint	kit-literal	600px	1
 kit/derived.slint	kit-literal	60ms	1
 kit/derived.slint	kit-literal	60px	1
-kit/derived.slint	kit-literal	6px	7
+kit/derived.slint	kit-literal	6px	6
 kit/derived.slint	kit-literal	70ms	1
 kit/derived.slint	kit-literal	720px	1
 kit/derived.slint	kit-literal	72px	3
 kit/derived.slint	kit-literal	7px	2
 kit/derived.slint	kit-literal	800px	1
 kit/derived.slint	kit-literal	88px	2
-kit/derived.slint	kit-literal	8px	8
+kit/derived.slint	kit-literal	8px	7
 kit/derived.slint	kit-literal	96px	3
 kit/derived.slint	kit-literal	9px	4
-kit/derived.slint	kit-literal	rgba(	18
+kit/derived.slint	kit-literal	rgba(	17
