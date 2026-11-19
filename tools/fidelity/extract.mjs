@@ -18,6 +18,7 @@ import { pathToFileURL } from 'node:url';
 import { REPO, designRoot, designSrc, designCommit } from './lib/design.mjs';
 import { parseCss } from './lib/css.mjs';
 import { makeReader, readDecl } from './lib/values.mjs';
+import { CSS_EASE_OUT, easeTable } from './lib/ease.mjs';
 
 const args = process.argv.slice(2);
 const flag = n => args.includes(n);
@@ -217,7 +218,7 @@ function tokensSlint(css) {
   out.push('}', '');
   out.push('/// A glass tier: tokens.ts `glass` (backdrop blur, saturate, brightness, fill, shadow) and the');
   out.push('/// tier rule in wubble.css (the shadow colour, the inset rim all round and the top light line).');
-  out.push('export struct GlassTier { blur: length, saturate: float, brightness: float, fill: color, shadow-y: length, shadow-blur: length, shadow-color: color, rim-all: color, rim-top: color }');
+  out.push('export struct GlassTierStyle { blur: length, saturate: float, brightness: float, fill: color, shadow-y: length, shadow-blur: length, shadow-color: color, rim-all: color, rim-top: color }');
   out.push('export global Glass {');
   for (const [k, g] of Object.entries(t.glass)) {
     const sel = `wb-${k}--box-shadow`;
@@ -226,7 +227,7 @@ function tokensSlint(css) {
       `fill: ${slintValue(color(g.fill))}`, `shadow-y: ${slintValue(L(g.shadow[0]))}`, `shadow-blur: ${slintValue(L(g.shadow[1]))}`,
       `shadow-color: ${slintValue(W(`${sel}-shadow-3-color`))}`, `rim-all: ${slintValue(W(`${sel}-shadow-1-color`))}`, `rim-top: ${slintValue(W(`${sel}-shadow-2-color`))}`,
     ];
-    out.push(`    out property <GlassTier> ${k}: { ${fields.join(', ')} }; // ${cite('core/tokens.ts', tl(`  ${k}: {`))}, core/wubble.css:${W(`${sel}-shadow-3-color`).line}`);
+    out.push(`    out property <GlassTierStyle> ${k}: { ${fields.join(', ')} }; // ${cite('core/tokens.ts', tl(`  ${k}: {`))}, core/wubble.css:${W(`${sel}-shadow-3-color`).line}`);
   }
   out.push(prop('over-content', color(t.thickOverContent), cite('core/tokens.ts', tl('thickOverContent ='))));
   const top = W('wb-glass-after--background-stop-1-color');
@@ -270,6 +271,24 @@ function tokensSlint(css) {
   }
   const bl = lineOf('core/physics.ts', 'export const BAND_K');
   for (const [k, v] of Object.entries(physics.BAND_K)) out.push(prop(`band-${k}`, L(v), cite('core/physics.ts', bl)));
+  // CSS `ease-out` per keyframe interval (wobble): Slint has no per-key easing, so the kit
+  // interpolates this table (x = i / 32) over each interval's progress.
+  const easeOut = easeTable(CSS_EASE_OUT, 32).map(v => fmtNum(Number(v.toFixed(6))));
+  out.push(`    // CSS ease-out, cubic-bezier(${CSS_EASE_OUT.join(', ')}), sampled at x = i / 32 (the curve keyframe intervals take)`);
+  out.push(`    out property <[float]> ease-out-css: [${easeOut.join(', ')}];`);
+  out.push('}', '');
+  out.push('/// A keyframe: progress `t` (0..1), scale x/y and rotation (deg); 0 and 1 are at rest.');
+  out.push('export struct KeyStep { t: float, sx: float, sy: float, rot: float }');
+  out.push('export global Keyframes {');
+  for (const [n, file, kf, dur] of [['wobble', 'core/wubble.css', 'wb-wob-a', 'wb-wob-a-gt-svg--animation-duration'], ['squash', 'core/wubble.css', 'wb-sq-a', null], ['button-squash', 'pages/touch.css', 'tp-bq-a', null]]) {
+    const k = keyframes(css, file, kf);
+    const p = css.find(c => c.file === file).props.find(p => p.id.startsWith(`${kf}-k-`));
+    out.push(`    out property <[KeyStep]> ${n}: [${k.map(([t, sx, sy, r]) => `{ t: ${fmtNum(t)}, sx: ${fmtNum(sx)}, sy: ${fmtNum(sy)}, rot: ${fmtNum(r)} }`).join(', ')}]; // ${file}:${p.line} @keyframes ${kf}`);
+    if (dur) {
+      const d = css.find(c => c.file === file).props.find(p => p.id === dur);
+      out.push(prop(`${n}-ms`, d, `${file}:${d.line}`));
+    }
+  }
   out.push('}');
   return out.join('\n');
 }

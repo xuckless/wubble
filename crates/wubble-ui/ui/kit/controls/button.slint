@@ -2,10 +2,13 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Spacing, Chrome, Fonts, Type, Motion, Radius } from "../../tokens.slint";
+import { Palette, Space, Chrome, Fonts, Type, Motion, Radius } from "../gen/tokens.slint";
 import { Shell } from "../derived.slint";
-import { Squash } from "../../components/squash.slint"; // wubble change
+import { Squash } from "../motion/squash.slint";
+import { Press } from "../motion/press.slint";
+import { WubbleCss } from "../gen/css.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+import { Calm } from "../motion/calm.slint";
 
 // @source slint-pressable
 // Press: scale to 0.97 over 120 ms ease-out, back over 200 ms ease-out (wubble.css .wb-press).
@@ -14,7 +17,7 @@ export component PressableButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
     // wubble change: the side padding, so an icon-only button (.wb-ib, 30 square) fits
-    in property <length> padding-x: Spacing.s3;
+    in property <length> padding-x: Space.s3;
     callback clicked();
     // wubble change: a right-button release on the button, for a second choice on one control.
     callback secondary-clicked();
@@ -36,18 +39,16 @@ export component PressableButton inherits Rectangle {
     min-height: Chrome.controls;
     border-radius: Radius.sm;
     background: touch.has-hover ? Palette.shell : transparent;
-    animate background { duration: 150ms; easing: Motion.easeOut; }
+    animate background { duration: Calm.ms(WubbleCss.wb-press--transition-background-color-duration); easing: ease; }
 
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     // wubble change: the release squash (wubble.css `wb-sq` at a third, squash.slint) times the
     // press, on one transform.
-    property <float> press: touch.pressed ? Motion.pressScale : 1;
-    animate press {
-        duration: touch.pressed ? Motion.pressMs : Motion.pressRelease;
-        easing: Motion.easeOut;
+    press := Press {
+        pressed: touch.pressed;
     }
-    transform-scale-x: root.press * sq.sx;
-    transform-scale-y: root.press * sq.sy;
+    transform-scale-x: press.scale * sq.sx;
+    transform-scale-y: press.scale * sq.sy;
     sq := Squash {
         amp: Shell.squash-chrome;
     }
@@ -74,7 +75,7 @@ export component PressableButton inherits Rectangle {
     HorizontalLayout {
         padding-left: root.padding-x;
         padding-right: root.padding-x;
-        spacing: Spacing.s2;
+        spacing: Space.s2;
         alignment: center;
         @children
         if root.text != "": Text {

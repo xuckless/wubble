@@ -2,7 +2,7 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Spacing } from "../../tokens.slint";
+import { Palette, Space } from "../gen/tokens.slint";
 import { Shell } from "../derived.slint";
 import { StatusBubble } from "../../components/status-bubble.slint";
 import { PressableButton } from "../controls/button.slint";
@@ -161,8 +161,8 @@ export component SplitView inherits Rectangle {
                 && touch.mouse-y > parent.height - Shell.status-margin - self.height - Shell.status-dodge;
         }
         if p.closable: PressableButton {
-            x: parent.width - self.width - Spacing.s2;
-            y: Spacing.s2;
+            x: parent.width - self.width - Space.s2;
+            y: Space.s2;
             width: 28px;
             // wubble change: its own height; unset, it would take the pane's whole height
             height: 28px;

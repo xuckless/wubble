@@ -1,0 +1,26 @@
+// derived: Calm(motion/calm.slint) + Motion(gen/tokens.slint)
+// The kit's one fixed-curve animator: `t` runs to 1 while `on` and back to 0, over the design's
+// in and out durations and easings (a CSS transition between two states), cut to the design's
+// 1 ms under reduced motion by `Calm.ms`. The motion primitives (Overlap, Press, Film, Fold,
+// Pulse, Crossfade) are views of one `t`; nothing else in the kit times a fixed curve.
+
+import { Motion } from "../gen/tokens.slint";
+import { Calm } from "calm.slint";
+
+export component Tween {
+    in property <bool> on;
+    in property <duration> in-ms: Motion.overlap-in;
+    in property <duration> out-ms: Motion.overlap-out;
+    in property <easing> in-easing: Motion.ease-out;
+    in property <easing> out-easing: Motion.ease-out;
+    // CSS keeps animation delays under reduced motion; so does this.
+    in property <duration> delay: 0ms;
+    out property <float> t: root.on ? 1 : 0;
+    width: 0px;
+    height: 0px;
+    animate t {
+        duration: Calm.ms(root.on ? root.in-ms : root.out-ms);
+        delay: root.delay;
+        easing: root.on ? root.in-easing : root.out-easing;
+    }
+}

@@ -2,11 +2,13 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Radius, Fonts, Type, Motion } from "../../tokens.slint";
+import { Palette, Radius, Fonts, Type, Motion } from "../gen/tokens.slint";
 import { TabItem } from "../../components/model.slint";
 import { Icon, IconPaths } from "../../components/icon.slint";
 import { Shell } from "../derived.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+import { Calm } from "../motion/calm.slint";
+import { BrowserCss } from "../gen/css.slint";
 
 // @source slint-tab-row
 // wubble change: `TabItem` (with an `id`) is in components/model.slint.
@@ -53,11 +55,6 @@ export component TabRow inherits Rectangle {
     // the selected row's background is the indicator (drawn by Sidebar), so rows only hover
     // wubble change: .wb-tab:hover white 4.5 % (the port's opaque shell read as a slab)
     background: touch.has-hover && !root.selected ? Shell.row-hover : transparent;
-    animate background { duration: 150ms; easing: Motion.easeOut; }
-
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale: touch.pressed ? Motion.pressScale : 1;
-    animate transform-scale { duration: touch.pressed ? Motion.pressMs : Motion.pressRelease; easing: Motion.easeOut; }
 
     keys := FocusKeys {
         activate => { root.activate(); }
@@ -114,7 +111,6 @@ export component TabRow inherits Rectangle {
             font-family: Fonts.ui;
             font-size: Shell.tab-font;
             font-weight: Type.body.weight;
-            animate color { duration: 150ms; easing: Motion.easeOut; }
         }
         // wubble change: the speaker, before the close button (Chromium's tab alert indicator
         // place); a click mutes or unmutes the tab.
@@ -165,13 +161,13 @@ export component TabRow inherits Rectangle {
         height: 22px;
         border-radius: Shell.tab-close-radius;
         background: close-touch.has-hover ? Shell.tab-close-hover : transparent;
-        animate background { duration: 150ms; easing: Motion.easeOut; }
+        animate background { duration: Calm.ms(BrowserCss.wb-tab-x--transition-background-color-duration); easing: ease; }
         visible: !root.compact;
         opacity: root.close-shown ? 1 : 0;
-        animate opacity { duration: 150ms; easing: Motion.easeOut; }
+        animate opacity { duration: Calm.ms(BrowserCss.wb-tab-x--transition-opacity-duration); easing: ease; }
         transform-origin: { x: self.width / 2, y: self.height / 2 };
         transform-scale: root.close-shown ? 1 : 0.8;
-        animate transform-scale { duration: 200ms; easing: Motion.easeOut; }
+        animate transform-scale { duration: Calm.ms(BrowserCss.wb-tab-x--transition-scale-duration); easing: BrowserCss.wb-tab-x--transition-scale-easing; }
         close-touch := TouchArea {
             clicked => { root.close(); }
         }

@@ -1,3 +1,4 @@
+// design: pages/touch-kit.tsx:52-69, core/wubble.css:64 @598f814
 // The squash token (`wb-sq-a` / `wb-sq-b` in core/wubble.css, `SQUASH` / `squashAt` in
 // pages/touch-kit.tsx, @source touch-squash; the owner's design repo): 1.30×0.78 → 0.93×1.07 →
 // 1.03×0.98 over 500 ms, each stretch eased out. The keys are `wubble_core::motion::SQUASH_KEYS`,
@@ -8,7 +9,7 @@
 // Not a wrapper: callers multiply `sx` / `sy` into their own transform, so the press and the
 // squash never fight over one property. Cut under reduced motion.
 
-import { Calm } from "../tokens.slint";
+import { Calm } from "calm.slint";
 import { SquashKeys } from "squash-keys.slint";
 
 export component Squash {
@@ -23,7 +24,7 @@ export component Squash {
     height: 0px;
     property <float> phase: root.hit ? 1 : 0;
     animate phase {
-        duration: SquashKeys.length;
+        duration: Calm.ms(SquashKeys.length);
         easing: linear;
     }
     // How far along the keys: 1 (at rest) until the first flip.

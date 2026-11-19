@@ -13,7 +13,7 @@
 //   scroll-y, thumb-*  the tab list's scroller
 // Nothing here tweens a value Rust owns; only hover fades and the 0.97 press use `animate`.
 
-import { Palette, Radius, Spacing, Chrome, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Radius, Space, Chrome, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { TabRow } from "../kit/chrome/tab-row.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
@@ -27,11 +27,12 @@ import { NewTabRow } from "new-tab-row.slint";
 import { WindowLights } from "window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
 import { MoveArea } from "window-frame.slint";
-import { Wobble } from "wobble.slint";
+import { Wobble } from "../kit/motion/wobble.slint";
 import { Raised } from "raised.slint";
-import { Entering } from "entering.slint";
+import { Entering } from "../kit/motion/overlap.slint";
 import { FolderRow } from "folder-row.slint";
 import { SideEdges } from "model.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
 // resized (design browser/chrome.tsx: every `[data-ride]` section is translated by the string's
@@ -231,7 +232,7 @@ export component Sidebar inherits Rectangle {
         padding-right: root.floating ? Shell.peek-pad-end : Shell.side-pad;
         padding-top: root.floating ? Shell.peek-pad-y : Shell.side-pad;
         padding-bottom: root.floating ? Shell.peek-pad-y : Shell.side-pad;
-        spacing: Spacing.s3;
+        spacing: Space.s3;
 
         // .wb-side-top: 30 high, lights 10 in (centred on the rail)
         Ride {
@@ -601,8 +602,8 @@ export component Sidebar inherits Rectangle {
                     background: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : transparent;
                     opacity: Shell.capsule-alpha;
                     animate background {
-                        duration: Shell.capsule-colour-ms;
-                        easing: Motion.easeInOut;
+                        duration: Calm.ms(Shell.capsule-colour-ms);
+                        easing: Motion.ease-in-out;
                     }
                 }
 
@@ -622,12 +623,6 @@ export component Sidebar inherits Rectangle {
                     accessible-item-selected: i == root.space-index;
                     accessible-action-default => {
                         root.space-switched(space.id);
-                    }
-                    transform-origin: { x: self.width / 2, y: self.height / 2 };
-                    transform-scale: ta.pressed ? Motion.pressScale : 1;
-                    animate transform-scale {
-                        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-                        easing: Motion.easeOut;
                     }
                     ta := TouchArea {
                         clicked => {

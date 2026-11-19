@@ -1,10 +1,11 @@
-import { Palette, Motion, Radius, Spacing, Fonts } from "../tokens.slint";
+import { Palette, Motion, Radius, Space, Fonts } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { BeamShape, CommandBarEvent, CommandBarState, CommandResult, GlassTier, Origin } from "model.slint";
 import { BorderBeam } from "border-beam.slint";
 import { CommandRow } from "command-row.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // Command bar overlay; fills its parent (the content area).
 // `state` has one writer, `dispatch`; everything else reads it.
@@ -107,7 +108,7 @@ export component CommandBar inherits Rectangle {
     }
 
     Timer {
-        interval: Motion.dropdownOut;
+        interval: Motion.dropdown-out;
         running: root.state == CommandBarState.closing;
         triggered => {
             root.dispatch(CommandBarEvent.settle);
@@ -125,15 +126,15 @@ export component CommandBar inherits Rectangle {
         background: Shell.scrim;
         opacity: root.open ? 1 : 0;
         animate opacity {
-            duration: root.open ? Shell.scrim-in : Shell.scrim-out;
-            easing: Motion.easeOut;
+            duration: Calm.ms(root.open ? Shell.scrim-in : Shell.scrim-out);
+            easing: Motion.ease-out;
         }
     }
 
     panel := GlassPanel {
-        width: min(Shell.command-bar-width, root.width - Spacing.s4 * 2);
+        width: min(Shell.command-bar-width, root.width - Space.s4 * 2);
         x: (root.width - self.width) / 2;
-        height: Shell.side-pad + Shell.command-input-height + (root.count > 0 ? Spacing.s1 + root.visible-rows * root.row-pitch : 0px) + Spacing.s2;
+        height: Shell.side-pad + Shell.command-input-height + (root.count > 0 ? Space.s1 + root.visible-rows * root.row-pitch : 0px) + Space.s2;
         tier: GlassTier.thick;
         radius: Radius.lg;
         over-content: true;
@@ -143,11 +144,11 @@ export component CommandBar inherits Rectangle {
             x: max(0px, min(self.width, root.origin.x - root.absolute-position.x - self.x)),
             y: max(0px, min(self.height, root.origin.y - root.absolute-position.y - self.y)),
         };
-        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        transform-scale: root.open ? 1 : Motion.dropdown-from;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
         // Swallow clicks so they do not reach the scrim.
         TouchArea { }
@@ -159,19 +160,19 @@ export component CommandBar inherits Rectangle {
 
         VerticalLayout {
             padding-top: Shell.side-pad;
-            padding-left: Spacing.s2;
-            padding-right: Spacing.s2;
-            padding-bottom: Spacing.s2;
-            spacing: root.count > 0 ? Spacing.s1 : 0px;
+            padding-left: Space.s2;
+            padding-right: Space.s2;
+            padding-bottom: Space.s2;
+            spacing: root.count > 0 ? Space.s1 : 0px;
 
             Rectangle {
                 height: Shell.command-input-height;
                 input := TextInput {
                     accessible-label: "Address or search";
-                    x: Spacing.s3;
+                    x: Space.s3;
                     height: parent.height;
                     vertical-alignment: center;
-                    width: parent.width - Spacing.s3 - Spacing.s1;
+                    width: parent.width - Space.s3 - Space.s1;
                     font-family: Fonts.ui;
                     font-size: Shell.command-input-font;
                     color: Palette.ink;
@@ -204,7 +205,7 @@ export component CommandBar inherits Rectangle {
                     }
                 }
                 Text {
-                    x: Spacing.s3;
+                    x: Space.s3;
                     text: "Search or enter address";
                     color: Palette.haze;
                     font-family: Fonts.ui;
@@ -230,12 +231,12 @@ export component CommandBar inherits Rectangle {
                         background: Shell.command-selected;
                         opacity: root.count > 0 ? 1 : 0;
                         animate y {
-                            duration: Shell.command-sel-ms;
-                            easing: Motion.easeOut;
+                            duration: Calm.ms(Shell.command-sel-ms);
+                            easing: Motion.ease-out;
                         }
                         animate opacity {
-                            duration: Shell.command-sel-fade;
-                            easing: Motion.easeOut;
+                            duration: Calm.ms(Shell.command-sel-fade);
+                            easing: Motion.ease-out;
                         }
                     }
                     VerticalLayout {

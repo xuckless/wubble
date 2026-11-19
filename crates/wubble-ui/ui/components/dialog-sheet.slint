@@ -1,4 +1,4 @@
-import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { SheetFrame } from "sheet-frame.slint";
 import { DialogView } from "model.slint";
@@ -77,8 +77,8 @@ export component DialogSheet inherits SheetFrame {
         background: Palette.shell;
         input := TextInput {
             accessible-label: root.dialog.message;
-            x: Spacing.s3;
-            width: parent.width - 2 * Spacing.s3;
+            x: Space.s3;
+            width: parent.width - 2 * Space.s3;
             height: parent.height;
             vertical-alignment: center;
             single-line: true;
@@ -119,8 +119,8 @@ export component DialogSheet inherits SheetFrame {
         background: Palette.shell;
         secret-field := TextInput {
             accessible-label: "Password";
-            x: Spacing.s3;
-            width: parent.width - 2 * Spacing.s3;
+            x: Space.s3;
+            width: parent.width - 2 * Space.s3;
             height: parent.height;
             vertical-alignment: center;
             single-line: true;

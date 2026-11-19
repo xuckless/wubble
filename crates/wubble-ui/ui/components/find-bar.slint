@@ -1,9 +1,10 @@
-import { Palette, Motion, Spacing, Fonts, Type, Chrome } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type, Chrome } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { FindView, GlassTier } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // Find in page: a strip at the content's top right, as Chromium places its find bar. Written
 // from scratch: the design repo has no find bar. The surface is Ultra Reactivate's
@@ -43,18 +44,18 @@ export component FindBar inherits Rectangle {
         radius: Shell.menu-radius;
         over-content: true;
         transform-origin: { x: self.width, y: 0px };
-        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        transform-scale: root.open ? 1 : Motion.dropdown-from;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
         TouchArea { }
 
         HorizontalLayout {
-            padding-left: Spacing.s3;
-            padding-right: Spacing.s1;
-            spacing: Spacing.s1;
+            padding-left: Space.s3;
+            padding-right: Space.s1;
+            spacing: Space.s1;
             input := TextInput {
                 accessible-label: "Find in page";
                 horizontal-stretch: 1;
@@ -97,7 +98,7 @@ export component FindBar inherits Rectangle {
                 font-size: Type.label.size;
             }
             PressableButton {
-                padding-x: Spacing.s1;
+                padding-x: Space.s1;
                 width: Chrome.controls;
                 label: "Previous match";
                 clicked => {
@@ -109,7 +110,7 @@ export component FindBar inherits Rectangle {
                 }
             }
             PressableButton {
-                padding-x: Spacing.s1;
+                padding-x: Space.s1;
                 width: Chrome.controls;
                 label: "Next match";
                 clicked => {
@@ -121,7 +122,7 @@ export component FindBar inherits Rectangle {
                 }
             }
             PressableButton {
-                padding-x: Spacing.s1;
+                padding-x: Space.s1;
                 width: Chrome.controls;
                 label: "Close find";
                 clicked => {

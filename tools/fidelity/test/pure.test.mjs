@@ -61,3 +61,20 @@ test('CSS declarations read as typed values with their lines', () => {
   assert.deepEqual(splitTop('a(b c) d', ' '), ['a(b c)', 'd']);
   assert.equal(readDecl('position', 'absolute', R), null);
 });
+
+test('the CSS ease-out table follows cubic-bezier(0, 0, .58, 1)', async () => {
+  const { cubicBezier, easeTable, CSS_EASE_OUT } = await import('../lib/ease.mjs');
+  const t = easeTable(CSS_EASE_OUT, 32);
+  assert.equal(t.length, 33);
+  assert.equal(t[0], 0);
+  assert.equal(t[32], 1);
+  // the bezier at parameter .5 is the point (.3425, .5)
+  assert.ok(Math.abs(cubicBezier(CSS_EASE_OUT, 0.3425) - 0.5) < 1e-9);
+  // linear interpolation of the table stays within 1e-3 of the curve
+  let worst = 0;
+  for (let i = 0; i <= 1000; i++) {
+    const u = i / 1000, k = Math.min(31, Math.floor(u * 32)), f = u * 32 - k;
+    worst = Math.max(worst, Math.abs(t[k] + (t[k + 1] - t[k]) * f - cubicBezier(CSS_EASE_OUT, u)));
+  }
+  assert.ok(worst < 1e-3, `worst ${worst}`);
+});

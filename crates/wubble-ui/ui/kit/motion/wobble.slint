@@ -1,0 +1,38 @@
+// design: core/wubble.css:59-69 @598f814
+// The icon wobble on a hit (`wb-wob-a` / `wb-wob-b`, .55 s ease-out): 25 % rotate(-14deg)
+// scale(.9, 1.12), 50 % rotate(9deg) scale(1.06, .95), 75 % rotate(-4deg). Slint has no
+// keyframes, so one linear tween runs a phase 0 → 1 and the generated keys (`Keyframes.wobble`)
+// are interpolated from it, each interval on CSS `ease-out` as CSS applies the timing function
+// per keyframe interval (the generated `Motion.ease-out-css` table). The design's two names, so
+// a repeat restarts, are `hit` flipping: each flip plays it once more.
+
+import { Motion, Keyframes, KeyStep } from "../gen/tokens.slint";
+import { Calm } from "calm.slint";
+
+export component Wobble inherits Rectangle {
+    // Flip to play the wobble.
+    in property <bool> hit: false;
+    property <float> phase: root.hit ? 1 : 0;
+    animate phase {
+        duration: Calm.ms(Keyframes.wobble-ms);
+        easing: linear;
+    }
+    // How far along the keyframes: 1 (at rest) until the first flip.
+    property <float> t: root.hit ? root.phase : 1 - root.phase;
+    property <[KeyStep]> k: Keyframes.wobble;
+    property <int> seg: root.t >= root.k[3].t ? 3 : root.t >= root.k[2].t ? 2 : root.t >= root.k[1].t ? 1 : 0;
+    property <float> u: (root.t - root.k[root.seg].t) / (root.k[root.seg + 1].t - root.k[root.seg].t);
+    // CSS ease-out at u, from the 33-entry table (linear between entries)
+    property <float> ux: clamp(root.u, 0, 1) * 32;
+    property <int> i: min(31, floor(root.ux));
+    property <float> e: Motion.ease-out-css[root.i] + (Motion.ease-out-css[root.i + 1] - Motion.ease-out-css[root.i]) * (root.ux - root.i);
+    pure function lerp(a: float, b: float) -> float {
+        return a + (b - a) * root.e;
+    }
+
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-rotation: root.lerp(root.k[root.seg].rot, root.k[root.seg + 1].rot) * 1deg;
+    transform-scale-x: root.lerp(root.k[root.seg].sx, root.k[root.seg + 1].sx);
+    transform-scale-y: root.lerp(root.k[root.seg].sy, root.k[root.seg + 1].sy);
+    @children
+}

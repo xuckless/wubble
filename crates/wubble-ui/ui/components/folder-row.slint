@@ -1,7 +1,8 @@
-import { Palette, Radius, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Radius, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { TabItem } from "model.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // A folder's header in the tab list: the chevron (down while open), the folder's name, and how
 // many tabs it holds. Same pitch, hover and press as a tab row (components.slint TabRow, the
@@ -18,16 +19,6 @@ export component FolderRow inherits Rectangle {
     height: Shell.row;
     border-radius: Radius.sm;
     background: touch.has-hover ? Shell.row-hover : transparent;
-    animate background {
-        duration: Shell.icon-button-ms;
-        easing: Motion.easeOut;
-    }
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale: touch.pressed ? Motion.pressScale : 1;
-    animate transform-scale {
-        duration: touch.pressed ? Motion.pressMs : Motion.pressRelease;
-        easing: Motion.easeOut;
-    }
     accessible-role: button;
     accessible-label: root.tab.title;
     accessible-expandable: true;

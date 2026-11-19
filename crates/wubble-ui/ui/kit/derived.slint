@@ -5,7 +5,7 @@
 // `icons.tsx` (xuckless/the-wallpaper-project @ 6c840da), named by its CSS rule. Nothing here
 // repeats a value tokens.slint already has.
 
-import { Chrome } from "../tokens.slint";
+import { Chrome } from "gen/tokens.slint";
 
 export global Shell {
     // Touch sizing: the host sets it from the input kind (a touch flips it on, a mouse move off)
@@ -467,7 +467,7 @@ export global Shell {
     out property <color> kbd-highlight: rgba(255, 255, 255, 0.08);
     out property <length> kbd-font: 12px;
     // .wb-thin, the chips' body (wubble.css): shadow 0 10px 24px / .35 (the fill and the rims are
-    // Glass.thin.fill, Glass.rimTop, Glass.rimAll)
+    // Glass.thin.fill, Glass.thin.rim-top, Glass.thin.rim-all)
     out property <color> thin-shadow: rgba(0, 0, 0, 0.35);
     // the other native pages' column (wubble's: the design has no list page)
     out property <length> settings-width: 720px;

@@ -6,9 +6,10 @@
 // ink glyphs in the 18 % dots), and turns dark over the colour.
 // The component only reports intent; wubble_ui::window acts on it.
 
-import { Palette, Motion } from "../tokens.slint";
+import { Palette, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 component Light inherits Rectangle {
     in property <color> tint;
@@ -28,15 +29,15 @@ component Light inherits Rectangle {
     border-radius: Shell.light / 2;
     background: root.group-hover ? root.tint : Shell.light-rest;
     animate background {
-        duration: Shell.light-fill-ms;
-        easing: Motion.easeOut;
+        duration: Calm.ms(Shell.light-fill-ms);
+        easing: Motion.ease-out;
     }
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale-x: ta.pressed ? Shell.light-press-x : 1;
     transform-scale-y: ta.pressed ? Shell.light-press-y : 1;
     animate transform-scale-x, transform-scale-y {
-        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-        easing: Motion.easeSpring;
+        duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
+        easing: Motion.ease-spring;
     }
 
     Icon {
@@ -47,8 +48,8 @@ component Light inherits Rectangle {
         weight: root.icon-weight;
         tint: root.group-hover ? Shell.light-glyph-ink : Palette.ink;
         animate tint {
-            duration: Shell.light-glyph-ms;
-            easing: Motion.easeOut;
+            duration: Calm.ms(Shell.light-glyph-ms);
+            easing: Motion.ease-out;
         }
     }
     ta := TouchArea {

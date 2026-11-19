@@ -1,5 +1,6 @@
-import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Palette, Motion, Fonts } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The shell's buttons report their hover here: (Action id, where the tooltip hangs in window
 // px: the button's centre x, top y and bottom y, on). One global, so any button reaches the host
@@ -44,8 +45,8 @@ export component Tooltip inherits Rectangle {
     x: max(Shell.tip-edge, min(self.want-x, root.bounds-width - self.width - Shell.tip-edge));
     y: root.fits-below ? root.below-y : max(Shell.tip-edge, root.above-y);
     animate x, y, width {
-        duration: root.jump ? 0ms : Shell.tip-glide;
-        easing: Motion.easeInOut;
+        duration: Calm.ms(root.jump ? 0ms : Shell.tip-glide);
+        easing: Motion.ease-in-out;
     }
 
     tip := Rectangle {
@@ -54,15 +55,15 @@ export component Tooltip inherits Rectangle {
         clip: true;
         opacity: root.shown ? 1 : 0;
         transform-origin: { x: self.width / 2, y: self.height };
-        transform-scale: root.shown ? 1 : Motion.dropdownFrom;
+        transform-scale: root.shown ? 1 : Motion.dropdown-from;
         y: root.shown ? 0px : Shell.tip-rise;
         animate opacity {
-            duration: root.shown ? Shell.tip-fade-in : Shell.tip-fade-out;
-            easing: root.shown ? Motion.easeOut : Motion.easeIn;
+            duration: Calm.ms(root.shown ? Shell.tip-fade-in : Shell.tip-fade-out);
+            easing: root.shown ? Motion.ease-out : Motion.ease-in;
         }
         animate transform-scale, y {
-            duration: root.shown ? Shell.tip-rise-in : Shell.tip-rise-out;
-            easing: root.shown ? Motion.easeOut : Motion.easeIn;
+            duration: Calm.ms(root.shown ? Shell.tip-rise-in : Shell.tip-rise-out);
+            easing: root.shown ? Motion.ease-out : Motion.ease-in;
         }
         row := HorizontalLayout {
             padding-left: Shell.tip-pad;
