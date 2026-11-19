@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 # Vendored third-party code is not linted by `clippy --workspace`; its own
 # rustfmt.toml keeps `cargo fmt --all` off it. Built as a path dependency,
-# tested with `cargo test -p welding`.
+# tested with `cargo test -p welding`; the renderer through wubble-ui's crisp_text test.
 exclude = ["vendor/welding"]
 
 [workspace.package]
@@ -30,7 +30,8 @@ slint = { version = "1.19", default-features = false, features = [
     "compat-1-2",
     "accessibility",
     "backend-winit",
-    "renderer-femtovg-wgpu",
+    # Skia on the shared wgpu device (`skia-wgpu`); see TODO.md Decided "Shell renderer".
+    "renderer-skia",
     "unstable-wgpu-30",
     # Only for the monitor refresh-rate query (wubble main).
     "unstable-winit-030",

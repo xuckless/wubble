@@ -3,7 +3,7 @@
 //!
 //! The smoke snapshots the window once after its last frame
 //! (`Window::take_snapshot`, which re-renders the scene through the same
-//! femtovg-wgpu path into a readable texture) and samples the content
+//! Skia-on-wgpu path into a readable texture) and samples the content
 //! rectangle. Smoke only; never on the frame path.
 
 use slint::{Rgba8Pixel, SharedPixelBuffer};

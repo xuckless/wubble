@@ -2803,9 +2803,9 @@ dependencies = [
  "drm 0.14.1",
  "gbm",
  "gbm-sys",
+ "glutin",
  "i-slint-common",
  "i-slint-core",
- "i-slint-renderer-femtovg",
  "i-slint-renderer-skia",
  "input",
  "libseat",
@@ -2813,6 +2813,7 @@ dependencies = [
  "memmap2",
  "nix",
  "pkg-config",
+ "raw-window-handle",
  "wgpu",
  "xkbcommon",
 ]
@@ -2825,6 +2826,7 @@ checksum = "b824c2cce2e9f766eb42138a0ac1ec93d095dd9cd45a2dfa650dd3e6558cdfd9"
 dependencies = [
  "cfg_aliases",
  "i-slint-backend-linuxkms",
+ "i-slint-backend-testing",
  "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
@@ -2842,6 +2844,7 @@ dependencies = [
  "cfg_aliases",
  "i-slint-common",
  "i-slint-core",
+ "i-slint-renderer-skia",
  "vtable",
 ]
 
@@ -6257,7 +6260,7 @@ dependencies = [
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
- "i-slint-renderer-femtovg",
+ "i-slint-renderer-skia",
  "i-slint-renderer-software",
  "once_cell",
  "pin-weak",
@@ -8658,9 +8661,11 @@ name = "wubble-ui"
 version = "0.0.0"
 dependencies = [
  "i-slint-backend-testing",
+ "i-slint-renderer-skia",
  "objc2-foundation 0.3.2",
  "slint",
  "slint-build",
+ "wgpu",
  "wubble-core",
 ]
 

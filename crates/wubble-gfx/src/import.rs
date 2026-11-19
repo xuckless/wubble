@@ -207,7 +207,7 @@ fn import_device(_adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue)
     ))
 }
 
-/// The descriptor Slint uses for its own device, so femtovg sees the same
+/// The descriptor Slint uses for its own device, so the renderer sees the same
 /// features and limits under `Manual` as under `Automatic`.
 /// Ported from Slint 1.19 i-slint-core `graphics/wgpu_30.rs`
 /// `default_device_descriptor` (GPL-3.0-only option of Slint's licence).
@@ -234,10 +234,11 @@ pub(crate) fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> 
     }
 }
 
-/// The blit target format. Slint's femtovg renderer treats texture values as
-/// display-encoded and writes them to the surface unchanged, so the target is
-/// NOT an sRGB format: an sRGB target would be decoded to linear on sampling
-/// and shown too dark (#808080 came out as #373737). The blit re-encodes.
+/// The blit target format. A UNORM texture's values are display-encoded sRGB
+/// to Slint's Skia renderer, which draws them onto the UNORM surface unchanged
+/// (i-slint-renderer-skia 1.19 `sampled_texture_color_space`). Not an sRGB
+/// format: femtovg, the earlier renderer, showed one too dark (#808080 came out
+/// as #373737), and UNORM needs no conversion anywhere. The blit re-encodes.
 pub(crate) const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Number of blit targets. Two, so consecutive frames are different images

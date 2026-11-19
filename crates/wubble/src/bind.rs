@@ -33,10 +33,17 @@ pub(crate) fn sync<T: Clone + PartialEq + 'static>(
 }
 
 /// A page icon (straight RGBA, `width * height * 4` bytes) as a shell image: the one place
-/// pixels become an `Image`, for icons that just arrived and icons the store restored.
+/// pixels become an `Image`, for icons that just arrived and icons the store restored. Shrunk
+/// to `SHELL_ICON_PX` (twice the drawn size) with an area average, so the renderer's bilinear
+/// sampling does not alias its edges.
 pub fn favicon_image(width: u32, height: u32, rgba: &[u8]) -> slint::Image {
+    use wubble_core::favicon::{SHELL_ICON_PX, shrink_rgba};
+    let Some((width, height, rgba)) = shrink_rgba(width, height, rgba.to_vec(), SHELL_ICON_PX)
+    else {
+        return slint::Image::default();
+    };
     slint::Image::from_rgba8(
-        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(rgba, width, height),
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&rgba, width, height),
     )
 }
 

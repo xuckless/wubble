@@ -33,7 +33,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
 
 ## Commands
 
-    cargo check --workspace        # first run downloads prebuilt CEF
+    cargo check --workspace        # first run downloads prebuilt CEF and Skia (rust-skia binaries)
     cargo build --workspace        # builds wubble-helper too; needed before cargo run
     cargo test -p wubble-core
     cargo run -p wubble
