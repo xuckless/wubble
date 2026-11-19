@@ -348,6 +348,12 @@ impl Host {
                 MenuEffect::Run(MenuCommand::Perform(action)) => self.perform(action),
                 MenuEffect::Run(MenuCommand::Model(command)) => self.dispatch(command.0),
                 MenuEffect::Run(MenuCommand::ToggleMute(t)) => self.toggle_mute(t),
+                MenuEffect::Run(MenuCommand::ReloadTab(t)) => {
+                    if let Some(view) = self.tab_view(t) {
+                        view.reload();
+                    }
+                }
+                MenuEffect::Run(MenuCommand::RenameFolder(f)) => self.rename_folder_requested(f),
                 MenuEffect::Run(MenuCommand::ToggleBlocker(host)) => self.toggle_blocker(&host),
                 MenuEffect::Run(MenuCommand::SpaceNeverSleep(space, on)) => {
                     self.dispatch(Command::SetSpaceNeverSleep { space, on });

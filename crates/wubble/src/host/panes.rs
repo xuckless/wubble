@@ -699,9 +699,10 @@ impl Host {
 
     /// A tab row's right click at `x, y` (window, logical): its split entries, as the shell's
     /// menu on the focused page.
+    /// A folder header's right click opens the folder's menu.
     pub fn tab_context(&mut self, id: i32, x: f32, y: f32) {
         self.hover_dismiss();
-        let (Some(tab), Some(focused)) = (crate::shell::tab_id(id), self.shown()) else {
+        let Some(focused) = self.shown() else {
             return;
         };
         let Some(window) = self.w.window.upgrade() else {
@@ -709,10 +710,16 @@ impl Host {
         };
         let scale = window.window().scale_factor();
         let at = ((x * scale).round() as i32, (y * scale).round() as i32);
-        let facts = wubble_core::tabmenu::Facts {
-            muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+        let entries = if let Some(folder) = crate::shell::folder_of_row(id) {
+            menu::folder_entries(&self.model, folder)
+        } else if let Some(tab) = crate::shell::tab_id(id) {
+            let facts = wubble_core::tabmenu::Facts {
+                muted: self.audio.get(&tab).is_some_and(|a| a.muted),
+            };
+            menu::tab_entries(&self.model, tab, facts, &self.keymap)
+        } else {
+            return;
         };
-        let entries = menu::tab_entries(&self.model, tab, facts, &self.keymap);
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

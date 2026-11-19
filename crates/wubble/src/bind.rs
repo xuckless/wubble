@@ -55,6 +55,13 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
             muted: r.muted,
             in_split: r.in_split,
             blocked: i32::try_from(r.blocked).unwrap_or(i32::MAX),
+            kind: match r.kind {
+                shell::RowKind::Tab => 0,
+                shell::RowKind::Folder => 1,
+            },
+            depth: i32::from(r.depth),
+            count: i32::try_from(r.count).unwrap_or(i32::MAX),
+            collapsed: r.collapsed,
         })
         .collect()
 }

@@ -517,6 +517,52 @@ fn rename_space() {
     assert_eq!(m.spaces[0].name, "Home");
 }
 
+#[test]
+fn folder_with_tab_takes_its_place_and_renames() {
+    let (m, ids) = with_tabs(3);
+    let (m, _) = run(
+        m,
+        Command::FolderWithTab {
+            tab: ids[1],
+            name: "Reading".into(),
+        },
+    );
+    let Item::Folder(f) = &m.spaces[0].items[1] else {
+        panic!("a folder where the tab was: {:?}", m.spaces[0].items);
+    };
+    assert_eq!(
+        (f.name.as_str(), f.tabs.as_slice()),
+        ("Reading", &ids[1..2])
+    );
+    let folder = f.id;
+    assert_eq!(m.spaces[0].items.len(), 3);
+    // a tab already in a folder goes into a new one at the end
+    let (m, _) = run(
+        m,
+        Command::FolderWithTab {
+            tab: ids[1],
+            name: "Later".into(),
+        },
+    );
+    let Some(Item::Folder(g)) = m.spaces[0].items.last() else {
+        panic!("a new folder at the end");
+    };
+    assert_eq!((g.name.as_str(), g.tabs.as_slice()), ("Later", &ids[1..2]));
+    let (m, _) = run(
+        m,
+        Command::RenameFolder {
+            folder,
+            name: "Read".into(),
+        },
+    );
+    assert!(
+        m.spaces[0]
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Folder(f) if f.id == folder && f.name == "Read"))
+    );
+}
+
 // ----- random sequences
 
 struct Xorshift(u64);

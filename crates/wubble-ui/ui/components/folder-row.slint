@@ -1,0 +1,89 @@
+import { Palette, Radius, Fonts, Type, Motion } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { Icon, IconPaths } from "icon.slint";
+import { TabItem } from "model.slint";
+
+// A folder's header in the tab list: the chevron (down while open), the folder's name, and how
+// many tabs it holds. Same pitch, hover and press as a tab row (components.slint TabRow, the
+// design's .wb-tab metrics), so the list's springs carry it like any row. A click folds the
+// folder away or shows it (through the list's press / release, so a header never drags); a
+// right click opens the folder's menu. Written new: the design bucket has no folders.
+export component FolderRow inherits Rectangle {
+    in property <TabItem> tab;
+    in property <bool> compact: false;
+    callback press(length);
+    callback release();
+    callback context(length, length);
+
+    height: Shell.row;
+    border-radius: Radius.sm;
+    background: touch.has-hover ? Shell.row-hover : transparent;
+    animate background {
+        duration: Shell.icon-button-ms;
+        easing: Motion.easeOut;
+    }
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: touch.pressed ? Motion.pressScale : 1;
+    animate transform-scale {
+        duration: touch.pressed ? Motion.pressMs : Motion.pressRelease;
+        easing: Motion.easeOut;
+    }
+    accessible-role: button;
+    accessible-label: root.tab.title;
+    accessible-expandable: true;
+    accessible-expanded: !root.tab.collapsed;
+    accessible-action-default => {
+        root.press(0px);
+        root.release();
+    }
+
+    touch := TouchArea {
+        pointer-event(e) => {
+            if e.button == PointerEventButton.right && e.kind == PointerEventKind.down {
+                root.context(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                return;
+            }
+            if e.button != PointerEventButton.left {
+                return;
+            }
+            if e.kind == PointerEventKind.down {
+                root.press(self.absolute-position.y + self.mouse-y);
+            }
+            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                root.release();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.compact ? (root.width - Shell.tab-icon) / 2 : Shell.side-grid;
+        padding-right: Shell.side-pad + Shell.side-grid;
+        spacing: Shell.side-grid;
+        Rectangle {
+            width: Shell.tab-icon;
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                path: root.compact ? IconPaths.folder : root.tab.collapsed ? IconPaths.chevron-right : IconPaths.chevron-down;
+                tint: touch.has-hover ? Palette.ink : Shell.tab-ink;
+            }
+        }
+        if !root.compact: Text {
+            text: root.tab.title;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+            color: Shell.tab-ink;
+            font-family: Fonts.ui;
+            font-size: Shell.tab-font;
+            font-weight: Type.label.weight;
+        }
+        if !root.compact: Text {
+            text: root.tab.count;
+            vertical-alignment: center;
+            color: Palette.haze;
+            font-family: Fonts.ui;
+            font-size: Type.label.size;
+        }
+    }
+}

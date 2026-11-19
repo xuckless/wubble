@@ -27,6 +27,7 @@ import { MoveArea } from "window-frame.slint";
 import { Wobble } from "wobble.slint";
 import { Raised } from "raised.slint";
 import { Entering } from "entering.slint";
+import { FolderRow } from "folder-row.slint";
 import { SideEdges } from "model.slint";
 
 // wubble: a section that rides the bowed seam string at its own height, shifted along x, not
@@ -419,7 +420,13 @@ export component Sidebar inherits Rectangle {
                             opacity: 1 - gone.e;
                             transform-origin: { x: self.width / 2, y: self.height / 2 };
                             transform-scale: 1 - Shell.tab-exit-shrink * gone.e;
-                            TabRow {
+                            if gone.tab.kind == 0: TabRow {
+                                x: root.compact ? 0px : gone.tab.depth * Shell.folder-indent;
+                                width: parent.width - self.x;
+                                tab: gone.tab;
+                                compact: root.compact;
+                            }
+                            if gone.tab.kind == 1: FolderRow {
                                 width: parent.width;
                                 tab: gone.tab;
                                 compact: root.compact;
@@ -438,8 +445,24 @@ export component Sidebar inherits Rectangle {
                                 e: i < root.row-enter.length ? root.row-enter[i] : 1;
                                 width: parent.width;
                                 height: parent.height;
-                                TabRow {
+                                if tab.kind == 1: FolderRow {
                                     width: parent.width;
+                                    tab: tab;
+                                    compact: root.compact;
+                                    press(y) => {
+                                        root.tab-press(i, y);
+                                    }
+                                    release => {
+                                        root.tab-release(i);
+                                    }
+                                    context(x, y) => {
+                                        root.tab-context(tab.id, x, y);
+                                    }
+                                }
+                                // a tab in a folder sits one step in (none on the rail)
+                                if tab.kind == 0: TabRow {
+                                    x: root.compact ? 0px : tab.depth * Shell.folder-indent;
+                                    width: parent.width - self.x;
                                     tab: tab;
                                     selected: tab.id == root.active-tab-id;
                                     compact: root.compact;

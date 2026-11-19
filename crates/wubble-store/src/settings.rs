@@ -184,6 +184,12 @@ settings! {
     SidebarWidth: f32 = defs::SIDEBAR_WIDTH;
     /// Extended, rail or hidden.
     SidebarModeSetting: SidebarMode = defs::SIDEBAR_MODE;
+    /// Calmer motion: auto (the OS), on or off (`wubble_core::motion::Calm`).
+    ReduceMotion: String = defs::REDUCE_MOTION;
+    /// Touch-sized rows: auto (the input), touch or mouse (`wubble_core::touch::Sizing`).
+    TouchSizing: String = defs::TOUCH_SIZING;
+    /// Shift+click opens a peek.
+    GlanceEnabled: bool = defs::GLANCE_ENABLED;
     /// Opaque entries; the keybinding editor owns their format.
     KeybindingOverrides: Vec<String> = defs::KEYBINDING_OVERRIDES;
     BlockerEnabled: bool = defs::BLOCKER_ENABLED;

@@ -71,6 +71,8 @@ pub enum Command {
         opener: TabId,
     },
     CloseTab(TabId),
+    /// Closes each of these tabs (the tab menu's "Close Tabs Below", a folder's "Close Folder").
+    CloseTabs(Vec<TabId>),
     ActivateTab(TabId),
     MoveTab {
         tab: TabId,
@@ -88,6 +90,16 @@ pub enum Command {
     SetFolderCollapsed {
         folder: FolderId,
         collapsed: bool,
+    },
+    RenameFolder {
+        folder: FolderId,
+        name: String,
+    },
+    /// A new folder holding the tab, where the tab was (the tab menu's "New folder with tab").
+    /// A pinned tab or one in a folder goes into a new folder at the end of its Space.
+    FolderWithTab {
+        tab: TabId,
+        name: String,
     },
     /// A new tab on the same page in the same container, right after it, shown.
     DuplicateTab(TabId),
@@ -921,6 +933,34 @@ impl Model {
         fx
     }
 
+    fn folder_with_tab(&mut self, tab: TabId, name: String) -> Vec<Effect> {
+        let Some((si, place)) = self.place_of(tab) else {
+            return vec![];
+        };
+        let id = FolderId(self.next_folder);
+        self.next_folder += 1;
+        let folder = |tabs| {
+            Item::Folder(Folder {
+                id,
+                name,
+                tabs,
+                collapsed: false,
+            })
+        };
+        if let Place::Normal(i) = place {
+            self.spaces[si].items[i] = folder(vec![tab]);
+            return vec![];
+        }
+        self.spaces[si].items.push(folder(vec![]));
+        self.move_tab(
+            tab,
+            Dest::Folder {
+                folder: id,
+                index: 0,
+            },
+        )
+    }
+
     fn move_tab(&mut self, tab: TabId, to: Dest) -> Vec<Effect> {
         let (Some((src, _)), Some(dst)) = (self.place_of(tab), self.dest_space(to)) else {
             return vec![];
@@ -1560,6 +1600,7 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             .into_iter()
             .collect(),
         Command::CloseTab(t) => m.close_tab(t),
+        Command::CloseTabs(tabs) => tabs.into_iter().flat_map(|t| m.close_tab(t)).collect(),
         Command::ActivateTab(t) => m.activate_tab(t),
         Command::MoveTab { tab, to } => m.move_tab(tab, to),
         Command::PinTab(t) => m.set_pinned(t, true),
@@ -1586,6 +1627,15 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             }
             vec![]
         }
+        Command::RenameFolder { folder, name } => {
+            if let Some(si) = m.folder_space(folder)
+                && let Some(f) = m.spaces[si].folder_mut(folder)
+            {
+                f.name = name;
+            }
+            vec![]
+        }
+        Command::FolderWithTab { tab, name } => m.folder_with_tab(tab, name),
         Command::DuplicateTab(t) => m.duplicate_tab(t),
         Command::CloseOthers(t) => m.close_others(t),
         Command::NewSpace {

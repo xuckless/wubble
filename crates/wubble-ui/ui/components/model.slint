@@ -14,6 +14,12 @@ export struct TabItem {
     in-split: bool,
     // wubble: requests the blocker stopped on this tab's page.
     blocked: int,
+    // wubble: 0 a tab, 1 a folder's header (a negative id; `title` is its name, `count` its tabs,
+    // `collapsed` whether they are folded away). `depth` 1: a tab inside a folder.
+    kind: int,
+    depth: int,
+    count: int,
+    collapsed: bool,
 }
 
 // The border beam this frame (wubble_core::beam::Shape): head and tail length as fractions of

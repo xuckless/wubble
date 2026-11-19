@@ -105,6 +105,9 @@ export global Shell {
     out property <float> icon-grid: 24;
     // .wb-tab-icon box (the favicon inside it is `icon`)
     out property <length> tab-icon: 18px;
+    // A tab inside a folder sits this far in (wubble: the design has no folders); the icon box
+    // plus its gap, so the favicon lines up under the folder's name.
+    out property <length> folder-indent: 14px;
     // .wb-address: icon 13 at stroke 1.9, pressed to .985 over .2 s
     out property <length> address-icon: 13px;
     out property <float> address-icon-stroke: 1.9;

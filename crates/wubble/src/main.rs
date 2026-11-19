@@ -1097,9 +1097,12 @@ fn connect_input(window: &AppWindow, win: WindowId) {
 fn connect_shell(window: &AppWindow, win: WindowId) {
     use wubble_core::model::Command as Cmd;
     let command = move |c: Cmd| with_host_in(win, |host| host.dispatch(c));
+    // A tab row picks its tab; a folder header folds the folder away or shows it.
     window.on_tab_activated(move |id| {
         if let Some(t) = shell::tab_id(id) {
             command(Cmd::ActivateTab(t));
+        } else if let Some(folder) = shell::folder_of_row(id) {
+            with_host_in(win, |host| host.toggle_folder(folder));
         }
     });
     window.on_tab_closed(move |id| {
