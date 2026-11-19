@@ -8,13 +8,13 @@
 
 import { Palette, Motion } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 component Light inherits Rectangle {
     in property <color> tint;
     in property <string> icon-path;
     in property <bool> group-hover;
-    in property <float> icon-weight: 2.4;
+    in property <float> icon-weight: Shell.light-stroke;
     in property <string> label;
     callback clicked();
     accessible-role: AccessibleRole.button;
@@ -74,7 +74,7 @@ export component WindowLights inherits Rectangle {
             spacing: root.compact ? Shell.light-gap-rail : Shell.light-gap;
             Light {
                 tint: Palette.coral;
-                icon-path: IconPaths.close;
+                icon-path: Glyph.close;
                 label: "Close window";
                 group-hover: group.has-hover;
                 clicked => {
@@ -83,7 +83,7 @@ export component WindowLights inherits Rectangle {
             }
             Light {
                 tint: Palette.amber;
-                icon-path: IconPaths.minus;
+                icon-path: Glyph.minus;
                 label: "Minimise";
                 group-hover: group.has-hover;
                 clicked => {
@@ -92,9 +92,9 @@ export component WindowLights inherits Rectangle {
             }
             Light {
                 tint: Palette.mint;
-                icon-path: IconPaths.expand;
+                icon-path: Glyph.expand;
                 label: "Full screen";
-                icon-weight: 2.2;
+                icon-weight: Shell.light-stroke-expand;
                 group-hover: group.has-hover;
                 clicked => {
                     root.toggle-fullscreen-requested();

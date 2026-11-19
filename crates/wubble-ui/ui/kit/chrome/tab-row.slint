@@ -4,7 +4,7 @@
 
 import { Palette, Radius, Fonts, Type, Motion } from "../../tokens.slint";
 import { TabItem } from "../../components/model.slint";
-import { Icon, IconPaths } from "../../components/icon.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
 import { Shell } from "../derived.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 
@@ -100,7 +100,7 @@ export component TabRow inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 // wubble change: a wubble:// page shows its own glyph (icons.tsx PAGE_ICON)
-                path: IconPaths.page(root.tab.url);
+                path: Glyph.page(root.tab.url);
                 tint: root.selected ? Palette.ink : Shell.tab-ink;
             }
         }
@@ -129,7 +129,7 @@ export component TabRow inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 size: Shell.icon - 2px;
-                path: root.tab.muted ? IconPaths.speaker-muted : IconPaths.speaker;
+                path: root.tab.muted ? Glyph.speaker-muted : Glyph.speaker;
                 tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
             }
         }
@@ -140,8 +140,8 @@ export component TabRow inherits Rectangle {
             Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                size: 13px;
-                path: IconPaths.split;
+                size: Shell.tab-split-icon;
+                path: Glyph.split;
                 tint: Palette.haze;
             }
         }
@@ -175,17 +175,13 @@ export component TabRow inherits Rectangle {
         close-touch := TouchArea {
             clicked => { root.close(); }
         }
-        Path {
-            width: 10px;
-            height: 10px;
+        Icon {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            viewbox-width: 10;
-            viewbox-height: 10;
-            commands: "M1 1 9 9M9 1 1 9";
-            stroke: close-touch.has-hover ? Palette.ink : Palette.haze;
-            stroke-width: 1.5px;
-            stroke-line-cap: round;
+            size: Shell.tab-close-icon;
+            weight: Shell.tab-close-stroke;
+            path: Glyph.close;
+            tint: close-touch.has-hover ? Palette.ink : Palette.haze;
         }
     }
     // wubble change: the keyboard focus ring

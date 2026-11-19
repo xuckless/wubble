@@ -78,11 +78,6 @@ components/check-box.slint	font	font-weight	1
 components/check-box.slint	paint	background	1
 components/check-box.slint	paint	border-color	1
 components/check-box.slint	paint	border-width	1
-components/check-box.slint	paint	fill	1
-components/check-box.slint	paint	stroke	1
-components/check-box.slint	paint	stroke-width	1
-components/check-box.slint	primitive	Path	1
-components/check-box.slint	primitive	commands	1
 components/check-box.slint	text	Text	1
 components/check-box.slint	token	Fonts	1
 components/check-box.slint	token	Motion	10
@@ -208,12 +203,6 @@ components/glow-ring.slint	paint	@linear-gradient	1
 components/glow-ring.slint	paint	border-color	1
 components/glow-ring.slint	paint	border-width	1
 components/glow-ring.slint	token	Palette	4
-components/icon.slint	paint	fill	1
-components/icon.slint	paint	stroke	1
-components/icon.slint	paint	stroke-width	1
-components/icon.slint	primitive	Path	1
-components/icon.slint	primitive	commands	1
-components/icon.slint	token	Palette	1
 components/model.slint	paint	background	1
 components/nav-buttons.slint	paint	background	1
 components/nav-buttons.slint	token	Palette	1
@@ -395,9 +384,6 @@ kit/chrome/split-view.slint	kit-literal	1.5px	1
 kit/chrome/split-view.slint	kit-literal	14px	1
 kit/chrome/split-view.slint	kit-literal	1px	5
 kit/chrome/split-view.slint	kit-literal	28px	2
-kit/chrome/tab-row.slint	kit-literal	1.5px	1
-kit/chrome/tab-row.slint	kit-literal	10px	2
-kit/chrome/tab-row.slint	kit-literal	13px	1
 kit/chrome/tab-row.slint	kit-literal	150ms	4
 kit/chrome/tab-row.slint	kit-literal	200ms	1
 kit/chrome/tab-row.slint	kit-literal	22px	4
@@ -418,7 +404,6 @@ kit/derived.slint	kit-literal	#C3C8D4	1
 kit/derived.slint	kit-literal	#F2F4FA	1
 kit/derived.slint	kit-literal	0.5px	1
 kit/derived.slint	kit-literal	1.5px	2
-kit/derived.slint	kit-literal	1.6px	1
 kit/derived.slint	kit-literal	100000px	1
 kit/derived.slint	kit-literal	100ms	1
 kit/derived.slint	kit-literal	10px	9
@@ -441,7 +426,7 @@ kit/derived.slint	kit-literal	150ms	5
 kit/derived.slint	kit-literal	150px	1
 kit/derived.slint	kit-literal	15px	1
 kit/derived.slint	kit-literal	160ms	4
-kit/derived.slint	kit-literal	16px	8
+kit/derived.slint	kit-literal	16px	7
 kit/derived.slint	kit-literal	17px	2
 kit/derived.slint	kit-literal	180ms	2
 kit/derived.slint	kit-literal	18px	7

@@ -7,7 +7,7 @@
 import { Palette, Motion } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { Tips } from "tooltip.slint";
 
 // .wb-ib: an icon-only PressableButton
@@ -55,10 +55,10 @@ export component NavButtons inherits HorizontalLayout {
     spacing: Shell.nav-gap;
     // [icon, action id, its spoken name, enabled]: one table, one button each
     property <[{icon: string, id: string, label: string, enabled: bool}]> buttons: [
-        { icon: IconPaths.sidebar, id: "toggle-sidebar", label: "Toggle sidebar", enabled: true },
-        { icon: IconPaths.back, id: "back", label: "Back", enabled: root.can-go-back },
-        { icon: IconPaths.forward, id: "forward", label: "Forward", enabled: root.can-go-forward },
-        { icon: IconPaths.reload, id: "reload", label: "Reload", enabled: true },
+        { icon: Glyph.sidebar, id: "toggle-sidebar", label: "Toggle sidebar", enabled: true },
+        { icon: Glyph.back, id: "back", label: "Back", enabled: root.can-go-back },
+        { icon: Glyph.forward, id: "forward", label: "Forward", enabled: root.can-go-forward },
+        { icon: Glyph.reload, id: "reload", label: "Reload", enabled: true },
     ];
     for b in root.buttons: IconButton {
         icon-path: b.icon;

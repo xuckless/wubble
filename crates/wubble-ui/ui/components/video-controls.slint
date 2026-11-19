@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, VideoView } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TextButton } from "settings.slint";
 
 // Video controls over the page's main video (wubble_core::video): play, a progress bar with the
@@ -71,7 +71,7 @@ export component VideoControls inherits Rectangle {
                 padding: Spacing.s1;
                 spacing: Spacing.s1;
                 play := IconButton {
-                    icon-path: root.video.paused ? IconPaths.play : IconPaths.pause;
+                    icon-path: root.video.paused ? Glyph.play : Glyph.pause;
                     label: root.video.paused ? "Play" : "Pause";
                     clicked => {
                         root.command("play", 0);
@@ -123,7 +123,7 @@ export component VideoControls inherits Rectangle {
                     }
                 }
                 loop := IconButton {
-                    icon-path: IconPaths.loop;
+                    icon-path: Glyph.loop;
                     label: "Loop";
                     background: root.video.looped ? Shell.icon-button-hover.with-alpha(0.18) : self.hovered ? Shell.icon-button-hover : transparent;
                     clicked => {
@@ -131,42 +131,42 @@ export component VideoControls inherits Rectangle {
                     }
                 }
                 if root.video.can-pip: IconButton {
-                    icon-path: IconPaths.pip;
+                    icon-path: Glyph.pip;
                     label: "Picture in picture";
                     clicked => {
                         root.command("pip", 0);
                     }
                 }
                 frame := IconButton {
-                    icon-path: IconPaths.camera;
+                    icon-path: Glyph.camera;
                     label: "Save frame";
                     clicked => {
                         root.command("frame", 0);
                     }
                 }
                 mute := IconButton {
-                    icon-path: root.video.muted ? IconPaths.speaker-muted : IconPaths.speaker;
+                    icon-path: root.video.muted ? Glyph.speaker-muted : Glyph.speaker;
                     label: root.video.muted ? "Unmute" : "Mute";
                     clicked => {
                         root.command("mute", 0);
                     }
                 }
                 if root.video.can-save: IconButton {
-                    icon-path: IconPaths.download;
+                    icon-path: Glyph.download;
                     label: "Save video";
                     clicked => {
                         root.command("save", 0);
                     }
                 }
                 IconButton {
-                    icon-path: IconPaths.chevron-right;
+                    icon-path: Glyph.chevron-right;
                     label: "Collapse";
                     clicked => {
                         root.command("collapse", 0);
                     }
                 }
                 close := IconButton {
-                    icon-path: IconPaths.close;
+                    icon-path: Glyph.close;
                     label: "Close";
                     clicked => {
                         root.command("dismiss", 0);
@@ -209,7 +209,7 @@ export component VideoControls inherits Rectangle {
         Icon {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            path: IconPaths.chevron-left;
+            path: Glyph.chevron-left;
             tint: Palette.ink;
         }
     }

@@ -1,6 +1,6 @@
 import { Palette, Radius, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem } from "model.slint";
 
 // A folder's header in the tab list: the chevron (down while open), the folder's name, and how
@@ -64,7 +64,7 @@ export component FolderRow inherits Rectangle {
             Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                path: root.compact ? IconPaths.folder : root.tab.collapsed ? IconPaths.chevron-right : IconPaths.chevron-down;
+                path: root.compact ? Glyph.folder : root.tab.collapsed ? Glyph.chevron-right : Glyph.chevron-down;
                 tint: touch.has-hover ? Palette.ink : Shell.tab-ink;
             }
         }

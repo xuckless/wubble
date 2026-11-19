@@ -6,6 +6,7 @@
 // repeats a value tokens.slint already has.
 
 import { Chrome } from "../tokens.slint";
+import { IconStroke } from "gen/icons.slint";
 
 export global Shell {
     // Touch sizing: the host sets it from the input kind (a touch flips it on, a mouse move off)
@@ -104,9 +105,17 @@ export global Shell {
     out property <length> rail-gap: 6px;
 
     // icons.tsx: 24 grid, 1.7 stroke, round caps
-    out property <length> icon: 16px;
-    out property <float> icon-stroke: 1.7;
-    out property <float> icon-grid: 24;
+    out property <length> icon: IconStroke.size;
+    out property <float> icon-stroke: IconStroke.width;
+    out property <float> icon-grid: IconStroke.grid;
+    // call-site sizes and strokes of the web chrome: .wb-tab-x (tabs.tsx:132, close 12 at 2),
+    // .wb-light glyphs (chrome.tsx:85-87, 8 at 2.4 / 2.4 / 2.2), the tab-row speaker (the
+    // `icon` less 2) and split mark (tabs.tsx wb-tab-split, 13)
+    out property <length> tab-close-icon: IconStroke.size * 0.75;
+    out property <float> tab-close-stroke: 2;
+    out property <float> light-stroke: 2.4;
+    out property <float> light-stroke-expand: 2.2;
+    out property <length> tab-split-icon: address-icon; // the same 13
     // .wb-tab-icon box (the favicon inside it is `icon`)
     out property <length> tab-icon: 18px;
     // A tab inside a folder sits this far in (wubble: the design has no folders); the icon box
@@ -305,7 +314,7 @@ export global Shell {
     out property <length> find-height: 44px;
     // The screenshot region picker: how much the page dims outside the region.
     out property <float> shot-dim: 0.5;
-    // The speaker glyph in a tab row (hand drawn on the 24 grid: the bucket has none).
+    // The speaker glyph in a tab row (touch.tsx:128-131's speaker).
     out property <length> speaker: 22px;
     // The permission prompt: an .ur-o-surface under the address pill (Chromium's bubble place),
     // 8 below it, 320 wide; the downloads popover: the same surface, 360 wide, rows 60 high with
@@ -320,7 +329,7 @@ export global Shell {
     out property <length> error-icon: 40px;
     // The prompt's "remember" check box: a 1 px rim, a 1.6 px tick.
     out property <length> check-rim: 1px;
-    out property <length> check-tick: 1.6px;
+    out property <float> check-tick: 2.4; // grid units (1.6 px at the 16 px box)
 
     // The settings page (wubble://settings), from the design repo's `pages/settings.css` and the
     // touch kit's `pages/touch.css` (xuckless/the-wallpaper-project @ 21838b8), by rule.
@@ -485,4 +494,29 @@ export global Shell {
     out property <length> task-end: 48px;
     out property <length> page-indent: 20px;
     out property <length> page-favicon: 16px;
+}
+
+// Glyphs wubble needs that the design draws nowhere, derived on the design's rules: viewBox 24,
+// stroke 1.7, round caps and joins, no fill, content inside 3..21, box corners radius 1.5. Each is
+// listed with a rendered sheet in notes/fidelity/derived-review.md for the owner; kit `Glyph` is
+// the one place that names them.
+export global Derived {
+    out property <string> chevron-up: "M6 15l6-6 6 6"; // chevron-down (sourcepanel.tsx:85) turned
+    out property <string> chevron-left: "M15 6l-6 6 6 6"; // chevron-right (touch-kit.tsx:138) turned
+    out property <string> star: "M12 3.8l2.5 5.2 5.7.8-4.1 4 1 5.7L12 16.8 6.9 19.5l1-5.7-4.1-4 5.7-.8z";
+    out property <string> folder: "M3.5 7a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z";
+    out property <string> trash: "M5 7h14M10 7V5h4v2M7 7l.8 12h8.4L17 7M10.5 11v5M13.5 11v5";
+    out property <string> eye: "M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 14.8a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6z";
+    out property <string> copy: "M8.5 8.5h10v11h-10zM5.5 15.5v-11h10";
+    out property <string> pause: "M8.5 5.5v13M15.5 5.5v13";
+    out property <string> loop: "M16.5 4.5l3 3-3 3M19.5 7.5H8a4 4 0 0 0-4 4M7.5 19.5l-3-3 3-3M4.5 16.5H16a4 4 0 0 0 4-4";
+    out property <string> pip: "M3.5 5.5h17v13h-17zM12 11.5h6.5v5H12z";
+    out property <string> pip-return: "M3.5 5.5h17v13h-17zM16.5 14.5l-6-6M10.5 13V8.5H15";
+    out property <string> camera: "M4 8h3.5L9 6h6l1.5 2H20v11H4zM12 16.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6z";
+    out property <string> key: "M8 11a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM10.8 12.2 20 3M16.5 6.5l2.5 2.5M14 9l2 2";
+    out property <string> zap: "M13 3 5 13.5h6L10 21l8-10.5h-6z";
+    out property <string> gauge: "M4.5 17a7.5 7.5 0 1 1 15 0M12 17l3.5-4.5";
+    out property <string> clock: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17zM12 7.5V12l3 2";
+    out property <string> pin: "M6 3h12v18l-6-4-6 4z"; // the PIN ribbon at rest (touch.tsx:244)
+    out property <string> awake: "M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4";
 }

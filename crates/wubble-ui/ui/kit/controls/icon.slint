@@ -1,0 +1,116 @@
+// design: browser/icons.tsx:39-41, pages/touch-kit.tsx:156 @598f814
+// The stroke icon: 24 grid, 1.7 stroke, round caps and joins, no fill, stroke width in grid
+// units (the SVG's stroke-width), so it scales with `size`. `Glyph` names every path wubble
+// draws: the design's from gen/icons.slint, the rest from derived.slint (Derived); nothing else
+// holds a path table.
+
+import { Palette } from "../../tokens.slint";
+import { Shell, Derived } from "../derived.slint";
+import { IconStroke, BrowserIcons, KitIcons, SettingsIcons, InlinePaths } from "../gen/icons.slint";
+
+export global Glyph {
+    // browser/icons.tsx `P`
+    out property <string> globe: BrowserIcons.globe;
+    out property <string> plus: BrowserIcons.plus;
+    out property <string> close: BrowserIcons.close;
+    out property <string> search: BrowserIcons.search;
+    out property <string> code: BrowserIcons.code;
+    out property <string> arrow: BrowserIcons.arrow;
+    out property <string> sidebar: BrowserIcons.sidebar;
+    out property <string> back: BrowserIcons.back;
+    out property <string> forward: BrowserIcons.forward;
+    out property <string> reload: BrowserIcons.reload;
+    out property <string> lock: BrowserIcons.lock;
+    out property <string> download: BrowserIcons.download;
+    out property <string> split: BrowserIcons.split;
+    out property <string> settings: BrowserIcons.settings;
+    out property <string> bubble: BrowserIcons.bubble;
+    // the window lights' glyphs (chrome.tsx:86-87)
+    out property <string> minus: InlinePaths.chrome-l86;
+    out property <string> expand: InlinePaths.chrome-l87;
+    out property <string> chevron-down: InlinePaths.sourcepanel-l85;
+    // pages/touch-kit.tsx `PATH`
+    out property <string> chevron-right: KitIcons.chevron-right;
+    out property <string> duplicate: KitIcons.duplicate;
+    out property <string> link: KitIcons.link;
+    out property <string> move: KitIcons.move;
+    out property <string> check: KitIcons.check;
+    out property <string> book: KitIcons.book;
+    out property <string> play: KitIcons.play;
+    // pages/settings.tsx `SECTIONS`
+    out property <string> palette: SettingsIcons.appearance;
+    out property <string> stack: SettingsIcons.spaces;
+    out property <string> keyboard: SettingsIcons.shortcuts;
+    out property <string> shield: SettingsIcons.privacy;
+    // pages/touch.tsx:128-131: the speaker, its waves, and the mute cross
+    out property <string> speaker: InlinePaths.touch-l128 + InlinePaths.touch-l129 + InlinePaths.touch-l130;
+    out property <string> speaker-muted: InlinePaths.touch-l128 + InlinePaths.touch-l131;
+    out property <string> mic: InlinePaths.command-l134;
+    // not in the design (kit/derived.slint, listed in notes/fidelity/derived-review.md)
+    out property <string> chevron-up: Derived.chevron-up;
+    out property <string> chevron-left: Derived.chevron-left;
+    out property <string> star: Derived.star;
+    out property <string> folder: Derived.folder;
+    out property <string> trash: Derived.trash;
+    out property <string> eye: Derived.eye;
+    out property <string> copy: Derived.copy;
+    out property <string> pause: Derived.pause;
+    out property <string> loop: Derived.loop;
+    out property <string> pip: Derived.pip;
+    out property <string> pip-return: Derived.pip-return;
+    out property <string> camera: Derived.camera;
+    out property <string> key: Derived.key;
+    out property <string> zap: Derived.zap;
+    out property <string> gauge: Derived.gauge;
+    out property <string> clock: Derived.clock;
+    out property <string> pin: Derived.pin;
+    out property <string> awake: Derived.awake;
+
+    // A tab's glyph when it has no favicon: a wubble:// page's own stroke icon (icons.tsx
+    // PAGE_ICON: never a letter), else the globe. The URLs are wubble_core's `InternalPage::url`.
+    public pure function page(url: string) -> string {
+        if url == "wubble://settings" { return BrowserIcons.settings; }
+        if url == "wubble://history" { return self.clock; }
+        if url == "wubble://bookmarks" { return self.star; }
+        if url == "wubble://downloads" { return self.download; }
+        if url == "wubble://passwords" { return self.lock; }
+        return self.globe;
+    }
+
+    // A glyph by name, for rows that carry their icon as data (MenuEntry.icon); "" for none.
+    public pure function named(name: string) -> string {
+        if name == "pin" { return self.pin; }
+        if name == "duplicate" { return self.duplicate; }
+        if name == "move" { return self.move; }
+        if name == "split" { return self.split; }
+        if name == "mute" { return self.speaker-muted; }
+        if name == "speaker" { return self.speaker; }
+        if name == "awake" { return self.awake; }
+        if name == "close" { return self.close; }
+        if name == "link" { return self.link; }
+        if name == "shield" { return self.shield; }
+        if name == "copy" { return self.copy; }
+        if name == "check" { return self.check; }
+        if name == "download" { return self.download; }
+        return "";
+    }
+}
+
+// One icon at `size`. `weight` is the stroke in grid units, as the SVG's stroke-width; Slint
+// strokes in logical px, so it is scaled by size / grid here.
+export component Icon inherits Path {
+    in property <string> path: Glyph.globe;
+    in property <length> size: IconStroke.size;
+    in property <float> weight: IconStroke.width;
+    in property <color> tint: Palette.mist;
+    width: root.size;
+    height: root.size;
+    viewbox-width: IconStroke.grid;
+    viewbox-height: IconStroke.grid;
+    commands: root.path;
+    fill: transparent;
+    stroke: root.tint;
+    stroke-width: root.size * root.weight / IconStroke.grid;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+}

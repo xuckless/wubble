@@ -1,7 +1,7 @@
 import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { SheetButton } from "sheet-button.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 // What a Main window shows for its tab while the tab plays in the picture-in-picture window: a
 // centred column ("Playing in picture-in-picture", the tab's title, Back to tab) on the page's
@@ -29,7 +29,7 @@ export component PipCard inherits Rectangle {
         height: self.preferred-height;
         spacing: Spacing.s3;
         Icon {
-            path: IconPaths.pip;
+            path: Glyph.pip;
             size: Shell.error-icon;
             tint: Palette.mist;
         }

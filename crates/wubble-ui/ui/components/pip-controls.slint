@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
-import { IconPaths } from "icon.slint";
+import { Glyph } from "../kit/controls/icon.slint";
 import { MoveArea } from "window-frame.slint";
 
 // The picture-in-picture window's controls (wubble_core::pip): a strip at the window's foot while
@@ -47,35 +47,35 @@ export component PipControls inherits Rectangle {
                 padding: Spacing.s1;
                 spacing: Spacing.s1;
                 IconButton {
-                    icon-path: IconPaths.back;
+                    icon-path: Glyph.back;
                     label: "Back 10 seconds";
                     clicked => {
                         root.command("seek-by", -10);
                     }
                 }
                 IconButton {
-                    icon-path: root.paused ? IconPaths.play : IconPaths.pause;
+                    icon-path: root.paused ? Glyph.play : Glyph.pause;
                     label: root.paused ? "Play" : "Pause";
                     clicked => {
                         root.command("play", 0);
                     }
                 }
                 IconButton {
-                    icon-path: IconPaths.forward;
+                    icon-path: Glyph.forward;
                     label: "Forward 10 seconds";
                     clicked => {
                         root.command("seek-by", 10);
                     }
                 }
                 IconButton {
-                    icon-path: IconPaths.pip-return;
+                    icon-path: Glyph.pip-return;
                     label: "Back to tab";
                     clicked => {
                         root.command("return", 0);
                     }
                 }
                 IconButton {
-                    icon-path: IconPaths.close;
+                    icon-path: Glyph.close;
                     label: "Close picture-in-picture";
                     clicked => {
                         root.command("close", 0);

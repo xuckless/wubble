@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { SheetButton } from "sheet-button.slint";
 import { ErrorView, GlassTier } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 
 // The error panel over the page: a failed load ("This site can't be reached", Reload), a refused
 // certificate ("Your connection is not private", Go back, and Proceed only where allowed) or a
@@ -62,7 +62,7 @@ export component ErrorPanel inherits Rectangle {
             height: self.preferred-height;
             spacing: Spacing.s3;
             Icon {
-                path: root.error.cert ? IconPaths.lock : IconPaths.globe;
+                path: root.error.cert ? Glyph.lock : Glyph.globe;
                 size: Shell.error-icon;
                 tint: root.error.cert ? Palette.coral : Palette.mist;
             }

@@ -5,7 +5,7 @@
 
 import { Palette, Chrome, Radius, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { FocusRing, FocusKeys } from "focus-ring.slint";
 
 export component NewTabRow inherits Rectangle {
@@ -57,7 +57,7 @@ export component NewTabRow inherits Rectangle {
                 Icon {
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    path: IconPaths.plus;
+                    path: Glyph.plus;
                     size: Shell.new-tab-icon;
                     weight: Shell.new-tab-stroke;
                     tint: Palette.ink;   // .wb button: ink (as IconButton)
