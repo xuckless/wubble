@@ -103,11 +103,6 @@ components/error-panel.slint	token	Fonts	3
 components/error-panel.slint	token	Motion	3
 components/error-panel.slint	token	Palette	5
 components/error-panel.slint	token	Type	3
-components/fav-grid.slint	animate	animate	2
-components/fav-grid.slint	paint	background	1
-components/fav-grid.slint	token	Glass	1
-components/fav-grid.slint	token	Motion	5
-components/fav-grid.slint	token	Palette	2
 components/find-bar.slint	animate	animate	1
 components/find-bar.slint	font	font-family	3
 components/find-bar.slint	font	font-size	3

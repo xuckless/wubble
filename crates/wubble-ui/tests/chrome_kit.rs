@@ -13,12 +13,19 @@ use slint::{
 slint::slint! {
     #[edition = "1.19"]
     import { AddressPill } from "ui/kit/chrome/address-pill.slint";
+    import { Favs } from "ui/kit/chrome/favs.slint";
     export component Probe inherits Window {
         width: 400px;
         height: 300px;
         in property <bool> compact;
         pill := AddressPill { x: 20px; y: 50px; width: 240px; compact: root.compact; host: "example.com"; path: "/a"; }
         out property <float> pill-press: pill.press-scale;
+        favs := Favs {
+            x: 20px; y: 120px; width: 240px; compact: root.compact;
+            tabs: [{ id: 7, title: "a", url: "https://a.test" }, { id: 8, title: "b", url: "https://b.test" }];
+        }
+        out property <int> fav-hover: favs.hovered-id;
+        out property <length> favs-height: favs.height;
         out property <length> origin-x: pill.origin.x;
         out property <length> origin-y: pill.origin.y;
     }
@@ -63,6 +70,26 @@ fn address_pill(p: &Probe) {
     assert_eq!((p.get_origin_x(), p.get_origin_y()), (60.0, 68.0));
 }
 
+/// `.wb-favs`: four columns 8 apart, 44 high; the rail: one 40 px column 6 apart. The tile
+/// under the pointer is the one a press waves.
+fn favourites(p: &Probe) {
+    assert_eq!(p.get_favs_height(), 44.0);
+    // the second tile: x 20 + (240 - 24) / 4 + 8 = 82 .. 136
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(100.0, 140.0),
+        },
+    );
+    assert_eq!(p.get_fav_hover(), 8);
+    at(p, WindowEvent::PointerExited);
+    assert_eq!(p.get_fav_hover(), -1);
+    p.set_compact(true);
+    mock_elapsed_time(Duration::from_millis(1));
+    assert_eq!(p.get_favs_height(), 40.0 + 6.0 + 40.0);
+    p.set_compact(false);
+}
+
 #[test]
 fn chrome_kit_parts_follow_the_design() {
     init_integration_test_with_mock_time();
@@ -70,4 +97,5 @@ fn chrome_kit_parts_follow_the_design() {
     p.show().unwrap();
     run_out();
     address_pill(&p);
+    favourites(&p);
 }

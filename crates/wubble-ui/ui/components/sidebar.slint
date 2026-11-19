@@ -21,7 +21,7 @@ import { PressableButton } from "../kit/controls/button.slint";
 import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "../kit/chrome/address-pill.slint";
-import { FavGrid } from "fav-grid.slint";
+import { Favs } from "../kit/chrome/favs.slint";
 import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
@@ -58,6 +58,8 @@ export component Sidebar inherits Rectangle {
     in property <string> address-host;
     in property <string> address-path;
     in property <bool> address-secure;
+    // the favourite under the pointer (a tab id), -1 when none: a press there waves its glass
+    in-out property <int> fav-hover: -1;
     in property <bool> address-bookmarkable: false;
     in property <bool> address-bookmarked: false;
     in property <bool> address-blocker-visible: false;
@@ -328,7 +330,8 @@ export component Sidebar inherits Rectangle {
         if root.pinned-tabs.length > 0: Ride {
             ride: root.ride;
             step: root.ride-step;
-            FavGrid {
+            Favs {
+                hovered-id <=> root.fav-hover;
                 tabs: root.pinned-tabs;
                 active-tab-id: root.active-tab-id;
                 compact: root.compact;

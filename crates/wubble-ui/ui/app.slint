@@ -180,6 +180,8 @@ export component AppWindow inherits Window {
     in property <string> address-host <=> sidebar.address-host;
     in property <string> address-path <=> sidebar.address-path;
     in property <bool> address-secure <=> sidebar.address-secure;
+    // A favourite is under the pointer: a press waves its glass (chrome.tsx `Fav` onPointerDown).
+    out property <bool> fav-hovered: sidebar.fav-hover >= 0;
     in property <bool> address-bookmarkable <=> sidebar.address-bookmarkable;
     in property <bool> address-bookmarked <=> sidebar.address-bookmarked;
     in property <bool> address-blocker-visible <=> sidebar.address-blocker-visible;
