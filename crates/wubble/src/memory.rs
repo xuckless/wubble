@@ -24,7 +24,7 @@ use wubble_core::sleep::SleepPolicy;
 /// The tab-count states, sampled in order.
 pub const COUNTS: [(&str, usize); 4] = [("empty", 0), ("one", 1), ("ten", 10), ("fifty", 50)];
 
-/// Measure ticks (16 ms each) a state must hold before it is sampled: about 3 s, for the
+/// Measure ticks ([`crate::measure::TICK`] each) a state must hold before it is sampled: about 3 s, for the
 /// renderers' first garbage collections and Chromium's post-load tasks.
 pub const SETTLE_TICKS: u32 = 190;
 
@@ -91,7 +91,12 @@ pub struct Seen {
 pub enum Action {
     /// Open this many more tabs.
     Open(usize),
-    Sample(&'static str),
+    /// Sample the state, reached `ready_after` ticks after the phase began (the tabs opened and
+    /// loaded, or the policy applied), a coarse time to compare settings by.
+    Sample {
+        state: &'static str,
+        ready_after: u32,
+    },
     /// A lifecycle tick past the policy's delay.
     Tick(Sleep),
     Finish,
@@ -147,7 +152,10 @@ pub fn next(d: Driver, seen: &Seen) -> (Driver, Vec<Action>) {
     if held.is_none_or(|n| n < SETTLE_TICKS) {
         return (Driver { held, ticks, ..d }, vec![]);
     }
-    let sample = Action::Sample(d.phase.name());
+    let sample = Action::Sample {
+        state: d.phase.name(),
+        ready_after: ticks.saturating_sub(SETTLE_TICKS + 1),
+    };
     let (phase, then) = match d.phase {
         Phase::Tabs(i) if i + 1 < COUNTS.len() => (
             Phase::Tabs(i + 1),
@@ -223,7 +231,7 @@ pub fn step(seen: &Seen) -> Vec<Action> {
 /// zygote's it was forked from, so only this tells it apart, and a sandboxed renderer reports
 /// its id in the sandbox's PID namespace.
 /// `window` is the window's physical size and scale.
-pub fn sample(state: &str, seen: &Seen, renderers: &BTreeSet<u32>, window: &str) {
+pub fn sample(state: &str, ready_ms: u128, seen: &Seen, renderers: &BTreeSet<u32>, window: &str) {
     RUN.with_borrow_mut(|r| {
         let Some(r) = r.as_mut() else {
             return;
@@ -244,7 +252,7 @@ pub fn sample(state: &str, seen: &Seen, renderers: &BTreeSet<u32>, window: &str)
         }
         let _ = writeln!(
             r.report,
-            "\ntabs={} views={} frozen={} window={window}",
+            "\ntabs={} views={} frozen={} window={window} ready_after_ms~{ready_ms}",
             seen.tabs, seen.views, seen.frozen
         );
         r.report.push_str(&memreport::table(state, &procs));
@@ -299,6 +307,13 @@ mod tests {
         }
     }
 
+    fn sample(state: &'static str) -> Action {
+        Action::Sample {
+            state,
+            ready_after: 0,
+        }
+    }
+
     /// Runs the driver for `n` ticks against `seen`, collecting the actions.
     fn run(mut d: Driver, seen: &Seen, n: u32) -> (Driver, Vec<Action>) {
         let mut all = vec![];
@@ -326,7 +341,7 @@ mod tests {
         let (d, a) = run(d, &seen(0, 0), SETTLE_TICKS);
         assert!(a.is_empty());
         let (d, a) = next(d, &seen(0, 0));
-        assert_eq!(a, vec![Action::Sample("empty"), Action::Open(1)]);
+        assert_eq!(a, vec![sample("empty"), Action::Open(1)]);
         // A tab still loading does not count; the hold starts over when it breaks.
         let (d, a) = run(d, &seen(1, 0), SETTLE_TICKS * 2);
         assert!(a.is_empty());
@@ -338,14 +353,16 @@ mod tests {
         let (d, a) = run(d, &busy, 3);
         assert!(a.is_empty());
         let (d, a) = run(d, &seen(1, 1), SETTLE_TICKS + 1);
-        assert_eq!(a, vec![Action::Sample("one"), Action::Open(9)]);
+        // Ready from the last unbroken hold on: 2 x SETTLE loading, SETTLE - 1 held, 3 busy.
+        let one = Action::Sample {
+            state: "one",
+            ready_after: 3 * SETTLE_TICKS + 2,
+        };
+        assert_eq!(a, vec![one, Action::Open(9)]);
         let (d, a) = run(d, &seen(10, 10), SETTLE_TICKS + 1);
-        assert_eq!(a, vec![Action::Sample("ten"), Action::Open(40)]);
+        assert_eq!(a, vec![sample("ten"), Action::Open(40)]);
         let (d, a) = run(d, &seen(50, 50), SETTLE_TICKS + 1);
-        assert_eq!(
-            a,
-            vec![Action::Sample("fifty"), Action::Tick(Sleep::Freeze)]
-        );
+        assert_eq!(a, vec![sample("fifty"), Action::Tick(Sleep::Freeze)]);
         let frozen = Seen {
             frozen: 49,
             ..seen(50, 50)
@@ -353,14 +370,14 @@ mod tests {
         let (d, a) = run(d, &frozen, SETTLE_TICKS + 1);
         assert_eq!(
             a,
-            vec![Action::Sample("fifty-frozen"), Action::Tick(Sleep::Discard)]
+            vec![sample("fifty-frozen"), Action::Tick(Sleep::Discard)]
         );
         let discarded = Seen {
             views: 1,
             ..seen(50, 50)
         };
         let (d, a) = run(d, &discarded, SETTLE_TICKS + 1);
-        assert_eq!(a, vec![Action::Sample("fifty-discarded"), Action::Finish]);
+        assert_eq!(a, vec![sample("fifty-discarded"), Action::Finish]);
         assert_eq!(run(d, &discarded, 5).1, vec![]);
     }
 

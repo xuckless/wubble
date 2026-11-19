@@ -43,13 +43,14 @@ impl Host {
                         }
                     }
                 }
-                Action::Sample(state) => {
+                Action::Sample { state, ready_after } => {
                     let window = self.w.window.upgrade().map(|w| {
                         let (size, scale) = (w.window().size(), w.window().scale_factor());
                         format!("{}x{}@{scale}", size.width, size.height)
                     });
                     let window = window.unwrap_or_default();
-                    memory::sample(state, &seen, &self.tasks.renderer_pids(), &window);
+                    let ready_ms = crate::measure::TICK.as_millis() * u128::from(ready_after);
+                    memory::sample(state, ready_ms, &seen, &self.tasks.renderer_pids(), &window);
                 }
                 // The policy's own transitions at its own delays; the pressure stays out of it.
                 Action::Tick(sleep) => {
