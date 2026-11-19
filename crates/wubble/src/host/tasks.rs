@@ -41,6 +41,11 @@ impl TasksPage {
         }
     }
 
+    /// The live tabs' renderer pids (several tabs may share one).
+    pub(super) fn renderer_pids(&self) -> std::collections::BTreeSet<u32> {
+        self.pids.values().copied().collect()
+    }
+
     /// `tab`'s renderer is gone: its pid is stale.
     pub(super) fn forget(&mut self, tab: TabId) {
         self.pids.remove(&tab);

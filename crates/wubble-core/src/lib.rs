@@ -23,6 +23,7 @@ pub mod import;
 pub mod keys;
 pub mod lifecycle;
 pub mod media;
+pub mod memreport;
 pub mod model;
 pub mod motion;
 pub mod neterror;

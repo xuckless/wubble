@@ -75,6 +75,9 @@ pub enum Scenario {
     /// The content blocker alone, windowless: compile, cache and per-request
     /// cost of the bundled lists (`blocking::measure`).
     Blocker,
+    /// The process tree's memory with no tab, 1, 10 and 50 tabs, then frozen and discarded
+    /// by the sleep policy (`memory.rs`).
+    Memory,
 }
 
 impl Scenario {
@@ -85,6 +88,7 @@ impl Scenario {
             Self::Resize => "resize",
             Self::Typing => "typing",
             Self::Blocker => "blocker",
+            Self::Memory => "memory",
         }
     }
 
@@ -95,7 +99,8 @@ impl Scenario {
             Self::Resize => include_str!("../assets/measure-resize.html"),
             Self::Typing => include_str!("../assets/measure-typing.html"),
             // Windowless: `main` runs `blocking::measure` instead of a page.
-            Self::Blocker => "",
+            // The memory run opens its own pages.
+            Self::Blocker | Self::Memory => "",
         }
     }
 
@@ -697,6 +702,9 @@ pub fn shell(shell: Shell) {
 /// Timer hook, every [`TICK`] while measuring: injects input (`typing`) or
 /// resizes the window (`resize`), and quits once the run is over.
 pub fn tick(host: &mut Host, window: &AppWindow) {
+    if with_session(|s| s.scenario) == Some(Scenario::Memory) {
+        return host.memory_tick();
+    }
     let now = Instant::now();
     let Some((scenario, step, base)) = with_session(|s| {
         if s.finished(now) {
@@ -797,7 +805,11 @@ fn inject(host: &mut Host, kind: InputKind, n: u32) {
 /// `adapter` names the GPU for the header.
 /// A run in which no frame arrived recorded nothing and is `None` too.
 pub fn finish(adapter: &str) -> Option<(String, String)> {
-    let session = SESSION.take().filter(|s| s.first_frame.is_some())?;
+    let session = SESSION.take()?;
+    if session.scenario == Scenario::Memory {
+        return crate::memory::finish();
+    }
+    let session = Some(session).filter(|s| s.first_frame.is_some())?;
     let period = session
         .refresh_mhz
         .filter(|&m| m > 0)
