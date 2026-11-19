@@ -18,6 +18,8 @@ import { pathToFileURL } from 'node:url';
 import { REPO, designRoot, designSrc, designCommit } from './lib/design.mjs';
 import { parseCss } from './lib/css.mjs';
 import { makeReader, readDecl } from './lib/values.mjs';
+import { literal } from './lib/literals.mjs';
+import { LITERALS } from './literals.mjs';
 
 const args = process.argv.slice(2);
 const flag = n => args.includes(n);
@@ -495,6 +497,35 @@ function rustGen(css) {
   const wob = dur('core/wubble.css', 'wb-wob-a-gt-svg--animation-duration');
   out.push(`    /// ${'core/wubble.css'}:${wob.line}`, `    pub const WOBBLE_MS: f64 = ${rnum(wob.v)};`);
   out.push('}');
+  rustLiterals(out);
+  return out.join('\n');
+}
+
+// Inline literals (literals.mjs), one module per manifest module, in manifest order.
+const literalValues = LITERALS.map(([mod, name, file, needle, o = {}]) => {
+  const { value, line } = literal(read(file), needle, file);
+  use(file, line);
+  return { mod, name, file, line, value, ...o };
+});
+function rustLiterals(out) {
+  for (const mod of [...new Set(literalValues.map(l => l.mod))]) {
+    const files = [...new Set(literalValues.filter(l => l.mod === mod).map(l => l.file))];
+    out.push('', `/// Inline literals of ${files.join(', ')} (tools/fidelity/literals.mjs)`, '#[rustfmt::skip]', `pub mod ${mod} {`);
+    for (const l of literalValues.filter(l => l.mod === mod)) {
+      const t = l.type === 'usize' ? ['usize', String(l.value)] : rtype(l.value);
+      out.push(`    pub const ${rid(l.name)}: ${t[0]} = ${t[1]}; // ${l.file}:${l.line}`);
+    }
+    out.push('}');
+  }
+}
+function literalsSlint() {
+  const out = ['// Inline literals of the design\'s code that its CSS tables miss (tools/fidelity/literals.mjs).'];
+  const slint = literalValues.filter(l => l.slint);
+  for (const g of [...new Set(slint.map(l => l.slint[0]))]) {
+    out.push('', `export global ${g} {`);
+    for (const l of slint.filter(l => l.slint[0] === g)) out.push(prop(l.slint[1], { t: l.slint[2], v: l.value }, `${l.file}:${l.line}`));
+    out.push('}');
+  }
   return out.join('\n');
 }
 
@@ -515,6 +546,7 @@ const files = {
   'crates/wubble-ui/ui/kit/gen/tokens.slint': withHeader(tokensSlint(css)),
   'crates/wubble-ui/ui/kit/gen/css.slint': withHeader(cssSlint(css)),
   'crates/wubble-ui/ui/kit/gen/icons.slint': withHeader(iconsSlint()),
+  'crates/wubble-ui/ui/kit/gen/literals.slint': withHeader(literalsSlint()),
   'crates/wubble-core/src/kit_gen.rs': withHeader(rustGen(css)),
 };
 
