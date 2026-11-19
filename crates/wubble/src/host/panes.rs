@@ -542,8 +542,8 @@ impl Host {
                         Some(r.tab) == focused
                     },
                     // only the docked panel shows a close button (wubble's, derived): the design's
-                    // split panes have none (webview.tsx); a split pane closes from the tab menu,
-                    // the command bar or Ctrl+W
+                    // split panes have none (webview.tsx); a page leaves the split from the tab
+                    // menu's Take Out of Split View, Mod+| or the command bar's unsplit action
                     closable: r.tab == PANEL_TAB,
                     edge: masked.as_ref().map(|m| m.image.clone()).unwrap_or_default(),
                     margin: masked.as_ref().map_or(0.0, |m| m.margin),
@@ -564,7 +564,6 @@ impl Host {
             let source = &self.devtools.seam;
             // the panel's string, after the split's (`Host::split_grab`)
             let panel = panel_x.map(|x| {
-                let held = source.held || source.bend.x.abs() > BOWED;
                 let bow = Bow {
                     bend: source.bend.x,
                     gy: source.gy - f64::from(window.get_content_y()),
@@ -572,11 +571,12 @@ impl Host {
                 let x = x - SPLIT::gap / 2.0;
                 (
                     x,
-                    if held {
+                    if source.held || source.bend.x.abs() > BOWED {
                         string_line(x, height, RADIUS, bow)
                     } else {
                         String::new()
                     },
+                    source.held,
                 )
             });
             self.w
@@ -584,9 +584,10 @@ impl Host {
                 .seams(height)
                 .into_iter()
                 .chain(panel)
-                .map(|(x, path)| SplitSeam {
+                .map(|(x, path, held)| SplitSeam {
                     x: x as f32,
                     path: path.into(),
+                    held,
                 })
                 .collect()
         };

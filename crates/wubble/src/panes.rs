@@ -184,7 +184,7 @@ impl Panes {
     }
 
     /// The seams: centre x and the bowed string while held or twanging ("" when straight).
-    pub fn seams(&self, height: f64) -> Vec<(f64, String)> {
+    pub fn seams(&self, height: f64) -> Vec<(f64, String, bool)> {
         if !self.shown() {
             return vec![];
         }
@@ -193,12 +193,13 @@ impl Panes {
             .into_iter()
             .enumerate()
             .map(|(j, (x, bend, gy))| {
-                let path = if self.split.held == Some(j) || bend.abs() > BOWED {
+                let held = self.split.held == Some(j);
+                let path = if held || bend.abs() > BOWED {
                     string_line(x, height, RADIUS, Bow { bend, gy })
                 } else {
                     String::new()
                 };
-                (x, path)
+                (x, path, held)
             })
             .collect()
     }
@@ -372,7 +373,7 @@ mod tests {
         let want = [(TabId(2), 0.0, 500.0), (TabId(1), 508.0, 500.0)]
             .map(|(tab, x, width)| PageRect { tab, x, width });
         assert_eq!(rects, want);
-        assert_eq!(p.seams(700.0), vec![(504.0, String::new())]);
+        assert_eq!(p.seams(700.0), vec![(504.0, String::new(), false)]);
         assert!(p.ring(m.visible_tab(), 700.0).starts_with("M"));
         // physical pixels per pane
         let l = rects[1].layout(700.0, 1.5);
@@ -402,8 +403,8 @@ mod tests {
         };
         assert_eq!(right, left);
         assert!(right.at(300.0) < -1.0, "bowed toward the pointer");
-        let (x, path) = p.seams(700.0)[0].clone();
-        assert!(!path.is_empty() && x > 380.0);
+        let (x, path, held) = p.seams(700.0)[0].clone();
+        assert!(!path.is_empty() && x > 380.0 && held);
     }
 
     #[test]

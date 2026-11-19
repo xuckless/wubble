@@ -63,6 +63,7 @@ export struct SplitPane {
 export struct SplitSeam {
     x: length,
     path: string,     // string_line(...) while bowed, "" when straight
+    held: bool,       // the pointer holds the seam (.wb-split-held)
 }
 
 export component SplitView inherits Rectangle {
@@ -197,10 +198,16 @@ export component SplitView inherits Rectangle {
             commands: s.path;
             visible: s.path != "";
             fill: transparent;
-            // .wb-split-held .wb-split-line: sky 1.6 at full opacity while the string bends
+            // .wb-split-line: sky 1.6, shown while held (1 over .2 s ease-out) and fading out on
+            // release (0 over .15 s ease-in) while the string springs back. The generator types
+            // the rest opacity as a length (0px): over Shell.beam-unit (1px) reads its number.
             stroke: BrowserCss.wb-split-line--stroke;
             stroke-width: BrowserCss.wb-split-line--stroke-width * Shell.beam-unit;
-            opacity: BrowserCss.wb-split-held-wb-split-line--opacity;
+            opacity: s.held ? BrowserCss.wb-split-held-wb-split-line--opacity : BrowserCss.wb-split-line--opacity / Shell.beam-unit;
+            animate opacity {
+                duration: s.held ? BrowserCss.wb-split-held-wb-split-line--transition-opacity-duration : BrowserCss.wb-split-line--transition-opacity-duration;
+                easing: s.held ? BrowserCss.wb-split-held-wb-split-line--transition-opacity-easing : BrowserCss.wb-split-line--transition-opacity-easing;
+            }
         }
         TouchArea {
             // wubble change: the web design's 20 px strip (Shell.split-grab), not the port's 12
