@@ -77,6 +77,7 @@ use wubble_ui::{AppWindow, CommandBarState, GlassKeys};
 use crate::bar::{self, BarInputs, BarMode, BarRow, Choice, RowTarget};
 use crate::block_smoke::{self, BlockSmoke};
 use crate::blocking::Blocking;
+use crate::clipboard::Bridge as _;
 use crate::ime::Ime;
 use crate::input::{self, InputState, KeyFocus, KeyRoute, PendingKeys};
 use crate::nav_smoke::{self, NavSmoke, SmokeAction, SmokeInput};

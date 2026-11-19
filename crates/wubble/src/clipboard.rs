@@ -9,17 +9,6 @@
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the
 //! bridge is off; the shell's own copies then go through Slint.
 
-#[cfg(target_os = "linux")]
-use slint::winit_030::WinitWindowAccessor;
-#[cfg(target_os = "linux")]
-use slint::winit_030::winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-
-#[cfg(target_os = "linux")]
-type Wayland = smithay_clipboard::Clipboard;
-/// No Wayland clipboard off Linux.
-#[cfg(not(target_os = "linux"))]
-enum Wayland {}
-
 /// Which clipboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Buffer {
@@ -34,63 +23,92 @@ pub fn bridge_needed(wayland_display: Option<&std::ffi::OsStr>) -> bool {
     cfg!(target_os = "linux") && wayland_display.is_some_and(|d| !d.is_empty())
 }
 
-#[derive(Default)]
-pub struct Clipboard {
-    /// Opened on first use: the window's Wayland connection exists by then.
-    wayland: Option<Wayland>,
-}
+/// The host side of the pages' clipboard. One impl per OS, chosen by cfg into [`Clipboard`].
+pub trait Bridge: Default {
+    /// Opens the clipboard now, before the window takes keyboard focus: the compositor
+    /// offers the selection to a client when focus enters, so a clipboard opened later has
+    /// nothing to paste until the selection changes.
+    fn open(&mut self, window: &slint::Window);
 
-impl Clipboard {
-    #[cfg(not(target_os = "linux"))]
-    fn wayland(&mut self, _window: &slint::Window) -> Option<&Wayland> {
-        None
-    }
-
-    #[cfg(target_os = "linux")]
-    fn wayland(&mut self, window: &slint::Window) -> Option<&Wayland> {
-        if self.wayland.is_none() {
-            let display = window
-                .with_winit_window(|w| match w.display_handle().map(|h| h.as_raw()) {
-                    Ok(RawDisplayHandle::Wayland(h)) => Some(h.display.as_ptr()),
-                    _ => None,
-                })
-                .flatten()?;
-            // Safety: the display is winit's live `wl_display`, which outlives
-            // the window and so this clipboard (the host drops it first).
-            self.wayland = Some(unsafe { smithay_clipboard::Clipboard::new(display) });
-        }
-        self.wayland.as_ref()
-    }
-
-    /// Opens the Wayland clipboard now, before the window takes keyboard focus: the
-    /// compositor offers the selection to a client when focus enters, so a clipboard
-    /// opened later has nothing to paste until the selection changes.
-    pub fn open(&mut self, window: &slint::Window) {
-        self.wayland(window);
-    }
-
-    /// Puts `text` on `buffer`; false when the window is not a Wayland one.
-    pub fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool {
-        let Some(clipboard) = self.wayland(window) else {
-            return false;
-        };
-        #[cfg(not(target_os = "linux"))]
-        let _ = (clipboard, buffer, text);
-        #[cfg(target_os = "linux")]
-        match buffer {
-            Buffer::Clipboard => clipboard.store(text),
-            Buffer::Primary => clipboard.store_primary(text),
-        }
-        true
-    }
+    /// Puts `text` on `buffer`; false when this window has no host clipboard, and the
+    /// caller copies through Slint instead.
+    fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool;
 
     /// The text on `buffer`, if any.
-    pub fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
-        let clipboard = self.wayland(window)?;
-        #[cfg(not(target_os = "linux"))]
-        return match *clipboard {};
-        #[cfg(target_os = "linux")]
-        {
+    fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String>;
+}
+
+#[cfg(target_os = "linux")]
+pub type Clipboard = wayland::Wayland;
+#[cfg(not(target_os = "linux"))]
+pub type Clipboard = NoBridge;
+
+/// macOS and Windows: Chromium's own clipboard serves the pages, so nothing is bridged and
+/// the shell's own copies go through Slint.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[derive(Default)]
+pub struct NoBridge;
+
+impl Bridge for NoBridge {
+    fn open(&mut self, _window: &slint::Window) {}
+
+    fn store(&mut self, _window: &slint::Window, _buffer: Buffer, _text: &str) -> bool {
+        false
+    }
+
+    fn load(&mut self, _window: &slint::Window, _buffer: Buffer) -> Option<String> {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod wayland {
+    use super::{Bridge, Buffer};
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+
+    /// The window's Wayland clipboard; none under X11, where Chromium's own works.
+    #[derive(Default)]
+    pub struct Wayland {
+        /// Opened on first use: the window's Wayland connection exists by then.
+        clipboard: Option<smithay_clipboard::Clipboard>,
+    }
+
+    impl Wayland {
+        fn get(&mut self, window: &slint::Window) -> Option<&smithay_clipboard::Clipboard> {
+            if self.clipboard.is_none() {
+                let display = window
+                    .with_winit_window(|w| match w.display_handle().map(|h| h.as_raw()) {
+                        Ok(RawDisplayHandle::Wayland(h)) => Some(h.display.as_ptr()),
+                        _ => None,
+                    })
+                    .flatten()?;
+                // Safety: the display is winit's live `wl_display`, which outlives
+                // the window and so this clipboard (the host drops it first).
+                self.clipboard = Some(unsafe { smithay_clipboard::Clipboard::new(display) });
+            }
+            self.clipboard.as_ref()
+        }
+    }
+
+    impl Bridge for Wayland {
+        fn open(&mut self, window: &slint::Window) {
+            self.get(window);
+        }
+
+        fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool {
+            let Some(clipboard) = self.get(window) else {
+                return false;
+            };
+            match buffer {
+                Buffer::Clipboard => clipboard.store(text),
+                Buffer::Primary => clipboard.store_primary(text),
+            }
+            true
+        }
+
+        fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
+            let clipboard = self.get(window)?;
             let text = match buffer {
                 Buffer::Clipboard => clipboard.load(),
                 Buffer::Primary => clipboard.load_primary(),

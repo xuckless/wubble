@@ -13,7 +13,7 @@ use wubble_engine::input::{KeyInput, Point};
 use wubble_ui::{AppWindow, CommandBarState};
 
 use super::Host;
-use crate::clipboard::Buffer;
+use crate::clipboard::{Bridge as _, Buffer};
 use crate::menu::{Command as MenuCommand, Menu};
 use crate::parity::{self, Action, Button, HostCheck, HostOp, Input, Mods, Parity, Step};
 use crate::with_host;

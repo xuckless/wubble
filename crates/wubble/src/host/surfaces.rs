@@ -24,7 +24,7 @@ use wubble_ui::{
 
 use super::{Host, new_tab, now_ms};
 use crate::chooser::{self, DialogSpec};
-use crate::clipboard::Buffer;
+use crate::clipboard::{Bridge as _, Buffer};
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
 use crate::page_error::{self, ErrorEffect, ErrorEvent, PageError};
