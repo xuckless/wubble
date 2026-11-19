@@ -1,0 +1,128 @@
+// derived: SearchCapsule (controls/search-capsule.slint), GlassPanel thin (material/glass.slint), Icon (controls/icon.slint), KitText
+// A one-line text field: the design has no plain field (notes/fidelity/wubble-only.md section 6,
+// "the `.st-search` capsule at the control height, radius 12, film rim while focused").
+// `capsule` is the search capsule itself (`.st-search`: 40 high, radius 20, the animated clear
+// and the ring). Otherwise the capsule's thin glass at the control height (36) and the control
+// radius (12), the same padding, icon and type, the film rim while it has the focus; no clear
+// button (that is the search's). `numeric` aligns the number right; `secret` masks it. Escape
+// in a plain field calls `escaped()` and is consumed (a sheet around it cancels).
+
+import { SettingsCss } from "../gen/css.slint";
+import { TouchMenu } from "../gen/tokens.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { GlassTier } from "../../components/model.slint";
+import { SearchCapsule } from "search-capsule.slint";
+import { Icon } from "icon.slint";
+
+export component Field inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    // a leading icon (plain fields only: the capsule leads with its search icon)
+    in property <string> icon-path: "";
+    in property <bool> numeric: false;
+    in property <bool> capsule: false;
+    // masked text (a password)
+    in property <bool> secret: false;
+    callback edited(string);
+    callback accepted(string);
+    // Escape in the field: a sheet around it cancels.
+    callback escaped();
+    out property <bool> focused: root.capsule ? cap.focused : input.has-focus;
+    public function take-focus() {
+        if root.capsule {
+            cap.take-focus();
+        } else {
+            input.focus();
+        }
+    }
+
+    height: root.capsule ? SettingsCss.st-search--height : Shell.field-height;
+
+    cap := SearchCapsule {
+        visible: root.capsule;
+        height: root.height;
+        text <=> root.text;
+        placeholder: root.placeholder;
+        edited(t) => {
+            root.edited(t);
+        }
+        accepted(t) => {
+            root.accepted(t);
+        }
+        escaped => {
+            root.escaped();
+        }
+    }
+
+    GlassPanel {
+        visible: !root.capsule;
+        tier: GlassTier.thin;
+        radius: Shell.control-radius;
+        film: input.has-focus;
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+        HorizontalLayout {
+            padding-left: SettingsCss.st-search--padding-left;
+            padding-right: SettingsCss.st-search--padding-left;
+            spacing: SettingsCss.st-search--gap;
+            if root.icon-path != "": VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.search-icon;
+                    path: root.icon-path;
+                    tint: SettingsCss.st-search--color;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                KitText {
+                    width: parent.width;
+                    height: parent.height;
+                    role: Role.st-search-input;
+                    text: root.placeholder;
+                    visible: input.text == "";
+                    color: SettingsCss.st-search-input-placeholder--color;
+                    vertical-alignment: center;
+                    horizontal-alignment: root.numeric ? right : left;
+                    overflow: elide;
+                }
+                input := TextInput {
+                    width: parent.width;
+                    height: parent.height;
+                    text <=> root.text;
+                    font-family: Role.st-search-input.family;
+                    font-size: Role.st-search-input.size;
+                    font-weight: Role.st-search-input.weight;
+                    color: SettingsCss.st-search-input--color;
+                    selection-background-color: Shell.selection-fill;
+                    selection-foreground-color: Shell.selection-ink;
+                    vertical-alignment: center;
+                    horizontal-alignment: root.numeric ? right : left;
+                    single-line: true;
+                    accessible-label: root.placeholder;
+                    input-type: root.secret ? InputType.password : root.numeric ? InputType.decimal : InputType.text;
+                    edited => {
+                        root.edited(self.text);
+                    }
+                    accepted => {
+                        root.accepted(self.text);
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            root.escaped();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+        }
+    }
+}
