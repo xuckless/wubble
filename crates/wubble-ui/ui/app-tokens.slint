@@ -255,6 +255,9 @@ export global Shell {
     // .ur-o-toast: 46 high, padding 0 12, radius 14, 14 / 540; rises 14 px from .95 over a
     // 400 ms spring. Shown for 1.5 s (Chromium's zoom bubble closes after 1.5 s).
     out property <length> toast-height: 46px;
+    // wubble's: the widest a notice grows before its text wraps onto another line (a line of
+    // about 60 characters).
+    out property <length> toast-max-width: 520px;
     out property <length> toast-pad: 16px;
     out property <length> toast-font: 14px;
     out property <int> toast-weight: 540;

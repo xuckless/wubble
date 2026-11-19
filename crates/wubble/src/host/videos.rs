@@ -467,8 +467,15 @@ impl Host {
         for effect in effects {
             match effect {
                 VideoEffect::Page(cmd) => {
+                    // As the user's own action: the controls' clicks and the keys are, and a
+                    // page lets only such a call start a video with its sound on (Chromium's
+                    // autoplay policy); `View::eval` is none, so play after unmute did nothing.
+                    let params = serde_json::json!({
+                        "expression": page_script(cmd),
+                        "userGesture": true,
+                    });
                     if let Some(view) = self.tab_view(tab) {
-                        view.eval(&page_script(cmd));
+                        view.cdp("Runtime.evaluate", &params);
                     }
                 }
                 VideoEffect::RememberRate(rate) => {
@@ -722,6 +729,7 @@ impl Host {
                         open: o.shown(),
                         collapsed: o.collapsed(),
                         pane_right: (pane.x + pane.w) as f32,
+                        pane_bottom: (pane.y + pane.h) as f32,
                         x: r.x as f32,
                         y: r.y as f32,
                         w: r.w as f32,
@@ -1141,14 +1149,75 @@ impl Host {
             .and_then(|t| self.videos.overlays.get(&t))
             .and_then(Overlay::video)
             .cloned();
+        let pip = self.pip_smoke_seen();
         let sponsor = tab.and_then(|t| self.videos.sponsor_tabs.get(&t));
+        let overlay = tab.and_then(|t| self.videos.overlays.get(&t));
+        let toast = self
+            .w
+            .window
+            .upgrade()
+            .map(|w| (w.get_toast_serial(), w.get_toast_text().to_string()))
+            .unwrap_or_default();
         smoke::Seen {
             video,
             jumps: sponsor.map_or(0, |s| s.sent.as_ref().map_or(0, |(_, t)| t.len())),
             notice: sponsor.is_some_and(|s| s.skips.notice(now_ms() as u64).is_some()),
             fired,
-            pip: self.pip_smoke_seen(),
+            pip,
+            now: now_ms() as u64,
+            strip: overlay.is_some_and(Overlay::shown),
+            speeds: overlay.is_some_and(Overlay::speeds_open),
+            toast,
         }
+    }
+
+    /// `--smoke video`'s pointer: window events at a spot of the strip, found on screen (the
+    /// elements' ids, in a debug build), sent once the host is free, as winit's would be.
+    fn video_smoke_pointer(&self, spot: smoke::Spot, click: bool) {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::ComponentHandle;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        let weak = self.w.window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let find = |id: &str| {
+                ElementHandle::find_by_element_id(&window, &format!("VideoControls::{id}"))
+                    .collect::<Vec<_>>()
+            };
+            let centre = |e: &ElementHandle, fx: f32| {
+                let (p, size) = (e.absolute_position(), e.size());
+                slint::LogicalPosition::new(p.x + size.width * fx, p.y + size.height / 2.0)
+            };
+            let video = find("root");
+            let Some(video) = video.first() else {
+                return crate::with_host(|h| h.fail("no video controls on screen".into()));
+            };
+            let (vp, vs) = (video.absolute_position(), video.size());
+            let at = match spot {
+                smoke::Spot::Video => Some(slint::LogicalPosition::new(
+                    vp.x + vs.width / 2.0,
+                    vp.y + vs.height * 0.75,
+                )),
+                smoke::Spot::Away => Some(slint::LogicalPosition::new(
+                    vp.x + vs.width + 40.0,
+                    vp.y + vs.height * 0.75,
+                )),
+                smoke::Spot::Button(id) => find(id).first().map(|e| centre(e, 0.5)),
+                smoke::Spot::Bar(f) => find("bar").first().map(|e| centre(e, f)),
+                smoke::Spot::Speed(i) => find("speed").get(i).map(|e| centre(e, 0.5)),
+            };
+            let Some(position) = at else {
+                return crate::with_host(|h| h.fail(format!("{spot:?} is not on screen")));
+            };
+            crate::with_host(|h| h.input.pointer = Some(position));
+            let w = window.window();
+            w.dispatch_event(WindowEvent::PointerMoved { position });
+            if click {
+                let button = PointerEventButton::Left;
+                w.dispatch_event(WindowEvent::PointerPressed { position, button });
+                w.dispatch_event(WindowEvent::PointerReleased { position, button });
+            }
+        });
     }
 
     /// Picture-in-picture as `--smoke video` checks it: the machine, the model's Pip window and
@@ -1231,6 +1300,8 @@ impl Host {
                 }
                 smoke::Action::PipSpike => self.pip_spike(),
                 smoke::Action::Pip(name) => self.pip_command(name, 0.0),
+                smoke::Action::PointTo(spot) => self.video_smoke_pointer(spot, false),
+                smoke::Action::Click(spot) => self.video_smoke_pointer(spot, true),
                 smoke::Action::Undo => {
                     if let Some(tab) = self.shown() {
                         self.sponsor_undo(tab);

@@ -1,6 +1,7 @@
-//! The video controls on the testing backend: the collapsed strip's tab is docked to the page
-//! pane's right edge where the strip was, and the strip's close button dismisses on a click and
-//! hides the site on a right click. One test (one platform per process).
+//! The video controls on the testing backend: the pointer on any of the strip's buttons is on
+//! the strip (so the strip stays); the collapsed strip's tab is docked to the page pane's right
+//! edge where the strip was, and the strip's close button dismisses on a click and hides the
+//! site on a right click. One test (one platform per process).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -26,6 +27,7 @@ fn view(open: bool, collapsed: bool) -> VideoView {
         h: 300.0,
         // the pane runs on past the video
         pane_right: 900.0,
+        pane_bottom: 700.0,
         rate: "1\u{d7}".into(),
         ..VideoView::default()
     }
@@ -64,6 +66,38 @@ fn the_tab_docks_to_the_pane_edge_and_the_close_button_dismisses() {
     let commands = Rc::new(RefCell::new(vec![]));
     let log = commands.clone();
     app.on_video_command(move |name, _| log.borrow_mut().push(name.to_string()));
+    let over = Rc::new(RefCell::new(vec![]));
+    let hovers = over.clone();
+    app.on_video_hovered(move |on| hovers.borrow_mut().push(on));
+
+    // The pointer onto the strip, then over each of its buttons: it stays on the strip
+    // throughout (no `hovered(false)` between them). Under the buttons' touch areas the strip's
+    // own lost its hover to each of them, and the strip went with the pointer still on it.
+    app.set_video(view(true, false));
+    mock_elapsed_time(Duration::from_millis(400));
+    for id in [
+        "play",
+        "bar",
+        "rate-button",
+        "loop",
+        "frame",
+        "mute",
+        "close",
+    ] {
+        let e = element(&app, &format!("VideoControls::{id}"));
+        app.window().dispatch_event(WindowEvent::PointerMoved {
+            position: centre(&e),
+        });
+        mock_elapsed_time(Duration::from_millis(200));
+        assert_eq!(*over.borrow(), [true], "over {id}");
+    }
+    // Off the strip, beside it on the video: no longer over it.
+    let video = element(&app, "VideoControls::root").absolute_position();
+    app.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(video.x + 50.0, video.y + 250.0),
+    });
+    mock_elapsed_time(Duration::from_millis(16));
+    assert_eq!(*over.borrow(), [true, false]);
 
     // The strip open: its close button dismisses, a right click hides the site.
     app.set_video(view(true, false));

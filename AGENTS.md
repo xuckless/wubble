@@ -73,7 +73,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
 The gallery (`gallery_smoke.rs`, `host/gallery.rs`) writes `DIR/NN-name.png` per scene in the
 order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, command bar (empty, with
 results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
-menu and save prompt, dialog sheet, error and certificate error pages, Settings (four scroll
+menu and save prompt, dialog sheet, toast, error and certificate error pages, Settings (four scroll
 positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager.
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
 properties: the host rewrites those). Size and scale come from the environment:

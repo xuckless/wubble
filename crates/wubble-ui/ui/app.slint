@@ -920,6 +920,7 @@ export component AppWindow inherits Window {
             Toast {
                 x: (parent.width - self.width) / 2;
                 y: Spacing.s4;
+                widest: min(Shell.toast-max-width, parent.width - 2 * Spacing.s4);
                 text: root.toast-text;
                 serial: root.toast-serial;
                 action: root.toast-action;

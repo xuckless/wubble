@@ -584,8 +584,9 @@ export struct VideoView {
     // the strip shows; `collapsed`: only its tab at the page's right edge shows
     open: bool,
     collapsed: bool,
-    // the page pane's right edge, in the same coordinates as `x`
+    // the page pane's right and bottom edges, in the same coordinates as `x` and `y`
     pane-right: length,
+    pane-bottom: length,
     x: length,
     y: length,
     w: length,
