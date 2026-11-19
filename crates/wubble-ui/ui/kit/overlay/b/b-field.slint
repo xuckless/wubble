@@ -6,7 +6,9 @@
 // (`.tp-btn-body`, 12), so a field and the buttons under it share one radius. Escape calls
 // `escaped()` and is consumed (the sheet's own key scope is not the field's parent); Return
 // calls `accepted(text)`. `secret` masks it (a password), `numeric` takes a number (right
-// aligned, as a settings value). Same API as the settings page's old Field, so call sites swap.
+// aligned, as a settings value). Not the kit Field (controls/field.slint) yet: that one has no
+// `label` (the accessible name) or `select-all` (the prompt's proposed text comes selected);
+// the sheets move to it once it has them (a gap for the controls owner).
 // derived (notes/fidelity/derived-review.md "Overlays B"): the radius, the end padding and the
 // missing icon and clear button.
 
