@@ -62,8 +62,8 @@ pub struct Out {
 pub const FROZEN_STEP: f64 = 1.0 / 120.0;
 
 /// The scene time the start page is shot at under `--frozen-backdrop`: the web capture's
-/// (tools/fidelity/scenes.json `"settle": 2000` then `"after": 600` ms on that clock, the
-/// bubble stepping through both: capture.mjs freezes only the liquid; checked by a test).
+/// (the design capture's `"settle": 2000` then `"after": 600` ms on that clock, the bubble
+/// stepping through both; the scoring tool that held them is gone, so no test pins it).
 pub const FROZEN_AT: f64 = 2.6;
 
 /// Where the W field is.
@@ -707,27 +707,5 @@ mod tests {
         // a 60 Hz and a 120 Hz settle: the same bubble
         assert_eq!(at(72), at(144));
         assert_eq!(at(1), at(72));
-    }
-
-    #[test]
-    fn the_frozen_time_is_the_web_capture_s_settle() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tools/fidelity/scenes.json"
-        );
-        let scenes: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let start = scenes["scenes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|s| s["name"] == "start")
-            .unwrap();
-        let ms = |k: &str| start.get(k).unwrap_or(&scenes[k]).as_f64().unwrap();
-        assert!(
-            start.get("steps").is_none(),
-            "the web shot's clock has steps too"
-        );
-        assert!(((ms("settle") + ms("after")) / 1000.0 - FROZEN_AT).abs() < 1e-9);
     }
 }
