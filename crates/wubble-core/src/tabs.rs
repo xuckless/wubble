@@ -24,6 +24,12 @@ pub mod TABS {
     pub const dragStart: f64 = 6.0;
     /// closing row leaves 20% faster than rows enter (240)
     pub const exitMs: f64 = 190.0;
+    /// wubble change: at most this many rows run their entrance at once; rows added past it
+    /// appear in place. Each entering row is an opacity layer in Slint's Skia renderer, a
+    /// render target Skia keeps in its cache for good (Slint 1.19 never purges it), so 40 rows
+    /// entering together (session restore, a burst of opens) left 40 MiB of VRAM behind
+    /// (TODO Decided "GPU memory: Skia scratch layers").
+    pub const maxEntering: usize = 4;
 }
 
 #[derive(Clone, Debug)]
@@ -177,6 +183,7 @@ impl TabRows {
             self.leaving.clear();
         }
         self.leaving.retain(|l| !ids.contains(&l.id));
+        cap_entrances(&mut next);
         self.rows = next;
         self.active = active;
         // wubble change: the host's model can change under a held press (a tab closes itself,
@@ -344,6 +351,24 @@ impl TabRows {
             stretch: sx,
             squash: squash_of(sx),
             origin: if self.stretch.dir > 0.0 { 0.3 } else { 0.7 }, // the trailing edge leads the stretch
+        }
+    }
+}
+
+/// wubble: rows whose entrance would push the number entering past [`TABS::maxEntering`] arrive
+/// at once. Rows already entering keep running (no jump); among the new ones (enter 0), the
+/// top rows get the room left, so a whole list entering animates its first rows.
+fn cap_entrances(rows: &mut [RowAnim]) {
+    let mut room = TABS::maxEntering.saturating_sub(
+        rows.iter()
+            .filter(|r| r.enter > 0.0 && r.enter < OVERLAP_IN)
+            .count(),
+    );
+    for r in rows.iter_mut().filter(|r| r.enter == 0.0) {
+        if room > 0 {
+            room -= 1;
+        } else {
+            r.enter = OVERLAP_IN;
         }
     }
 }
@@ -555,5 +580,47 @@ mod tests {
         // back over its own slot: a drag that lands where it started is no move
         t.r#move(100.0);
         assert_eq!(t.up(), TabUp::None);
+    }
+
+    fn entering(t: &TabRows) -> Vec<u64> {
+        t.rows
+            .iter()
+            .filter(|r| r.entrance() < 1.0)
+            .map(|r| r.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_burst_of_new_rows_animates_at_most_the_cap() {
+        // 40 tabs open in one tick (session restore, the memory harness)
+        let mut t = TabRows::new(&[1], Some(0));
+        let ids: Vec<u64> = (1..=41).collect();
+        t.set_ids(&ids, Some(0));
+        assert_eq!(t.rows.iter().map(|r| r.id).collect::<Vec<_>>(), ids);
+        assert_eq!(entering(&t), [2, 3, 4, 5], "the top new rows animate");
+        assert!(t.rows[5..].iter().all(|r| r.entrance() == 1.0));
+        // a whole new list (another Space) is capped the same way
+        let other: Vec<u64> = (100..140).collect();
+        t.set_ids(&other, None);
+        assert_eq!(entering(&t), [100, 101, 102, 103]);
+    }
+
+    #[test]
+    fn rows_already_entering_keep_running_and_use_up_the_cap() {
+        let mut t = TabRows::new(&[1], Some(0));
+        // one tab per tick: the first four animate, later ones appear in place
+        let mut ids = vec![1];
+        for id in 2..=8 {
+            ids.push(id);
+            t.set_ids(&ids, Some(0));
+            t.step(0.016);
+        }
+        assert_eq!(entering(&t), [2, 3, 4, 5]);
+        // once they have arrived, a new tab animates again
+        settle(&mut t);
+        ids.push(9);
+        t.set_ids(&ids, Some(0));
+        assert_eq!(entering(&t), [9]);
+        assert_eq!(t.rows.last().unwrap().entrance(), 0.0);
     }
 }
