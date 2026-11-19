@@ -28,6 +28,8 @@ export component OverlapLook inherits Rectangle {
     // where it grows from (the centre; the Menu grows from its trigger)
     in property <length> origin-x: self.width / 2;
     in property <length> origin-y: self.height / 2;
+    // the shift runs across instead of down (the Swap's `.tp-sw-x`, pages/touch.css:31-32)
+    in property <bool> along-x: false;
     opacity: root.fade;
     transform-origin: { x: root.origin-x, y: root.origin-y };
     property <length> shift: root.entering ? root.shift-in : root.shift-out;
@@ -39,7 +41,8 @@ export component OverlapLook inherits Rectangle {
     out property <length> blur: root.blur-from * (1 - root.e);
     transform-scale: root.zoom;
     Rectangle {
-        y: root.offset;
+        x: root.along-x ? root.offset : 0px;
+        y: root.along-x ? 0px : root.offset;
         @children
     }
     Rectangle {

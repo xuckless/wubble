@@ -54,9 +54,10 @@ fn toggle_and_slider_draw_their_springs() {
     let views = app.global::<Controls>().get_views();
     assert!(views.row_count() >= 2, "toggle and slider took slots");
     let on_toggle = views.iter().find(|v| v.value == 1.0 && v.fill == 1.0);
+    // the settings row's toggle is the design's sm size: travel 50 - 2 * 3 - 24 = 20 px
     assert!(
-        on_toggle.is_some_and(|v| v.x == 40.0),
-        "an on toggle rests at the far end"
+        on_toggle.as_ref().is_some_and(|v| v.x == 20.0),
+        "an on toggle rests at the far end: {on_toggle:?}"
     );
 
     let changed = Rc::new(RefCell::new(vec![]));

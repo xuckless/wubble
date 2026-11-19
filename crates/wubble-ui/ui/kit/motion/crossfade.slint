@@ -1,8 +1,10 @@
 // design: pages/touch-kit.tsx:70-110, pages/touch.css:27-36 @598f814
 // Crossfade (the touch kit's `Swap`): when the label changes, the old one leaves 7 px up at .98,
 // blurring, over 190 ms ease-in-out while the new one arrives from 7 px below over 240 ms
-// ease-out; both share the box. Built for text labels, the design's use; the x and up/down
-// variants of `Swap` (`.tp-sw-x`, `.tp-sw-up/down`) are not built until a surface needs them.
+// ease-out; both share the box. Built for text labels, the design's use. `along-x` is the
+// `.tp-sw-x` variant (touch.css:31-32: in from 8 px right, out 8 px left, no scale; the dock
+// tooltip's label); the up/down variants (`.tp-sw-up/down`) are not built until a surface needs
+// them.
 
 import { TouchCss } from "../gen/css.slint";
 import { TextRole, Role } from "../gen/text.slint";
@@ -10,17 +12,15 @@ import { KitText } from "../text.slint";
 import { Tween } from "tween.slint";
 import { OverlapLook } from "overlap.slint";
 
-component SwapLayer inherits OverlapLook {
+// One item of a Swap, any content: in while `shown`, out otherwise (`.tp-sw-i`, `data-s`).
+export component SwapItem inherits OverlapLook {
     in property <bool> shown;
-    in property <string> text;
-    in property <TextRole> role;
-    in property <color> ink;
-    in property <TextHorizontalAlignment> align;
     e: tw.t;
     entering: root.shown;
-    shift-in: TouchCss.tp-sw-i-data-s-pre--transform-translatey;
-    shift-out: TouchCss.tp-sw-i-data-s-out--transform-translatey;
-    scale-from: TouchCss.tp-sw-i-data-s-pre--transform-scale;
+    shift-in: root.along-x ? TouchCss.tp-sw-x-gt-tp-sw-i-data-s-pre--transform-translatex : TouchCss.tp-sw-i-data-s-pre--transform-translatey;
+    shift-out: root.along-x ? TouchCss.tp-sw-x-gt-tp-sw-i-data-s-out--transform-translatex : TouchCss.tp-sw-i-data-s-out--transform-translatey;
+    // `.tp-sw-x` replaces the whole transform: a shift, no scale
+    scale-from: root.along-x ? 1 : TouchCss.tp-sw-i-data-s-pre--transform-scale;
     tw := Tween {
         on: root.shown;
         in-ms: TouchCss.tp-sw-i--transition-opacity-duration;
@@ -28,6 +28,14 @@ component SwapLayer inherits OverlapLook {
         in-easing: TouchCss.tp-sw-i--transition-opacity-easing;
         out-easing: TouchCss.tp-sw-i-data-s-out--transition-timing-function;
     }
+    @children
+}
+
+component SwapLayer inherits SwapItem {
+    in property <string> text;
+    in property <TextRole> role;
+    in property <color> ink;
+    in property <TextHorizontalAlignment> align;
     KitText {
         role: root.role;
         text: root.text;
@@ -42,6 +50,8 @@ export component CrossfadeText inherits Rectangle {
     in property <TextRole> role: Role.body;
     in property <color> ink;
     in property <TextHorizontalAlignment> align: left;
+    // `.tp-sw-x`: the labels shift across, not down
+    in property <bool> along-x: false;
     // which layer holds the current text; the other leaves with the previous one
     property <bool> front: true;
     property <string> a;
@@ -60,6 +70,6 @@ export component CrossfadeText inherits Rectangle {
         }
         root.front = !root.front;
     }
-    la := SwapLayer { shown: root.front; text: root.a; role: root.role; ink: root.ink; align: root.align; }
-    lb := SwapLayer { shown: !root.front; text: root.b; role: root.role; ink: root.ink; align: root.align; }
+    la := SwapLayer { shown: root.front; text: root.a; role: root.role; ink: root.ink; align: root.align; along-x: root.along-x; }
+    lb := SwapLayer { shown: !root.front; text: root.b; role: root.role; ink: root.ink; align: root.align; along-x: root.along-x; }
 }

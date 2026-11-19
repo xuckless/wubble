@@ -1,34 +1,59 @@
-// design: core/wubble.css:46-49, browser/browser.css:34-38 @598f814
-// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
-// @ 6c840da, with the marked `wubble change`s), unchanged.
+// design: pages/touch.tsx:440-456, pages/touch.css:121-131, core/wubble.css:25-49, browser/browser.css:34-38 @598f814
+// The one button base and the touch kit's Button (`.tp-btn` around `.tp-btn-body`): 44 high,
+// radius 12, 0 16 padding, gap 8, 14 px at 600. `pri` is the Space accent with abyss text;
+// `ghost` is mist text, ink on white .07 on hover; `glass` is `.wb-thin .wb-film` with ink text
+// (the film rim while touched). Background and colour transition .15 s (CSS `ease`). Press
+// (`.wb-press`, kit Press) scales the button; release lets the body squash once at a third of
+// the squash token (`tp-bq-a`, kit Keys), on pointer up and on Enter / Space key up
+// (touch.tsx:452). The design's slint/ port has only PressableButton; the rest is written from
+// the TSX and CSS above.
+// Derived (notes/fidelity/derived-review.md): the disabled look (opacity .35, `.wb-ib:disabled`)
+// and the keyboard ring on pri and ghost (the design shows only the glass film on focus).
 
-import { Palette, Space, Chrome, Fonts, Type, Motion, Radius, Keyframes } from "../gen/tokens.slint";
-import { Shell } from "../derived.slint";
+import { Palette, Chrome, Keyframes } from "../gen/tokens.slint";
+import { TouchCss, BrowserCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { GlassTier } from "../../components/model.slint";
+import { GlassPanel } from "../material/glass.slint";
 import { Keys } from "../motion/keys.slint";
 import { Press } from "../motion/press.slint";
-import { WubbleCss, TouchCss } from "../gen/css.slint";
+import { Tween } from "../motion/tween.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
-import { Calm } from "../motion/calm.slint";
 import { KitText } from "../text.slint";
-import { Role } from "../gen/text.slint";
+
+// `.tp-btn-body.pri / .glass / .ghost`
+export enum ButtonKind { pri, glass, ghost }
 
 // @source slint-pressable
-// Press: scale to 0.97 over 120 ms ease-out, back over 200 ms ease-out (wubble.css .wb-press).
-// Never used where physics owns the transform (the tab indicator, the bubble).
+// The base every button is a view of (Button, IconButton, the sheet button): touch, press,
+// squash, keyboard and ring in one place. Unset, it is the ghost look: icon mode (no text)
+// takes the icon button's radius (`.wb-ib`), text mode the button's (`.tp-btn-body`).
+// Callers multiply nothing: the press and the squash share this one transform.
 export component PressableButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
-    // wubble change: the side padding, so an icon-only button (.wb-ib, 30 square) fits
-    in property <length> padding-x: Space.s3;
+    // the side padding, so an icon-only button (.wb-ib, 30 square) fits
+    in property <length> padding-x: TouchCss.wb-tp-btn-body--padding-left;
+    in property <ButtonKind> kind: ButtonKind.ghost;
+    // `--tp-accent`: the Space's accent
+    in property <color> accent: Palette.sky;
+    // a right-button release on the button, for a second choice on one control
     callback clicked();
-    // wubble change: a right-button release on the button, for a second choice on one control.
     callback secondary-clicked();
     out property <bool> pressed: touch.pressed;
     out property <bool> hovered: touch.has-hover;
-    // wubble change: what a screen reader calls the button when it has no text (an icon).
+    // what a screen reader calls the button when it has no text (an icon)
     in property <string> label;
-    // wubble change: Tab reaches the button (Space or Enter clicks it), with the design's ring.
+    // Tab reaches the button (Space or Enter clicks it), with the ring
     out property <bool> keyboard-focused: keys.has-focus;
+    // The fill at rest and on hover, and the ink (text, icons) at rest and on hover, by kind;
+    // a view of the base (IconButton) sets its own.
+    in property <color> fill: root.kind == ButtonKind.pri ? root.accent : transparent;
+    in property <color> hover-fill: root.kind == ButtonKind.pri ? root.accent : root.kind == ButtonKind.ghost ? TouchCss.tp-btn-hover-tp-btn-body-ghost--background : transparent;
+    in property <color> rest-ink: root.kind == ButtonKind.pri ? TouchCss.tp-btn-body-pri--color : root.kind == ButtonKind.ghost ? TouchCss.tp-btn-body-ghost--color : TouchCss.wb-tp-btn-body--color;
+    in property <color> hover-ink: root.kind == ButtonKind.ghost ? TouchCss.tp-btn-hover-tp-btn-body-ghost--color : root.rest-ink;
+    // the ink now (for a view's icon)
+    out property <color> ink: root.mix(root.rest-ink, root.hover-ink, hov.t);
     accessible-role: AccessibleRole.button;
     accessible-label: root.label != "" ? root.label : root.text;
     accessible-enabled: root.enabled;
@@ -38,14 +63,32 @@ export component PressableButton inherits Rectangle {
         }
     }
 
+    // a transition between two colours, as CSS interpolates them (premultiplied: to or from
+    // clear, only the alpha runs)
+    pure function mix(a: color, b: color, t: float) -> color {
+        if a.alpha == 0 {
+            return b.with-alpha(b.alpha * t);
+        }
+        if b.alpha == 0 {
+            return a.with-alpha(a.alpha * (1 - t));
+        }
+        return b.mix(a, t);
+    }
+
     min-height: Chrome.controls;
-    border-radius: Radius.sm;
-    background: touch.has-hover ? Palette.shell : transparent;
-    animate background { duration: Calm.ms(WubbleCss.wb-press--transition-background-color-duration); easing: ease; }
+    border-radius: root.text == "" ? BrowserCss.wb-ib--border-radius : TouchCss.wb-tp-btn-body--border-radius;
+    background: root.mix(root.fill, root.hover-fill, hov.t);
+    opacity: root.enabled ? 1 : BrowserCss.wb-ib-disabled--opacity;
+    // `transition: background-color .15s, color .15s` (CSS `ease`)
+    hov := Tween {
+        on: touch.has-hover && root.enabled;
+        in-ms: TouchCss.wb-tp-btn-body--transition-background-color-duration;
+        out-ms: TouchCss.wb-tp-btn-body--transition-background-color-duration;
+        in-easing: ease;
+        out-easing: ease;
+    }
 
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    // wubble change: the release squash (touch.css `tp-bq-a`, the squash token at a third, keys.slint) times the
-    // press, on one transform.
     press := Press {
         pressed: touch.pressed;
     }
@@ -61,13 +104,35 @@ export component PressableButton inherits Rectangle {
         }
     }
 
+    // `.wb-thin .wb-film`: the glass body, its rim lit while hovered, pressed or focused
+    if root.kind == ButtonKind.glass: GlassPanel {
+        width: root.width;
+        height: root.height;
+        tier: GlassTier.thin;
+        radius: root.border-radius;
+        hover: touch.has-hover && root.enabled;
+        pressed: touch.pressed;
+        focused: keys.has-focus;
+    }
+
     keys := FocusKeys {
         enabled: root.enabled;
-        activate => { root.clicked(); }
+        activate => {
+            root.clicked();
+        }
+        key-released(e) => {
+            if e.text == " " || e.text == Key.Return {
+                sq.hit = !sq.hit;
+                return accept;
+            }
+            return reject;
+        }
     }
     touch := TouchArea {
         enabled: root.enabled;
-        clicked => { root.clicked(); }
+        clicked => {
+            root.clicked();
+        }
         pointer-event(e) => {
             if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
                 root.secondary-clicked();
@@ -78,19 +143,25 @@ export component PressableButton inherits Rectangle {
     HorizontalLayout {
         padding-left: root.padding-x;
         padding-right: root.padding-x;
-        spacing: Space.s2;
+        spacing: TouchCss.wb-tp-btn-body--gap;
         alignment: center;
         @children
         if root.text != "": KitText {
-            role: Role.label;
+            role: Role.wb-tp-btn-body;
             text: root.text;
             vertical-alignment: center;
-            color: root.enabled ? Palette.ink : Palette.haze;
+            color: root.ink;
         }
     }
-    // wubble change: the keyboard focus ring
     FocusRing {
         shown: keys.has-focus;
         radius: root.border-radius;
     }
+}
+
+// `.tp-btn` + `.tp-btn-body`: 44 high; `kind` pri, glass (the default) or ghost.
+export component Button inherits PressableButton {
+    kind: ButtonKind.glass;
+    height: TouchCss.wb-tp-btn-body--height;
+    border-radius: TouchCss.wb-tp-btn-body--border-radius;
 }

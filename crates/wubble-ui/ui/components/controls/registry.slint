@@ -30,19 +30,31 @@ export struct ControlView {
     origin: float,
     // The toggle's accent bloom, 0..1.
     fill: float,
-    // The slider's value shown, 0..100; the segment chosen.
+    // The slider's value shown, 0..100; the segment chosen; the hold button's fill, 0..1.
     value: float,
     held: bool,
     // The menu (kind 3): the lit row (-1 none), whether the highlight appears in place, the
-    // phase (0 closed, 1 open, 2 closing), the focused row and the row the trigger confirms
-    // (-1 none). The highlight's row (the lit one, else the first, `max(0, i)` of the TS) has
-    // `hl-rows` rows and `hl-rules` separators above it.
+    // focused row and the row the trigger confirms (`done`, -1 none). The highlight's row (the
+    // lit one, else the first, `max(0, i)` of the TS) has `hl-rows` rows and `hl-rules`
+    // separators above it.
     hl: int,
     hl-rows: int,
     hl-rules: int,
     jump: bool,
-    phase: int,
     focus: int,
+    // The toggle's wall squash (its second transform, about its own origin: 0 left .. 1 right
+    // of the knob); 1, 1 and 0.5 for the others.
+    squash-x: float,
+    squash-y: float,
+    origin2: float,
+    // The phase, by kind. Menu: 0 closed, 1 open, 2 closing. Hold button: 0 idle, 1 held,
+    // 2 done. Confirm button: 0 idle, 1 busy, 2 done.
+    phase: int,
+    // Counts the pulses (hold: done; confirm: done), so a control replays it on each change.
+    hit: int,
+    // Counts the hold button's completions (`Effect::Done`): it runs `done` on each change.
+    dones: int,
+    // The menu: the row the trigger confirms (-1 none).
     done: int,
 }
 
@@ -50,17 +62,19 @@ export global Controls {
     in property <[ControlView]> views;
     in property <int> generation;
     // kind: 0 toggle (value 0/1), 1 slider (value 0..100), 2 segmented (value the segment),
-    // 3 menu.
+    // 3 menu, 4 hold button (value 1: disabled), 5 confirm button (value: its busy time, ms).
     // Returns the slot.
     callback acquire(int, float) -> int;
-    // The setting changed from outside: the control springs to it.
+    // The setting changed from outside: the control springs to it (hold: disabled 1/0).
     callback set-value(int, float);
-    // The slider's travel, px.
+    // The slider's and the toggle's travel, px.
     callback resize(int, length);
     // The segmented control's segment `i` laid out at (left, width), px.
     callback segment(int, int, length, length);
     // Pointer along the travel, px; `t` the time base the toggle measures its fling with.
-    callback press(int, length);
+    // Hold: press starts, release ends the hold. Confirm: press is the click. Returns whether
+    // the control runs its action now (confirm: the machine's `Effect::Run`; the others: false).
+    callback press(int, length) -> bool;
     callback drag(int, length);
     // The value it lands on (toggle 0/1, slider 0..100, segment index), or -1 when it was not
     // held (or, segmented, landed on no segment).
@@ -73,6 +87,6 @@ export global Controls {
     callback menu-event(int, int, int, int, [MenuEntry]) -> MenuEffect;
 
     public pure function view(slot: int) -> ControlView {
-        return slot >= 0 && slot < root.views.length ? root.views[slot] : { scale-x: 1, scale-y: 1, origin: 0.5, hl: -1, jump: true, focus: -1, done: -1 };
+        return slot >= 0 && slot < root.views.length ? root.views[slot] : { scale-x: 1, scale-y: 1, origin: 0.5, hl: -1, jump: true, focus: -1, done: -1, squash-x: 1, squash-y: 1, origin2: 0.5 };
     }
 }

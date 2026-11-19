@@ -1,14 +1,9 @@
-import { Palette } from "../kit/gen/tokens.slint";
-import { Shell } from "../kit/derived.slint";
-import { PressableButton } from "../kit/controls/button.slint";
+// A sheet's button (dialog, sign-in, error panel, permission prompt): the kit Button
+// (kit/controls/button.slint, the touch kit's `.tp-btn`). `primary`, the default action, is the
+// pri button; the others are ghost (derived: notes/fidelity/derived-review.md).
+import { Button, ButtonKind } from "../kit/controls/button.slint";
 
-// A sheet's button (dialog, sign-in, error panel, permission prompt): Ultra Reactivate's
-// `.ur-o-dialog` buttons, 42 high, radius 11, 16 at the sides. `primary`: the default action,
-// filled at rest.
-export component SheetButton inherits PressableButton {
+export component SheetButton inherits Button {
     in property <bool> primary;
-    height: Shell.sheet-button;
-    padding-x: Shell.sheet-button-pad;
-    border-radius: Shell.sheet-button-radius;
-    background: self.primary ? (self.hovered ? Palette.rim : Palette.shell) : (self.hovered ? Palette.shell : transparent);
+    kind: self.primary ? ButtonKind.pri : ButtonKind.ghost;
 }

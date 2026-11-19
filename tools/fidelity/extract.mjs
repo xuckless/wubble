@@ -332,7 +332,8 @@ function tokensSlint(css) {
     use(file, l);
     out.push(prop(id, id === 'chevron-stroke' ? F(Number(m[1])) : L(Number(m[1])), `${file}:${l}`));
   }
-  out.push('}');
+  out.push('}', '');
+  out.push(...tsxSlint());
   return out.join('\n');
 }
 
@@ -521,6 +522,50 @@ function keyframes(css, file, name) {
   }
   return [...steps.values()].sort((a, b) => a[0] - b[0]);
 }
+/**
+ * Values the controls take from TSX markup and timers rather than a constant table: an `<svg>`
+ * or `<Icon size>` attribute, a `setTimeout` length. Each is found by its line's text and read
+ * by a regex; a design change that moves or drops one fails here instead of going stale.
+ */
+function tsxValue(file, needle, re) {
+  const line = lineOf(file, needle);
+  if (!line) throw new Error(`${file}: no line with ${needle}`);
+  const m = re.exec(read(file).split('\n')[line - 1]);
+  if (!m) throw new Error(`${file}:${line}: ${re} does not match`);
+  use(file, line);
+  return { v: Number(m[1]), at: `${file}:${line}` };
+}
+const TSX = () => {
+  const checks = table('pages/touch.tsx', 'CHECKS');
+  const dock = table('pages/touch.tsx', 'DOCK');
+  const tick = 'pathLength={20}';
+  return {
+    // the check box's tick (touch.tsx Checks; settings.tsx's row check box is the same markup)
+    'check-tick-delay': { t: 'duration', v: checks.value.tickDelay, at: `pages/touch.tsx:${checks.first} CHECKS.tickDelay` },
+    'check-tick-size': { t: 'length', ...tsxValue('pages/touch.tsx', tick, /<svg width="([\d.]+)"/) },
+    'check-tick-stroke': { t: 'float', ...tsxValue('pages/touch.tsx', tick, /stroke-width="([\d.]+)"/) },
+    'check-tick-length': { t: 'float', ...tsxValue('pages/touch.tsx', tick, /pathLength=\{([\d.]+)\}/) },
+    // the tick's path (`PATH.check`, two segments of slope 1, so its length grows linearly with
+    // x): where it starts and ends across, in grid units
+    'check-tick-x0': { t: 'float', ...tsxValue('pages/touch-kit.tsx', '  check: ', /check: 'm([\d.]+) /) },
+    'check-tick-x1': { t: 'float', ...tsxValue('pages/touch-kit.tsx', '  check: ', /L([\d.]+) [\d.]+'/) },
+    // the fill's `clip-path: circle(75%)` (not read by the CSS reader): its radius over the box
+    'check-fill-radius': { t: 'float', ...tsxValue('pages/touch.css', '.tp-ck.on .tp-ck-fill', /circle\(([\d.]+)%/), scale: 0.01 },
+    // the dock tooltip's glide (`--tp-glide`)
+    'tip-glide': { t: 'duration', v: dock.value.glideMs, at: `pages/touch.tsx:${dock.first}-${dock.last} DOCK.glideMs` },
+    // HoldButton's done label icon, ConfirmButton's done icon and how long it shows
+    'hold-done-icon': { t: 'length', ...tsxValue('pages/settings.tsx', 'class="st-hold-done"', /size=\{([\d.]+)\}/) },
+    'confirm-done-icon': { t: 'length', ...tsxValue('pages/settings.tsx', 'class="st-ok"><Icon name="check"', /size=\{([\d.]+)\}/) },
+    'confirm-done-ms': { t: 'duration', ...tsxValue('pages/settings.tsx', "setSt('idle')", /setSt\('idle'\), (\d+)\)/) },
+  };
+};
+function tsxSlint() {
+  const out = ['/// Control values the tables above do not hold: TSX markup and timers, and a CSS value the', '/// reader leaves unread (each line cites where).', 'export global Tsx {'];
+  for (const [k, { t, v, at, scale = 1 }] of Object.entries(TSX())) out.push(prop(k, { t, v: v * scale }, at));
+  out.push('}');
+  return out;
+}
+
 const genTables = {};
 function rustGen(css) {
   const out = [
@@ -541,6 +586,11 @@ function rustGen(css) {
       const m = /max = ([\d.]+), full = (\d+)/.exec(read(file).split('\n')[ln - 1]);
       use(file, ln);
       out.push(`    /// Stretch.update's defaults (${file}:${ln})`, '    pub mod STRETCH {', `        pub const max: f64 = ${rnum(Number(m[1]))};`, `        pub const full: f64 = ${rnum(Number(m[2]))};`, '    }');
+    }
+    if (mod === 'settings') {
+      // ConfirmButton has no table: its done label shows for a setTimeout's length
+      const done = TSX()['confirm-done-ms'];
+      out.push(`    /// ConfirmButton (${done.at})`, '    pub mod CONFIRM {', `        pub const doneMs: f64 = ${rnum(done.v)};`, '    }');
     }
     out.push('}', '');
   }
