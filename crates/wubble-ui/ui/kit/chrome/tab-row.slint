@@ -1,6 +1,6 @@
 // design: browser/tabs.tsx:15-136, browser/browser.css:60-80 @598f814
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
-// @ 6c840da, with the marked `wubble change`s), unchanged.
+// @ 6c840da, with the marked `wubble change`s): no press squash (the design has none).
 
 import { Palette, Radius, Fonts, Type, Motion } from "../gen/tokens.slint";
 import { TabItem } from "../../components/model.slint";
@@ -19,6 +19,8 @@ export component TabRow inherits Rectangle {
     in property <TabItem> tab;
     in property <bool> selected: false;
     in property <bool> compact: false;   // rail mode: icon only
+    // wubble change: the row being dragged (.wb-tab-drag: white .1, shadow 0 10 24 black .4)
+    in property <bool> dragging: false;
     // pointer y in window px; tabs.rs decides click vs drag (6 px) and the reorder
     callback press(length);
     callback drag(length);
@@ -38,6 +40,19 @@ export component TabRow inherits Rectangle {
     // tab, Delete closes it; `focus-token` changing gives the selected row keyboard focus (F6
     // to the sidebar).
     callback activate();
+    // wubble change: Up / Down (tabs.tsx onKeyDown): the list moves the selection, clamped
+    // (wubble_core::tabs::step_focus); `true` is down.
+    callback step(bool);
+    // wubble change: whether this row holds the keyboard focus (the list's roving focus)
+    callback focused(bool);
+    // wubble change: the row takes the focus when it becomes the selected row while the list
+    // holds it (Up / Down), as tabs.tsx focuses `children[j + 1]`
+    in property <bool> follow-focus: false;
+    changed selected => {
+        if root.selected && root.follow-focus {
+            keys.focus();
+        }
+    }
     in property <int> focus-token;
     changed focus-token => {
         if root.selected {
@@ -56,12 +71,20 @@ export component TabRow inherits Rectangle {
     border-radius: Radius.sm;
     // the selected row's background is the indicator (drawn by Sidebar), so rows only hover
     // wubble change: .wb-tab:hover white 4.5 % (the port's opaque shell read as a slab)
-    background: touch.has-hover && !root.selected ? Shell.row-hover : transparent;
+    // wubble change: .wb-tab-drag on the dragged row, over the hover
+    background: root.dragging ? BrowserCss.wb-tab-drag--background
+        : touch.has-hover && !root.selected ? BrowserCss.wb-tab-hover--background : transparent;
+    drop-shadow-offset-x: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-x : 0;
+    drop-shadow-offset-y: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-y : 0;
+    drop-shadow-blur: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-blur : 0;
+    drop-shadow-color: root.dragging ? BrowserCss.wb-tab-drag--box-shadow-shadow-1-color : transparent;
 
     keys := FocusKeys {
         activate => { root.activate(); }
+        changed has-focus => { root.focused(self.has-focus); }
         other-key(e) => {
-            if e.text == Key.Delete { root.close(); return accept; }
+            if e.text == Key.Delete || e.text == Key.Backspace { root.close(); return accept; }
+            if e.text == Key.DownArrow || e.text == Key.UpArrow { root.step(e.text == Key.DownArrow); return accept; }
             return reject;
         }
     }
@@ -160,7 +183,7 @@ export component TabRow inherits Rectangle {
         width: 22px;
         height: 22px;
         border-radius: Shell.tab-close-radius;
-        background: close-touch.has-hover ? Shell.tab-close-hover : transparent;
+        background: close-touch.has-hover ? BrowserCss.wb-tab-x-hover--background : transparent;
         animate background { duration: Calm.ms(BrowserCss.wb-tab-x--transition-background-color-duration); easing: ease; }
         visible: !root.compact;
         opacity: root.close-shown ? 1 : 0;
@@ -177,12 +200,14 @@ export component TabRow inherits Rectangle {
             size: Shell.tab-close-icon;
             weight: Shell.tab-close-stroke;
             path: Glyph.close;
-            tint: close-touch.has-hover ? Palette.ink : Palette.haze;
+            // .wb-tab-x mist, ink on its own hover
+            tint: close-touch.has-hover ? BrowserCss.wb-tab-x-hover--color : BrowserCss.wb-tab-x--color;
         }
     }
-    // wubble change: the keyboard focus ring
+    // wubble change: the keyboard focus ring, inside the row (.wb-tab outline-offset -2px)
     FocusRing {
         shown: keys.has-focus;
         radius: root.border-radius;
+        offset: BrowserCss.wb-tab--outline-offset;
     }
 }

@@ -196,17 +196,6 @@ components/glance-card.slint	token	Type	2
 components/model.slint	paint	background	1
 components/nav-buttons.slint	paint	background	1
 components/nav-buttons.slint	token	Palette	1
-components/new-tab-row.slint	animate	animate	2
-components/new-tab-row.slint	font	font-family	1
-components/new-tab-row.slint	font	font-size	1
-components/new-tab-row.slint	font	font-weight	1
-components/new-tab-row.slint	paint	background	1
-components/new-tab-row.slint	text	Text	1
-components/new-tab-row.slint	token	Fonts	1
-components/new-tab-row.slint	token	Motion	6
-components/new-tab-row.slint	token	Palette	2
-components/new-tab-row.slint	token	Radius	1
-components/new-tab-row.slint	token	Type	2
 components/pages.slint	font	font-family	10
 components/pages.slint	font	font-size	10
 components/pages.slint	font	font-weight	1
@@ -427,4 +416,4 @@ kit/derived.slint	kit-literal	88px	2
 kit/derived.slint	kit-literal	8px	7
 kit/derived.slint	kit-literal	96px	3
 kit/derived.slint	kit-literal	9px	4
-kit/derived.slint	kit-literal	rgba(	17
+kit/derived.slint	kit-literal	rgba(	16

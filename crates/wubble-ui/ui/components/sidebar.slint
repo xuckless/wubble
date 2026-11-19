@@ -22,7 +22,7 @@ import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
-import { NewTabRow } from "new-tab-row.slint";
+import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
 import { MoveArea } from "window-frame.slint";
@@ -80,6 +80,12 @@ export component Sidebar inherits Rectangle {
     in property <int> selected: -1;
     in property <[length]> row-y;
     in property <[float]> row-scale;
+    // the row being dragged (TabRows::is_dragging), -1 when none
+    in property <int> dragged-row: -1;
+    // Up / Down from row `i`: the row to select (wubble_core::tabs::step_focus, the driver)
+    pure callback tab-step(int, bool) -> int;
+    // a tab row holds the keyboard focus: the selected row takes it as the selection moves
+    property <bool> rows-focused: false;
     // each row's entrance, 0..1 (wubble_core::tabs: a new tab, at most four at once)
     in property <[float]> row-enter;
     // the whole list's entrance after a Space switch, 0..1: one opacity layer for the list
@@ -515,6 +521,17 @@ export component Sidebar inherits Rectangle {
                                         root.tab-activated(tab.id);
                                     }
                                     focus-token: root.focus-serial;
+                                    dragging: i == root.dragged-row;
+                                    follow-focus: root.rows-focused;
+                                    focused(on) => {
+                                        root.rows-focused = on;
+                                    }
+                                    step(down) => {
+                                        let j = root.tab-step(i, down);
+                                        if j != i && j >= 0 && j < root.tabs.length {
+                                            root.tab-activated(root.tabs[j].id);
+                                        }
+                                    }
                                 }
                             }
                         }

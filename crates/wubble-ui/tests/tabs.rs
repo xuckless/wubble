@@ -136,12 +136,61 @@ fn tab_drag_emits_tab_moved(app: &AppWindow, driver: &Shared, log: &Log) {
         moved(app, ROW_X, y + k as f32 * 5.0);
         driver.borrow_mut().advance(app, DT);
     }
+    assert_eq!(
+        app.get_dragged_row(),
+        0,
+        "the dragged row wears .wb-tab-drag"
+    );
     release(app, ROW_X, y + 85.0, PointerEventButton::Left);
     assert_eq!(log.borrow().moved, [(10, 2)]);
     assert_eq!(log.borrow().activated, [11], "a drag is not a click");
     // The host has not reordered the model: the rows spring back to its order.
     settle(app, driver);
     assert_eq!(rows(app), [0.0, 40.0, 80.0]);
+    assert_eq!(app.get_dragged_row(), -1);
+}
+
+fn key(app: &AppWindow, k: slint::platform::Key) {
+    let text: slint::SharedString = k.into();
+    dispatch(app, WindowEvent::KeyPressed { text: text.clone() });
+    dispatch(app, WindowEvent::KeyReleased { text });
+}
+
+/// tabs.tsx onKeyDown: Up / Down pick the next row, clamped (no wrap), the focus follows the
+/// selection; Backspace closes.
+fn tab_keys_step_clamp_and_close(app: &AppWindow, driver: &Shared, log: &Log) {
+    use slint::platform::Key;
+    app.set_active_tab_id(10);
+    pump();
+    settle(app, driver);
+    app.invoke_focus_region(wubble_ui::FocusRegion::Sidebar);
+    pump();
+    let before = log.borrow().activated.len();
+    key(app, Key::UpArrow);
+    assert_eq!(
+        log.borrow().activated.len(),
+        before,
+        "the first row stays: no wrap"
+    );
+    for want in [11, 12] {
+        key(app, Key::DownArrow);
+        assert_eq!(log.borrow().activated.last(), Some(&want));
+        // the host makes it the active tab; the row takes the focus
+        app.set_active_tab_id(want);
+        pump();
+    }
+    let before = log.borrow().activated.len();
+    key(app, Key::DownArrow);
+    assert_eq!(
+        log.borrow().activated.len(),
+        before,
+        "the last row stays: no wrap"
+    );
+    key(app, Key::Backspace);
+    assert_eq!(log.borrow().closed.last(), Some(&12));
+    app.set_active_tab_id(10);
+    pump();
+    settle(app, driver);
 }
 
 /// Drag row 0 two slots down; halfway, the host re-renders the rows (a title changed) with
@@ -293,6 +342,7 @@ fn tab_list_scenarios() {
     tab_click_activates(&app, &driver, &log);
     tab_close_middle_click(&app, &driver, &log);
     tab_drag_emits_tab_moved(&app, &driver, &log);
+    tab_keys_step_clamp_and_close(&app, &driver, &log);
     drag_survives_an_in_place_rerender(&app, &driver);
     tab_scroll_reaches_scroller(&app, &driver);
     folder_header_is_a_row(&app, &driver, &log);

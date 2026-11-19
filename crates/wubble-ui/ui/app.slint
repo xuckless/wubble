@@ -217,6 +217,8 @@ export component AppWindow inherits Window {
     // tabs.rs: rows, the indicator (its row, -1 for none), the Space capsule
     in property <[length]> row-y <=> sidebar.row-y;
     in property <[float]> row-scale <=> sidebar.row-scale;
+    in property <int> dragged-row <=> sidebar.dragged-row;
+    pure callback tab-step <=> sidebar.tab-step;
     in property <[float]> row-enter <=> sidebar.row-enter;
     in property <float> list-enter <=> sidebar.list-enter;
     in property <[LeavingRow]> leaving-rows <=> sidebar.leaving-rows;
