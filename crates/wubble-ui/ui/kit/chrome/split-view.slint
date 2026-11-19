@@ -1,8 +1,10 @@
 // design: browser/webview.tsx:55-138, browser/split.ts:1-234, browser/browser.css:109-119 @598f814
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
-// @ 6c840da, with the marked `wubble change`s), unchanged.
+// @ 6c840da, with the marked `wubble change`s): the held line as `.wb-split-line` (sky, 1.6),
+// the ring 1.5 (`.wb-split-ring`); split panes have no close button (webview.tsx has none).
 
 import { Palette, Space } from "../gen/tokens.slint";
+import { BrowserCss } from "../gen/css.slint";
 import { Shell } from "../derived.slint";
 import { StatusBubble } from "../../components/status-bubble.slint";
 import { PressableButton } from "../controls/button.slint";
@@ -37,8 +39,8 @@ export struct SplitPane {
     // so it follows the window in the same layout pass (`x0`/`x1` are ignored).
     fill: bool,
     focused: bool,
-    // wubble change: whether the pane shows its close button (the panes of a split, the docked
-    // DevTools panel; not a lone page).
+    // wubble change: whether the pane shows its close button: the docked DevTools panel only
+    // (derived; the design's split panes have none).
     closable: bool,
     // wubble change: while a string bends this pane's edge, the frame with that edge cut along
     // the string (wubble_gfx::mask), wider than the pane by `margin` each side for a bulge, drawn
@@ -182,7 +184,7 @@ export component SplitView inherits Rectangle {
         commands: root.ring;
         fill: transparent;
         stroke: root.accent;
-        stroke-width: 1.5px;
+        stroke-width: BrowserCss.wb-split-ring--stroke-width * Shell.beam-unit;   // CSS user units: one logical px
     }
     for s[j] in root.seams: Rectangle {
         Path {
@@ -195,9 +197,10 @@ export component SplitView inherits Rectangle {
             commands: s.path;
             visible: s.path != "";
             fill: transparent;
-            stroke: Palette.sky;
-            stroke-width: 1px;
-            opacity: 0.6;
+            // .wb-split-held .wb-split-line: sky 1.6 at full opacity while the string bends
+            stroke: BrowserCss.wb-split-line--stroke;
+            stroke-width: BrowserCss.wb-split-line--stroke-width * Shell.beam-unit;
+            opacity: BrowserCss.wb-split-held-wb-split-line--opacity;
         }
         TouchArea {
             // wubble change: the web design's 20 px strip (Shell.split-grab), not the port's 12

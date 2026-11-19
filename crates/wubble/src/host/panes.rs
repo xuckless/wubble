@@ -515,7 +515,6 @@ impl Host {
         let focused = self.shown();
         let rects = self.pane_rects(window);
         let fill = rects.len() == 1;
-        let split = self.w.panes.seam_count() > 0;
         let panel_x = rects.iter().find(|r| r.tab == PANEL_TAB).map(|r| r.x);
         let panes: Vec<SplitPane> = rects
             .into_iter()
@@ -542,8 +541,10 @@ impl Host {
                     } else {
                         Some(r.tab) == focused
                     },
-                    // the panes of a split and the docked panel close; a lone page does not
-                    closable: split || r.tab == PANEL_TAB,
+                    // only the docked panel shows a close button (wubble's, derived): the design's
+                    // split panes have none (webview.tsx); a split pane closes from the tab menu,
+                    // the command bar or Ctrl+W
+                    closable: r.tab == PANEL_TAB,
                     edge: masked.as_ref().map(|m| m.image.clone()).unwrap_or_default(),
                     margin: masked.as_ref().map_or(0.0, |m| m.margin),
                     prev_opacity: prev.map_or(0.0, |p| p.2),

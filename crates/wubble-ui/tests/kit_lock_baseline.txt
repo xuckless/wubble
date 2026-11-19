@@ -337,9 +337,8 @@ components/video-controls.slint	animate	animate	2
 components/video-controls.slint	paint	background	5
 components/video-controls.slint	token	Motion	8
 components/video-controls.slint	token	Palette	3
-kit/chrome/split-view.slint	kit-literal	1.5px	1
 kit/chrome/split-view.slint	kit-literal	14px	1
-kit/chrome/split-view.slint	kit-literal	1px	5
+kit/chrome/split-view.slint	kit-literal	1px	4
 kit/chrome/split-view.slint	kit-literal	28px	2
 kit/chrome/tab-row.slint	kit-literal	22px	4
 kit/chrome/tab-row.slint	kit-literal	2px	1
