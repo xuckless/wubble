@@ -8523,6 +8523,7 @@ dependencies = [
  "clap",
  "dirs",
  "dispatch2",
+ "i-slint-backend-testing",
  "interprocess",
  "log",
  "opener",

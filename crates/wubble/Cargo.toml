@@ -9,6 +9,10 @@ license.workspace = true
 
 [dependencies]
 wubble-core.workspace = true
+# `--smoke video` finds the video strip's buttons on screen by their element ids (debug builds
+# carry them); the release the `slint` pin pulls in (GPL-3.0-only, as Slint; already in Cargo.lock
+# through wubble-ui's tests).
+i-slint-backend-testing = { version = "=1.19.0", default-features = false }
 # Pages for screen readers (`host/ax.rs`).
 wubble-ax.workspace = true
 wubble-engine.workspace = true

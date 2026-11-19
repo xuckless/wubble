@@ -18,7 +18,15 @@
 //!    the notice; after a reload (a new document of the same video, its kit without jumps) the
 //!    new document reports the jump again; undo (paused) goes back before the segment and the jump is withdrawn
 //!    (`smoke: sponsor ok`);
-//! 6. a media key (Toggle) through the host's path pauses the playing video.
+//! 6. a media key (Toggle) through the host's path pauses the playing video;
+//! 7. the strip through real pointer events at its buttons' places on screen, the clip playing
+//!    (looped): a move over the video shows it; the pointer resting on its play button keeps it
+//!    past the hide delay; a click pauses, mute works paused, a click plays; a click on the bar
+//!    seeks; the speed button's menu sets 2; mute and loop toggle; the frame button saves a frame
+//!    (its notice comes up); the pointer moved off the video hides the strip; back on it, the
+//!    frame saved once more, the run ends with the strip up and its frame button under the
+//!    pointer (`--shot`'s picture; the notice is gone by the time the shot settles)
+//!    (`smoke: strip ok`).
 //!
 //! `--smoke boost`: a Boost stored through the editor's path (`http://127.0.0.1/boost*`: CSS, a
 //! tint, a document-start script) colours `boost.html` and sets its title; `other.html` stays as
@@ -65,6 +73,14 @@ const RESTART: &str = "(k=>(k.cmd('seek',0),k.cmd('play'),1))(window[Symbol.for(
 const PLAY_BEFORE_JUMP: &str = "(k=>(k.cmd('muted',true),k.cmd('rate',1),k.cmd('seek',0.5),k.cmd('play'),1))\
      (window[Symbol.for('wubble.kit')])";
 
+/// The clip playing from the start, looped and muted, at normal speed: the strip's stage.
+const STRIP_PREP: &str = "(k=>(k.cmd('muted',true),k.cmd('loop',true),k.cmd('rate',1),k.cmd('seek',0),\
+     k.cmd('play'),1))(window[Symbol.for('wubble.kit')])";
+
+/// How long the pointer rests on the strip before its click: past both of the strip's hide
+/// delays, which must not apply while it is there.
+const HOLD_MS: u64 = wubble_core::video::STILL_MS + wubble_core::video::LEAVE_MS + 500;
+
 /// Also marks the document, so the check after the reload can tell the new one from it.
 const RATE_CHECK: &str =
     "(window.wubbleMark=1,{check:'rate',rate:document.querySelector('video').playbackRate})";
@@ -109,6 +125,39 @@ pub enum Step {
     Undone,
     KeyPlaying,
     KeyPaused,
+    /// The clip playing again, looped, for the strip's stage.
+    StripPrep,
+    StripShown,
+    /// The pointer rests on the strip's play button since this time (host ms).
+    StripHeld {
+        since: u64,
+    },
+    StripPaused,
+    StripPausedMute {
+        before: bool,
+    },
+    StripPlaying,
+    /// A click on the bar seeks to this time (ms).
+    StripSeek {
+        to: u64,
+    },
+    StripSpeeds,
+    StripRate,
+    StripMute {
+        before: bool,
+    },
+    StripLoopOff,
+    StripLoopOn,
+    StripFrame {
+        serial: i32,
+    },
+    StripLeft,
+    StripBack,
+    StripLastFrame {
+        serial: i32,
+    },
+    /// Passed: the window quits.
+    Done,
     // --smoke boost
     BoostLoaded,
     BoostSaving,
@@ -167,6 +216,14 @@ pub struct Seen {
     /// Jumps the page reported taking since the last snapshot.
     pub fired: usize,
     pub pip: PipSeen,
+    /// The host's clock, ms.
+    pub now: u64,
+    /// The strip is open (not hidden, not tucked away).
+    pub strip: bool,
+    /// Its speed menu is open.
+    pub speeds: bool,
+    /// The window's notice: its serial and text.
+    pub toast: (i32, String),
 }
 
 /// Picture-in-picture as the host has it at a snapshot.
@@ -195,6 +252,21 @@ pub enum Input<'a> {
     PipSpiked(&'a str),
 }
 
+/// A place on the strip or around it, found on screen when the event is sent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spot {
+    /// The middle of the video's lower half (under the strip).
+    Video,
+    /// Beside the video, on the page.
+    Away,
+    /// The centre of the strip's element with this id (`VideoControls::<id>`).
+    Button(&'static str),
+    /// The progress bar at this fraction.
+    Bar(f32),
+    /// The speed menu's row (`video::RATES` index).
+    Speed(usize),
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Action {
     Load(String),
@@ -206,6 +278,10 @@ pub enum Action {
     PipSpike,
     /// A button of the Pip window's controls (`Host::pip_command`).
     Pip(&'static str),
+    /// The pointer moves to the spot (a window event, as winit's).
+    PointTo(Spot),
+    /// A left click at the spot: moved there, pressed, released.
+    Click(Spot),
     Undo,
     Key(MediaKey),
     PutBoost(Box<Boost>),
@@ -446,9 +522,129 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
         (KeyPlaying, Snapshot(_)) if video.as_ref().is_some_and(|v| !v.paused) => {
             to(s, KeyPaused, vec![Action::Key(MediaKey::Toggle)])
         }
-        (KeyPaused, Snapshot(_)) if video.as_ref().is_some_and(|v| v.paused) => {
-            to(s, KeyPaused, vec![Action::Pass("video".into())])
+        (KeyPaused, Snapshot(_)) if video.as_ref().is_some_and(|v| v.paused) => to(
+            s,
+            StripPrep,
+            vec![
+                Action::Setting("screenshot.output", "file"),
+                Action::Eval(STRIP_PREP.into()),
+            ],
+        ),
+
+        // ----- the strip, through the pointer
+        (StripPrep, Snapshot(_)) if video.as_ref().is_some_and(|v| !v.paused && v.looped) => {
+            to(s, StripShown, vec![Action::PointTo(Spot::Video)])
         }
+        (StripShown, Snapshot(seen)) if seen.strip => to(
+            s,
+            StripHeld { since: seen.now },
+            vec![Action::PointTo(Spot::Button("play"))],
+        ),
+        (StripHeld { .. }, Snapshot(seen)) if !seen.strip => {
+            fail(s, "the strip went while the pointer was on it".into())
+        }
+        (StripHeld { since }, Snapshot(seen)) if seen.now > since + HOLD_MS => {
+            to(s, StripPaused, vec![Action::Click(Spot::Button("play"))])
+        }
+        (StripPaused, Snapshot(seen)) if video.as_ref().is_some_and(|v| v.paused) => {
+            let before = video.is_some_and(|v| v.muted);
+            if !seen.strip {
+                return fail(s, "the strip went after its pause click".into());
+            }
+            to(
+                s,
+                StripPausedMute { before },
+                vec![Action::Click(Spot::Button("mute"))],
+            )
+        }
+        (StripPausedMute { before }, Snapshot(_))
+            if video
+                .as_ref()
+                .is_some_and(|v| v.paused && v.muted != before) =>
+        {
+            to(s, StripPlaying, vec![Action::Click(Spot::Button("play"))])
+        }
+        (StripPlaying, Snapshot(_)) if video.as_ref().is_some_and(|v| !v.paused) => {
+            let v = video.unwrap_or_default();
+            // far from where it plays, so the jump shows
+            let fraction = if v.time < v.duration / 2.0 { 0.7 } else { 0.1 };
+            let to_time = (f64::from(fraction) * v.duration * 1000.0) as u64;
+            to(
+                s,
+                StripSeek { to: to_time },
+                vec![Action::Click(Spot::Bar(fraction))],
+            )
+        }
+        (StripSeek { to: ms }, Snapshot(_))
+            if let t = ms as f64 / 1000.0
+                && video
+                    .as_ref()
+                    .is_some_and(|v| !v.paused && v.time >= t - 0.15 && v.time < t + 0.6) =>
+        {
+            to(
+                s,
+                StripSpeeds,
+                vec![Action::Click(Spot::Button("rate-button"))],
+            )
+        }
+        (StripSpeeds, Snapshot(seen)) if seen.speeds => {
+            // RATES[7] is 2.
+            to(s, StripRate, vec![Action::Click(Spot::Speed(7))])
+        }
+        (StripRate, Snapshot(_)) if video.as_ref().is_some_and(|v| v.rate == 2.0) => {
+            let before = video.is_some_and(|v| v.muted);
+            to(
+                s,
+                StripMute { before },
+                vec![Action::Click(Spot::Button("mute"))],
+            )
+        }
+        (StripMute { before }, Snapshot(_))
+            if video.as_ref().is_some_and(|v| v.muted != before) =>
+        {
+            to(s, StripLoopOff, vec![Action::Click(Spot::Button("loop"))])
+        }
+        (StripLoopOff, Snapshot(_)) if video.as_ref().is_some_and(|v| !v.looped) => {
+            to(s, StripLoopOn, vec![Action::Click(Spot::Button("loop"))])
+        }
+        (StripLoopOn, Snapshot(seen)) if video.as_ref().is_some_and(|v| v.looped) => {
+            let serial = seen.toast.0;
+            to(
+                s,
+                StripFrame { serial },
+                vec![Action::Click(Spot::Button("frame"))],
+            )
+        }
+        (StripFrame { serial }, Snapshot(seen)) if seen.toast.0 != serial => {
+            let line = format!("smoke: strip frame notice {:?}", seen.toast.1);
+            to(
+                s,
+                StripLeft,
+                vec![Action::Log(line), Action::PointTo(Spot::Away)],
+            )
+        }
+        (StripLeft, Snapshot(seen)) if !seen.strip => {
+            to(s, StripBack, vec![Action::PointTo(Spot::Video)])
+        }
+        (StripBack, Snapshot(seen)) if seen.strip => {
+            let serial = seen.toast.0;
+            to(
+                s,
+                StripLastFrame { serial },
+                vec![
+                    Action::PointTo(Spot::Button("frame")),
+                    Action::Click(Spot::Button("frame")),
+                ],
+            )
+        }
+        (StripLastFrame { serial }, Snapshot(seen)) if seen.toast.0 != serial && seen.strip => to(
+            s,
+            Done,
+            vec![
+                Action::Log("smoke: strip ok".into()),
+                Action::Pass("video".into()),
+            ],
+        ),
 
         // ----- boost
         (BoostLoaded, Web(e)) if loaded(e) => to(
