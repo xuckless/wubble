@@ -1,0 +1,33 @@
+// derived: Slider rail and fill (controls/slider.slint, .tp-sl-rail / .tp-sl-fill)
+// A progress track (wubble-only.md: the downloads list): the slider's rail (white .12, a 1 px
+// inset white .1 top light, round ends) and its fill in the Space accent, without the knob.
+// `value` below 0 is a download of unknown size: the fill spans the rail at .35. The fill eases
+// to a new value as the dropdowns do (220 ms ease-out).
+// derived (notes/fidelity/derived-review.md "Progress track"): 4 px high (`Space.s1`), not the
+// slider's 8 px grip rail, so a list row keeps its rhythm; the .35 unknown-size fill.
+
+import { Palette, Space, Motion } from "../../gen/tokens.slint";
+import { TouchCss, BrowserCss } from "../../gen/css.slint";
+import { Calm } from "../../motion/calm.slint";
+
+export component AProgress inherits Rectangle {
+    in property <float> value;
+    in property <color> accent: Palette.sky;
+    out property <length> fill-width: fill.width;
+    height: Space.s1;
+    border-radius: self.height / 2;
+    background: TouchCss.tp-sl-rail--background;
+    inner-shadow-offset-y: TouchCss.tp-sl-rail--box-shadow-shadow-1-y;
+    inner-shadow-color: TouchCss.tp-sl-rail--box-shadow-shadow-1-color;
+    fill := Rectangle {
+        x: 0px;
+        width: root.value < 0 ? parent.width : parent.width * min(1, root.value);
+        border-radius: parent.border-radius;
+        background: root.accent;
+        opacity: root.value < 0 ? BrowserCss.wb-ib-disabled--opacity : 1;
+        animate width {
+            duration: Calm.ms(Motion.dropdown-in);
+            easing: Motion.ease-out;
+        }
+    }
+}

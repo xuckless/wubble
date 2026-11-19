@@ -132,6 +132,7 @@ enum SmokeArg {
     Overlay {
         dark: bool,
     },
+    Start,
     SessionPhase(Phase),
 }
 
@@ -158,6 +159,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "codecs" => Ok(SmokeArg::Codecs { wired: true }),
         Some(("codecs", "bare")) => Ok(SmokeArg::Codecs { wired: false }),
         None if value == "ax" => Ok(SmokeArg::Ax),
+        None if value == "start" => Ok(SmokeArg::Start),
         None if value == "overlay" => Ok(SmokeArg::Overlay { dark: false }),
         Some(("overlay", "dark")) => Ok(SmokeArg::Overlay { dark: true }),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
@@ -169,7 +171,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark` or `session-phase=1|2`"
+             `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark`, `start` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -235,6 +237,9 @@ pub enum Smoke {
     Overlay { dark: bool, dir: Option<PathBuf> },
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
+    /// The start page: its bubble drawn, poked, a mini popped, the capsule's command bar, a
+    /// tile; one PNG per step into `dir` when given (`start_smoke.rs`).
+    Start { dir: Option<PathBuf> },
 }
 
 /// The halves of `--smoke session`, each its own process (CEF starts once
@@ -332,7 +337,7 @@ impl TryFrom<Cli> for Command {
             }));
         }
         let gallery = matches!(cli.smoke, Some(SmokeArg::Gallery));
-        let overlay = matches!(cli.smoke, Some(SmokeArg::Overlay { .. }));
+        let overlay = matches!(cli.smoke, Some(SmokeArg::Overlay { .. } | SmokeArg::Start));
         if cli.shot_dir.is_some() != gallery && !overlay {
             return conflict("--smoke gallery and --shot-dir go together");
         }
@@ -386,6 +391,7 @@ impl TryFrom<Cli> for Command {
                 dark,
                 dir: cli.shot_dir,
             },
+            (Some(SmokeArg::Start), None, None) => Smoke::Start { dir: cli.shot_dir },
         };
         Ok(Command::Smoke(smoke))
     }
@@ -531,6 +537,21 @@ mod tests {
     }
 
     #[test]
+    fn smoke_start() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "start"]).ok(),
+            Some(Command::Smoke(Smoke::Start { dir: None }))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "start", "--shot-dir", "/tmp/d"]).ok(),
+            Some(Command::Smoke(Smoke::Start {
+                dir: Some(PathBuf::from("/tmp/d"))
+            }))
+        );
+        assert!(parse(["wubble", "--smoke", "start", "--profile", "/tmp/p"]).is_err());
+    }
+
+    #[test]
     fn a_shot_needs_a_smoke() {
         let (command, shot) =
             parse_with_shot(["wubble", "--smoke", "settings", "--shot", "/tmp/s.png"]).unwrap();
@@ -649,7 +670,7 @@ mod tests {
     fn a_url_does_not_combine_with_a_smoke() {
         for smoke in [
             "boot", "nav", "tabs", "split", "page", "block", "settings", "pages", "windows",
-            "frames=3", "session",
+            "frames=3", "session", "start",
         ] {
             assert!(
                 parse(["wubble", "--smoke", smoke, "example.com"]).is_err(),

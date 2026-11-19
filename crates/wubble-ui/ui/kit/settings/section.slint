@@ -1,0 +1,256 @@
+// design: pages/settings.tsx:121, pages/settings.tsx:185-198, pages/settings.tsx:575-600, pages/settings.css:33-47, pages/settings.css:93-101, pages/settings.css:117-118 @598f814
+// A section of the settings page and its rows:
+// - `.st-sec-head`: 32 high, margin 0 6 8 8, the h2 in the display face (19 / 600, line 1).
+// - `.st-card`: the rows on white .035, radius 20, padding 6, inset 0 1px 0 white .06 (the rows
+//   are concentric: radius 14). A card drawn as one slice per row rounds only its ends
+//   (`CardSlice`), since the page's rows are one flat list.
+// - `.st-row`: min 60 high, padding 11 14, gap 16, radius 14; a row that taps (`.tap`) takes
+//   white .04 under the pointer (.15 s). `.st-row-text`: the title (14 / 500 ink) over the note
+//   (13 mist, 2 below); `.st-row-ctl`: the controls, 12 apart, at the end.
+// - `.st-lead`: the 36 tile (radius 12, white .06) a Space row leads with, its icon in the
+//   Space colour (.3 s ease-out).
+// - `.st-empty`: the empty search (padding 32 8, the 15 px line 12 above a ghost button).
+// - `.st-path .wb-mono`: 13 px mono mist (the licence notices).
+// wubble: a row's note may be a warning (`tone`: the restart note in amber, a shortcut taken
+// by another action in coral); a Space's title is its editable name.
+
+import { Palette } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+import { Calm } from "../motion/calm.slint";
+import { Shell } from "../derived.slint";
+import { Icon } from "../controls/icon.slint";
+import { Press } from "../motion/press.slint";
+
+// The Space colours, in the design's order (`SWATCHES`)
+export global SpaceColours {
+    out property <[color]> all: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.amber, Palette.coral];
+}
+
+// `.st-sec-head h2`
+export component SectionHeader inherits KitText {
+    role: Role.st-sec-head-h2;
+    color: Palette.ink;
+    vertical-alignment: center;
+}
+
+// `.st-sec-head`: the title's line over a section's card, anything else (a Reset) at its end
+export component SectionHead inherits HorizontalLayout {
+    in property <string> text;
+    height: SettingsCss.st-sec-head--height + SettingsCss.st-sec-head--margin-bottom;
+    padding-left: SettingsCss.st-sec-head--margin-left;
+    padding-right: SettingsCss.st-sec-head--margin-right;
+    padding-bottom: SettingsCss.st-sec-head--margin-bottom;
+    spacing: SettingsCss.st-sec-head--gap;
+    SectionHeader {
+        horizontal-stretch: 1;
+        text: root.text;
+    }
+    @children
+}
+
+// One row's slice of `.st-card`: the first carries the top padding, radius and highlight, the
+// last the bottom ones.
+export component CardSlice inherits Rectangle {
+    in property <bool> first: true;
+    in property <bool> last: true;
+    // room round content that is not rows (rows pad themselves)
+    in property <length> content-pad: 0px;
+    border-top-left-radius: root.first ? SettingsCss.st-card--border-radius : 0px;
+    border-top-right-radius: root.first ? SettingsCss.st-card--border-radius : 0px;
+    border-bottom-left-radius: root.last ? SettingsCss.st-card--border-radius : 0px;
+    border-bottom-right-radius: root.last ? SettingsCss.st-card--border-radius : 0px;
+    background: SettingsCss.st-card--background;
+    inner-shadow-offset-y: SettingsCss.st-card--box-shadow-shadow-1-y;
+    inner-shadow-color: root.first ? SettingsCss.st-card--box-shadow-shadow-1-color : transparent;
+    VerticalLayout {
+        padding-left: SettingsCss.st-card--padding + root.content-pad;
+        padding-right: SettingsCss.st-card--padding + root.content-pad;
+        padding-top: root.first ? SettingsCss.st-card--padding : 0px;
+        padding-bottom: root.last ? SettingsCss.st-card--padding : 0px;
+        spacing: 0px;
+        @children
+    }
+}
+
+// `.st-card` whole
+export component Card inherits CardSlice {
+    first: true;
+    last: true;
+}
+
+// `.st-row`: its pieces (a lead, `RowText`, the controls) side by side
+export component Row inherits Rectangle {
+    // `.tap`: a click anywhere on the row flips it
+    in property <bool> tap;
+    callback tapped();
+    border-radius: SettingsCss.st-row--border-radius;
+    background: root.tap && ta.has-hover ? SettingsCss.st-row-tap-hover--background : transparent;
+    animate background {
+        duration: Calm.ms(SettingsCss.st-row--transition-background-color-duration);
+    }
+    ta := TouchArea {
+        enabled: root.tap;
+        mouse-cursor: root.tap ? pointer : default;
+        clicked => {
+            root.tapped();
+        }
+    }
+    // a layout in a layout, so the row's minimum and its wrapped text's height reach the card
+    VerticalLayout {
+        HorizontalLayout {
+            min-height: SettingsCss.st-row--min-height;
+            padding-left: SettingsCss.st-row--padding-left;
+            padding-right: SettingsCss.st-row--padding-right;
+            padding-top: SettingsCss.st-row--padding-top;
+            padding-bottom: SettingsCss.st-row--padding-bottom;
+            spacing: SettingsCss.st-row--gap-column;
+            @children
+        }
+    }
+}
+
+// What a row's note says: plain, or a warning
+export enum NoteTone { plain, restart, conflict }
+
+// `.st-row-note` (also a list's lines and its empty text)
+export component RowNote inherits KitText {
+    in property <NoteTone> tone: NoteTone.plain;
+    role: Role.st-row-note;
+    min-height: Role.st-row-note.size * Role.body.line-height;
+    color: root.tone == NoteTone.restart ? Palette.amber : root.tone == NoteTone.conflict ? Palette.coral : SettingsCss.st-row-note--color;
+    vertical-alignment: center;
+    wrap: word-wrap;
+}
+
+// `.st-row-text`: the title over its note; the text takes the row's free width
+export component RowText inherits VerticalLayout {
+    in property <string> title;
+    in property <string> note;
+    in property <NoteTone> tone: NoteTone.plain;
+    horizontal-stretch: 1;
+    alignment: center;
+    spacing: SettingsCss.st-row-note--margin-top;
+    KitText {
+        role: Role.st-row-title;
+        text: root.title;
+        min-height: Role.st-row-title.size * Role.body.line-height;
+        color: SettingsCss.st-row-title--color;
+        vertical-alignment: center;
+        wrap: word-wrap;
+    }
+    if root.note != "": RowNote {
+        text: root.note;
+        tone: root.tone;
+    }
+}
+
+// `.st-row-text` whose title is a name typed in place (a Space's): Enter applies it
+export component RowNameText inherits VerticalLayout {
+    in property <string> name;
+    in property <string> label;
+    in property <string> note;
+    callback renamed(string);
+    horizontal-stretch: 1;
+    alignment: center;
+    spacing: SettingsCss.st-row-note--margin-top;
+    TextInput {
+        text: root.name;
+        accessible-label: root.label;
+        min-height: Role.st-row-title.size * Role.body.line-height;
+        vertical-alignment: center;
+        color: SettingsCss.st-row-title--color;
+        font-family: Role.st-row-title.family;
+        font-size: Role.st-row-title.size;
+        font-weight: Role.st-row-title.weight;
+        selection-background-color: Shell.selection-fill;
+        selection-foreground-color: Shell.selection-ink;
+        single-line: true;
+        accepted => {
+            root.renamed(self.text);
+        }
+    }
+    if root.note != "": RowNote {
+        text: root.note;
+    }
+}
+
+// `.st-row-ctl`: a row's controls, centred on its height, 12 apart
+export component RowControls inherits VerticalLayout {
+    alignment: center;
+    HorizontalLayout {
+        alignment: end;
+        spacing: SettingsCss.st-row-ctl--gap;
+        @children
+    }
+}
+
+// `.st-lead`: a Space's icon on its tile; a click picks the next icon (wubble)
+export component Lead inherits Rectangle {
+    in property <string> icon-path;
+    in property <color> tint;
+    in property <string> label;
+    callback clicked();
+    width: SettingsCss.st-lead--width;
+    height: SettingsCss.st-lead--height;
+    press := Press {
+        pressed: ta.pressed;
+    }
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+    Rectangle {
+        border-radius: SettingsCss.st-lead--border-radius;
+        background: SettingsCss.st-lead--background;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: press.scale;
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: Shell.lead-icon;
+            path: root.icon-path;
+            tint: root.tint;
+            animate tint {
+                duration: Calm.ms(SettingsCss.st-lead--transition-color-duration);
+                easing: SettingsCss.st-lead--transition-color-easing;
+            }
+        }
+    }
+}
+
+// `.st-path .wb-mono`: a block of monospaced text (the licence notices)
+export component MonoNote inherits KitText {
+    role: Role.st-path-wb-mono;
+    color: SettingsCss.st-path-wb-mono--color;
+    wrap: word-wrap;
+}
+
+// `.st-empty`: nothing matches the search; the action (the ghost "Clear search") as children
+export component NothingMatches inherits VerticalLayout {
+    in property <string> text;
+    padding-left: SettingsCss.st-empty--padding-left;
+    padding-right: SettingsCss.st-empty--padding-right;
+    padding-top: SettingsCss.st-empty--padding-top;
+    padding-bottom: SettingsCss.st-empty--padding-bottom;
+    spacing: SettingsCss.st-empty-p--margin-bottom;
+    alignment: start;
+    KitText {
+        role: Role.st-empty-p;
+        text: root.text;
+        color: SettingsCss.st-empty--color;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: start;
+        @children
+    }
+}

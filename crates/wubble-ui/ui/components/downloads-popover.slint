@@ -1,19 +1,17 @@
-import { Palette, Motion, Space, Fonts, Type, Chrome } from "../kit/gen/tokens.slint";
+import { Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { PressableButton } from "../kit/controls/button.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
-import { GlassTier, DownloadItem, DownloadAction, DownloadStatus, GlassKeys, GlassOver } from "model.slint";
-import { DownloadRow } from "download-row.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { DownloadItem, DownloadAction, GlassKeys } from "model.slint";
+import { APopover } from "../kit/overlay/a/a-popover.slint";
+import { ADownloadRow } from "../kit/overlay/a/a-download-row.slint";
 
 // The downloads list, opened from the sidebar's download button: one row per download, newest
 // first, with its progress and the buttons its state allows (pause, resume, cancel, retry, show
 // in folder, remove). Fills its parent (the window) so a click outside the panel closes it, like
-// the context menu. Written from scratch: the design repo has no downloads list. Looks and
-// timings are the context menu's (Ultra Reactivate `.ur-o-surface`, overlays.css): thick glass
-// over content, padding 6, radius 14, rows entering on the Overlap stagger; the download glyph is
-// the design's (icons.tsx). `action` and `dismissed` are intents; the host acts and closes it.
+// the context menu. Derived from the kit (notes/fidelity/wubble-only.md): the Popover
+// (kit/overlay/a/a-popover.slint) growing from its anchor, rows (kit/overlay/a/a-download-row.slint)
+// entering on the Overlap stagger. `action` and `dismissed` are intents; the host acts and closes
+// it.
 export component DownloadsPopover inherits Rectangle {
     in property <bool> open;
     // The panel's top left, in this element's coordinates.
@@ -25,7 +23,7 @@ export component DownloadsPopover inherits Rectangle {
 
     // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
     // the panel has faded; only the open popover takes the pointer.
-    visible: root.open || panel.opacity > 0;
+    visible: panel.mounted;
 
     TouchArea {
         enabled: root.open;
@@ -57,25 +55,17 @@ export component DownloadsPopover inherits Rectangle {
 
     property <length> list-height: min(root.items.length, Shell.download-max-rows) * Shell.download-row;
 
-    panel := GlassPanel {
+    panel := APopover {
+        open: root.open;
         // the scene draws its glass above the page (GlassPanel `over-layer`)
         key: GlassKeys.downloads;
-        over-layer: GlassOver.top;
         width: Shell.downloads-width;
         height: root.list-height + 2 * Shell.menu-pad;
         x: max(Space.s2, min(root.anchor-x, root.width - self.width - Space.s2));
         y: max(Space.s2, min(root.anchor-y, root.height - self.height - Space.s2));
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        transform-origin: { x: 0px, y: 0px };
-        transform-scale: root.open ? 1 : Motion.dropdown-from;
-        opacity: root.open ? 1 : 0;
-        animate transform-scale, opacity {
-            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
-            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
-        }
-        TouchArea { }
+        // it grows from the anchor, wherever the fit above put the panel
+        origin-x: max(0px, min(root.anchor-x - self.x, self.width));
+        origin-y: max(0px, min(root.anchor-y - self.y, self.height));
 
         Flickable {
             x: Shell.menu-pad;
@@ -90,7 +80,7 @@ export component DownloadsPopover inherits Rectangle {
                 index: i;
                 y: i * Shell.download-row;
                 height: Shell.download-row;
-                DownloadRow {
+                ADownloadRow {
                     item: item;
                     action(id, a) => {
                         root.action(id, a);

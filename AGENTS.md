@@ -47,6 +47,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke split   # window splits two bundled pages, checks each pane, unsplits, exits; run by hand only
     cargo run -p wubble -- --smoke page   # window drives a select popup, an alert, a context menu, find and zoom, exits; run by hand only
     cargo run -p wubble -- --smoke session   # two tabs saved, restarted and restored on a temp profile; two windows, exits; run by hand only
+    cargo run -p wubble -- --smoke start   # Ctrl+T's start page: its bubble's pixels, a poke, a pop, the capsule's command bar, a tile; `--shot-dir DIR` for one PNG a step; exits; run by hand only
     cargo run -p wubble -- --smoke settings   # window opens wubble://settings, flips a setting through its toggle, reads the store back, exits; run by hand only
     cargo run -p wubble -- --smoke autofill   # loopback sign-in page, fake keyring: fill from the key menu, submit, save prompt, vault row; exits; run by hand only
     cargo run -p wubble-engine --example block_smoke   # windowless: the request-filter hook cancels a script and runs the commit script (a stand-in filter, not wubble-blocker), exits; run by hand only
@@ -78,7 +79,7 @@ order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, a tab row and th
 hovered, the command bar opening (a burst: `DIR/NN-name/fKKK.png` with `times.txt`), command bar
 (empty, with results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
 menu and save prompt, dialog sheet, toast, error and certificate error pages, Settings (four scroll
-positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager.
+positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page.
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
 properties: the host rewrites those). Size and scale come from the environment:
 `WUBBLE_SHOT_SIZE=900x600` (logical; the design's 1360x880 by default) and

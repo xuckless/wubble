@@ -1,0 +1,121 @@
+// derived: APopover (a-popover.slint), KitText roles heading/body/st-row-title, .st-lead tile, CheckBox, Button (controls/button.slint)
+// The prompt that hangs under the address pill (wubble-only.md: permission prompt, save-password
+// prompt): the Popover, a heading title, the body (`detail`, mist) and request lines, each led by
+// the settings row's lead tile (`.st-lead`, 36, radius 12, white .06, a mist icon) with its text
+// in the row-title role, an optional kit CheckBox, and a right-aligned kit Button row by the
+// Sheet's rule: ghost buttons, then one primary. `danger` turns the first ghost's ink coral
+// ("Never"). It takes no keyboard focus of its own (keyjacking: no keystroke meant for the page
+// answers it); its buttons answer only while it is open. `answered(i)`: 0 the first ghost, 1 the
+// second, 2 the primary.
+// derived (notes/fidelity/derived-review.md "Prompt"): the request lines' one glyph (the host
+// sends plain strings, so every line shows the shield), padding 16 and gap 8.
+
+import { Palette, Space } from "../../gen/tokens.slint";
+import { SettingsCss, TouchCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { KitText } from "../../text.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { Button, ButtonKind } from "../../controls/button.slint";
+import { CheckBox } from "../../controls/check-box.slint";
+import { APopover } from "a-popover.slint";
+
+export component APrompt inherits Rectangle {
+    in property <bool> open;
+    in property <int> key: -1;
+    in property <string> title;
+    in property <string> detail;
+    in property <[string]> lines;
+    // the CheckBox's words; empty: none
+    in property <string> remember;
+    in-out property <bool> checked;
+    in property <string> ghost-a;
+    in property <string> ghost-b;
+    in property <string> primary;
+    in property <bool> danger;
+    callback answered(int);
+    out property <bool> mounted: pop.mounted;
+    out property <float> progress: pop.progress;
+    out property <bool> glass-present: pop.glass-present;
+    height: body.preferred-height;
+    visible: pop.mounted;
+    pop := APopover {
+        open: root.open;
+        key: root.key;
+        body := VerticalLayout {
+            padding: Space.s4;
+            spacing: Space.s2;
+            KitText {
+                role: Role.heading;
+                text: root.title;
+                color: Palette.ink;
+                overflow: elide;
+            }
+            if root.detail != "": KitText {
+                role: Role.body;
+                text: root.detail;
+                color: Palette.mist;
+                wrap: word-wrap;
+            }
+            for line in root.lines: HorizontalLayout {
+                spacing: Space.s3;
+                Rectangle {
+                    width: SettingsCss.st-lead--width;
+                    height: SettingsCss.st-lead--height;
+                    border-radius: SettingsCss.st-lead--border-radius;
+                    background: SettingsCss.st-lead--background;
+                    Icon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        path: Glyph.shield;
+                        tint: Palette.mist;
+                    }
+                }
+                KitText {
+                    role: Role.st-row-title;
+                    text: line;
+                    color: Palette.ink;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+            }
+            if root.remember != "": CheckBox {
+                text: root.remember;
+                checked <=> root.checked;
+            }
+            HorizontalLayout {
+                alignment: end;
+                spacing: Space.s2;
+                if root.ghost-a != "": Button {
+                    kind: ButtonKind.ghost;
+                    text: root.ghost-a;
+                    rest-ink: root.danger ? Palette.coral : TouchCss.tp-btn-body-ghost--color;
+                    hover-ink: root.danger ? Palette.coral : TouchCss.tp-btn-hover-tp-btn-body-ghost--color;
+                    clicked => {
+                        if root.open {
+                            root.answered(0);
+                        }
+                    }
+                }
+                if root.ghost-b != "": Button {
+                    kind: ButtonKind.ghost;
+                    text: root.ghost-b;
+                    clicked => {
+                        if root.open {
+                            root.answered(1);
+                        }
+                    }
+                }
+                if root.primary != "": Button {
+                    kind: ButtonKind.pri;
+                    text: root.primary;
+                    clicked => {
+                        if root.open {
+                            root.answered(2);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

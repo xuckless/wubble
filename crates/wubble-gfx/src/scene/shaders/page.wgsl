@@ -4,6 +4,8 @@
 //   fs_page: one pane's latest frame, a rounded card at its place, into the page-inclusive blur
 //            source (render.rs `P.bg`, bottom-first like `bg`: see common.wgsl). The frame holds
 //            display-encoded bytes (import.rs), the values `bg` holds, so it is sampled raw.
+//   vs_card + fs_page: the start page's card image (start.rs), a rounded card at its place in
+//            the top-first output, sampled 1:1: the live liquid and bubbles shown only inside it.
 //   fs_resolve: an overlay layer's premultiplied glass to the straight alpha Skia expects of a
 //            wgpu image (`AlphaType::Unpremul`), texel for texel.
 // Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl (render.rs always prepends all four).
@@ -25,6 +27,12 @@ fn vs_page(@builtin(vertex_index) vi: u32) -> QuadOut {
   var o = quadVs(vi, U.uQuad, U.uView);
   o.pos.y = -o.pos.y; // the target is bottom-first: screen y down is clip y up
   return o;
+}
+
+// the same card into the top-first output (start.rs): placed as every quad on the output is
+@vertex
+fn vs_card(@builtin(vertex_index) vi: u32) -> QuadOut {
+  return quadVs(vi, U.uQuad, U.uView);
 }
 
 @fragment

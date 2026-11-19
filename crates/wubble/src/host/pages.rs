@@ -40,6 +40,7 @@ pub(super) fn kind_of(page: Option<InternalPage>) -> InternalPageKind {
         Some(InternalPage::Passwords) => InternalPageKind::Passwords,
         Some(InternalPage::Archive) => InternalPageKind::Archive,
         Some(InternalPage::Tasks) => InternalPageKind::Tasks,
+        Some(InternalPage::Start) => InternalPageKind::Start,
     }
 }
 
@@ -376,6 +377,7 @@ impl Host {
         self.render_settings();
         self.render_passwords(&window);
         self.render_pill(&window);
+        self.render_start(&window, page);
     }
 
     // ----- the address pill: the bookmark star and the blocker badge

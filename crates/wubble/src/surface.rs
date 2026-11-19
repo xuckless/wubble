@@ -155,6 +155,8 @@ pub enum FindBar {
         matches: u32,
         /// 1-based; 0 when nothing is highlighted.
         active: u32,
+        /// The engine's final count for `query` is in (CEF `final_update`).
+        done: bool,
     },
 }
 
@@ -177,6 +179,7 @@ pub enum FindEvent {
     Result {
         matches: u32,
         active: u32,
+        done: bool,
     },
     ViewGone,
 }
@@ -198,6 +201,7 @@ pub fn find(state: FindBar, event: FindEvent) -> (FindBar, Vec<FindEffect>) {
         query,
         matches: 0,
         active: 0,
+        done: false,
     };
     match (state, event) {
         (FindBar::Closed { last }, Open) => {
@@ -221,11 +225,19 @@ pub fn find(state: FindBar, event: FindEvent) -> (FindBar, Vec<FindEffect>) {
         (s @ FindBar::Open { .. }, Next | Prev) if s.query().is_empty() => (s, vec![]),
         (s @ FindBar::Open { .. }, Next) => (s, vec![FindEffect::Next]),
         (s @ FindBar::Open { .. }, Prev) => (s, vec![FindEffect::Prev]),
-        (FindBar::Open { query, .. }, Result { matches, active }) => (
+        (
+            FindBar::Open { query, .. },
+            Result {
+                matches,
+                active,
+                done,
+            },
+        ) => (
             FindBar::Open {
                 query,
                 matches,
                 active,
+                done,
             },
             vec![],
         ),
@@ -252,9 +264,16 @@ impl FindBar {
                 query,
                 matches,
                 active,
+                ..
             } if !query.is_empty() => format!("{active} of {matches}"),
             _ => String::new(),
         }
+    }
+
+    /// The search is over and found nothing (the count turns coral); not while
+    /// a new query waits for the engine's answer.
+    pub fn none(&self) -> bool {
+        matches!(self, Self::Open { query, matches: 0, done: true, .. } if !query.is_empty())
     }
 }
 
@@ -419,8 +438,14 @@ pub fn route(event: PageEvent) -> Routed {
         }),
         PageEvent::ContextMenuDismissed => Routed::Menu(MenuEvent::Reset),
         PageEvent::FindResult {
-            matches, active, ..
-        } => Routed::Find(FindEvent::Result { matches, active }),
+            matches,
+            active,
+            done,
+        } => Routed::Find(FindEvent::Result {
+            matches,
+            active,
+            done,
+        }),
         // The host reads the zoom back when the user zooms; the view's own
         // reports (a load, an address change) are not the user's.
         PageEvent::ZoomChanged { .. } => Routed::Ignore,
@@ -725,13 +750,17 @@ mod tests {
         let (s, fx) = find(s, FindEvent::Query("needle".into()));
         assert_eq!(fx, [FindEffect::Find("needle".into())]);
         assert_eq!(s.counter(), "0 of 0");
+        // Waiting for the engine is not "no match".
+        assert!(!s.none());
         let (s, _) = find(
             s,
             FindEvent::Result {
                 matches: 2,
                 active: 1,
+                done: true,
             },
         );
+        assert!(!s.none());
         assert_eq!(s.counter(), "1 of 2");
         assert_eq!(find(s.clone(), FindEvent::Next).1, [FindEffect::Next]);
         assert_eq!(find(s.clone(), FindEvent::Prev).1, [FindEffect::Prev]);
@@ -752,12 +781,37 @@ mod tests {
                 s.clone(),
                 FindEvent::Result {
                     matches: 1,
-                    active: 1
+                    active: 1,
+                    done: true
                 }
             )
             .0,
             s
         );
+    }
+
+    #[test]
+    fn find_says_none_only_after_the_final_count() {
+        let (s, _) = find(FindBar::default(), FindEvent::Open);
+        let (s, _) = find(s, FindEvent::Query("wub".into()));
+        assert!(!s.none(), "searching");
+        let partial = FindEvent::Result {
+            matches: 0,
+            active: 0,
+            done: false,
+        };
+        let (s, _) = find(s, partial);
+        assert!(!s.none(), "an interim count");
+        let last = FindEvent::Result {
+            matches: 0,
+            active: 0,
+            done: true,
+        };
+        let (s, _) = find(s, last);
+        assert!(s.none());
+        // The next keystroke waits again.
+        let (s, _) = find(s, FindEvent::Query("wubb".into()));
+        assert!(!s.none());
     }
 
     #[test]
@@ -816,7 +870,8 @@ mod tests {
             }),
             Routed::Find(FindEvent::Result {
                 matches: 2,
-                active: 1
+                active: 1,
+                done: true
             })
         );
         assert_eq!(

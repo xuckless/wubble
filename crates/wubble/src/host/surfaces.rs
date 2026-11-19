@@ -978,6 +978,7 @@ fn find_view(find: &FindBar, focus: i32) -> FindView {
         open: matches!(find, FindBar::Open { .. }),
         query: find.query().into(),
         counter: find.counter().into(),
+        none: find.none(),
         focus_serial: focus,
     }
 }

@@ -1,0 +1,102 @@
+// derived: Overlap (motion/overlap.slint, wb-in / wb-out), GlassPanel thick capsule, KitText st-row-title, PressableButton ghost, IconButton
+// A free-standing notice (wubble-only.md: toast; the design has none): a thick glass capsule
+// over content with its text in the row-title role, ink. It arrives by Overlap's rule (from 7 px
+// below at .98, clear and blurred 4 px, 240 ms ease-out) and leaves by it (5 px up, 190 ms
+// ease-in-out). With an `action` it carries a ghost text button (the kit's 30-high base button,
+// so the capsule keeps its height) and, `sticky`, a close IconButton; only then does it take the
+// pointer, and over itself only. The owner times it (`shown`).
+// derived (notes/fidelity/derived-review.md "Toast"): the capsule (radius = height / 2), the
+// 46 px least height and 16 px side padding.
+
+import { Palette, Space } from "../../gen/tokens.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Tween } from "../../motion/tween.slint";
+import { OverlapLook } from "../../motion/overlap.slint";
+import { PressableButton, ButtonKind } from "../../controls/button.slint";
+import { IconButton } from "../../controls/icon-button.slint";
+import { Glyph } from "../../controls/icon.slint";
+import { GlassTier, GlassOver } from "../../../components/model.slint";
+
+export component AToast inherits Rectangle {
+    in property <bool> shown;
+    in property <string> text;
+    in property <string> action;
+    in property <bool> sticky;
+    in property <int> key: -1;
+    in property <int> layer: GlassOver.card;
+    // the widest it grows (and the room it is given): a longer text wraps
+    in property <length> widest: Shell.toast-max-width;
+    callback acted();
+    callback closed();
+    out property <float> progress: tw.t;
+    out property <bool> glass-present: pill.item.present;
+    width: min(root.widest, row.preferred-width);
+    height: max(Shell.toast-height, row.preferred-height);
+    visible: root.shown || tw.t > 0;
+    tw := Tween {
+        on: root.shown;
+    }
+    OverlapLook {
+        e: tw.t;
+        entering: root.shown;
+        pill := GlassPanel {
+            key: root.key;
+            over-layer: root.layer;
+            present: root.visible && tw.t > 0;
+            tier: GlassTier.thick;
+            radius: min(self.height, Shell.toast-height) / 2;
+            over-content: true;
+            // Only a notice with a button takes the pointer.
+            if root.shown && root.action != "": TouchArea { }
+            row := HorizontalLayout {
+                // a wrapped text's lines clear the glass's top and bottom
+                padding-top: Space.s3;
+                padding-bottom: Space.s3;
+                padding-left: Shell.toast-pad;
+                padding-right: root.action == "" ? Shell.toast-pad : Space.s2;
+                spacing: Space.s2;
+                alignment: center;
+                // One label per text, made anew for each: Slint 1.19 drops its text
+                // measurements on a new surface or scale factor (`TextLayoutCache::clear_all`,
+                // which drops their dependency trackers without marking what depended on them
+                // dirty), and a layout measured before that no longer hears of its text
+                // changing. The toast's row was measured empty at start-up, so every later
+                // notice kept the empty pill and its text ran out of it. A new label is a new
+                // measurement the row depends on.
+                for text in [root.text]: label := KitText {
+                    role: Role.st-row-title;
+                    text: text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    color: Palette.ink;
+                }
+                if root.action != "": VerticalLayout {
+                    alignment: center;
+                    PressableButton {
+                        kind: ButtonKind.ghost;
+                        text: root.action;
+                        enabled: root.shown;
+                        clicked => {
+                            root.acted();
+                        }
+                    }
+                }
+                if root.action != "" && root.sticky: VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        icon-path: Glyph.close;
+                        label: "Close";
+                        enabled: root.shown;
+                        clicked => {
+                            root.closed();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

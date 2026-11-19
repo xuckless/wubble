@@ -254,7 +254,7 @@ fn shaders() -> Vec<(String, String)> {
 #[test]
 fn every_shader_has_the_numbers_of_the_glsl_it_translates() {
     let all = shaders();
-    assert_eq!(all.len(), 10, "the scene's ten shaders");
+    assert_eq!(all.len(), 12, "the scene's twelve shaders");
     // wubble's own passes (the page in the scene) translate nothing: there is no GLSL to cite
     let own: Vec<&str> = all
         .iter()

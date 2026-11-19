@@ -40,7 +40,7 @@ export component CheckBox inherits Rectangle {
     }
 
     border-radius: TouchCss.wb-tp-ck--border-radius;
-    background: TouchCss.tp-ck-hover--background.with-alpha(TouchCss.tp-ck-hover--background.alpha * hov.t);
+    background: TouchCss.tp-ck-hover--background.transparentize(1 - hov.t);
     hov := Tween {
         on: ta.has-hover;
         in-ms: TouchCss.wb-tp-ck--transition-background-color-duration;

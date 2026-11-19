@@ -36,7 +36,10 @@ component SwapLayer inherits SwapItem {
     in property <TextRole> role;
     in property <color> ink;
     in property <TextHorizontalAlignment> align;
+    // the label fills the box (the trigger's label sits left, `align` places it)
     KitText {
+        width: parent.width;
+        height: parent.height;
         role: root.role;
         text: root.text;
         color: root.ink;

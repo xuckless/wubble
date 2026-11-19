@@ -1,0 +1,128 @@
+// design: pages/settings.tsx:376-406, pages/settings.css:23-31 @598f814
+// The section list (`.st-nav`): rows 36 high, 2 apart (NAV.pitch 38). A row (`.st-nav-btn`) is
+// a 16 px stroke icon and the title, 11 apart, 0 12 padding, 13.5 mist; ink under the pointer
+// and when current, the current row's icon in the Space accent (.24 s ease-out); pressed to .97
+// over .12 s; disabled (a section the search leaves out) at .32. The indicator (`.st-nav-ind`:
+// white .08, radius 12, inset 0 1px 0 white .07) rides the follow spring to the current row and
+// stretches along its travel (volume kept), about 30 % of its height moving down, 70 % up.
+// The spring is Rust's: the Swatches ring's (`wubble_core::controls::swatches`, `Controls` kind
+// 6), the same follow spring and stretch along a row of 36 px pitch. The nav's pitch is 38, so
+// the ring's travel is scaled by 38 / 36 and its stretch along x is applied along y (kit gap: a
+// ring slot with its own pitch and axis).
+
+import { Palette } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Calm } from "../motion/calm.slint";
+import { Tween } from "../motion/tween.slint";
+import { Icon } from "../controls/icon.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+
+// `.st-nav-ind`, at row `index`. Its slot is acquired as it is made: make it only once the
+// window's `Controls` are wired (inside an `if`, as the page opens), where it starts in place.
+export component NavIndicator inherits Rectangle {
+    in property <int> index;
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <bool> live: root.slot >= 0 && root.slot < Controls.views.length;
+    property <int> gen: Controls.generation;
+    property <length> pitch: SettingsCss.wb-st-nav-btn--height + SettingsCss.st-nav--gap;
+    // the ring's pitch (`SWATCH.pitch`: a swatch target and the gap)
+    property <length> ring-pitch: SettingsCss.wb-st-sw--width + SettingsCss.st-swatches--gap;
+
+    init => {
+        root.slot = Controls.acquire(6, Math.max(0, root.index));
+    }
+    changed index => {
+        Controls.set-value(root.slot, Math.max(0, root.index));
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    height: SettingsCss.st-nav-ind--height;
+    Rectangle {
+        y: root.live ? root.v.x * Shell.px * root.pitch / root.ring-pitch : root.index * root.pitch;
+        height: root.height;
+        border-radius: SettingsCss.st-nav-ind--border-radius;
+        background: SettingsCss.st-nav-ind--background;
+        inner-shadow-offset-y: SettingsCss.st-nav-ind--box-shadow-shadow-1-y;
+        inner-shadow-color: SettingsCss.st-nav-ind--box-shadow-shadow-1-color;
+        // the ring's origin is 0.3 moving forward, 0.7 back: the TSX's 30 % / 70 %
+        transform-origin: { x: self.width / 2, y: self.height * (root.live ? root.v.origin : 0.5) };
+        transform-scale-x: root.live ? root.v.scale-y : 1;
+        transform-scale-y: root.live ? root.v.scale-x : 1;
+    }
+}
+
+// `.st-nav-btn`
+export component NavRow inherits Rectangle {
+    in property <string> title;
+    in property <string> icon-path;
+    // `.on`: the current section
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <color> accent: Palette.sky;
+    callback picked();
+
+    property <bool> lit: root.on || (ta.has-hover && root.enabled);
+    height: SettingsCss.wb-st-nav-btn--height;
+    border-radius: SettingsCss.wb-st-nav-btn--border-radius;
+    opacity: root.enabled ? 1 : SettingsCss.wb-st-nav-btn-disabled--opacity;
+    animate opacity {
+        duration: Calm.ms(SettingsCss.wb-st-nav-btn--transition-opacity-duration);
+        easing: SettingsCss.wb-st-nav-btn--transition-opacity-easing;
+    }
+    press := Tween {
+        on: ta.pressed;
+        in-ms: SettingsCss.st-nav-btn-active-not-disabled--transition-duration;
+        out-ms: SettingsCss.st-nav-btn-active-not-disabled--transition-duration;
+    }
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.title;
+    accessible-item-selected: root.on;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.picked();
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.picked();
+        }
+    }
+    body := Rectangle {
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: 1 - (1 - SettingsCss.st-nav-btn-active-not-disabled--transform-scale) * press.t;
+        HorizontalLayout {
+            padding-left: SettingsCss.wb-st-nav-btn--padding-left;
+            padding-right: SettingsCss.wb-st-nav-btn--padding-right;
+            spacing: SettingsCss.wb-st-nav-btn--gap;
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    path: root.icon-path;
+                    tint: root.on ? root.accent : root.lit ? SettingsCss.st-nav-btn-hover--color : SettingsCss.wb-st-nav-btn--color;
+                    animate tint {
+                        duration: Calm.ms(SettingsCss.st-nav-btn-svg--transition-color-duration);
+                        easing: SettingsCss.st-nav-btn-svg--transition-color-easing;
+                    }
+                }
+            }
+            KitText {
+                horizontal-stretch: 1;
+                role: Role.wb-st-nav-btn;
+                text: root.title;
+                color: root.lit ? SettingsCss.st-nav-btn-hover--color : SettingsCss.wb-st-nav-btn--color;
+                vertical-alignment: center;
+                overflow: elide;
+                animate color {
+                    duration: Calm.ms(SettingsCss.wb-st-nav-btn--transition-color-duration);
+                }
+            }
+        }
+    }
+}
