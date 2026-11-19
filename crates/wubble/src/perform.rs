@@ -17,13 +17,10 @@ use crate::host::Builtin;
 use crate::surface::FindEvent;
 
 /// Actions with no implementation yet, each with the reason.
-pub const NOT_YET: &[(Action, &str)] = &[
-    (Action::NewSpace, "needs a name and tint prompt"),
-    (
-        Action::ToggleCompactMode,
-        "the shell's one sidebar toggle is ToggleSidebar",
-    ),
-];
+pub const NOT_YET: &[(Action, &str)] = &[(
+    Action::ToggleCompactMode,
+    "the shell's one sidebar toggle is ToggleSidebar",
+)];
 
 /// Engine calls on the visible tab's view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,7 +210,9 @@ pub fn plan(action: Action, model: &Model) -> Plan {
                 to: WindowTarget::New,
             })
         }),
-        Action::NewSpace | Action::ToggleCompactMode => Plan::NotYet,
+        // "Space N" in the next swatch; renamed in Settings (or the sidebar)
+        Action::NewSpace => Plan::Model(model.new_space()),
+        Action::ToggleCompactMode => Plan::NotYet,
     }
 }
 
@@ -423,6 +422,11 @@ mod tests {
         assert_eq!(plan(Action::SelectSpace(3), &m), Plan::Nothing);
         assert_eq!(plan(Action::NextSpace, &m), switch(1));
         assert_eq!(plan(Action::PrevSpace, &m), switch(1));
+        assert_eq!(
+            plan(Action::NewSpace, &m),
+            Plan::Model(m.new_space()),
+            "a Space with the next name and swatch"
+        );
     }
 
     #[test]

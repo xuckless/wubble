@@ -601,6 +601,13 @@ function rustGen(css) {
   out.push(`/// core/tokens.ts:${sl + 1}-${sl + tokens.spaces.length} (\`spaces\`: ${tokens.spaces.map(s => s.id).join(', ')})`, '#[rustfmt::skip]', 'pub mod spaces {');
   out.push(`    pub const ACCENT: [[u8; 3]; ${tokens.spaces.length}] = [${tokens.spaces.map(s => rgb(s.accent)).join(', ')}];`);
   out.push(`    pub const DYE: [[[u8; 3]; 3]; ${tokens.spaces.length}] = [${tokens.spaces.map(s => `[${s.dye.map(rgb).join(', ')}]`).join(', ')}];`);
+  // the settings swatches a Space's colour is picked from (a new Space takes the next one)
+  const wl = lineOf('pages/settings.tsx', 'const SWATCHES = [');
+  const swatches = [...read('pages/settings.tsx').split('\n')[wl - 1].matchAll(/color\.(\w+)/g)].map(m => m[1]);
+  use('pages/settings.tsx', wl);
+  out.push(`    /// pages/settings.tsx:${wl} (\`SWATCHES\`)`);
+  out.push(`    pub const SWATCHES: [[u8; 3]; ${swatches.length}] = [${swatches.map(n => rgb(tokens.color[n])).join(', ')}];`);
+  out.push(`    pub const SWATCH_NAMES: [&str; ${swatches.length}] = [${swatches.map(n => JSON.stringify(n)).join(', ')}];`);
   out.push('}', '');
   out.push('/// core/tokens.ts', '#[rustfmt::skip]', 'pub mod tokens {');
   for (const k of ['radius', 'space', 'chrome', 'motion', 'type']) rmod(k, tokens[k], `core/tokens.ts:${lineOf('core/tokens.ts', `export const ${k}`)}`, 4, out);

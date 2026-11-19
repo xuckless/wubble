@@ -203,6 +203,42 @@ fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
     Rgb(byte(r), byte(g), byte(b))
 }
 
+/// The colours a Space is picked from (the settings swatches, `kit_gen::spaces::SWATCHES`).
+pub fn swatches() -> impl Iterator<Item = Rgb> {
+    crate::kit_gen::spaces::SWATCHES
+        .iter()
+        .map(|&[r, g, b]| Rgb(r, g, b))
+}
+
+/// The swatch's name, capitalised ("Sky"), or `None` for a colour that is no swatch.
+pub fn swatch_name(tint: Rgb) -> Option<String> {
+    let i = swatches().position(|s| s == tint)?;
+    let name = crate::kit_gen::spaces::SWATCH_NAMES[i];
+    let mut chars = name.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+}
+
+/// A new Space's name and colour beside the Spaces there are (`existing`: name, tint): "Space N"
+/// for the first N past their count that no Space is named, in the first swatch none wears
+/// (round the swatches again when every one is worn).
+pub fn next_space<'a>(existing: impl IntoIterator<Item = (&'a str, Rgb)> + Clone) -> (String, Rgb) {
+    let count = existing.clone().into_iter().count();
+    let name = (count + 1..)
+        .map(|n| format!("Space {n}"))
+        .find(|n| !existing.clone().into_iter().any(|(e, _)| e == n))
+        .expect("an unused name");
+    let worn: Vec<Rgb> = existing.into_iter().map(|(_, t)| t).collect();
+    let all: Vec<Rgb> = swatches().collect();
+    let tint = all
+        .iter()
+        .copied()
+        .find(|t| !worn.contains(t))
+        .unwrap_or(all[count % all.len()]);
+    (name, tint)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +345,32 @@ mod tests {
     fn container_ids_compare_by_value() {
         assert_eq!(ContainerId(3), ContainerId(3));
         assert_ne!(ContainerId(3), ContainerId(4));
+    }
+
+    #[test]
+    fn a_new_space_takes_the_next_name_and_an_unworn_swatch() {
+        let sky = Rgb(124, 200, 255);
+        let lilac = Rgb(184, 166, 255);
+        let blue = Rgb(0x6a, 0x8f, 0xff);
+        assert_eq!(next_space([]), ("Space 1".into(), sky));
+        assert_eq!(
+            next_space([("Space 1", blue)]),
+            ("Space 2".into(), sky),
+            "the first Space's own tint is no swatch"
+        );
+        assert_eq!(
+            next_space([("Space 2", sky), ("Work", blue)]),
+            ("Space 3".into(), lilac)
+        );
+        assert_eq!(
+            next_space([("Space 2", sky), ("Space 3", lilac)]).0,
+            "Space 4",
+            "a name already taken is skipped"
+        );
+        let worn: Vec<(String, Rgb)> = swatches().map(|t| ("x".to_string(), t)).collect();
+        let (_, t) = next_space(worn.iter().map(|(n, t)| (n.as_str(), *t)));
+        assert_eq!(t, sky, "round the swatches again");
+        assert_eq!(swatch_name(lilac).as_deref(), Some("Lilac"));
+        assert_eq!(swatch_name(blue), None);
     }
 }

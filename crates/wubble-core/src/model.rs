@@ -384,6 +384,20 @@ pub struct Model {
 const DEFAULT_TINT: Rgb = Rgb(0x6a, 0x8f, 0xff);
 
 impl Model {
+    /// The Space Settings' "+" and the New Space action add: [`crate::space::next_space`]
+    /// beside the Spaces there are, in the Default container.
+    pub fn new_space(&self) -> Command {
+        let (name, tint) =
+            crate::space::next_space(self.spaces.iter().map(|s| (s.name.as_str(), s.tint)));
+        Command::NewSpace {
+            name,
+            tint,
+            container: ContainerId::DEFAULT,
+        }
+    }
+}
+
+impl Model {
     /// One empty Space and the Default container; `now` starts the model's clock.
     pub fn new(now: Instant) -> Self {
         let space = Space {
