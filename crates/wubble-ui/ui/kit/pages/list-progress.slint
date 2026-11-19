@@ -1,0 +1,44 @@
+// derived: the slider's rail and fill (pages/touch.css:50-52 @598f814) + Glide(motion/tween.slint)
+// A download's progress (wubble-only: the design has no progress bar): the slider's rail
+// (`.tp-sl-rail`, white .12, round ends) and its accent fill (`.tp-sl-fill`), thinned to
+// `Shell.download-track`; the fill follows the progress over the dropdown's 220 ms ease-out.
+// An unknown size (`progress` below 0): the fill is full at .35.
+
+import { Palette, Motion } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { Glide } from "../motion/tween.slint";
+
+export component ListProgress inherits Rectangle {
+    // 0 to 1; below 0 when the size is unknown
+    in property <float> progress;
+    in property <color> accent: Palette.sky;
+    // the unknown size's fill (wubble)
+    property <float> unknown: 0.35;
+    height: Shell.download-track;
+    border-radius: self.height / 2;
+    background: TouchCss.tp-sl-rail--background;
+    to := Glide {
+        to: root.progress < 0 ? root.width : root.width * root.progress;
+        ms: Motion.dropdown-in;
+        easing: Motion.ease-out;
+    }
+    Rectangle {
+        x: 0px;
+        width: to.at;
+        border-radius: parent.border-radius;
+        background: root.accent;
+        opacity: root.progress < 0 ? root.unknown : 1;
+    }
+}
+
+// A download's glyph: mint once it is complete, ink while bytes are coming, haze otherwise
+// (cancelled, failed).
+export global DownloadTint {
+    public pure function of(done: bool, active: bool) -> color {
+        if done {
+            return Palette.mint;
+        }
+        return active ? Palette.ink : Palette.haze;
+    }
+}

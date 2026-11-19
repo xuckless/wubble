@@ -1,0 +1,262 @@
+// derived: ListProgress(pages/list-progress.slint) + KitText(text.slint) roles st-row-title / st-row-note / st-path-wb-mono + IconButton(controls/icon-button.slint) + PressableButton(controls/button.slint) + OverlapLayer(motion/overlap.slint) + Tween(motion/tween.slint), pages/settings.css:41-47,98 browser/browser.css:75-78 pages/touch.css:139-140 @598f814
+// A list page's row (wubble-only.md section 32), the settings row's anatomy: `.st-row` (min 60,
+// padding 11 14, gap 16, radius 14; a target as a whole is `.st-row.tap`: white .04 under it on
+// hover over .15 s), led by an `.st-lead` tile (36, radius 12, white .06) round the favicon or a
+// mist icon, the title `.st-row-title` (14 / 500 ink) over the note `.st-row-note` (13 mist, 2
+// apart; an address or a number in `.st-path .wb-mono`, 13 mono mist), and the row's controls at
+// its end (`.st-row-ctl`, gap 12, in `@children`). Rows enter on the Overlap stagger (`index`,
+// 30 ms apart, capped so a long list does not wait). A row's actions show as the tab row's close
+// button does (`.wb-tab-x`: opacity 0 at .8 to 1 at 1 on the row's hover, .15 s / .2 s
+// ease-out): each `RowAction` takes the row's `reveal`, and shows while it has the keyboard too
+// (the design's `:focus-visible`). A folder's chevron is the design's disclosure (`.tp-chev`:
+// down, turned to up over .22 s ease-out while open).
+
+import { Palette, Motion } from "../gen/tokens.slint";
+import { SettingsCss, BrowserCss, TouchCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { IconButton } from "../controls/icon-button.slint";
+import { PressableButton } from "../controls/button.slint";
+import { OverlapLayer } from "../motion/overlap.slint";
+import { Tween } from "../motion/tween.slint";
+import { ListProgress } from "list-progress.slint";
+
+// `.st-lead`: the tile a row leads with, the favicon (16) in it or the icon.
+export component RowLead inherits Rectangle {
+    in property <image> favicon;
+    in property <string> icon-path: Glyph.globe;
+    in property <color> tint: Palette.mist;
+    width: SettingsCss.st-lead--width;
+    height: SettingsCss.st-lead--height;
+    border-radius: SettingsCss.st-lead--border-radius;
+    background: SettingsCss.st-lead--background;
+    if root.favicon.width > 0: Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        source: root.favicon;
+        width: Shell.page-favicon;
+        height: Shell.page-favicon;
+    }
+    if root.favicon.width == 0: Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        path: root.icon-path;
+        tint: root.tint;
+    }
+}
+
+// `.tp-chev`: a folder's disclosure chevron, up while open.
+export component RowChevron inherits Rectangle {
+    in property <bool> open;
+    width: Shell.icon;
+    turn := Tween {
+        on: root.open;
+        in-ms: TouchCss.tp-chev--transition-transform-duration;
+        out-ms: TouchCss.tp-chev--transition-transform-duration;
+        in-easing: TouchCss.tp-chev--transition-transform-easing;
+        out-easing: TouchCss.tp-chev--transition-transform-easing;
+    }
+    Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        path: Glyph.chevron-down;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-rotation: turn.t * TouchCss.tp-chev-up--transform-rotate * 1deg;
+    }
+}
+
+// The `.wb-tab-x` reveal of one of a row's controls: hidden at .8 until `shown`.
+component Reveal inherits Rectangle {
+    in property <bool> shown;
+    fade := Tween {
+        on: root.shown;
+        in-ms: BrowserCss.wb-tab-x--transition-opacity-duration;
+        out-ms: BrowserCss.wb-tab-x--transition-opacity-duration;
+        in-easing: ease;
+        out-easing: ease;
+    }
+    grow := Tween {
+        on: root.shown;
+        in-ms: BrowserCss.wb-tab-x--transition-scale-duration;
+        out-ms: BrowserCss.wb-tab-x--transition-scale-duration;
+        in-easing: BrowserCss.wb-tab-x--transition-scale-easing;
+        out-easing: BrowserCss.wb-tab-x--transition-scale-easing;
+    }
+    out property <float> shown-opacity: fade.t * BrowserCss.wb-tab-hover-wb-tab-x--opacity;
+    opacity: root.shown-opacity;
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale: BrowserCss.wb-tab-x--scale + (BrowserCss.wb-tab-hover-wb-tab-x--scale - BrowserCss.wb-tab-x--scale) * grow.t;
+    @children
+}
+
+// A row's icon action (`.wb-ib`), revealed with the row; `danger` (delete) is coral.
+export component RowAction inherits Reveal {
+    in property <string> icon-path;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <bool> danger;
+    // the row's hover (ListRow `reveal`); `always`: shown regardless
+    in property <bool> reveal;
+    in property <bool> always;
+    callback clicked();
+    out property <bool> keyboard-focused: button.keyboard-focused;
+    shown: root.always || root.reveal || button.keyboard-focused;
+    width: button.width;
+    height: button.height;
+    button := IconButton {
+        icon-path: root.icon-path;
+        label: root.label;
+        enabled: root.enabled;
+        rest-ink: root.danger ? Palette.coral : Palette.ink;
+        hover-ink: root.danger ? Palette.coral : BrowserCss.wb-ib-hover-not-disabled--color;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A row's worded action (the ghost base button, 30 high), revealed with the row.
+export component RowTextAction inherits Reveal {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> reveal;
+    in property <bool> always;
+    callback clicked();
+    shown: root.always || root.reveal || button.keyboard-focused;
+    width: button.preferred-width;
+    height: button.min-height;
+    button := PressableButton {
+        text: root.text;
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component ListRow inherits Rectangle {
+    in property <string> title;
+    in property <string> note;
+    // the note is an address or a number (`.wb-mono`)
+    in property <bool> mono-note;
+    in property <color> note-color: SettingsCss.st-row-note--color;
+    // the lead tile: a favicon, else `icon-path`; `lead: false` for none
+    in property <bool> lead: true;
+    in property <image> favicon;
+    in property <string> icon-path: Glyph.globe;
+    in property <color> icon-tint: Palette.mist;
+    // a tree's depth: the row starts this far in
+    in property <length> indent;
+    // the whole row is a target (`.st-row.tap`): hover, click opens, middle-click opens in a tab
+    in property <bool> tappable: true;
+    // the entrance: the row comes in when this turns true (the page opening), `index` places it
+    // on the stagger
+    in property <bool> shown: true;
+    in property <int> index;
+    // a progress rail under the text (a download's; ListProgress), `progress` below 0: unknown
+    in property <bool> has-progress;
+    in property <float> progress;
+    // what a screen reader calls the row; the default action opens it
+    in property <string> label: root.title;
+    callback opened();
+    callback opened-new-tab();
+    out property <bool> hovered: ta.has-hover;
+    // the row's actions show (RowAction `reveal`)
+    out property <bool> reveal: ta.has-hover;
+
+    // wubble: rows past this many share the last step (a page's first screen staggers, the rest
+    // comes with it); a count, not a design value
+    property <int> stagger-cap: 12;
+    height: max(SettingsCss.st-row--min-height, body.preferred-height);
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.opened();
+    }
+
+    hover := Tween {
+        on: root.tappable && ta.has-hover;
+        in-ms: SettingsCss.st-row--transition-background-color-duration;
+        out-ms: SettingsCss.st-row--transition-background-color-duration;
+        in-easing: ease;
+        out-easing: ease;
+    }
+
+    OverlapLayer {
+        shown: root.shown;
+        index: min(root.index, root.stagger-cap);
+        Rectangle {
+            border-radius: SettingsCss.st-row--border-radius;
+            background: SettingsCss.st-row-tap-hover--background;
+            opacity: hover.t;
+        }
+        // the row's controls sit inside its touch area, so its hover holds over them
+        ta := TouchArea {
+            mouse-cursor: root.tappable ? MouseCursor.pointer : MouseCursor.default;
+            clicked => {
+                if root.tappable {
+                    root.opened();
+                }
+            }
+            pointer-event(e) => {
+                if root.tappable && e.button == PointerEventButton.middle && e.kind == PointerEventKind.up {
+                    root.opened-new-tab();
+                }
+            }
+            body := HorizontalLayout {
+                padding-left: SettingsCss.st-row--padding-left + root.indent;
+                padding-right: SettingsCss.st-row--padding-right;
+                padding-top: SettingsCss.st-row--padding-top;
+                padding-bottom: SettingsCss.st-row--padding-bottom;
+                spacing: SettingsCss.st-row--gap-column;
+                if root.lead: VerticalLayout {
+                    alignment: center;
+                    RowLead {
+                        favicon: root.favicon;
+                        icon-path: root.icon-path;
+                        tint: root.icon-tint;
+                    }
+                }
+                text-col := VerticalLayout {
+                    horizontal-stretch: 1;
+                    min-width: SettingsCss.st-row-text--min-width;
+                    alignment: center;
+                    spacing: SettingsCss.st-row-note--margin-top;
+                    title-text := KitText {
+                        role: Role.st-row-title;
+                        min-height: self.line;
+                        text: root.title;
+                        color: SettingsCss.st-row-title--color;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    if root.note != "": KitText {
+                        role: root.mono-note ? Role.st-path-wb-mono : Role.st-row-note;
+                        min-height: self.line;
+                        text: root.note;
+                        color: root.note-color;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: SettingsCss.st-row-ctl--gap;
+                        @children
+                    }
+                }
+            }
+            // under the text, in the row's lower padding, so a row with it keeps its height
+            if root.has-progress: ListProgress {
+                x: body.x + text-col.x;
+                y: body.y + text-col.y + text-col.height + SettingsCss.st-row-note--margin-top;
+                width: text-col.width;
+                progress: root.progress;
+            }
+        }
+    }
+}
