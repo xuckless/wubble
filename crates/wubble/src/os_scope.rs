@@ -17,7 +17,8 @@ trait ScopeHost {
     fn cgroup() -> Option<String> {
         None
     }
-    /// Starts `request`'s scope with this process in it.
+    /// Starts `request`'s scope with this process in it, returning once the process has moved
+    /// (or the time is up).
     fn start(_request: &ScopeRequest) -> Result<(), String> {
         Ok(())
     }
@@ -55,7 +56,7 @@ impl ScopeHost for NoScope {}
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use wubble_core::scope::ScopeRequest;
+    use wubble_core::scope::{self, ScopeRequest};
     use zbus::zvariant::Value;
 
     /// The user's systemd manager (`org.freedesktop.systemd1.Manager.StartTransientUnit`, the
@@ -86,8 +87,24 @@ mod linux {
                 "StartTransientUnit",
                 &(request.unit.as_str(), "fail", properties, aux),
             )
-            .map(drop)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+            // The call returns once the job is queued (`systemd-run --scope` waits for
+            // `JobRemoved`); CEF must not fork its zygote and GPU process before the move, so
+            // read the cgroup back within the same budget.
+            let deadline = std::time::Instant::now() + super::TIMEOUT;
+            loop {
+                if Self::cgroup().is_some_and(|c| scope::moved(request, &c)) {
+                    return Ok(());
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "{} not entered within {} ms",
+                        request.unit,
+                        super::TIMEOUT.as_millis()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
         }
     }
 }

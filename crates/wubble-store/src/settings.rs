@@ -231,8 +231,6 @@ settings! {
     ProcessSiteIsolation: bool = defs::PROCESS_SITE_ISOLATION;
     ProcessRendererLimit: u32 = defs::PROCESS_RENDERER_LIMIT;
     ProcessSpareRenderer: bool = defs::PROCESS_SPARE_RENDERER;
-    /// `auto` or `off`.
-    VideoHardwareDecode: String = defs::VIDEO_HARDWARE_DECODE;
     /// A CEF start switch: read before the engine starts.
     DevtoolsRemotePort: u32 = defs::DEVTOOLS_REMOTE_PORT;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;

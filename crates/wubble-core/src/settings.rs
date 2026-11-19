@@ -497,18 +497,6 @@ pub const PROCESS_SPARE_RENDERER: SettingDef = SettingDef {
     section: Section::Performance,
     restart: true,
 };
-/// Hardware video decode where Chromium needs asking (Linux NVIDIA with libva-nvidia-driver,
-/// `wubble_engine::app::PageFeatures::hw_video_decode`): `auto` uses it when the driver is
-/// found, `off` never (a driver update can crash the GPU process). A CEF start switch.
-pub const VIDEO_HARDWARE_DECODE: SettingDef = SettingDef {
-    key: "video.hardware_decode",
-    kind: SettingKind::Choice(&["auto", "off"]),
-    default: "auto",
-    label: "Hardware video decode (auto: when the driver is installed)",
-    section: Section::Performance,
-    restart: true,
-};
-
 /// Chromium's remote debugging endpoint (`remote-debugging-port`), on 127.0.0.1 only. Off by
 /// default: with a port set, any program on this computer can read and drive every open tab.
 /// Docked DevTools is the frontend page served by that endpoint, so it needs the port; without
@@ -792,7 +780,6 @@ pub const ALL: &[&SettingDef] = &[
     &PROCESS_SITE_ISOLATION,
     &PROCESS_RENDERER_LIMIT,
     &PROCESS_SPARE_RENDERER,
-    &VIDEO_HARDWARE_DECODE,
     &DEVTOOLS_REMOTE_PORT,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
@@ -897,7 +884,6 @@ mod tests {
             &PROCESS_SITE_ISOLATION,
             &PROCESS_RENDERER_LIMIT,
             &PROCESS_SPARE_RENDERER,
-            &VIDEO_HARDWARE_DECODE,
         ] {
             assert!(d.restart && d.section == Section::Performance, "{}", d.key);
         }

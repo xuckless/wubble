@@ -48,8 +48,8 @@ pub use settings::{
     ReaderThemeSetting, ReaderWidthSetting, ReduceMotion, RoutingRules, ScreenshotOutput,
     SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter,
     SleepFreezeAfter, SleepKeepPinned, SleepNeverSites, SponsorActions, SponsorAsked,
-    SponsorEnabled, TouchSizing, VideoCollapsed, VideoControls, VideoHardwareDecode,
-    VideoHiddenSites, VideoRates, ZoomDefault, text_of,
+    SponsorEnabled, TouchSizing, VideoCollapsed, VideoControls, VideoHiddenSites, VideoRates,
+    ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

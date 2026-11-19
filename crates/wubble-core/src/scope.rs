@@ -40,26 +40,46 @@ pub struct ScopeContext<'a> {
 }
 
 /// The scope to ask for, or `None`: not browsing, the user opted out, or the process is
-/// already in a wubble scope (a launcher that made one, or a restart from inside one).
+/// already in wubble's own scope (a restart from inside one). Any other scope, a desktop
+/// launcher's `app-gnome-wubble-<pid>.scope` included, has the default weight, so the process
+/// still moves.
 pub fn plan(cx: ScopeContext) -> Option<ScopeRequest> {
-    if !cx.browsing || cx.no_scope_env || cx.cgroup.is_some_and(in_wubble_scope) {
+    if !cx.browsing || cx.no_scope_env || cx.cgroup.and_then(scope_leaf).is_some_and(is_own_unit) {
         return None;
     }
     Some(ScopeRequest {
-        unit: format!("app-wubble-{}.scope", cx.pid),
+        unit: own_unit(cx.pid),
         pid: cx.pid,
         cpu_weight: CPU_WEIGHT,
         description: "wubble browser",
     })
 }
 
-/// Whether the cgroup v2 line (`0::/user.slice/.../app-wubble-12.scope`) names a wubble scope.
-fn in_wubble_scope(cgroup: &str) -> bool {
+/// The unit [`plan`] asks for.
+fn own_unit(pid: u32) -> String {
+    format!("app-wubble-{pid}.scope")
+}
+
+/// Whether `leaf` is a unit [`plan`] makes: exactly `app-wubble-<digits>.scope`.
+fn is_own_unit(leaf: &str) -> bool {
+    leaf.strip_prefix("app-wubble-")
+        .and_then(|rest| rest.strip_suffix(".scope"))
+        .is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The last component of the cgroup v2 path in `/proc/self/cgroup`
+/// (`0::/user.slice/.../app-wubble-12.scope`); v1 lines do not count.
+fn scope_leaf(cgroup: &str) -> Option<&str> {
     cgroup
         .lines()
-        .filter_map(|l| l.strip_prefix("0::"))
-        .filter_map(|path| path.rsplit('/').next())
-        .any(|leaf| leaf.starts_with("app-") && leaf.ends_with(".scope") && leaf.contains("wubble"))
+        .find_map(|l| l.strip_prefix("0::"))
+        .and_then(|path| path.rsplit('/').next())
+}
+
+/// Whether the process is in `request`'s unit now: `StartTransientUnit` returns when the job
+/// is queued, so the OS edge reads `/proc/self/cgroup` back until this holds.
+pub fn moved(request: &ScopeRequest, cgroup: &str) -> bool {
+    scope_leaf(cgroup) == Some(request.unit.as_str())
 }
 
 #[cfg(test)]
@@ -95,6 +115,21 @@ mod tests {
     }
 
     #[test]
+    fn moved_only_once_the_cgroup_names_the_unit() {
+        let request = plan(cx(true, false, Some(TERMINAL))).unwrap();
+        assert!(!moved(&request, TERMINAL));
+        assert!(!moved(&request, ""));
+        assert!(!moved(
+            &request,
+            "0::/user.slice/user@1000.service/app.slice/app-wubble-17.scope\n"
+        ));
+        assert!(moved(
+            &request,
+            "0::/user.slice/user@1000.service/app.slice/app-wubble-4242.scope\n"
+        ));
+    }
+
+    #[test]
     fn skip_rules() {
         let cases = [
             (cx(false, false, Some(TERMINAL)), "a smoke or measurement"),
@@ -107,17 +142,20 @@ mod tests {
                 ),
                 "already in its own scope",
             ),
-            (
-                cx(
-                    true,
-                    false,
-                    Some("0::/user.slice/user@1000.service/app.slice/app-gnome-wubble-9.scope"),
-                ),
-                "a launcher's scope for wubble",
-            ),
         ];
         for (c, why) in cases {
             assert_eq!(plan(c), None, "{why}");
+        }
+        // a desktop launcher's scope has the default weight: still move
+        for launcher in [
+            "0::/user.slice/user@1000.service/app.slice/app-gnome-wubble-9.scope",
+            "0::/user.slice/user@1000.service/app.slice/app-wubble-.scope",
+            "0::/user.slice/user@1000.service/app.slice/app-wubble-9x.scope",
+        ] {
+            assert!(
+                plan(cx(true, false, Some(launcher))).is_some(),
+                "{launcher}"
+            );
         }
         // cgroup v1 lines and other apps' scopes do not count
         assert!(

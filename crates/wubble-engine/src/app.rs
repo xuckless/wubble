@@ -122,9 +122,10 @@ pub struct PageFeatures {
     /// `settings::DEVTOOLS_REMOTE_PORT` through `settings::remote_port`: Chromium's remote
     /// debugging endpoint, on 127.0.0.1. `None`: no socket is opened.
     pub remote_debugging_port: Option<u16>,
-    /// Hardware video decode through VA-API on NVIDIA (`VaapiOnNvidiaGPUs`): on only when
-    /// `settings::VIDEO_HARDWARE_DECODE` is `auto` and [`hardware_video_decode_found`] says the
-    /// driver is there. Chromium keeps VA-API off on NVIDIA by default (crbug.com/1492880).
+    /// Hardware video decode through VA-API on NVIDIA (`VaapiOnNvidiaGPUs`): on when
+    /// [`hardware_video_decode_found`] says the driver is there. Chromium keeps VA-API off on
+    /// NVIDIA by default (crbug.com/1492880). Not a setting: a user who must keep a crashing
+    /// driver out sets `LIBVA_DRIVER_NAME` to anything else, which [`prepare_process`] keeps.
     pub hw_video_decode: bool,
 }
 
@@ -511,9 +512,8 @@ impl Platform for Linux {
         nvidia_vaapi(&|key| std::env::var_os(key), &|path| path.exists())
     }
 
-    /// With the NVIDIA VA-API driver, its environment. Set whatever the setting says (the
-    /// settings load later, on the store thread); without `VaapiOnNvidiaGPUs` Chromium refuses
-    /// VA-API on NVIDIA anyway.
+    /// With the NVIDIA VA-API driver, its environment (with `VaapiOnNvidiaGPUs`, which the
+    /// same detection turns on).
     #[cfg(target_os = "linux")]
     fn prepare_process() {
         if !hardware_video_decode_found() {

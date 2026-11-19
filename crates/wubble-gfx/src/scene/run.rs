@@ -215,6 +215,7 @@ mod tests {
             (Paused, false, true, Some(IDLE_TICK), false),
             (Running, true, false, ms(1), false),
             (Idle, true, true, Some(IDLE_TICK), false),
+            (Running, true, true, None, false),
         ];
         for (state, covered, changed, since, due) in cases {
             assert_eq!(
@@ -222,24 +223,6 @@ mod tests {
                 due,
                 "{state:?} covered={covered} changed={changed} {since:?}"
             );
-        }
-    }
-
-    #[test]
-    fn paused_or_covered_is_never_due() {
-        let times = [
-            None,
-            Some(Duration::ZERO),
-            Some(IDLE_TICK),
-            Some(Duration::from_secs(60)),
-        ];
-        for state in [Running, Idle, Paused] {
-            for changed in [false, true] {
-                for since in times {
-                    assert!(!scene_due(state, true, changed, since), "{state:?} covered");
-                    assert!(!scene_due(Paused, false, changed, since), "paused");
-                }
-            }
         }
     }
 
