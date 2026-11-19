@@ -79,7 +79,8 @@ order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, a tab row and th
 hovered, the command bar opening (a burst: `DIR/NN-name/fKKK.png` with `times.txt`), command bar
 (empty, with results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
 menu and save prompt, dialog sheet, toast, error and certificate error pages, Settings (four scroll
-positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page.
+positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page,
+the rail with its tab hovered (the close badge).
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
 properties: the host rewrites those). Size and scale come from the environment:
 `WUBBLE_SHOT_SIZE=900x600` (logical; the design's 1360x880 by default) and
