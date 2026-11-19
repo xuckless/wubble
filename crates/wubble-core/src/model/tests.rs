@@ -599,7 +599,7 @@ fn a_peek_is_on_screen_over_its_opener_and_closes() {
     assert_eq!(fx, [Effect::CloseTab(g2)]);
     assert_eq!(m.glance_of(w), None);
     assert_eq!(m.visible_tab(), Some(opener));
-    // only over a page on screen
+    // only over a page on screen: a hidden opener's link is a tab
     let (m, fx) = run(
         m,
         Command::OpenGlance {
@@ -608,7 +608,60 @@ fn a_peek_is_on_screen_over_its_opener_and_closes() {
             url: "https://x.test/".into(),
         },
     );
-    assert!(fx.is_empty() && m.glances.is_empty());
+    assert!(matches!(fx.as_slice(), [Effect::CreateTab { .. }]));
+    assert!(m.glances.is_empty());
+}
+
+#[test]
+fn a_link_in_a_peek_opens_a_tab() {
+    let (m, ids) = with_tabs(2);
+    let (m, g) = peek(m, ids[1]);
+    let w = m.focused();
+    let before = m.tabs.len();
+    let (m, fx) = run(
+        m,
+        Command::OpenGlance {
+            window: w,
+            opener: g,
+            url: "https://inner.test/".into(),
+        },
+    );
+    assert!(
+        matches!(fx.first(), Some(Effect::CreateTab { .. })),
+        "{fx:?}"
+    );
+    assert_eq!(m.tabs.len(), before + 1, "the link is not dropped");
+    assert_eq!(m.glance_of(w).map(|x| x.tab), Some(g), "the peek stays");
+}
+
+#[test]
+fn a_peek_from_a_little_window_opens_a_tab() {
+    let (m, _) = with_tabs(1);
+    let (m, fx) = run(
+        m,
+        Command::OpenLittle {
+            url: "https://l.test".into(),
+            space: None,
+        },
+    );
+    let l = opened(&fx);
+    let lt = m.window(l).unwrap().tab().unwrap();
+    let before = m.tabs.len();
+    let (m, fx) = run(
+        m,
+        Command::OpenGlance {
+            window: l,
+            opener: lt,
+            url: "https://peek.test/".into(),
+        },
+    );
+    assert!(
+        matches!(fx.first(), Some(Effect::CreateTab { .. })),
+        "{fx:?}"
+    );
+    assert_eq!(m.tabs.len(), before + 1, "the link is not dropped");
+    assert!(m.glances.is_empty());
+    m.check().expect("model holds");
 }
 
 #[test]

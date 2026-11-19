@@ -123,7 +123,8 @@ pub enum Command {
         name: String,
     },
     /// Open `url` in a peek over `window`'s page `opener` (one peek per window: an open one is
-    /// closed first). Refused unless the opener is on screen there.
+    /// closed first). A tab instead unless the window shows a Space with the opener on screen
+    /// and the opener is not a peek.
     OpenGlance {
         window: WindowId,
         opener: TabId,
@@ -1013,9 +1014,15 @@ impl Model {
         m
     }
 
+    /// A peek needs a window showing a Space and an opener on screen there that is not itself a
+    /// peek; otherwise the link opens as a tab, as a plain click on it would (a Little or Popup
+    /// window, a link inside a peek).
     fn open_glance(&mut self, window: WindowId, opener: TabId, url: String) -> Vec<Effect> {
-        if !self.window_tabs(window).contains(&opener) || self.is_glance(opener) {
-            return vec![];
+        let peekable = matches!(self.window(window).map(|w| w.shown), Some(Shown::Space(_)))
+            && self.window_tabs(window).contains(&opener)
+            && !self.is_glance(opener);
+        if !peekable {
+            return self.new_tab(url, None, Some(opener));
         }
         let mut fx = match self.glance_of(window) {
             Some(g) => self.close_tab(g.tab),
