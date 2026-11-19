@@ -19,6 +19,7 @@ import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { SpaceIcon } from "../kit/chrome/space-icon.slint";
+import { Mark } from "../kit/chrome/mark.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, FilterListItem } from "model.slint";
 import { PageScroll } from "page-scroll.slint";
@@ -1404,6 +1405,9 @@ export component SettingsPage inherits Rectangle {
                         Line {
                             label: "wubble " + root.about.version;
                             note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+                            Mark {
+                                size: Shell.about-mark;
+                            }
                         }
                         Line {
                             label: "Licence";

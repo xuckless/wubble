@@ -66,7 +66,10 @@ fn tokens_match_physics() {
     // A favicon image is handed over at twice the side it is drawn at (wubble_core::favicon),
     // so the renderer's bilinear sample is an exact 2x2 average at scale 1.
     let shell_icon = f64::from(wubble_core::favicon::SHELL_ICON_PX);
-    for name in ["icon", "page-favicon"] {
-        assert_eq!(2.0 * token("kit/derived.slint", name), shell_icon, "{name}");
+    for (file, name) in [
+        ("kit/gen/icons.slint", "size"),
+        ("kit/derived.slint", "page-favicon"),
+    ] {
+        assert_eq!(2.0 * token(file, name), shell_icon, "{name}");
     }
 }

@@ -1,0 +1,20 @@
+// design: pages/found-ui.tsx:71-104, browser/icons.tsx:49-55 @598f814
+// The mark, as the owner's brand-kit SVGs (assets/icons/wubble-mark*.svg: the body's radial
+// gradient is centred at (.36, .3), which Slint's centred `@radial-gradient` cannot express, so
+// the vector art is drawn by the renderer). Four cuts as the design has them: the full mark, and
+// 64, 32 and 16 px with a heavier film stroke, a thicker W and the flat #1A1E2A body.
+
+import { Shell } from "../derived.slint";
+
+export component Mark inherits Image {
+    in property <length> size: Shell.icon;
+    width: root.size;
+    height: root.size;
+    image-fit: contain;
+    source: root.size <= Shell.icon ? @image-url("../../../../../assets/icons/wubble-mark-16.svg")
+        : root.size <= 2 * Shell.icon ? @image-url("../../../../../assets/icons/wubble-mark-32.svg")
+        : root.size <= 4 * Shell.icon ? @image-url("../../../../../assets/icons/wubble-mark-64.svg")
+        : @image-url("../../../../../assets/icons/wubble-mark.svg");
+    accessible-role: image;
+    accessible-label: "wubble";
+}
