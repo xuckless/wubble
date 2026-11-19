@@ -342,7 +342,7 @@ pub fn user_data_dir() -> Option<PathBuf> {
 }
 
 /// What differs per OS. One impl per OS, chosen by cfg into [`Current`].
-trait Platform {
+pub(crate) trait Platform {
     /// Per-user data directory, given an environment lookup.
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf>;
 
@@ -379,6 +379,12 @@ trait Platform {
     /// Process-wide setup before anything else touches the OS's application
     /// object (winit, `cef::initialize`). Nothing by default.
     fn prepare_process() {}
+
+    /// The character a named key's CEF event carries when it types none (`windows_key_code`
+    /// is a Windows `VK_*`): none by default.
+    fn named_key_character(_windows_key_code: i32) -> Option<u16> {
+        None
+    }
 }
 
 /// Process-wide setup that must come first in `main`, before the window
@@ -395,7 +401,7 @@ pub fn prepare_process() {
 const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
 
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
-struct Linux;
+pub(crate) struct Linux;
 
 impl Platform for Linux {
     /// No entries: CEF 156.0.30's defaults hand over real, tiled dmabufs on
@@ -411,7 +417,7 @@ impl Platform for Linux {
 
 /// macOS runs from `wubble.app/Contents/MacOS` (built by `wubble-bundle`).
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
-struct MacOs;
+pub(crate) struct MacOs;
 
 impl Platform for MacOs {
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
@@ -431,6 +437,11 @@ impl Platform for MacOs {
     #[cfg(target_os = "macos")]
     fn prepare_process() {
         crate::mac_app::install();
+    }
+
+    /// What AppKit puts in a named key's `characters` (CEF builds an NSEvent from it).
+    fn named_key_character(windows_key_code: i32) -> Option<u16> {
+        crate::input::appkit_character(windows_key_code)
     }
 
     /// The example runs bundled as `wubble.app/Contents/MacOS/wubble` (`wubble-bundle --exe`).
@@ -454,7 +465,7 @@ impl Platform for MacOs {
 /// Windows: no windowless views yet (see `view.rs`), but CEF boots; CEF
 /// and the helper sit next to the binary (the trait's defaults).
 #[cfg_attr(not(windows), allow(dead_code))]
-struct Windows;
+pub(crate) struct Windows;
 
 impl Platform for Windows {
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] = &[];
@@ -491,11 +502,11 @@ fn windows_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-type Current = Linux;
+pub(crate) type Current = Linux;
 #[cfg(target_os = "macos")]
-type Current = MacOs;
+pub(crate) type Current = MacOs;
 #[cfg(windows)]
-type Current = Windows;
+pub(crate) type Current = Windows;
 
 /// The welding config for `config`; pure so the mapping is testable.
 fn cef_config(config: &EngineConfig) -> CefRuntimeConfig {

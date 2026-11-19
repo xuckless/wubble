@@ -203,6 +203,20 @@ impl Action {
             .unwrap_or_default()
     }
 
+    /// Whether the action is an edit command (undo, cut, copy ...): a shell text field
+    /// may have the focus without the shell knowing, so these never run from shell focus.
+    pub fn is_edit(self) -> bool {
+        matches!(
+            self,
+            Action::Undo
+                | Action::Redo
+                | Action::Cut
+                | Action::Copy
+                | Action::Paste
+                | Action::SelectAll
+        )
+    }
+
     /// Every action, parameterised ones expanded over their range.
     pub fn all() -> Vec<Action> {
         let mut v: Vec<Action> = FIXED.iter().map(|&(_, a)| a).collect();
@@ -371,6 +385,22 @@ mod tests {
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
+    }
+
+    #[test]
+    fn edit_actions() {
+        let edits: Vec<_> = Action::all().into_iter().filter(|a| a.is_edit()).collect();
+        assert_eq!(
+            edits,
+            [
+                Action::Undo,
+                Action::Redo,
+                Action::Cut,
+                Action::Copy,
+                Action::Paste,
+                Action::SelectAll
+            ]
+        );
     }
 
     #[test]

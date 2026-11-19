@@ -175,23 +175,26 @@ mod tests {
         assert!(!bridge_needed(None));
     }
 
-    /// What is stored is what loads back; the primary selection does not exist here. Skipped
-    /// where there is no clipboard (a headless runner). Puts back what the clipboard held.
+    /// There is no primary selection here: storing to it fails and loading from it is empty,
+    /// without touching the system clipboard.
     #[cfg(not(target_os = "linux"))]
     #[test]
+    fn arboard_has_no_primary_selection() {
+        let mut bridge = Arboard::default();
+        assert!(!bridge.store_text(Buffer::Primary, "wubble clipboard test"));
+        assert_eq!(bridge.load_text(Buffer::Primary), None);
+    }
+
+    /// What is stored is what loads back. Overwrites the system clipboard and races any other
+    /// app writing to it, so it runs by hand only (`cargo test -- --ignored`); the parity smoke
+    /// covers the round trip.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    #[ignore = "overwrites the system clipboard"]
     fn arboard_stores_and_loads_text() {
-        let Ok(mut probe) = arboard::Clipboard::new() else {
-            eprintln!("no system clipboard: skipped");
-            return;
-        };
-        let before = probe.get_text().ok();
         let mut bridge = Arboard::default();
         let text = "wubble clipboard test";
-        assert!(!bridge.store_text(Buffer::Primary, text));
         assert!(bridge.store_text(Buffer::Clipboard, text));
         assert_eq!(bridge.load_text(Buffer::Clipboard).as_deref(), Some(text));
-        if let Some(before) = before {
-            let _ = probe.set_text(before);
-        }
     }
 }

@@ -29,6 +29,9 @@ pub const SHUTDOWN_TURNS: u32 = Current::TURNS_PER_SECOND * 16;
 /// earlier fixed `1 << 14` turns (65 ms on Linux) was 273 s there.
 pub const SETTLE_TURNS: u32 = Current::TURNS_PER_SECOND / 2;
 
+// Settling is a short wait inside the shutdown budget.
+const _: () = assert!(0 < SETTLE_TURNS && SETTLE_TURNS < SHUTDOWN_TURNS);
+
 /// Where the CEF runtime is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -244,19 +247,6 @@ mod tests {
                     "{state:?} + {event:?}"
                 );
             }
-        }
-    }
-
-    /// Settling is a short wait inside the shutdown budget, on every OS.
-    #[test]
-    fn settling_is_shorter_than_the_shutdown_bound() {
-        const { assert!(0 < SETTLE_TURNS && SETTLE_TURNS < SHUTDOWN_TURNS) };
-        for turns_per_second in [
-            <super::super::Linux as Platform>::TURNS_PER_SECOND,
-            <super::super::MacOs as Platform>::TURNS_PER_SECOND,
-            <super::super::Windows as Platform>::TURNS_PER_SECOND,
-        ] {
-            assert!(0 < turns_per_second / 2 && turns_per_second / 2 < turns_per_second * 16);
         }
     }
 

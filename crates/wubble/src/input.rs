@@ -84,7 +84,9 @@ pub fn page_fullscreen_binding(binding: Option<(Action, Route)>) -> Option<(Acti
 ///   not handle it". With the page focused the key goes to the page only; the
 ///   action waits for the engine's `WebEvent::KeyUnhandled` ([`PendingKeys`]).
 ///   In a shell text field the field keeps it (Escape closes the bar, it does
-///   not stop the page); with nothing focused the action runs.
+///   not stop the page); with nothing focused the action runs, except an edit
+///   command ([`Action::is_edit`]): `Shell` focus covers the find bar, dialog
+///   and settings fields, which own copy, paste and undo.
 /// - Unbound keys go where the focus is; modifier keys also reach Slint.
 pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bool) -> KeyRoute {
     match (focus, binding, modifier) {
@@ -93,6 +95,9 @@ pub fn key_route(focus: KeyFocus, binding: Option<(Action, Route)>, modifier: bo
         (_, Some((action, Route::Shell)), false) => KeyRoute::Perform(action),
         (KeyFocus::Page, Some((action, Route::PageFirst)), false) => KeyRoute::PageFirst(action),
         (KeyFocus::Field, Some((_, Route::PageFirst)), false) => KeyRoute::Shell,
+        (KeyFocus::Shell, Some((action, Route::PageFirst)), false) if action.is_edit() => {
+            KeyRoute::Shell
+        }
         (KeyFocus::Shell, Some((action, Route::PageFirst)), false) => KeyRoute::Perform(action),
         (KeyFocus::Page, None, false) => KeyRoute::Page,
         (KeyFocus::Field | KeyFocus::Shell, None, false) => KeyRoute::Shell,
@@ -466,6 +471,7 @@ mod tests {
         use KeyFocus::{Field, Page, Shell};
         let shell = Some((Action::NewTab, Route::Shell));
         let page_first = Some((Action::Reload, Route::PageFirst));
+        let edit = Some((Action::Paste, Route::PageFirst));
         let cases = [
             // Shell-reserved chords run whatever has focus.
             (Page, shell, KeyRoute::Perform(Action::NewTab)),
@@ -476,6 +482,10 @@ mod tests {
             (Page, page_first, KeyRoute::PageFirst(Action::Reload)),
             (Field, page_first, KeyRoute::Shell),
             (Shell, page_first, KeyRoute::Perform(Action::Reload)),
+            // Edit commands: the page's, or the focused shell field's (find bar, dialog).
+            (Page, edit, KeyRoute::PageFirst(Action::Paste)),
+            (Field, edit, KeyRoute::Shell),
+            (Shell, edit, KeyRoute::Shell),
             // Unbound keys go where the focus is.
             (Page, None, KeyRoute::Page),
             (Field, None, KeyRoute::Shell),
