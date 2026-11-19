@@ -235,7 +235,14 @@ pub struct DragData {
     pub text: Option<String>,
     pub html: Option<String>,
     pub base_url: Option<String>,
+    /// A dragged picture's own bytes and file name (page drags only). Boxed, as is the
+    /// image: the events carrying a drag stay small.
+    pub file_contents: Option<Box<DragFileContents>>,
+    /// The thumbnail under the pointer (page drags only).
+    pub image: Option<Box<DragImage>>,
 }
+
+pub use welding::{DragFileContents, DragImage};
 
 impl From<welding::DragPayload> for DragData {
     fn from(p: welding::DragPayload) -> Self {
@@ -246,6 +253,8 @@ impl From<welding::DragPayload> for DragData {
             text: p.fragment_text,
             html: p.fragment_html,
             base_url: p.fragment_base_url,
+            file_contents: p.file_contents.map(Box::new),
+            image: p.image.map(Box::new),
         }
     }
 }
@@ -266,6 +275,8 @@ impl From<DragData> for welding::DragPayload {
             fragment_text: d.text,
             fragment_html: d.html,
             fragment_base_url: d.base_url,
+            file_contents: d.file_contents.map(|c| *c),
+            image: d.image.map(|i| *i),
         }
     }
 }

@@ -1805,6 +1805,33 @@ pub struct DragPayload {
     pub fragment_text: Option<String>,
     pub fragment_html: Option<String>,
     pub fragment_base_url: Option<String>,
+    /// wubble change 51: a dragged picture's own encoded bytes (CEF's
+    /// `GetFileContents`) and Chromium's file name for them. Read only from a
+    /// page drag; a host payload's are ignored (CEF has no setter).
+    pub file_contents: Option<DragFileContents>,
+    /// wubble change 51: the drag image CEF shows under the pointer, as PNG.
+    /// Read only from a page drag.
+    pub image: Option<DragImage>,
+}
+
+/// wubble change 51: a dragged picture's bytes as the page loaded them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragFileContents {
+    /// Chromium's safe file name for the bytes (`GetSafeFilenameForImageFileContents`);
+    /// `None` when it found no image extension.
+    pub name: Option<String>,
+    pub bytes: Arc<[u8]>,
+}
+
+/// wubble change 51: the drag's thumbnail.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragImage {
+    /// PNG of CEF's representation nearest the view's device scale.
+    pub png: Arc<[u8]>,
+    /// The image's size in DIP: the PNG's pixels over this are its scale.
+    pub size: (i32, i32),
+    /// The pointer's point in the image, in DIP.
+    pub hotspot: (i32, i32),
 }
 
 /// wubble change 47: how a page is printed to PDF, CEF's

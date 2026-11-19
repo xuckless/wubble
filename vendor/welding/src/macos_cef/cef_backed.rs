@@ -251,7 +251,7 @@ cef::wrap_render_handler! {
             push_navigation(
                 &self.handler.events,
                 crate::surface::NavigationEvent::DragStarted {
-                    payload: crate::drag::payload_from_cef(drag_data),
+                    payload: crate::drag::payload_from_cef(drag_data, scale),
                     allowed_operations: crate::DragOperations(allowed_ops.as_ref().0 as u32),
                     x: (x as f32 * scale).round() as i32,
                     y: (y as f32 * scale).round() as i32,
