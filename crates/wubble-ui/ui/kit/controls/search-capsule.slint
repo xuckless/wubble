@@ -71,6 +71,8 @@ export component SearchCapsule inherits Rectangle {
             Rectangle {
                 horizontal-stretch: 1;
                 KitText {
+                    width: parent.width;
+                    height: parent.height;
                     role: Role.st-search-input;
                     text: root.placeholder;
                     visible: input.text == "";
@@ -79,6 +81,8 @@ export component SearchCapsule inherits Rectangle {
                     overflow: elide;
                 }
                 input := TextInput {
+                    width: parent.width;
+                    height: parent.height;
                     font-family: Role.st-search-input.family;
                     font-size: Role.st-search-input.size;
                     font-weight: Role.st-search-input.weight;
