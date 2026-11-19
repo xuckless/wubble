@@ -4,7 +4,7 @@ members = ["crates/*"]
 # Vendored third-party code is not linted by `clippy --workspace`; its own
 # rustfmt.toml keeps `cargo fmt --all` off it. Built as a path dependency,
 # tested with `cargo test -p welding`; the renderer through wubble-ui's crisp_text test.
-exclude = ["vendor/welding", "vendor/i-slint-renderer-femtovg"]
+exclude = ["vendor/welding"]
 
 [workspace.package]
 version = "0.0.0"
@@ -30,7 +30,8 @@ slint = { version = "1.19", default-features = false, features = [
     "compat-1-2",
     "accessibility",
     "backend-winit",
-    "renderer-femtovg-wgpu",
+    # Skia on the shared wgpu device (`skia-wgpu`); see TODO.md Decided "Shell renderer".
+    "renderer-skia",
     "unstable-wgpu-30",
     # Only for the monitor refresh-rate query (wubble main).
     "unstable-winit-030",
@@ -56,11 +57,3 @@ debug = "line-tables-only"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
-
-# Forked: Slint's femtovg renderer 1.19.0 (GPL-3.0-only, one of its licence options) vendored
-# with wubble's changes (crisp text: glyphs on whole pixels), see
-# vendor/i-slint-renderer-femtovg/WUBBLE_CHANGES.md. Moves with the `slint` pin: on a Slint
-# bump, re-vendor the new release and re-apply the changes, or drop the patch once upstream
-# has them.
-[patch.crates-io]
-i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg" }

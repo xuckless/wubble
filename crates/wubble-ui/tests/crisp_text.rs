@@ -1,15 +1,15 @@
-//! Text drawn by the shell's renderer (Slint's femtovg on wgpu, offscreen) keeps every glyph
+//! Text drawn by the shell's renderer (Slint's Skia on wgpu, offscreen) keeps every glyph
 //! whole and on one baseline: a centred text in an odd-sized box at a fractional position (as
 //! a segmented control's label, a key cap or a settings row in the scroller can be) draws each
-//! stem of "l l l …" with the same ink over the same rows. Before
-//! the vendored renderer's change (vendor/i-slint-renderer-femtovg/WUBBLE_CHANGES.md) the text's
-//! origin landed on a half pixel and femtovg's nearest-sampled glyph atlas dropped or doubled
-//! columns ('Full' drawn as 'Fuli'). Needs a GPU adapter; without one the test returns early.
-//! Pattern: the renderer crate's own `tests/image_source.rs` (offscreen platform).
+//! stem of "l l l …" with the same ink over the same rows. Under the earlier femtovg renderer
+//! the text's origin landed on a half pixel and its nearest-sampled glyph atlas dropped or
+//! doubled columns ('Full' drawn as 'Fuli'); this pins that the renderer never does that.
+//! Needs a GPU adapter; without one the test returns early.
+//! Pattern: the femtovg renderer crate's `tests/image_source.rs` (offscreen platform).
 
 use std::rc::Rc;
 
-use i_slint_renderer_femtovg::FemtoVGWGPURenderer;
+use i_slint_renderer_skia::SkiaWGPU30Renderer;
 use slint::ComponentHandle;
 use slint::platform::{Platform, Renderer, WindowAdapter};
 use slint::{PhysicalSize, PlatformError};
@@ -61,14 +61,16 @@ fn poll_once<F: std::future::Future>(future: F) -> Option<F::Output> {
 
 struct Offscreen {
     instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
 }
 
 impl Platform for Offscreen {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
-        let renderer = FemtoVGWGPURenderer::new(
+        let renderer = SkiaWGPU30Renderer::new(
             self.instance.clone(),
+            self.adapter.clone(),
             self.device.clone(),
             self.queue.clone(),
         )?;
@@ -83,7 +85,7 @@ impl Platform for Offscreen {
 
 struct OffscreenWindow {
     window: slint::Window,
-    renderer: FemtoVGWGPURenderer,
+    renderer: SkiaWGPU30Renderer,
 }
 
 impl WindowAdapter for OffscreenWindow {
@@ -114,6 +116,7 @@ fn init() -> bool {
     };
     slint::platform::set_platform(Box::new(Offscreen {
         instance,
+        adapter,
         device,
         queue,
     }))

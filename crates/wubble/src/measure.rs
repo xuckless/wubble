@@ -136,7 +136,7 @@ pub enum Metric {
     /// The scene's step, encode and submit in the rendering notifier (CPU side).
     Scene,
     /// Slint's `BeforeRendering` to `AfterRendering`: the shell step, the
-    /// scene, femtovg's encode and the surface acquire.
+    /// scene, Skia's draw and submit and the surface acquire.
     SlintRender,
 }
 
