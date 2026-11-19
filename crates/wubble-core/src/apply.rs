@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::archive::ArchiveAfter;
 use crate::omnibox::SearchEngine;
-use crate::pagetheme::{PageTheme, ThemeTable};
+use crate::pagetheme::{Contrast, MediaPrefs, Motion, PageTheme, ThemeTable};
 use crate::reader::ReaderPrefs;
 use crate::routing::Rule;
 use crate::seam::SidebarMode;
@@ -129,11 +129,15 @@ pub enum Applied {
     Glass(GlassSetting),
     Passwords(PasswordSettings),
     Media(MediaSettings),
-    /// Dark mode for pages: the default and the per-site table, applied to every live page.
+    /// Dark mode for pages: the default and the per-site table, and the accessibility media
+    /// features, applied to every live page.
     PageThemes {
         default: PageTheme,
         sites: ThemeTable,
+        media: MediaPrefs,
     },
+    /// Chromium's minimum font size in CSS pixels (0: none), for the whole profile.
+    MinFontSize(u32),
     Reader(ReaderPrefs),
     ScreenshotOutput(ShotOutput),
     /// The link hints' letters (`hints::alphabet`).
@@ -226,10 +230,24 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if [s::PASSWORDS_OFFER_TO_SAVE.key, s::PASSWORDS_AUTOFILL.key].contains(&k) => {
             Applied::Passwords(PasswordSettings::from_stored(stored))
         }
-        k if [s::PAGE_THEME.key, s::PAGE_THEME_SITES.key].contains(&k) => Applied::PageThemes {
-            default: PageTheme::from_id(value_of(&s::PAGE_THEME, stored))?,
-            sites: map(&s::PAGE_THEME_SITES, stored),
-        },
+        k if [
+            s::PAGE_THEME.key,
+            s::PAGE_THEME_SITES.key,
+            s::PAGES_MOTION.key,
+            s::PAGES_CONTRAST.key,
+        ]
+        .contains(&k) =>
+        {
+            Applied::PageThemes {
+                default: PageTheme::from_id(value_of(&s::PAGE_THEME, stored))?,
+                sites: map(&s::PAGE_THEME_SITES, stored),
+                media: MediaPrefs {
+                    motion: Motion::from_id(value_of(&s::PAGES_MOTION, stored))?,
+                    contrast: Contrast::from_id(value_of(&s::PAGES_CONTRAST, stored))?,
+                },
+            }
+        }
+        k if k == s::PAGES_MIN_FONT_SIZE.key => Applied::MinFontSize(count(def, stored)),
         k if [
             s::READER_DETECT.key,
             s::READER_SIZE.key,
@@ -524,6 +542,8 @@ mod tests {
         let s = stored(&[
             ("pages.theme", "dark"),
             ("pages.theme_sites", r#"{"a.test":2}"#),
+            ("pages.reduced_motion", "reduce"),
+            ("pages.min_font_size", "12"),
             ("reader.size", "24"),
             ("screenshot.output", "file"),
             ("hints.alphabet", "vimium"),
@@ -531,9 +551,19 @@ mod tests {
         let themes = Applied::PageThemes {
             default: PageTheme::Dark,
             sites: ThemeTable::from([("a.test".into(), 2)]),
+            media: MediaPrefs {
+                motion: Motion::Reduce,
+                contrast: Contrast::Auto,
+            },
         };
         assert_eq!(effect_of("pages.theme", &s), Some(themes.clone()));
+        assert_eq!(effect_of("pages.reduced_motion", &s), Some(themes.clone()));
+        assert_eq!(effect_of("pages.contrast", &s), Some(themes.clone()));
         assert_eq!(effect_of("pages.theme_sites", &s), Some(themes));
+        assert_eq!(
+            effect_of("pages.min_font_size", &s),
+            Some(Applied::MinFontSize(12))
+        );
         let Some(Applied::Reader(p)) = effect_of("reader.theme", &s) else {
             panic!("no reader prefs")
         };

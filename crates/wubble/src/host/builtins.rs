@@ -10,7 +10,7 @@ use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use wubble_core::hints::{self, HintEffect, HintEvent, HintKey, Hints};
-use wubble_core::pagetheme::{self, PageTheme, ThemeTable};
+use wubble_core::pagetheme::{self, MediaPrefs, PageTheme, Shown, ThemeTable};
 use wubble_core::reader::{self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs};
 use wubble_core::settings as defs;
 use wubble_core::shot::{self, Shot, ShotEffect, ShotEvent, ShotOutput, ShotRequest};
@@ -30,8 +30,12 @@ pub(super) struct Builtins {
     /// `settings::PAGE_THEME` and `settings::PAGE_THEME_SITES`.
     theme_default: PageTheme,
     theme_sites: ThemeTable,
+    /// `settings::PAGES_MOTION` and `settings::PAGES_CONTRAST`, shown on every page.
+    media: MediaPrefs,
     /// What each live view was last told (`pagetheme::sync`); absent: nothing yet.
-    applied: BTreeMap<TabId, PageTheme>,
+    applied: BTreeMap<TabId, Shown>,
+    /// `settings::PAGES_MIN_FONT_SIZE`.
+    min_font: u32,
     /// The page-theme calls in flight, to report a refused one.
     theme_calls: BTreeSet<u64>,
     reader: BTreeMap<TabId, Reader>,
@@ -54,7 +58,9 @@ impl Default for Builtins {
         Self {
             theme_default: PageTheme::Auto,
             theme_sites: ThemeTable::new(),
+            media: MediaPrefs::default(),
             applied: BTreeMap::new(),
+            min_font: 0,
             theme_calls: BTreeSet::new(),
             reader: BTreeMap::new(),
             reader_prefs: ReaderPrefs::default(),
@@ -96,14 +102,40 @@ impl Host {
 
     // ----- settings
 
-    pub(super) fn set_page_themes(&mut self, default: PageTheme, sites: ThemeTable) {
+    pub(super) fn set_page_themes(
+        &mut self,
+        default: PageTheme,
+        sites: ThemeTable,
+        media: MediaPrefs,
+    ) {
         self.builtins.theme_default = default;
         self.builtins.theme_sites = sites;
+        self.builtins.media = media;
         let tabs: Vec<_> = self.views.keys().copied().collect();
         for tab in tabs {
             self.sync_page_theme(tab, None);
         }
         self.redraw_builtins();
+    }
+
+    pub(super) fn set_min_font_size(&mut self, px: u32) {
+        self.builtins.min_font = px;
+        let tabs: Vec<_> = self.views.keys().copied().collect();
+        for tab in tabs {
+            self.sync_min_font(tab);
+        }
+    }
+
+    /// Tells Chromium the minimum font size through `tab`'s view. A profile preference, so
+    /// telling it again (each view that opens, in case views ever use other contexts) costs a
+    /// no-op write.
+    fn sync_min_font(&mut self, tab: TabId) {
+        let px = self.builtins.min_font;
+        if let Some(view) = self.tab_view(tab)
+            && let Err(e) = view.set_minimum_font_size(px)
+        {
+            eprintln!("wubble: minimum font size: {e}");
+        }
     }
 
     pub(super) fn set_reader_prefs(&mut self, prefs: ReaderPrefs) {
@@ -142,6 +174,7 @@ impl Host {
     pub(super) fn builtins_view_opened(&mut self, tab: TabId, url: &str) {
         self.builtins.applied.remove(&tab);
         self.sync_page_theme(tab, Some(url));
+        self.sync_min_font(tab);
         self.boosts_view_opened(tab);
     }
 
@@ -149,6 +182,7 @@ impl Host {
     /// other one.
     pub(super) fn builtins_loading(&mut self, tab: TabId, url: &str) {
         self.sync_page_theme(tab, Some(url));
+        self.sync_min_font(tab);
     }
 
     /// The tab's view is gone (closed, discarded): forget what it was told.
@@ -291,21 +325,24 @@ impl Host {
             },
         };
         let b = &self.builtins;
-        let wanted = pagetheme::wanted(&b.theme_sites, &url, b.theme_default);
-        let Some(theme) = pagetheme::sync(b.applied.get(&tab).copied(), wanted) else {
+        let wanted = (
+            pagetheme::wanted(&b.theme_sites, &url, b.theme_default),
+            b.media,
+        );
+        let Some(shown) = pagetheme::sync(b.applied.get(&tab).copied(), wanted) else {
             return;
         };
         let Some(view) = self.tab_view(tab) else {
             return;
         };
         let mut sent = vec![];
-        for (method, params) in pagetheme::calls(theme) {
+        for (method, params) in pagetheme::calls(shown) {
             if let Some(id) = view.cdp(method, &params) {
                 sent.push(id.0);
             }
         }
         if sent.len() == 2 {
-            self.builtins.applied.insert(tab, theme);
+            self.builtins.applied.insert(tab, shown);
         }
         self.builtins.theme_calls.extend(sent);
     }

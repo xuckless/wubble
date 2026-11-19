@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use cef::{ImplBrowser, ImplBrowserHost, ImplFrame};
+use cef::{ImplBrowser, ImplBrowserHost, ImplFrame, ImplPreferenceManager, ImplValue};
 use welding::{
     CefRuntime, CefSurfaceEvent, CefSurfaceProducer, HostWgpuContext, NavigationEvent,
     PlatformCefProducer, WeldError,
@@ -580,6 +580,32 @@ impl View {
     /// opened with `begin_frames`.
     pub fn send_begin_frame(&mut self) {
         self.send(|host| host.send_external_begin_frame());
+    }
+
+    /// Text on every page of the profile is drawn at least `px` CSS pixels tall (0: no
+    /// minimum): Chromium's `webkit.webprefs.minimum_font_size` (Chrome's "Minimum font size"),
+    /// set on this view's request context; Chromium pushes it to the profile's open pages.
+    /// `Err` when the view is not open yet or CEF refuses it.
+    pub fn set_minimum_font_size(&mut self, px: u32) -> Result<(), String> {
+        const PREF: &str = "webkit.webprefs.minimum_font_size";
+        let px = i32::try_from(px).map_err(|e| e.to_string())?;
+        let mut result = Err(format!("{PREF}: the view is not open"));
+        self.send(|host| {
+            result = (|| {
+                let context = host.request_context().ok_or("no request context")?;
+                let mut value = cef::value_create().ok_or("CEF made no value")?;
+                value.set_int(px);
+                // Not `CefString::default()`: that passes a null `error`, and CEF's C wrapper
+                // refuses the call outright when an out-parameter is null.
+                let mut error = cef::CefString::from("");
+                let name = cef::CefString::from(PREF);
+                if context.set_preference(Some(&name), Some(&mut value), Some(&mut error)) == 0 {
+                    return Err(format!("{PREF}: {error}"));
+                }
+                Ok(())
+            })();
+        });
+        result
     }
 
     /// CEF's frame-rate ceiling (`SetWindowlessFrameRate`), for a window

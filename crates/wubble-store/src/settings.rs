@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use wubble_core::apply::GlassSetting;
 use wubble_core::archive::ArchiveAfter;
 use wubble_core::omnibox::SearchEngine;
-use wubble_core::pagetheme::PageTheme;
+use wubble_core::pagetheme::{Contrast, Motion, PageTheme};
 use wubble_core::reader::{ReaderFont, ReaderTheme, ReaderWidth};
 use wubble_core::seam::SidebarMode;
 use wubble_core::settings as defs;
@@ -99,6 +99,8 @@ word_codec!(
     SidebarMode,
     GlassSetting,
     PageTheme,
+    Motion,
+    Contrast,
     ReaderWidth,
     ReaderFont,
     ReaderTheme,
@@ -240,6 +242,12 @@ settings! {
     PageThemeDefault: PageTheme = defs::PAGE_THEME;
     /// Per-site page themes (`wubble_core::pagetheme`): hosts at the default are absent.
     PageThemeSites: ZoomTable = defs::PAGE_THEME_SITES;
+    /// `prefers-reduced-motion` for pages; `auto` follows the OS.
+    PagesMotion: Motion = defs::PAGES_MOTION;
+    /// More contrast or forced colours for pages; `auto` follows the OS.
+    PagesContrast: Contrast = defs::PAGES_CONTRAST;
+    /// CSS pixels; 0 is no minimum.
+    PagesMinFontSize: u32 = defs::PAGES_MIN_FONT_SIZE;
     ReaderDetect: bool = defs::READER_DETECT;
     ReaderSize: u32 = defs::READER_SIZE;
     ReaderWidthSetting: ReaderWidth = defs::READER_WIDTH;

@@ -522,6 +522,34 @@ pub const PAGE_THEME_SITES: SettingDef = SettingDef {
     section: Section::Hidden,
     restart: false,
 };
+/// `prefers-reduced-motion` for every page (`pagetheme::Motion`); `auto` follows the OS.
+pub const PAGES_MOTION: SettingDef = SettingDef {
+    key: "pages.reduced_motion",
+    kind: SettingKind::Choice(&crate::pagetheme::MOTION_WORDS),
+    default: "auto",
+    label: "Reduce motion on pages",
+    section: Section::Appearance,
+    restart: false,
+};
+/// More contrast or forced colours for every page (`pagetheme::Contrast`); `auto` follows the OS.
+pub const PAGES_CONTRAST: SettingDef = SettingDef {
+    key: "pages.contrast",
+    kind: SettingKind::Choice(&crate::pagetheme::CONTRAST_WORDS),
+    default: "auto",
+    label: "Contrast on pages",
+    section: Section::Appearance,
+    restart: false,
+};
+/// Chromium's minimum font size, in CSS pixels (its `webkit.webprefs.minimum_font_size`
+/// preference, 0 to 24 in Chrome's settings); 0 is none.
+pub const PAGES_MIN_FONT_SIZE: SettingDef = SettingDef {
+    key: "pages.min_font_size",
+    kind: SettingKind::Count { min: 0, max: 24 },
+    default: "0",
+    label: "Minimum font size",
+    section: Section::Appearance,
+    restart: false,
+};
 /// Probe pages for an article: the address pill offers reader mode.
 pub const READER_DETECT: SettingDef = SettingDef {
     key: "reader.detect",
@@ -725,6 +753,9 @@ pub const ALL: &[&SettingDef] = &[
     &MEDIA_MIN_BYTES,
     &PAGE_THEME,
     &PAGE_THEME_SITES,
+    &PAGES_MOTION,
+    &PAGES_CONTRAST,
+    &PAGES_MIN_FONT_SIZE,
     &READER_DETECT,
     &READER_SIZE,
     &READER_WIDTH,

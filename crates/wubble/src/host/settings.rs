@@ -118,7 +118,12 @@ impl Host {
             Applied::Glass(setting) => self.w.glass.borrow_mut().set_setting(setting),
             Applied::Passwords(settings) => self.autofill.set_settings(settings),
             Applied::Media(settings) => self.apply_media_settings(settings),
-            Applied::PageThemes { default, sites } => self.set_page_themes(default, sites),
+            Applied::PageThemes {
+                default,
+                sites,
+                media,
+            } => self.set_page_themes(default, sites, media),
+            Applied::MinFontSize(px) => self.set_min_font_size(px),
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
