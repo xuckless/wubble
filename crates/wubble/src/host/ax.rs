@@ -181,7 +181,9 @@ impl Host {
             }
             None => vec![],
         };
-        super::panes::sync_rows(window.get_ax_items(), rows, |m| window.set_ax_items(m));
+        super::panes::sync_rows(window.get_ax_items(), rows, PartialEq::eq, |m| {
+            window.set_ax_items(m)
+        });
     }
 
     /// What a screen reader asked of item `index` of the window's page (`page-ax.slint`).

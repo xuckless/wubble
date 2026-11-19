@@ -527,6 +527,7 @@ fn click(engine: &mut Engine, view: ViewId, at: Point) -> Result<(), Box<dyn Err
     let up = Modifiers {
         keys: ModifiersState::empty(),
         buttons: Buttons::default(),
+        locks: Default::default(),
     };
     let down = Modifiers {
         buttons: Buttons::default().with(MouseButton::Left, true),
