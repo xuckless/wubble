@@ -5,8 +5,8 @@ import { DownloadTint } from "../kit/pages/list-progress.slint";
 import { Shell } from "../kit/derived.slint";
 
 // One download: its icon, name, second line and progress, and the buttons its state allows
-// (pause, resume, cancel, retry, open, show in folder, remove). The one row of the downloads
-// popover and of the downloads page, so both read one model and look alike. `action` is the
+// (pause, resume, cancel, retry, open, show in folder, remove): the downloads page's row (the
+// popover draws its own, overlays A's ADownloadRow, from the same model). `action` is the
 // intent; the host acts. A kit list row (ui/kit/pages/list-row.slint) with the progress rail;
 // the buttons are its actions, shown on the row's hover.
 export component DownloadRow inherits Rectangle {

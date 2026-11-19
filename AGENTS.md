@@ -78,7 +78,7 @@ The gallery (`gallery_smoke.rs`, `host/gallery.rs`) writes `DIR/NN-name.png` per
 order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, a tab row and the new-tab row
 hovered, the command bar opening (a burst: `DIR/NN-name/fKKK.png` with `times.txt`), command bar
 (empty, with results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
-menu and save prompt, dialog sheet, toast, error and certificate error pages, Settings (four scroll
+menu and save prompt, dialog sheet, dialog prompt, bookmark sheet, print sheet, toast, error and certificate error pages, Settings (four scroll
 positions), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page, a history row hovered (its actions shown).
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
 properties: the host rewrites those). Size and scale come from the environment:
