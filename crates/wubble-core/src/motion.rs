@@ -266,19 +266,10 @@ pub fn squash_of(s: f64) -> f64 {
     1.0 / s.sqrt()
 }
 
-// wubble change: ported from `pages/touch-kit.tsx` `SQUASH` / `squashAt` (@source touch-squash),
-// the one keyframe table the controls share (toggle landing, buttons, check boxes).
-/// The squash token as keys of `(t, sx, sy)` over [`SQUASH_MS`]:
-/// 1.30×0.78 → 0.93×1.07 → 1.03×0.98 (README › Motion tokens › Squash).
-pub const SQUASH_KEYS: [(f64, f64, f64); 5] = [
-    (0.0, 1.0, 1.0),
-    (0.28, 1.3, 0.78),
-    (0.58, 0.93, 1.07),
-    (0.8, 1.03, 0.98),
-    (1.0, 1.0, 1.0),
-];
-/// The squash token's length.
-pub const SQUASH_MS: f64 = 500.0;
+// The squash token's keys, in a file of their own that `wubble-ui`'s build script also reads
+// (it writes them into the Slint squash), so the table has one copy.
+mod squash;
+pub use squash::{SQUASH_KEYS, SQUASH_MS};
 
 /// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token).
 /// Ease-out between keys; outside 0..1 it is at rest, `(1, 1)`.
