@@ -1,0 +1,180 @@
+// derived: st-card / st-row / st-row-title / st-row-note (settings.css:40-46), MenuRow + MenuHighlight (controls/menu.slint), Button ghost (controls/button.slint)
+// The parts the sheets' bodies are laid out from (wubble-only.md §13-15: "a command-bar modal
+// body holding a settings card"):
+// - BCard: the settings card (`.st-card`: white .035, the inset top light, radius 20, padding 6)
+//   holding rows;
+// - BRow: a settings row (`.st-row`: 60 least high, padding 11 14, gap 16) with its title
+//   (`.st-row-title`, 14 / 500 ink) and optional note (`.st-row-note`, 13 mist), the control
+//   after them; BStackRow puts the control under the title, as the row's `flex-wrap` does when
+//   the control does not fit beside it (a sheet is 380 wide);
+// - BNote: a note line (`.st-row-note`); `danger` in coral, the design's danger colour (G7);
+// - BChoiceList / BChoiceRow: a chooser drawn as the Select's open menu laid flat in the sheet
+//   (rows `.tp-mrow` with the `.st-mcheck` column, one `.tp-menu-hl` gliding under the pointer)
+//   on a card, for a list the host gives as items (folders, printers), with a tree indent;
+// - BDangerButton: the ghost Button in coral (`.tp-dock-btn.danger`, `.tp-mrow.danger`), for
+//   "Remove bookmark".
+// derived (notes/fidelity/derived-review.md "Overlays B"): each composition above; the flat
+// chooser stands in for the Select because the Select takes menu entries and these lists are
+// host items (`[FolderChoiceItem]`, `[string]`), which Slint cannot map.
+
+import { Palette } from "../../gen/tokens.slint";
+import { SettingsCss, TouchCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { MenuRow, MenuHighlight } from "../../controls/menu.slint";
+import { Button, ButtonKind } from "../../controls/button.slint";
+
+export component BCard inherits Rectangle {
+    border-radius: SettingsCss.st-card--border-radius;
+    background: SettingsCss.st-card--background;
+    // the inset top light (`inset 0 1px 0`): a hairline inside the top edge
+    Rectangle {
+        y: SettingsCss.st-card--box-shadow-shadow-1-y - Shell.hairline;
+        x: SettingsCss.st-card--border-radius / 2;
+        width: parent.width - SettingsCss.st-card--border-radius;
+        height: Shell.hairline;
+        background: SettingsCss.st-card--box-shadow-shadow-1-color;
+    }
+    VerticalLayout {
+        padding: SettingsCss.st-card--padding;
+        @children
+    }
+}
+
+export component BRow inherits Rectangle {
+    in property <string> title;
+    in property <string> note;
+    // the control takes the room left (a field) instead of its own width at the end
+    in property <bool> wide;
+    min-height: SettingsCss.st-row--min-height;
+    border-radius: SettingsCss.st-row--border-radius;
+    HorizontalLayout {
+        padding-top: SettingsCss.st-row--padding-top;
+        padding-bottom: SettingsCss.st-row--padding-bottom;
+        padding-left: SettingsCss.st-row--padding-left;
+        padding-right: SettingsCss.st-row--padding-right;
+        spacing: SettingsCss.st-row--gap-column;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            KitText {
+                role: Role.st-row-title;
+                text: root.title;
+                color: SettingsCss.st-row-title--color;
+                overflow: elide;
+            }
+            if root.note != "": KitText {
+                role: Role.st-row-note;
+                text: root.note;
+                color: SettingsCss.st-row-note--color;
+                wrap: word-wrap;
+            }
+        }
+        // `.st-row-ctl`: pushed to the end; a control that stretches (a field) takes the room
+        HorizontalLayout {
+            alignment: root.wide ? LayoutAlignment.stretch : LayoutAlignment.end;
+            horizontal-stretch: 1;
+            spacing: SettingsCss.st-row-ctl--gap;
+            @children
+        }
+    }
+}
+
+// The row wrapped: the control under its title, across the row.
+export component BStackRow inherits Rectangle {
+    in property <string> title;
+    // the width a control gets across the row (a slider sets its own width: give it this)
+    out property <length> control-width: root.width - SettingsCss.st-row--padding-left - SettingsCss.st-row--padding-right;
+    min-height: SettingsCss.st-row--min-height;
+    border-radius: SettingsCss.st-row--border-radius;
+    VerticalLayout {
+        padding-top: SettingsCss.st-row--padding-top;
+        padding-bottom: SettingsCss.st-row--padding-bottom;
+        padding-left: SettingsCss.st-row--padding-left;
+        padding-right: SettingsCss.st-row--padding-right;
+        spacing: SettingsCss.st-row--gap-row;
+        KitText {
+            role: Role.st-row-title;
+            text: root.title;
+            color: SettingsCss.st-row-title--color;
+            overflow: elide;
+        }
+        @children
+    }
+}
+
+export component BNote inherits KitText {
+    in property <bool> danger;
+    role: Role.st-row-note;
+    color: root.danger ? Palette.coral : SettingsCss.st-row-note--color;
+    wrap: word-wrap;
+}
+
+export component BChoiceList inherits Rectangle {
+    // on a card (`.st-card`'s fill); false: bare, inside a menu's glass (BMenuPanel)
+    in property <bool> card: true;
+    // the row under the pointer (-1: none) and whether the highlight appears in place
+    property <int> lit: -1;
+    property <bool> jump: true;
+    // a row reports the pointer (BChoiceRow `hovered`): (its index, on)
+    public function hover(index: int, on: bool) {
+        if on {
+            root.jump = root.lit < 0;
+            root.lit = index;
+        } else if root.lit == index {
+            root.lit = -1;
+        }
+    }
+    border-radius: SettingsCss.st-card--border-radius;
+    background: root.card ? SettingsCss.st-card--background : transparent;
+    MenuHighlight {
+        on: root.lit >= 0;
+        jump: root.jump;
+        top: TouchCss.tp-menu--padding + max(0, root.lit) * TouchCss.wb-tp-mrow--height;
+        panel-width: root.width;
+    }
+    VerticalLayout {
+        padding: TouchCss.tp-menu--padding;
+        @children
+    }
+}
+
+export component BChoiceRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    // the tree depth: each level one folder indent further in
+    in property <int> depth;
+    callback picked();
+    callback hovered(bool);
+    height: TouchCss.wb-tp-mrow--height;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.picked();
+    }
+    MenuRow {
+        x: root.depth * Shell.folder-indent;
+        width: parent.width - self.x;
+        shown: true;
+        check-column: true;
+        checked: root.checked;
+        label: root.label;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        changed has-hover => {
+            root.hovered(self.has-hover);
+        }
+        clicked => {
+            root.picked();
+        }
+    }
+}
+
+export component BDangerButton inherits Button {
+    kind: ButtonKind.ghost;
+    rest-ink: Palette.coral;
+    hover-ink: Palette.coral;
+}

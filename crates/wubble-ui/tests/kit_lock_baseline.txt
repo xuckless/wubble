@@ -47,14 +47,6 @@ components/autoscroll-cursor.slint	paint	stroke-width	1
 components/autoscroll-cursor.slint	primitive	Path	1
 components/autoscroll-cursor.slint	primitive	commands	1
 components/autoscroll-cursor.slint	token	Palette	9
-components/bookmark-sheet.slint	font	font-family	3
-components/bookmark-sheet.slint	font	font-size	3
-components/bookmark-sheet.slint	font	font-weight	1
-components/bookmark-sheet.slint	paint	background	1
-components/bookmark-sheet.slint	text	Text	3
-components/bookmark-sheet.slint	token	Fonts	3
-components/bookmark-sheet.slint	token	Palette	3
-components/bookmark-sheet.slint	token	Type	4
 components/boost-panel.slint	font	font-family	5
 components/boost-panel.slint	font	font-size	5
 components/boost-panel.slint	font	font-weight	2
