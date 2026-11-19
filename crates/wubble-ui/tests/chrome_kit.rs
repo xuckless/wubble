@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
 use slint::{
-    ComponentHandle, LogicalPosition,
+    ComponentHandle, LogicalPosition, Model,
     platform::{PointerEventButton, WindowEvent},
 };
 
@@ -16,17 +16,18 @@ slint::slint! {
     import { Favs } from "ui/kit/chrome/favs.slint";
     import { SpaceTint, SpaceSwitcher } from "ui/kit/chrome/space-switcher.slint";
     import { CommandBar } from "ui/kit/chrome/command-bar.slint";
-    import { CommandBarState, CommandMode, CommandResult } from "ui/components/model.slint";
-    export { CommandBarState, CommandMode, CommandResult }
+    import { CommandBarState, CommandMode, CommandResult, TabItem } from "ui/components/model.slint";
+    export { CommandBarState, CommandMode, CommandResult, TabItem }
     export component Probe inherits Window {
         width: 400px;
         height: 300px;
         in property <bool> compact;
         pill := AddressPill { x: 20px; y: 50px; width: 240px; compact: root.compact; host: "example.com"; path: "/a"; }
         out property <float> pill-press: pill.press-scale;
+        in property <[TabItem]> fav-tabs: [{ id: 7, title: "a", url: "https://a.test" }, { id: 8, title: "b", url: "https://b.test" }];
         favs := Favs {
             x: 20px; y: 120px; width: 240px; compact: root.compact;
-            tabs: [{ id: 7, title: "a", url: "https://a.test" }, { id: 8, title: "b", url: "https://b.test" }];
+            tabs: root.fav-tabs;
         }
         out property <int> fav-hover: favs.hovered-id;
         out property <length> favs-height: favs.height;
@@ -107,6 +108,28 @@ fn favourites(p: &Probe) {
             position: LogicalPosition::new(100.0, 140.0),
         },
     );
+    assert_eq!(p.get_fav_hover(), 8);
+    // the gap between the tiles is no tile
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(78.0, 140.0),
+        },
+    );
+    assert_eq!(p.get_fav_hover(), -1);
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(100.0, 140.0),
+        },
+    );
+    // The hovered tile goes (its tab closed) with the pointer still on it: no stale id, the
+    // press would wave nothing.
+    let tabs = p.get_fav_tabs();
+    let first: Vec<TabItem> = tabs.iter().take(1).collect();
+    p.set_fav_tabs(slint::ModelRc::from(first.as_slice()));
+    assert_eq!(p.get_fav_hover(), -1);
+    p.set_fav_tabs(tabs);
     assert_eq!(p.get_fav_hover(), 8);
     at(p, WindowEvent::PointerExited);
     assert_eq!(p.get_fav_hover(), -1);

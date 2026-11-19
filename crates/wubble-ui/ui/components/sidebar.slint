@@ -61,8 +61,11 @@ export component Sidebar inherits Rectangle {
     in property <string> address-host;
     in property <string> address-path;
     in property <bool> address-secure;
-    // the favourite under the pointer (a tab id), -1 when none: a press there waves its glass
-    in-out property <int> fav-hover: -1;
+    // the favourite under the pointer (a tab id), -1 when none: a press there waves its glass.
+    // Favs (inside an `if`) copies its binding here; it is gone with the last pinned tab and
+    // leaves its last value behind: masked then.
+    property <int> favs-hover: -1;
+    out property <int> fav-hover: root.pinned-tabs.length > 0 ? root.favs-hover : -1;
     in property <bool> address-bookmarkable: false;
     in property <bool> address-bookmarked: false;
     in property <bool> address-blocker-visible: false;
@@ -335,7 +338,12 @@ export component Sidebar inherits Rectangle {
             ride: root.ride;
             step: root.ride-step;
             Favs {
-                hovered-id <=> root.fav-hover;
+                init => {
+                    root.favs-hover = self.hovered-id;
+                }
+                changed hovered-id => {
+                    root.favs-hover = self.hovered-id;
+                }
                 tabs: root.pinned-tabs;
                 active-tab-id: root.active-tab-id;
                 compact: root.compact;
