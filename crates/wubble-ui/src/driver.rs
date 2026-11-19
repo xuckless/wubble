@@ -238,6 +238,13 @@ impl Driver {
         window.set_space_index(slint_index(space));
     }
 
+    /// The sidebar's compact look (chrome::compact) from the seam's live width, its mode and the
+    /// peek.
+    fn set_compact(&self, window: &AppWindow) {
+        let w = self.seam.w.x.max(0.0);
+        window.set_sidebar_rail(chrome::compact(w, self.seam.mode, self.peek.shown()));
+    }
+
     fn set_mode(&mut self, window: &AppWindow, mode: seam::SidebarMode) {
         self.seam.set_mode(mode, true);
         window.set_sidebar_mode(self.seam.mode.into());
@@ -327,7 +334,7 @@ impl Driver {
             SEAM::rail
         }) as f32);
         window.set_sidebar_opacity(1f64.min(w / SEAM::rail).powf(2.0) as f32);
-        window.set_sidebar_rail(chrome::compact(w, self.seam.mode, self.peek.shown()));
+        self.set_compact(window);
         window.set_sidebar_saved(self.seam.saved as f32);
         let bowed = self.seam.held || self.seam.bend.x.abs() > BOWED;
         window.set_seam_bowed(bowed);
@@ -554,18 +561,16 @@ fn peek_step(driver: &Shared, window: &AppWindow, timer: &Rc<slint::Timer>, even
                 );
             }
             PeekEffect::Disarm => timer.stop(),
-            PeekEffect::Show | PeekEffect::Hide => {}
         }
     }
     window.set_peek(state.shown());
-    let d = driver.borrow();
-    let w = d.seam.w.x.max(0.0);
-    window.set_sidebar_rail(chrome::compact(w, d.seam.mode, state.shown()));
+    driver.borrow().set_compact(window);
     window.window().request_redraw();
 }
 
 /// One step of the command bar (wubble_core::chrome::command), its effects run: the state, mode
-/// and origin written, the exit timed (the dropdown's out duration), the keys moved.
+/// and origin written, the exit timed (the dropdown's out duration), the keys moved (taken once
+/// the opener's prefill has landed).
 fn command_step(
     driver: &Shared,
     window: &AppWindow,
@@ -595,8 +600,20 @@ fn command_step(
     }
     for effect in effects {
         match effect {
-            CommandEffect::Show | CommandEffect::Hide => timer.stop(),
-            CommandEffect::FocusInput => window.invoke_command_focus_input(),
+            CommandEffect::Disarm => timer.stop(),
+            // Deferred to the event loop: an opener prefills the query right after the open
+            // (`request-address-focus` then the host's `open_bar`), and the input must select
+            // that text, not the one it held. Not if the bar has gone by then.
+            CommandEffect::FocusInput => {
+                let (d, w) = (Rc::downgrade(driver), window.as_weak());
+                slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                    if let (Some(d), Some(w)) = (d.upgrade(), w.upgrade())
+                        && matches!(d.borrow().command, CommandBar::Open { .. })
+                    {
+                        w.invoke_command_focus_input();
+                    }
+                });
+            }
             CommandEffect::RestoreFocus => window.invoke_command_release_keys(),
             CommandEffect::StartExit => {
                 let (d, w, t) = (

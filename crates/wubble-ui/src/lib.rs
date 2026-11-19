@@ -385,6 +385,36 @@ mod tests {
         press(app, "\n");
         assert_eq!(chosen.get(), 1);
 
+        // The opener prefills the query after the open (the host's `open_bar` on the URL): the
+        // input selects that text, so typing replaces all of it, whatever it held before.
+        app.set_command_query("news".into());
+        let w = app.as_weak();
+        app.on_address_focus_requested(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_command_query("https://example.com/".into());
+            }
+        });
+        app.invoke_request_address_focus();
+        settle();
+        press(app, "x");
+        assert_eq!(app.get_command_query(), "x");
+        // the same for New tab with a prefilled query (`search_for`: the bar on the text)
+        press(app, Key::Escape);
+        settle();
+        let w = app.as_weak();
+        app.on_new_tab_requested(move || {
+            if let Some(w) = w.upgrade() {
+                w.set_command_query("some words".into());
+            }
+        });
+        app.invoke_request_new_tab();
+        settle();
+        press(app, "y");
+        assert_eq!(app.get_command_query(), "y");
+        press(app, Key::Escape);
+        settle();
+        dismissed.set(0);
+
         // Escape runs the exit: the dropdown's out duration (176 ms); a second Escape while it
         // closes does not dismiss again.
         app.invoke_request_address_focus();

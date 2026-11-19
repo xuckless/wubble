@@ -64,8 +64,6 @@ pub enum PeekEffect {
     /// (Re)start the one timer, ms.
     Arm(u32),
     Disarm,
-    Show,
-    Hide,
 }
 
 /// One step of the peek.
@@ -74,22 +72,16 @@ pub fn peek(state: Peek, event: PeekEvent) -> (Peek, Vec<PeekEffect>) {
     use PeekEffect::*;
     use PeekEvent::*;
     match (state, event) {
-        (s, ModeChanged(m)) if m != SidebarMode::Hidden => {
-            let mut fx = vec![Disarm];
-            if s.shown() {
-                fx.push(Hide);
-            }
-            (Idle, fx)
-        }
+        (_, ModeChanged(m)) if m != SidebarMode::Hidden => (Idle, vec![Disarm]),
         (_, ModeChanged(_)) => (state, vec![]),
-        (Idle, EdgeEntered) => (Shown, vec![Show]),
-        (Arming, EdgeEntered) => (Shown, vec![Disarm, Show]),
+        (Idle, EdgeEntered) => (Shown, vec![]),
+        (Arming, EdgeEntered) => (Shown, vec![Disarm]),
         (Idle | Arming, StripMoved) => (Arming, vec![Arm(PEEK_IN_MS)]),
-        (Arming, TimerFired) => (Shown, vec![Show]),
+        (Arming, TimerFired) => (Shown, vec![]),
         (Arming, PanelLeft) => (Idle, vec![Disarm]),
         (Shown, PanelLeft) => (Leaving, vec![Arm(PEEK_OUT_MS)]),
         (Leaving, EdgeEntered | StripMoved | PanelEntered) => (Shown, vec![Disarm]),
-        (Leaving, TimerFired) => (Idle, vec![Hide]),
+        (Leaving, TimerFired) => (Idle, vec![]),
         (s, _) => (s, vec![]),
     }
 }
@@ -158,14 +150,12 @@ pub enum CommandEvent {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandEffect {
-    /// Show the bar as the state says (and stop an exit under way).
-    Show,
+    /// Stop an exit under way.
+    Disarm,
     /// The input takes the keys, its text selected (`input.focus()`).
     FocusInput,
     /// Run the exit (`wb-pop-out`, the dropdown's out duration), then `Settled`.
     StartExit,
-    /// Gone.
-    Hide,
     /// The keys go back where they were, if the bar held them.
     RestoreFocus,
 }
@@ -176,11 +166,10 @@ pub fn command(state: CommandBar, event: CommandEvent) -> (CommandBar, Vec<Comma
     use CommandEffect::*;
     use CommandEvent as E;
     match (state, event) {
-        (_, E::Open { mode, from }) => (Open { mode, from }, vec![Show, FocusInput]),
+        (_, E::Open { mode, from }) => (Open { mode, from }, vec![Disarm, FocusInput]),
         (Open { mode, from }, E::Close) => (Closing { mode, from }, vec![StartExit]),
-        (Closing { .. }, E::Settled) => (Closed, vec![Hide, RestoreFocus]),
-        (Open { .. }, E::Pick) => (Closed, vec![Hide, RestoreFocus]),
-        (Open { from, .. }, E::SetMode(mode)) => (Open { mode, from }, vec![Show, FocusInput]),
+        (Closing { .. }, E::Settled) | (Open { .. }, E::Pick) => (Closed, vec![RestoreFocus]),
+        (Open { from, .. }, E::SetMode(mode)) => (Open { mode, from }, vec![FocusInput]),
         (s, _) => (s, vec![]),
     }
 }
@@ -238,7 +227,7 @@ mod tests {
                 from: AT
             }
         );
-        assert_eq!(fx, [Show, FocusInput]);
+        assert_eq!(fx, [Disarm, FocusInput]);
         assert_eq!((s.mode(), s.from()), (Some(CommandMode::New), Some(AT)));
         assert_eq!(
             (CommandBar::Closed.mode(), CommandBar::Closed.from()),
@@ -264,7 +253,7 @@ mod tests {
         assert_eq!(command(s, CommandEvent::Pick), (s, vec![]));
         let (s, fx) = command(s, CommandEvent::Settled);
         assert_eq!(s, CommandBar::Closed);
-        assert_eq!(fx, [Hide, RestoreFocus]);
+        assert_eq!(fx, [RestoreFocus]);
     }
 
     #[test]
@@ -273,7 +262,7 @@ mod tests {
         let s = command(CommandBar::Closed, open(CommandMode::New)).0;
         assert_eq!(
             command(s, CommandEvent::Pick),
-            (CommandBar::Closed, vec![Hide, RestoreFocus])
+            (CommandBar::Closed, vec![RestoreFocus])
         );
     }
 
@@ -290,7 +279,7 @@ mod tests {
                 from: AT
             }
         );
-        assert_eq!(fx, [Show, FocusInput]);
+        assert_eq!(fx, [Disarm, FocusInput]);
     }
 
     #[test]
@@ -325,7 +314,7 @@ mod tests {
                 from: AT
             }
         );
-        assert_eq!(fx, [Show, FocusInput]);
+        assert_eq!(fx, [FocusInput]);
         // not while it leaves
         let closing = command(s, CommandEvent::Close).0;
         assert_eq!(
@@ -359,11 +348,8 @@ mod tests {
 
     #[test]
     fn the_edge_shows_the_peek_at_once() {
-        assert_eq!(peek(Peek::Idle, EdgeEntered), (Peek::Shown, vec![Show]));
-        assert_eq!(
-            peek(Peek::Arming, EdgeEntered),
-            (Peek::Shown, vec![Disarm, Show])
-        );
+        assert_eq!(peek(Peek::Idle, EdgeEntered), (Peek::Shown, vec![]));
+        assert_eq!(peek(Peek::Arming, EdgeEntered), (Peek::Shown, vec![Disarm]));
     }
 
     #[test]
@@ -376,7 +362,7 @@ mod tests {
             peek(Peek::Arming, StripMoved),
             (Peek::Arming, vec![Arm(PEEK_IN_MS)])
         );
-        assert_eq!(peek(Peek::Arming, TimerFired), (Peek::Shown, vec![Show]));
+        assert_eq!(peek(Peek::Arming, TimerFired), (Peek::Shown, vec![]));
     }
 
     #[test]
@@ -390,7 +376,7 @@ mod tests {
             peek(Peek::Shown, PanelLeft),
             (Peek::Leaving, vec![Arm(PEEK_OUT_MS)])
         );
-        assert_eq!(peek(Peek::Leaving, TimerFired), (Peek::Idle, vec![Hide]));
+        assert_eq!(peek(Peek::Leaving, TimerFired), (Peek::Idle, vec![]));
         for back in [PanelEntered, EdgeEntered, StripMoved] {
             assert_eq!(
                 peek(Peek::Leaving, back),
@@ -421,10 +407,7 @@ mod tests {
     fn a_mode_other_than_hidden_ends_the_peek_from_any_state() {
         for s in [Peek::Idle, Peek::Arming, Peek::Shown, Peek::Leaving] {
             for m in [SidebarMode::Extended, SidebarMode::Rail] {
-                let (to, fx) = peek(s, ModeChanged(m));
-                assert_eq!(to, Peek::Idle);
-                assert_eq!(fx.first(), Some(&Disarm), "{s:?}");
-                assert_eq!(fx.contains(&Hide), s.shown(), "{s:?}");
+                assert_eq!(peek(s, ModeChanged(m)), (Peek::Idle, vec![Disarm]), "{s:?}");
             }
             assert_eq!(peek(s, ModeChanged(SidebarMode::Hidden)), (s, vec![]));
         }
