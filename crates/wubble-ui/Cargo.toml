@@ -21,3 +21,7 @@ slint-build.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing = "1.19"
+# The renderer itself, offscreen, for the crisp text test (tests/crisp_text.rs): the vendored
+# copy through the workspace's [patch.crates-io].
+i-slint-renderer-femtovg = { version = "1.19", features = ["wgpu-30"] }
+wgpu.workspace = true
