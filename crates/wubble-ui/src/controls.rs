@@ -169,13 +169,10 @@ fn row_kinds(count: i32, entries: &ModelRc<MenuEntry>) -> Vec<RowKind> {
 
 /// The owner's intents, as Slint reads them.
 fn effect_of(fx: &[Effect]) -> MenuEffect {
-    let mut out = MenuEffect {
-        chosen: -1,
-        ..MenuEffect::default()
-    };
+    let mut out = MenuEffect::default();
     for e in fx {
         match *e {
-            Effect::Chosen(i) => out.chosen = index(Some(i)),
+            Effect::Chosen(i) => out.pick = index(Some(i)) + 1,
             Effect::Dismiss { refocus } => {
                 out.dismiss = true;
                 out.refocus = refocus;
@@ -503,7 +500,7 @@ mod tests {
         let v = c.views.row_data(0).unwrap();
         assert_eq!((v.focus, v.hl, v.hl_rows, v.hl_rules), (2, 2, 1, 1));
         let fx = c.menu(id, menu_event(5, 4), rows());
-        assert_eq!((fx.chosen, fx.dismiss, fx.refocus), (2, true, true));
+        assert_eq!((fx.pick, fx.dismiss, fx.refocus), (3, true, true));
         c.menu(id, menu_event(2, 0), rows());
         assert_eq!(c.views.row_data(0).unwrap().phase, 2);
         let mut t = Instant::now();

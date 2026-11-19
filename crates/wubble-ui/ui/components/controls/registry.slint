@@ -10,8 +10,9 @@ import { MenuEntry } from "../model.slint";
 
 // What a menu event asks of the menu's owner (`wubble_core::controls::menu::Effect`).
 export struct MenuEffect {
-    // the row chosen, -1 for none
-    chosen: int,
+    // the row chosen plus one, 0 for none: the zero value (an unhandled `menu-event` returns
+    // it) chooses nothing
+    pick: int,
     // close the menu; `refocus`: give the keyboard back to the trigger
     dismiss: bool,
     refocus: bool,

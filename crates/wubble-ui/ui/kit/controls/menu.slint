@@ -199,9 +199,7 @@ export component Menu inherits Rectangle {
     property <int> gen: Controls.generation;
     out property <bool> mounted: root.v.phase != 0;
     out property <bool> shown: root.v.phase == 1;
-    // the lit row, the focused row and the row the trigger confirms (-1 none)
-    out property <int> lit: root.v.hl;
-    out property <int> focused-row: root.v.focus;
+    // the row the trigger confirms (-1 none)
     out property <int> done: root.v.done;
     out property <length> panel-height: list.preferred-height;
     out property <length> panel-width: root.menu-width;
@@ -209,8 +207,6 @@ export component Menu inherits Rectangle {
     out property <float> body-e: body.e;
     out property <float> body-zoom: body.zoom;
     out property <length> body-blur: body.blur;
-    out property <length> hl-y: hl.y;
-    out property <float> hl-opacity: hl.opacity;
 
     // The slot is taken at the first event, not on `init`: the window's components are built
     // before the host wires the registry.
@@ -236,11 +232,11 @@ export component Menu inherits Rectangle {
             root.slot = Controls.acquire(3, 0);
         }
         let fx = Controls.menu-event(root.slot, kind, arg, root.entries.length, root.entries);
-        if fx.chosen >= 0 {
-            root.chosen(fx.chosen);
+        if fx.pick > 0 {
+            root.chosen(fx.pick - 1);
         }
         if fx.dismiss {
-            if fx.chosen < 0 {
+            if fx.pick == 0 {
                 root.dismissed();
             }
             root.close-requested(fx.refocus);
@@ -325,7 +321,14 @@ export component Menu inherits Rectangle {
             tier: GlassTier.thick;
             radius: TouchCss.tp-menu--border-radius;
             over-content: true;
-            // the pointer between rows stays the menu's; leaving clears the highlight
+            // Slint 1.19 has no menu roles and a role must be constant: a list of items (the
+            // Select's checkable, the current one checked)
+            accessible-role: AccessibleRole.list;
+            accessible-label: root.label;
+            // The rows, the highlight and the space between them sit inside this area, so it keeps
+            // its hover over all of them (a parent TouchArea stays hovered while a child is) and
+            // loses it only when the pointer leaves the panel: the web's `onPointerLeave` on the
+            // whole menu. Its press between rows stays the menu's, not the scrim's.
             area := TouchArea {
                 enabled: root.shown;
                 changed has-hover => {
@@ -333,57 +336,53 @@ export component Menu inherits Rectangle {
                         root.send(4, 0);
                     }
                 }
-            }
-            hl := MenuHighlight {
-                on: root.v.hl >= 0;
-                jump: root.v.jump;
-                panel-width: root.menu-width;
-                danger: root.v.hl >= 0 && root.v.hl < root.entries.length && root.entries[root.v.hl].danger;
-                top: TouchCss.tp-menu--padding + root.v.hl-rows * TouchCss.wb-tp-mrow--height + root.v.hl-rules * Space.s2;
-            }
-            // Slint 1.19 has no menu roles and a role must be constant: a list of items (the
-            // Select's checkable, the current one checked)
-            accessible-role: AccessibleRole.list;
-            accessible-label: root.label;
-            list := VerticalLayout {
-                padding: TouchCss.tp-menu--padding;
-                for entry[i] in root.entries: Rectangle {
-                    height: entry.separator ? Space.s2 : TouchCss.wb-tp-mrow--height;
-                    if entry.separator: MenuRule {
-                        shown: root.shown;
-                        index: i;
-                    }
-                    if !entry.separator: MenuRow {
-                        shown: root.shown;
-                        index: i;
-                        icon: Glyph.named(entry.icon);
-                        label: entry.label;
-                        kbd: entry.shortcut;
-                        danger: entry.danger;
-                        enabled: entry.enabled;
-                        check-column: root.checks;
-                        checked: i == root.checked;
-                        accent: root.accent;
-                        accessible-role: AccessibleRole.list-item;
-                        accessible-label: entry.label;
-                        accessible-enabled: entry.enabled;
-                        accessible-checkable: root.checks;
-                        accessible-checked: root.checks && i == root.checked;
-                        accessible-item-index: i;
-                        accessible-item-count: root.entries.length;
-                        accessible-item-selected: i == root.v.focus;
-                        accessible-action-default => {
-                            root.send(6, i);
+                hl := MenuHighlight {
+                    on: root.v.hl >= 0;
+                    jump: root.v.jump;
+                    panel-width: root.menu-width;
+                    danger: root.v.hl >= 0 && root.v.hl < root.entries.length && root.entries[root.v.hl].danger;
+                    top: TouchCss.tp-menu--padding + root.v.hl-rows * TouchCss.wb-tp-mrow--height + root.v.hl-rules * Space.s2;
+                }
+                list := VerticalLayout {
+                    padding: TouchCss.tp-menu--padding;
+                    for entry[i] in root.entries: Rectangle {
+                        height: entry.separator ? Space.s2 : TouchCss.wb-tp-mrow--height;
+                        if entry.separator: MenuRule {
+                            shown: root.shown;
+                            index: i;
                         }
-                        row-touch := TouchArea {
-                            enabled: root.shown && entry.enabled;
-                            changed has-hover => {
-                                if self.has-hover {
-                                    root.send(3, i);
-                                }
-                            }
-                            clicked => {
+                        if !entry.separator: MenuRow {
+                            shown: root.shown;
+                            index: i;
+                            icon: Glyph.named(entry.icon);
+                            label: entry.label;
+                            kbd: entry.shortcut;
+                            danger: entry.danger;
+                            enabled: entry.enabled;
+                            check-column: root.checks;
+                            checked: i == root.checked;
+                            accent: root.accent;
+                            accessible-role: AccessibleRole.list-item;
+                            accessible-label: entry.label;
+                            accessible-enabled: entry.enabled;
+                            accessible-checkable: root.checks;
+                            accessible-checked: root.checks && i == root.checked;
+                            accessible-item-index: i;
+                            accessible-item-count: root.entries.length;
+                            accessible-item-selected: i == root.v.focus;
+                            accessible-action-default => {
                                 root.send(6, i);
+                            }
+                            row-touch := TouchArea {
+                                enabled: root.shown && entry.enabled;
+                                changed has-hover => {
+                                    if self.has-hover {
+                                        root.send(3, i);
+                                    }
+                                }
+                                clicked => {
+                                    root.send(6, i);
+                                }
                             }
                         }
                     }

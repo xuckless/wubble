@@ -4,8 +4,8 @@
 // on (`wb-on`) while it has the focus or a query. The clear button (`.st-clear`, 28, radius 14,
 // white .10, a 14 px ink close) shows only with a query: in from .8, clear and blurred 3 px
 // (opacity and blur .2 s, scale .24 s, ease-out), out over .15 s ease-in; hidden it takes no
-// pointer and no focus. Escape with a query clears it and is consumed (else `escaped()` for a
-// sheet around it); the clear button clears and gives the focus back to the input.
+// pointer and no focus. Escape with a query clears it and is consumed (else `escaped()` and the
+// key goes on to the sheet or page around it); the clear button clears and gives the focus back to the input.
 
 import { Palette, TouchMenu } from "../gen/tokens.slint";
 import { SettingsCss } from "../gen/css.slint";
@@ -100,8 +100,10 @@ export component SearchCapsule inherits Rectangle {
                                 root.clear-query();
                                 return accept;
                             }
+                            // the web handles Escape only with a query: it goes on to
+                            // the sheet or page around the field
                             root.escaped();
-                            return accept;
+                            return reject;
                         }
                         return reject;
                     }
