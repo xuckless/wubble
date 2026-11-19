@@ -1,0 +1,312 @@
+{
+  "about": "Per-control specimens from the design (tools/fidelity/README.md, Specimens). lib/specimen.mjs expands each control into ordinary scenes: one still per state (`spec-<control>--<state>`, a tight crop: the union of `root` and the state's `clip` selectors plus `pad` px) and one frame burst per sequence (`spec-<control>--seq-<name>`, 1/120 s per frame, with curve.json of the `track` elements). `{root}` in a selector or step is replaced by the control's root. `page` names a page below; `before` runs after the page's steps (for settings: a search that brings the row to the top). `elements` are the named parts whose rects (<id>.rects.json) and curves the controls lanes compare against wubble (geometry-diff.mjs). `source` is a design `@source` anchor or `path#text` (first line containing text), resolved to file:line in specimens-index.json. States are only those the design defines; `after` (ms on the fixed clock after the steps) defaults to the page's. The settings page settles the liquid only 100 ms: every settings specimen lies inside the page's opaque `.wb-main-in`, so the liquid never shows in it (SwiftShader still draws it: on the GPU these crops differ by 0.6 to 1.0 mean ΔE, so they stay on SwiftShader).",
+  "pages": {
+    "touch": { "url": "/wubble/pages/_harness.html?page=touch", "viewport": [1360, 3600], "ready": ".tp-grid", "frozen": false, "gl": "gpu", "stage": ".tp-spec:has({root}) .tp-stage", "after": 600 },
+    "settings": { "url": "/wubble/", "gl": "swiftshader", "settle": 100, "stage": ".wb-main", "after": 600, "steps": [{ "key": ",", "ctrl": true }, { "until": ".st-main" }, { "advance": 1500 }] },
+    "shell": { "url": "/wubble/", "gl": "swiftshader", "stage": ".wb-window", "after": 600 }
+  },
+  "controls": [
+    {
+      "control": "button-pri", "group": "Button", "page": "touch", "root": ".tp-btns > .tp-btn:nth-of-type(1)", "stage": ".tp-spec:has(.tp-btns) .tp-stage", "source": "touch-buttons",
+      "elements": { "button": "{root}", "body": "{root} > .tp-btn-body" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "press", "steps": [{ "press": "{root}" }] }, { "state": "focus", "steps": [{ "focus": "{root}" }] }
+      ],
+      "sequences": [
+        { "name": "press", "steps": [{ "press": "{root}" }], "frames": 30, "track": ["button", "body"] },
+        { "name": "release", "steps": [{ "press": "{root}" }, { "holdFor": 200 }, { "release": true }], "frames": 72, "track": ["button", "body"] }
+      ]
+    },
+    {
+      "control": "button-glass", "group": "Button", "page": "touch", "root": ".tp-btns > .tp-btn:nth-of-type(2)", "stage": ".tp-spec:has(.tp-btns) .tp-stage", "source": "touch-buttons",
+      "elements": { "button": "{root}", "body": "{root} > .tp-btn-body" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "press", "steps": [{ "press": "{root}" }] }, { "state": "focus", "steps": [{ "focus": "{root}" }] }
+      ],
+      "sequences": [
+        { "name": "release", "steps": [{ "press": "{root}" }, { "holdFor": 200 }, { "release": true }], "frames": 72, "track": ["button", "body"] }
+      ]
+    },
+    {
+      "control": "button-ghost", "group": "Button", "page": "touch", "root": ".tp-btns > .tp-btn:nth-of-type(3)", "stage": ".tp-spec:has(.tp-btns) .tp-stage", "source": "touch-buttons",
+      "elements": { "button": "{root}", "body": "{root} > .tp-btn-body" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "press", "steps": [{ "press": "{root}" }] }, { "state": "focus", "steps": [{ "focus": "{root}" }] }
+      ],
+      "sequences": [
+        { "name": "release", "steps": [{ "press": "{root}" }, { "holdFor": 200 }, { "release": true }], "frames": 72, "track": ["button", "body"] }
+      ]
+    },
+    {
+      "control": "iconbutton", "group": "IconButton", "page": "shell", "root": ".wb-ib[aria-label=Source]", "source": "browser/chrome.tsx#aria-label=\"Source\"",
+      "elements": { "button": "{root}", "icon": "{root} svg" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "press", "steps": [{ "press": "{root}" }] }, { "state": "focus", "steps": [{ "focus": "{root}" }] },
+        { "state": "on", "steps": [{ "click": "{root}" }, { "hover": ".wb-tab-on" }] }
+      ],
+      "sequences": [
+        { "name": "press", "steps": [{ "press": "{root}" }], "frames": 30, "track": ["button"] }
+      ]
+    },
+    {
+      "control": "iconbutton-disabled", "group": "IconButton", "page": "shell", "root": ".wb-ib[aria-label=Forward]", "source": "browser/chrome.tsx#aria-label=\"Forward\"",
+      "elements": { "button": "{root}", "icon": "{root} svg" },
+      "states": [{ "state": "disabled" }, { "state": "hover", "steps": [{ "hover": "{root}" }] }]
+    },
+    {
+      "control": "toggle-lg", "group": "Toggle", "page": "touch", "root": ".tp-tg-lg", "source": "touch-toggle",
+      "elements": { "track": "{root}", "fill": "{root} .tp-tg-fill", "knob": "{root} .tp-tg-knob" },
+      "states": [
+        { "state": "on" }, { "state": "hover-on", "steps": [{ "hover": "{root}" }] },
+        { "state": "press-on", "steps": [{ "press": "{root}" }] }, { "state": "focus-on", "steps": [{ "focus": "{root}" }] },
+        { "state": "off", "steps": [{ "click": "{root}" }, { "advance": 800 }] },
+        { "state": "mid-drag", "steps": [{ "press": "{root}" }, { "move": { "dx": -18, "steps": 6 } }, { "advance": 60 }], "after": 0 }
+      ],
+      "sequences": [
+        { "name": "flip-off", "steps": [{ "click": "{root}" }], "frames": 96, "track": ["track", "fill", "knob"] },
+        { "name": "flip-on", "steps": [{ "click": "{root}" }, { "advance": 900 }, { "click": "{root}" }], "frames": 96, "track": ["track", "fill", "knob"] }
+      ]
+    },
+    {
+      "control": "toggle-sm", "group": "Toggle", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .tp-tg-sm", "source": "touch-toggle",
+      "before": [{ "click": ".st-search input" }, { "type": "Block trackers" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "track": "{root}", "fill": "{root} .tp-tg-fill", "knob": "{root} .tp-tg-knob" },
+      "states": [
+        { "state": "on" }, { "state": "hover-on", "steps": [{ "hover": "{root}" }] },
+        { "state": "press-on", "steps": [{ "press": "{root}" }] }, { "state": "focus-on", "steps": [{ "focus": "{root}" }] },
+        { "state": "off", "steps": [{ "click": "{root}" }, { "advance": 800 }] },
+        { "state": "mid-drag", "steps": [{ "press": "{root}" }, { "move": { "dx": -10, "steps": 6 } }, { "advance": 60 }], "after": 0 }
+      ],
+      "sequences": [
+        { "name": "flip-off", "steps": [{ "click": "{root}" }], "frames": 96, "track": ["track", "fill", "knob"] }
+      ]
+    },
+    {
+      "control": "slider", "group": "ElasticSlider", "page": "touch", "root": ".tp-spec .tp-sl-wrap", "stage": ".tp-spec:has(.tp-sl-wrap) .tp-stage", "clip": ["{root} .tp-sl-knob", "{root} .tp-sl-bub"], "source": "touch-slider",
+      "elements": { "wrap": "{root}", "track": "{root} .tp-sl", "rail": "{root} .tp-sl-rail", "fill": "{root} .tp-sl-fill", "knob": "{root} .tp-sl-knob", "bubble": "{root} .tp-sl-bub", "value": "{root} output" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root} .tp-sl-knob" }] },
+        { "state": "focus", "steps": [{ "focus": "{root} .tp-sl" }] },
+        { "state": "held", "steps": [{ "press": "{root} .tp-sl-knob" }, { "advance": 600 }], "after": 0 },
+        { "state": "dragging", "steps": [{ "drag": { "from": "{root} .tp-sl-knob", "to": { "to": "{root} .tp-sl", "fx": 0.3 }, "hold": true, "steps": 12 } }], "after": 0 },
+        { "state": "past-min", "steps": [{ "drag": { "from": "{root} .tp-sl-knob", "to": { "to": "{root} .tp-sl", "fx": -0.2 }, "hold": true, "steps": 12 } }, { "advance": 400 }], "after": 0 },
+        { "state": "past-max", "steps": [{ "drag": { "from": "{root} .tp-sl-knob", "to": { "to": "{root} .tp-sl", "fx": 1.2 }, "hold": true, "steps": 12 } }, { "advance": 400 }], "after": 0 },
+        { "state": "min", "steps": [{ "drag": { "from": "{root} .tp-sl-knob", "to": { "to": "{root} .tp-sl", "fx": -0.2 }, "steps": 12 } }, { "advance": 1200 }] },
+        { "state": "max", "steps": [{ "drag": { "from": "{root} .tp-sl-knob", "to": { "to": "{root} .tp-sl", "fx": 1.2 }, "steps": 12 } }, { "advance": 1200 }] }
+      ],
+      "sequences": [
+        { "name": "press", "steps": [{ "press": "{root} .tp-sl-knob" }], "frames": 60, "track": ["knob", "fill", "bubble", "value"] },
+        { "name": "release-past-max", "steps": [{ "drag": { "from": "{root} .tp-sl-knob", "to": { "to": "{root} .tp-sl", "fx": 1.3 }, "hold": true, "steps": 12 } }, { "advance": 300 }, { "release": true }], "frames": 96, "track": ["knob", "fill", "bubble", "value"] },
+        { "name": "drag", "steps": [{ "press": "{root} .tp-sl-knob" }], "frames": 24, "track": ["knob", "fill", "bubble"] }
+      ]
+    },
+    {
+      "control": "slider-settings", "group": "ElasticSlider", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-slider", "source": "touch-slider",
+      "before": [{ "click": ".st-search input" }, { "type": "Page zoom" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "wrap": "{root}", "track": "{root} .tp-sl", "fill": "{root} .tp-sl-fill", "knob": "{root} .tp-sl-knob", "bubble": "{root} .tp-sl-bub" },
+      "states": [
+        { "state": "rest" },
+        { "state": "held", "steps": [{ "press": "{root} .tp-sl-knob" }, { "advance": 600 }], "after": 0 }
+      ]
+    },
+    {
+      "control": "segmented", "group": "Segmented", "page": "touch", "root": ".tp-space-demo .tp-seg", "stage": ".tp-spec:has(.tp-space-demo) .tp-stage", "source": "touch-space",
+      "elements": { "row": "{root}", "indicator": "{root} > .tp-seg-ind", "top": "{root} > .tp-seg-top", "seg1": "{root} > button:nth-of-type(1)", "seg2": "{root} > button:nth-of-type(2)", "seg3": "{root} > button:nth-of-type(3)" },
+      "states": [
+        { "state": "at-1" },
+        { "state": "at-2", "steps": [{ "click": "{root} > button:nth-of-type(2)" }, { "advance": 1000 }] },
+        { "state": "at-3", "steps": [{ "click": "{root} > button:nth-of-type(3)" }, { "advance": 1000 }] },
+        { "state": "hover-2", "steps": [{ "hover": "{root} > button:nth-of-type(2)" }] },
+        { "state": "press-indicator", "steps": [{ "press": "{root} > button:nth-of-type(1)" }, { "advance": 300 }], "after": 0 },
+        { "state": "focus", "steps": [{ "focus": "{root} > button:nth-of-type(1)" }] },
+        { "state": "drag-stretch", "steps": [{ "drag": { "from": "{root} > button:nth-of-type(1)", "to": { "to": "{root} > button:nth-of-type(2)" }, "hold": true, "steps": 8 } }], "after": 0 }
+      ],
+      "sequences": [
+        { "name": "move-1-2", "steps": [{ "click": "{root} > button:nth-of-type(2)" }], "frames": 96, "track": ["indicator", "top"] },
+        { "name": "move-1-3", "steps": [{ "click": "{root} > button:nth-of-type(3)" }], "frames": 96, "track": ["indicator", "top"] },
+        { "name": "move-3-1", "steps": [{ "click": "{root} > button:nth-of-type(3)" }, { "advance": 1000 }, { "click": "{root} > button:nth-of-type(1)" }], "frames": 96, "track": ["indicator", "top"] }
+      ]
+    },
+    {
+      "control": "segmented-plain", "group": "Segmented", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-seg", "source": "touch-space",
+      "before": [{ "click": ".st-search input" }, { "type": "transparency" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "row": "{root}", "indicator": "{root} > .tp-seg-ind", "seg1": "{root} > button:nth-of-type(1)", "seg2": "{root} > button:nth-of-type(2)", "seg3": "{root} > button:nth-of-type(3)" },
+      "states": [
+        { "state": "rest" },
+        { "state": "moved", "steps": [{ "click": "{root} > button:nth-of-type(3)" }, { "advance": 1000 }] },
+        { "state": "hover", "steps": [{ "hover": "{root} > button:nth-of-type(3)" }] }
+      ],
+      "sequences": [
+        { "name": "move", "steps": [{ "click": "{root} > button:nth-of-type(3)" }], "frames": 96, "track": ["indicator"] }
+      ]
+    },
+    {
+      "control": "checkbox", "group": "CheckBox", "page": "touch", "root": ".tp-checks > button:nth-of-type(2)", "stage": ".tp-spec:has(.tp-checks) .tp-stage", "source": "touch-checks",
+      "elements": { "row": "{root}", "box": "{root} .tp-ck-box", "fill": "{root} .tp-ck-fill", "tick": "{root} svg" },
+      "states": [
+        { "state": "off" }, { "state": "hover-off", "steps": [{ "hover": "{root}" }] },
+        { "state": "press-off", "steps": [{ "press": "{root}" }] }, { "state": "focus-off", "steps": [{ "focus": "{root}" }] },
+        { "state": "on", "steps": [{ "click": "{root}" }, { "advance": 900 }] }
+      ],
+      "sequences": [
+        { "name": "fill", "steps": [{ "click": "{root}" }], "frames": 72, "track": ["box", "fill", "tick"] }
+      ]
+    },
+    {
+      "control": "checkbox-on", "group": "CheckBox", "page": "touch", "root": ".tp-checks > button:nth-of-type(1)", "stage": ".tp-spec:has(.tp-checks) .tp-stage", "source": "touch-checks",
+      "elements": { "row": "{root}", "box": "{root} .tp-ck-box", "fill": "{root} .tp-ck-fill", "tick": "{root} svg" },
+      "states": [{ "state": "on" }, { "state": "hover-on", "steps": [{ "hover": "{root}" }] }],
+      "sequences": [
+        { "name": "clear", "steps": [{ "click": "{root}" }], "frames": 60, "track": ["box", "fill", "tick"] }
+      ]
+    },
+    {
+      "control": "swatches", "group": "Swatches", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-swatches", "source": "settings-swatches",
+      "before": [{ "click": ".st-search input" }, { "type": "Personal" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "row": "{root}", "ring": "{root} > .st-sw-ring", "sw1": "{root} > button:nth-of-type(1)", "sw3": "{root} > button:nth-of-type(3)", "sw4": "{root} > button:nth-of-type(4)" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root} > button:nth-of-type(3)" }] },
+        { "state": "selected-4", "steps": [{ "click": "{root} > button:nth-of-type(4)" }, { "advance": 1000 }, { "hover": ".st-nav" }] },
+        { "state": "focus", "steps": [{ "focus": "{root} > button[aria-checked=true]" }] }
+      ],
+      "sequences": [
+        { "name": "ring-glide", "steps": [{ "click": "{root} > button:nth-of-type(4)" }], "frames": 72, "track": ["ring"] }
+      ]
+    },
+    {
+      "control": "menu", "group": "Menu", "page": "touch", "root": ".tp-menu-wrap", "stage": ".tp-stage-menu", "clip": [".tp-menu"], "source": "touch-menu",
+      "elements": { "trigger": ".tp-menu-trig", "menu": ".tp-menu", "highlight": ".tp-menu-hl", "row1": ".tp-menu > button:nth-of-type(1)", "row2": ".tp-menu > button:nth-of-type(2)", "row3": ".tp-menu > button:nth-of-type(3)", "row4": ".tp-menu > button:nth-of-type(4)" },
+      "states": [
+        { "state": "closed" }, { "state": "trigger-hover", "steps": [{ "hover": ".tp-menu-trig" }] },
+        { "state": "trigger-press", "steps": [{ "press": ".tp-menu-trig" }] }, { "state": "trigger-focus", "steps": [{ "focus": ".tp-menu-trig" }] },
+        { "state": "open", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }] },
+        { "state": "hl-shortcut", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }, { "hover": ".tp-menu > button:nth-of-type(1)" }] },
+        { "state": "hl-submenu", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }, { "hover": ".tp-menu > button:nth-of-type(2)" }] },
+        { "state": "hl-shortcut-long", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }, { "hover": ".tp-menu > button:nth-of-type(3)" }] },
+        { "state": "hl-destructive", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }, { "hover": ".tp-menu > button:nth-of-type(4)" }] },
+        { "state": "keyboard", "steps": [{ "focus": ".tp-menu-trig" }, { "key": "ArrowDown" }, { "advance": 800 }] }
+      ],
+      "sequences": [
+        { "name": "open", "steps": [{ "click": ".tp-menu-trig" }], "clip": [".tp-stage-menu"], "frames": 48, "track": ["menu", "row1", "row2", "row3", "row4"] },
+        { "name": "highlight-glide", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }, { "hover": ".tp-menu > button:nth-of-type(1)" }, { "advance": 400 }, { "hover": ".tp-menu > button:nth-of-type(4)" }], "clip": [".tp-menu"], "frames": 48, "track": ["highlight"] },
+        { "name": "close", "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }, { "click": ".tp-menu-trig" }], "clip": [".tp-stage-menu"], "frames": 36, "track": ["menu"] }
+      ]
+    },
+    {
+      "control": "select", "group": "Select", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-select", "clip": ["{root} .tp-menu"], "source": "settings-select",
+      "before": [{ "click": ".st-search input" }, { "type": "Search engine" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "select": "{root}", "trigger": "{root} .st-select-trig", "menu": "{root} .tp-menu", "highlight": "{root} .tp-menu-hl", "row1": "{root} .tp-menu > button:nth-of-type(1)", "row2": "{root} .tp-menu > button:nth-of-type(2)" },
+      "states": [
+        { "state": "closed" }, { "state": "hover", "steps": [{ "hover": "{root} .st-select-trig" }] },
+        { "state": "open", "steps": [{ "click": "{root} .st-select-trig" }, { "advance": 800 }, { "hover": ".st-nav" }] },
+        { "state": "highlight", "steps": [{ "click": "{root} .st-select-trig" }, { "advance": 800 }, { "hover": "{root} .tp-menu > button:nth-of-type(2)" }] }
+      ],
+      "sequences": [
+        { "name": "open", "steps": [{ "click": "{root} .st-select-trig" }], "clip": [".st-card"], "frames": 48, "track": ["menu", "row1", "row2"] }
+      ]
+    },
+    {
+      "control": "select-up", "group": "Select", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-select", "clip": ["{root} .tp-menu"], "source": "settings-select", "viewport": [1360, 520],
+      "before": [{ "eval": "document.querySelector('.st-main').style.paddingTop = '230px'" }, { "advance": 200 }],
+      "elements": { "select": "{root}", "trigger": "{root} .st-select-trig", "menu": "{root} .tp-menu" },
+      "states": [
+        { "state": "open-up", "steps": [{ "click": "{root} .st-select-trig" }, { "advance": 800 }, { "hover": ".st-nav" }] }
+      ]
+    },
+    {
+      "control": "hold", "group": "HoldButton", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-hold", "source": "settings-hold",
+      "before": [{ "click": ".st-search input" }, { "type": "Clear now" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "button": "{root}", "fill": "{root} .st-hold-fill", "top": "{root} .st-hold-top" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "press", "steps": [{ "press": "{root}" }], "after": 0 },
+        { "state": "hold-25", "steps": [{ "press": "{root}" }, { "holdFor": 267 }], "after": 0 },
+        { "state": "hold-50", "steps": [{ "press": "{root}" }, { "holdFor": 542 }], "after": 0 },
+        { "state": "hold-75", "steps": [{ "press": "{root}" }, { "holdFor": 817 }], "after": 0 },
+        { "state": "done", "steps": [{ "press": "{root}" }, { "holdFor": 1200 }, { "release": true }, { "advance": 500 }], "after": 0 },
+        { "state": "disabled", "steps": [{ "disable": "{root}" }] }
+      ],
+      "sequences": [
+        { "name": "hold", "steps": [{ "press": "{root}" }], "frames": 150, "track": ["button", "fill", "top"] },
+        { "name": "drain", "steps": [{ "press": "{root}" }, { "holdFor": 500 }, { "release": true }], "frames": 72, "track": ["button", "fill", "top"] }
+      ]
+    },
+    {
+      "control": "confirm", "group": "ConfirmButton", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .tp-btn:has(.st-confirm)", "stage": ".wb-main", "source": "settings.tsx#function ConfirmButton",
+      "before": [{ "click": ".st-search input" }, { "type": "version" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "button": "{root}", "body": "{root} .st-confirm" },
+      "states": [
+        { "state": "idle" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "press", "steps": [{ "press": "{root}" }] },
+        { "state": "busy", "steps": [{ "click": "{root}" }, { "advance": 500 }], "after": 0 },
+        { "state": "done", "steps": [{ "click": "{root}" }, { "advance": 1900 }], "after": 0 }
+      ],
+      "sequences": [
+        { "name": "run", "steps": [{ "click": "{root}" }], "frames": 220, "track": ["button", "body"] }
+      ]
+    },
+    {
+      "control": "search", "group": "SearchCapsule", "page": "settings", "root": ".st-search", "source": "settings-search",
+      "elements": { "capsule": "{root}", "input": "{root} input", "clear": "{root} .st-clear" },
+      "states": [
+        { "state": "empty" }, { "state": "hover", "steps": [{ "hover": "{root}" }] },
+        { "state": "focused", "steps": [{ "click": "{root} input" }, { "advance": 400 }, { "hover": ".st-nav" }] },
+        { "state": "query", "steps": [{ "click": "{root} input" }, { "type": "tab" }, { "advance": 600 }, { "hover": ".st-nav" }] },
+        { "state": "clear-hover", "steps": [{ "click": "{root} input" }, { "type": "tab" }, { "advance": 600 }, { "hover": "{root} .st-clear" }] }
+      ],
+      "sequences": [
+        { "name": "focus", "steps": [{ "click": "{root} input" }], "frames": 36, "track": ["capsule", "clear"] },
+        { "name": "type", "steps": [{ "click": "{root} input" }, { "advance": 400 }, { "type": "tab" }], "frames": 48, "track": ["capsule", "clear"] }
+      ]
+    },
+    {
+      "control": "kbd", "group": "Kbd", "page": "settings", "root": ".st-fold.open > .st-fold-in > .st-row .st-keys", "source": "settings.tsx#st-keys",
+      "before": [{ "click": ".st-search input" }, { "type": "keyboard shortcut" }, { "advance": 600 }, { "eval": "document.activeElement.blur()" }, { "hover": ".st-nav" }],
+      "elements": { "keys": "{root}", "combo": "{root} > .st-combo:nth-of-type(1)", "key1": "{root} kbd" },
+      "states": [{ "state": "rest" }]
+    },
+    {
+      "control": "scroller", "group": "Scroller", "page": "settings", "root": ".wb-main .wb-thumb", "stage": ".wb-main", "pad": 12, "source": "browser/scroller.tsx#wb-thumb-on",
+      "elements": { "thumb": "{root}" },
+      "states": [
+        { "state": "hidden" },
+        { "state": "shown", "steps": [{ "wheel": { "over": ".wb-main", "y": 300 } }, { "advance": 300 }], "after": 0 },
+        { "state": "hover", "steps": [{ "wheel": { "over": ".wb-main", "y": 300 } }, { "advance": 300 }, { "hover": "{root}" }, { "advance": 300 }], "after": 0 },
+        { "state": "dragging", "steps": [{ "wheel": { "over": ".wb-main", "y": 300 } }, { "advance": 300 }, { "drag": { "from": "{root}", "by": [0, 60], "hold": true, "steps": 8 } }, { "advance": 200 }], "after": 0 }
+      ],
+      "sequences": [
+        { "name": "show-fade", "steps": [{ "wheel": { "over": ".wb-main", "y": 300 } }], "clip": [".wb-main .wb-thumb"], "pad": 40, "frames": 150, "track": ["thumb"] }
+      ]
+    },
+    {
+      "control": "seam-pill", "group": "Seam and Pill", "page": "shell", "root": ".wb-window > .wb-pill:not(.wb-src-pill)", "clip": [".wb-window > .wb-grab:not(.wb-src-grab)"], "pad": 16, "source": "browser/chrome.tsx#class=\"wb-pill\"",
+      "elements": { "pill": "{root}", "dot": "{root} > i", "grab": ".wb-window > .wb-grab:not(.wb-src-grab)" },
+      "states": [
+        { "state": "rest" }, { "state": "hover", "steps": [{ "hover": ".wb-window > .wb-grab:not(.wb-src-grab)" }] },
+        { "state": "held", "steps": [{ "press": ".wb-window > .wb-grab:not(.wb-src-grab)" }] },
+        { "state": "focus", "steps": [{ "focus": ".wb-window > .wb-grab:not(.wb-src-grab)" }] }
+      ],
+      "sequences": [
+        { "name": "grab", "steps": [{ "press": ".wb-window > .wb-grab:not(.wb-src-grab)" }], "frames": 48, "track": ["pill", "dot"] }
+      ]
+    },
+    {
+      "control": "tooltip", "group": "Tooltip", "page": "touch", "root": ".tp-dock", "stage": ".tp-stage-dock", "clip": [".tp-tip-pos"], "source": "touch-dock",
+      "elements": { "dock": "{root}", "pos": "{root} > .tp-tip-pos", "tip": "{root} .tp-tip", "btn1": "{root} > button:nth-of-type(1)", "btn4": "{root} > button:nth-of-type(4)", "btn6": "{root} > button:nth-of-type(6)" },
+      "states": [
+        { "state": "hidden" },
+        { "state": "over-1", "steps": [{ "hover": "{root} > button:nth-of-type(1)" }, { "advance": 800 }] },
+        { "state": "over-4", "steps": [{ "hover": "{root} > button:nth-of-type(4)" }, { "advance": 800 }] },
+        { "state": "over-destructive", "steps": [{ "hover": "{root} > button:nth-of-type(6)" }, { "advance": 800 }] }
+      ],
+      "sequences": [
+        { "name": "appear", "steps": [{ "hover": "{root} > button:nth-of-type(1)" }], "frames": 72, "track": ["pos", "tip", "btn1"] },
+        { "name": "glide", "steps": [{ "hover": "{root} > button:nth-of-type(1)" }, { "advance": 800 }, { "hover": "{root} > button:nth-of-type(4)" }], "frames": 48, "track": ["pos", "tip", "btn1", "btn4"] }
+      ]
+    }
+  ]
+}
