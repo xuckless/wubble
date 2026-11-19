@@ -52,6 +52,11 @@ impl Host {
         if tab == PANEL_TAB {
             return self.on_panel_page_event(event);
         }
+        // Pages for screen readers (`host/ax.rs`).
+        if let PageEvent::AxTree(json) | PageEvent::AxLocation(json) = &event {
+            let location = matches!(event, PageEvent::AxLocation(_));
+            return self.ax_event(tab, json, location);
+        }
         // The built-ins' answers (`host/builtins.rs`, `host/videos.rs`).
         if matches!(
             event,
@@ -497,6 +502,7 @@ impl Host {
             self.dock_event(DockEvent::TabGone(tab));
         }
         self.builtins_view_gone(tab);
+        self.ax_view_gone(tab);
         // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it.
         self.print_tab_closed(tab);
         if let Some(s) = self.surfaces.remove(&tab) {

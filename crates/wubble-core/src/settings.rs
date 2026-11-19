@@ -706,6 +706,17 @@ pub const PIP_ON_TAB_SWITCH: SettingDef = SettingDef {
     section: Section::General,
     restart: false,
 };
+/// Web pages in the screen reader's tree (`apply::web_accessibility`): auto while a screen
+/// reader runs, or always, or never. CEF builds every page's accessibility tree while it is on,
+/// which costs memory and CPU, so auto is off without one.
+pub const A11Y_WEB: SettingDef = SettingDef {
+    key: "a11y.web",
+    kind: SettingKind::Choice(&["auto", "on", "off"]),
+    default: "auto",
+    label: "Pages for screen readers (auto: while one runs)",
+    section: Section::General,
+    restart: false,
+};
 /// SponsorBlock lookups (`sponsor`): a request wubble itself makes, so off until the user
 /// turns it on (the first YouTube video asks once). The label carries the data's attribution.
 pub const SPONSOR_ENABLED: SettingDef = SettingDef {
@@ -809,6 +820,7 @@ pub const ALL: &[&SettingDef] = &[
     &VIDEO_COLLAPSED,
     &MEDIA_KEYS,
     &PIP_ON_TAB_SWITCH,
+    &A11Y_WEB,
     &SPONSOR_ENABLED,
     &SPONSOR_ASKED,
     &SPONSOR_ACTIONS,

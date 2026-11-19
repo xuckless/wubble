@@ -172,6 +172,9 @@ pub enum Applied {
     AskWhereToSave(bool),
     /// Calmer motion: the setting (the host combines it with the OS preference).
     ReduceMotion(crate::motion::Calm),
+    /// Pages for screen readers: the setting (the host combines it with whether a screen reader
+    /// runs, [`web_accessibility`]).
+    WebAccessibility(crate::motion::Calm),
     /// Touch-sized rows: auto, always or never.
     TouchSizing(crate::touch::Sizing),
     /// Shift+click opens a peek.
@@ -187,6 +190,13 @@ pub fn value_of<'a>(def: &'a SettingDef, stored: &'a HashMap<String, String>) ->
         .map(String::as_str)
         .filter(|v| def.kind.accepts(v))
         .unwrap_or(def.default)
+}
+
+/// Whether pages' accessibility trees are built and shown to assistive technology: the
+/// `a11y.web` setting's on or off, or on auto whether a screen reader runs. The same three-way
+/// choice as "Calmer motion" (`motion::Calm`: on, off, or follow the OS).
+pub fn web_accessibility(setting: crate::motion::Calm, screen_reader: bool) -> bool {
+    setting.reduced(screen_reader)
 }
 
 fn flag(def: &SettingDef, stored: &HashMap<String, String>) -> bool {
@@ -326,6 +336,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
         k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
         k if k == s::DOWNLOADS_ASK_WHERE.key => Applied::AskWhereToSave(flag(def, stored)),
         k if k == s::REDUCE_MOTION.key => Applied::ReduceMotion(crate::motion::Calm::parse(v)),
+        k if k == s::A11Y_WEB.key => Applied::WebAccessibility(crate::motion::Calm::parse(v)),
         k if k == s::TOUCH_SIZING.key => Applied::TouchSizing(crate::touch::Sizing::parse(v)),
         k if k == s::GLANCE_ENABLED.key => Applied::Glance(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
@@ -387,6 +398,25 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn pages_reach_screen_readers_on_auto_only_while_one_runs() {
+        use crate::motion::Calm;
+        for (setting, reader, on) in [
+            (Calm::Auto, false, false),
+            (Calm::Auto, true, true),
+            (Calm::On, false, true),
+            (Calm::On, true, true),
+            (Calm::Off, false, false),
+            (Calm::Off, true, false),
+        ] {
+            assert_eq!(
+                web_accessibility(setting, reader),
+                on,
+                "{setting:?} {reader}"
+            );
+        }
     }
 
     #[test]
@@ -667,6 +697,10 @@ mod tests {
             Some(Applied::PipOnTabSwitch(false))
         );
         assert_eq!(effect_of("media.keys", &s), Some(Applied::MediaKeys(true)));
+        assert_eq!(
+            effect_of("a11y.web", &s),
+            Some(Applied::WebAccessibility(crate::motion::Calm::Auto))
+        );
         assert_eq!(
             effect_of("boosts.enabled", &s),
             Some(Applied::BoostsEnabled(true))

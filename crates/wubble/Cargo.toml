@@ -9,6 +9,8 @@ license.workspace = true
 
 [dependencies]
 wubble-core.workspace = true
+# Pages for screen readers (`host/ax.rs`).
+wubble-ax.workspace = true
 wubble-engine.workspace = true
 wubble-gfx.workspace = true
 wubble-ui.workspace = true

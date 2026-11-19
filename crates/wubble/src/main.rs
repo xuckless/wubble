@@ -1,4 +1,5 @@
 mod autofill_smoke;
+mod ax_smoke;
 mod backdrop;
 mod bar;
 mod bind;
@@ -34,6 +35,7 @@ mod prompt;
 mod quit_smoke;
 mod run_state;
 mod screen;
+mod screen_reader;
 mod session_smoke;
 mod settings_smoke;
 mod shell;
@@ -216,6 +218,7 @@ fn main() -> ExitCode {
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
+                Smoke::Ax => Mode::Ax,
                 Smoke::Gallery { dir } => {
                     shot::request_dir(dir);
                     Mode::Gallery
@@ -466,6 +469,8 @@ struct Outcome {
     builtins_passed: Option<String>,
     /// `--smoke video` or `--smoke boost` passed.
     video_passed: Option<String>,
+    /// `--smoke ax` passed, with the page's item count.
+    ax_passed: Option<usize>,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
     /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
     measured: Option<Result<(), String>>,
@@ -512,6 +517,8 @@ enum Mode {
     Video,
     /// `--smoke boost`.
     Boost,
+    /// `--smoke ax`.
+    Ax,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -1026,6 +1033,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_pip_command(move |name, value| {
         with_host_in(win, |host| host.pip_command(&name, value))
     });
+    window.on_ax_action(move |index, name, value| {
+        with_host_in(win, |host| host.ax_action(index, &name, &value))
+    });
     window.on_toast_acted(move || with_host_in(win, Host::toast_acted));
     window.on_toast_closed(move || with_host_in(win, Host::toast_closed));
     window
@@ -1129,6 +1139,7 @@ fn run(
         media_smoke: None,
         builtin_smoke: None,
         video_smoke: None,
+        ax_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
     };
@@ -1260,6 +1271,13 @@ fn run(
                 },
             )
         }
+        Mode::Ax => (
+            Some(page_url(ax_smoke::PAGE)),
+            Checks {
+                ax_smoke: Some(ax_smoke::AxSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Video | Mode::Boost => {
             let (port, requests) = video_server.clone().ok_or("no smoke server")?;
             let base = format!("http://127.0.0.1:{port}");
@@ -1457,6 +1475,7 @@ fn run(
         media_passed: host.media_passed,
         builtins_passed: host.builtins_passed.take(),
         video_passed: host.video_passed.take(),
+        ax_passed: host.ax_passed,
         measured,
     };
     let code = Verdict::of(mode, &outcome).print();

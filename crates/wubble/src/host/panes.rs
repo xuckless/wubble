@@ -79,7 +79,7 @@ fn edge(table: &EdgeTable) -> Edge<'_> {
 
 /// Writes `rows` into the shell's model in place when it is one this host made (rows kept, only
 /// changed ones set), else hands `set` a new one.
-fn sync_rows<T: Clone + PartialEq + 'static>(
+pub(super) fn sync_rows<T: Clone + PartialEq + 'static>(
     model: slint::ModelRc<T>,
     rows: Vec<T>,
     set: impl FnOnce(slint::ModelRc<T>),

@@ -88,6 +88,7 @@ enum SmokeArg {
     Builtins,
     Video,
     Boost,
+    Ax,
     SessionPhase(Phase),
 }
 
@@ -111,6 +112,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "builtins" => Ok(SmokeArg::Builtins),
         None if value == "video" => Ok(SmokeArg::Video),
         None if value == "boost" => Ok(SmokeArg::Boost),
+        None if value == "ax" => Ok(SmokeArg::Ax),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -120,7 +122,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost` or `session-phase=1|2`"
+             `boost`, `ax` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -174,6 +176,9 @@ pub enum Smoke {
     Video,
     /// Boosts on loopback pages: CSS, a tint and a document-start script; a CSP page.
     Boost,
+    /// Pages for screen readers: `a11y.web` on, the bundled page's accessible items, a click
+    /// and a field's value through them.
+    Ax,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -272,6 +277,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Builtins), None, None) => Smoke::Builtins,
             (Some(SmokeArg::Video), None, None) => Smoke::Video,
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
+            (Some(SmokeArg::Ax), None, None) => Smoke::Ax,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -465,6 +471,10 @@ mod tests {
             Some(Command::Smoke(Smoke::Boost))
         );
         assert!(parse(["wubble", "--smoke", "video", "--url", "about:blank"]).is_err());
+        assert_eq!(
+            parse(["wubble", "--smoke", "ax"]).ok(),
+            Some(Command::Smoke(Smoke::Ax))
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@
 
 mod autofill;
 mod autoscroll;
+mod ax;
 mod boost;
 mod builtins;
 mod busy;
@@ -283,6 +284,8 @@ pub struct Checks {
     pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
     /// `--smoke video` and `--smoke boost`.
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
+    /// `--smoke ax`.
+    pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
     /// Views paint on external begin frames from [`Host::pace`].
@@ -489,12 +492,16 @@ pub struct Host {
     boosts: boost::Boosts,
     /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/videos.rs`).
     videos: videos::Videos,
+    /// Pages for screen readers (`host/ax.rs`).
+    ax: ax::WebAx,
     /// Reduced motion and touch sizing (`look.rs`).
     look: look::Look,
     /// Shift+click opens a peek (`glance.enabled`).
     glance_enabled: bool,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
+    /// `--smoke ax` passed, with the page's item count.
+    pub ax_passed: Option<usize>,
 }
 
 impl Host {
@@ -665,7 +672,9 @@ impl Host {
             builtins: builtins::Builtins::default(),
             boosts: boost::Boosts::new(boosts),
             videos,
+            ax: ax::WebAx::default(),
             video_passed: None,
+            ax_passed: None,
             look: look::Look::new(),
             glance_enabled: true,
         };
@@ -921,6 +930,7 @@ impl Host {
                             view.set_drag_source(true);
                         }
                         self.builtins_view_opened(tab, &url);
+                        self.ax_view_opened(tab);
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -1048,6 +1058,7 @@ impl Host {
         self.render_builtins(&window);
         self.render_video(&window);
         self.render_pip(&window);
+        self.render_ax(&window);
         self.render_boost(&window);
         let nav = self.view().map(|view| {
             (
@@ -1239,6 +1250,7 @@ impl Host {
         self.autofill_smoke_worked(presented);
         self.builtin_smoke_worked();
         self.video_smoke_worked();
+        self.ax_smoke_worked(&window);
         let framed = self.shown().is_some_and(|t| self.w.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
         if self.checks.block_smoke.is_some() {
@@ -1447,6 +1459,9 @@ impl Host {
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
+        if let WebEvent::TitleChanged(title) = &event {
+            self.ax_smoke_step(crate::ax_smoke::Input::Title(title));
+        }
         self.parity_web(&event);
         self.builtins_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
@@ -2116,6 +2131,7 @@ impl Host {
         self.passwords_tick(now);
         self.gpu_check();
         self.look_tick();
+        self.ax_tick();
     }
 
     // ----- smokes

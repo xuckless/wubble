@@ -8539,6 +8539,7 @@ dependencies = [
  "url",
  "wayland-backend",
  "winresource",
+ "wubble-ax",
  "wubble-blocker",
  "wubble-core",
  "wubble-engine",
