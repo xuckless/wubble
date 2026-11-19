@@ -1379,7 +1379,7 @@ fn run(
     wubble_ui::window::no_os_window_restoration();
     slint::BackendSelector::new()
         .backend_name("winit".into())
-        .renderer_name("femtovg-wgpu".into())
+        .renderer_name("skia-wgpu".into())
         .require_wgpu_30(gpu.slint_configuration())
         .with_winit_window_attributes_hook(wubble_ui::window::attributes)
         .select()?;

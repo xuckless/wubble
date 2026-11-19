@@ -7,8 +7,8 @@
 //! the pane times the stretch, anchored top left), so switching between the two shows no step.
 //! The output is wider than the pane by a margin on each side, room for the edge to bulge out
 //! (`SPLIT.margin` in the design, 72 px); the bulge shows the design's page colour where the frame
-//! has no pixels. Its alpha is straight: femtovg does not treat a wgpu texture as premultiplied
-//! (i-slint-renderer-femtovg 1.19 `images.rs`: `PREMULTIPLIED` only for CPU buffers).
+//! has no pixels. Its alpha is straight: Slint's Skia renderer imports a wgpu texture as unpremultiplied
+//! (i-slint-renderer-skia 1.19 `wgpu_30_surface/{vulkan,metal}.rs` `import_*_texture`: `AlphaType::Unpremul`).
 //!
 //! Plumbing as the [`crate::import`] blit (wgpu examples, MIT OR Apache-2.0) and the scene's glass
 //! pass; the SDF is the scene's `sdRound` (owner's design repo). No third-party code is new here.
@@ -134,7 +134,7 @@ impl EdgeMask {
             multiview_mask: None,
             cache: None,
         });
-        // linear: a stale frame is scaled to the pane, as femtovg's `image-fit: fill` does
+        // linear: a stale frame is scaled to the pane, as the shell's `image-fit: fill` does
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("wubble edge mask"),
             mag_filter: wgpu::FilterMode::Linear,
