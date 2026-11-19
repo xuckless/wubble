@@ -1,10 +1,51 @@
 // design: browser/scroller.tsx:1-181, browser/browser.css:126-130 @598f814
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
-// @ 6c840da, with the marked `wubble change`s), unchanged.
+// @ 6c840da, with the marked `wubble change`s); the thumb is the web's `.wb-thumb` (controls kit
+// B): 6 px at right 3 (9 under the pointer, width .15 s), ink .38, in .12 s ease-out, out .3 s
+// ease-in.
 
-import { Palette, Motion } from "../gen/tokens.slint";
 import { Calm } from "../motion/calm.slint";
 import { BrowserCss } from "../gen/css.slint";
+
+// `.wb-thumb`: the overlay scroll thumb at `top`, `height` long, showing while `shown`; it widens
+// under the pointer, leftwards from its right edge (`right: 3px`). Its drag goes to the caller.
+export component Thumb inherits Rectangle {
+    in property <length> top;
+    in property <length> length;
+    in property <bool> shown;
+    // the specimen's forced hover (kit/specimen/slide.slint)
+    in property <bool> preview-hover;
+    callback down(length);
+    callback move(length);
+    callback up();
+    out property <bool> hovered: ta.has-hover || root.preview-hover;
+    property <length> w: root.hovered ? BrowserCss.wb-thumb-hover--width : BrowserCss.wb-thumb--width;
+    animate w {
+        duration: Calm.ms(BrowserCss.wb-thumb--transition-width-duration);
+        easing: BrowserCss.wb-thumb--transition-width-easing;
+    }
+    // the parent's full size; the bar is placed inside
+    bar := Rectangle {
+        x: root.width - BrowserCss.wb-thumb--right - root.w;
+        y: root.top;
+        width: root.w;
+        height: root.length;
+        border-radius: BrowserCss.wb-thumb--border-radius;
+        background: BrowserCss.wb-thumb--background;
+        opacity: root.shown ? BrowserCss.wb-thumb-on--opacity : 0;
+        animate opacity {
+            duration: Calm.ms(root.shown ? BrowserCss.wb-thumb-on--transition-opacity-duration : BrowserCss.wb-thumb--transition-opacity-duration);
+            easing: root.shown ? BrowserCss.wb-thumb-on--transition-opacity-easing : BrowserCss.wb-thumb--transition-opacity-easing;
+        }
+        ta := TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) { root.down(self.absolute-position.y + self.mouse-y); }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.up(); }
+            }
+            moved => { if (self.pressed) { root.move(self.absolute-position.y + self.mouse-y); } }
+        }
+    }
+}
 
 // @source slint-scroller
 // A scroll view on Wubble physics (scroller.rs) instead of Flickable's: wheel, keys and touch go
@@ -48,21 +89,14 @@ export component WubbleScroller inherits Rectangle {
         height: self.preferred-height;
         @children
     }
-    Rectangle {
-        x: root.width - 7px;
-        y: root.thumb-top;
-        width: 4px;
-        height: root.thumb-height;
-        border-radius: 2px;
-        background: Palette.mist;
-        opacity: root.thumb-visible ? 0.55 : 0;
-        animate opacity { duration: Calm.ms(root.thumb-visible ? BrowserCss.wb-thumb-on--transition-opacity-duration : BrowserCss.wb-thumb--transition-opacity-duration); easing: root.thumb-visible ? ease-out : ease-in; }
-        TouchArea {
-            pointer-event(e) => {
-                if (e.kind == PointerEventKind.down) { root.thumb-down(self.absolute-position.y + self.mouse-y); }
-                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.thumb-up(); }
-            }
-            moved => { if (self.pressed) { root.thumb-move(self.absolute-position.y + self.mouse-y); } }
-        }
+    Thumb {
+        width: root.width;
+        height: root.height;
+        top: root.thumb-top;
+        length: root.thumb-height;
+        shown: root.thumb-visible;
+        down(y) => { root.thumb-down(y); }
+        move(y) => { root.thumb-move(y); }
+        up => { root.thumb-up(); }
     }
 }

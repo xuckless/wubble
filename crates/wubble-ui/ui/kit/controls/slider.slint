@@ -1,0 +1,298 @@
+// design: pages/touch.tsx:17-140, pages/touch.css:39-59, pages/settings.css:71-73 @598f814
+// ElasticSlider (`touch.tsx` ElasticSlider, `.tp-sl*`): held, the knob sits under the finger 1:1
+// (keeping the grab offset) and rubber-bands past both ends, the rail stretching after it; a press
+// away from the knob sends it there on a stiff catch-up spring, then it follows. Released or
+// keyed, the follow spring. The knob stretches along its travel with speed and swells while held;
+// while held the value moves from the label into a bubble that trails the knob and leans with it.
+// Arrows step (Shift: ten steps), Page a tenth, Home and End the ends. Every new value is
+// reported (`edited`) while held, so a live setting follows the finger.
+// The physics is Rust's (`wubble_core::controls::slider`, through the `Controls` registry, kind
+// 1): the value domain, the step snap, the keys and the grip's one transition are there.
+// `compact` is the settings row's `.st-slider` (240 wide, no label, the value pulled 6 into the
+// track). Slint limits (notes/fidelity/deviations.md): no `:focus-visible`, so the knob's ring
+// shows after a Tab focus only (FocusReason); the 3 px blur of the bubble and the label is a
+// backdrop-blur inside the fading element (Skia only, as kit/motion/overlap.slint).
+
+import { Palette, Fonts } from "../gen/tokens.slint";
+import { TouchCss, SettingsCss, BrowserCss } from "../gen/css.slint";
+import { Role, TextRole } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Icon } from "icon.slint";
+import { Tween } from "../motion/tween.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+
+// The registry's key codes (`Controls.key`), from a Slint key; -1: not the slider's.
+export global SliderKeys {
+    public pure function code(text: string) -> int {
+        return text == Key.LeftArrow ? 0 : text == Key.RightArrow ? 1 : text == Key.UpArrow ? 2
+            : text == Key.DownArrow ? 3 : text == Key.PageUp ? 4 : text == Key.PageDown ? 5
+            : text == Key.Home ? 6 : text == Key.End ? 7 : -1;
+    }
+}
+
+export component ElasticSlider inherits VerticalLayout {
+    in property <float> value;
+    in property <float> min: 0;
+    in property <float> max: 100;
+    in property <float> step: 1;
+    in property <string> label;
+    // a leading icon path (Glyph), "" for none
+    in property <string> icon;
+    // the value's unit, after it (the design's `format`: `v => v + '%'`)
+    in property <string> unit;
+    // `--tp-accent`: the Space colour
+    in property <color> accent: Palette.sky;
+    // `.st-slider`: the settings row's slider
+    in property <bool> compact;
+    in property <bool> enabled: true;
+    // The specimen's forced states (kit/specimen/slide.slint); never set by the shell.
+    in property <bool> preview-held;
+    in property <bool> preview-focus;
+    // A new value: while held, every one the knob passes; a key's; the one a release lands on.
+    callback edited(float);
+    out property <bool> held: root.v.held || root.preview-held;
+    out property <bool> keyboard-focused: (keys.has-focus && root.tab-focus) || root.preview-focus;
+    // the value shown (the knob's while held), in the domain's units
+    out property <float> shown: root.live ? root.v.value : root.value;
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <bool> live: root.slot >= 0 && root.slot < Controls.views.length;
+    property <int> gen: Controls.generation;
+    property <bool> tab-focus;
+    property <float> span: Math.max(root.max - root.min, root.step);
+    property <length> kx: root.live ? root.v.x * Shell.px : Math.clamp((root.value - root.min) / root.span, 0, 1) * track.width;
+    property <length> bx: root.live ? root.v.bubble-x * Shell.px : root.kx;
+    property <string> text: root.shown + root.unit;
+
+    init => {
+        root.slot = Controls.acquire(1, root.value);
+        // the domain, then the value again in it (acquire snapped it to the default 0..100)
+        Controls.configure(root.slot, root.min, root.max, root.step);
+        Controls.set-value(root.slot, root.value);
+        Controls.resize(root.slot, track.width);
+    }
+    changed value => {
+        Controls.set-value(root.slot, root.value);
+    }
+    changed min => {
+        Controls.configure(root.slot, root.min, root.max, root.step);
+    }
+    changed max => {
+        Controls.configure(root.slot, root.min, root.max, root.step);
+    }
+    changed step => {
+        Controls.configure(root.slot, root.min, root.max, root.step);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+    // while held, each value the knob passes (the TSX loop's `report`)
+    changed shown => {
+        if root.v.held {
+            root.edited(root.shown);
+        }
+    }
+
+    width: root.compact ? SettingsCss.st-slider-tp-sl-wrap--width : TouchCss.tp-sl-wrap--max-width;
+    opacity: root.enabled ? 1 : BrowserCss.wb-ib-disabled--opacity;
+    spacing: root.compact ? SettingsCss.st-slider-tp-sl-label--margin-bottom : TouchCss.tp-sl-label--margin-bottom;
+
+    // .tp-sl-label: the label (with its icon) left, the value right; the value fades and blurs
+    // while held, as the bubble takes it
+    out-fade := Tween {
+        on: !root.held;
+        in-ms: TouchCss.tp-sl-label-output--transition-opacity-duration;
+        out-ms: TouchCss.tp-sl-wrap-held-tp-sl-label-output--transition-duration;
+        in-easing: TouchCss.tp-sl-label-output--transition-opacity-easing;
+        out-easing: TouchCss.tp-sl-label-output--transition-opacity-easing;
+    }
+    HorizontalLayout {
+        alignment: space-between;
+        HorizontalLayout {
+            visible: !root.compact;
+            spacing: TouchCss.tp-sl-label-gt-span--gap;
+            if root.icon != "": Icon {
+                path: root.icon;
+                tint: TouchCss.tp-sl-label--color;
+                y: (parent.height - self.height) / 2;
+            }
+            KitText {
+                role: Role.tp-sl-label;
+                text: root.label;
+                color: TouchCss.tp-sl-label--color;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            opacity: out-fade.t;
+            width: output.preferred-width;
+            output := KitText {
+                // `<output class="wb-mono">`: the mono face at the output rule's size and weight
+                role: { family: Fonts.mono, size: Role.tp-sl-label-output.size, weight: Role.tp-sl-label-output.weight, line-height: Role.tp-sl-label-output.line-height };
+                text: root.text;
+                color: TouchCss.tp-sl-label-output--color;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                backdrop-blur: TouchCss.tp-sl-wrap-held-tp-sl-label-output--filter-blur * (1 - out-fade.t);
+                visible: out-fade.t > 0 && out-fade.t < 1;
+            }
+        }
+    }
+
+    // .tp-sl: the track the pointer and the keys drive (role slider)
+    track := Rectangle {
+        height: TouchCss.tp-sl--height;
+        changed width => {
+            Controls.resize(root.slot, self.width);
+        }
+
+        // .tp-sl-rail: stretched to the knob when it is banded past an end
+        Rectangle {
+            x: Math.min(0px, root.kx);
+            y: parent.height * TouchCss.tp-sl-rail--top + TouchCss.tp-sl-rail--margin-top;
+            width: Math.max(parent.width, root.kx) - self.x;
+            height: TouchCss.tp-sl-rail--height;
+            border-radius: TouchCss.tp-sl-rail--border-radius;
+            background: TouchCss.tp-sl-rail--background;
+            inner-shadow-offset-y: TouchCss.tp-sl-rail--box-shadow-shadow-1-y;
+            inner-shadow-color: TouchCss.tp-sl-rail--box-shadow-shadow-1-color;
+        }
+        // .tp-sl-fill
+        Rectangle {
+            x: 0px;
+            y: parent.height * TouchCss.tp-sl-rail--top + TouchCss.tp-sl-rail--margin-top;
+            width: Math.max(0px, root.kx);
+            height: TouchCss.tp-sl-rail--height;
+            border-radius: TouchCss.tp-sl-rail--border-radius;
+            background: root.accent;
+        }
+        // .tp-sl-knob, centred on `kx`, scaled about 70% / 30% of its width with the travel
+        knob := Rectangle {
+            x: root.kx - self.width / 2;
+            y: parent.height * TouchCss.tp-sl-knob--top - self.height / 2;
+            width: TouchCss.tp-sl-knob--width;
+            height: TouchCss.tp-sl-knob--height;
+            border-radius: TouchCss.tp-sl-knob--border-radius;
+            background: TouchCss.tp-sl-knob--background;
+            drop-shadow-offset-y: TouchCss.tp-sl-knob--box-shadow-shadow-1-y;
+            drop-shadow-blur: TouchCss.tp-sl-knob--box-shadow-shadow-1-blur;
+            drop-shadow-color: TouchCss.tp-sl-knob--box-shadow-shadow-1-color;
+            transform-origin: { x: self.width * root.v.origin, y: self.height / 2 };
+            transform-scale-x: root.live ? root.v.scale-x : 1;
+            transform-scale-y: root.live ? root.v.scale-y : 1;
+            // `.tp-sl:focus-visible .tp-sl-knob`: a 3 px accent ring round the knob
+            ring := Rectangle {
+                x: -TouchCss.tp-sl-knob-focus--ring;
+                y: -TouchCss.tp-sl-knob-focus--ring;
+                width: parent.width + 2 * TouchCss.tp-sl-knob-focus--ring;
+                height: parent.height + 2 * TouchCss.tp-sl-knob-focus--ring;
+                border-radius: parent.border-radius + TouchCss.tp-sl-knob-focus--ring;
+                border-width: TouchCss.tp-sl-knob-focus--ring;
+                border-color: root.accent;
+                visible: root.keyboard-focused;
+            }
+        }
+        // .tp-sl-bub: rides `bx` and leans about 50% 130%; its label (`b`) rises into place
+        bub-op := Tween {
+            on: root.held;
+            in-ms: TouchCss.tp-sl-wrap-held-tp-sl-bub-b--transition-opacity-duration;
+            out-ms: TouchCss.tp-sl-bub-b--transition-opacity-duration;
+            in-easing: TouchCss.tp-sl-wrap-held-tp-sl-bub-b--transition-opacity-easing;
+            out-easing: TouchCss.tp-sl-bub-b--transition-opacity-easing;
+        }
+        bub-tr := Tween {
+            on: root.held;
+            in-ms: TouchCss.tp-sl-wrap-held-tp-sl-bub-b--transition-transform-duration;
+            out-ms: TouchCss.tp-sl-bub-b--transition-transform-duration;
+            in-easing: TouchCss.tp-sl-wrap-held-tp-sl-bub-b--transition-transform-easing;
+            out-easing: TouchCss.tp-sl-bub-b--transition-transform-easing;
+        }
+        bub := Rectangle {
+            x: root.bx - self.width / 2;
+            y: parent.height / 2 - TouchCss.tp-sl-bub--bottom-offset - self.height;
+            width: b.width;
+            height: b.height;
+            visible: bub-op.t > 0;
+            transform-rotation: (root.live ? root.v.lean : 0) * 1deg;
+            transform-origin: { x: self.width / 2, y: self.height * TouchCss.tp-sl-bub--origin-y };
+            b := Rectangle {
+                y: TouchCss.tp-sl-bub-b--transform-translatey * (1 - bub-tr.t);
+                width: Math.max(TouchCss.tp-sl-bub-b--min-width, bub-text.preferred-width + TouchCss.tp-sl-bub-b--padding-left + TouchCss.tp-sl-bub-b--padding-right);
+                height: bub-text.preferred-height + TouchCss.tp-sl-bub-b--padding-top + TouchCss.tp-sl-bub-b--padding-bottom;
+                border-radius: TouchCss.tp-sl-bub-b--border-radius;
+                background: TouchCss.tp-sl-bub-b--background;
+                opacity: bub-op.t;
+                transform-origin: { x: self.width / 2, y: self.height * TouchCss.tp-sl-bub-b--origin-y };
+                transform-scale: TouchCss.tp-sl-bub-b--transform-scale + (1 - TouchCss.tp-sl-bub-b--transform-scale) * bub-tr.t;
+                bub-text := KitText {
+                    // `<b class="wb-mono">`
+                    role: { family: Fonts.mono, size: Role.tp-sl-bub-b.size, weight: Role.tp-sl-bub-b.weight, line-height: Role.tp-sl-bub-b.line-height };
+                    text: root.text;
+                    color: TouchCss.tp-sl-bub-b--color;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    backdrop-blur: TouchCss.tp-sl-bub-b--filter-blur * (1 - bub-op.t);
+                    visible: bub-op.t > 0 && bub-op.t < 1;
+                }
+            }
+        }
+
+        keys := FocusScope {
+            enabled: root.enabled;
+            // a click focuses through `focus()` below (reason: programmatic), so only a Tab
+            // shows the ring, as `:focus-visible`
+            focus-on-click: false;
+            focus-gained(reason) => {
+                root.tab-focus = reason == FocusReason.tab-navigation;
+            }
+            focus-lost => {
+                root.tab-focus = false;
+            }
+            key-pressed(e) => {
+                let code = SliderKeys.code(e.text);
+                if code < 0 {
+                    return reject;
+                }
+                root.edited(Controls.key(root.slot, code, e.modifiers.shift));
+                accept
+            }
+            accessible-role: slider;
+            accessible-label: root.label;
+            accessible-value: root.text;
+            accessible-value-minimum: root.min;
+            accessible-value-maximum: root.max;
+            accessible-value-step: root.step;
+            accessible-enabled: root.enabled;
+            accessible-action-increment => {
+                root.edited(Controls.key(root.slot, 1, false));
+            }
+            accessible-action-decrement => {
+                root.edited(Controls.key(root.slot, 0, false));
+            }
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: self.pressed ? grabbing : grab;
+                pointer-event(e) => {
+                    if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                        keys.focus();
+                        Controls.press(root.slot, self.mouse-x);
+                    }
+                    // the values were reported while held; the knob springs to the last one
+                    if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                        Controls.release(root.slot);
+                    }
+                }
+                moved => {
+                    if self.pressed {
+                        Controls.drag(root.slot, self.mouse-x);
+                    }
+                }
+            }
+        }
+    }
+}

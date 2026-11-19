@@ -1,0 +1,156 @@
+// design: pages/settings.tsx:263-300, pages/settings.css:87-92 @598f814
+// Swatches (`settings.tsx` Swatches, `.st-swatches/.st-sw/.st-sw-ring`): colour dots on 34 px
+// targets 2 px apart, and an ink ring that travels between them on the follow spring and
+// stretches along its travel (volume kept) about its trailing side, the same body as the tab
+// indicator. A dot swells to 1.12 under the pointer; a target presses (`wb-press`). ArrowLeft/
+// Right choose the neighbour. Role radiogroup, each target a radio.
+// The ring's spring is Rust's (`wubble_core::controls::swatches`, the `Controls` registry, kind 3;
+// its count goes through `configure`'s max).
+
+import { Palette } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { Calm } from "../motion/calm.slint";
+import { Press } from "../motion/press.slint";
+import { FocusRing } from "../../components/focus-ring.slint";
+import { SliderKeys } from "slider.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+
+export component Swatches inherits Rectangle {
+    in property <[color]> colours;
+    // each colour's name for a screen reader (aria-label)
+    in property <[string]> names;
+    in property <color> value;
+    // what the colours are for (aria-label)
+    in property <string> label;
+    // the specimen's forced states (kit/specimen/slide.slint): keyboard focus, a hovered swatch
+    in property <bool> preview-focus;
+    in property <int> preview-hover: -1;
+    callback chosen(color);
+    out property <bool> keyboard-focused: (keys.has-focus && root.tab-focus) || root.preview-focus;
+    // the swatch the value is (0 when it is none of them, as the TSX)
+    out property <int> index;
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <bool> live: root.slot >= 0 && root.slot < Controls.views.length;
+    property <int> gen: Controls.generation;
+    property <bool> tab-focus;
+    property <length> pitch: SettingsCss.wb-st-sw--width + SettingsCss.st-swatches--gap;
+
+    init => {
+        root.slot = Controls.acquire(3, root.index);
+        Controls.configure(root.slot, 0, root.colours.length, 1);
+    }
+    changed index => {
+        Controls.set-value(root.slot, root.index);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    width: row.preferred-width;
+    height: SettingsCss.wb-st-sw--height;
+
+    // .st-sw-ring
+    ring := Rectangle {
+        x: root.live ? root.v.x * Shell.px : root.index * root.pitch;
+        width: SettingsCss.st-sw-ring--width;
+        height: SettingsCss.st-sw-ring--height;
+        border-radius: SettingsCss.st-sw-ring--border-radius;
+        border-width: SettingsCss.st-sw-ring--box-shadow-shadow-1-spread;
+        border-color: SettingsCss.st-sw-ring--box-shadow-shadow-1-color;
+        transform-origin: { x: self.width * (root.live ? root.v.origin : 0.5), y: self.height / 2 };
+        transform-scale-x: root.live ? root.v.scale-x : 1;
+        transform-scale-y: root.live ? root.v.scale-y : 1;
+    }
+    row := HorizontalLayout {
+        spacing: SettingsCss.st-swatches--gap;
+        for c[i] in root.colours: sw := Rectangle {
+            property <bool> on: c == root.value;
+            init => {
+                if self.on {
+                    root.index = i;
+                }
+            }
+            changed on => {
+                if self.on {
+                    root.index = i;
+                }
+            }
+            width: SettingsCss.wb-st-sw--width;
+            height: SettingsCss.wb-st-sw--height;
+            press := Press {
+                pressed: ta.pressed;
+            }
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            transform-scale: press.scale;
+            accessible-role: radio-button;
+            accessible-label: i < root.names.length ? root.names[i] : "";
+            accessible-checkable: true;
+            accessible-checked: i == root.index;
+            accessible-action-default => {
+                root.chosen(c);
+            }
+            // .st-sw i: the dot, swelling under the pointer
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: SettingsCss.st-sw-i--width;
+                height: SettingsCss.st-sw-i--height;
+                border-radius: SettingsCss.st-sw-i--border-radius;
+                background: c;
+                inner-shadow-offset-y: SettingsCss.st-sw-i--box-shadow-shadow-1-y;
+                inner-shadow-color: SettingsCss.st-sw-i--box-shadow-shadow-1-color;
+                drop-shadow-offset-y: SettingsCss.st-sw-i--box-shadow-shadow-2-y;
+                drop-shadow-blur: SettingsCss.st-sw-i--box-shadow-shadow-2-blur;
+                drop-shadow-color: SettingsCss.st-sw-i--box-shadow-shadow-2-color;
+                transform-origin: { x: self.width / 2, y: self.height / 2 };
+                transform-scale: ta.has-hover || root.preview-hover == i ? SettingsCss.st-sw-hover-i--scale : 1;
+                animate transform-scale {
+                    duration: Calm.ms(SettingsCss.st-sw-i--transition-scale-duration);
+                    easing: SettingsCss.st-sw-i--transition-scale-easing;
+                }
+            }
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                pointer-event(e) => {
+                    if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                        keys.focus();
+                    }
+                }
+                clicked => {
+                    root.chosen(c);
+                }
+            }
+            if root.keyboard-focused && i == root.index: FocusRing {
+                radius: SettingsCss.wb-st-sw--border-radius;
+                shown: true;
+            }
+        }
+    }
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            root.tab-focus = reason == FocusReason.tab-navigation;
+        }
+        focus-lost => {
+            root.tab-focus = false;
+        }
+        key-pressed(e) => {
+            let code = SliderKeys.code(e.text);
+            if code != 0 && code != 1 {
+                return reject;
+            }
+            let i = round(Controls.key(root.slot, code, false));
+            if i >= 0 && i < root.colours.length && i != root.index {
+                root.chosen(root.colours[i]);
+            }
+            accept
+        }
+        accessible-role: radio-group;
+        accessible-label: root.label;
+    }
+}

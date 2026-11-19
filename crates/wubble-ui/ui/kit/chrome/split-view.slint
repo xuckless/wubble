@@ -6,6 +6,8 @@ import { Palette, Space } from "../gen/tokens.slint";
 import { Shell } from "../derived.slint";
 import { StatusBubble } from "../../components/status-bubble.slint";
 import { PressableButton } from "../controls/button.slint";
+import { SeamStrip } from "../controls/seam.slint";
+import { BrowserCss } from "../gen/css.slint";
 
 // @source slint-split-view
 // Split view (wubble_core::split): 2–3 pages side by side, divided by rubber strings. Rust owns every
@@ -61,6 +63,11 @@ export struct SplitPane {
 export struct SplitSeam {
     x: length,
     path: string,     // string_line(...) while bowed, "" when straight
+    // controls kit B: the pill rides the string's bend at the grab height (0: mid height, until
+    // the host passes it); held by the split's machine
+    bend: length,
+    gy: length,
+    held: bool,
 }
 
 export component SplitView inherits Rectangle {
@@ -76,6 +83,8 @@ export component SplitView inherits Rectangle {
     callback seam-drag(length, length);
     callback seam-release();
     callback seam-even();                      // double-click: even shares
+    // controls kit B: ArrowLeft (-1) / ArrowRight (+1) on seam `j`'s grab (split.nudge)
+    callback seam-nudge(int, int);
     callback pane-close(int);                  // pane id
     // wubble change: the page's input, per pane: (pane id, ..., pane-relative px)
     callback pointer-moved(int, length, length);
@@ -184,32 +193,24 @@ export component SplitView inherits Rectangle {
         stroke: root.accent;
         stroke-width: 1.5px;
     }
-    for s[j] in root.seams: Rectangle {
-        Path {
-            width: root.width;
-            height: root.height;
-            viewbox-x: 0;
-            viewbox-y: 0;
-            viewbox-width: root.width / 1px;
-            viewbox-height: root.height / 1px;
-            commands: s.path;
-            visible: s.path != "";
-            fill: transparent;
-            stroke: Palette.sky;
-            stroke-width: 1px;
-            opacity: 0.6;
-        }
-        TouchArea {
-            // wubble change: the web design's 20 px strip (Shell.split-grab), not the port's 12
-            x: s.x - Shell.split-grab / 2;
-            width: Shell.split-grab;
-            mouse-cursor: col-resize;
-            pointer-event(e) => {
-                if (e.kind == PointerEventKind.down) { root.seam-grab(j, self.x + self.mouse-x, self.mouse-y); }
-                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.seam-release(); }
-            }
-            moved => { if (self.pressed) { root.seam-drag(self.x + self.mouse-x, self.mouse-y); } }
-            double-clicked => { root.seam-even(); }
-        }
+    // each seam: the string (always drawn), its full-height grab strip and pill (kit SeamStrip)
+    for s[j] in root.seams: SeamStrip {
+        width: root.width;
+        height: root.height;
+        seam-x: s.x;
+        path: s.path;
+        bend: s.bend;
+        grab-y: s.gy > 0 ? s.gy : -1px;
+        held: s.held;
+        string-top: root.radius;
+        string-bottom: root.height - root.radius;
+        grab-top: BrowserCss.wb-split-grab--top;
+        grab-bottom: BrowserCss.wb-split-grab--bottom;
+        label: "Resize pages. Drag far to close one; double-click to even them out.";
+        grab(x, y) => { root.seam-grab(j, x, y); }
+        drag(x, y) => { root.seam-drag(x, y); }
+        release => { root.seam-release(); }
+        double-clicked => { root.seam-even(); }
+        nudge(d) => { root.seam-nudge(j, d); }
     }
 }
