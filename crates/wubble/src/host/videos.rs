@@ -729,6 +729,7 @@ impl Host {
                         open: o.shown(),
                         collapsed: o.collapsed(),
                         pane_right: (pane.x + pane.w) as f32,
+                        pane_bottom: (pane.y + pane.h) as f32,
                         x: r.x as f32,
                         y: r.y as f32,
                         w: r.w as f32,

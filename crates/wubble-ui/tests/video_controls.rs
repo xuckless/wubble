@@ -27,6 +27,7 @@ fn view(open: bool, collapsed: bool) -> VideoView {
         h: 300.0,
         // the pane runs on past the video
         pane_right: 900.0,
+        pane_bottom: 700.0,
         rate: "1\u{d7}".into(),
         ..VideoView::default()
     }

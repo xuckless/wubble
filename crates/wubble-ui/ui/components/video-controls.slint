@@ -214,7 +214,8 @@ export component VideoControls inherits Rectangle {
         }
     }
 
-    // The speed menu, under the strip's right end.
+    // The speed menu, under the strip's right end; it may reach below a short video, down to the
+    // pane's bottom (cut to the video, a small one's fastest rows were out of reach).
     if root.video.open && root.video.speeds: GlassPanel {
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
@@ -222,7 +223,7 @@ export component VideoControls inherits Rectangle {
         x: strip.x + strip.width - self.width;
         y: strip.y + strip.height + Spacing.s1;
         width: list.preferred-width;
-        height: max(0px, min(list.preferred-height, root.height - self.y - Spacing.s1));
+        height: max(0px, min(list.preferred-height, root.video.pane-bottom - root.y - self.y - Spacing.s1));
         clip: true;
         // Around the rows, as the strip's: a row under the pointer is still the menu.
         TouchArea {
