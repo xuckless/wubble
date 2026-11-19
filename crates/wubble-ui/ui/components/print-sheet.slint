@@ -20,15 +20,25 @@ export component PrintSheet inherits SheetFrame {
     callback answered(bool);
 
     property <string> pages;
+    // What the body shows: the host's view while open, then the last one through the exit (the
+    // host sends an empty view when the sheet closes; the body keeps its card and destinations
+    // while the Sheet plays its exit).
+    property <PrintSheetView> last;
+    property <PrintSheetView> view: root.sheet.open ? root.sheet : root.last;
+    changed sheet => {
+        if root.sheet.open {
+            root.last = root.sheet;
+        }
+    }
 
     open: root.sheet.open;
-    title: root.sheet.busy ? "Printing…" : "Print";
-    accept-text: root.sheet.destination == 0 ? "Save" : "Print";
+    title: root.view.busy ? "Printing…" : "Print";
+    accept-text: root.view.destination == 0 ? "Save" : "Print";
     cancel-text: "Cancel";
     accepted => {
         // A bad range is refused by the host, which keeps the reason shown; a failure's
         // message does not block a retry.
-        if !root.sheet.busy {
+        if !root.view.busy {
             root.answered(true);
         }
     }
@@ -48,29 +58,29 @@ export component PrintSheet inherits SheetFrame {
     // Each opening restarts the pages field from the sheet's own text.
     property <int> serial: root.sheet.serial;
     changed serial => {
-        root.pages = root.sheet.pages;
         if root.sheet.open {
+            root.pages = root.sheet.pages;
             root.focus-sheet();
         }
     }
 
     // Destinations: Save as PDF first, then each printer.
     destinations := BChoiceList {
-        for name[i] in root.sheet.destinations: BChoiceRow {
+        for name[i] in root.view.destinations: BChoiceRow {
             label: name;
-            checked: i == root.sheet.destination;
+            checked: i == root.view.destination;
             hovered(on) => {
                 destinations.hover(i, on);
             }
             picked => {
-                root.edit(i, root.pages, root.sheet.landscape, root.sheet.paper,
-                    root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+                root.edit(i, root.pages, root.view.landscape, root.view.paper,
+                    root.view.margins, root.view.scale, root.view.background, root.view.copies);
             }
         }
     }
-    // Built at the first opening: its controls take their slots in the controls registry, which
-    // the host wires after the window is built.
-    if root.sheet.serial > 0: BCard {
+    // Built at the first opening (its controls take their slots in the controls registry, which
+    // the host wires after the window is built) and kept from then on.
+    if root.view.serial > 0: BCard {
         BRow {
             title: "Pages";
             wide: true;
@@ -79,8 +89,8 @@ export component PrintSheet inherits SheetFrame {
                 placeholder: "All, or like 1-3, 5";
                 label: "Pages";
                 edited(t) => {
-                    root.edit(root.sheet.destination, t, root.sheet.landscape, root.sheet.paper,
-                        root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+                    root.edit(root.view.destination, t, root.view.landscape, root.view.paper,
+                        root.view.margins, root.view.scale, root.view.background, root.view.copies);
                 }
                 accepted => {
                     root.accepted();
@@ -96,10 +106,10 @@ export component PrintSheet inherits SheetFrame {
                 compact: true;
                 label: "Layout";
                 labels: ["Portrait", "Landscape"];
-                selected: root.sheet.landscape ? 1 : 0;
+                selected: root.view.landscape ? 1 : 0;
                 chosen(i) => {
-                    root.edit(root.sheet.destination, root.pages, i == 1, root.sheet.paper,
-                        root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+                    root.edit(root.view.destination, root.pages, i == 1, root.view.paper,
+                        root.view.margins, root.view.scale, root.view.background, root.view.copies);
                 }
             }
         }
@@ -109,10 +119,10 @@ export component PrintSheet inherits SheetFrame {
                 compact: true;
                 label: "Paper";
                 labels: ["Letter", "A4", "Legal"];
-                selected: root.sheet.paper;
+                selected: root.view.paper;
                 chosen(i) => {
-                    root.edit(root.sheet.destination, root.pages, root.sheet.landscape, i,
-                        root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+                    root.edit(root.view.destination, root.pages, root.view.landscape, i,
+                        root.view.margins, root.view.scale, root.view.background, root.view.copies);
                 }
             }
         }
@@ -122,10 +132,10 @@ export component PrintSheet inherits SheetFrame {
                 compact: true;
                 label: "Margins";
                 labels: ["Default", "None", "Minimum"];
-                selected: root.sheet.margins;
+                selected: root.view.margins;
                 chosen(i) => {
-                    root.edit(root.sheet.destination, root.pages, root.sheet.landscape, root.sheet.paper,
-                        i, root.sheet.scale, root.sheet.background, root.sheet.copies);
+                    root.edit(root.view.destination, root.pages, root.view.landscape, root.view.paper,
+                        i, root.view.scale, root.view.background, root.view.copies);
                 }
             }
         }
@@ -138,42 +148,42 @@ export component PrintSheet inherits SheetFrame {
                 min: 10;
                 max: 200;
                 step: 10;
-                value: root.sheet.scale;
+                value: root.view.scale;
                 width: scale-row.control-width;
                                 edited(v) => {
-                    root.edit(root.sheet.destination, root.pages, root.sheet.landscape, root.sheet.paper,
-                        root.sheet.margins, Math.round(v), root.sheet.background, root.sheet.copies);
+                    root.edit(root.view.destination, root.pages, root.view.landscape, root.view.paper,
+                        root.view.margins, Math.round(v), root.view.background, root.view.copies);
                 }
             }
         }
-        if root.sheet.destination > 0: copies-row := BStackRow {
+        if root.view.destination > 0: copies-row := BStackRow {
             title: "Copies";
             ElasticSlider {
                 compact: true;
                 label: "Copies";
                 min: 1;
                 max: 99;
-                value: root.sheet.copies;
+                value: root.view.copies;
                 width: copies-row.control-width;
                                 edited(v) => {
-                    root.edit(root.sheet.destination, root.pages, root.sheet.landscape, root.sheet.paper,
-                        root.sheet.margins, root.sheet.scale, root.sheet.background, Math.round(v));
+                    root.edit(root.view.destination, root.pages, root.view.landscape, root.view.paper,
+                        root.view.margins, root.view.scale, root.view.background, Math.round(v));
                 }
             }
         }
         CheckBox {
             text: "Background graphics";
-            checked: root.sheet.background;
+            checked: root.view.background;
             toggled(on) => {
-                if on != root.sheet.background {
-                    root.edit(root.sheet.destination, root.pages, root.sheet.landscape, root.sheet.paper,
-                        root.sheet.margins, root.sheet.scale, on, root.sheet.copies);
+                if on != root.view.background {
+                    root.edit(root.view.destination, root.pages, root.view.landscape, root.view.paper,
+                        root.view.margins, root.view.scale, on, root.view.copies);
                 }
             }
         }
     }
-    if root.sheet.error != "": BNote {
+    if root.view.error != "": BNote {
         danger: true;
-        text: root.sheet.error;
+        text: root.view.error;
     }
 }
