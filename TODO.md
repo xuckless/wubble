@@ -253,7 +253,8 @@ Each item is done when it works on Linux and macOS; Windows is verified on CI.
 - [x] Clipboard, drag-and-drop (into, out of, and between views): the page clipboard reaches the system on Wayland through wubble-helper's clipboard content script (see Decided "Page clipboard on Wayland"): copy, cut, paste, `execCommand`, `navigator.clipboard` text, primary selection and middle-click paste; Copy Image puts the image on the clipboard (Decided "Copy Image", B.copy-image). Page drags run inside the window (`page_drag`: drop on the page, a link on the sidebar opens a tab, Escape cancels). Files from other apps drop on the page where winit reports them (X11, macOS, Windows). Checked by `--smoke parity` (A, B, D).
   - [ ] A page's own non-text clipboard formats (`navigator.clipboard.write` with images, `text/html`): the script sees only `text/plain`; needs a MIME-aware Wayland data source
   - [ ] **Files dropped from other apps on Wayland**: winit 0.30 has no Wayland drag and drop; needs our own `wl_data_device` drop target on the window
-  - [ ] **Dragging out of the window** to other apps: needs an OS drag source (Slint has none)
+  - [ ] **Dragging a picture** (owner, 2026-11-18: "the pictures aren't draggable yet"): inside the window an image drag exists (onto the sidebar or a field); out to the desktop or another app does not, and that is what a person expects of a picture. Batch nine's leftovers lane builds the drag source; the image must go out as a file, not only as a link
+- [ ] **Dragging out of the window** to other apps: needs an OS drag source (Slint has none)
   - [ ] Drop operation: copy, then move, then link among those the page allows; welding does not report CEF `UpdateDragCursor`, so a text drag between two fields copies instead of moving
   - [ ] Custom drag MIME types (`setData("application/x-...")`) are dropped: welding's `DragPayload` has files, link, text and HTML only
 - [x] **Ctrl+wheel zoom** (`--smoke parity` E.ctrl-wheel-zoom): Chromium zooms only when the page leaves the wheel alone, and CEF does not report whether a wheel was consumed, so wubble-helper's `zoom.js` (a content script on its own frame channel, `page::FrameChannel::Zoom`) reports a trusted Ctrl+wheel the page did not cancel, a task after its dispatch, and the host zooms the visible tab one step (`Action::ZoomIn/Out`, as the keys). Open: one step per wheel event, so a touchpad's stream of small Ctrl+wheel deltas (pinch) zooms fast; Chromium accumulates them
@@ -429,6 +430,10 @@ pass upgrades them. Source: the design repo and `~/Dev/wubble-wt/notes/motion-au
 - [ ] Liquid glass (the wgpu scene's glass tiers, pointer light, tap waves) under every floating surface, with the flat Slint fallback kept
 - [ ] The glowing ring and border beam wherever something is focused, loading or newly opened: text fields, prompts, the command bar, menus on open
 - [ ] One audit at the end: walk every surface in the gallery smoke and mark each against the three effects above
+
+## Shelved ideas (owner; research only until picked up)
+
+- [ ] Live text in images (owner, 2026-11-18, Safari style): select and copy text inside pictures on a page with an on-device OCR model. Shelved; research note on candidate models and how it would fit: `~/Dev/wubble-wt/notes/ocr-research.md`. Nothing leaves the machine.
 
 ## M6 — Own engine: ungoogled Chromium + CEF
 
