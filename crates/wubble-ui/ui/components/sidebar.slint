@@ -22,6 +22,7 @@ import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "../kit/chrome/address-pill.slint";
 import { Favs } from "../kit/chrome/favs.slint";
+import { SpaceSwitcher, SpaceName } from "../kit/chrome/space-switcher.slint";
 import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
@@ -350,22 +351,9 @@ export component Sidebar inherits Rectangle {
             step: root.ride-step;
             // A new Space's name arrives with the Overlap entrance (chrome.tsx keys the span by
             // the Space: `wb-in`).
-            Entering {
-                height: Shell.space-name-height;
-                e: root.space-enter;
-                Text {
-                    x: Shell.side-grid;
-                    y: Shell.space-name-top;
-                    width: parent.width - Shell.side-grid * 2;
-                    height: parent.height - Shell.space-name-top;
-                    text: root.spaces[root.space-index].name;
-                    color: Palette.mist;
-                    font-family: Fonts.ui;
-                    font-size: Type.label.size;
-                    font-weight: Type.label.weight;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+            SpaceName {
+                text: root.spaces[root.space-index].name;
+                enter: root.space-enter;
             }
         }
 
@@ -611,64 +599,17 @@ export component Sidebar inherits Rectangle {
                 }
             }
 
-            strip := Rectangle {
+            strip := SpaceSwitcher {
                 x: root.compact ? (parent.width - self.width) / 2 : 0px;
-                width: root.compact ? Shell.space-tile : parent.span;
-                // along the axis: stretched about `origin`; across it: squashed
-                property <length> along: Shell.space-tile * root.capsule-stretch;
-                property <length> across: Shell.space-tile / Math.sqrt(root.capsule-stretch);
-                property <length> at: root.capsule-offset + (Shell.space-tile - self.along) * root.capsule-origin;
-                Rectangle {
-                    x: root.compact ? (Shell.space-tile - parent.across) / 2 : parent.at;
-                    y: root.compact ? parent.at : (Shell.space-tile - parent.across) / 2;
-                    width: root.compact ? parent.across : parent.along;
-                    height: root.compact ? parent.along : parent.across;
-                    border-radius: Shell.control-radius;
-                    background: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : transparent;
-                    opacity: Shell.capsule-alpha;
-                    animate background {
-                        duration: Calm.ms(Shell.capsule-colour-ms);
-                        easing: Motion.ease-in-out;
-                    }
-                }
-
-                accessible-role: AccessibleRole.tab-list;
-                accessible-label: "Spaces";
-                for space[i] in root.spaces: tile := Rectangle {
-                    // tabs.tsx SpaceSwitcher: each click wobbles the icon once more
-                    property <bool> hit: false;
-                    x: root.compact ? 0px : i * switcher.pitch;
-                    y: root.compact ? i * switcher.pitch : 0px;
-                    width: Shell.space-tile;
-                    height: Shell.space-tile;
-                    border-radius: Shell.control-radius;
-                    accessible-role: AccessibleRole.tab;
-                    accessible-label: space.name;
-                    accessible-item-selectable: true;
-                    accessible-item-selected: i == root.space-index;
-                    accessible-action-default => {
-                        root.space-switched(space.id);
-                    }
-                    ta := TouchArea {
-                        clicked => {
-                            tile.hit = !tile.hit;
-                            root.space-switched(space.id);
-                        }
-                    }
-                    Wobble {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: Shell.space-glyph;
-                        height: Shell.space-glyph;
-                        hit: tile.hit;
-                        Icon {
-                            // the icon is drawn at 17 px (tabs.tsx SpaceIcons): stroke 1.7 on the 24 grid
-                            size: Shell.space-glyph;
-                            path: Glyph.space(space.icon);
-                            // .wb button: ink (the capsule under the active one carries its colour)
-                            tint: Palette.ink;
-                        }
-                    }
+                y: 0px;
+                spaces: root.spaces;
+                active: root.space-index;
+                vertical: root.compact;
+                offset: root.capsule-offset;
+                stretch: root.capsule-stretch;
+                origin: root.capsule-origin;
+                picked(id) => {
+                    root.space-switched(id);
                 }
             }
         }

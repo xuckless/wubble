@@ -14,6 +14,7 @@ slint::slint! {
     #[edition = "1.19"]
     import { AddressPill } from "ui/kit/chrome/address-pill.slint";
     import { Favs } from "ui/kit/chrome/favs.slint";
+    import { SpaceTint, SpaceSwitcher } from "ui/kit/chrome/space-switcher.slint";
     export component Probe inherits Window {
         width: 400px;
         height: 300px;
@@ -26,6 +27,14 @@ slint::slint! {
         }
         out property <int> fav-hover: favs.hovered-id;
         out property <length> favs-height: favs.height;
+        // the Space glyph's colour: rest, hovered, active
+        out property <[color]> space-tints: [SpaceTint.of(false, false), SpaceTint.of(true, false), SpaceTint.of(false, true)];
+        spaces := SpaceSwitcher {
+            x: 20px; y: 200px; vertical: root.compact;
+            spaces: [{ id: 1, name: "a" }, { id: 2, name: "b" }, { id: 3, name: "c" }];
+        }
+        out property <length> spaces-w: spaces.width;
+        out property <length> spaces-h: spaces.height;
         out property <length> origin-x: pill.origin.x;
         out property <length> origin-y: pill.origin.y;
     }
@@ -90,6 +99,30 @@ fn favourites(p: &Probe) {
     p.set_compact(false);
 }
 
+/// The Space glyph's computed colour: ink at rest, hovered and active (`.wb button { color:
+/// inherit }` outranks `.wb-space`'s haze); `.wb-spaces` 36 tiles 2 apart, a column on the rail.
+fn spaces(p: &Probe) {
+    use slint::Model;
+    let tints: Vec<slint::Color> = p.get_space_tints().iter().collect();
+    let (haze, ink) = (
+        slint::Color::from_rgb_u8(0x7E, 0x84, 0x96),
+        slint::Color::from_rgb_u8(0xF2, 0xF4, 0xFA),
+    );
+    assert_eq!(tints, [ink, ink, ink]);
+    assert_ne!(tints[0], haze, "the web renders no haze glyph");
+    assert_eq!(
+        (p.get_spaces_w(), p.get_spaces_h()),
+        (3.0 * 38.0 - 2.0, 36.0)
+    );
+    p.set_compact(true);
+    mock_elapsed_time(Duration::from_millis(1));
+    assert_eq!(
+        (p.get_spaces_w(), p.get_spaces_h()),
+        (36.0, 3.0 * 38.0 - 2.0)
+    );
+    p.set_compact(false);
+}
+
 #[test]
 fn chrome_kit_parts_follow_the_design() {
     init_integration_test_with_mock_time();
@@ -98,4 +131,5 @@ fn chrome_kit_parts_follow_the_design() {
     run_out();
     address_pill(&p);
     favourites(&p);
+    spaces(&p);
 }
