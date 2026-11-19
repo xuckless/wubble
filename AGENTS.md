@@ -53,6 +53,8 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble-engine --example gpu_crash_smoke   # windowless: kills the GPU process (chrome://gpucrash), frames must resume; run by hand only
     cargo run -p wubble -- --shot-dir DIR --smoke gallery   # walks the shell through its surfaces on a seeded profile, one PNG each; run by hand only
     cargo run -p wubble-engine --example cookie_smoke   # windowless, two processes on one temp profile: a container's tabs share cookies (persistent and session) and localStorage, other containers see none, they survive a restart, clearing and forgetting a site work; prints `smoke: cookies ok`; run by hand only
+    WUBBLE_CODEC_CLIPS=DIR cargo run -p wubble -- --smoke codecs   # windowless: which codecs and media sources play with the browser's blocker, observer and kit (`codecs=bare`: without them); clips from scripts/codec-clips.sh DIR (none: the bundled clip only); exits
+    cargo run -p wubble-engine --example local_probe   # windowless: localhost, 127.0.0.1, [::1] and the LAN address load with fetch, cookies, WebSocket and a service worker; exits
     cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
@@ -87,8 +89,8 @@ worktree without `target/` and `.git`; clippy needs `rustup component add clippy
 
 Window smokes need a GUI session: over ssh they hang creating the window, so always
 wrap them in `timeout`. Console smoke loop: log in at the Mac console as `pixlbot`
-(fast user switching; the toolchain and `~/wubble-b6` are that user's), open Terminal,
-`cd ~/wubble-b6 && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
+(fast user switching; the toolchain and `~/wubble-main` are that user's), open Terminal,
+`cd ~/wubble-main && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
 (above), then:
 
     for s in boot nav tabs session frames=120 split page settings pages autofill windows media video boost builtins quit block parity; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s > /tmp/wubble-$s.log 2>&1; echo "exit $?"; grep -E '^smoke|panicked|^wubble:' /tmp/wubble-$s.log; done; pgrep -fl MacOS/wubble

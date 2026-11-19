@@ -8575,6 +8575,7 @@ name = "wubble-bundle"
 version = "0.0.0"
 dependencies = [
  "cef",
+ "plist",
  "semver",
 ]
 
@@ -8599,12 +8600,14 @@ name = "wubble-engine"
 version = "0.0.0"
 dependencies = [
  "aes 0.9.4",
+ "base64 0.22.1",
  "cbc",
  "cef",
  "dpi",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "serde_json",
+ "sha1_smol",
  "welding",
  "winit",
  "wubble-core",

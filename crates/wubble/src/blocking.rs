@@ -175,7 +175,7 @@ impl Blocking {
     }
 
     /// [`Self::start`] with the fetcher given; returns the thread, if one runs.
-    fn start_with(
+    pub(crate) fn start_with(
         self: &Arc<Self>,
         profile: &Path,
         settings: &BlockerSettings,
