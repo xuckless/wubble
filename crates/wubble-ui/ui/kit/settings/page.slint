@@ -1,0 +1,118 @@
+// design: pages/settings.tsx:553-570, pages/settings.css:5-20 @598f814
+// The settings page's frame pieces (`.st-page`, `.st-grid`, `.st-pin`): the page's colour under
+// one scroller, the title in the display face (`.st-pin h1`: 40, line-height 1; 34 in the
+// narrow container), and the search count (`.st-count`: 18 high, 12.5 mist). The grid's
+// columns and the pin's ride are laid out by the page (components/settings.slint) from
+// `Shell.settings-*`, which come from the same rules.
+// The scroller is wubble's: the native pages share the design's scroll physics through the
+// PageScroll global (components/page-scroll.slint) on the kit scroller.
+
+import { Palette, Space } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+import { WubbleScroller } from "../controls/scroller.slint";
+import { PageScroll } from "../../components/page-scroll.slint";
+
+// The page's values that are not one rule's: the accent before a Space gives one (the design's
+// `--tp-accent` default, sky), the narrow container (`@container (max-width: 759px)`), and
+// wubble's own: a whole-number setting (the design has no stepper) is the row's slider
+// (`.st-slider`) when its range is at most `slider-range` steps, else a number typed in a
+// field, a fractional one snaps to `float-step`; a list's lines are `entry-gap` apart; a list page's title and search `title-gap`.
+export global SettingsLayout {
+    out property <color> accent: Palette.sky;
+    out property <length> narrow: SettingsCss.max-width-759px--query-max-width;
+    out property <float> slider-range: 500;
+    // a fractional setting's slider snaps to hundredths (two decimals shown)
+    out property <float> float-step: 0.01;
+    out property <length> entry-gap: Space.s1;
+    out property <length> title-gap: Space.s6;
+}
+
+// `.st-pin h1`
+export component PageTitle inherits KitText {
+    in property <bool> narrow;
+    role: root.narrow ? Role.st-title-narrow : Role.st-title;
+    color: Palette.ink;
+    vertical-alignment: center;
+}
+
+// `.st-count`: how many rows the search leaves (empty without a query)
+export component SearchCount inherits KitText {
+    role: Role.st-count;
+    height: SettingsCss.st-count--height;
+    color: SettingsCss.st-count--color;
+    vertical-alignment: center;
+}
+
+// The scroller every native page shares: the page's colour on the design's scroll physics
+// (the PageScroll global, stepped by the driver). The open page reports its sizes there and
+// takes its input from here; `wheeled` is any scroll by hand (wheel, touch, thumb).
+export component PageScroller inherits Rectangle {
+    in property <bool> open;
+    // where the content is (rubber-banded past the ends), and how far it can go
+    out property <length> scroll: root.open ? PageScroll.y : 0px;
+    out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
+    callback wheeled();
+    background: Palette.web;
+    public function wheel(d: length) {
+        PageScroll.wheel(d);
+        root.wheeled();
+    }
+    // glide to `y` (scroller.tsx `to`)
+    public function to(y: length) {
+        PageScroll.to(y);
+    }
+    // back to the top at once
+    public function reset() {
+        PageScroll.reset();
+    }
+    changed open => {
+        if root.open {
+            PageScroll.reset();
+            root.report();
+        }
+    }
+    function report() {
+        if root.open {
+            PageScroll.viewport = scroller.viewport-height;
+            PageScroll.content = scroller.content-height;
+        }
+    }
+    scroller := WubbleScroller {
+        content-y: root.scroll;
+        thumb-visible: root.open && PageScroll.thumb-visible;
+        thumb-height: PageScroll.thumb-height;
+        thumb-top: PageScroll.thumb-top;
+        changed viewport-height => {
+            root.report();
+        }
+        changed content-height => {
+            root.report();
+        }
+        wheel(d) => {
+            root.wheel(d);
+        }
+        touch-down(y) => {
+            PageScroll.touch-down(y);
+            root.wheeled();
+        }
+        touch-move(y) => {
+            PageScroll.touch-move(y);
+        }
+        touch-up => {
+            PageScroll.touch-up();
+        }
+        thumb-down(y) => {
+            PageScroll.thumb-down(y);
+            root.wheeled();
+        }
+        thumb-move(y) => {
+            PageScroll.thumb-move(y);
+        }
+        thumb-up => {
+            PageScroll.thumb-up();
+        }
+        @children
+    }
+}

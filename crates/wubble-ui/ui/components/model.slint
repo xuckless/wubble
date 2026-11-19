@@ -395,7 +395,6 @@ export struct SettingItem {
     number: float,
     min: float,
     max: float,
-    step: float,
     // segmented: the stored words, their labels, the chosen one (-1: none yet)
     words: [string],
     labels: [string],
@@ -404,6 +403,9 @@ export struct SettingItem {
     entries: [EntryItem],
     changed: bool,
     restart: bool,
+    // a choice the design picks from a Select (the search engine): its labels as menu rows;
+    // empty for the segmented ones
+    options: [MenuEntry],
 }
 
 // One action of the keybinding editor (`keys::binding_rows`).
@@ -412,6 +414,8 @@ export struct BindingItem {
     action: string,
     label: string,
     chord: string,
+    // the chord's keys, one key cap each ("Ctrl", "K")
+    keys: [string],
     changed: bool,
 }
 
