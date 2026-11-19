@@ -82,7 +82,43 @@ impl AxItem {
     }
 }
 
+/// Where a screen reader's action on an item can land: at its centre, or not before the page
+/// scrolls by `(dx, dy)` (CSS pixels) to bring that centre to the middle of the viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Reach {
+    At { x: f64, y: f64 },
+    ScrollBy { dx: f64, dy: f64 },
+}
+
+/// The [`Reach`] of an item at `item` (an [`AxItem::bounds`]) in a viewport of `viewport`'s
+/// size ([`PageTree::viewport`]): a click outside the viewport hits nothing.
+pub fn reach(item: Bounds, viewport: Bounds) -> Reach {
+    let (x, y) = (item.x + item.width / 2.0, item.y + item.height / 2.0);
+    let inside = |at: f64, size: f64| (0.0..size).contains(&at);
+    let off = |at: f64, size: f64| {
+        if inside(at, size) {
+            0.0
+        } else {
+            at - size / 2.0
+        }
+    };
+    if inside(x, viewport.width) && inside(y, viewport.height) {
+        Reach::At { x, y }
+    } else {
+        Reach::ScrollBy {
+            dx: off(x, viewport.width),
+            dy: off(y, viewport.height),
+        }
+    }
+}
+
 impl PageTree {
+    /// The page's viewport: its document's root bounds (CSS pixels).
+    pub fn viewport(&self) -> Option<Bounds> {
+        let doc = self.trees.get(&self.root)?;
+        Some(doc.nodes.get(&doc.root?)?.location.bounds)
+    }
+
     /// The page's items in document order, frames read at their host, at most `cap` (a page
     /// of thousands of nodes keeps its first ones).
     pub fn flatten(&self, cap: usize) -> Vec<AxItem> {

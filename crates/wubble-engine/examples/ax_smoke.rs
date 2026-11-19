@@ -1,6 +1,6 @@
 //! Windowless check of the page accessibility path. Run by hand:
 //!
-//!     cargo run -p wubble-engine --example ax_smoke [-- --dump FILE]
+//!     cargo run -p wubble-engine --example ax_smoke [-- --dump FILE] [--scale 2]
 //!
 //! (after `cargo build --workspace`, so `wubble-helper` sits next to the binaries). It opens
 //! one windowless view on a temporary `file://` page with headings, links, a button and a form,
@@ -10,7 +10,8 @@
 //! headings (with their levels), the links, the button, the text field and the checkbox are
 //! there with their names, and prints `ax smoke: ok`. `--dump FILE` writes the JSON of every
 //! tree change, one per line (the fixture in `wubble-ax/src/fixtures` came from it). No window
-//! is shown and nothing touches the network. It waits for tree changes, counted; the deadline
+//! is shown and nothing touches the network. `--scale` sets the view's device scale (default 1):
+//! the printed bounds stay CSS pixels at any scale. It waits for tree changes, counted; the deadline
 //! only bounds a hang and nothing here measures speed.
 
 use std::path::{Path, PathBuf};
@@ -41,12 +42,11 @@ const PAGE: &str = r#"<!doctype html>
 const DEADLINE: Duration = Duration::from_secs(60);
 
 fn main() -> ExitCode {
-    let dump = std::env::args()
-        .skip_while(|a| a != "--dump")
-        .nth(1)
-        .map(PathBuf::from);
+    let arg = |name: &str| std::env::args().skip_while(|a| a != name).nth(1);
+    let dump = arg("--dump").map(PathBuf::from);
+    let scale = arg("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let dir = std::env::temp_dir().join(format!("wubble-ax-smoke-{}", std::process::id()));
-    let result = run(&dir, dump.as_deref());
+    let result = run(&dir, dump.as_deref(), scale);
     let _ = std::fs::remove_dir_all(&dir);
     match result {
         Ok(()) => {
@@ -60,7 +60,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(dir: &Path, dump: Option<&Path>) -> Result<(), String> {
+fn run(dir: &Path, dump: Option<&Path>, scale: f32) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let page = dir.join("page.html");
     std::fs::write(&page, PAGE).map_err(|e| e.to_string())?;
@@ -75,7 +75,7 @@ fn run(dir: &Path, dump: Option<&Path>) -> Result<(), String> {
             url: format!("file://{}", page.display()),
             layout: Layout {
                 size: FrameSize::new(800, 600),
-                scale: 1.0,
+                scale,
                 area: None,
             },
             frame_rate: 30,

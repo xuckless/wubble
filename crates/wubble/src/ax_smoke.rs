@@ -4,9 +4,12 @@
 //! button; it runs the button's default action as a screen reader would (`Host::ax_action`):
 //! the page retitles itself from its click handler; then sets the text field's value: the page
 //! retitles itself from its `input` handler, and the field's item shows the value once the
-//! page's next tree change came. Bounded by counts of CEF work runs, never by time. Run by hand
-//! (it opens a window); what a screen reader makes of it is checked by hand with Orca or an
-//! AT-SPI dump.
+//! page's next tree change came; last it runs the default action of a button below the fold
+//! (the host scrolls it into view first): the page retitles itself. Bounded by counts of CEF
+//! work runs, never by time. Run by hand (it opens a window); what a screen reader makes of it
+//! is checked by hand with Orca or an AT-SPI dump.
+
+use wubble_ui::AxKind;
 
 /// Runs of CEF work one step may take before the smoke gives up.
 pub const MAX_STEP_RUNS: u32 = 4_000;
@@ -20,16 +23,19 @@ pub const PAGE: &str = r##"<!doctype html><html lang="en"><head><title>ax</title
 <input id="email" value="a@b" oninput="document.title='ax value '+this.value">
 <label><input type="checkbox" checked> Remember me</label>
 <button onclick="document.title='ax clicked'">Send</button>
+<div style="height:3000px"></div>
+<button onclick="document.title='ax far'">Far</button>
 </body></html>"##;
 
 /// The items the page must show: kind (`AxItemView::kind`) and label.
-pub const EXPECTED: &[(i32, &str)] = &[
-    (0, "Welcome"),
-    (1, "docs"),
-    (0, "Sign in"),
-    (3, "Email"),
-    (4, "Remember me"),
-    (2, "Send"),
+pub const EXPECTED: &[(AxKind, &str)] = &[
+    (AxKind::Heading, "Welcome"),
+    (AxKind::Link, "docs"),
+    (AxKind::Heading, "Sign in"),
+    (AxKind::TextField, "Email"),
+    (AxKind::CheckBox, "Remember me"),
+    (AxKind::Button, "Send"),
+    (AxKind::Button, "Far"),
 ];
 
 /// What the smoke types into the field.
@@ -47,6 +53,11 @@ pub enum Step {
     Typed,
     /// Waiting for the field's item to show the value.
     Value,
+    /// The default action of the button below the fold ran (the page scrolls to it first):
+    /// waiting for the page's title.
+    Far,
+    /// Passed: counting the items.
+    Done,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,7 +76,7 @@ impl Default for AxSmoke {
 }
 
 /// One accessible item as the window shows it: kind, label, value.
-pub type Item = (i32, String, String);
+pub type Item = (AxKind, String, String);
 
 #[derive(Clone, Copy, Debug)]
 pub enum Input<'a> {
@@ -88,7 +99,7 @@ pub enum Action {
     Fail(String),
 }
 
-fn find(items: &[Item], kind: i32, label: &str) -> Option<usize> {
+fn find(items: &[Item], kind: AxKind, label: &str) -> Option<usize> {
     items.iter().position(|(k, l, _)| *k == kind && l == label)
 }
 
@@ -111,7 +122,7 @@ pub fn next(mut s: AxSmoke, input: Input) -> (AxSmoke, Vec<Action>) {
         (Step::Items, Input::Worked(items))
             if EXPECTED.iter().all(|(k, l)| find(items, *k, l).is_some()) =>
         {
-            let index = find(items, 2, "Send").unwrap_or_default();
+            let index = find(items, AxKind::Button, "Send").unwrap_or_default();
             to(
                 Step::Clicked,
                 vec![Action::Act {
@@ -129,7 +140,7 @@ pub fn next(mut s: AxSmoke, input: Input) -> (AxSmoke, Vec<Action>) {
             vec![],
         ),
         (Step::Typed, Input::Worked(items)) if s.runs == 1 => {
-            let index = find(items, 3, "Email").unwrap_or_default();
+            let index = find(items, AxKind::TextField, "Email").unwrap_or_default();
             (
                 s,
                 vec![Action::Act {
@@ -145,10 +156,20 @@ pub fn next(mut s: AxSmoke, input: Input) -> (AxSmoke, Vec<Action>) {
         (Step::Value, Input::Worked(items))
             if items
                 .iter()
-                .any(|(k, l, v)| *k == 3 && l == "Email" && v == TYPED) =>
+                .any(|(k, l, v)| *k == AxKind::TextField && l == "Email" && v == TYPED) =>
         {
-            (s, vec![Action::Pass(items.len())])
+            let index = find(items, AxKind::Button, "Far").unwrap_or_default();
+            to(
+                Step::Far,
+                vec![Action::Act {
+                    index,
+                    name: "click",
+                    text: "",
+                }],
+            )
         }
+        (Step::Far, Input::Title("ax far")) => to(Step::Done, vec![]),
+        (Step::Done, Input::Worked(items)) => (s, vec![Action::Pass(items.len())]),
         _ => (s, vec![]),
     }
 }
@@ -161,7 +182,7 @@ mod tests {
         EXPECTED
             .iter()
             .map(|(k, l)| {
-                let v = if *k == 3 { value } else { "" };
+                let v = if *k == AxKind::TextField { value } else { "" };
                 (*k, (*l).to_owned(), v.to_owned())
             })
             .collect()
@@ -197,8 +218,21 @@ mod tests {
         let (s, _) = next(s, Input::Title("ax value typed"));
         let (s, a) = next(s, Input::Worked(&items("a@b")));
         assert!(a.is_empty(), "the tree has not caught up");
+        let (s, a) = next(s, Input::Worked(&items(TYPED)));
+        assert_eq!(
+            a,
+            vec![Action::Act {
+                index: 6,
+                name: "click",
+                text: ""
+            }],
+            "the button below the fold"
+        );
+        let (s, a) = next(s, Input::Worked(&items(TYPED)));
+        assert!(a.is_empty(), "waiting for its click");
+        let (s, _) = next(s, Input::Title("ax far"));
         let (_, a) = next(s, Input::Worked(&items(TYPED)));
-        assert_eq!(a, vec![Action::Pass(6)]);
+        assert_eq!(a, vec![Action::Pass(7)]);
     }
 
     #[test]

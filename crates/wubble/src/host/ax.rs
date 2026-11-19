@@ -5,8 +5,9 @@
 //! (`PageTree::flatten`) as Slint's own accessible elements (`page-ax.slint`), so they reach the
 //! screen reader through Slint's AccessKit adapter. Off, nothing is asked of CEF and the list is
 //! empty. A screen reader's actions come back by item: a click at the item's centre through the
-//! pointer path, a text field's value typed over its text (CEF has no accessibility actions
-//! for windowless browsers).
+//! pointer path (an item outside the viewport is first scrolled to its middle,
+//! `wubble_ax::reach`), a text field's value typed over its text (CEF has no accessibility
+//! actions for windowless browsers).
 //!
 //! A flat list, not the page's tree: Slint 1.19 cannot graft a foreign AccessKit subtree, and has
 //! no link or heading role (see `page-ax.slint`); the full mapping (`PageTree::apply`) waits for
@@ -15,13 +16,14 @@
 use std::collections::BTreeMap;
 
 use slint::platform::PointerEventButton;
-use wubble_ax::{AxItem, AxValue, Kind, PageTree, value};
+use wubble_ax::{AxItem, AxValue, Bounds, Kind, PageTree, Reach, value};
 use wubble_core::apply::web_accessibility;
 use wubble_core::motion::Calm;
 use wubble_core::tab::TabId;
 use wubble_engine::input::Point;
 use wubble_engine::page::EditCommand;
-use wubble_ui::{AppWindow, AxItemView};
+use wubble_engine::page::PageEvent;
+use wubble_ui::{AppWindow, AxItemView, AxKind};
 
 use super::Host;
 use crate::screen_reader::{self, ScreenReader};
@@ -30,12 +32,25 @@ use crate::screen_reader::{self, ScreenReader};
 /// its first ones.
 const MAX_ITEMS: usize = 1500;
 
+/// A screen reader's action on an item outside the viewport: the page was asked to scroll it
+/// to the middle (`eval` answers with how far it scrolled, clamped at the page's ends; the
+/// tree's own update for a scroll alone may never come).
+struct Waiting {
+    tab: TabId,
+    eval: u64,
+    bounds: Bounds,
+    viewport: Bounds,
+    name: String,
+    text: String,
+}
+
 pub(super) struct WebAx {
     setting: Calm,
     reader: Box<dyn ScreenReader>,
     /// What the views were last told.
     on: bool,
     trees: BTreeMap<TabId, PageTree>,
+    waiting: Option<Waiting>,
 }
 
 impl Default for WebAx {
@@ -45,6 +60,7 @@ impl Default for WebAx {
             reader: screen_reader::source(),
             on: false,
             trees: BTreeMap::new(),
+            waiting: None,
         }
     }
 }
@@ -53,14 +69,14 @@ impl Default for WebAx {
 /// area (the page's view DIP, from the pane's left edge).
 fn view_of(index: usize, item: &AxItem, pane_x: f32) -> AxItemView {
     let kind = match item.kind {
-        Kind::Heading => 0,
-        Kind::Link => 1,
-        Kind::Button => 2,
-        Kind::TextField => 3,
-        Kind::CheckBox => 4,
-        Kind::RadioButton => 5,
-        Kind::Image => 6,
-        Kind::Text => 7,
+        Kind::Heading => AxKind::Heading,
+        Kind::Link => AxKind::Link,
+        Kind::Button => AxKind::Button,
+        Kind::TextField => AxKind::TextField,
+        Kind::CheckBox => AxKind::CheckBox,
+        Kind::RadioButton => AxKind::RadioButton,
+        Kind::Image => AxKind::Image,
+        Kind::Text => AxKind::Text,
     };
     let b = item.bounds;
     AxItemView {
@@ -95,6 +111,7 @@ impl Host {
         }
         self.ax.on = on;
         self.ax.trees.clear();
+        self.ax.waiting = None;
         let views: Vec<_> = self.views.values().copied().collect();
         for id in views {
             if let Some(view) = self.engine.view(id) {
@@ -175,10 +192,66 @@ impl Host {
         let Some(item) = usize::try_from(index).ok().and_then(|i| items.get(i)) else {
             return;
         };
-        let b = item.bounds;
+        let Some(viewport) = self.ax.trees.get(&tab).and_then(PageTree::viewport) else {
+            return;
+        };
+        match wubble_ax::reach(item.bounds, viewport) {
+            Reach::At { x, y } => self.ax_act(tab, x, y, name, text),
+            Reach::ScrollBy { dx, dy } => {
+                let script = format!(
+                    "(()=>{{const x=scrollX,y=scrollY;\
+                     scrollBy({{left:{dx},top:{dy},behavior:'instant'}});\
+                     return [scrollX-x,scrollY-y]}})()"
+                );
+                let Some(id) = self.tab_view(tab).and_then(|v| v.eval(&script)) else {
+                    return;
+                };
+                self.ax.waiting = Some(Waiting {
+                    tab,
+                    eval: id.0,
+                    bounds: item.bounds,
+                    viewport,
+                    name: name.to_owned(),
+                    text: text.to_owned(),
+                });
+            }
+        }
+    }
+
+    /// The page's answer to the scroll an action asked for; whether it was one. The action
+    /// runs where the item is now, if that is in the viewport.
+    pub(super) fn ax_answer(&mut self, event: &PageEvent) -> bool {
+        let PageEvent::EvalResult { id, result } = event else {
+            return false;
+        };
+        let Some(w) = self.ax.waiting.take_if(|w| w.eval == id.0) else {
+            return false;
+        };
+        let moved = result
+            .as_deref()
+            .ok()
+            .and_then(|t| serde_json::from_str::<[f64; 2]>(t).ok());
+        let Some([dx, dy]) = moved else {
+            eprintln!("wubble: ax: the page did not scroll: {result:?}");
+            return true;
+        };
+        let now = Bounds {
+            x: w.bounds.x - dx,
+            y: w.bounds.y - dy,
+            ..w.bounds
+        };
+        match wubble_ax::reach(now, w.viewport) {
+            Reach::At { x, y } => self.ax_act(w.tab, x, y, &w.name, &w.text),
+            Reach::ScrollBy { .. } => eprintln!("wubble: ax: the item stays out of view"),
+        }
+        true
+    }
+
+    /// The action at `(x, y)` of `tab`'s pane (CSS px).
+    fn ax_act(&mut self, tab: TabId, x: f64, y: f64, name: &str, text: &str) {
         let point = Point {
-            x: (b.x + b.width / 2.0) as f32,
-            y: (b.y + b.height / 2.0) as f32,
+            x: x as f32,
+            y: y as f32,
         };
         let pane = crate::shell::pane_id(tab);
         // a click, as the pointer would make it (it focuses the page and the field too)
@@ -255,7 +328,10 @@ mod tests {
             },
         };
         let row = view_of(3, &item, 100.0);
-        assert_eq!((row.id, row.kind, row.label.as_str()), (3, 1, "docs"));
+        assert_eq!(
+            (row.id, row.kind, row.label.as_str()),
+            (3, AxKind::Link, "docs")
+        );
         assert_eq!((row.x, row.y, row.w, row.h), (168.0, 80.0, 29.0, 17.0));
     }
 }

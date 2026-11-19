@@ -123,6 +123,46 @@ fn bounds_add_the_offset_containers_less_their_scroll() {
 }
 
 #[test]
+fn a_transformed_container_maps_what_it_contains() {
+    // From CEF 156 (`ax_smoke` with the help link in
+    // `<div style="transform:translate(100px,50px) scale(2);transform-origin:0 0">`): the div
+    // sits at (0, 0) in the root with its layout offset (8, 186.688) in its transform.
+    let v = json!({
+        "ax_tree_id": "tree-t",
+        "updates": [{
+            "root_id": 15,
+            "nodes": [
+                { "id": 15, "role": "rootWebArea", "offset_container_id": 0,
+                  "location": { "x": 0.0, "y": 0.0, "width": 800.0, "height": 600.0 },
+                  "child_ids": [31], "attributes": { "scrollX": 0, "scrollY": 0 } },
+                { "id": 31, "role": "genericContainer", "offset_container_id": 15,
+                  "location": { "x": 0.0, "y": 0.0, "width": 784.0, "height": 18.0 },
+                  "transform": "[ 2 0 0 108\n  0 2 0 236.688\n  0 0 1 0\n  0 0 0 1 ]\n",
+                  "child_ids": [32] },
+                { "id": 32, "role": "link", "offset_container_id": 31,
+                  "location": { "x": 0.0, "y": 0.0, "width": 31.0, "height": 17.0 },
+                  "attributes": { "name": "Help" } }
+            ]
+        }]
+    });
+    let mut tree = PageTree::default();
+    let u = first(&mut tree, v);
+    let b = by_id(&u, 32).bounds().expect("bounds");
+    assert_eq!((b.x0, b.y0, b.x1, b.y1), (108.0, 236.688, 170.0, 270.688));
+    let items = tree.flatten(usize::MAX);
+    assert_eq!(items[0].bounds.x, 108.0);
+    // A transform that is not 16 numbers is left out.
+    let mut odd = PageTree::default();
+    let mut v = page();
+    v["updates"][0]["nodes"][1]["transform"] = json!("[ 1 0 ]");
+    let u = first(&mut odd, v);
+    assert_eq!(
+        by_id(&u, 2).bounds(),
+        Some(Rect::new(10.0, 20.0, 310.0, 60.0))
+    );
+}
+
+#[test]
 fn focus_comes_from_the_tree_data_and_stays() {
     let mut tree = PageTree::default();
     assert_eq!(first(&mut tree, page()).focus, NodeId(6));
@@ -513,6 +553,49 @@ fn the_page_focus_is_the_focused_tree_s_node() {
     });
     tree.apply(&parse_updates(&ax(&focus)));
     assert!(tree.flatten(usize::MAX)[0].focused);
+}
+
+#[test]
+fn an_item_off_the_viewport_is_scrolled_to_before_it_is_reached() {
+    let tree = smoke_tree();
+    let viewport = tree.viewport().expect("the root's bounds");
+    assert_eq!((viewport.width, viewport.height), (800.0, 600.0));
+    let send = tree.flatten(usize::MAX)[8].bounds;
+    assert_eq!(
+        reach(send, viewport),
+        Reach::At {
+            x: send.x + send.width / 2.0,
+            y: send.y + send.height / 2.0
+        },
+        "on screen"
+    );
+    let b = |x, y| Bounds {
+        x,
+        y,
+        width: 40.0,
+        height: 20.0,
+    };
+    // Below the fold: its centre goes to the middle; then it is reached.
+    assert_eq!(
+        reach(b(10.0, 2400.0), viewport),
+        Reach::ScrollBy {
+            dx: 0.0,
+            dy: 2410.0 - 300.0
+        }
+    );
+    assert_eq!(
+        reach(b(10.0, 290.0), viewport),
+        Reach::At { x: 30.0, y: 300.0 }
+    );
+    // Above the top and off to the right.
+    assert_eq!(
+        reach(b(900.0, -100.0), viewport),
+        Reach::ScrollBy {
+            dx: 920.0 - 400.0,
+            dy: -90.0 - 300.0
+        }
+    );
+    assert_eq!(PageTree::default().viewport(), None);
 }
 
 #[test]

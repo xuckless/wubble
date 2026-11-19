@@ -1,4 +1,4 @@
-import { AxItemView } from "model.slint";
+import { AxItemView, AxKind } from "model.slint";
 
 // The visible page for screen readers: one invisible element per item of the page's
 // accessibility tree as wubble-ax flattens it (headings, links, buttons, fields, check boxes,
@@ -18,18 +18,18 @@ export component PageAx inherits Rectangle {
         y: item.y;
         width: item.w;
         height: item.h;
-        if item.kind == 0: Rectangle {
+        if item.kind == AxKind.heading: Rectangle {
             accessible-role: text;
             accessible-label: "Heading level " + item.level + ", " + item.label;
         }
-        if item.kind == 1: Rectangle {
+        if item.kind == AxKind.link: Rectangle {
             accessible-role: button;
             accessible-label: item.label + ", link";
             accessible-action-default => {
                 root.action(item.id, "click", "");
             }
         }
-        if item.kind == 2: Rectangle {
+        if item.kind == AxKind.button: Rectangle {
             accessible-role: button;
             accessible-label: item.label;
             accessible-value: item.value;
@@ -37,7 +37,7 @@ export component PageAx inherits Rectangle {
                 root.action(item.id, "click", "");
             }
         }
-        if item.kind == 3: Rectangle {
+        if item.kind == AxKind.text-field: Rectangle {
             accessible-role: text-input;
             accessible-label: item.label;
             accessible-value: item.value;
@@ -48,7 +48,7 @@ export component PageAx inherits Rectangle {
                 root.action(item.id, "set-value", v);
             }
         }
-        if item.kind == 4: Rectangle {
+        if item.kind == AxKind.check-box: Rectangle {
             accessible-role: checkbox;
             accessible-label: item.label;
             accessible-checkable: true;
@@ -57,7 +57,7 @@ export component PageAx inherits Rectangle {
                 root.action(item.id, "click", "");
             }
         }
-        if item.kind == 5: Rectangle {
+        if item.kind == AxKind.radio-button: Rectangle {
             accessible-role: radio-button;
             accessible-label: item.label;
             accessible-checkable: true;
@@ -66,11 +66,11 @@ export component PageAx inherits Rectangle {
                 root.action(item.id, "click", "");
             }
         }
-        if item.kind == 6: Rectangle {
+        if item.kind == AxKind.image: Rectangle {
             accessible-role: image;
             accessible-label: item.label;
         }
-        if item.kind == 7: Rectangle {
+        if item.kind == AxKind.text: Rectangle {
             accessible-role: text;
             accessible-label: item.label;
         }

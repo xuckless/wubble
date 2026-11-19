@@ -28,7 +28,7 @@ use accesskit::{
     Action, ActionRequest, Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate, Uuid,
 };
 
-pub use flat::{AxItem, Kind};
+pub use flat::{AxItem, Kind, Reach, reach};
 pub use value::{AxNode, AxValue, Bounds, LocationChange, Updates};
 
 /// Chromium role name to AccessKit role. Roles not listed are generic containers, which
@@ -345,13 +345,16 @@ impl DocTree {
         .take(self.nodes.len())
     }
 
-    /// `node`'s bounds in page coordinates: each container's origin less its scroll offset.
+    /// `node`'s bounds in page coordinates: through its transform, then each container's
+    /// origin less its scroll offset and through the container's transform (Chromium's
+    /// `AXTree::RelativeToTreeBoundsInternal`, read, not copied).
     fn absolute(&self, node: &AxNode) -> Bounds {
-        let mut b = node.location.bounds;
+        let mut b = node.location.bounds.through(node.location.transform);
         for id in self.containers(node) {
             let Some(c) = self.nodes.get(&id) else { break };
             b.x += c.location.bounds.x - f64::from(c.int("scrollX").unwrap_or(0));
             b.y += c.location.bounds.y - f64::from(c.int("scrollY").unwrap_or(0));
+            b = b.through(c.location.transform);
         }
         b
     }

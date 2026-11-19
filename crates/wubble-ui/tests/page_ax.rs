@@ -12,7 +12,7 @@ use i_slint_backend_testing::{
     AccessibleRole, ElementHandle, init_integration_test_with_mock_time, mock_elapsed_time,
 };
 use slint::{ComponentHandle, LogicalSize, ModelRc, VecModel};
-use wubble_ui::{AppWindow, AxItemView};
+use wubble_ui::{AppWindow, AxItemView, AxKind};
 
 fn one(app: &AppWindow, label: &str) -> ElementHandle {
     let mut found: Vec<_> = ElementHandle::find_by_accessible_label(app, label).collect();
@@ -20,7 +20,7 @@ fn one(app: &AppWindow, label: &str) -> ElementHandle {
     found.remove(0)
 }
 
-fn item(id: i32, kind: i32, label: &str) -> AxItemView {
+fn item(id: i32, kind: AxKind, label: &str) -> AxItemView {
     AxItemView {
         id,
         kind,
@@ -47,19 +47,19 @@ fn page_items_are_accessible_elements_with_their_actions() {
     let items = vec![
         AxItemView {
             level: 1,
-            ..item(0, 0, "Welcome")
+            ..item(0, AxKind::Heading, "Welcome")
         },
-        item(1, 7, "Read the"),
-        item(2, 1, "docs"),
+        item(1, AxKind::Text, "Read the"),
+        item(2, AxKind::Link, "docs"),
         AxItemView {
             value: "a@b".into(),
-            ..item(3, 3, "Email")
+            ..item(3, AxKind::TextField, "Email")
         },
         AxItemView {
             checked: true,
-            ..item(4, 4, "Remember me")
+            ..item(4, AxKind::CheckBox, "Remember me")
         },
-        item(5, 2, "Send"),
+        item(5, AxKind::Button, "Send"),
     ];
     app.set_ax_items(ModelRc::new(VecModel::from(items)));
     mock_elapsed_time(Duration::from_millis(16));

@@ -131,11 +131,59 @@ impl Bounds {
     }
 }
 
-/// Where a node is: its bounds and the node they are relative to (`None`: the page).
+impl Bounds {
+    /// The bounding box of these bounds mapped by `t` (`gfx::RectF` through
+    /// `gfx::Transform::MapRect`).
+    pub fn through(self, t: Option<Affine>) -> Bounds {
+        let Some([a, b, c, d, e, f]) = t else {
+            return self;
+        };
+        let (x1, y1) = (self.x + self.width, self.y + self.height);
+        let corners = [(self.x, self.y), (x1, self.y), (self.x, y1), (x1, y1)]
+            .map(|(x, y)| (a * x + b * y + c, d * x + e * y + f));
+        let (mut lo, mut hi) = (corners[0], corners[0]);
+        for (x, y) in corners {
+            lo = (lo.0.min(x), lo.1.min(y));
+            hi = (hi.0.max(x), hi.1.max(y));
+        }
+        Bounds {
+            x: lo.0,
+            y: lo.1,
+            width: hi.0 - lo.0,
+            height: hi.1 - lo.1,
+        }
+    }
+}
+
+/// A node's 2D transform, row-major `[a, b, c, d, e, f]`: `x' = a x + b y + c`,
+/// `y' = d x + e y + f` (the 4x4's x and y rows; depth and perspective do not reach the screen
+/// here).
+pub type Affine = [f64; 6];
+
+/// CEF writes `relative_bounds.transform` as `gfx::Transform::ToString()`: 16 numbers, row by
+/// row, in brackets (`"[ 2 0 0 108\n  0 2 0 236.688\n  0 0 1 0\n  0 0 0 1 ]"`, seen on a
+/// CSS-transformed element; the page's own scale never shows up here, its bounds are DIP).
+fn affine_of(v: Option<&AxValue>) -> Option<Affine> {
+    let Some(AxValue::String(s)) = v else {
+        return None;
+    };
+    let m: Vec<f64> = s
+        .split(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == ',')
+        .filter(|w| !w.is_empty())
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    (m.len() == 16).then(|| [m[0], m[1], m[3], m[4], m[5], m[7]])
+}
+
+/// Where a node is: its bounds, the node they are relative to (`None`: the page) and its own
+/// transform, applied to its bounds before its container's offset (Chromium's
+/// `AXTree::RelativeToTreeBoundsInternal`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Location {
     pub offset_container: Option<i32>,
     pub bounds: Bounds,
+    pub transform: Option<Affine>,
 }
 
 /// One node of Chromium's tree (`ui::AXNodeData`).
@@ -184,6 +232,7 @@ impl AxNode {
             location: Location {
                 offset_container: v.int("offset_container_id").filter(|id| *id > 0),
                 bounds: v.get("location").map(Bounds::of).unwrap_or_default(),
+                transform: affine_of(v.get("transform")),
             },
             child_ids: v.ints("child_ids"),
             actions: v.strings("actions"),
@@ -268,6 +317,7 @@ pub fn parse_locations(v: &AxValue) -> Vec<LocationChange> {
                 location: Location {
                     offset_container: at.int("offset_container_id").filter(|id| *id > 0),
                     bounds: at.get("bounds").map(Bounds::of).unwrap_or_default(),
+                    transform: affine_of(at.get("transform")),
                 },
             })
         })

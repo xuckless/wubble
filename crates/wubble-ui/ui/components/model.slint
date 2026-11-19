@@ -551,12 +551,14 @@ export struct PasswordsView {
 
 // ── Pages for screen readers (wubble-ax `PageTree::flatten`, host `ax.rs`).
 
-// One item of the visible page for assistive technology, in reading order. `kind`: 0 heading,
-// 1 link, 2 button, 3 text field, 4 check box, 5 radio button, 6 image, 7 text
-// (wubble_ax::Kind). `x`..`h`: its rectangle in the content area, logical px.
+// What a page item is (wubble_ax::Kind, mapped once in the host's `ax.rs`).
+export enum AxKind { heading, link, button, text-field, check-box, radio-button, image, text }
+
+// One item of the visible page for assistive technology, in reading order. `x`..`h`: its
+// rectangle in the content area, logical px.
 export struct AxItemView {
     id: int,
-    kind: int,
+    kind: AxKind,
     label: string,
     value: string,
     level: int,
