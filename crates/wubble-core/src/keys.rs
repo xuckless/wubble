@@ -880,6 +880,7 @@ mod tests {
             Action::ScreenshotVisible,
             Action::ScreenshotFullPage,
             Action::NewBoost,
+            Action::ClearBrowsingData,
         ];
         for p in PLATFORMS {
             let km = Keymap::defaults(p);

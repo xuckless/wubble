@@ -1321,6 +1321,7 @@ fn run(
         response_observer: Some(media_observer.clone()),
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
+        containers: loaded.model.containers.iter().map(|c| c.id).collect(),
         ..config?
     })?;
     if smoke_block {

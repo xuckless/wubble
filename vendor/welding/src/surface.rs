@@ -950,9 +950,18 @@ pub struct CefSurfaceConfig {
     /// CEF's process-global context. Set an absolute path to retain that one
     /// producer's profile across runs. This requires an explicit
     /// [`CefRuntimeConfig::cache_path`](crate::runtime::CefRuntimeConfig::cache_path)
-    /// and the path must be inside it, because CEF otherwise chooses its
-    /// shared platform-default root cache directory.
+    /// (CEF otherwise chooses its shared platform-default root cache
+    /// directory), and the path must be a direct child of it (wubble change
+    /// 46: CEF's Chrome runtime makes it a Chrome profile).
     pub user_data_dir: Option<std::path::PathBuf>,
+    /// The request context this producer shares with others
+    /// ([`SharedProfile`](crate::SharedProfile)): same cookies, storage,
+    /// cache, permissions and service workers. When set, `user_data_dir` is
+    /// ignored (the shared profile chose its directory). `None`, the default,
+    /// gives the producer its own context as described above.
+    /// wubble change 46, see `WUBBLE_CHANGES.md`.
+    #[cfg(feature = "cef-runtime")]
+    pub profile: Option<crate::SharedProfile>,
     /// Subscribe to the Chrome DevTools Protocol.
     ///
     /// Off by default because CDP is chatty and the subscription is not free:
@@ -1028,6 +1037,8 @@ impl Default for CefSurfaceConfig {
             background_color: Some([255, 255, 255]),
             prefer_accelerated: true,
             user_data_dir: None,
+            #[cfg(feature = "cef-runtime")]
+            profile: None,
             devtools_protocol: false,
             handle_permission_requests: false,
             handle_auth_challenges: false,

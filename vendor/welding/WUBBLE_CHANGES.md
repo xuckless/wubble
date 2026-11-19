@@ -422,6 +422,22 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `maybe_load_library`), then pins the API version (which calls into the
    framework). CEF's helper order (cefsimple `process_helper_mac.cc`); the
    helper no longer loads the framework, so its initialisers run sandboxed.
+46. **Shared request contexts (`SharedProfile`).** `profile.rs`: a public
+   `SharedProfile` owns one `cef::RequestContext` created with a readiness
+   handler (`is_ready` once CEF calls `OnRequestContextInitialized`; the
+   handler moved here from `macos_cef`), and `CefSurfaceConfig::profile`
+   hands it to a producer: the Linux, macOS and Windows producers create
+   their browser in that context (`profile::for_surface`) instead of a fresh
+   one, so several producers share cookies, storage, cache, permissions and
+   service workers. `MacosCefProducer::new` accepts a ready shared profile
+   (no `prepare_profile` dance). `user_data_dir` must now be a direct child
+   of the runtime's `cache_path`, not merely inside it: CEF 156's Chrome
+   runtime makes a disk-backed context a Chrome profile and, for any deeper
+   path, logs "Cannot create profile at path" and silently falls back to an
+   in-memory profile. wubble gives each container one shared profile
+   (`wubble-engine` `storage.rs`); before this every view had its own
+   in-memory jar, so tabs never shared a login and nothing survived a
+   restart. Test: `wubble-engine`'s `cookie_smoke` example.
 
 ## Not changed, on purpose
 

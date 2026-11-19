@@ -200,6 +200,9 @@ pub struct ViewConfig {
     /// each frame onto it inside CEF's paint callback, before CEF reuses the
     /// buffer.
     pub gpu: HostWgpuContext,
+    /// Whose cookies, storage and cache the view uses (`crate::storage`):
+    /// the tab's container.
+    pub container: wubble_core::space::ContainerId,
 }
 
 /// One live windowless browser.
@@ -265,6 +268,7 @@ impl View {
     pub(crate) fn open(
         runtime: &CefRuntime,
         config: ViewConfig,
+        profile: welding::SharedProfile,
         filter: Option<Arc<dyn ContentFilter>>,
         observer: Option<Arc<dyn ResponseObserver>>,
         devtools_client: cef::Client,
@@ -278,6 +282,7 @@ impl View {
             layout,
             (config.frame_rate, config.begin_frames),
             &config.gpu,
+            profile,
             (request_filter, response_observer),
         )?;
         let mut producer = producer;
@@ -1163,6 +1168,16 @@ impl View {
         }
     }
 
+    /// Deletes everything `origin` (`scheme://host[:port]`) stored in this
+    /// view's container: cookies, local storage, IndexedDB, cache storage,
+    /// service workers (CDP `Storage.clearDataForOrigin`). Done when the
+    /// [`PageEvent::CdpReply`] with the id returned arrives; `None` when the
+    /// view could not take the call.
+    pub fn forget_site(&mut self, origin: &str) -> Option<CdpId> {
+        let params = serde_json::json!({ "origin": origin, "storageTypes": "all" });
+        self.cdp("Storage.clearDataForOrigin", &params)
+    }
+
     /// Sends one DevTools protocol call to this page (`cdp.rs`); its answer
     /// arrives as [`PageEvent::CdpReply`] with the id returned. `None` when
     /// the view cannot take it (closing, or CEF refused the message).
@@ -1865,6 +1880,7 @@ fn new_producer(
     layout: Layout,
     (frame_rate, begin_frames): (u32, bool),
     gpu: &HostWgpuContext,
+    profile: welding::SharedProfile,
     (request_filter, response_observer): (
         Option<welding::RequestFilter>,
         Option<welding::ResponseObserver>,
@@ -1886,6 +1902,8 @@ fn new_producer(
             // CDP: `View::set_frozen`, `View::cdp` (page dark mode, screenshots).
             devtools_protocol: true,
             response_observer,
+            // The container's context, shared with its other views.
+            profile: Some(profile),
             ..welding::CefSurfaceConfig::default()
         },
     };
@@ -1902,6 +1920,7 @@ fn new_producer(
     _layout: Layout,
     _pacing: (u32, bool),
     _gpu: &HostWgpuContext,
+    _profile: welding::SharedProfile,
     _hooks: (
         Option<welding::RequestFilter>,
         Option<welding::ResponseObserver>,

@@ -147,6 +147,8 @@ pub enum Call {
     FocusWindow(WindowId),
     /// The last Main window closed.
     Quit,
+    /// Delete the container's web storage (`Engine::forget_container`).
+    ForgetContainer(ContainerId),
     Nothing,
 }
 
@@ -179,6 +181,7 @@ pub fn call(effect: &Effect, model: &Model) -> Call {
         Effect::FocusWindow(w) => Call::FocusWindow(*w),
         Effect::LastWindowClosed => Call::Quit,
         Effect::Tidied { .. } => Call::Nothing,
+        Effect::ContainerDeleted(c) => Call::ForgetContainer(*c),
         Effect::Lifecycle { tab, effect } => match effect {
             Life::Show => Call::SetVisible {
                 tab: *tab,
@@ -881,6 +884,12 @@ impl Host {
                     frame_rate,
                     begin_frames: self.pace.is_some(),
                     gpu: self.w.presenters[0].context().clone(),
+                    // The tab's own cookies, storage and cache: its container's.
+                    container: self
+                        .model
+                        .tabs
+                        .get(&tab)
+                        .map_or(ContainerId::DEFAULT, |t| t.container),
                 };
                 match self.engine.open_view(config) {
                     Ok(id) => {
@@ -946,6 +955,7 @@ impl Host {
                     .upgrade_in_event_loop(|window| window.invoke_request_new_tab());
             }
             Call::Quit => quit(),
+            Call::ForgetContainer(c) => self.engine.forget_container(c),
             Call::OpenWindow(id) => self.open_window(id),
             Call::CloseWindow(id) => self.close_window(id),
             Call::FocusWindow(id) => self.raise_window(id),
@@ -1552,6 +1562,45 @@ impl Host {
     fn site_of(&self, tab: TabId) -> Option<String> {
         let url = self.model.tabs.get(&tab)?.url.as_str();
         wubble_core::site::origin_of(url)
+    }
+
+    // ----- browsing data
+
+    /// `Action::ClearBrowsingData`: what can be cleared for `tab`, as the shell's menu near the
+    /// top of the window. Choosing a row is the confirmation.
+    pub(super) fn clear_data_menu(&mut self, tab: TabId) {
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        let origin = self.site_of(tab);
+        let entries = crate::menu::clear_entries(&self.model, tab, origin.as_deref());
+        let size = window.window().size();
+        let at = ((size.width / 2) as i32, (size.height / 5) as i32);
+        self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
+        self.render_surfaces(&window);
+    }
+
+    /// Deletes what the clear menu's row named, then says so.
+    pub(super) fn clear_data(&mut self, tab: TabId, what: crate::menu::ClearData) {
+        use crate::menu::ClearData;
+        let done = match what {
+            ClearData::Containers(containers) => {
+                match self.engine.clear_browsing_data(&containers) {
+                    Ok(()) => Some("Cookies and cached files deleted"),
+                    Err(e) => {
+                        eprintln!("wubble: clear browsing data: {e}");
+                        None
+                    }
+                }
+            }
+            ClearData::Site(origin) => self
+                .tab_view(tab)
+                .and_then(|v| v.forget_site(&origin))
+                .map(|_| "Site data deleted"),
+        };
+        if let Some(window) = self.w.window.upgrade() {
+            self.toast(&window, done.unwrap_or("Nothing was deleted"));
+        }
     }
 
     /// A later start on this profile: its URL in a Little window, or the browser brought
@@ -3228,6 +3277,10 @@ mod tests {
                 Call::FocusWindow(WindowId(1)),
             ),
             (Effect::LastWindowClosed, Call::Quit),
+            (
+                Effect::ContainerDeleted(ContainerId(3)),
+                Call::ForgetContainer(ContainerId(3)),
+            ),
         ];
         for (effect, want) in cases {
             assert_eq!(call(&effect, &m), want, "{effect:?}");
@@ -3309,6 +3362,7 @@ mod tests {
                 | Call::CloseWindow(_)
                 | Call::FocusWindow(_)
                 | Call::Quit
+                | Call::ForgetContainer(_)
                 | Call::Nothing => {}
             }
         }

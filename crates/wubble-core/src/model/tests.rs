@@ -441,9 +441,75 @@ fn delete_container_resets_spaces_and_overrides() {
         old.iter()
             .all(|t| closed.contains(t) && !m.tabs.contains_key(t))
     );
+    // Its storage goes too, after its pages closed.
+    assert_eq!(fx.last(), Some(&Effect::ContainerDeleted(work)));
     // Default is not deletable.
     let (m2, fx) = run(m.clone(), Command::DeleteContainer(D));
     assert_eq!((m2, fx), (m, vec![]));
+}
+
+#[test]
+fn pages_opened_from_a_tab_keep_its_container() {
+    let (m, _) = run(Model::new(t0()), Command::NewContainer { name: "W".into() });
+    let work = m.containers[1].id;
+    let (m, a) = open(m, None);
+    let (m, _) = run(
+        m,
+        Command::ReopenInContainer {
+            tab: a,
+            container: work,
+        },
+    );
+    let opener = m.visible_tab().expect("the reopened tab");
+    assert_eq!(m.tabs[&opener].container, work);
+    // A link or pop-up shown as a tab, one in the background, one in a Popup window.
+    let (m, child) = open(m, Some(opener));
+    let (m, fx) = run(
+        m,
+        Command::BackgroundTab {
+            url: "https://bg.test".into(),
+            opener,
+        },
+    );
+    let Effect::CreateTab {
+        tab: bg, container, ..
+    } = fx[0]
+    else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(container, work);
+    let (m, fx) = run(
+        m,
+        Command::OpenPopupWindow {
+            url: "https://pop.test".into(),
+            opener,
+            size: None,
+        },
+    );
+    let popup = fx
+        .iter()
+        .find_map(|e| match e {
+            Effect::CreateTab { tab, .. } => Some(*tab),
+            _ => None,
+        })
+        .expect("the popup's tab");
+    assert!(
+        [child, bg, popup]
+            .iter()
+            .all(|t| m.tabs[t].container == work)
+    );
+    // An explicit container still wins, and a tab without an opener takes the Space's.
+    let (m, fx) = run(
+        m,
+        Command::NewTab {
+            url: "https://d.test".into(),
+            container: Some(D),
+            opener: Some(opener),
+        },
+    );
+    assert!(matches!(fx[0], Effect::CreateTab { container: D, .. }));
+    let (m, plain) = open(m, None);
+    assert_eq!(m.tabs[&plain].container, D);
 }
 
 #[test]

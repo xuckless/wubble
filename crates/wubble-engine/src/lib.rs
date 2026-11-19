@@ -26,6 +26,7 @@ pub mod nav;
 pub mod page;
 pub mod popup;
 pub mod save;
+pub mod storage;
 pub mod view;
 pub mod zoom;
 

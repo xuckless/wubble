@@ -99,12 +99,15 @@ pub enum Action {
     /// Widen or narrow the docked DevTools panel a step (its seam's keyboard nudge).
     DockWider,
     DockNarrower,
+    /// Choose whose cookies and cache to delete (this container's, every
+    /// container's) or which site to forget; the menu is the confirmation.
+    ClearBrowsingData,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 64] = [
+const FIXED: [(&str, Action); 65] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -168,6 +171,7 @@ const FIXED: [(&str, Action); 64] = [
     ("select-all", Action::SelectAll),
     ("dock-wider", Action::DockWider),
     ("dock-narrower", Action::DockNarrower),
+    ("clear-browsing-data", Action::ClearBrowsingData),
     ("quit", Action::Quit),
 ];
 
@@ -246,7 +250,7 @@ pub struct ActionInfo {
 
 /// Actions the command bar lists (parameterless only). The shortcut column
 /// comes from `Keymap::shortcut_for`, so no chord text is stored here.
-pub const PALETTE: [ActionInfo; 27] = [
+pub const PALETTE: [ActionInfo; 28] = [
     ActionInfo {
         action: Action::NewSpace,
         title: "New Space",
@@ -383,6 +387,11 @@ pub const PALETTE: [ActionInfo; 27] = [
         title: "New Boost for This Site",
         keywords: "css style script customise tweak userstyle userscript stylus arc",
     },
+    ActionInfo {
+        action: Action::ClearBrowsingData,
+        title: "Clear Browsing Data",
+        keywords: "cookies cache site storage logins forget privacy delete container",
+    },
 ];
 
 #[cfg(test)]
@@ -392,7 +401,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 82);
+        assert_eq!(all.len(), 83);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -419,7 +428,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 82);
+        assert_eq!(ids.len(), 83);
     }
 
     #[test]
@@ -484,6 +493,11 @@ mod tests {
                 "Screenshot of the Full Page",
             ),
             ("new-boost", Action::NewBoost, "New Boost for This Site"),
+            (
+                "clear-browsing-data",
+                Action::ClearBrowsingData,
+                "Clear Browsing Data",
+            ),
         ] {
             assert_eq!(Action::from_id(id), Some(action));
             assert_eq!(action.id(), id);

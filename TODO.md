@@ -6,7 +6,7 @@ popups, split views) is one scene we control.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · **(?)** blocked on an open decision.
 
-## Status (2026-11-18, after batch seven)
+## Status (2026-11-18, after batch eight)
 
 Ticks on `main`, counting sub-items; open includes `[~]`. An item is ticked only when it is
 merged and its checks pass. Open counts grew with batch seven because each lane wrote down the
@@ -15,13 +15,13 @@ gaps it found as sub-items.
 | Milestone | Done | Open |
 |---|---|---|
 | M0 Frame path | 15 | 9 |
-| M1 Engine layer | 22 | 32 |
-| M2 Shell | 26 | 10 |
+| M1 Engine layer | 25 | 30 |
+| M2 Shell | 32 | 8 |
 | M3 Memory and sleeping | 9 | 1 |
-| M4 DevTools and built-ins | 16 | 9 |
-| M5 Arc-style features | 5 | 2 |
-| Built in instead of extensions | 7 | 2 |
-| Performance pass | 0 | 7 |
+| M4 DevTools and built-ins | 21 | 5 |
+| M5 Arc-style features | 5 | 4 |
+| Built in instead of extensions | 8 | 1 |
+| Performance pass | 0 | 10 |
 
 Platforms: Linux passes every smoke. macOS (M2 Pro, b8/plat) passes every smoke but `parity`
 (two items open: a page text drag never starts, the autoscroll arrow does not stretch) and runs
@@ -72,6 +72,7 @@ windowed at the display rate (see Measured). Windows has not been green in CI.
 | Session storage | `wubble-store` loads and saves `wubble_core::model::Model` directly (`load_session`/`save_session`, one transaction, schema v2). Restored tabs are Discarded, idle, no opener; scroll, busy, folder collapse and id counters are not stored (counters derived as max id + 1 by `Model::from_parts`, so a freed highest id can be reused after restart). `Tab.container` is the effective container, so it covers the per-tab override. Recently-closed list bounded to 25. Settings are typed through one `settings!` table |
 | Vault storage and settings table | One `logins` schema, the vault's (text id generated client side because it is AEAD associated data; migration 4 drops the store's earlier v3 table, which nothing wrote). The vault trait stays sync: `wubble_vault::StoreLogins` owns the `Store` and `pollster::block_on`s each call, so a `Vault` lives only on the store thread (never Slint's). `Vault::unlock` returns `UnlockOutcome { Ready, NewKey { unreadable }, Unreadable { rows }, Unavailable }` so the UI can say saved passwords cannot be read. Settings: `wubble_core::settings::ALL` (key, kind, storage-text default, label, section, restart) is the one table; the store's typed `settings!` and the settings page both derive from it. Page view-models take plain rows defined in core (`pages`); the downloads page and the popover read one host list (`core::download`), stored in the `downloads` table |
 | Containers | Each Space has a default container; a tab can be reopened in another, and Spaces may share one |
+| Web storage per container | A container is the unit of web storage: all its tabs share one CEF request context (`welding::SharedProfile`, welding change 46), so one cookie jar, local storage/IndexedDB, HTTP cache, permission store and service-worker set; containers share nothing. One context object per container (not one per view on a shared path): one owner, one asynchronous initialisation, one place for clearing. `wubble_engine::storage` owns the mapping: `<root_cache_path>/container-<id>` (the default container is `container-0`, never CEF's global context), a direct child of the root because CEF 156's Chrome runtime makes each a Chrome profile and silently falls back to memory for a deeper path. Session cookies persist (`persist_session_cookies`). The engine brings the session's containers up at start (outside any host callback) and others on first use, and drops its references when the shutdown begins. Pop-ups, links and background tabs inherit the opener's container. Deleting a container clears its cookies now and its directory at the next start (a `container-<id>.forget` marker, swept before CEF starts). "Clear Browsing Data" (`Action::ClearBrowsingData`, its menu is the confirmation): cookies, HTTP cache and HTTP auth of this container or of all; "Forget <site>" clears that origin's cookies and site storage (CDP `Storage.clearDataForOrigin`). Linux cookies are encrypted with the OS keyring key (`v11`), stable across runs. Before 2026-11-18 every view had its own in-memory context: no shared or persisted login |
 | Deleting a Space | Closes its tabs (as Zen does); the UI confirms first. The last Space cannot be deleted |
 | Ctrl+T in the model | `Command::OpenCommandBar` returns only `Effect::ShowCommandBar`; the tab exists once `NewTab` is sent after a choice |
 | Content blocker | Brave's `adblock-rust` (network + cosmetic, uBlock/EasyList lists), on by default, per-site toggle |
@@ -305,7 +306,7 @@ Daily-drive set
 - [~] Vertical sidebar on Regular glass: tab rows 36 px, pinned section, "Today" group, new-tab row. Folders done: a folder's header is a row of the list on the same springs (chevron, name, count; a click folds it, its menu renames, collapses, ungroups or closes it), its tabs one step in, drag in and out through `shell::move_dest`; the tab menu adds Reload, Copy Link, New Folder with Tab, Move to <folder>, Remove from Folder, Close Tabs Below. "Today" / older day labels not built: the design draws none, and the Space's own order interleaves days, so labels would either reorder the user's list or repeat (owner to choose). (rows, favourites, new-tab row, scrolling list, drag-reorder and the scene's Regular glass done; the design's `.wb-nav` (sidebar toggle, back, forward, reload: `NavButtons`, the header's one sidebar toggle) is in; no "Today" group)
 - [x] Spaces, containers and tab-tree model with one pure `apply(model, command)` (`wubble_core::model`) with tests
 - [x] Tabs for real: one `Model` in the binary drives the engine (a view per live tab, only the visible one shown) and the sidebar (`view_model`); Ctrl+T/L/W, tab click/close, Space switch, popups as tabs; `--smoke tabs` (see "Tabs in the host")
-- [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container (switcher with the drawn icons and the stretching capsule done; `Space.icon` exists; a two-finger horizontal swipe over the tab list switches Spaces, one per gesture, ends do not wrap, only when its horizontal travel is twice its vertical travel (a list scroll's drift is not a swipe): `touch::SpaceSwipe`, `host/swipe.rs`; the new-Space sheet is not built, `Action::NewSpace` stays in `perform::NOT_YET`)
+- [ ] Spaces: switcher with stretching indicator, per-Space tint, per-Space container (web storage per container done: each container is its own cookie jar and storage on disk, `wubble_engine::storage`, `cookie_smoke`; switcher with the drawn icons and the stretching capsule done; `Space.icon` exists; a two-finger horizontal swipe over the tab list switches Spaces, one per gesture, ends do not wrap, only when its horizontal travel is twice its vertical travel (a list scroll's drift is not a swipe): `touch::SpaceSwipe`, `host/swipe.rs`; the new-Space sheet is not built, `Action::NewSpace` stays in `perform::NOT_YET`)
 - [ ] Command bar on Thick glass: address, search, switch-to-tab, actions, shortcuts (UI component done on flat Glass; results wired through `omnibox::rank` over open tabs, store history, bookmarks and the action palette, with the keymap's shortcuts; favicons on history, bookmark and switch-to-tab rows; the real Thick glass over the page remains: the scene is under the page, so it needs an overlay output fed with the page texture) Batch eight: favicons checked on every row kind (a row without one draws its kind's glyph, never a letter); the over-page Thick glass pass is still open: it reverses the Decided row "glass never blurs web content", which waits for the owner, and needs a new gfx pass (the design's overlay mode never reads the page).
 - [x] Suggestion planning + live-suggestions flag (`wubble_core::suggest`), with tests
 - [x] Command bar brain (`wubble_core::omnibox`): `classify` (Chromium Parse rules), one search-engine table, `rank` over tabs/history/bookmarks/actions; wiring to Slint results remains
@@ -410,8 +411,10 @@ Measured by hand on the owner's machines, never in tests. Each item starts with 
 - [ ] Start-up: time to first window and to first page pixels; lazy work moved off the start path
 - [ ] Page load: time to first paint and to load end against Chromium on the same machine; cache, preconnect and blocker cost
 - [ ] Input: key and pointer to pixels, scroll smoothness at the display rate
+- [ ] macOS memory with one tab (owner's observation on the MacBook, debug build, 2026-11-18, one Wikipedia article): the wubble process about 800 MB, a wubble helper about 300 MB (which helper, and whether the figure is resident or the footprint Activity Monitor shows, not recorded). Break the main process down (Chromium's browser process lives in it; the wgpu scene's textures and blur pyramid; Skia and Slint caches; the blocker's engine and bundled lists; snapshots; debug-build overhead) and compare with a release build and with Chromium alone on the same page
 - [ ] Memory: per-tab cost live, frozen and discarded; shell and scene baseline; renderer process limits
 - [ ] Video playback under load (owner, 2026-11-18: a 4K60 YouTube video used about 20% of every core, and while lane builds ran the UI lagged, connections dropped and the video froze): find whether 4K VP9/AV1 decodes in software on Linux NVIDIA (prebuilt CEF, no VA-API), what hardware decode needs, and give the browser, GPU and network processes priority over background work
+- [ ] macOS idle and video cost (owner's observation on the MacBook, debug build, 2026-11-18; which checkout was run is not recorded): an idle Wikipedia page about 55% CPU and 45% GPU; one YouTube tab at 1440p about 20% CPU and 20% GPU paused, 50 to 60% of each while playing. The idle figures are the ones that are plainly wrong: a still page should cost close to nothing. Find what keeps drawing (the backdrop scene redrawing every frame, Chromium free-running at the display rate, the per-frame texture copy, the pump) and whether the run-state rule (Running / Idle / Paused) is active on macOS; repeat on a release build before judging the video figures
 - [ ] CPU and GPU at idle and during video: no redraw when nothing changes, scene paused when hidden, glass cost
 - [ ] Release build settings (LTO, codegen units, symbols) and binary size
 - [ ] Linux video upload path: `disable-gpu-memory-buffer-video-frames` (the 10-bit black-video fix, M1) moves every software-decoded stream off the GpuMemoryBuffer pool. Measure 8-bit 4K60 playback (frame time, CPU) with and without it; look for a 10-bit-only fix (a multiplanar/P010 GpuMemoryBuffer feature) and narrow the switch if one exists

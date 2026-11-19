@@ -23,7 +23,7 @@ use wubble_core::action::Action;
 use wubble_core::keys::Keymap;
 use wubble_core::model::{Command as ModelCommand, Model};
 use wubble_core::pagetheme::PageTheme;
-use wubble_core::space::SpaceId;
+use wubble_core::space::{ContainerId, SpaceId};
 use wubble_core::tab::TabId;
 use wubble_core::tabmenu::{self, Facts, Run};
 use wubble_core::window::{Shown, WindowId, WindowKind, WindowTarget};
@@ -134,6 +134,8 @@ pub enum Command {
     ToggleBoost(i64),
     /// Open the Boost editor on this Boost.
     EditBoost(i64),
+    /// Delete browsing data (`clear_entries`).
+    ClearData(ClearData),
     /// A divider between groups; never chosen.
     Separator,
     /// A line of text (always disabled); never chosen.
@@ -875,6 +877,65 @@ pub fn blocker_entries(
     out
 }
 
+/// What a "Clear Browsing Data" row deletes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClearData {
+    /// Cookies, HTTP cache and HTTP auth of these containers.
+    Containers(Vec<ContainerId>),
+    /// Everything this origin stored (cookies, local storage, IndexedDB,
+    /// service workers) in the tab's container.
+    Site(String),
+}
+
+/// `Action::ClearBrowsingData`'s menu for `tab` (on `origin`, if a web page): the rows say what
+/// goes, and choosing one is the confirmation; dismissing it clears nothing.
+pub fn clear_entries(model: &Model, tab: TabId, origin: Option<&str>) -> Vec<Entry> {
+    let container = model.tabs.get(&tab).map(|t| t.container);
+    let name = container
+        .and_then(|c| model.containers.iter().find(|k| k.id == c))
+        .map_or("this container", |c| c.name.as_str());
+    let row = |label: String, command| Entry {
+        label,
+        command,
+        enabled: true,
+        icon: "",
+        shortcut: String::new(),
+        danger: true,
+    };
+    let mut out = vec![Entry {
+        label: "Delete cookies and cached files (sites will sign you out)".into(),
+        command: Command::Info,
+        enabled: false,
+        icon: "",
+        shortcut: String::new(),
+        danger: false,
+    }];
+    if let Some(origin) = origin.filter(|_| container.is_some()) {
+        let site = origin.split_once("://").map_or(origin, |(_, h)| h);
+        out.push(row(
+            format!("Forget {site} in {name}"),
+            Command::ClearData(ClearData::Site(origin.to_owned())),
+        ));
+    }
+    if let Some(c) = container.filter(|_| model.containers.len() > 1) {
+        out.push(row(
+            format!("Clear {name}"),
+            Command::ClearData(ClearData::Containers(vec![c])),
+        ));
+    }
+    out.push(row(
+        if model.containers.len() > 1 {
+            "Clear All Containers".into()
+        } else {
+            "Clear Cookies and Cache".into()
+        },
+        Command::ClearData(ClearData::Containers(
+            model.containers.iter().map(|c| c.id).collect(),
+        )),
+    ));
+    out
+}
+
 /// One stream of the media menu: its id, its title, and what is known of it.
 pub struct MediaRow<'a> {
     pub item: u32,
@@ -1104,6 +1165,55 @@ pub fn transition(state: Menu, event: MenuEvent) -> (Menu, Vec<MenuEffect>) {
 mod tests {
     use super::*;
     use wubble_engine::page::{EditFlags, MediaFlags};
+
+    #[test]
+    fn the_clear_menu_names_what_goes() {
+        let commands = |e: &[Entry]| -> Vec<Command> {
+            e.iter()
+                .filter(|e| e.enabled)
+                .map(|e| e.command.clone())
+                .collect()
+        };
+        let m = Model::new(std::time::Instant::now());
+        let (m, _) = wubble_core::model::apply(
+            m,
+            ModelCommand::NewTab {
+                url: "https://a.test/x".into(),
+                container: None,
+                opener: None,
+            },
+        );
+        let tab = *m.tabs.keys().next().unwrap();
+        let d = ContainerId::DEFAULT;
+        // One container: the site, then everything; every row destructive.
+        let e = clear_entries(&m, tab, Some("https://a.test"));
+        assert_eq!(
+            commands(&e),
+            [
+                Command::ClearData(ClearData::Site("https://a.test".into())),
+                Command::ClearData(ClearData::Containers(vec![d])),
+            ]
+        );
+        assert!(e.iter().filter(|e| e.enabled).all(|e| e.danger));
+        assert_eq!(e[1].label, "Forget a.test in Default");
+        // Two containers: this one alone, or all; no site on an internal page.
+        let (m, _) = wubble_core::model::apply(
+            m,
+            ModelCommand::NewContainer {
+                name: "Work".into(),
+            },
+        );
+        let work = m.containers[1].id;
+        let e = clear_entries(&m, tab, None);
+        assert_eq!(
+            commands(&e),
+            [
+                Command::ClearData(ClearData::Containers(vec![d])),
+                Command::ClearData(ClearData::Containers(vec![d, work])),
+            ]
+        );
+        assert_eq!(e[2].label, "Clear All Containers");
+    }
 
     #[test]
     fn the_media_menu_lists_choices_and_refusals() {

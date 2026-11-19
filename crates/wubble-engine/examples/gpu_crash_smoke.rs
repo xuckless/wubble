@@ -86,6 +86,7 @@ fn run(dir: &Path) -> Result<(), String> {
             frame_rate: 30,
             begin_frames: false,
             gpu: context.clone(),
+            container: wubble_core::space::ContainerId::DEFAULT,
         })
     };
     let painter =

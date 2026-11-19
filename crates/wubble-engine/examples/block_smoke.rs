@@ -119,6 +119,7 @@ fn run(dir: &Path) -> Result<(), String> {
             frame_rate: 30,
             begin_frames: false,
             gpu: presenter.context().clone(),
+            container: wubble_core::space::ContainerId::DEFAULT,
         })
         .map_err(|e| e.to_string())?;
 
