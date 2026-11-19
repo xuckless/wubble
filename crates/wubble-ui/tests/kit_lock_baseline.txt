@@ -172,12 +172,6 @@ components/raised.slint	paint	drop-shadow-offset-y	1
 components/raised.slint	paint	fill	1
 components/raised.slint	token	Glass	5
 components/raised.slint	token	Radius	1
-components/reader-controls.slint	font	font-family	1
-components/reader-controls.slint	font	font-size	1
-components/reader-controls.slint	text	Text	1
-components/reader-controls.slint	token	Fonts	1
-components/reader-controls.slint	token	Palette	1
-components/reader-controls.slint	token	Type	1
 components/settings.slint	animate	animate	9
 components/settings.slint	font	font-family	15
 components/settings.slint	font	font-size	15
