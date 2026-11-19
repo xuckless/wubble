@@ -23,7 +23,9 @@ export component OverlapLook inherits Rectangle {
     in property <length> shift-in: WubbleCss.wb-in-k-from--transform-translatey;
     in property <length> shift-out: WubbleCss.wb-out-k-to--transform-translatey;
     in property <float> scale-from: WubbleCss.wb-in-k-from--transform-scale;
-    opacity: root.e;
+    // the opacity part alone (wubble): a list entering as one fades as one layer, its rows only move
+    in property <float> fade: root.e;
+    opacity: root.fade;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     property <length> shift: root.entering ? root.shift-in : root.shift-out;
     // the look at `e`, also read by the curve tests
@@ -37,7 +39,8 @@ export component OverlapLook inherits Rectangle {
     }
     Rectangle {
         backdrop-blur: root.blur;
-        visible: root.e > 0 && root.e < 1;
+        // only while the layer is see-through: at opacity 1 it would blur what is behind it
+        visible: root.fade > 0 && root.fade < 1;
     }
 }
 
@@ -68,8 +71,11 @@ export component OverlapLayer inherits Rectangle {
 // (wubble_core::motion::overlap_in).
 export component Entering inherits Rectangle {
     in property <float> e: 1;
+    // the opacity part alone (OverlapLook `fade`)
+    in property <float> fade: root.e;
     OverlapLook {
         e: root.e;
+        fade: root.fade;
         @children
     }
 }

@@ -953,6 +953,11 @@ impl Engine {
         storage::forget(self.profiles.root(), container);
     }
 
+    /// CEF's cache directory (the profile's, or the per-process smoke one).
+    pub fn cache_dir(&self) -> &Path {
+        self.profiles.root()
+    }
+
     /// How page requests are answered from now on. Requests already
     /// reported keep waiting for the host.
     pub fn set_request_mode(&mut self, mode: RequestMode) {

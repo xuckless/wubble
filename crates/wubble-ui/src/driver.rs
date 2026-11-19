@@ -278,6 +278,7 @@ impl Driver {
             &self.row_enter,
             self.tabs.rows.iter().map(|r| r.entrance() as f32).collect(),
         );
+        window.set_list_enter(self.tabs.list_entrance() as f32);
         let leaving = &self.tabs.leaving;
         self.gone.retain(|g| leaving.iter().any(|l| same(g, l.id)));
         let rows = leaving

@@ -140,7 +140,7 @@ pub fn png_size(png: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The PNG as 8-bit RGBA rows, what the clipboard takes.
-fn rgba(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+pub fn rgba(png: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     // A full page is large: allow up to 1 GiB of pixels.
     let limits = png::Limits { bytes: 1 << 30 };
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(png), limits);

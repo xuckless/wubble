@@ -6,7 +6,7 @@
 
 //! Translation between welding's portable drag/touch/print types and CEF.
 
-use cef::{ImplBrowserHost, ImplDragData};
+use cef::{ImplBrowserHost, ImplDragData, ImplWriteHandler, WrapWriteHandler, WriteHandler, rc::Rc as _};
 
 use crate::{
     WeldError,
@@ -161,12 +161,19 @@ pub(crate) fn finish_drag_source(
     host.drag_source_system_drag_ended();
 }
 
+/// wubble change 51: the most of a dragged picture's bytes copied out.
+const FILE_CONTENTS_CAP: usize = 32 << 20;
+
 /// Copy callback-scoped CEF drag data into welding-owned values before handing
-/// it to the host. Image data is intentionally not exposed yet: CEF offers it
-/// as a platform `CefImage`, while all of file/link/text/html survive a normal
-/// cross-toolkit OS drag unchanged.
-pub(crate) fn payload_from_cef(data: &cef::DragData) -> DragPayload {
-    let mut payload = DragPayload::default();
+/// it to the host. wubble change 51: a picture's bytes and the drag image are
+/// copied too (`scale` is the view's device scale), since the data cannot be
+/// read once the callback returns.
+pub(crate) fn payload_from_cef(data: &cef::DragData, scale: f32) -> DragPayload {
+    let mut payload = DragPayload {
+        file_contents: file_contents(data),
+        image: drag_image(data, scale),
+        ..DragPayload::default()
+    };
 
     if data.is_file() != 0
         && let Some(mut paths) = cef::string_list_alloc()
@@ -193,6 +200,79 @@ pub(crate) fn payload_from_cef(data: &cef::DragData) -> DragPayload {
         payload.fragment_base_url = non_empty(userfree(data.fragment_base_url()));
     }
     payload
+}
+
+// wubble change 51: a CEF stream writer's sink, appending to a buffer.
+cef::wrap_write_handler! {
+    struct BufferWriter {
+        bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl WriteHandler {
+        fn write(&self, ptr: *const u8, size: usize, n: usize) -> usize {
+            let Some(len) = size.checked_mul(n) else { return 0 };
+            if ptr.is_null() || len == 0 {
+                return 0;
+            }
+            // Safety: CEF hands `size * n` readable bytes at `ptr` for the call.
+            let chunk = unsafe { std::slice::from_raw_parts(ptr, len) };
+            self.bytes.lock().unwrap().extend_from_slice(chunk);
+            n
+        }
+
+        fn tell(&self) -> i64 {
+            self.bytes.lock().unwrap().len() as i64
+        }
+
+        fn flush(&self) -> ::std::os::raw::c_int {
+            0
+        }
+    }
+}
+
+/// wubble change 51: the dragged picture's bytes (`GetFileContents` writes the
+/// image resource Blink loaded, not re-encoded) and Chromium's name for them.
+fn file_contents(data: &cef::DragData) -> Option<crate::DragFileContents> {
+    let size = data.file_contents(None);
+    if size == 0 || size > FILE_CONTENTS_CAP {
+        return None;
+    }
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(size)));
+    let mut handler = BufferWriter::new(bytes.clone());
+    let mut writer = cef::stream_writer_create_for_handler(Some(&mut handler))?;
+    data.file_contents(Some(&mut writer));
+    drop(writer);
+    let bytes = std::mem::take(&mut *bytes.lock().unwrap());
+    (!bytes.is_empty()).then(|| crate::DragFileContents {
+        name: non_empty(userfree(data.file_name())),
+        bytes: bytes.into(),
+    })
+}
+
+/// wubble change 51: CEF's drag image as PNG at `scale` (or its nearest
+/// representation), with its size and hotspot in DIP.
+fn drag_image(data: &cef::DragData, scale: f32) -> Option<crate::DragImage> {
+    use cef::{ImplBinaryValue, ImplImage};
+    if data.has_image() == 0 {
+        return None;
+    }
+    let image = data.image()?;
+    let size = (image.width() as i32, image.height() as i32);
+    // CEF's C glue returns nothing without the out-params.
+    let (mut width, mut height) = (0, 0);
+    let png = image.as_png(scale, 1, Some(&mut width), Some(&mut height))?;
+    let mut bytes = vec![0; png.size()];
+    let read = png.data(Some(&mut bytes), 0);
+    bytes.truncate(read);
+    if bytes.is_empty() {
+        return None;
+    }
+    let hotspot = data.image_hotspot();
+    Some(crate::DragImage {
+        png: bytes.into(),
+        size,
+        hotspot: (hotspot.x, hotspot.y),
+    })
 }
 
 fn to_cef_payload(payload: &DragPayload) -> Result<cef::DragData, WeldError> {
@@ -264,5 +344,28 @@ mod tests {
         ] {
             assert_eq!(from_cef_operations(operations(ops)), ops);
         }
+    }
+
+    // wubble change 51: a picture's bytes are shared, not copied, by a clone.
+    #[test]
+    fn a_picture_payload_clones_its_bytes_shared() {
+        let payload = DragPayload {
+            link_url: Some("https://a.test/cat.jpg".into()),
+            file_contents: Some(crate::DragFileContents {
+                name: Some("cat.jpg".into()),
+                bytes: std::sync::Arc::from(&[0xff, 0xd8, 0xff][..]),
+            }),
+            image: Some(crate::DragImage {
+                png: std::sync::Arc::from(&b"\x89PNG"[..]),
+                size: (20, 10),
+                hotspot: (4, 5),
+            }),
+            ..DragPayload::default()
+        };
+        let clone = payload.clone();
+        assert_eq!(clone, payload);
+        assert_ne!(DragPayload::default(), clone);
+        let (a, b) = (payload.file_contents.unwrap(), clone.file_contents.unwrap());
+        assert!(std::sync::Arc::ptr_eq(&a.bytes, &b.bytes));
     }
 }

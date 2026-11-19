@@ -622,6 +622,11 @@ impl Host {
                 let dragging = !self.drag_idle();
                 is(dragging == want, format!("page drag running: {dragging}"))
             }
+            HostCheck::DragPicture => {
+                let got = self.drag_picture();
+                let ok = matches!(&got, Some((Some("image/png"), Some(name), true)) if name.ends_with(".png"));
+                is(ok, format!("dragged picture {got:?}"))
+            }
             HostCheck::Tooltip(want) => {
                 let got = self.page_tip_shown();
                 is(got.as_deref() == Some(want), format!("tooltip {got:?}"))

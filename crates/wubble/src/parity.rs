@@ -234,6 +234,8 @@ pub enum HostCheck {
     AutoscrollStretched,
     /// A page drag runs (true) or none does (false).
     Drag(bool),
+    /// The page drag carries a PNG picture's own bytes under a `.png` name, and a drag image.
+    DragPicture,
     /// The print sheet is open (true) or not.
     PrintSheet(bool),
     /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
@@ -809,6 +811,24 @@ pub const ITEMS: &[Item] = &[
             Settle(20)
         ],
         [H(C::Tabs(2))]
+    ),
+    // A dragged picture carries its own bytes, Chromium's name for them and the drag image
+    // (welding change 51): what a drag out to another app offers as a file (`wl::wayland`).
+    // Dropped on the page's file zone, it still drops there.
+    item!(
+        "D.image-drag-payload",
+        [
+            Press(at::IMG),
+            MoveTo(at::x(at::IMG, 80.0)),
+            Until(H(C::Drag(true))),
+            Until(H(C::DragPicture)),
+            MoveTo(at::x(at::FILEZONE, 380.0)),
+            MoveTo(at::FILEZONE),
+            Settle(10),
+            Release(at::FILEZONE),
+            Settle(10)
+        ],
+        [H(C::Drag(false)), J("eq(seen.files.length, 1)")]
     ),
     item!(
         "D.os-file-drop",

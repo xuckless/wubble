@@ -13,6 +13,8 @@ use wubble_engine::input::Locks;
 use wubble_engine::page::{DragData, DragOps};
 
 #[cfg(target_os = "linux")]
+pub mod drag_file;
+#[cfg(target_os = "linux")]
 pub mod wayland;
 
 /// What the platform reports, delivered on the Slint thread to the window's

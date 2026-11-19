@@ -24,6 +24,14 @@ pub mod TABS {
     pub const dragStart: f64 = 6.0;
     /// closing row leaves 20% faster than rows enter (240)
     pub const exitMs: f64 = 190.0;
+    /// wubble change: at most this many rows run their entrance at once, and at most this many
+    /// their exit; rows added past it appear in place, rows dropped past it go at once. Each
+    /// entering or leaving row is an opacity layer in Slint's Skia renderer, a render target
+    /// Skia keeps cached until its 256 MiB budget is full (Slint 1.19 sets no lower limit and
+    /// runs no cleanup), so 40 rows entering together (session restore, a burst of opens) left
+    /// 40 MiB of VRAM behind (TODO Decided "GPU memory: Skia scratch layers"). A whole new list
+    /// (a Space switch) enters as one layer: [`TabRows::list_entrance`].
+    pub const maxAnimating: usize = 4;
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +120,9 @@ pub struct TabRows {
     pub active: Option<usize>,
     /// rows on their way out (wubble)
     pub leaving: Vec<Leaving>,
+    /// wubble: seconds since the whole list was replaced (a Space switch); `OVERLAP_IN` or more
+    /// once it has arrived. The list enters as one, so its rows need no layer each.
+    list_enter: f64,
     ind_y: Spring,
     stretch: Stretch,
     drag: Option<Drag>,
@@ -131,6 +142,7 @@ impl TabRows {
             rows,
             active,
             leaving: vec![],
+            list_enter: OVERLAP_IN,
             ind_y: spring(active.unwrap_or(0) as f64 * TABS::pitch),
             stretch: Stretch::new(),
             drag: None,
@@ -144,39 +156,50 @@ impl TabRows {
         self.pitch = pitch;
     }
 
-    /// Sync with the model: new rows start at their slot (they appear in place and fade in).
-    /// A Space switch replaces every row, so the whole list enters (tabs.tsx remounts the
-    /// list per Space: `key={sp.id}`).
+    /// Sync with the model: new rows start at their slot (they appear in place and fade in, at
+    /// most [`TABS::maxAnimating`] at once). A Space switch replaces every row, so the whole
+    /// list enters as one ([`TabRows::list_entrance`]; tabs.tsx remounts the list per Space:
+    /// `key={sp.id}`).
     pub fn set_ids(&mut self, ids: &[u64], active: Option<usize>) {
+        // Rows the model dropped leave where they were, unless nothing stayed (another Space: the
+        // list is a new one, as tabs.tsx remounts it per Space).
+        let kept = self.rows.iter().any(|r| ids.contains(&r.id));
+        if !kept {
+            self.list_enter = 0.0;
+        }
+        let entering = self
+            .rows
+            .iter()
+            .filter(|r| r.enter < OVERLAP_IN && ids.contains(&r.id))
+            .count();
+        let mut room = if kept {
+            TABS::maxAnimating.saturating_sub(entering)
+        } else {
+            0
+        };
         let mut next = Vec::with_capacity(ids.len());
         for (i, &id) in ids.iter().enumerate() {
             match self.rows.iter().position(|r| r.id == id) {
                 Some(j) => next.push(self.rows[j].clone()),
-                None => next.push(RowAnim {
-                    enter: 0.0,
-                    ..RowAnim::arrived(id, i, self.pitch)
-                }),
+                None => {
+                    let mut row = RowAnim::arrived(id, i, self.pitch);
+                    if room > 0 {
+                        room -= 1;
+                        row.enter = 0.0;
+                    }
+                    next.push(row);
+                }
             }
         }
-        // Rows the model dropped leave where they were, unless nothing stayed (another Space: the
-        // list is a new one, as tabs.tsx remounts it per Space).
-        let kept = self.rows.iter().any(|r| ids.contains(&r.id));
-        if kept {
-            self.leaving
-                .extend(
-                    self.rows
-                        .iter()
-                        .filter(|r| !ids.contains(&r.id))
-                        .map(|r| Leaving {
-                            id: r.id,
-                            y: r.y.x,
-                            t: 0.0,
-                        }),
-                );
-        } else {
-            self.leaving.clear();
-        }
-        self.leaving.retain(|l| !ids.contains(&l.id));
+        self.leaving.retain(|l| kept && !ids.contains(&l.id));
+        let room = TABS::maxAnimating.saturating_sub(self.leaving.len());
+        let dropped = self.rows.iter().filter(|r| !ids.contains(&r.id));
+        self.leaving
+            .extend(dropped.filter(|_| kept).take(room).map(|r| Leaving {
+                id: r.id,
+                y: r.y.x,
+                t: 0.0,
+            }));
         self.rows = next;
         self.active = active;
         // wubble change: the host's model can change under a held press (a tab closes itself,
@@ -187,6 +210,11 @@ impl TabRows {
             d.to = d.to.min(self.rows.len() - 1);
             Some(d)
         });
+    }
+
+    /// wubble: how far the whole list's entrance is after a Space switch, 0..1 (1 once arrived).
+    pub fn list_entrance(&self) -> f64 {
+        overlap_in(self.list_enter)
     }
 
     // @source slint-tabs-slot
@@ -298,6 +326,10 @@ impl TabRows {
         }
         self.leaving.retain(|l| l.t < exit);
         moving |= !self.leaving.is_empty();
+        if self.list_enter < OVERLAP_IN {
+            self.list_enter += dt;
+            moving = true;
+        }
         let slots: Vec<Option<usize>> = self.rows.iter().map(|r| self.slot_of(r.id)).collect();
         for (r, slot) in self.rows.iter_mut().zip(slots) {
             if r.enter < OVERLAP_IN {
@@ -427,10 +459,15 @@ mod tests {
             t.step(0.016);
         }
         assert!(t.leaving.is_empty(), "gone after exitMs");
-        // another Space: every row is new, so the whole list enters (and none leaves)
+        // another Space: every row is new, so the whole list enters as one (and none leaves)
+        assert_eq!(t.list_entrance(), arrived);
         t.set_ids(&[7, 8], None);
         assert!(t.leaving.is_empty());
-        assert!(t.rows.iter().all(|r| r.entrance() == 0.0));
+        assert!(t.rows.iter().all(|r| r.entrance() == arrived));
+        assert_eq!(t.list_entrance(), 0.0);
+        assert!(t.step(0.016));
+        settle(&mut t);
+        assert_eq!(t.list_entrance(), arrived);
     }
 
     #[test]
@@ -555,5 +592,70 @@ mod tests {
         // back over its own slot: a drag that lands where it started is no move
         t.r#move(100.0);
         assert_eq!(t.up(), TabUp::None);
+    }
+
+    fn entering(t: &TabRows) -> Vec<u64> {
+        t.rows
+            .iter()
+            .filter(|r| r.entrance() < 1.0)
+            .map(|r| r.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_burst_of_new_rows_animates_at_most_the_cap() {
+        // 40 tabs open in one tick (session restore, the memory harness)
+        let mut t = TabRows::new(&[1], Some(0));
+        let ids: Vec<u64> = (1..=41).collect();
+        t.set_ids(&ids, Some(0));
+        assert_eq!(t.rows.iter().map(|r| r.id).collect::<Vec<_>>(), ids);
+        assert_eq!(entering(&t), [2, 3, 4, 5], "the top new rows animate");
+        assert!(t.rows[5..].iter().all(|r| r.entrance() == 1.0));
+        // a whole new list (another Space) enters as one: no row on its own
+        let other: Vec<u64> = (100..140).collect();
+        t.set_ids(&other, None);
+        assert!(entering(&t).is_empty());
+        assert_eq!(t.list_entrance(), 0.0);
+    }
+
+    #[test]
+    fn a_burst_of_closes_leaves_at_most_the_cap() {
+        // "Close Other Tabs" on 41 rows: one stays, 40 go in one tick
+        let ids: Vec<u64> = (1..=41).collect();
+        let mut t = TabRows::new(&ids, Some(0));
+        t.set_ids(&[1], Some(0));
+        assert_eq!(
+            t.leaving.iter().map(|l| l.id).collect::<Vec<_>>(),
+            [2, 3, 4, 5],
+            "the top dropped rows animate out, the rest go at once"
+        );
+        // rows already leaving use up the cap
+        let mut t = TabRows::new(&[1, 2, 3, 4, 5, 6], Some(0));
+        t.set_ids(&[1, 2, 3, 4, 5], Some(0));
+        t.step(0.016);
+        t.set_ids(&[1], Some(0));
+        assert_eq!(
+            t.leaving.iter().map(|l| l.id).collect::<Vec<_>>(),
+            [6, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn rows_already_entering_keep_running_and_use_up_the_cap() {
+        let mut t = TabRows::new(&[1], Some(0));
+        // one tab per tick: the first four animate, later ones appear in place
+        let mut ids = vec![1];
+        for id in 2..=8 {
+            ids.push(id);
+            t.set_ids(&ids, Some(0));
+            t.step(0.016);
+        }
+        assert_eq!(entering(&t), [2, 3, 4, 5]);
+        // once they have arrived, a new tab animates again
+        settle(&mut t);
+        ids.push(9);
+        t.set_ids(&ids, Some(0));
+        assert_eq!(entering(&t), [9]);
+        assert_eq!(t.rows.last().unwrap().entrance(), 0.0);
     }
 }

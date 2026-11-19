@@ -465,6 +465,19 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`*/cef_backed.rs`). Nothing turns accessibility on: CEF calls the handler
    only after the host's `BrowserHost::set_accessibility_state(ENABLED)`.
 
+51. **A dragged picture's bytes and the drag image.** `DragPayload` gains
+   `file_contents: Option<DragFileContents { name, bytes }>` and
+   `image: Option<DragImage { png, size, hotspot }>` (`surface.rs`).
+   `drag::payload_from_cef(data, scale)` copies them in `StartDragging` on
+   the UI thread (the data is callback-scoped and not `Send`): the bytes
+   through `GetFileContents` into a `wrap_write_handler!` buffer (32 MiB cap),
+   the name from `GetFileName`, the image as `GetImage()->GetAsPNG(scale)` with
+   its size and hotspot in DIP (`GetAsPNG` returns nothing unless its
+   pixel-size out-params are given: CEF's C glue checks them). `to_cef_payload` ignores both (CEF has no
+   setter; a drag back into the window re-enters with the held clone,
+   change 48). The three platforms' render handlers pass their scale.
+   Test: `drag::tests`.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through
