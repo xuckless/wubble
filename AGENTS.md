@@ -62,6 +62,8 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
     cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line, the Pip window opened, returned and closed; exits; run by hand only
     cargo run -p wubble -- --smoke boost   # loopback pages: a Boost's CSS, tint and document-start script, a CSP page, turned off; exits; run by hand only
+    scripts/build-cef.sh WORK   # Linux x64: CEF 156.0.30 with proprietary codecs into WORK (~38 GB, ~2.5 h, no root); run by hand only
+    CEF_PATH=WORK/cef_path cargo build --workspace   # wubble on that CEF (H.264, AAC, HLS: `--smoke codecs` then asserts them); unset CEF_PATH for the prebuilt
     cargo run -p wubble -- --measure load   # windowed, release: loopback pages cold and warm, in-page timings and first frame; `--load-variant`, `--runs`, `--load-page`, `--load-back`, `--serve-only`; `scripts/measure-load.sh` (a process per cold sample) and `scripts/measure-load-chromium.sh` compare plain Chromium; hand run only
     cargo run -p wubble -- --measure memory --out mem.csv   # process tree memory with 0/1/10/50 tabs, frozen, discarded; window; run by hand only
     scripts/mem-compare.sh chromium-browser 10   # another browser's PSS sum on the same page; opens its window; run by hand only
