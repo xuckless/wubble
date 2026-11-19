@@ -31,3 +31,6 @@ wubble-sysmem.workspace = true
 # Seals the test segment the writer decrypts (wubble-core's own AES-128 crates).
 aes = "0.9.4"
 cbc = { version = "0.2.1", features = ["alloc"] }
+# The local_probe example's WebSocket handshake (both already in Cargo.lock).
+sha1_smol = "1.0.1"
+base64 = "0.22"
