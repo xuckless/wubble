@@ -21,7 +21,8 @@ use crate::page_drag::{self, DragEffect, DragInput, Over, PageDrag};
 /// Every operation: what a drop from another app offers the page.
 const ANY: DragOps = DragOps(DragOps::COPY.0 | DragOps::LINK.0 | DragOps::MOVE.0);
 
-/// Where a drag from another app is.
+/// Where a drag from another app is (moves come from the Wayland worker only).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum External {
     Enter,
@@ -310,7 +311,8 @@ impl Host {
         }
     }
 
-    /// What the platform reported for this window (`crate::wl`).
+    /// What the platform reported for this window (`crate::wl`, on Wayland only).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn aux_event(&mut self, event: crate::wl::AuxEvent) {
         use crate::wl::AuxEvent as A;
         let Some(window) = self.w.window.upgrade() else {

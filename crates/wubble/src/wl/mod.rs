@@ -16,7 +16,9 @@ use wubble_engine::page::{DragData, DragOps};
 pub mod wayland;
 
 /// What the platform reports, delivered on the Slint thread to the window's
-/// host (`Host::aux_event`). Points are window-relative logical px.
+/// host (`Host::aux_event`). Points are window-relative logical px. Only the
+/// Wayland worker reports any: elsewhere winit has what there is.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuxEvent {
     /// A drag from another app entered the window, carrying this.
@@ -78,6 +80,7 @@ impl Aux for Null {
 }
 
 /// Hands `event` for window `id` to the host on the Slint thread.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn deliver(id: WindowId, event: AuxEvent) {
     let _ = slint::invoke_from_event_loop(move || {
         crate::with_host_in(id, |host| host.aux_event(event))

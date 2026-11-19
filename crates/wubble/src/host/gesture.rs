@@ -1,7 +1,10 @@
 //! Touchpad gestures over the window (`wubble_core::gesture`): pinch zooms the visible page in
 //! the zoom keys' steps, a sideways swipe over a page goes back or forward with the edge chip
 //! (`swipe-chip.slint`) following the fingers, unless the page scrolls sideways with it.
-//! Wayland reports both through `crate::wl`; macOS pinch is winit's `PinchGesture`.
+//! Wayland reports both through `crate::wl`; macOS pinch is winit's `PinchGesture`. Nothing
+//! reports a history swipe elsewhere yet (macOS's would be winit's `PanGesture`), so its half is
+//! unused there.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 use wubble_core::gesture::{self, Pinch, PinchInput, Swipe, SwipeEffect, SwipeInput};
 use wubble_core::motion;

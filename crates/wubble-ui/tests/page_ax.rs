@@ -41,7 +41,8 @@ fn page_items_are_accessible_elements_with_their_actions() {
     let log: Rc<RefCell<Vec<(i32, String, String)>>> = Rc::default();
     let l = log.clone();
     app.on_ax_action(move |id, name, value| {
-        l.borrow_mut().push((id, name.to_string(), value.to_string()))
+        l.borrow_mut()
+            .push((id, name.to_string(), value.to_string()))
     });
     let items = vec![
         AxItemView {
