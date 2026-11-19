@@ -96,6 +96,9 @@ mod drag;
 mod keyboard;
 #[cfg(feature = "cef-runtime")]
 mod profile;
+// wubble change 39: one request context shared by several producers.
+#[cfg(feature = "cef-runtime")]
+pub use profile::SharedProfile;
 #[cfg(feature = "cef-runtime")]
 mod snapshot;
 

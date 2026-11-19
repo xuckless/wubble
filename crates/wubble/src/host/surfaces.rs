@@ -385,6 +385,7 @@ impl Host {
                 MenuEffect::Run(MenuCommand::ShotElement(at)) => self.shot_element(tab, at),
                 MenuEffect::Run(MenuCommand::ToggleBoost(id)) => self.toggle_boost(id),
                 MenuEffect::Run(MenuCommand::EditBoost(id)) => self.edit_boost(id),
+                MenuEffect::Run(MenuCommand::ClearData(what)) => self.clear_data(tab, what),
             }
         }
         answered

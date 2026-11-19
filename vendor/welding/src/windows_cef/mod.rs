@@ -259,7 +259,8 @@ impl WindowsCefProducer {
                 ..Default::default()
             };
             let url: cef::CefString = config.surface.initial_url.as_str().into();
-            let mut request_context = crate::profile::create(_runtime, &config.surface)?;
+            // wubble change 39: a shared profile's context when the config names one.
+            let mut request_context = crate::profile::for_surface(_runtime, &config.surface)?;
 
             let create_started = cef::browser_host_create_browser(
                 Some(&window_info),

@@ -283,6 +283,8 @@ pub enum Effect {
         space: SpaceId,
         before: Vec<Item>,
     },
+    /// The container is gone: its cookies, storage and cache go with it.
+    ContainerDeleted(ContainerId),
 }
 
 /// One per app: every window's tabs and Spaces.
@@ -809,10 +811,12 @@ impl Model {
             None => opener_space
                 .unwrap_or_else(|| self.space_idx(self.active_space()).expect("active space")),
         };
+        // A page's pop-up or link keeps its opener's cookies: the opener's container.
+        let inherited = opener.and_then(|o| self.tabs.get(&o)).map(|t| t.container);
         let opener = opener.filter(|_| opener_space == Some(si));
         let default = self.spaces[si].container;
         let id = self.fresh_tab();
-        let eff = container.unwrap_or(default);
+        let eff = container.or(inherited).unwrap_or(default);
         let tab = Tab {
             id,
             url: url.clone(),
@@ -1059,10 +1063,11 @@ impl Model {
             .filter(|t| t.container == container)
             .map(|t| t.id)
             .collect();
-        let fx = affected
+        let mut fx: Vec<Effect> = affected
             .into_iter()
             .flat_map(|t| self.reopen_in_container(t, ContainerId::DEFAULT))
             .collect();
+        fx.push(Effect::ContainerDeleted(container));
         self.containers.retain(|c| c.id != container);
         for s in &mut self.spaces {
             if s.container == container {
