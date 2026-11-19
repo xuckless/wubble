@@ -124,6 +124,8 @@ mod tests {
     fn shell_scenarios() {
         init_integration_test_with_mock_time();
         let app = AppWindow::new().unwrap();
+        // the kit menu keeps its highlight and keys in the controls registry
+        let _controls = crate::controls::wire(&app);
         app.window()
             .set_size(slint::LogicalSize::new(1280.0, 800.0));
         command_bar_lifecycle(&app);
@@ -186,6 +188,7 @@ mod tests {
         };
         open_menu(40.0);
         assert!(!app.get_web_focused(), "the menu takes the keyboard");
+
         press(app, Key::DownArrow);
         press(app, Key::DownArrow);
         press(app, Key::Return);
@@ -198,7 +201,7 @@ mod tests {
         // Near the right edge the panel opens to the pointer's left.
         let width = app.window().size().width as f32 / app.window().scale_factor();
         open_menu(width - 40.0);
-        assert!(app.get_menu_panel_x() + 220.0 <= width);
+        assert!(app.get_menu_panel_x() + 236.0 <= width);
         app.set_menu(MenuView::default());
         settle();
         assert!(

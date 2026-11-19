@@ -3,6 +3,19 @@
 // slot on `init` and draws `Controls.views[slot]`; its pointer events go back as intents. Slint
 // has no "destroyed" callback, so live instances answer every `generation` bump with `alive`
 // and the registry frees the slots nobody answered for (the GlassLayer sweep, glass.rs).
+// The kit menu (kit/controls/menu.slint) keeps its lifecycle, highlight and keys here too
+// (`wubble_core::controls::menu`): its events return the owner's intents as a `MenuEffect`.
+
+import { MenuEntry } from "../model.slint";
+
+// What a menu event asks of the menu's owner (`wubble_core::controls::menu::Effect`).
+export struct MenuEffect {
+    // the row chosen, -1 for none
+    chosen: int,
+    // close the menu; `refocus`: give the keyboard back to the trigger
+    dismiss: bool,
+    refocus: bool,
+}
 
 export struct ControlView {
     // Along the travel, px of the design's control (the Rust machine's units). The segmented
@@ -19,12 +32,24 @@ export struct ControlView {
     // The slider's value shown, 0..100; the segment chosen.
     value: float,
     held: bool,
+    // The menu (kind 3): the lit row (-1 none), whether the highlight appears in place, the
+    // phase (0 closed, 1 open, 2 closing), the focused row and the row the trigger confirms
+    // (-1 none). The highlight's row (the lit one, else the first, `max(0, i)` of the TS) has
+    // `hl-rows` rows and `hl-rules` separators above it.
+    hl: int,
+    hl-rows: int,
+    hl-rules: int,
+    jump: bool,
+    phase: int,
+    focus: int,
+    done: int,
 }
 
 export global Controls {
     in property <[ControlView]> views;
     in property <int> generation;
-    // kind: 0 toggle (value 0/1), 1 slider (value 0..100), 2 segmented (value the segment).
+    // kind: 0 toggle (value 0/1), 1 slider (value 0..100), 2 segmented (value the segment),
+    // 3 menu.
     // Returns the slot.
     callback acquire(int, float) -> int;
     // The setting changed from outside: the control springs to it.
@@ -40,8 +65,13 @@ export global Controls {
     // held (or, segmented, landed on no segment).
     callback release(int) -> float;
     callback alive(int);
+    // A menu event: (slot, kind, arg, row count, rows). Kinds: 0 opened by pointer, 1 opened by
+    // key (arg: the row to focus, -1 the first), 2 closed, 3 pointer on row arg, 4 pointer left,
+    // 5 key arg (0 up, 1 down, 2 escape, 3 tab, 4 enter or space), 6 row arg chosen, 7 pointer
+    // pressed outside. Rows past the given entries are plain items.
+    callback menu-event(int, int, int, int, [MenuEntry]) -> MenuEffect;
 
     public pure function view(slot: int) -> ControlView {
-        return slot >= 0 && slot < root.views.length ? root.views[slot] : { scale-x: 1, scale-y: 1, origin: 0.5 };
+        return slot >= 0 && slot < root.views.length ? root.views[slot] : { scale-x: 1, scale-y: 1, origin: 0.5, hl: -1, jump: true, focus: -1, done: -1 };
     }
 }

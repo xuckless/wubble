@@ -25,13 +25,18 @@ export component OverlapLook inherits Rectangle {
     in property <float> scale-from: WubbleCss.wb-in-k-from--transform-scale;
     // the opacity part alone (wubble): a list entering as one fades as one layer, its rows only move
     in property <float> fade: root.e;
+    // where it grows from (the centre; the Menu grows from its trigger)
+    in property <length> origin-x: self.width / 2;
+    in property <length> origin-y: self.height / 2;
     opacity: root.fade;
-    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-origin: { x: root.origin-x, y: root.origin-y };
     property <length> shift: root.entering ? root.shift-in : root.shift-out;
     // the look at `e`, also read by the curve tests
     out property <length> offset: root.shift * (1 - root.e);
     out property <float> zoom: 1 - (1 - root.scale-from) * (1 - root.e);
-    out property <length> blur: Motion.overlap-blur * (1 - root.e);
+    // the blur at e = 0 (Overlap's 4 px; the search capsule's clear button 3)
+    in property <length> blur-from: Motion.overlap-blur;
+    out property <length> blur: root.blur-from * (1 - root.e);
     transform-scale: root.zoom;
     Rectangle {
         y: root.offset;

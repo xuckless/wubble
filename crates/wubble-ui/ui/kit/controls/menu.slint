@@ -1,0 +1,638 @@
+// design: pages/touch.tsx:458-552, pages/touch.css:133-158, pages/settings.tsx:200-260, pages/settings.css:75-81 @598f814
+// The touch kit's menu (`Menu`, `.tp-menu/.tp-mrow/.tp-menu-hl`) and the settings Select's rows,
+// which are the same menu. Thick glass, 236 wide (Select 220), padding 6, radius 16; rows 36 high,
+// radius 10, padding 0 10, gap 10, 13.5 px, a 16 px mist icon (danger: coral), the shortcut in
+// 11.5 px haze mono pushed right, a 14 px haze chevron for a row that leads on. The body grows
+// from its trigger (or the pointer): from .95, clear and blurred 4 px, over 220 ms ease-out; it
+// shrinks back over 176 ms ease-in-out, a transition (reopening mid-exit turns back). Rows arrive
+// from 4 px up, 40 + 30·i ms behind the body (.24 s ease-out) and leave at once (.12 s ease).
+// ONE highlight glides between rows (.16 s ease-out) following the pointer and the keys; it
+// appears in place (`jump`) when it arrives while no row was lit, and fades (.12 s).
+// The lifecycle, highlight and keys are `wubble_core::controls::menu` (through `Controls`); the
+// curves are tweens here. Keys as the TSX: Down/Up with wrap, Escape (closes, refocuses the
+// trigger), Tab (closes), Enter/Space on the focused row; no type-ahead, Home/End or mnemonic.
+// derived (notes/fidelity/derived-review.md): the separator, a 1 px rim-top hairline in an 8 px
+// (`Space.s2`) row, inset by the row padding; disabled rows in haze; submenus are not built
+// (the design's "Move to Space" only draws the chevron).
+
+import { Palette, Space, Glass, TouchMenu, Motion } from "../gen/tokens.slint";
+import { TouchCss, SettingsCss } from "../gen/css.slint";
+import { Role, TextRole } from "../gen/text.slint";
+import { KitIcons } from "../gen/icons.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Tween } from "../motion/tween.slint";
+import { OverlapLook } from "../motion/overlap.slint";
+import { Calm } from "../motion/calm.slint";
+import { Press } from "../motion/press.slint";
+import { CrossfadeText } from "../motion/crossfade.slint";
+import { Icon, Glyph } from "icon.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+import { GlassTier, MenuEntry } from "../../components/model.slint";
+import { Controls, ControlView, MenuEffect } from "../../components/controls/registry.slint";
+
+// `.tp-menu-hl`: the one highlight, under the rows. `top` is its row's top in the panel.
+export component MenuHighlight inherits Rectangle {
+    in property <bool> on;
+    in property <bool> jump;
+    in property <bool> danger;
+    in property <length> top;
+    // the panel's width (left 6, right 6)
+    in property <length> panel-width;
+    x: TouchCss.tp-menu-hl--left;
+    width: root.panel-width - TouchCss.tp-menu-hl--left - TouchCss.tp-menu-hl--right;
+    height: TouchCss.tp-menu-hl--height;
+    y: root.top;
+    // `.jump` transitions the opacity only: it appears in place
+    animate y {
+        duration: root.jump ? 0ms : Calm.ms(TouchCss.tp-menu-hl--transition-transform-duration);
+        easing: TouchCss.tp-menu-hl--transition-transform-easing;
+    }
+    border-radius: TouchCss.tp-menu-hl--border-radius;
+    background: root.danger ? TouchCss.tp-menu-hl-danger--background : TouchCss.tp-menu-hl--background;
+    animate background {
+        duration: root.jump ? 0ms : Calm.ms(TouchCss.tp-menu-hl--transition-background-color-duration);
+        easing: ease;
+    }
+    opacity: root.on ? TouchCss.tp-menu-hl-on--opacity : 0;
+    animate opacity {
+        duration: Calm.ms(TouchCss.tp-menu-hl--transition-opacity-duration);
+        easing: ease;
+    }
+}
+
+// `.tp-mrow`: one row; enters behind the body while `shown`, `index` places it in the stagger.
+// The Select's rows lead with a check column (`.st-mcheck`, the accent check on the chosen one).
+export component MenuRow inherits Rectangle {
+    in property <bool> shown;
+    in property <int> index;
+    in property <string> icon;
+    in property <string> label;
+    in property <string> kbd;
+    in property <bool> sub;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    in property <bool> check-column;
+    in property <bool> checked;
+    in property <color> accent: Palette.sky;
+    height: TouchCss.wb-tp-mrow--height;
+    tw := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-menu-shown-tp-mrow--transition-opacity-duration;
+        out-ms: TouchCss.wb-tp-mrow--transition-opacity-duration;
+        in-easing: TouchCss.tp-menu-shown-tp-mrow--transition-opacity-easing;
+        out-easing: ease;
+        delay: root.shown ? TouchMenu.first + TouchMenu.stagger * root.index : 0ms;
+    }
+    // the look, also read by the curve tests
+    out property <float> e: tw.t;
+    out property <length> offset: TouchCss.wb-tp-mrow--transform-translatey * (1 - tw.t);
+    property <color> ink: !root.enabled ? Palette.haze : root.danger ? TouchCss.tp-mrow-danger--color : TouchCss.wb-tp-mrow--color;
+    property <TextRole> kbd-role: {
+        family: Role.wb-mono.family,
+        size: Role.tp-mrow-kbd.size,
+        weight: Role.tp-mrow-kbd.weight,
+        line-height: Role.tp-mrow-kbd.line-height,
+    };
+    Rectangle {
+        y: root.offset;
+        opacity: tw.t;
+        HorizontalLayout {
+            padding-left: TouchCss.wb-tp-mrow--padding-left;
+            padding-right: TouchCss.wb-tp-mrow--padding-right;
+            spacing: TouchCss.wb-tp-mrow--gap;
+            if root.check-column: VerticalLayout {
+                width: SettingsCss.st-mcheck--width;
+                alignment: center;
+                Icon {
+                    size: TouchMenu.check-icon;
+                    path: KitIcons.check;
+                    tint: root.accent;
+                    visible: root.checked;
+                }
+            }
+            if root.icon != "": VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.row-icon;
+                    path: root.icon;
+                    tint: !root.enabled ? Palette.haze : root.danger ? TouchCss.tp-mrow-danger--color : TouchCss.tp-mrow-svg--color;
+                }
+            }
+            KitText {
+                role: Role.wb-tp-mrow;
+                text: root.label;
+                color: root.ink;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            if root.kbd != "": KitText {
+                role: root.kbd-role;
+                text: root.kbd;
+                color: TouchCss.tp-mrow-kbd--color;
+                vertical-alignment: center;
+            }
+            if root.sub: VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.sub-icon;
+                    path: KitIcons.chevron-right;
+                    tint: TouchCss.tp-mrow-tp-mrow-sub--color;
+                }
+            }
+        }
+    }
+}
+
+// derived: the separator wubble's menus need (the design's menus have none): a hairline in the
+// rows' rhythm, entering with them.
+component MenuRule inherits Rectangle {
+    in property <bool> shown;
+    in property <int> index;
+    height: Space.s2;
+    tw := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-menu-shown-tp-mrow--transition-opacity-duration;
+        out-ms: TouchCss.wb-tp-mrow--transition-opacity-duration;
+        in-easing: TouchCss.tp-menu-shown-tp-mrow--transition-opacity-easing;
+        out-easing: ease;
+        delay: root.shown ? TouchMenu.first + TouchMenu.stagger * root.index : 0ms;
+    }
+    Rectangle {
+        x: TouchCss.wb-tp-mrow--padding-left;
+        width: parent.width - TouchCss.wb-tp-mrow--padding-left - TouchCss.wb-tp-mrow--padding-right;
+        height: Shell.px;
+        background: Glass.thick.rim-top;
+        opacity: tw.t;
+    }
+}
+
+// The menu: the panel, its rows and highlight, its keys. Its own area is the scrim while it is
+// shown: a press there is "outside" (the owner closes the menu); size it to the window. The
+// owner places the panel (`panel-x`, `panel-y`) and the point it grows from (`origin-x`,
+// `origin-y`, in the panel), and owns `open`: `chosen(i)` and `close-requested(refocus)` are
+// intents (`dismissed()`: closed without a choice).
+export component Menu inherits Rectangle {
+    in property <bool> open;
+    // opened by key: the focus goes to `start` (-1: the first row)
+    in property <bool> via-key;
+    in property <int> start: -1;
+    in property <[MenuEntry]> entries;
+    in property <length> menu-width: TouchCss.tp-menu--width;
+    in property <string> label: "Menu";
+    // the Select: a check column, the row checked, the accent
+    in property <bool> checks;
+    in property <int> checked: -1;
+    in property <color> accent: Palette.sky;
+    in property <length> panel-x;
+    in property <length> panel-y;
+    in property <length> origin-x: root.menu-width / 2;
+    in property <length> origin-y;
+    callback chosen(int);
+    callback dismissed();
+    callback close-requested(bool);
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <int> gen: Controls.generation;
+    out property <bool> mounted: root.v.phase != 0;
+    out property <bool> shown: root.v.phase == 1;
+    // the lit row, the focused row and the row the trigger confirms (-1 none)
+    out property <int> lit: root.v.hl;
+    out property <int> focused-row: root.v.focus;
+    out property <int> done: root.v.done;
+    out property <length> panel-height: list.preferred-height;
+    out property <length> panel-width: root.menu-width;
+    // the body's look (curve tests)
+    out property <float> body-e: body.e;
+    out property <float> body-zoom: body.zoom;
+    out property <length> body-blur: body.blur;
+    out property <length> hl-y: hl.y;
+    out property <float> hl-opacity: hl.opacity;
+
+    // The slot is taken at the first event, not on `init`: the window's components are built
+    // before the host wires the registry.
+    init => {
+        if root.open {
+            root.send(root.via-key ? 1 : 0, root.start);
+        }
+    }
+    changed open => {
+        root.send(root.open ? (root.via-key ? 1 : 0) : 2, root.start);
+    }
+    changed entries => {
+        root.send(-1, 0);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    // One event to the machine (`Controls.menu-event`'s kinds; -1 only the rows), its intents
+    // to the owner.
+    function send(kind: int, arg: int) {
+        if root.slot < 0 {
+            root.slot = Controls.acquire(3, 0);
+        }
+        let fx = Controls.menu-event(root.slot, kind, arg, root.entries.length, root.entries);
+        if fx.chosen >= 0 {
+            root.chosen(fx.chosen);
+        }
+        if fx.dismiss {
+            if fx.chosen < 0 {
+                root.dismissed();
+            }
+            root.close-requested(fx.refocus);
+        }
+    }
+
+    public function take-focus() {
+        keys.focus();
+    }
+
+    // (the root stays visible, so the keys can take the focus as the owner opens it, before the
+    // machine has heard of it; the body shows only while mounted)
+
+    // the scrim
+    TouchArea {
+        enabled: root.shown;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                root.send(7, 0);
+            }
+        }
+        scroll-event(e) => {
+            root.send(7, 0);
+            accept
+        }
+    }
+
+    // Keys only; no area, so it never takes the pointer from the scrim.
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if !root.shown {
+                return reject;
+            }
+            if event.text == Key.Escape {
+                root.send(5, 2);
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.send(5, 1);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.send(5, 0);
+                return accept;
+            }
+            if event.text == Key.Return || event.text == " " {
+                root.send(5, 4);
+                return accept;
+            }
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                root.send(5, 3);
+                return reject;
+            }
+            return accept;
+        }
+    }
+
+    tween := Tween {
+        on: root.shown;
+        in-ms: Motion.dropdown-in;
+        out-ms: Motion.dropdown-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+
+    body := OverlapLook {
+        x: root.panel-x;
+        y: root.panel-y;
+        width: root.menu-width;
+        height: list.preferred-height;
+        e: tween.t;
+        entering: root.shown;
+        shift-in: 0px;
+        shift-out: 0px;
+        scale-from: Motion.dropdown-from;
+        origin-x: root.origin-x;
+        origin-y: root.origin-y;
+        visible: root.mounted;
+        GlassPanel {
+            tier: GlassTier.thick;
+            radius: TouchCss.tp-menu--border-radius;
+            over-content: true;
+            // the pointer between rows stays the menu's; leaving clears the highlight
+            area := TouchArea {
+                enabled: root.shown;
+                changed has-hover => {
+                    if !self.has-hover {
+                        root.send(4, 0);
+                    }
+                }
+            }
+            hl := MenuHighlight {
+                on: root.v.hl >= 0;
+                jump: root.v.jump;
+                panel-width: root.menu-width;
+                danger: root.v.hl >= 0 && root.v.hl < root.entries.length && root.entries[root.v.hl].danger;
+                top: TouchCss.tp-menu--padding + root.v.hl-rows * TouchCss.wb-tp-mrow--height + root.v.hl-rules * Space.s2;
+            }
+            // Slint 1.19 has no menu roles and a role must be constant: a list of items (the
+            // Select's checkable, the current one checked)
+            accessible-role: AccessibleRole.list;
+            accessible-label: root.label;
+            list := VerticalLayout {
+                padding: TouchCss.tp-menu--padding;
+                for entry[i] in root.entries: Rectangle {
+                    height: entry.separator ? Space.s2 : TouchCss.wb-tp-mrow--height;
+                    if entry.separator: MenuRule {
+                        shown: root.shown;
+                        index: i;
+                    }
+                    if !entry.separator: MenuRow {
+                        shown: root.shown;
+                        index: i;
+                        icon: Glyph.named(entry.icon);
+                        label: entry.label;
+                        kbd: entry.shortcut;
+                        danger: entry.danger;
+                        enabled: entry.enabled;
+                        check-column: root.checks;
+                        checked: i == root.checked;
+                        accent: root.accent;
+                        accessible-role: AccessibleRole.list-item;
+                        accessible-label: entry.label;
+                        accessible-enabled: entry.enabled;
+                        accessible-checkable: root.checks;
+                        accessible-checked: root.checks && i == root.checked;
+                        accessible-item-index: i;
+                        accessible-item-count: root.entries.length;
+                        accessible-item-selected: i == root.v.focus;
+                        accessible-action-default => {
+                            root.send(6, i);
+                        }
+                        row-touch := TouchArea {
+                            enabled: root.shown && entry.enabled;
+                            changed has-hover => {
+                                if self.has-hover {
+                                    root.send(3, i);
+                                }
+                            }
+                            clicked => {
+                                root.send(6, i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The page's context menu (and any menu at a point): fills its parent (the window), so a press
+// anywhere outside the panel is the menu's ("outside", consumed as Chromium's menu consumes it).
+// The panel opens to the right of and below the pointer, flips where it would leave the parent,
+// then clamps 8 px inside it, and grows from the pointer. It keeps the last open menu's rows and
+// point while it leaves (the host clears the menu as it closes it). `chosen` and `dismissed` are
+// intents; the host closes it.
+export component PointMenu inherits Rectangle {
+    in property <bool> open;
+    // where the pointer was, in this element's coordinates
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <[MenuEntry]> entries;
+    callback chosen(int);
+    callback dismissed();
+    // the panel's left edge, after flipping and clamping
+    out property <length> panel-x: menu.panel-x;
+
+    property <[MenuEntry]> rows;
+    property <length> at-x;
+    property <length> at-y;
+    changed open => {
+        root.latch();
+    }
+    changed entries => {
+        root.latch();
+    }
+    function latch() {
+        if root.open {
+            root.rows = root.entries;
+            root.at-x = root.anchor-x;
+            root.at-y = root.anchor-y;
+        }
+    }
+    init => {
+        root.latch();
+    }
+
+    public function take-focus() {
+        menu.take-focus();
+    }
+
+    // flip where it would leave the parent, then clamp into it, `Space.s2` from the edges
+    pure function place(anchor: length, size: length, limit: length) -> length {
+        let flipped = anchor + size > limit - Space.s2 ? anchor - size : anchor;
+        return max(Space.s2, min(flipped, limit - size - Space.s2));
+    }
+
+    menu := Menu {
+        width: root.width;
+        height: root.height;
+        open: root.open;
+        entries: root.rows;
+        panel-x: root.place(root.at-x, self.menu-width, root.width);
+        panel-y: root.place(root.at-y, self.panel-height, root.height);
+        origin-x: max(0px, min(self.menu-width, root.at-x - self.panel-x));
+        origin-y: max(0px, min(self.panel-height, root.at-y - self.panel-y));
+        chosen(i) => {
+            root.chosen(i);
+        }
+        dismissed => {
+            root.dismissed();
+        }
+    }
+}
+
+// The trigger of a menu button and of the Select: `.tp-btn-body.glass` (`wb-thin wb-film
+// wb-press`, the film lit while open, `wb-on`), its label swapped by the Swap crossfade, a 14 px
+// chevron that turns over while open (.22 s ease-out). A local stand-in for lane c1's
+// `Button { kind: glass }`: swap it in when that lands (kit-plan 2.3).
+export component MenuTrigger inherits Rectangle {
+    in property <string> text;
+    in property <bool> open;
+    // the confirm flash: a mint check before `text`
+    in property <bool> done;
+    in property <length> least-width: TouchCss.tp-menu-trig--min-width;
+    in property <length> trigger-height: TouchCss.wb-tp-btn-body--height;
+    in property <string> label;
+    // a click (`by-key`: Space or Enter, the web's `detail === 0`)
+    callback clicked(bool);
+    // ArrowDown on the closed trigger
+    callback down();
+    out property <bool> keyboard-focused: keys.has-focus;
+    out property <float> chevron-turn: turn.t;
+    public function focus-trigger() {
+        keys.focus();
+    }
+    min-width: root.least-width;
+    preferred-width: root.least-width;
+    height: root.trigger-height;
+    accessible-role: AccessibleRole.combobox;
+    accessible-label: root.label;
+    accessible-value: root.text;
+    accessible-expanded: root.open;
+    accessible-action-default => {
+        root.clicked(true);
+    }
+    press := Press {
+        pressed: touch.pressed;
+    }
+    turn := Tween {
+        on: root.open;
+        in-ms: TouchCss.tp-chev--transition-transform-duration;
+        out-ms: TouchCss.tp-chev--transition-transform-duration;
+        in-easing: TouchCss.tp-chev--transition-transform-easing;
+        out-easing: TouchCss.tp-chev--transition-transform-easing;
+    }
+    mark := Tween {
+        on: root.done;
+        in-ms: TouchCss.tp-sw-i--transition-opacity-duration;
+        out-ms: TouchCss.tp-sw-i-data-s-out--transition-duration;
+        in-easing: TouchCss.tp-sw-i--transition-opacity-easing;
+        out-easing: TouchCss.tp-sw-i-data-s-out--transition-timing-function;
+    }
+    GlassPanel {
+        tier: GlassTier.thin;
+        radius: TouchCss.wb-tp-btn-body--border-radius;
+        hover: touch.has-hover;
+        pressed: touch.pressed;
+        focused: keys.has-focus;
+        film: self.hover || self.pressed || self.focused || root.open;
+        scale: press.scale;
+        HorizontalLayout {
+            padding-left: TouchCss.wb-tp-btn-body--padding-left;
+            padding-right: TouchCss.wb-tp-btn-body--padding-right;
+            spacing: TouchCss.wb-tp-btn-body--gap;
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: TouchCss.tp-menu-done--gap * mark.t;
+                VerticalLayout {
+                    alignment: center;
+                    width: TouchMenu.done-icon * mark.t;
+                    Icon {
+                        size: TouchMenu.done-icon;
+                        path: KitIcons.check;
+                        tint: TouchCss.tp-menu-done--color;
+                        opacity: mark.t;
+                    }
+                }
+                CrossfadeText {
+                    horizontal-stretch: 1;
+                    text: root.text;
+                    role: Role.wb-tp-btn-body;
+                    ink: root.done ? TouchCss.tp-menu-done--color : TouchCss.wb-tp-btn-body--color;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.chevron-icon;
+                    weight: TouchMenu.chevron-stroke;
+                    path: KitIcons.chevron;
+                    tint: TouchCss.wb-tp-btn-body--color;
+                    transform-rotation: TouchCss.tp-chev-up--transform-rotate * 1deg * turn.t;
+                }
+            }
+        }
+    }
+    touch := TouchArea {
+        clicked => {
+            root.clicked(false);
+        }
+    }
+    keys := FocusKeys {
+        activate => {
+            root.clicked(true);
+        }
+        other-key(e) => {
+            if e.text == Key.DownArrow && !root.open {
+                root.down();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: TouchCss.wb-tp-btn-body--border-radius;
+    }
+}
+
+// The touch page's menu button ("Tab actions"): a trigger and the menu it grows from (8 px below,
+// left-aligned, from the trigger's centre); choosing closes it and the trigger confirms the row
+// with `done-labels[i]` in mint for `MENU.confirmMs` (the machine times it). Escape closes and
+// refocuses the trigger; a choice by key refocuses it too. The menu draws over what this element's
+// later siblings draw only within its own parent (Slint's z-order is per parent): place it last,
+// or in an overlay (notes/fidelity/deviations.md).
+export component MenuButton inherits Rectangle {
+    in property <string> text;
+    in property <[MenuEntry]> entries;
+    in property <[string]> done-labels;
+    in property <string> label: root.text;
+    callback chosen(int);
+    property <bool> open;
+    property <bool> via-key;
+    out property <bool> is-open: root.open;
+    out property <int> confirming: menu.done;
+    preferred-width: trigger.preferred-width;
+    min-width: trigger.min-width;
+    height: trigger.height;
+    function toggle(by-key: bool) {
+        root.via-key = by-key;
+        root.open = !root.open;
+        if root.open && by-key {
+            menu.take-focus();
+        }
+    }
+    trigger := MenuTrigger {
+        width: root.width;
+        text: menu.done >= 0 && menu.done < root.done-labels.length ? root.done-labels[menu.done] : root.text;
+        done: menu.done >= 0;
+        open: root.open;
+        label: root.label;
+        clicked(by-key) => {
+            root.toggle(by-key);
+        }
+        down => {
+            root.toggle(true);
+        }
+    }
+    menu := Menu {
+        x: -root.absolute-position.x;
+        y: -root.absolute-position.y;
+        width: Shell.no-clip;
+        height: Shell.no-clip;
+        open: root.open;
+        via-key: root.via-key;
+        entries: root.entries;
+        label: root.label;
+        panel-x: root.absolute-position.x + TouchCss.tp-menu--left;
+        panel-y: root.absolute-position.y + trigger.height + TouchMenu.gap;
+        origin-x: trigger.width / 2;
+        origin-y: -(TouchMenu.gap + trigger.height / 2);
+        chosen(i) => {
+            root.chosen(i);
+        }
+        close-requested(refocus) => {
+            root.open = false;
+            if refocus {
+                trigger.focus-trigger();
+            }
+        }
+    }
+}
