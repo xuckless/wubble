@@ -3,8 +3,11 @@
 //!
 //! Linux: the XDG Settings portal, `org.freedesktop.appearance reduced-motion` (1 = reduced;
 //! xdg-desktop-portal 1.21 and later), else GNOME's `org.gnome.desktop.interface
-//! enable-animations` through the same portal. macOS and Windows have no reader yet (Slint 1.19
-//! keeps its own reading internal, winit 0.30 has none): the setting alone decides there.
+//! enable-animations` through the same portal. macOS: `NSWorkspace`'s
+//! `accessibilityDisplayShouldReduceMotion` (System Settings > Accessibility > Display > Reduce
+//! motion), read on each call (an in-process property; no thread). Windows: the "Animation
+//! effects" switch (`SPI_GETCLIENTAREAANIMATION`), read on each call as Slint's own winit backend
+//! does (there is no change notification a winit window receives). Other targets: never reduced.
 
 /// Where the OS's reduced-motion preference comes from.
 pub trait MotionSource {
@@ -18,17 +21,25 @@ pub fn source() -> Box<dyn MotionSource> {
     {
         Box::new(linux::Portal::start())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(macos::Workspace)
+    }
+    #[cfg(windows)]
+    {
+        Box::new(win::AnimationEffects)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         Box::new(NoSource)
     }
 }
 
 /// No OS preference known: never reduced.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 struct NoSource;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl MotionSource for NoSource {
     fn reduced(&self) -> bool {
         false
@@ -119,5 +130,49 @@ pub(crate) mod linux {
         }
         let v = read_one(bus, "org.gnome.desktop.interface", "enable-animations")?;
         bool::try_from(&v).ok().map(|on| !on)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2_app_kit::NSWorkspace;
+
+    /// The shared workspace's accessibility display options.
+    pub struct Workspace;
+
+    impl super::MotionSource for Workspace {
+        fn reduced(&self) -> bool {
+            NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+        }
+    }
+}
+
+// Ported from Slint's winit backend (`i-slint-backend-winit-1.19.0/windows_settings.rs`,
+// `motion_preference`; GPL-3.0-only OR the Slint licences, taken under GPL-3.0-only).
+#[cfg(windows)]
+mod win {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+
+    /// The "Animation effects" switch under Settings > Accessibility > Visual effects.
+    pub struct AnimationEffects;
+
+    impl super::MotionSource for AnimationEffects {
+        /// Off = reduced; animations on when the setting cannot be read.
+        fn reduced(&self) -> bool {
+            let mut enabled = windows::core::BOOL::from(true);
+            // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL through `pvparam`, which points
+            // at `enabled` for the call's duration.
+            let read = unsafe {
+                SystemParametersInfoW(
+                    SPI_GETCLIENTAREAANIMATION,
+                    0,
+                    Some(&mut enabled as *mut _ as *mut core::ffi::c_void),
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                )
+            };
+            read.is_ok() && !enabled.as_bool()
+        }
     }
 }
