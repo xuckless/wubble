@@ -173,14 +173,6 @@ components/preview-card.slint	text	Text	2
 components/preview-card.slint	token	Fonts	2
 components/preview-card.slint	token	Motion	3
 components/preview-card.slint	token	Palette	2
-components/print-sheet.slint	font	font-family	2
-components/print-sheet.slint	font	font-size	2
-components/print-sheet.slint	font	font-weight	1
-components/print-sheet.slint	paint	background	1
-components/print-sheet.slint	text	Text	2
-components/print-sheet.slint	token	Fonts	2
-components/print-sheet.slint	token	Palette	2
-components/print-sheet.slint	token	Type	3
 components/raised.slint	paint	background	2
 components/raised.slint	paint	border-color	2
 components/raised.slint	paint	border-width	2
