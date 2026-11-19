@@ -16,6 +16,16 @@ use slint::{Model, VecModel};
 /// see removed, so a row's own state (hover, the press, a TouchArea's grab mid-drag, its tweens)
 /// survives a re-render; replacing the whole model would rebuild every row.
 pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    sync_by(model, rows, PartialEq::eq);
+}
+
+/// [`sync`] with `same` deciding whether a row changed (rows holding wgpu images: see
+/// [`same_image`]).
+pub fn sync_by<T: Clone + 'static>(
+    model: &VecModel<T>,
+    rows: Vec<T>,
+    same: impl Fn(&T, &T) -> bool,
+) {
     let keep = model.row_count().min(rows.len());
     for _ in rows.len()..model.row_count() {
         model.remove(model.row_count() - 1);
@@ -23,10 +33,21 @@ pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
     for (i, row) in rows.into_iter().enumerate() {
         if i >= keep {
             model.push(row);
-        } else if model.row_data(i).as_ref() != Some(&row) {
+        } else if !model.row_data(i).is_some_and(|old| same(&old, &row)) {
             model.set_row_data(i, row);
         }
     }
+}
+
+/// Whether two images are the same: Slint 1.19's `Image` equality has no case for wgpu
+/// textures (`ImageInner::eq` falls through to `false`), so two clones of one texture compare
+/// unequal; here they are the same when they hold the same texture.
+pub fn same_image(a: &slint::Image, b: &slint::Image) -> bool {
+    a == b
+        || matches!(
+            (a.to_wgpu_30_texture(), b.to_wgpu_30_texture()),
+            (Some(x), Some(y)) if x == y
+        )
 }
 
 #[cfg(test)]
@@ -70,6 +91,31 @@ mod tests {
         assert_eq!(m.iter().collect::<Vec<_>>(), [7]);
         sync(&m, vec![]);
         assert_eq!(m.row_count(), 0);
+    }
+
+    #[test]
+    fn sync_by_keeps_rows_its_test_calls_the_same() {
+        let m = VecModel::from(vec![(1, 'a'), (2, 'b')]);
+        sync_by(&m, vec![(1, 'x'), (3, 'y')], |a, b| a.0 == b.0);
+        // row 0 is "the same" and keeps its old data; row 1 changed
+        assert_eq!(m.iter().collect::<Vec<_>>(), [(1, 'a'), (3, 'y')]);
+    }
+
+    #[test]
+    fn images_without_a_texture_compare_as_slint_does() {
+        let pixels = |v| {
+            let mut b = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1, 1);
+            b.make_mut_bytes().fill(v);
+            slint::Image::from_rgba8(b)
+        };
+        let a = pixels(1);
+        assert!(same_image(&a, &a.clone()));
+        assert!(!same_image(&a, &pixels(2)));
+        assert!(same_image(
+            &slint::Image::default(),
+            &slint::Image::default()
+        ));
+        assert!(!same_image(&a, &slint::Image::default()));
     }
 
     /// The testing platform can be installed once per process, so every

@@ -82,12 +82,39 @@ fn edge(table: &EdgeTable) -> Edge<'_> {
 fn sync_rows<T: Clone + PartialEq + 'static>(
     model: slint::ModelRc<T>,
     rows: Vec<T>,
+    same: impl Fn(&T, &T) -> bool,
     set: impl FnOnce(slint::ModelRc<T>),
 ) {
     match slint::Model::as_any(&model).downcast_ref::<slint::VecModel<T>>() {
-        Some(model) => wubble_ui::sync(model, rows),
+        Some(model) => wubble_ui::sync_by(model, rows, same),
         None => set(super::surfaces::model(rows)),
     }
+}
+
+/// Whether two panes show the same: their frames (wgpu textures) compared by texture, as Slint
+/// 1.19 never finds two such images equal ([`wubble_ui::same_image`]); rewriting an unchanged
+/// row every frame asked for the next frame, so the shell rendered at the display rate forever.
+fn same_pane(a: &SplitPane, b: &SplitPane) -> bool {
+    let bare = |p: &SplitPane| SplitPane {
+        frame: slint::Image::default(),
+        edge: slint::Image::default(),
+        prev: slint::Image::default(),
+        ..p.clone()
+    };
+    use wubble_ui::same_image as same;
+    same(&a.frame, &b.frame)
+        && same(&a.edge, &b.edge)
+        && same(&a.prev, &b.prev)
+        && bare(a) == bare(b)
+}
+
+/// [`same_pane`] for the peek's card.
+fn same_glance(a: &GlanceView, b: &GlanceView) -> bool {
+    let bare = |g: &GlanceView| GlanceView {
+        frame: slint::Image::default(),
+        ..g.clone()
+    };
+    wubble_ui::same_image(&a.frame, &b.frame) && bare(a) == bare(b)
 }
 
 /// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's
@@ -564,8 +591,12 @@ impl Host {
         } else {
             self.w.panes.ring(focused, height)
         };
-        sync_rows(window.get_panes(), panes, |m| window.set_panes(m));
-        sync_rows(window.get_seams(), seams, |m| window.set_seams(m));
+        sync_rows(window.get_panes(), panes, same_pane, |m| {
+            window.set_panes(m)
+        });
+        sync_rows(window.get_seams(), seams, PartialEq::eq, |m| {
+            window.set_seams(m)
+        });
         window.set_focus_ring(ring.into());
     }
 
@@ -594,7 +625,7 @@ impl Host {
                 ..window.get_glance()
             },
         };
-        if window.get_glance() != view {
+        if !same_glance(&window.get_glance(), &view) {
             window.set_glance(view);
         }
     }
