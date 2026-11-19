@@ -48,6 +48,7 @@ export component AutofillMenu inherits Rectangle {
         y: 0px;
         visible: root.view.chip;
         icon-path: root.key-path;
+        label: "Passwords";
         clicked => {
             root.menu(root.view.menu-open ? -2 : -1);
         }

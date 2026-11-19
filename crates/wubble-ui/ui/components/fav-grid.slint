@@ -39,6 +39,13 @@ export component FavGrid inherits Rectangle {
         width: root.tile-w;
         height: root.tile-h;
         key: GlassKeys.favourites + tab.id;
+        accessible-role: AccessibleRole.tab;
+        accessible-label: tab.title;
+        accessible-item-selectable: true;
+        accessible-item-selected: tab.id == root.active-tab-id;
+        accessible-action-default => {
+            root.activated(tab.id);
+        }
         over-wgpu: root.over-wgpu;
         clip-start: root.glass-clip-start;
         clip-end: root.glass-clip-end;

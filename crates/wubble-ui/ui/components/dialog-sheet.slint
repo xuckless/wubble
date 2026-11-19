@@ -76,6 +76,7 @@ export component DialogSheet inherits SheetFrame {
         border-radius: Shell.sheet-button-radius;
         background: Palette.shell;
         input := TextInput {
+            accessible-label: root.dialog.message;
             x: Spacing.s3;
             width: parent.width - 2 * Spacing.s3;
             height: parent.height;
@@ -117,6 +118,7 @@ export component DialogSheet inherits SheetFrame {
         border-radius: Shell.sheet-button-radius;
         background: Palette.shell;
         secret-field := TextInput {
+            accessible-label: "Password";
             x: Spacing.s3;
             width: parent.width - 2 * Spacing.s3;
             height: parent.height;

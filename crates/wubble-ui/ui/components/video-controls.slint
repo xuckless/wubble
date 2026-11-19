@@ -69,6 +69,7 @@ export component VideoControls inherits Rectangle {
             spacing: Spacing.s1;
             IconButton {
                 icon-path: root.video.paused ? IconPaths.play : IconPaths.pause;
+                label: root.video.paused ? "Play" : "Pause";
                 clicked => {
                     root.command("play", 0);
                 }
@@ -120,6 +121,7 @@ export component VideoControls inherits Rectangle {
             }
             IconButton {
                 icon-path: IconPaths.loop;
+                label: "Loop";
                 background: root.video.looped ? Shell.icon-button-hover.with-alpha(0.18) : self.hovered ? Shell.icon-button-hover : transparent;
                 clicked => {
                     root.command("loop", 0);
@@ -127,36 +129,42 @@ export component VideoControls inherits Rectangle {
             }
             if root.video.can-pip: IconButton {
                 icon-path: IconPaths.pip;
+                label: "Picture in picture";
                 clicked => {
                     root.command("pip", 0);
                 }
             }
             IconButton {
                 icon-path: IconPaths.camera;
+                label: "Save frame";
                 clicked => {
                     root.command("frame", 0);
                 }
             }
             IconButton {
                 icon-path: root.video.muted ? IconPaths.speaker-muted : IconPaths.speaker;
+                label: root.video.muted ? "Unmute" : "Mute";
                 clicked => {
                     root.command("mute", 0);
                 }
             }
             if root.video.can-save: IconButton {
                 icon-path: IconPaths.download;
+                label: "Save video";
                 clicked => {
                     root.command("save", 0);
                 }
             }
             IconButton {
                 icon-path: IconPaths.chevron-right;
+                label: "Collapse";
                 clicked => {
                     root.command("collapse", 0);
                 }
             }
             close := IconButton {
                 icon-path: IconPaths.close;
+                label: "Close";
                 clicked => {
                     root.command("dismiss", 0);
                 }

@@ -60,6 +60,10 @@ struct Cli {
     /// per shell surface into.
     #[arg(long, value_name = "DIR", requires = "smoke", conflicts_with = "shot")]
     shot_dir: Option<PathBuf>,
+    /// Debugging only: run CEF without its sandbox (logged loudly at start). The engine
+    /// reads it from the command line itself (`EngineConfig::from_current_exe`).
+    #[arg(long)]
+    no_sandbox: bool,
 }
 
 /// The `--smoke` value alone; `--url` is joined in by `Command::try_from`.
@@ -311,6 +315,15 @@ mod tests {
             profile: None,
             downloads: None,
         })
+    }
+
+    #[test]
+    fn no_sandbox_is_accepted_anywhere_and_changes_no_command() {
+        assert_eq!(parse(["wubble", "--no-sandbox"]).ok(), run(None));
+        assert_eq!(
+            parse(["wubble", "--smoke", "boot", "--no-sandbox"]).ok(),
+            Some(Command::Smoke(Smoke::Boot))
+        );
     }
 
     #[test]

@@ -22,8 +22,8 @@ const COSMETIC: (&str, &str) = ("cosmetic", include_str!("cosmetic.js"));
 /// `clipboard.js`: the page clipboard through the window, only when the browser
 /// passed [`CLIPBOARD_SWITCH`] (browser side `crates/wubble/src/clipboard.rs`).
 const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
-/// Must match `CLIPBOARD_SWITCH` in wubble-engine/src/app.rs. Duplicated on purpose,
-/// as `sandbox` below: the helper cannot depend on wubble-engine.
+/// Must match `CLIPBOARD_SWITCH` in wubble-engine/src/app.rs. Duplicated on purpose:
+/// the helper cannot depend on wubble-engine.
 const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
 
 /// One context script running `scripts`, each called with its own channel:
@@ -54,12 +54,12 @@ fn compose(scripts: &[(&str, &str)]) -> String {
 }
 
 fn main() {
-    #[cfg(target_os = "macos")]
-    let _framework = load_framework();
-    // Must match `SANDBOX` in wubble-engine/src/app.rs. Duplicated on purpose:
-    // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
-    let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
-    let clipboard = std::env::args().any(|a| a.strip_prefix("--") == Some(CLIPBOARD_SWITCH));
+    // macOS: welding applies the seatbelt, then loads the CEF framework (change 45).
+    let switch = |name| std::env::args().any(|a| a.strip_prefix("--") == Some(name));
+    // The browser's rule (TODO.md Decided, "CEF sandbox"); CEF passes its
+    // `--no-sandbox` on to every subprocess.
+    let sandbox = CefSandboxMode::for_direct_entry(switch(CefSandboxMode::NO_SANDBOX_SWITCH));
+    let clipboard = switch(CLIPBOARD_SWITCH);
     let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES, COSMETIC]
         .into_iter()
         .chain(clipboard.then_some(CLIPBOARD))
@@ -71,21 +71,6 @@ fn main() {
         sandbox,
         Some(script),
     ));
-}
-
-/// macOS helpers live in `wubble.app/Contents/Frameworks/wubble Helper*.app`
-/// and must load the CEF framework before any CEF call; the loader keeps it
-/// loaded while it lives. Linux links libcef directly and needs nothing.
-///
-/// From cef-rs `cef/src/library_loader.rs` and its use in the cefsimple helper
-/// (tauri-apps/cef-rs, MIT OR Apache-2.0), as wgpu-weld's
-/// `demo-weld-mac/src/helper.rs` does (MPL-2.0).
-#[cfg(target_os = "macos")]
-fn load_framework() -> cef::library_loader::LibraryLoader {
-    let exe = std::env::current_exe().expect("the helper knows its own path");
-    let loader = cef::library_loader::LibraryLoader::new(&exe, true);
-    assert!(loader.load(), "cannot load the CEF framework");
-    loader
 }
 
 #[cfg(test)]

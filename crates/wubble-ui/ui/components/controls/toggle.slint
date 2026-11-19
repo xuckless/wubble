@@ -10,6 +10,7 @@ import { Shell } from "../../app-tokens.slint";
 import { Controls, ControlView } from "registry.slint";
 import { FilmRim } from "../glow-ring.slint";
 import { Raised, Chip } from "../raised.slint";
+import { FocusKeys } from "../focus-ring.slint";
 
 export component Toggle inherits Rectangle {
     in property <bool> on;
@@ -36,7 +37,7 @@ export component Toggle inherits Rectangle {
     width: Shell.toggle-width;
     height: Shell.toggle-height;
     border-radius: self.height / 2;
-    accessible-role: switch;
+    accessible-role: AccessibleRole.switch;
     accessible-checked: root.on;
     accessible-action-default => {
         root.toggled();
@@ -78,13 +79,9 @@ export component Toggle inherits Rectangle {
         radius: root.border-radius;
         touched: ta.has-hover || ta.pressed || fs.has-focus;
     }
-    fs := FocusScope {
-        key-pressed(e) => {
-            if e.text == " " || e.text == Key.Return {
-                root.toggled();
-                return accept;
-            }
-            return reject;
+    fs := FocusKeys {
+        activate => {
+            root.toggled();
         }
     }
     ta := TouchArea {

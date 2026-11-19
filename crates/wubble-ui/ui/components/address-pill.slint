@@ -78,6 +78,11 @@ export component AddressPill inherits Rectangle {
             easing: Motion.easeOut;
         }
 
+        accessible-role: AccessibleRole.button;
+        accessible-label: "Address " + root.host + root.path;
+        accessible-action-default => {
+            root.activated();
+        }
         ta := TouchArea {
             mouse-cursor: text;
             clicked => {
@@ -131,6 +136,11 @@ export component AddressPill inherits Rectangle {
             // Above the whole-pill TouchArea, so a click here is not an address click.
             if root.popups-blocked > 0: popups := Rectangle {
                 width: popups-row.preferred-width;
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Blocked pop-ups: " + root.popups-blocked;
+                accessible-action-default => {
+                    root.popups-requested(popups.absolute-position.x, popups.absolute-position.y + popups.height);
+                }
                 popups-row := HorizontalLayout {
                     spacing: Spacing.s1;
                     Icon {
@@ -156,6 +166,11 @@ export component AddressPill inherits Rectangle {
             }
             if root.media-visible: media := Rectangle {
                 width: Shell.address-icon;
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Save media";
+                accessible-action-default => {
+                    root.media-requested(media.absolute-position.x, media.absolute-position.y + media.height);
+                }
                 Icon {
                     y: (parent.height - self.height) / 2;
                     path: IconPaths.download;
@@ -171,6 +186,11 @@ export component AddressPill inherits Rectangle {
             }
             if root.blocker-visible: badge := Rectangle {
                 width: badge-row.preferred-width;
+                accessible-role: AccessibleRole.button;
+                accessible-label: "Blocker: " + root.blocked + " blocked";
+                accessible-action-default => {
+                    root.blocker-requested(badge.absolute-position.x, badge.absolute-position.y + badge.height);
+                }
                 badge-row := HorizontalLayout {
                     spacing: Spacing.s1;
                     Icon {
@@ -197,6 +217,11 @@ export component AddressPill inherits Rectangle {
             }
             if root.reader-available: book := Rectangle {
                 width: Shell.address-icon;
+                accessible-role: AccessibleRole.button;
+                accessible-label: root.reader-on ? "Leave reader" : "Reader";
+                accessible-action-default => {
+                    root.reader-requested();
+                }
                 Icon {
                     y: (parent.height - self.height) / 2;
                     path: IconPaths.book;
@@ -212,6 +237,11 @@ export component AddressPill inherits Rectangle {
             }
             if root.bookmarkable: star := Rectangle {
                 width: Shell.address-icon;
+                accessible-role: AccessibleRole.button;
+                accessible-label: root.bookmarked ? "Edit bookmark" : "Bookmark page";
+                accessible-action-default => {
+                    root.bookmark-requested();
+                }
                 Icon {
                     y: (parent.height - self.height) / 2;
                     path: IconPaths.star;
@@ -237,6 +267,7 @@ export component AddressPill inherits Rectangle {
         height: Chrome.address;
         border-radius: Shell.control-radius;
         icon-path: IconPaths.search;
+        label: "Address";
         clicked => {
             root.activated();
         }

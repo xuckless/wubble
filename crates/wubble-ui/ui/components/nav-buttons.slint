@@ -53,16 +53,17 @@ export component NavButtons inherits HorizontalLayout {
     // An `Action` id (wubble-core action.rs): toggle-sidebar, back, forward, reload.
     callback action(string);
     spacing: Shell.nav-gap;
-    // [icon, action id, enabled]: one table, one button each
-    property <[{icon: string, id: string, enabled: bool}]> buttons: [
-        { icon: IconPaths.sidebar, id: "toggle-sidebar", enabled: true },
-        { icon: IconPaths.back, id: "back", enabled: root.can-go-back },
-        { icon: IconPaths.forward, id: "forward", enabled: root.can-go-forward },
-        { icon: IconPaths.reload, id: "reload", enabled: true },
+    // [icon, action id, its spoken name, enabled]: one table, one button each
+    property <[{icon: string, id: string, label: string, enabled: bool}]> buttons: [
+        { icon: IconPaths.sidebar, id: "toggle-sidebar", label: "Toggle sidebar", enabled: true },
+        { icon: IconPaths.back, id: "back", label: "Back", enabled: root.can-go-back },
+        { icon: IconPaths.forward, id: "forward", label: "Forward", enabled: root.can-go-forward },
+        { icon: IconPaths.reload, id: "reload", label: "Reload", enabled: true },
     ];
     for b in root.buttons: IconButton {
         icon-path: b.icon;
         tip-action: b.id;
+        label: b.label;
         enabled: b.enabled;
         clicked => {
             root.action(b.id);

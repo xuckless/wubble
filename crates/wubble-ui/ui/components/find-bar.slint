@@ -55,6 +55,7 @@ export component FindBar inherits Rectangle {
             padding-right: Spacing.s1;
             spacing: Spacing.s1;
             input := TextInput {
+                accessible-label: "Find in page";
                 horizontal-stretch: 1;
                 vertical-alignment: center;
                 single-line: true;
@@ -97,6 +98,7 @@ export component FindBar inherits Rectangle {
             PressableButton {
                 padding-x: Spacing.s1;
                 width: Chrome.controls;
+                label: "Previous match";
                 clicked => {
                     root.step(false);
                 }
@@ -108,6 +110,7 @@ export component FindBar inherits Rectangle {
             PressableButton {
                 padding-x: Spacing.s1;
                 width: Chrome.controls;
+                label: "Next match";
                 clicked => {
                     root.step(true);
                 }
@@ -119,6 +122,7 @@ export component FindBar inherits Rectangle {
             PressableButton {
                 padding-x: Spacing.s1;
                 width: Chrome.controls;
+                label: "Close find";
                 clicked => {
                     root.closed();
                 }

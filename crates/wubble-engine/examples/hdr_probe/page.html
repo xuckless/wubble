@@ -20,7 +20,7 @@
 <canvas id="cv" width="40" height="40"></canvas>
 <img id="img" src="pq-hdr.avif">
 <video id="vid" src="pq-hdr.mp4" muted loop autoplay playsinline></video>
-<!-- 8-bit control for the 10-bit clip above: same PQ greys and tags; the 10-bit one renders black (TODO.md) -->
+<!-- 8-bit control for the 10-bit clip above: same PQ greys and tags; the 10-bit one rendered black until Linux got disable-gpu-memory-buffer-video-frames (TODO.md) -->
 <video id="pq8" src="pq-hdr-8bit.mp4" muted loop autoplay playsinline style="position:absolute;left:10px;top:280px;width:160px;height:90px"></video>
 <video id="sdr" src="sdr.mp4" muted loop autoplay playsinline style="position:absolute;left:200px;top:180px;width:160px;height:90px"></video>
 <script>
@@ -51,8 +51,21 @@ Promise.all([
   new Promise((r) => { vid.addEventListener('playing', () => r(`playing ${vid.videoWidth}x${vid.videoHeight}`), {once: true});
                        vid.addEventListener('error', () => r('error ' + (vid.error && vid.error.message)), {once: true});
                        setTimeout(() => r('timeout'), 8000); }),
+  // Decode vs compositing: the video drawn into a plain 2D canvas and read back
+  // (needs WUBBLE_PROBE_SWITCHES=allow-file-access-from-files, else the canvas is
+  // tainted). Colour here with a black composited frame: the compositor is at fault;
+  // black here too: the frame itself (as the GpuMemoryBuffer pool made 10-bit video).
+  new Promise((r) => setTimeout(r, 1500)),
 ]).then(([a, v]) => {
   out.avif = a; out.video = v;
+  for (const [key, el] of [['canvas10bit', vid], ['canvas8bit', document.getElementById('pq8')]]) {
+    try {
+      const c = document.createElement('canvas'); c.width = 160; c.height = 90;
+      const g = c.getContext('2d', {willReadFrequently: true});
+      g.drawImage(el, 0, 0, 160, 90);
+      out[key] = [27, 80, 133].map((x) => Array.from(g.getImageData(x, 45, 1, 1).data).join('/')).join(' ');
+    } catch (e) { out[key] = 'error ' + e; }
+  }
   console.log('HDRPROBE ' + JSON.stringify(out));
   console.log('HDRPROBE done');
 });

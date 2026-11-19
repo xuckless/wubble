@@ -34,6 +34,7 @@ pub mod popup;
 pub mod pressure;
 pub mod pump;
 pub mod reader;
+pub mod region;
 pub mod routing;
 pub mod scroller;
 pub mod seam;

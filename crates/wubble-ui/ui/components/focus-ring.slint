@@ -1,0 +1,40 @@
+// Keyboard focus for the shell's controls. The ring is the design's focus-visible outline
+// (src/wubble/core/wubble.css `.wb :focus-visible { outline: 2px solid var(--wb-sky);
+// outline-offset: 2px }`, owner's own code, xuckless/the-wallpaper-project); the Slint port has
+// no focus ring, so this is written for wubble.
+
+import { Palette } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+
+// The outline around its parent, shown while `shown` (place it as the parent's last child).
+export component FocusRing inherits Rectangle {
+    in property <bool> shown;
+    in property <length> radius;
+    property <length> out: Shell.focus-ring-offset + Shell.focus-ring-width;
+    visible: root.shown;
+    Rectangle {
+        x: -root.out;
+        y: -root.out;
+        width: root.width + 2 * root.out;
+        height: root.height + 2 * root.out;
+        border-width: Shell.focus-ring-width;
+        border-color: Palette.sky;
+        border-radius: root.radius + root.out;
+    }
+}
+
+// A control's keyboard focus: reached by Tab (never by a click, so the ring is focus-visible
+// only), Space or Enter activates; any other key goes to `other-key` (unset: rejected, so it
+// reaches the parent). Its `has-focus` shows the control's FocusRing.
+export component FocusKeys inherits FocusScope {
+    callback activate();
+    callback other-key(KeyEvent) -> EventResult;
+    focus-on-click: false;
+    key-pressed(e) => {
+        if e.text == " " || e.text == Key.Return {
+            root.activate();
+            return accept;
+        }
+        return root.other-key(e);
+    }
+}

@@ -173,6 +173,16 @@ export component Sidebar inherits Rectangle {
     callback tab-hovered(int, bool, length);
     callback tab-activated(int);     // tab id: a favourite (rows pick through tab-release)
     callback new-tab-requested();
+    // F6 to the sidebar: keyboard focus to the active tab's row (the rows take it), else, when
+    // the active tab is no row (a favourite, or none), the new-tab row.
+    property <int> focus-serial: 0;
+    public function take-focus() {
+        if root.selected >= 0 && root.selected < root.tabs.length {
+            root.focus-serial += 1;
+        } else {
+            new-tab.take-focus();
+        }
+    }
     callback window-close-requested();
     callback window-minimise-requested();
     callback window-toggle-fullscreen-requested();
@@ -389,6 +399,8 @@ export component Sidebar inherits Rectangle {
 
                     rows := Rectangle {
                         height: root.list-height;
+                        accessible-role: AccessibleRole.tab-list;
+                        accessible-label: "Tabs";
                         // on the rail rows are 40 wide and centred (.wb-tabs-rail)
                         property <length> row-w: root.compact ? Shell.rail-item : self.width;
                         property <length> row-x: (self.width - self.row-w) / 2;
@@ -490,6 +502,10 @@ export component Sidebar inherits Rectangle {
                                     hovered(on, y) => {
                                         root.tab-hovered(tab.id, on, y);
                                     }
+                                    activate => {
+                                        root.tab-activated(tab.id);
+                                    }
+                                    focus-token: root.focus-serial;
                                 }
                             }
                         }
@@ -531,6 +547,7 @@ export component Sidebar inherits Rectangle {
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.download;
                 tip-action: "open-downloads";
+                label: "Downloads";
                 clicked => {
                     root.downloads-requested();
                 }
@@ -545,6 +562,7 @@ export component Sidebar inherits Rectangle {
                 y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.code;
                 tip-action: "dev-tools";
+                label: "Developer tools";
                 clicked => {
                     root.action("dev-tools");
                 }
@@ -558,6 +576,7 @@ export component Sidebar inherits Rectangle {
                 y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
                 icon-path: IconPaths.settings;
                 tip-action: "open-settings";
+                label: "Settings";
                 clicked => {
                     root.settings-requested();
                 }
@@ -584,6 +603,8 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
+                accessible-role: AccessibleRole.tab-list;
+                accessible-label: "Spaces";
                 for space[i] in root.spaces: tile := Rectangle {
                     // tabs.tsx SpaceSwitcher: each click wobbles the icon once more
                     property <bool> hit: false;
@@ -592,6 +613,13 @@ export component Sidebar inherits Rectangle {
                     width: Shell.space-tile;
                     height: Shell.space-tile;
                     border-radius: Shell.control-radius;
+                    accessible-role: AccessibleRole.tab;
+                    accessible-label: space.name;
+                    accessible-item-selectable: true;
+                    accessible-item-selected: i == root.space-index;
+                    accessible-action-default => {
+                        root.space-switched(space.id);
+                    }
                     transform-origin: { x: self.width / 2, y: self.height / 2 };
                     transform-scale: ta.pressed ? Motion.pressScale : 1;
                     animate transform-scale {

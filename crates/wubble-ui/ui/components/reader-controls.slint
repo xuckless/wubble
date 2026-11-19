@@ -40,6 +40,7 @@ export component ReaderControls inherits Rectangle {
             alignment: center;
             IconButton {
                 icon-path: IconPaths.minus;
+                label: "Smaller text";
                 y: (parent.height - self.height) / 2;
                 clicked => {
                     root.setting("reader.size", root.size - 1);
@@ -54,6 +55,7 @@ export component ReaderControls inherits Rectangle {
             }
             IconButton {
                 icon-path: IconPaths.plus;
+                label: "Larger text";
                 y: (parent.height - self.height) / 2;
                 clicked => {
                     root.setting("reader.size", root.size + 1);
@@ -82,6 +84,7 @@ export component ReaderControls inherits Rectangle {
             }
             IconButton {
                 icon-path: IconPaths.close;
+                label: "Close reader";
                 y: (parent.height - self.height) / 2;
                 clicked => {
                     root.closed();

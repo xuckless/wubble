@@ -88,7 +88,7 @@ export component Segmented inherits Rectangle {
             changed width => {
                 Controls.segment(root.slot, i, self.x, self.width);
             }
-            accessible-role: button;
+            accessible-role: AccessibleRole.button;
             accessible-label: label;
             accessible-action-default => {
                 root.chosen(i);
@@ -281,6 +281,7 @@ export component Stepper inherits HorizontalLayout {
     alignment: end;
     IconButton {
         icon-path: IconPaths.minus;
+        label: "Less";
         enabled: root.value > root.min;
         y: (parent.height - self.height) / 2;
         clicked => {
@@ -298,6 +299,7 @@ export component Stepper inherits HorizontalLayout {
     }
     IconButton {
         icon-path: IconPaths.plus;
+        label: "More";
         enabled: root.value < root.max;
         y: (parent.height - self.height) / 2;
         clicked => {
@@ -342,7 +344,7 @@ export component TextButton inherits Rectangle {
             sq.hit = !sq.hit;
         }
     }
-    accessible-role: button;
+    accessible-role: AccessibleRole.button;
     accessible-label: root.text;
     accessible-action-default => {
         root.clicked();
@@ -393,6 +395,7 @@ export component EntryList inherits VerticalLayout {
         }
         IconButton {
             icon-path: IconPaths.close;
+            label: "Remove";
             clicked => {
                 root.removed(entry.key);
             }
@@ -678,7 +681,7 @@ component BindingRow inherits Line {
         chord := Kbd {
             text: root.armed ? "Press a shortcut" : root.item.chord == "" ? "None" : root.item.chord;
             armed: root.armed;
-            accessible-role: button;
+            accessible-role: AccessibleRole.button;
             accessible-label: root.item.label;
             accessible-action-default => {
                 root.record(root.item.action);
@@ -749,7 +752,7 @@ component NavRow inherits Rectangle {
         duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
         easing: Motion.easeOut;
     }
-    accessible-role: tab;
+    accessible-role: AccessibleRole.tab;
     accessible-label: root.title;
     accessible-action-default => {
         root.picked();
@@ -1191,7 +1194,7 @@ export component SettingsPage inherits Rectangle {
                                     height: Shell.lead;
                                     border-radius: Shell.control-radius;
                                     background: Shell.lead-fill;
-                                    accessible-role: button;
+                                    accessible-role: AccessibleRole.button;
                                     accessible-label: space.name + " icon";
                                     accessible-action-default => {
                                         root.space-icon-chosen(space.id, root.next-icon(space.icon));
@@ -1219,6 +1222,7 @@ export component SettingsPage inherits Rectangle {
                                 spacing: Shell.row-note-above;
                                 TextInput {
                                     text: space.name;
+                                    accessible-label: "Space name";
                                     min-height: Shell.row-title * Type.body.lineHeight;
                                     vertical-alignment: center;
                                     color: Palette.ink;

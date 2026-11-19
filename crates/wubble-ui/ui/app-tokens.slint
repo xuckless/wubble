@@ -33,6 +33,10 @@ export global Shell {
     // .wb-nav: gap 2, pulled 4 right; .wb-ib: 30 square, radius 9, white 7 % on hover, 35 % disabled
     out property <length> nav-gap: 2px;
     out property <length> nav-pull: 4px;
+    // The keyboard focus ring (core/wubble.css `.wb :focus-visible { outline: 2px solid
+    // var(--wb-sky); outline-offset: 2px }`), drawn by FocusRing.
+    out property <length> focus-ring-width: 2px;
+    out property <length> focus-ring-offset: 2px;
     out property <length> icon-button: 30px;
     out property <length> icon-button-radius: 9px;
     out property <color> icon-button-hover: rgba(255, 255, 255, 0.07);

@@ -1,0 +1,15 @@
+[package]
+name = "wubble-ax"
+description = "Chromium's accessibility tree (as CEF hands it to a windowless browser) mapped to AccessKit. Pure: no CEF, no Slint."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# The version Slint 1.19's winit backend already links (Cargo.lock), MIT OR Apache-2.0.
+accesskit = "0.25"
+
+[dev-dependencies]
+serde_json.workspace = true

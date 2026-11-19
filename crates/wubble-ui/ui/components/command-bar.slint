@@ -27,7 +27,8 @@ export component CommandBar inherits Rectangle {
     callback query-changed(string);
     callback result-chosen(int);
     callback dismissed();
-    // Fired once the bar has fully closed; the host restores focus.
+    // Fired once the bar has fully closed while it still held the keys; the host restores
+    // focus (not when something else, such as F6 to the sidebar, took them as it closed).
     callback closed();
 
     // Keyboard selection; `current` is what the UI uses, clamped to the model.
@@ -95,10 +96,13 @@ export component CommandBar inherits Rectangle {
             input.focus();
             input.select-all();
         } else if (self.state == CommandBarState.closed) {
+            let had-keys = input.has-focus;
             input.clear-focus();
             root.selected = 0;
             list.content-y = 0px;
-            root.closed();
+            if had-keys {
+                root.closed();
+            }
         }
     }
 
@@ -163,6 +167,7 @@ export component CommandBar inherits Rectangle {
             Rectangle {
                 height: Shell.command-input-height;
                 input := TextInput {
+                    accessible-label: "Address or search";
                     x: Spacing.s3;
                     height: parent.height;
                     vertical-alignment: center;

@@ -16,6 +16,10 @@ pub enum Action {
     /// Move the focused page into a new window.
     MoveTabToNewWindow,
     FocusAddress,
+    /// F6: keyboard focus to the next region of the window (`region`).
+    NextRegion,
+    /// Shift+F6: keyboard focus to the region before.
+    PrevRegion,
     Reload,
     HardReload,
     Stop,
@@ -100,7 +104,7 @@ pub enum Action {
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 62] = [
+const FIXED: [(&str, Action); 64] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -108,6 +112,8 @@ const FIXED: [(&str, Action); 62] = [
     ("close-window", Action::CloseWindow),
     ("move-tab-to-new-window", Action::MoveTabToNewWindow),
     ("focus-address", Action::FocusAddress),
+    ("next-region", Action::NextRegion),
+    ("prev-region", Action::PrevRegion),
     ("reload", Action::Reload),
     ("hard-reload", Action::HardReload),
     ("stop", Action::Stop),
@@ -386,7 +392,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 80);
+        assert_eq!(all.len(), 82);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -413,7 +419,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 80);
+        assert_eq!(ids.len(), 82);
     }
 
     #[test]

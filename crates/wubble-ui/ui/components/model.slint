@@ -78,6 +78,13 @@ export enum CommandBarEvent {
 }
 
 // Mirrors wubble_core::seam::SidebarMode; the seam (Rust) owns it.
+// F6's regions (mirrors wubble_core::region::Region; mapped in crates/wubble/src/host.rs).
+export enum FocusRegion {
+    address,
+    sidebar,
+    page,
+}
+
 export enum SidebarMode {
     extended,
     rail,
