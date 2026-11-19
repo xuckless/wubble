@@ -87,6 +87,14 @@ struct Cli {
     /// per shell surface into.
     #[arg(long, value_name = "DIR", requires = "smoke", conflicts_with = "shot")]
     shot_dir: Option<PathBuf>,
+    /// Hand run only, for the design-fidelity harness (`tools/fidelity`): the liquid holds
+    /// still (its clock does not advance), so two runs shoot the same backdrop.
+    #[arg(long, requires = "smoke")]
+    frozen_backdrop: bool,
+    /// Hand run only, with `--smoke gallery`: seed the design's Spaces and tabs from this
+    /// manifest (`tools/fidelity/parity.mjs` writes it and serves its pages) before the walk.
+    #[arg(long, value_name = "JSON", requires = "shot_dir")]
+    parity: Option<PathBuf>,
     /// Debugging only: run CEF without its sandbox (logged loudly at start). The engine
     /// reads it from the command line itself (`EngineConfig::from_current_exe`).
     #[arg(long)]
@@ -377,14 +385,27 @@ where
     parse_with_shot(args).map(|(command, _)| command)
 }
 
-/// [`parse`], and `--shot`'s file.
-pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, Option<PathBuf>), clap::Error>
+/// The hand-run shot options (`--shot`, `--frozen-backdrop`, `--parity`), apart from the
+/// command they ride on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShotArgs {
+    pub path: Option<PathBuf>,
+    pub frozen_backdrop: bool,
+    pub parity: Option<PathBuf>,
+}
+
+/// [`parse`], and the shot options.
+pub fn parse_with_shot<I, T>(args: I) -> Result<(Command, ShotArgs), clap::Error>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
     let mut cli = Cli::try_parse_from(args)?;
-    let shot = cli.shot.take();
+    let shot = ShotArgs {
+        path: cli.shot.take(),
+        frozen_backdrop: cli.frozen_backdrop,
+        parity: cli.parity.take(),
+    };
     Command::try_from(cli).map(|command| (command, shot))
 }
 
@@ -498,8 +519,28 @@ mod tests {
         let (command, shot) =
             parse_with_shot(["wubble", "--smoke", "settings", "--shot", "/tmp/s.png"]).unwrap();
         assert_eq!(command, Command::Smoke(Smoke::Settings));
-        assert_eq!(shot, Some(PathBuf::from("/tmp/s.png")));
+        assert_eq!(shot.path, Some(PathBuf::from("/tmp/s.png")));
+        assert!(!shot.frozen_backdrop);
         assert!(parse(["wubble", "--shot", "/tmp/s.png"]).is_err());
+    }
+
+    #[test]
+    fn the_fidelity_flags_ride_on_a_smoke() {
+        let args = [
+            "wubble",
+            "--smoke",
+            "gallery",
+            "--shot-dir",
+            "/tmp/g",
+            "--frozen-backdrop",
+            "--parity",
+            "/tmp/p.json",
+        ];
+        let (_, shot) = parse_with_shot(args).unwrap();
+        assert!(shot.frozen_backdrop);
+        assert_eq!(shot.parity, Some(PathBuf::from("/tmp/p.json")));
+        assert!(parse(["wubble", "--frozen-backdrop"]).is_err());
+        assert!(parse(["wubble", "--smoke", "boot", "--parity", "/tmp/p.json"]).is_err());
     }
 
     #[test]

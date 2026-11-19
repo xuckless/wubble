@@ -7,6 +7,11 @@
 //!
 //! Surfaces that need a live page (split panes, DevTools docked, the video strip, reader and
 //! boost editor, Little and Popup windows) are not scenes: their own smokes take a `--shot`.
+//!
+//! For the design-fidelity harness (`tools/fidelity`): `--parity` seeds the design's Spaces and
+//! tabs before the first scene ([`Action::Seed`]), a scene may hold the pointer somewhere
+//! ([`Scene::pointer`], hover states), and a scene with [`Scene::frames`] is shot as a burst
+//! of frames from the moment it is shown (its motion), each with its time since the show.
 
 use wubble_core::pages::InternalPage;
 use wubble_core::seam::SidebarMode;
@@ -23,6 +28,11 @@ pub struct Scene {
     /// Scrolls the page this many logical px (a wheel over it) once it settled, then settles
     /// again.
     pub wheel: u32,
+    /// Where the pointer rests while the scene is shot, logical px in the window; `None`
+    /// moves it out of the window.
+    pub pointer: Option<(u16, u16)>,
+    /// Shoot this many frames back to back from the show instead of one settled shot.
+    pub frames: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +65,8 @@ const fn scene(name: &'static str) -> Scene {
         page: None,
         overlay: Overlay::None,
         wheel: 0,
+        pointer: None,
+        frames: 0,
     }
 }
 
@@ -83,6 +95,19 @@ pub const SCENES: &[Scene] = &[
     Scene {
         sidebar: SidebarMode::Hidden,
         ..scene("sidebar-hidden")
+    },
+    // Hover states and motion, for the fidelity harness.
+    Scene {
+        pointer: Some(TAB_ROW),
+        ..scene("tab-row-hover")
+    },
+    Scene {
+        pointer: Some(NEW_TAB_ROW),
+        ..scene("new-tab-hover")
+    },
+    Scene {
+        frames: BURST,
+        ..over("command-bar-open", Overlay::CommandBar(""))
     },
     over("command-bar", Overlay::CommandBar("")),
     over("command-bar-results", Overlay::CommandBar("test")),
@@ -122,6 +147,13 @@ pub const SCENES: &[Scene] = &[
     on("task-manager", InternalPage::Tasks),
 ];
 
+/// The second tab row and the new-tab row of the extended sidebar on the parity profile
+/// (`--parity`: four favourites, the Space name, five tabs), logical px.
+const TAB_ROW: (u16, u16) = (130, 196);
+const NEW_TAB_ROW: (u16, u16) = (130, 356);
+/// Frames in a motion burst (about the length of an entrance at the snapshot rate).
+const BURST: u32 = 24;
+
 /// What the host reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -136,38 +168,58 @@ pub enum Event {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Start,
+    /// The profile is being seeded (`--parity`); waiting for its pages to load.
+    Seeding,
     /// Scene `i` is on the shell; waiting for it to settle.
     Shown(usize),
     /// Scene `i` was scrolled; waiting for it to settle again.
     Scrolled(usize),
     /// Scene `i` was written.
     Shot(usize),
+    /// Frame `k` of scene `i`'s burst was asked for.
+    Burst(usize, u32),
     Done,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
+    /// Seed the profile (the design's Spaces and tabs with `--parity`; nothing without).
+    Seed,
     Show(usize),
     Scroll(usize),
     Shoot(usize),
+    /// Frame `k` of scene `i`'s burst.
+    ShootFrame(usize, u32),
     /// Every scene was shot.
     Finish,
 }
 
 /// One step: the stage and what just happened give the next stage and what to do.
 pub fn next(stage: Stage, event: Event) -> (Stage, Option<Action>) {
+    // After scene `i` was written: the next one, or the end.
+    let after = |i: usize| {
+        if i + 1 < SCENES.len() {
+            (Stage::Shown(i + 1), Some(Action::Show(i + 1)))
+        } else {
+            (Stage::Done, Some(Action::Finish))
+        }
+    };
     match (stage, event) {
-        (Stage::Start, Event::Ready) => (Stage::Shown(0), Some(Action::Show(0))),
+        (Stage::Start, Event::Ready) => (Stage::Seeding, Some(Action::Seed)),
+        (Stage::Seeding, Event::Settled) => (Stage::Shown(0), Some(Action::Show(0))),
+        (Stage::Shown(i), Event::Settled) if SCENES[i].frames > 0 => {
+            (Stage::Burst(i, 0), Some(Action::ShootFrame(i, 0)))
+        }
         (Stage::Shown(i), Event::Settled) if SCENES[i].wheel > 0 => {
             (Stage::Scrolled(i), Some(Action::Scroll(i)))
         }
         (Stage::Shown(i) | Stage::Scrolled(i), Event::Settled) => {
             (Stage::Shot(i), Some(Action::Shoot(i)))
         }
-        (Stage::Shot(i), Event::Shot) if i + 1 < SCENES.len() => {
-            (Stage::Shown(i + 1), Some(Action::Show(i + 1)))
+        (Stage::Burst(i, k), Event::Shot) if k + 1 < SCENES[i].frames => {
+            (Stage::Burst(i, k + 1), Some(Action::ShootFrame(i, k + 1)))
         }
-        (Stage::Shot(_), Event::Shot) => (Stage::Done, Some(Action::Finish)),
+        (Stage::Shot(i) | Stage::Burst(i, _), Event::Shot) => after(i),
         (stage, _) => (stage, None),
     }
 }
@@ -186,7 +238,7 @@ mod tests {
             let a = action.unwrap_or_else(|| panic!("stuck at {stage:?}"));
             out.push(a);
             event = match a {
-                Action::Show(_) | Action::Scroll(_) => Event::Settled,
+                Action::Seed | Action::Show(_) | Action::Scroll(_) => Event::Settled,
                 _ => Event::Shot,
             };
         }
@@ -216,6 +268,39 @@ mod tests {
     }
 
     #[test]
+    fn the_profile_is_seeded_before_the_first_scene() {
+        let actions = walk();
+        assert_eq!(actions.first(), Some(&Action::Seed));
+        assert_eq!(actions.get(1), Some(&Action::Show(0)));
+    }
+
+    #[test]
+    fn a_burst_shoots_each_of_its_frames_once_in_order() {
+        let actions = walk();
+        for (i, scene) in SCENES.iter().enumerate() {
+            let frames: Vec<u32> = actions
+                .iter()
+                .filter_map(|a| match a {
+                    Action::ShootFrame(j, k) if *j == i => Some(*k),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                frames,
+                (0..scene.frames).collect::<Vec<_>>(),
+                "{}",
+                scene.name
+            );
+            assert_eq!(
+                actions.contains(&Action::Shoot(i)),
+                scene.frames == 0,
+                "{}",
+                scene.name
+            );
+        }
+    }
+
+    #[test]
     fn a_scene_is_shot_only_once_it_settled() {
         for stage in [Stage::Shown(3), Stage::Scrolled(3)] {
             for event in [Event::Ready, Event::Shot] {
@@ -229,13 +314,21 @@ mod tests {
         let actions = walk();
         let shown = actions.iter().filter(|a| matches!(a, Action::Show(_)));
         assert_eq!(shown.count(), SCENES.len());
+        // The scene's single shot, or its burst's last frame.
+        let shot = |i: usize| {
+            actions.iter().rposition(|a| {
+                *a == Action::Shoot(i) || matches!(a, Action::ShootFrame(j, _) if *j == i)
+            })
+        };
         for i in 0..SCENES.len() {
             let show = actions.iter().position(|a| *a == Action::Show(i));
-            let shoot = actions.iter().position(|a| *a == Action::Shoot(i));
-            assert!(show < shoot && show.is_some(), "scene {i}");
+            assert!(show.is_some() && show < shot(i), "scene {i}");
             if i > 0 {
-                let before = actions.iter().position(|a| *a == Action::Shoot(i - 1));
-                assert!(before < show, "scene {i} shown before {} was shot", i - 1);
+                assert!(
+                    shot(i - 1) < show,
+                    "scene {i} shown before {} was shot",
+                    i - 1
+                );
             }
         }
         assert_eq!(actions.last(), Some(&Action::Finish));

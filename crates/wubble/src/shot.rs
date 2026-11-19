@@ -21,6 +21,8 @@ thread_local! {
     static SHOT: RefCell<Option<(PathBuf, slint::Weak<AppWindow>)>> = const { RefCell::new(None) };
     static PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     static DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static FROZEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PARITY: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
 /// `--shot-dir`'s folder (`--smoke gallery`), before the window exists.
@@ -34,9 +36,21 @@ pub fn scene_path(dir: &std::path::Path, index: usize, name: &str) -> PathBuf {
     dir.join(format!("{:02}-{name}.png", index + 1))
 }
 
-/// `--shot`'s file, before the window exists.
-pub fn request(path: Option<PathBuf>) {
-    PATH.with(|p| *p.borrow_mut() = path);
+/// `--shot`'s file and the fidelity harness's options, before the window exists.
+pub fn request(args: crate::cli::ShotArgs) {
+    PATH.with(|p| *p.borrow_mut() = args.path);
+    FROZEN.with(|f| f.set(args.frozen_backdrop));
+    PARITY.with(|p| *p.borrow_mut() = args.parity);
+}
+
+/// `--frozen-backdrop`: the liquid holds still, so two runs shoot the same backdrop.
+pub fn frozen_backdrop() -> bool {
+    FROZEN.with(std::cell::Cell::get)
+}
+
+/// `--parity`'s manifest: the design's Spaces and tabs the gallery seeds before its walk.
+pub fn parity() -> Option<PathBuf> {
+    PARITY.with(|p| p.borrow().clone())
 }
 
 /// Whether a shot was asked for.
@@ -65,6 +79,34 @@ pub fn take_scene(window: &AppWindow, index: usize, name: &str) -> Result<PathBu
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = scene_path(&dir, index, name);
     take_to(window, &path)?;
+    Ok(path)
+}
+
+/// Writes frame `k` of the gallery scene `index`'s burst as `dir/NN-name/fKKK.png`, and its
+/// time since the show (`ms`) as a line `KKK <ms>` of `dir/NN-name/times.txt`.
+pub fn take_frame(
+    window: &AppWindow,
+    index: usize,
+    name: &str,
+    k: u32,
+    ms: f64,
+) -> Result<PathBuf, String> {
+    let dir = DIR
+        .with(|d| d.borrow().clone())
+        .ok_or("no --shot-dir was given")?;
+    let burst = scene_path(&dir, index, name).with_extension("");
+    std::fs::create_dir_all(&burst).map_err(|e| e.to_string())?;
+    let path = burst.join(format!("f{k:03}.png"));
+    take_to(window, &path)?;
+    let times = burst.join("times.txt");
+    let line = format!("{k:03} {ms:.2}\n");
+    let mut text = if k == 0 {
+        String::new()
+    } else {
+        std::fs::read_to_string(&times).unwrap_or_default()
+    };
+    text.push_str(&line);
+    std::fs::write(&times, text).map_err(|e| e.to_string())?;
     Ok(path)
 }
 
