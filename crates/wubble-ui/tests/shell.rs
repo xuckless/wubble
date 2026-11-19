@@ -123,11 +123,8 @@ fn peek(app: &AppWindow, driver: &Shared) {
     pump(1);
     assert!(!app.get_peeking());
 
-    // Into the edge strip: it peeks 60 ms later.
+    // Into the edge strip (`.wb-peek-edge` onPointerEnter): it peeks at once.
     pointer(app, 10.0, 300.0);
-    pump(30);
-    assert!(!app.get_peeking());
-    pump(40);
     assert!(app.get_peeking());
     // The slide (340 ms), then over a child row: still peeking.
     pump(400);
@@ -146,7 +143,8 @@ fn peek(app: &AppWindow, driver: &Shared) {
     assert!(!app.get_peeking());
     pump(400);
 
-    // Pushed against the window's edge, over the west resize strip: it peeks too.
+    // Pushed against the window's edge, over the west resize strip (the design's `onMove`
+    // strip): it peeks 60 ms later.
     pump(400);
     pointer(app, 2.0, 300.0);
     pump(100);

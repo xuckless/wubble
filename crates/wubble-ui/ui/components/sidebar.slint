@@ -13,15 +13,18 @@
 //   scroll-y, thumb-*  the tab list's scroller
 // Nothing here tweens a value Rust owns; only hover fades and the 0.97 press use `animate`.
 
-import { Palette, Radius, Space, Chrome, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
+import { Palette, Radius, Space, Chrome, Fonts, Type, Motion, Tsx } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { TabRow } from "../kit/chrome/tab-row.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
-import { AddressPill } from "address-pill.slint";
-import { FavGrid } from "fav-grid.slint";
+import { AddressPill } from "../kit/chrome/address-pill.slint";
+import { Favs } from "../kit/chrome/favs.slint";
+import { SpaceName } from "../kit/chrome/space-switcher.slint";
+import { SideBottom } from "../kit/chrome/side-bottom.slint";
+import { SideMode, SidePad } from "../kit/chrome/sidebar.slint";
 import { NewTabRow } from "../kit/chrome/new-tab-row.slint";
 import { WindowLights } from "../kit/chrome/window-lights.slint";
 import { NavButtons, IconButton } from "nav-buttons.slint";
@@ -57,6 +60,12 @@ export component Sidebar inherits Rectangle {
     in property <length> ride-step;
     in property <string> address-host;
     in property <string> address-path;
+    in property <bool> address-secure;
+    // the favourite under the pointer (a tab id), -1 when none: a press there waves its glass.
+    // Favs (inside an `if`) copies its binding here; it is gone with the last pinned tab and
+    // leaves its last value behind: masked then.
+    property <int> favs-hover: -1;
+    out property <int> fav-hover: root.pinned-tabs.length > 0 ? root.favs-hover : -1;
     in property <bool> address-bookmarkable: false;
     in property <bool> address-bookmarked: false;
     in property <bool> address-blocker-visible: false;
@@ -106,8 +115,9 @@ export component Sidebar inherits Rectangle {
     // The wgpu scene draws the glass of the pill and the favourites (and the sidebar's own,
     // in app.slint).
     in property <bool> glass-over-wgpu: false;
-    // The floating peek panel: .wb-side-peek pads 10 8 10 10 where the sidebar pads 6.
-    in property <bool> floating: false;
+    // The look it takes (chrome.tsx `sideMode`): its padding (.wb-side 6, .wb-side-rail 6 0,
+    // .wb-side-peek 10 8 10 10).
+    in property <SideMode> mode: SideMode.extended;
     // The window can be moved by dragging the sidebar's glass (off in full screen).
     in property <bool> window-movable: true;
     // The address pill's border beam this frame (see AddressPill).
@@ -115,7 +125,7 @@ export component Sidebar inherits Rectangle {
     out property <float> address-sheen: pill.sheen;
     // Where the command bar grows from when opened from the pill / the new-tab row, in window
     // coordinates (chrome.tsx `openCommand`: left + 40, vertical middle).
-    out property <Origin> address-origin: { x: pill.absolute-position.x + Shell.command-origin-dx, y: pill.absolute-position.y + pill.height / 2 };
+    out property <Origin> address-origin: pill.origin;
     // Where the column's edges fall, in window coordinates (the alignment the tests pin).
     out property <SideEdges> edges: {
         start: root.absolute-position.x,
@@ -135,15 +145,15 @@ export component Sidebar inherits Rectangle {
         rows-end: rows.absolute-position.x + rows.width,
         new-tab: new-tab.absolute-position.x,
         new-tab-end: new-tab.absolute-position.x + new-tab.width,
-        spaces: strip.absolute-position.x,
-        spaces-end: strip.absolute-position.x + strip.width,
-        downloads: downloads.absolute-position.x,
-        downloads-end: downloads.absolute-position.x + downloads.width,
-        downloads-y: downloads.absolute-position.y,
-        settings: settings.absolute-position.x,
-        settings-end: settings.absolute-position.x + settings.width,
+        spaces: switcher.spaces-x,
+        spaces-end: switcher.spaces-x + switcher.spaces-w,
+        downloads: switcher.downloads-x,
+        downloads-end: switcher.downloads-x + switcher.downloads-w,
+        downloads-y: switcher.downloads-y,
+        settings: switcher.settings-x,
+        settings-end: switcher.settings-x + switcher.settings-w,
     };
-    out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Shell.command-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
+    out property <Origin> new-tab-origin: { x: new-tab.absolute-position.x + Tsx.new-tab-origin-dx, y: new-tab.absolute-position.y + new-tab.height / 2 };
     // The pill's bottom left, in window coordinates: the permission prompt hangs below it.
     out property <Origin> address-below: { x: pill.absolute-position.x, y: pill.absolute-position.y + pill.height };
     // There are downloads to list: the download button shows in the footer.
@@ -153,7 +163,7 @@ export component Sidebar inherits Rectangle {
     callback settings-requested();
     // Right of the download button, level with its top, in window coordinates: the popover opens
     // there, beside the sidebar (it keeps itself inside the window, so it rises from the footer).
-    out property <Origin> downloads-anchor: { x: downloads.absolute-position.x + downloads.width + Shell.prompt-gap, y: downloads.absolute-position.y };
+    out property <Origin> downloads-anchor: { x: switcher.downloads-x + switcher.downloads-w + Shell.prompt-gap, y: switcher.downloads-y };
     // the tab list's scroller
     in property <length> scroll-y;
     in property <length> thumb-top;
@@ -172,9 +182,9 @@ export component Sidebar inherits Rectangle {
     callback tab-track(int, int, length, length);
     // The Space strip's first icon in window px, the step to the next and whether they run
     // down (rail) instead of across: where a dragged tab can be dropped onto a Space.
-    out property <length> space-strip-x: strip.absolute-position.x;
-    out property <length> space-strip-y: strip.absolute-position.y;
-    out property <length> space-pitch: Shell.space-tile + Shell.space-gap;
+    out property <length> space-strip-x: switcher.spaces-x;
+    out property <length> space-strip-y: switcher.spaces-y;
+    out property <length> space-pitch: switcher.pitch;
     out property <length> space-tile: Shell.space-tile;
     callback tab-drag(length);
     callback tab-release(int);
@@ -236,10 +246,10 @@ export component Sidebar inherits Rectangle {
 
     VerticalLayout {
         width: root.content-width;
-        padding-left: root.floating ? Shell.peek-pad-start : Shell.side-pad;
-        padding-right: root.floating ? Shell.peek-pad-end : Shell.side-pad;
-        padding-top: root.floating ? Shell.peek-pad-y : Shell.side-pad;
-        padding-bottom: root.floating ? Shell.peek-pad-y : Shell.side-pad;
+        padding-left: SidePad.left(root.mode);
+        padding-right: SidePad.right(root.mode);
+        padding-top: SidePad.top(root.mode);
+        padding-bottom: SidePad.bottom(root.mode);
         spacing: Space.s3;
 
         // .wb-side-top: 30 high, lights 10 in (centred on the rail)
@@ -292,6 +302,7 @@ export component Sidebar inherits Rectangle {
                 beam: root.address-beam;
                 host: root.address-host;
                 path: root.address-path;
+                secure: root.address-secure;
                 bookmarkable: root.address-bookmarkable;
                 bookmarked: root.address-bookmarked;
                 blocker-visible: root.address-blocker-visible;
@@ -326,7 +337,13 @@ export component Sidebar inherits Rectangle {
         if root.pinned-tabs.length > 0: Ride {
             ride: root.ride;
             step: root.ride-step;
-            FavGrid {
+            Favs {
+                init => {
+                    root.favs-hover = self.hovered-id;
+                }
+                changed hovered-id => {
+                    root.favs-hover = self.hovered-id;
+                }
                 tabs: root.pinned-tabs;
                 active-tab-id: root.active-tab-id;
                 compact: root.compact;
@@ -345,22 +362,9 @@ export component Sidebar inherits Rectangle {
             step: root.ride-step;
             // A new Space's name arrives with the Overlap entrance (chrome.tsx keys the span by
             // the Space: `wb-in`).
-            Entering {
-                height: Shell.space-name-height;
-                e: root.space-enter;
-                Text {
-                    x: Shell.side-grid;
-                    y: Shell.space-name-top;
-                    width: parent.width - Shell.side-grid * 2;
-                    height: parent.height - Shell.space-name-top;
-                    text: root.spaces[root.space-index].name;
-                    color: Palette.mist;
-                    font-family: Fonts.ui;
-                    font-size: Type.label.size;
-                    font-weight: Type.label.weight;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
+            SpaceName {
+                text: root.spaces[root.space-index].name;
+                enter: root.space-enter;
             }
         }
 
@@ -545,126 +549,26 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // .wb-side-bottom: the Space switcher (.wb-spaces): the drawn icons, in a row, or a column
-        // on the rail, with the capsule that follows the active one and stretches between them;
-        // and at the far end the secondary action (the design's Source button, wubble's the
-        // downloads button), under the column on the rail (.wb-side-bottom-rail)
-        switcher := Rectangle {
-            property <length> pitch: Shell.space-tile + Shell.space-gap;
-            property <length> span: max(0px, root.spaces.length * self.pitch - Shell.space-gap);
-            // the buttons at the end of the row, in order (chrome.tsx @ 21838b8: Source, then
-            // Settings, side by side; .wb-side-bottom-rail stacks them 10 apart under the Spaces)
-            // dev tools gives way when the row has no room for all three (downloads shown on a
-            // narrow sidebar); F12 still opens them
-            property <bool> tools: root.compact || !root.has-downloads || self.width >= self.span + 3 * Shell.side-bottom-button;
-            property <int> buttons: (root.has-downloads ? 1 : 0) + (self.tools ? 1 : 0) + 1;
-            property <length> rail-pitch: Shell.side-bottom-button + Shell.side-bottom-gap-rail;
-            height: root.compact ? self.span + self.buttons * self.rail-pitch : Shell.space-tile;
-
-            // wubble: the downloads list (the design has no downloads), first of the buttons
-            downloads := IconButton {
-                visible: root.has-downloads;
-                width: Shell.side-bottom-button;
-                height: Shell.side-bottom-button;
-                border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - parent.buttons * self.width;
-                y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
-                icon-path: Glyph.download;
-                tip-action: "open-downloads";
-                label: "Downloads";
-                clicked => {
-                    root.downloads-requested();
-                }
+        // .wb-side-bottom: the Space switcher and the buttons at the far end (kit SideBottom)
+        switcher := SideBottom {
+            spaces: root.spaces;
+            active: root.space-index;
+            vertical: root.compact;
+            capsule-offset: root.capsule-offset;
+            capsule-stretch: root.capsule-stretch;
+            capsule-origin: root.capsule-origin;
+            has-downloads: root.has-downloads;
+            space-picked(id) => {
+                root.space-switched(id);
             }
-            // the design's Source button (`code`): wubble's is the page's dev tools
-            dev-tools := IconButton {
-                visible: parent.tools;
-                width: Shell.side-bottom-button;
-                height: Shell.side-bottom-button;
-                border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - 2 * self.width;
-                y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
-                icon-path: Glyph.code;
-                tip-action: "dev-tools";
-                label: "Developer tools";
-                clicked => {
-                    root.action("dev-tools");
-                }
+            downloads-requested => {
+                root.downloads-requested();
             }
-            // the settings entry, always at the far end
-            settings := IconButton {
-                width: Shell.side-bottom-button;
-                height: Shell.side-bottom-button;
-                border-radius: Shell.control-radius;
-                x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
-                y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
-                icon-path: Glyph.settings;
-                tip-action: "open-settings";
-                label: "Settings";
-                clicked => {
-                    root.settings-requested();
-                }
+            dev-tools-requested => {
+                root.action("dev-tools");
             }
-
-            strip := Rectangle {
-                x: root.compact ? (parent.width - self.width) / 2 : 0px;
-                width: root.compact ? Shell.space-tile : parent.span;
-                // along the axis: stretched about `origin`; across it: squashed
-                property <length> along: Shell.space-tile * root.capsule-stretch;
-                property <length> across: Shell.space-tile / Math.sqrt(root.capsule-stretch);
-                property <length> at: root.capsule-offset + (Shell.space-tile - self.along) * root.capsule-origin;
-                Rectangle {
-                    x: root.compact ? (Shell.space-tile - parent.across) / 2 : parent.at;
-                    y: root.compact ? parent.at : (Shell.space-tile - parent.across) / 2;
-                    width: root.compact ? parent.across : parent.along;
-                    height: root.compact ? parent.along : parent.across;
-                    border-radius: Shell.control-radius;
-                    background: root.space-index >= 0 && root.space-index < root.spaces.length ? root.spaces[root.space-index].tint : transparent;
-                    opacity: Shell.capsule-alpha;
-                    animate background {
-                        duration: Calm.ms(Shell.capsule-colour-ms);
-                        easing: Motion.ease-in-out;
-                    }
-                }
-
-                accessible-role: AccessibleRole.tab-list;
-                accessible-label: "Spaces";
-                for space[i] in root.spaces: tile := Rectangle {
-                    // tabs.tsx SpaceSwitcher: each click wobbles the icon once more
-                    property <bool> hit: false;
-                    x: root.compact ? 0px : i * switcher.pitch;
-                    y: root.compact ? i * switcher.pitch : 0px;
-                    width: Shell.space-tile;
-                    height: Shell.space-tile;
-                    border-radius: Shell.control-radius;
-                    accessible-role: AccessibleRole.tab;
-                    accessible-label: space.name;
-                    accessible-item-selectable: true;
-                    accessible-item-selected: i == root.space-index;
-                    accessible-action-default => {
-                        root.space-switched(space.id);
-                    }
-                    ta := TouchArea {
-                        clicked => {
-                            tile.hit = !tile.hit;
-                            root.space-switched(space.id);
-                        }
-                    }
-                    Wobble {
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: Shell.space-glyph;
-                        height: Shell.space-glyph;
-                        hit: tile.hit;
-                        Icon {
-                            // the icon is drawn at 17 px (tabs.tsx SpaceIcons): stroke 1.7 on the 24 grid
-                            size: Shell.space-glyph;
-                            path: Glyph.space(space.icon);
-                            // .wb button: ink (the capsule under the active one carries its colour)
-                            tint: Palette.ink;
-                        }
-                    }
-                }
+            settings-requested => {
+                root.settings-requested();
             }
         }
     }

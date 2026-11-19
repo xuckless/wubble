@@ -1,0 +1,264 @@
+// design: browser/chrome.tsx:30-60, browser/chrome.tsx:279-281, browser/browser.css:39-47, core/wubble.css:13 @598f814
+// The address bar (`Address`, `.wb-address`): thin glass, radius 12, no shadow, the film rim on
+// hover; 36 high, padding 0 10, gap 8; the lock (13, stroke 1.9, mint) on a site, the bubble on
+// wubble's own pages; the text one mono 13 line, host in ink and the rest in haze, cut with an
+// ellipsis; pressed to .985 over .2 s ease-out; the keyboard focus ring (`.wb :focus-visible`).
+// A click opens the command bar from `origin`: left + 40 at mid height (`onOpen`). The beam laps
+// it while a page loads (wubble_core::beam; the scene draws it, BorderBeam where it cannot).
+// On the rail it is `.wb-rail-addr`, a 40 x 36 icon button whose command bar grows from its right
+// edge. wubble's own chips (pop-ups, media, blocker shield and count, reader, bookmark star) sit
+// at the right end in the same 13 px icon and 8 px gap (derived: notes/fidelity/derived-review.md).
+
+import { Palette, Tsx } from "../gen/tokens.slint";
+import { BrowserCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { IconButton } from "../controls/icon-button.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { Calm } from "../motion/calm.slint";
+import { GlassTier, GlassKeys, BeamShape, Origin } from "../../components/model.slint";
+import { BorderBeam } from "../../components/border-beam.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+import { TextRole } from "../gen/text.slint";
+
+// `.wb-address-text wb-mono`: the address face (`.wb-mono`) at the address size
+export global AddressText {
+    out property <TextRole> role: {
+        family: Role.wb-mono.family,
+        size: Role.wb-address-text.size,
+        weight: Role.wb-address-text.weight,
+        line-height: Role.wb-address-text.line-height,
+    };
+}
+
+// One of wubble's chips at the pill's right end: a 13 px glyph, optionally with a count.
+component Chip inherits Rectangle {
+    in property <string> icon-path;
+    in property <color> tint;
+    in property <color> fill: transparent;
+    in property <string> count;
+    in property <string> label;
+    callback clicked(length, length);
+    out property <bool> hovered: area.has-hover;
+    width: row.preferred-width;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked(root.absolute-position.x, root.absolute-position.y + root.height);
+    }
+    row := HorizontalLayout {
+        spacing: BrowserCss.wb-address--gap / 2;
+        Icon {
+            y: (parent.height - self.height) / 2;
+            path: root.icon-path;
+            size: Shell.address-icon;
+            weight: Shell.address-icon-stroke;
+            tint: root.tint;
+            fill: root.fill;
+        }
+        if root.count != "": KitText {
+            role: AddressText.role;
+            text: root.count;
+            color: Palette.mist;
+            vertical-alignment: center;
+        }
+    }
+    area := TouchArea {
+        clicked => {
+            root.clicked(root.absolute-position.x, root.absolute-position.y + root.height);
+        }
+    }
+}
+
+export component AddressPill inherits Rectangle {
+    in property <string> host;
+    in property <string> path;
+    // a site over https: the lock; wubble's own pages and the rest: the bubble (chrome.tsx `secure`)
+    in property <bool> secure: false;
+    in property <bool> compact: false;
+    // The scene draws this pill's glass (and its border beam).
+    in property <bool> over-wgpu: false;
+    // The window x range the sidebar shows: the glass is cut to it (GlassPanel `clip-start`).
+    in property <length> glass-clip-start: -Shell.no-clip;
+    in property <length> glass-clip-end: Shell.no-clip;
+    // The design's border beam: the scene draws it round this pill's glass; BorderBeam is its
+    // Slint fallback wherever the scene does not draw this pill.
+    in property <BeamShape> beam;
+    // The Slint fallback's strength: nothing where the scene draws the beam.
+    out property <float> sheen: root.over-wgpu ? 0 : root.beam.strength;
+    // Where the command bar grows from, window px: `r.left + 40` at mid height; on the rail the
+    // button's right edge (chrome.tsx `openCommand`).
+    out property <Origin> origin: root.compact
+        ? { x: rail.absolute-position.x + rail.width, y: rail.absolute-position.y + rail.height / 2 }
+        : { x: root.absolute-position.x + Tsx.address-origin-dx, y: root.absolute-position.y + root.height / 2 };
+    callback activated();
+    // wubble: the chips at the pill's right end.
+    in property <bool> bookmarkable: false;
+    in property <bool> bookmarked: false;
+    callback bookmark-requested();
+    in property <bool> blocker-visible: false;
+    in property <bool> blocker-allowed: false;
+    in property <int> blocked: 0;
+    callback blocker-requested(length, length);
+    in property <int> popups-blocked: 0;
+    callback popups-requested(length, length);
+    in property <bool> media-visible: false;
+    callback media-requested(length, length);
+    in property <bool> reader-available: false;
+    in property <bool> reader-on: false;
+    callback reader-requested();
+    // what the tests read: `.wb-address:active`
+    out property <float> press-scale: glass.scale;
+
+    height: BrowserCss.wb-address--height;
+
+    // `visible`, not `if`, so the panel's glass item outlives a rail round trip.
+    glass := GlassPanel {
+        visible: !root.compact;
+        key: GlassKeys.address;
+        over-wgpu: root.over-wgpu;
+        clip-start: root.glass-clip-start;
+        clip-end: root.glass-clip-end;
+        tier: GlassTier.thin;
+        radius: BrowserCss.wb-address--border-radius;
+        hover: ta.has-hover;
+        pressed: ta.pressed;
+        focused: keys.has-focus;
+        // useGlass(…, { shadow: 0 })
+        drop-shadow-blur: 0px;
+        drop-shadow-offset-y: 0px;
+        drop-shadow-color: transparent;
+        scale: ta.pressed ? BrowserCss.wb-address-active--transform-scale : 1;
+        animate scale {
+            duration: Calm.ms(BrowserCss.wb-address--transition-transform-duration);
+            easing: BrowserCss.wb-address--transition-transform-easing;
+        }
+
+        accessible-role: AccessibleRole.button;
+        accessible-label: "Address: " + root.host + root.path + ". Search or type an address";
+        accessible-action-default => {
+            root.activated();
+        }
+        keys := FocusKeys {
+            activate => {
+                root.activated();
+            }
+        }
+        ta := TouchArea {
+            mouse-cursor: text;
+            clicked => {
+                root.activated();
+            }
+        }
+
+        BorderBeam {
+            radius: BrowserCss.wb-address--border-radius;
+            shape: { head: root.beam.head, length: root.beam.length, strength: root.sheen, hue: root.beam.hue };
+        }
+
+        HorizontalLayout {
+            padding-left: BrowserCss.wb-address--padding-left;
+            padding-right: BrowserCss.wb-address--padding-right;
+            spacing: BrowserCss.wb-address--gap;
+            // `.wb-address-icon`
+            Rectangle {
+                width: Shell.address-icon;
+                site := Icon {
+                    y: (parent.height - self.height) / 2;
+                    path: root.secure ? Glyph.lock : Glyph.bubble;
+                    size: Shell.address-icon;
+                    weight: Shell.address-icon-stroke;
+                    tint: BrowserCss.wb-address-icon--color;
+                }
+            }
+            // host and path run on, one line in two colours (`.wb-address-text span`)
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                min-width: BrowserCss.wb-address-text--min-width;
+                spacing: 0px;
+                KitText {
+                    role: AddressText.role;
+                    text: root.host;
+                    color: BrowserCss.wb-address-text--color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                KitText {
+                    role: AddressText.role;
+                    text: root.path;
+                    horizontal-stretch: 1;
+                    color: BrowserCss.wb-address-text-span--color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+            // Above the whole-pill TouchArea, so a click here is not an address click.
+            if root.popups-blocked > 0: Chip {
+                icon-path: Glyph.expand;
+                tint: Palette.amber;
+                count: root.popups-blocked;
+                label: "Blocked pop-ups: " + root.popups-blocked;
+                clicked(x, y) => {
+                    root.popups-requested(x, y);
+                }
+            }
+            if root.media-visible: media := Chip {
+                icon-path: Glyph.download;
+                tint: media.hovered ? Palette.ink : BrowserCss.wb-address-icon--color;
+                label: "Save media";
+                clicked(x, y) => {
+                    root.media-requested(x, y);
+                }
+            }
+            if root.blocker-visible: badge := Chip {
+                icon-path: Glyph.shield;
+                tint: root.blocker-allowed ? Palette.haze : BrowserCss.wb-address-icon--color;
+                count: root.blocked > 0 ? root.blocked : "";
+                label: "Blocker: " + root.blocked + " blocked";
+                clicked(x, y) => {
+                    root.blocker-requested(x, y);
+                }
+            }
+            if root.reader-available: book := Chip {
+                icon-path: Glyph.book;
+                tint: root.reader-on ? Palette.sky : book.hovered ? Palette.ink : Palette.haze;
+                label: root.reader-on ? "Leave reader" : "Reader";
+                clicked => {
+                    root.reader-requested();
+                }
+            }
+            if root.bookmarkable: star := Chip {
+                icon-path: Glyph.star;
+                fill: root.bookmarked ? Palette.amber : transparent;
+                tint: root.bookmarked ? Palette.amber : Palette.haze;
+                label: root.bookmarked ? "Edit bookmark" : "Bookmark page";
+                clicked => {
+                    root.bookmark-requested();
+                }
+            }
+        }
+        FocusRing {
+            shown: keys.has-focus;
+            radius: BrowserCss.wb-address--border-radius;
+        }
+    }
+
+    // `.wb-ib.wb-rail-addr`: an icon button, 40 x 36, radius 12; the glyph at its centre
+    rail := IconButton {
+        visible: root.compact;
+        x: (parent.width - self.width) / 2;
+        width: BrowserCss.wb-rail-addr--width;
+        height: BrowserCss.wb-rail-addr--height;
+        border-radius: BrowserCss.wb-rail-addr--border-radius;
+        icon-path: Glyph.search;
+        label: "Search or type an address";
+        clicked => {
+            root.activated();
+        }
+    }
+    // The glyph's centre, in window coordinates (the alignment the tests pin).
+    out property <length> glyph-x: root.compact ? rail.glyph-x : site.absolute-position.x + site.width / 2;
+    out property <length> glyph-y: root.compact ? rail.glyph-y : site.absolute-position.y + site.height / 2;
+}

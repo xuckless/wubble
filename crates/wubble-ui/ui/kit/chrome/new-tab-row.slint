@@ -1,7 +1,9 @@
 // design: browser/chrome.tsx:291-293, browser/browser.css:81-83, core/wubble.css:48-49 @598f814
 // The "New tab" row under the tab list (`.wb-newtab wb-press`): 36 high, radius 10, padding
-// 0 10, gap 10; mist, ink on hover, with the hover fill white .045 (both over .15 s, the
-// `.wb-press` transition); the plus 15 / 2 in the 18 px icon box; pressed .97 (`.wb-press`).
+// 0 10, gap 10; the hover fill white .045 (over .15 s, the `.wb-press` transition); the plus
+// 15 / 2 in the 18 px icon box; pressed .97 (`.wb-press`). Colour and face as the web renders
+// them: `.wb-newtab`'s mist and 13.5 px (0,1,0) lose to `.wb button { font: inherit; color:
+// inherit }` (0,1,1), so the row is `.wb`'s ink at 14 px; `.wb-newtab:hover` (0,2,0) is ink.
 // On the rail it is 40 wide and centred (`.wb-newtab-rail`).
 
 import { BrowserCss, WubbleCss } from "../gen/css.slint";
@@ -27,7 +29,7 @@ export component NewTabRow inherits Rectangle {
         root.activated();
     }
 
-    property <color> ink: ta.has-hover ? BrowserCss.wb-newtab-hover--color : BrowserCss.wb-newtab--color;
+    property <color> ink: ta.has-hover ? BrowserCss.wb-newtab-hover--color : WubbleCss.wb--color;
     press := Press {
         pressed: ta.pressed;
     }
@@ -75,7 +77,7 @@ export component NewTabRow inherits Rectangle {
                 }
             }
             if !root.compact: KitText {
-                role: Role.wb-newtab;
+                role: Role.body;
                 text: "New tab";
                 horizontal-stretch: 1;
                 vertical-alignment: center;

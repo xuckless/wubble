@@ -209,6 +209,8 @@ pub enum Stage {
     Shown(usize),
     /// Scene `i` was scrolled; waiting for it to settle again.
     Scrolled(usize),
+    /// Scene `i` settled and the pointer was put on it again; waiting for the hover look.
+    Pointed(usize),
     /// Scene `i` was written.
     Shot(usize),
     /// Frame `k` of scene `i`'s burst was asked for.
@@ -222,6 +224,10 @@ pub enum Action {
     Seed,
     Show(usize),
     Scroll(usize),
+    /// Puts the pointer where scene `i` says, on the settled layout: a hover is only worked out
+    /// on a pointer event, and the one sent with the show met the layout the scene started from
+    /// (the sidebar still springing out of the previous scene's mode).
+    Point(usize),
     Shoot(usize),
     /// Frame `k` of scene `i`'s burst.
     ShootFrame(usize, u32),
@@ -248,7 +254,10 @@ pub fn next(stage: Stage, event: Event) -> (Stage, Option<Action>) {
         (Stage::Shown(i), Event::Settled) if SCENES[i].wheel > 0 => {
             (Stage::Scrolled(i), Some(Action::Scroll(i)))
         }
-        (Stage::Shown(i) | Stage::Scrolled(i), Event::Settled) => {
+        (Stage::Shown(i), Event::Settled) if SCENES[i].pointer.is_some() => {
+            (Stage::Pointed(i), Some(Action::Point(i)))
+        }
+        (Stage::Shown(i) | Stage::Scrolled(i) | Stage::Pointed(i), Event::Settled) => {
             (Stage::Shot(i), Some(Action::Shoot(i)))
         }
         (Stage::Burst(i, k), Event::Shot) if k + 1 < SCENES[i].frames => {
@@ -273,7 +282,9 @@ mod tests {
             let a = action.unwrap_or_else(|| panic!("stuck at {stage:?}"));
             out.push(a);
             event = match a {
-                Action::Seed | Action::Show(_) | Action::Scroll(_) => Event::Settled,
+                Action::Seed | Action::Show(_) | Action::Scroll(_) | Action::Point(_) => {
+                    Event::Settled
+                }
                 _ => Event::Shot,
             };
         }
@@ -337,9 +348,26 @@ mod tests {
 
     #[test]
     fn a_scene_is_shot_only_once_it_settled() {
-        for stage in [Stage::Shown(3), Stage::Scrolled(3)] {
+        for stage in [Stage::Shown(3), Stage::Scrolled(3), Stage::Pointed(3)] {
             for event in [Event::Ready, Event::Shot] {
                 assert_eq!(next(stage, event), (stage, None));
+            }
+        }
+    }
+
+    #[test]
+    fn a_hover_scene_puts_the_pointer_again_once_settled() {
+        let actions = walk();
+        for (i, scene) in SCENES.iter().enumerate() {
+            let point = actions.iter().position(|a| *a == Action::Point(i));
+            assert_eq!(point.is_some(), scene.pointer.is_some(), "{}", scene.name);
+            if let Some(p) = point {
+                assert_eq!(
+                    actions.get(p + 1),
+                    Some(&Action::Shoot(i)),
+                    "{}",
+                    scene.name
+                );
             }
         }
     }

@@ -97,6 +97,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
     window.set_active_space_id(v.active_space);
     window.set_address_host(v.host.as_str().into());
     window.set_address_path(v.path.as_str().into());
+    window.set_address_secure(v.secure);
     // Rows synced in place change no property, so no `changed` handler tells
     // the driver: tell it here.
     window.invoke_shell_model_changed();

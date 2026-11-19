@@ -11,6 +11,7 @@ pub mod beam;
 pub mod boost;
 pub mod bow;
 pub mod busy;
+pub mod chrome;
 pub mod controls;
 pub mod devtools;
 pub mod dnd;
