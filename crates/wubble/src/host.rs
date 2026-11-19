@@ -1700,6 +1700,7 @@ impl Host {
             Plan::Copy(text) => self.copy(&text),
             Plan::BookmarkPage => self.bookmark_page(),
             Plan::DevTools => self.toggle_devtools(),
+            Plan::DockNudge(dir) => self.source_nudge(f64::from(dir)),
             Plan::OpenBeside => self.open_beside(),
             Plan::Builtin(builtin) => self.builtin(builtin),
             // Later, outside the host: opening the bar calls back into it.

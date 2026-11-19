@@ -332,6 +332,8 @@ pub const DEFAULTS: &[Binding] = rows![
     "Mod+-", ALL, Action::ZoomOut, PageFirst;
     "Mod+0", ALL, Action::ZoomReset, PageFirst;
     "F12", LW, Action::DevTools, PageFirst;
+    "Mod+Alt+Shift+Left", ALL, Action::DockWider, Shell;
+    "Mod+Alt+Shift+Right", ALL, Action::DockNarrower, Shell;
     "Ctrl+Shift+I", LW, Action::DevTools, PageFirst;
     "Cmd+Alt+I", MAC, Action::DevTools, PageFirst;
     "Ctrl+U", LW, Action::ViewSource, PageFirst;

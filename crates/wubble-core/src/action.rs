@@ -84,12 +84,15 @@ pub enum Action {
     ScreenshotFullPage,
     /// The Boost editor on a new Boost for the visible site (`boost`).
     NewBoost,
+    /// Widen or narrow the docked DevTools panel a step (its seam's keyboard nudge).
+    DockWider,
+    DockNarrower,
     Quit,
 }
 
 /// Name and value of every parameterless action: the one list `id`,
 /// `from_id` and `all` share.
-const FIXED: [(&str, Action); 54] = [
+const FIXED: [(&str, Action); 56] = [
     ("new-tab", Action::NewTab),
     ("close-tab", Action::CloseTab),
     ("reopen-closed-tab", Action::ReopenClosedTab),
@@ -143,6 +146,8 @@ const FIXED: [(&str, Action); 54] = [
     ("screenshot-visible", Action::ScreenshotVisible),
     ("screenshot-full-page", Action::ScreenshotFullPage),
     ("new-boost", Action::NewBoost),
+    ("dock-wider", Action::DockWider),
+    ("dock-narrower", Action::DockNarrower),
     ("quit", Action::Quit),
 ];
 
@@ -353,7 +358,7 @@ mod tests {
     #[test]
     fn id_and_from_id_are_inverse() {
         let all = Action::all();
-        assert_eq!(all.len(), 72);
+        assert_eq!(all.len(), 74);
         for a in all {
             assert_eq!(Action::from_id(&a.id()), Some(a), "{a:?}");
         }
@@ -364,7 +369,7 @@ mod tests {
         let mut ids: Vec<String> = Action::all().iter().map(|a| a.id()).collect();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), 72);
+        assert_eq!(ids.len(), 74);
     }
 
     #[test]
