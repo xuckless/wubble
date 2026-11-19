@@ -441,6 +441,7 @@ fn hover(engine: &mut Engine, view: ViewId, point: Point) {
     let up = Modifiers {
         keys: ModifiersState::empty(),
         buttons: Buttons::default(),
+        locks: Default::default(),
     };
     view.mouse_move(point, &up, Duration::ZERO);
 }
@@ -461,6 +462,7 @@ fn click(engine: &mut Engine, view: ViewId, button: MouseButton, point: Point) {
     let up = Modifiers {
         keys: ModifiersState::empty(),
         buttons: Buttons::default(),
+        locks: Default::default(),
     };
     let down = Modifiers {
         buttons: Buttons::default().with(button, true),

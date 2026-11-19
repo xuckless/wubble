@@ -486,6 +486,29 @@ export struct FolderChoiceItem {
     depth: int,
 }
 
+// The print sheet (`wubble_core::print::Sheet`).
+export struct PrintSheetView {
+    open: bool,
+    // Rendering or sending: the buttons wait.
+    busy: bool,
+    // Changes with each opening: the pages field restarts from `pages`.
+    serial: int,
+    // Why the last try failed, or a bad page range; empty when all is well.
+    error: string,
+    // "Save as PDF", then the printers.
+    destinations: [string],
+    destination: int,
+    pages: string,
+    landscape: bool,
+    // Letter, A4, Legal.
+    paper: int,
+    // Default, None, Minimum.
+    margins: int,
+    scale: int,
+    background: bool,
+    copies: int,
+}
+
 // What the bookmark sheet asks (Ctrl+D, rename, move, new folder).
 export struct BookmarkSheetView {
     open: bool,
@@ -524,6 +547,26 @@ export struct PasswordsView {
     body: string,
     // The last import's report, or an error to show under the buttons.
     notice: string,
+}
+
+// ── Pages for screen readers (wubble-ax `PageTree::flatten`, host `ax.rs`).
+
+// What a page item is (wubble_ax::Kind, mapped once in the host's `ax.rs`).
+export enum AxKind { heading, link, button, text-field, check-box, radio-button, image, text }
+
+// One item of the visible page for assistive technology, in reading order. `x`..`h`: its
+// rectangle in the content area, logical px.
+export struct AxItemView {
+    id: int,
+    kind: AxKind,
+    label: string,
+    value: string,
+    level: int,
+    checked: bool,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
 }
 
 // ── Video controls (wubble_core::video), drawn over the visible page's main video.

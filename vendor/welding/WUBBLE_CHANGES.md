@@ -438,6 +438,32 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`wubble-engine` `storage.rs`); before this every view had its own
    in-memory jar, so tabs never shared a login and nothing survived a
    restart. Test: `wubble-engine`'s `cookie_smoke` example.
+47. **Print settings.** `CefSurfaceProducer::print_to_pdf(path, &PdfOptions)`:
+   `PdfOptions` (landscape, background graphics, scale, paper size in
+   inches, `PdfMargins` default / none / custom inches, page ranges) is
+   filled into `cef::PdfPrintSettings` (`drag::pdf_settings`) by the Linux,
+   macOS and Windows producers, which used CEF's defaults before. wubble's
+   print sheet sets them.
+48. **Drag operation and the page's own drag data.** The render handlers
+   implement `UpdateDragCursor` as `NavigationEvent::DragCursor { operation }`,
+   so the host learns what a drop would do (a text drag between two fields
+   moves, not copies) and shows it. `StartDragging` keeps a CEF clone of the
+   drag data in `Requests` (dropped by `finish_drag_source`); a
+   `DragInput` enter with no payload re-enters with that clone, which keeps
+   `DropData`'s custom types (`setData("application/x-...")`) that
+   `DragPayload` cannot carry. Test: `drag::tests`.
+49. **Scroll offset.** The render handlers implement `OnScrollOffsetChanged`
+   as `NavigationEvent::ScrollOffset { x, y }` (Linux, macOS, Windows
+   `*/cef_backed.rs`, `surface.rs`), so the host can tell whether a page took
+   a sideways scroll before it turns a two-finger swipe into back or forward.
+50. **Accessibility tree.** New `accessibility.rs` (cef-runtime): a
+   `WeldAccessibilityHandler` whose `OnAccessibilityTreeChange` and
+   `OnAccessibilityLocationChange` write CEF's value as JSON (`cef_write_json`)
+   and queue `NavigationEvent::AccessibilityTree { json }` /
+   `AccessibilityLocation { json }` (`surface.rs`); the render handlers of
+   all three platforms return it from `GetAccessibilityHandler`
+   (`*/cef_backed.rs`). Nothing turns accessibility on: CEF calls the handler
+   only after the host's `BrowserHost::set_accessibility_state(ENABLED)`.
 
 ## Not changed, on purpose
 

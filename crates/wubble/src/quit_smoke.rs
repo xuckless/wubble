@@ -125,6 +125,7 @@ fn right_click(view: &mut View, at: Point) {
     let up = Modifiers {
         keys: ModifiersState::empty(),
         buttons: Buttons::default(),
+        locks: Default::default(),
     };
     let down = Modifiers {
         buttons: Buttons::default().with(MouseButton::Right, true),

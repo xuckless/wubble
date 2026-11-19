@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
+use wubble_core::model::Command;
 use wubble_core::pip::{self, Pip, PipEffect, PipInput};
 use wubble_core::settings as defs;
 use wubble_core::sponsor::{self, ActTable, Plan, Segment, Skips};
@@ -36,32 +37,6 @@ const SPONSOR_RETRY_MS: u64 = 30_000;
 /// The kit's snapshot, as the poll asks for it.
 const SNAPSHOT: &str =
     "(function(){var k=window[Symbol.for('wubble.kit')];return k?k.snapshot():null})()";
-
-/// The window picture-in-picture shows a tab's frames in. The windows lane (b7/win, not on this
-/// base) builds it: a `WindowKind::Pip` (or a view-only window owned by `Pip`), frameless and
-/// small, `set_window_level(AlwaysOnTop)` through `with_winit_window` (a hint Wayland ignores),
-/// presenting the tab's frames while the tab stays in its Main window's list, its resize feeding
-/// the view's size, and its close reported as `PipInput::WindowClosed` (`Host::pip_window_closed`).
-pub trait PipWindow {
-    /// Whether there is a window to open: without one the controls offer no picture-in-picture.
-    fn available(&self) -> bool;
-    /// Shows `tab`'s frames; false when no window could be opened.
-    fn open(&mut self, tab: TabId) -> bool;
-    fn close(&mut self, tab: TabId);
-}
-
-/// No picture-in-picture window on this build (one window only).
-pub struct NoPipWindow;
-
-impl PipWindow for NoPipWindow {
-    fn available(&self) -> bool {
-        false
-    }
-    fn open(&mut self, _tab: TabId) -> bool {
-        false
-    }
-    fn close(&mut self, _tab: TabId) {}
-}
 
 /// The media downloader's menu for a page: the "save" button's seam. Set by that lane; without
 /// it the button is not shown.
@@ -184,7 +159,6 @@ pub(super) struct Videos {
     // picture-in-picture
     pip: Pip,
     pip_auto: bool,
-    pip_window: Box<dyn PipWindow>,
     pip_calls: BTreeMap<u64, (TabId, PipCall)>,
     // media keys
     keys_on: bool,
@@ -221,7 +195,6 @@ impl Default for Videos {
             asking: false,
             pip: Pip::Off,
             pip_auto: false,
-            pip_window: Box::new(NoPipWindow),
             pip_calls: BTreeMap::new(),
             keys_on: true,
             keys: None,
@@ -569,6 +542,7 @@ impl Host {
             "loop" => VideoCmd::Loop,
             "mute" => VideoCmd::Mute,
             "seek" => VideoCmd::Seek(f64::from(value)),
+            "seek-by" => VideoCmd::SeekBy(f64::from(value)),
             "pip" => VideoCmd::Pip,
             "frame" => VideoCmd::Frame,
             "save" => VideoCmd::Save,
@@ -679,7 +653,8 @@ impl Host {
 
     /// After every change to the model: a tab switch is picture-in-picture's cue.
     pub(super) fn media_after_change(&mut self) {
-        let visible = self.shown();
+        // the focused Main window's tab: the Pip window's own is no switch
+        let visible = self.model.window_tab(self.model.main_window());
         let last = std::mem::replace(&mut self.videos.last_visible, visible);
         if last == visible {
             return;
@@ -690,7 +665,7 @@ impl Host {
             // Playing with sound the tab makes: not a muted or silent clip.
             let playing = self.videos.playing.get(&from).copied().unwrap_or(false)
                 && self.audible_tabs().any(|t| t == from);
-            let auto = self.videos.pip_auto && self.videos.pip_window.available();
+            let auto = self.videos.pip_auto;
             self.pip_event(PipInput::TabSwitched {
                 from,
                 auto,
@@ -715,7 +690,8 @@ impl Host {
         if slint::Model::row_count(&window.get_video_rates()) != rates.len() {
             window.set_video_rates(slint::ModelRc::new(slint::VecModel::from(rates)));
         }
-        let tab = self.shown();
+        // a tab in picture-in-picture has its controls there, not under the Main window's card
+        let tab = self.model.window_key_tab(self.w.id);
         let zoom = tab
             .and_then(|t| self.tab_view(t))
             .map_or(100, |v| v.zoom_percent());
@@ -759,7 +735,7 @@ impl Host {
                             .position(|&r| r == nearest)
                             .map_or(-1, |i| i as i32),
                         speeds: o.speeds_open(),
-                        can_pip: self.videos.pip_window.available(),
+                        can_pip: self.model.can_pip(tab),
                         can_save: self.videos.save.is_some(),
                         marks: slint::ModelRc::new(slint::VecModel::from(marks)),
                     })
@@ -997,18 +973,22 @@ impl Host {
                     }
                 }
                 PipEffect::OpenWindow(tab) => {
-                    let opened = self.videos.pip_window.open(tab);
-                    self.pip_event(PipInput::WindowOpened(opened));
+                    self.dispatch(Command::OpenPip { tab });
+                    self.pip_event(PipInput::WindowOpened(self.model.pip_tab() == Some(tab)));
                 }
-                PipEffect::CloseWindow(tab) => self.videos.pip_window.close(tab),
+                // the model has pruned it already when the tab went
+                PipEffect::CloseWindow(tab) if self.model.pip_tab() == Some(tab) => {
+                    self.dispatch(Command::ClosePip);
+                }
+                PipEffect::CloseWindow(_) => {}
                 PipEffect::Toast(text) => self.toast_text(text),
             }
         }
     }
 
-    /// The picture-in-picture window was closed by the user (the windows lane calls this).
-    #[allow(dead_code)]
-    pub(crate) fn pip_window_closed(&mut self) {
+    /// The model's Pip window closed (its close button, return to tab, the window manager, or
+    /// this machine's own `CloseWindow`).
+    pub(super) fn pip_window_closed(&mut self) {
         self.pip_event(PipInput::WindowClosed);
     }
 
@@ -1046,6 +1026,40 @@ impl Host {
         {
             self.videos.pip_calls.insert(id.0, (tab, PipCall::Spike));
         }
+    }
+
+    /// The Pip window's controls (`pip-controls.slint`) and the Main window's card
+    /// (`pip-card.slint`): play, seek-by (seconds), return, close.
+    pub(crate) fn pip_command(&mut self, name: &str, value: f32) {
+        match name {
+            "return" => self.dispatch(Command::ReturnPip),
+            "close" => self.dispatch(Command::ClosePip),
+            "play" | "seek-by" => {
+                if let Some(tab) = self.model.pip_tab() {
+                    let here = self.w.id;
+                    if let Some(w) = self.model.window_of(tab)
+                        && self.enter(w)
+                    {
+                        self.video_command(name, value);
+                    }
+                    self.enter(here);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The Main window's card for its tab in picture-in-picture, and the Pip window's controls.
+    pub(super) fn render_pip(&mut self, window: &AppWindow) {
+        let card = self.model.pip_tab().filter(|&t| {
+            self.w.kind == wubble_core::window::WindowKind::Main && self.shown() == Some(t)
+        });
+        window.set_pip_card(card.is_some());
+        let title = card
+            .and_then(|t| self.model.tabs.get(&t))
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        window.set_pip_title(title.into());
     }
 
     // ----- media keys
@@ -1099,8 +1113,9 @@ impl Host {
 
     // ----- `--smoke video`
 
-    fn video_smoke_seen(&self, fired: usize) -> smoke::Seen {
-        let tab = self.shown();
+    fn video_smoke_seen(&mut self, fired: usize) -> smoke::Seen {
+        // the Main window's tab, wherever its frames show
+        let tab = self.model.window_tab(self.model.main_window());
         let video = tab
             .and_then(|t| self.videos.overlays.get(&t))
             .and_then(Overlay::video)
@@ -1111,6 +1126,40 @@ impl Host {
             jumps: sponsor.map_or(0, |s| s.sent.as_ref().map_or(0, |(_, t)| t.len())),
             notice: sponsor.is_some_and(|s| s.skips.notice(now_ms() as u64).is_some()),
             fired,
+            pip: self.pip_smoke_seen(),
+        }
+    }
+
+    /// Picture-in-picture as `--smoke video` checks it: the machine, the model's Pip window and
+    /// what each platform window shows.
+    fn pip_smoke_seen(&mut self) -> smoke::PipSeen {
+        let here = self.w.id;
+        let pip = self.model.pip_window();
+        let open = pip.is_some_and(|w| self.enter(w));
+        // a frame at the window's own size: the view was laid out for it (no gap, no chrome)
+        let size = self
+            .w
+            .window
+            .upgrade()
+            .map(|w| slint::ComponentHandle::window(&w).size());
+        let framed = match (self.model.pip_tab(), size) {
+            (Some(tab), Some(size)) if open && !self.snapshots.standing_in(tab) => self
+                .w
+                .frames
+                .get(&tab)
+                .map(|f| (f.clip.width, f.clip.height))
+                .filter(|&(w, h)| w.abs_diff(size.width) <= 2 && h.abs_diff(size.height) <= 2),
+            _ => None,
+        };
+        let card = self.enter(self.model.main_window())
+            && self.w.window.upgrade().is_some_and(|w| w.get_pip_card());
+        self.enter(here);
+        smoke::PipSeen {
+            on: matches!(self.videos.pip, Pip::On { .. }),
+            open,
+            framed,
+            card,
+            windows: self.window_ids().len(),
         }
     }
 
@@ -1148,11 +1197,19 @@ impl Host {
                         view.eval(&script);
                     }
                 }
-                smoke::Action::Video(name, value) => self.video_command(name, value),
+                smoke::Action::Video(name, value) => {
+                    // the overlay of the window the tab is on screen in
+                    let tab = self.model.window_tab(self.model.main_window());
+                    if let Some(w) = tab.and_then(|t| self.model.window_of(t)) {
+                        self.enter(w);
+                    }
+                    self.video_command(name, value);
+                }
                 smoke::Action::Setting(key, value) => {
                     self.write_setting(key, value);
                 }
                 smoke::Action::PipSpike => self.pip_spike(),
+                smoke::Action::Pip(name) => self.pip_command(name, 0.0),
                 smoke::Action::Undo => {
                     if let Some(tab) = self.shown() {
                         self.sponsor_undo(tab);
@@ -1244,12 +1301,5 @@ mod tests {
         // An answer, even "no segments", is not asked again.
         let mut answered = tab_with_a_jump();
         assert!(!answered.wants_lookup(u64::MAX));
-    }
-
-    #[test]
-    fn without_a_window_there_is_no_picture_in_picture() {
-        let mut w = NoPipWindow;
-        assert!(!w.available());
-        assert!(!w.open(TabId(1)));
     }
 }

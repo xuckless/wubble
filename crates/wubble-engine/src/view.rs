@@ -220,6 +220,11 @@ pub struct View {
     host: Option<cef::BrowserHost>,
     clicks: ClickTracker,
     wheel: WheelRemainder,
+    /// The page's root horizontal scroll offset (DIP), as CEF last reported it.
+    scroll_x: f64,
+    /// The accessibility tree wanted ([`View::set_accessibility`]), and whether CEF has been
+    /// told: the browser host may not exist yet when it is asked.
+    accessibility: (bool, bool),
     /// KEYUPs owed for keys pressed and not yet released, sent if focus
     /// leaves first so no key sticks.
     held_keys: Vec<(PhysicalKey, CefKey)>,
@@ -259,6 +264,9 @@ pub struct PopupLayer {
 pub enum DragPhase {
     /// The drag entered, carrying what is dragged.
     Enter(DragData),
+    /// The view's own page drag entered it again: CEF gets the data the page
+    /// gave, with the types [`DragData`] does not carry.
+    EnterSource,
     Over,
     Leave,
     Drop,
@@ -304,6 +312,8 @@ impl View {
             host: None,
             clicks: ClickTracker::default(),
             wheel: WheelRemainder::default(),
+            scroll_x: 0.0,
+            accessibility: (false, true),
             held_keys: Vec::new(),
             page: Vec::new(),
             popup: PopupWidget::default(),
@@ -363,11 +373,28 @@ impl View {
         self.apply_nav(NavInput::HardReload);
     }
 
-    /// Prints the page to a PDF file (Chromium's default page size and
-    /// margins). Completion arrives as [`PageEvent::PdfPrinted`]. The system
-    /// print dialog is not offered: it needs an embedder print handler.
-    pub fn print_to_pdf(&mut self, path: &Path) -> Result<(), String> {
-        self.producer.print_to_pdf(path).map_err(|e| {
+    /// Prints the page to a PDF file as `options` ask (the print sheet's).
+    /// Completion arrives as [`PageEvent::PdfPrinted`]. The system print
+    /// dialog is not offered: it needs an embedder print handler.
+    pub fn print_to_pdf(
+        &mut self,
+        path: &Path,
+        options: &wubble_core::print::PdfOptions,
+    ) -> Result<(), String> {
+        use wubble_core::print::PdfMargins as M;
+        let options = welding::PdfOptions {
+            landscape: options.landscape,
+            background: options.background,
+            scale: options.scale,
+            paper_inches: options.paper_inches,
+            margins: match options.margins {
+                M::Default => welding::PdfMargins::Default,
+                M::None => welding::PdfMargins::None,
+                M::Custom(m) => welding::PdfMargins::Custom(m),
+            },
+            page_ranges: options.page_ranges.clone(),
+        };
+        self.producer.print_to_pdf(path, &options).map_err(|e| {
             let error = format!("view {}: print to PDF: {e}", self.browser_id);
             eprintln!("wubble-engine: {error}");
             error
@@ -481,6 +508,12 @@ impl View {
         self.send(|host| {
             host.send_mouse_click_event(Some(&event), button, (!pressed).into(), count)
         });
+    }
+
+    /// The page's root horizontal scroll offset (DIP) as last reported: a change during a
+    /// sideways swipe means the page took it.
+    pub fn scroll_x(&self) -> f64 {
+        self.scroll_x
     }
 
     /// Deltas in logical pixels, positive = up / left.
@@ -754,6 +787,7 @@ impl View {
 
     fn apply_route(&mut self, routed: Route, mode: RequestMode) {
         match routed {
+            Route::ScrollX(x) => self.scroll_x = x,
             Route::Crashed => {
                 eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
                 // A host that asks about requests draws its own crash page,
@@ -796,7 +830,10 @@ impl View {
                 }
             }
             Route::ObserveZoom => self.observe_zoom(),
-            Route::PageCommitted => self.page.push(PageEvent::Committed),
+            Route::PageCommitted => {
+                self.tell_accessibility();
+                self.page.push(PageEvent::Committed);
+            }
         }
     }
 
@@ -1089,6 +1126,33 @@ impl View {
         self.zoom_step(welding::ZoomCommand::Out);
     }
 
+    /// Turns the page's accessibility tree on or off (CEF's TreeOnly mode for a windowless
+    /// browser: the renderer computes the whole tree and reports it as
+    /// [`PageEvent::AxTree`] and [`PageEvent::AxLocation`]). Off by default: it costs CPU and
+    /// memory on every page, so only while an assistive technology runs or a setting asks.
+    pub fn set_accessibility(&mut self, on: bool) {
+        if self.accessibility != (on, true) {
+            self.accessibility = (on, false);
+            self.tell_accessibility();
+        }
+    }
+
+    /// Tells CEF the accessibility state wanted, once its browser host exists (else at the next
+    /// commit).
+    fn tell_accessibility(&mut self) {
+        let (on, told) = self.accessibility;
+        if told {
+            return;
+        }
+        let state = if on {
+            cef::State::ENABLED
+        } else {
+            cef::State::DISABLED
+        };
+        self.send(|host| host.set_accessibility_state(state));
+        self.accessibility.1 = self.host.is_some();
+    }
+
     /// Clamped to 25..=500 %.
     pub fn set_zoom_percent(&mut self, percent: u32) {
         if self.is_open() {
@@ -1355,6 +1419,7 @@ impl View {
         }
         let (kind, payload) = match phase {
             DragPhase::Enter(data) => (welding::DragEventKind::Enter, Some(data.into())),
+            DragPhase::EnterSource => (welding::DragEventKind::Enter, None),
             DragPhase::Over => (welding::DragEventKind::Over, None),
             DragPhase::Leave => (welding::DragEventKind::Leave, None),
             DragPhase::Drop => (welding::DragEventKind::Drop, None),
@@ -1518,7 +1583,7 @@ impl View {
 
 /// Where one welding event goes: navigation, a page event, or one of the
 /// page state machines.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Route {
     Nav(NavInput),
     Page(PageEvent),
@@ -1533,6 +1598,8 @@ enum Route {
     /// The main frame committed a load (welding reports `LoadStart` for the
     /// main frame only).
     PageCommitted,
+    /// The root scroll offset's x.
+    ScrollX(f64),
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1844,6 +1911,12 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             x,
             y,
         })),
+        E::DragCursor { operation } => {
+            one(Route::Page(PageEvent::DragCursor(DragOps(operation.0))))
+        }
+        E::ScrollOffset { x, .. } => one(Route::ScrollX(x)),
+        E::AccessibilityTree { json } => one(Route::Page(PageEvent::AxTree(json))),
+        E::AccessibilityLocation { json } => one(Route::Page(PageEvent::AxLocation(json))),
         _ => vec![],
     }
 }

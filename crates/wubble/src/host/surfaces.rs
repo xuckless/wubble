@@ -52,13 +52,18 @@ impl Host {
         if tab == PANEL_TAB {
             return self.on_panel_page_event(event);
         }
+        // Pages for screen readers (`host/ax.rs`).
+        if let PageEvent::AxTree(json) | PageEvent::AxLocation(json) = &event {
+            let location = matches!(event, PageEvent::AxLocation(_));
+            return self.ax_event(tab, json, location);
+        }
         // The built-ins' answers (`host/builtins.rs`, `host/videos.rs`).
         if matches!(
             event,
             PageEvent::CdpReply { .. } | PageEvent::EvalResult { .. }
         ) {
             self.video_smoke_page(&event);
-            if self.media_answer(tab, &event) {
+            if self.ax_answer(&event) || self.media_answer(tab, &event) {
                 return;
             }
             self.builtins_answer(tab, &event);
@@ -116,6 +121,7 @@ impl Host {
             }
             Routed::Find(e) => self.apply_find(tab, e),
             Routed::Drag { data, allowed } => self.drag_started(tab, data, allowed),
+            Routed::DragCursor(op) => self.drag_cursor(tab, op),
             Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
             // Picture-in-picture's fullscreen is the video's, in its own window.
             Routed::Fullscreen(true) if self.pip_tab() == Some(tab) => {}
@@ -178,7 +184,8 @@ impl Host {
                     self.probe_report(tab, &frame, keys);
                 }
             }
-            Routed::Pdf { path, text } => {
+            Routed::Pdf { path, ok, .. } if self.print_rendered(&path, ok) => {}
+            Routed::Pdf { path, text, .. } => {
                 self.downloads.release(&path);
                 self.toast(window, &text);
             }
@@ -495,6 +502,9 @@ impl Host {
             self.dock_event(DockEvent::TabGone(tab));
         }
         self.builtins_view_gone(tab);
+        self.ax_view_gone(tab);
+        // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it.
+        self.print_tab_closed(tab);
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }

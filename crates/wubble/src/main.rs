@@ -1,5 +1,6 @@
 mod alloc_count;
 mod autofill_smoke;
+mod ax_smoke;
 mod backdrop;
 mod bar;
 mod bind;
@@ -40,6 +41,7 @@ mod prompt;
 mod quit_smoke;
 mod run_state;
 mod screen;
+mod screen_reader;
 mod session_smoke;
 mod settings_smoke;
 mod shell;
@@ -54,6 +56,7 @@ mod ui_loop;
 mod verdict;
 mod video_smoke;
 mod windows_smoke;
+mod wl;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -276,6 +279,7 @@ fn main() -> ExitCode {
                 Smoke::Builtins => Mode::Builtins,
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
+                Smoke::Ax => Mode::Ax,
                 Smoke::Gallery { dir } => {
                     shot::request_dir(dir);
                     Mode::Gallery
@@ -531,6 +535,8 @@ struct Outcome {
     builtins_passed: Option<String>,
     /// `--smoke video` or `--smoke boost` passed.
     video_passed: Option<String>,
+    /// `--smoke ax` passed, with the page's item count.
+    ax_passed: Option<usize>,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
     /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
     measured: Option<Result<(), String>>,
@@ -577,6 +583,8 @@ enum Mode {
     Video,
     /// `--smoke boost`.
     Boost,
+    /// `--smoke ax`.
+    Ax,
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -685,10 +693,10 @@ impl WindowFactory {
             with_host_in(id, |host| host.dispatch(Cmd::CloseWindow(id)));
             slint::CloseRequestResponse::KeepWindowShown
         });
-        // Little and Popup windows show their page alone.
+        // Little, Popup and Pip windows show their page alone.
         let ui = match kind {
             WindowKind::Main => ui,
-            WindowKind::Little | WindowKind::Popup => persist::UiState {
+            WindowKind::Little | WindowKind::Popup | WindowKind::Pip => persist::UiState {
                 mode: wubble_core::seam::SidebarMode::Hidden,
                 ..ui
             },
@@ -1049,6 +1057,16 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_shot_cancelled(move || with_host_in(win, Host::shot_cancelled));
     window.on_bookmark_deleted(move |id| with_host_in(win, |host| host.bookmark_deleted(id)));
     window.on_bookmark_folder_requested(move || with_host_in(win, Host::bookmark_folder_requested));
+    window.on_print_sheet_edited(
+        move |d, pages, landscape, paper, margins, scale, back, copies| {
+            with_host_in(win, |host| {
+                host.print_edited(d, &pages, landscape, paper, margins, scale, back, copies)
+            })
+        },
+    );
+    window.on_print_sheet_answered(move |accept| {
+        with_host_in(win, |host| host.print_answered(accept))
+    });
     window.on_bookmark_sheet_answered(move |accept, remove, name, folder| {
         with_host_in(win, |host| {
             host.bookmark_sheet_answered(accept, remove, &name, folder)
@@ -1081,6 +1099,12 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.video_command(&name, value))
     });
     window.on_video_hovered(move |over| with_host_in(win, |host| host.video_hovered(over)));
+    window.on_pip_command(move |name, value| {
+        with_host_in(win, |host| host.pip_command(&name, value))
+    });
+    window.on_ax_action(move |index, name, value| {
+        with_host_in(win, |host| host.ax_action(index, &name, &value))
+    });
     window.on_toast_acted(move || with_host_in(win, Host::toast_acted));
     window.on_toast_closed(move || with_host_in(win, Host::toast_closed));
     window
@@ -1182,6 +1206,7 @@ fn run(
         media_smoke: None,
         builtin_smoke: None,
         video_smoke: None,
+        ax_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
     };
@@ -1311,12 +1336,19 @@ fn run(
                 Checks {
                     builtin_smoke: Some(builtin_smoke::BuiltinSmoke::new(
                         page_url(TALL_PAGE),
-                        format!("file://{}", pdf.display()),
+                        wubble_core::dnd::file_uri(&pdf),
                     )),
                     ..none
                 },
             )
         }
+        Mode::Ax => (
+            Some(page_url(ax_smoke::PAGE)),
+            Checks {
+                ax_smoke: Some(ax_smoke::AxSmoke::default()),
+                ..none
+            },
+        ),
         Mode::Video | Mode::Boost => {
             let (port, requests) = video_server.clone().ok_or("no smoke server")?;
             let base = format!("http://127.0.0.1:{port}");
@@ -1585,6 +1617,7 @@ fn run(
         media_passed: host.media_passed,
         builtins_passed: host.builtins_passed.take(),
         video_passed: host.video_passed.take(),
+        ax_passed: host.ax_passed,
         measured,
     };
     let code = Verdict::of(mode, &outcome).print();

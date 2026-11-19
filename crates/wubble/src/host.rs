@@ -16,6 +16,7 @@
 
 mod autofill;
 mod autoscroll;
+mod ax;
 mod boost;
 mod builtins;
 mod busy;
@@ -24,6 +25,7 @@ mod downloads;
 mod drag;
 mod external;
 mod gallery;
+mod gesture;
 mod gpu;
 mod hover;
 mod look;
@@ -33,6 +35,7 @@ mod pages;
 mod panes;
 mod parity;
 mod preview;
+mod print;
 mod settings;
 mod snapshots;
 mod status;
@@ -75,7 +78,7 @@ use wubble_core::site::{Permission, SitePermissions};
 use wubble_core::space::{ContainerId, Item, SpaceId};
 use wubble_core::tab::{Liveness, TabId};
 use wubble_core::touch::InputEvent;
-use wubble_core::window::WindowId;
+use wubble_core::window::{WindowId, WindowKind};
 use wubble_core::zoom::ZoomTable;
 use wubble_engine::app::{Engine, PumpOutcome, PumpTimer, RequestMode, ViewId};
 use wubble_engine::input::{KeyId, KeyInput, Point};
@@ -284,6 +287,8 @@ pub struct Checks {
     pub builtin_smoke: Option<crate::builtin_smoke::BuiltinSmoke>,
     /// `--smoke video` and `--smoke boost`.
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
+    /// `--smoke ax`.
+    pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
     /// Views paint on external begin frames from [`Host::pace`].
@@ -376,6 +381,16 @@ pub struct Host {
     autoscroll: autoscroll::AutoscrollPointer,
     page_drag: crate::page_drag::PageDrag,
     drag_point: Point,
+    /// A drag from another app over the window (`drag.rs`).
+    external_drag: Option<drag::ExternalDrag>,
+    /// Touchpad pinch and history swipe (`gesture.rs`).
+    gestures: gesture::Gestures,
+    /// The print sheet (`print.rs`).
+    print: wubble_core::print::Sheet,
+    /// Opened print sheets: the pages field restarts with each.
+    print_serial: i32,
+    /// The private folder printer jobs' PDFs go to, made with the first (removed on exit).
+    print_dir: Option<tempfile::TempDir>,
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
     /// The live suggestion fetch (debounce, worker); sends nothing unless `live_suggestions`.
@@ -480,12 +495,16 @@ pub struct Host {
     boosts: boost::Boosts,
     /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/videos.rs`).
     videos: videos::Videos,
+    /// Pages for screen readers (`host/ax.rs`).
+    ax: ax::WebAx,
     /// Reduced motion and touch sizing (`look.rs`).
     look: look::Look,
     /// Shift+click opens a peek (`glance.enabled`).
     glance_enabled: bool,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
+    /// `--smoke ax` passed, with the page's item count.
+    pub ax_passed: Option<usize>,
 }
 
 impl Host {
@@ -592,6 +611,11 @@ impl Host {
             autoscroll: Default::default(),
             page_drag: Default::default(),
             drag_point: Point { x: 0.0, y: 0.0 },
+            external_drag: None,
+            gestures: Default::default(),
+            print: Default::default(),
+            print_serial: 0,
+            print_dir: None,
             search_engine: None,
             live_suggestions: false,
             suggest: crate::suggest_fx::SuggestFx::new(crate::suggest_fx::Http::new(), |e| {
@@ -651,7 +675,9 @@ impl Host {
             builtins: builtins::Builtins::default(),
             boosts: boost::Boosts::new(boosts),
             videos,
+            ax: ax::WebAx::default(),
             video_passed: None,
+            ax_passed: None,
             look: look::Look::new(),
             glance_enabled: true,
         };
@@ -737,7 +763,12 @@ impl Host {
             self.enter(other);
         }
         if let Some(gone) = self.parked.remove(&id) {
+            self.aux().remove_window(id);
             let _ = gone.handle.hide();
+            // picture-in-picture's window went, whoever closed it
+            if gone.kind == WindowKind::Pip {
+                self.pip_window_closed();
+            }
         }
     }
 
@@ -903,6 +934,7 @@ impl Host {
                             view.set_drag_source(true);
                         }
                         self.builtins_view_opened(tab, &url);
+                        self.ax_view_opened(tab);
                         self.pace(PaceEvent::Wake);
                     }
                     Err(e) => {
@@ -976,6 +1008,8 @@ impl Host {
             }
         }
         self.enter_focused();
+        // once per change, not per window: a tab switch is picture-in-picture's cue
+        self.media_after_change();
     }
 
     /// The open windows, the one the host is in first.
@@ -1026,8 +1060,9 @@ impl Host {
         window.set_address_popups_blocked(i32::try_from(held).unwrap_or(i32::MAX));
         self.render_surfaces(&window);
         self.render_builtins(&window);
-        self.media_after_change();
         self.render_video(&window);
+        self.render_pip(&window);
+        self.render_ax(&window);
         self.render_boost(&window);
         let nav = self.view().map(|view| {
             (
@@ -1132,7 +1167,7 @@ impl Host {
         input::key_page(
             self.key_pane,
             self.model.glance_of(self.w.id).map(|g| g.tab),
-            self.shown(),
+            self.model.window_key_tab(self.w.id),
         )
     }
 
@@ -1220,6 +1255,7 @@ impl Host {
         self.autofill_smoke_worked(presented);
         self.builtin_smoke_worked();
         self.video_smoke_worked();
+        self.ax_smoke_worked(&window);
         let framed = self.shown().is_some_and(|t| self.w.frames.contains_key(&t));
         let popup_framed = window.get_popup_frame().size().width > 0;
         if self.checks.block_smoke.is_some() {
@@ -1429,6 +1465,9 @@ impl Host {
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));
+        if let WebEvent::TitleChanged(title) = &event {
+            self.ax_smoke_step(crate::ax_smoke::Input::Title(title));
+        }
         self.parity_web(&event);
         self.builtins_web(tab, &event);
         self.builtin_smoke_step(crate::builtin_smoke::Input::Web(&event));
@@ -2098,6 +2137,7 @@ impl Host {
         self.passwords_tick(now);
         self.gpu_check();
         self.look_tick();
+        self.ax_tick();
     }
 
     // ----- smokes
@@ -2754,6 +2794,7 @@ impl Host {
             return EventResult::Propagate;
         };
         self.clipboard.open(window.window());
+        self.add_aux_window(&window);
         if let Some(e) = crate::run_state::event_of(event, || {
             window
                 .window()
@@ -2783,6 +2824,8 @@ impl Host {
                     .pointer_move(position.x, position.y);
                 self.tab_drag_pointer(position.x, position.y, false);
             }
+            // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
+            WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
             WindowEvent::HoveredFile(_)
             | WindowEvent::DroppedFile(_)
             | WindowEvent::HoveredFileCancelled => self.file_drop(&window, event),

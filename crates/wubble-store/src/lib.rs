@@ -36,7 +36,7 @@ pub use import::{ImportSummary, ItemKind, SkipReason, Skipped};
 pub use logins::LoginRow;
 pub use migrate::MIGRATIONS;
 pub use settings::{
-    ArchiveAfterSetting, BlockerCookieBanners, BlockerCustomLists, BlockerEnabled,
+    A11yWeb, ArchiveAfterSetting, BlockerCookieBanners, BlockerCustomLists, BlockerEnabled,
     BlockerExceptions, BlockerLists, BlockerListsAutoUpdate, BlockerStripParams, BoostsEnabled,
     DevtoolsRemotePort, DownloadsAskWhere, GlanceEnabled, GlassQuality, GlassScene, HintsAlphabet,
     HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MediaAskEachTime, MediaConcurrency,

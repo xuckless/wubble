@@ -150,6 +150,8 @@ pub enum HostOp {
     /// Back to the parity page's tab, closing every other tab.
     OnlyFirstTab,
     ZoomReset,
+    /// The print sheet's Save / Print, as its button.
+    AnswerPrint,
     /// Answers the visible page's permission prompt: allow (true) or block, not remembered.
     AnswerPrompt(bool),
     /// Undoes what input left: the page's menu, the command and find bars dismissed, a
@@ -232,6 +234,11 @@ pub enum HostCheck {
     AutoscrollStretched,
     /// A page drag runs (true) or none does (false).
     Drag(bool),
+    /// The print sheet is open (true) or not.
+    PrintSheet(bool),
+    /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
+    /// shifted and scaled, and a click lands where it is drawn, not at its point.
+    PageEntered,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -260,8 +267,9 @@ use Step::*;
 /// full size (the window settles after start), zoom (until the page shows it), a page navigated away from (reloaded); menus, bars, held buttons, an autoscroll, click series and
 /// the pointer ([`HostOp::Neutral`]), until the page saw the neutral click and the host
 /// runs neither an autoscroll nor a page drag; then the page's records, focus, selection and scroll.
-const RESET: [Step; 7] = [
+const RESET: [Step; 8] = [
     Restore,
+    Until(H(C::PageEntered)),
     Until(J("parity.sized()")),
     Until(J("parity.unzoomed()")),
     Retry(
@@ -278,7 +286,8 @@ macro_rules! item {
         Item {
             name: $name,
             steps: &[
-                RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], $($step),*
+                RESET[0], RESET[1], RESET[2], RESET[3], RESET[4], RESET[5], RESET[6], RESET[7],
+                $($step),*
             ],
             expect: &[$($expect),*],
             gap: $gap,
@@ -287,7 +296,8 @@ macro_rules! item {
     ($($t:tt)*) => { item!(@gap false, $($t)*) };
 }
 
-/// An item for a known gap: see [`Item::gap`].
+/// An item for a known gap: see [`Item::gap`]. None is known now.
+#[allow(unused_macros)]
 macro_rules! gap {
     ($($t:tt)*) => { item!(@gap true, $($t)*) };
 }
@@ -504,9 +514,16 @@ pub const ITEMS: &[Item] = &[
         [Click(Left, NONE, at::BLANK), Keys("Alt+Right")],
         [J("eq(location.hash, '#two')")]
     ),
+    // The print sheet opens; Save writes the PDF and lists it as a finished download.
     item!(
         "A.ctrl-p-print",
-        [Click(Left, NONE, at::BLANK), Keys("Ctrl+P")],
+        [
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+P"),
+            Until(H(C::PrintSheet(true))),
+            Host(HostOp::AnswerPrint),
+            Until(H(C::PrintSheet(false)))
+        ],
         [H(C::Downloads(1))]
     ),
     // B. Clipboard through the context menu, and the page's own copy.
@@ -727,6 +744,43 @@ pub const ITEMS: &[Item] = &[
         ],
         [J("eq(seen.drops.join(), 'payload')")]
     ),
+    // A type the page set itself (`application/x-wubble`) reaches the drop: the page's own drag
+    // data is re-entered as it was (welding change 48).
+    item!(
+        "D.custom-type-in-window",
+        [
+            Press(at::DRAG),
+            MoveTo(at::x(at::DRAG, 375.0)),
+            Until(H(C::Drag(true))),
+            MoveTo(at::x(at::DROP, 380.0)),
+            MoveTo(at::DROP),
+            Settle(10),
+            Release(at::DROP)
+        ],
+        [J("eq(seen.custom.join(), 'custom')")]
+    ),
+    // Selected text dragged from one field into another moves: the page's chosen operation
+    // (CEF `UpdateDragCursor`) ends the drag, so the source field deletes it.
+    item!(
+        "D.text-move-between-fields",
+        [
+            Js("parity.field('inp2', '')"),
+            Js("parity.selectField('inp', 'alpha')"),
+            Press(at::x(at::INP, 32.0)),
+            MoveTo(at::x(at::INP, 60.0)),
+            Until(H(C::Drag(true))),
+            MoveTo(at::x(at::INP2, 100.0)),
+            MoveTo(at::INP2),
+            Settle(10),
+            Release(at::INP2),
+            Settle(10)
+        ],
+        [
+            J("eq($('inp2').value, 'alpha')"),
+            J("eq($('inp').value, '')"),
+            J("eq(seen.effect, 'move')")
+        ]
+    ),
     item!(
         "D.text-drag-to-input",
         [
@@ -760,6 +814,7 @@ pub const ITEMS: &[Item] = &[
         "D.os-file-drop",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Host(HostOp::HoverFile(at::FILEZONE)),
             Settle(10),
             Host(HostOp::DropFile(at::FILEZONE))
@@ -799,6 +854,7 @@ pub const ITEMS: &[Item] = &[
         "E.middle-click-background-tab",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Click(Middle, NONE, at::LINK),
             Settle(20)
         ],
@@ -808,6 +864,7 @@ pub const ITEMS: &[Item] = &[
         "E.shift-wheel-horizontal",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Wheel(SHIFT, at::BLANK, 0.0, -120.0),
             Settle(10)
         ],
@@ -906,17 +963,19 @@ pub const ITEMS: &[Item] = &[
         "F.window-open",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Click(Left, NONE, at::OPEN_BUTTON),
             Settle(20)
         ],
         [H(C::Tabs(2))]
     ),
-    // Known gap (TODO.md M1): after F.window-open the next click has landed 11 px above its
-    // point (seen 2026-11-18, cause not found). This item is that click, on the first field.
-    gap!(
+    // A click straight after a tab switch: it once landed 11 px off, during the page's
+    // entrance (now waited for with `PageEntered`).
+    item!(
         "F.click-after-popup",
         [
             Host(HostOp::OnlyFirstTab),
+            Until(H(C::PageEntered)),
             Click(Left, NONE, at::INP),
             Settle(5)
         ],
@@ -1084,6 +1143,7 @@ fn input(
         modifiers: Modifiers {
             keys,
             buttons: Buttons::default(),
+            locks: Default::default(),
         },
     }
 }
@@ -1895,7 +1955,7 @@ mod tests {
     #[test]
     fn the_known_gaps_are_the_listed_ones() {
         let gaps: Vec<_> = ITEMS.iter().filter(|i| i.gap).map(|i| i.name).collect();
-        assert_eq!(gaps, ["F.click-after-popup"]);
+        assert!(gaps.is_empty(), "{gaps:?}");
     }
 
     /// On macOS no item that runs presses a Ctrl chord: each has its Mac chord, or is a gap

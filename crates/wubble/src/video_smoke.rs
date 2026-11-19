@@ -5,7 +5,10 @@
 //! `--smoke video` (`video.html`, a 3 s 64 x 48 VP8 clip, `assets/clip.webm`):
 //! 1. the kit's snapshot finds the video (its rect and duration are printed);
 //! 2. picture-in-picture spike: `document.pictureInPictureEnabled` and whether the video goes
-//!    fullscreen as a user gesture, printed as `pip: api=.. fullscreen=..` (not asserted);
+//!    fullscreen as a user gesture, printed as `pip: api=.. fullscreen=..` (not asserted); then
+//!    the overlay's button opens the Pip window: the page goes fullscreen, its frames arrive in
+//!    the second window and the Main window shows its card; return puts it back in the Main
+//!    window (one window again); opened once more, its close button ends it (`smoke: pip ok`);
 //! 3. speed 2 from the controls reads back from the page and is remembered for the site: after a
 //!    reload (a new document) the page plays at 2 again;
 //! 4. loop on, mute toggled;
@@ -76,6 +79,10 @@ pub enum Step {
     // --smoke video
     Found,
     PipSpike,
+    PipOpen,
+    PipReturning,
+    PipReopen,
+    PipClosing,
     Rate,
     RateChecked,
     Reloading,
@@ -148,6 +155,23 @@ pub struct Seen {
     pub notice: bool,
     /// Jumps the page reported taking since the last snapshot.
     pub fired: usize,
+    pub pip: PipSeen,
+}
+
+/// Picture-in-picture as the host has it at a snapshot.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PipSeen {
+    /// `pip::Pip::On`: the page went fullscreen for it.
+    pub on: bool,
+    /// The model has a Pip window and its platform window is open.
+    pub open: bool,
+    /// Frames of the tab (not a stand-in snapshot) in the Pip window at the window's size, and
+    /// that size.
+    pub framed: Option<(u32, u32)>,
+    /// The Main window shows the card for its tab.
+    pub card: bool,
+    /// Open platform windows.
+    pub windows: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,6 +193,8 @@ pub enum Action {
     Video(&'static str, f32),
     Setting(&'static str, &'static str),
     PipSpike,
+    /// A button of the Pip window's controls (`Host::pip_command`).
+    Pip(&'static str),
     Undo,
     Key(MediaKey),
     PutBoost(Box<Boost>),
@@ -279,13 +305,44 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
         }
         (PipSpike, PipSpiked(text)) => to(
             s,
-            Rate,
+            PipOpen,
             vec![
                 Action::Log(format!("pip: {text}")),
-                // RATES[7] is 2.
-                Action::Video("rate", 7.0),
+                Action::Video("pip", 0.0),
             ],
         ),
+        (PipOpen, Snapshot(seen))
+            if seen.pip.on && seen.pip.open && seen.pip.card && seen.pip.windows == 2 =>
+        {
+            let Some((w, h)) = seen.pip.framed else {
+                return (s, vec![]);
+            };
+            let line = format!("smoke: pip window {w}x{h}");
+            to(
+                s,
+                PipReturning,
+                vec![Action::Log(line), Action::Pip("return")],
+            )
+        }
+        (PipReturning, Snapshot(seen))
+            if !seen.pip.on && !seen.pip.open && !seen.pip.card && seen.pip.windows == 1 =>
+        {
+            to(s, PipReopen, vec![Action::Video("pip", 0.0)])
+        }
+        (PipReopen, Snapshot(seen)) if seen.pip.on && seen.pip.framed.is_some() => {
+            to(s, PipClosing, vec![Action::Pip("close")])
+        }
+        (PipClosing, Snapshot(seen)) if !seen.pip.on && !seen.pip.open && seen.pip.windows == 1 => {
+            to(
+                s,
+                Rate,
+                vec![
+                    Action::Log("smoke: pip ok".into()),
+                    // RATES[7] is 2.
+                    Action::Video("rate", 7.0),
+                ],
+            )
+        }
         (Rate, Snapshot(_)) if video.as_ref().is_some_and(|v| v.rate == 2.0) => {
             to(s, RateChecked, vec![Action::Eval(RATE_CHECK.into())])
         }
@@ -556,6 +613,36 @@ mod tests {
         let (s, a) = next(s, Input::Snapshot(&seen(Some(playing()))));
         assert_eq!(a[1], Action::PipSpike);
         let (s, a) = next(s, Input::PipSpiked("api=false fullscreen=ok"));
+        assert_eq!(a[1], Action::Video("pip", 0.0));
+        let open = PipSeen {
+            on: true,
+            open: true,
+            framed: None,
+            card: true,
+            windows: 2,
+        };
+        let pip = |p: &PipSeen| Seen {
+            pip: p.clone(),
+            ..seen(Some(playing()))
+        };
+        // Frames first.
+        let (s, a) = next(s, Input::Snapshot(&pip(&open)));
+        assert!(a.is_empty());
+        let framed = PipSeen {
+            framed: Some((400, 225)),
+            ..open.clone()
+        };
+        let (s, a) = next(s, Input::Snapshot(&pip(&framed)));
+        assert_eq!(a[1], Action::Pip("return"));
+        let back = PipSeen {
+            windows: 1,
+            ..PipSeen::default()
+        };
+        let (s, a) = next(s, Input::Snapshot(&pip(&back)));
+        assert_eq!(a, vec![Action::Video("pip", 0.0)]);
+        let (s, a) = next(s, Input::Snapshot(&pip(&framed)));
+        assert_eq!(a, vec![Action::Pip("close")]);
+        let (s, a) = next(s, Input::Snapshot(&pip(&back)));
         assert_eq!(a[1], Action::Video("rate", 7.0));
         let fast = VideoState {
             rate: 2.0,

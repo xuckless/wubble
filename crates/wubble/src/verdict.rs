@@ -114,6 +114,7 @@ fn smoke(mode: &Mode, o: &Outcome) -> (String, Option<String>) {
         ),
         Mode::Video => ("video", ok(o.video_passed.is_some())),
         Mode::Boost => ("boost", ok(o.video_passed.is_some())),
+        Mode::Ax => ("ax", o.ax_passed.map(|n| format!("ok ({n} items)"))),
         Mode::Session(phase) => {
             return (
                 format!("smoke: session phase {phase:?}"),

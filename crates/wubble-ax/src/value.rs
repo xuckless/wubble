@@ -27,6 +27,32 @@ pub enum AxValue {
 }
 
 impl AxValue {
+    /// The value CEF wrote as JSON (`cef_write_json`, what the engine's `PageEvent::AxTree`
+    /// and `AxLocation` carry). `None` for text that is not JSON.
+    pub fn from_json(text: &str) -> Option<AxValue> {
+        serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .map(|v| AxValue::of(&v))
+    }
+
+    /// A JSON value as CEF's: whole numbers that fit are ints (CEF writes ints as integers).
+    pub fn of(v: &serde_json::Value) -> AxValue {
+        use serde_json::Value;
+        match v {
+            Value::Null => AxValue::Null,
+            Value::Bool(b) => AxValue::Bool(*b),
+            Value::Number(n) => match n.as_i64().and_then(|i| i32::try_from(i).ok()) {
+                Some(i) => AxValue::Int(i),
+                None => AxValue::Double(n.as_f64().unwrap_or(0.0)),
+            },
+            Value::String(s) => AxValue::String(s.clone()),
+            Value::Array(a) => AxValue::List(a.iter().map(AxValue::of).collect()),
+            Value::Object(o) => {
+                AxValue::Dict(o.iter().map(|(k, v)| (k.clone(), AxValue::of(v))).collect())
+            }
+        }
+    }
+
     fn get(&self, key: &str) -> Option<&AxValue> {
         match self {
             AxValue::Dict(d) => d.get(key),
@@ -34,9 +60,16 @@ impl AxValue {
         }
     }
 
+    /// An id or count: an int, or a string of one (cefclient's `CastToInt` accepts both:
+    /// `tests/shared/browser/osr_accessibility_helper.cc`, BSD-3-Clause).
     fn int(&self, key: &str) -> Option<i32> {
-        match self.get(key)? {
+        self.get(key)?.as_int()
+    }
+
+    fn as_int(&self) -> Option<i32> {
+        match self {
             AxValue::Int(i) => Some(*i),
+            AxValue::String(s) => s.trim().parse().ok(),
             _ => None,
         }
     }
@@ -74,13 +107,7 @@ impl AxValue {
     }
 
     fn ints(&self, key: &str) -> Vec<i32> {
-        self.list(key)
-            .iter()
-            .filter_map(|v| match v {
-                AxValue::Int(i) => Some(*i),
-                _ => None,
-            })
-            .collect()
+        self.list(key).iter().filter_map(AxValue::as_int).collect()
     }
 }
 
@@ -104,11 +131,59 @@ impl Bounds {
     }
 }
 
-/// Where a node is: its bounds and the node they are relative to (`None`: the page).
+impl Bounds {
+    /// The bounding box of these bounds mapped by `t` (`gfx::RectF` through
+    /// `gfx::Transform::MapRect`).
+    pub fn through(self, t: Option<Affine>) -> Bounds {
+        let Some([a, b, c, d, e, f]) = t else {
+            return self;
+        };
+        let (x1, y1) = (self.x + self.width, self.y + self.height);
+        let corners = [(self.x, self.y), (x1, self.y), (self.x, y1), (x1, y1)]
+            .map(|(x, y)| (a * x + b * y + c, d * x + e * y + f));
+        let (mut lo, mut hi) = (corners[0], corners[0]);
+        for (x, y) in corners {
+            lo = (lo.0.min(x), lo.1.min(y));
+            hi = (hi.0.max(x), hi.1.max(y));
+        }
+        Bounds {
+            x: lo.0,
+            y: lo.1,
+            width: hi.0 - lo.0,
+            height: hi.1 - lo.1,
+        }
+    }
+}
+
+/// A node's 2D transform, row-major `[a, b, c, d, e, f]`: `x' = a x + b y + c`,
+/// `y' = d x + e y + f` (the 4x4's x and y rows; depth and perspective do not reach the screen
+/// here).
+pub type Affine = [f64; 6];
+
+/// CEF writes `relative_bounds.transform` as `gfx::Transform::ToString()`: 16 numbers, row by
+/// row, in brackets (`"[ 2 0 0 108\n  0 2 0 236.688\n  0 0 1 0\n  0 0 0 1 ]"`, seen on a
+/// CSS-transformed element; the page's own scale never shows up here, its bounds are DIP).
+fn affine_of(v: Option<&AxValue>) -> Option<Affine> {
+    let Some(AxValue::String(s)) = v else {
+        return None;
+    };
+    let m: Vec<f64> = s
+        .split(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == ',')
+        .filter(|w| !w.is_empty())
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    (m.len() == 16).then(|| [m[0], m[1], m[3], m[4], m[5], m[7]])
+}
+
+/// Where a node is: its bounds, the node they are relative to (`None`: the page) and its own
+/// transform, applied to its bounds before its container's offset (Chromium's
+/// `AXTree::RelativeToTreeBoundsInternal`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Location {
     pub offset_container: Option<i32>,
     pub bounds: Bounds,
+    pub transform: Option<Affine>,
 }
 
 /// One node of Chromium's tree (`ui::AXNodeData`).
@@ -138,10 +213,7 @@ impl AxNode {
     }
 
     pub fn int(&self, attribute: &str) -> Option<i32> {
-        match self.attributes.get(attribute) {
-            Some(AxValue::Int(i)) => Some(*i),
-            _ => None,
-        }
+        self.attributes.get(attribute)?.as_int()
     }
 
     pub fn flag(&self, attribute: &str) -> bool {
@@ -158,8 +230,9 @@ impl AxNode {
             role: v.string("role"),
             states: v.strings("state"),
             location: Location {
-                offset_container: v.int("offset_container_id").filter(|id| *id >= 0),
+                offset_container: v.int("offset_container_id").filter(|id| *id > 0),
                 bounds: v.get("location").map(Bounds::of).unwrap_or_default(),
+                transform: affine_of(v.get("transform")),
             },
             child_ids: v.ints("child_ids"),
             actions: v.strings("actions"),
@@ -176,6 +249,9 @@ pub struct TreeChange {
     pub root_id: Option<i32>,
     /// The focused node, when the update carries tree data.
     pub focus_id: Option<i32>,
+    /// The document the page's focus is in (`tree_data.focused_tree_id`, sent with the page
+    /// document's tree data): `focus_id` names a node of that tree.
+    pub focused_tree: Option<String>,
     pub nodes: Vec<AxNode>,
 }
 
@@ -198,6 +274,10 @@ pub fn parse_updates(v: &AxValue) -> Updates {
             node_id_to_clear: u.int("node_id_to_clear").filter(|id| *id != 0),
             root_id: u.int("root_id").filter(|id| *id != 0),
             focus_id: u.get("tree_data").and_then(|d| d.int("focus_id")),
+            focused_tree: u
+                .get("tree_data")
+                .map(|d| d.string("focused_tree_id"))
+                .filter(|t| !t.is_empty()),
             nodes: u.list("nodes").iter().filter_map(AxNode::of).collect(),
         })
         .collect();
@@ -235,8 +315,9 @@ pub fn parse_locations(v: &AxValue) -> Vec<LocationChange> {
                 tree_id: e.string("ax_tree_id"),
                 id: e.int("id")?,
                 location: Location {
-                    offset_container: at.int("offset_container_id").filter(|id| *id >= 0),
+                    offset_container: at.int("offset_container_id").filter(|id| *id > 0),
                     bounds: at.get("bounds").map(Bounds::of).unwrap_or_default(),
+                    transform: affine_of(at.get("transform")),
                 },
             })
         })

@@ -36,13 +36,39 @@ impl MotionSource for NoSource {
 }
 
 #[cfg(target_os = "linux")]
-mod linux {
+pub(crate) mod linux {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    /// How often the worker reads the portal again (an OS change shows within this).
+    /// How often a worker reads its flag again (an OS change shows within this).
     const POLL: Duration = Duration::from_secs(5);
+
+    /// A flag of the session bus read on a worker thread every [`POLL`], the latest answer in
+    /// the atomic (false until the first). The worker stops when there is no session bus or
+    /// `read` finds nothing to follow. Shared by the OS preferences the host follows.
+    pub(crate) fn poll_session_flag(
+        name: &str,
+        read: fn(&zbus::blocking::Connection) -> Option<bool>,
+    ) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        let out = flag.clone();
+        let spawned = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                let Ok(bus) = zbus::blocking::Connection::session() else {
+                    return;
+                };
+                while let Some(on) = read(&bus) {
+                    out.store(on, Ordering::Relaxed);
+                    std::thread::sleep(POLL);
+                }
+            });
+        if let Err(e) = spawned {
+            eprintln!("wubble: {name}: {e}");
+        }
+        flag
+    }
 
     /// The portal read on a worker thread; the latest answer in an atomic.
     pub struct Portal {
@@ -51,27 +77,9 @@ mod linux {
 
     impl Portal {
         pub fn start() -> Self {
-            let reduced = Arc::new(AtomicBool::new(false));
-            let out = reduced.clone();
-            let spawned = std::thread::Builder::new()
-                .name("wubble-os-motion".into())
-                .spawn(move || {
-                    let Ok(bus) = zbus::blocking::Connection::session() else {
-                        return;
-                    };
-                    loop {
-                        match read(&bus) {
-                            Some(on) => out.store(on, Ordering::Relaxed),
-                            // no portal and no GNOME key: nothing to follow
-                            None => return,
-                        }
-                        std::thread::sleep(POLL);
-                    }
-                });
-            if let Err(e) = spawned {
-                eprintln!("wubble: reduced motion: {e}");
+            Self {
+                reduced: poll_session_flag("wubble-os-motion", read),
             }
-            Self { reduced }
         }
     }
 

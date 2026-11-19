@@ -695,15 +695,25 @@ pub const MEDIA_KEYS: SettingDef = SettingDef {
     section: Section::General,
     restart: false,
 };
-/// Leaving a tab whose video plays aloud pops it into picture-in-picture (`pip`). Hidden until
-/// this build has a picture-in-picture window (the windows lane's `PipWindow`): without one it
-/// could never act. That lane moves it to `Section::General`.
+/// Leaving a tab whose video plays aloud pops it into picture-in-picture (`pip`, a Pip window);
+/// coming back to the tab closes it.
 pub const PIP_ON_TAB_SWITCH: SettingDef = SettingDef {
     key: "pip.on_tab_switch",
     kind: SettingKind::Bool,
     default: "0",
     label: "Picture-in-picture when leaving a tab with a playing video",
-    section: Section::Hidden,
+    section: Section::General,
+    restart: false,
+};
+/// Web pages in the screen reader's tree (`apply::web_accessibility`): auto while a screen
+/// reader runs, or always, or never. CEF builds every page's accessibility tree while it is on,
+/// which costs memory and CPU, so auto is off without one.
+pub const A11Y_WEB: SettingDef = SettingDef {
+    key: "a11y.web",
+    kind: SettingKind::Choice(&["auto", "on", "off"]),
+    default: "auto",
+    label: "Pages for screen readers (auto: while one runs)",
+    section: Section::General,
     restart: false,
 };
 /// SponsorBlock lookups (`sponsor`): a request wubble itself makes, so off until the user
@@ -809,6 +819,7 @@ pub const ALL: &[&SettingDef] = &[
     &VIDEO_COLLAPSED,
     &MEDIA_KEYS,
     &PIP_ON_TAB_SWITCH,
+    &A11Y_WEB,
     &SPONSOR_ENABLED,
     &SPONSOR_ASKED,
     &SPONSOR_ACTIONS,
@@ -923,16 +934,16 @@ mod tests {
         assert_eq!(PIP_ON_TAB_SWITCH.default, "0");
         assert_eq!(VIDEO_CONTROLS.default, "1");
         assert_eq!(BOOSTS_ENABLED.default, "1");
-        // No picture-in-picture window on this build: its setting could never act.
         for d in [
             &VIDEO_RATES,
             &VIDEO_COLLAPSED,
             &SPONSOR_ASKED,
             &SPONSOR_ACTIONS,
-            &PIP_ON_TAB_SWITCH,
         ] {
             assert_eq!(d.section, Section::Hidden, "{}", d.key);
         }
+        // A row of its own now that the Pip window exists.
+        assert_eq!(PIP_ON_TAB_SWITCH.section, Section::General);
     }
 
     #[test]

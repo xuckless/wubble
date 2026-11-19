@@ -286,6 +286,12 @@ export global Shell {
     out property <length> video-knob: 10px;
     // The strip's widest: compact in the video's corner, the page's own controls left free.
     out property <length> video-strip-width: 380px;
+    // The picture-in-picture window (Chromium's overlay window opens about this size, and goes
+    // no smaller than its controls need).
+    out property <length> pip-width: 400px;
+    out property <length> pip-height: 225px;
+    out property <length> pip-min-width: 240px;
+    out property <length> pip-min-height: 135px;
     // The collapsed strip's tab at the page's right edge: its width (the glyph plus a little).
     out property <length> video-tab-width: 22px;
     // The find bar: an .ur-o-surface strip at the content's top right (Chromium's place), the

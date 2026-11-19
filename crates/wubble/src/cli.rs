@@ -114,6 +114,7 @@ enum SmokeArg {
     Codecs {
         wired: bool,
     },
+    Ax,
     SessionPhase(Phase),
 }
 
@@ -139,6 +140,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "boost" => Ok(SmokeArg::Boost),
         None if value == "codecs" => Ok(SmokeArg::Codecs { wired: true }),
         Some(("codecs", "bare")) => Ok(SmokeArg::Codecs { wired: false }),
+        None if value == "ax" => Ok(SmokeArg::Ax),
         Some(("session-phase", "1")) => Ok(SmokeArg::SessionPhase(Phase::Write)),
         Some(("session-phase", "2")) => Ok(SmokeArg::SessionPhase(Phase::Read)),
         Some(("frames", n)) => n
@@ -148,7 +150,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost`, `codecs`, `codecs=bare` or `session-phase=1|2`"
+             `boost`, `codecs`, `codecs=bare`, `ax` or `session-phase=1|2`"
                 .into(),
         ),
     }
@@ -205,6 +207,9 @@ pub enum Smoke {
     /// Windowless: which codecs and media sources play, with the browser's blocker, media
     /// observer and page kit (`wired`) or without them (`codecs_smoke.rs`).
     Codecs { wired: bool },
+    /// Pages for screen readers: `a11y.web` on, the bundled page's accessible items, a click
+    /// and a field's value through them.
+    Ax,
     /// One half of `Session`, on the profile in `profile`.
     SessionPhase { phase: Phase, profile: PathBuf },
 }
@@ -348,6 +353,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Video), None, None) => Smoke::Video,
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
             (Some(SmokeArg::Codecs { wired }), None, None) => Smoke::Codecs { wired },
+            (Some(SmokeArg::Ax), None, None) => Smoke::Ax,
         };
         Ok(Command::Smoke(smoke))
     }
@@ -541,6 +547,10 @@ mod tests {
             Some(Command::Smoke(Smoke::Boost))
         );
         assert!(parse(["wubble", "--smoke", "video", "--url", "about:blank"]).is_err());
+        assert_eq!(
+            parse(["wubble", "--smoke", "ax"]).ok(),
+            Some(Command::Smoke(Smoke::Ax))
+        );
     }
 
     #[test]

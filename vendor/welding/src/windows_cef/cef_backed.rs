@@ -252,6 +252,9 @@ cef::wrap_render_handler! {
             // wubble change: refuse the drag unless the host can run one;
             // CEF waits for DragSourceEndedAt after a true here.
             if !self.handler.requests.drag_source() { return 0; }
+            // wubble change 48: keep the page's own data, custom types and
+            // all, for a drag that comes back into the window.
+            self.handler.requests.hold_source_drag(cef::ImplDragData::clone(drag_data));
             let scale = self.handler.metrics.lock().unwrap().scale();
             self.handler.events.push(CefSurfaceEvent::Navigation(
                 crate::surface::NavigationEvent::DragStarted {
@@ -262,6 +265,31 @@ cef::wrap_render_handler! {
                 },
             ));
             1
+        }
+
+        // wubble change 48: what a drop at the pointer would do.
+        fn update_drag_cursor(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            operation: cef::DragOperationsMask,
+        ) {
+            self.handler.events.push(CefSurfaceEvent::Navigation(
+                crate::surface::NavigationEvent::DragCursor {
+                    operation: crate::drag::from_cef_operations(operation),
+                },
+            ));
+        }
+
+        // wubble change 49: the root scroll offset, for the history swipe.
+        fn on_scroll_offset_changed(&self, _browser: Option<&mut cef::Browser>, x: f64, y: f64) {
+            self.handler.events.push(CefSurfaceEvent::Navigation(
+                crate::surface::NavigationEvent::ScrollOffset { x, y },
+            ));
+        }
+
+        // wubble change 50: the accessibility tree, once the host enables it.
+        fn accessibility_handler(&self) -> Option<cef::AccessibilityHandler> {
+            Some(crate::accessibility::handler(&self.handler.events))
         }
     }
 }

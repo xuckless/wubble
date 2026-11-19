@@ -328,6 +328,8 @@ pub struct InputState {
     /// From winit's `ModifiersChanged`, which always reaches Slint too.
     pub keys: ModifiersState,
     pub buttons: Buttons,
+    /// Caps / Num Lock, where the platform tells (`crate::wl` on Wayland).
+    pub locks: wubble_engine::input::Locks,
     epoch: Instant,
     pub window_focused: bool,
     /// What the view was last told about keyboard focus.
@@ -341,6 +343,7 @@ impl Default for InputState {
         Self {
             keys: ModifiersState::empty(),
             buttons: Buttons::default(),
+            locks: Default::default(),
             epoch: Instant::now(),
             window_focused: false,
             view_focused: false,
@@ -354,6 +357,7 @@ impl InputState {
         Modifiers {
             keys: self.keys,
             buttons: self.buttons,
+            locks: self.locks,
         }
     }
 
@@ -599,6 +603,7 @@ mod tests {
             modifiers: Modifiers {
                 keys: mods,
                 buttons: Buttons::default(),
+                locks: Default::default(),
             },
         };
         KeyId::of(&key).unwrap()

@@ -29,6 +29,8 @@ objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSEvent"] }
 
 [dev-dependencies]
+# The ax_smoke example maps the accessibility tree it gets.
+wubble-ax.workspace = true
 # Seals the test segment the writer decrypts (wubble-core's own AES-128 crates).
 aes = "0.9.4"
 cbc = { version = "0.2.1", features = ["alloc"] }

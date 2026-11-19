@@ -305,6 +305,8 @@ impl Surfaces {
 /// Where a page event goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Routed {
+    /// What a drop at the pointer would do, during a drag over the page.
+    DragCursor(wubble_engine::page::DragOps),
     /// The page started a drag (`page_drag`).
     Drag {
         data: wubble_engine::page::DragData,
@@ -365,6 +367,7 @@ pub enum Routed {
     Pdf {
         path: std::path::PathBuf,
         text: String,
+        ok: bool,
     },
     /// A frame's copy or paste, for the system clipboard (`clipboard.rs`).
     Clipboard {
@@ -429,6 +432,8 @@ pub fn route(event: PageEvent) -> Routed {
         PageEvent::Frozen { frozen, ok } => Routed::Frozen { frozen, ok },
         PageEvent::TargetId(id) => Routed::TargetId(id),
         PageEvent::Committed => Routed::Committed,
+        // taken before routing (`host/ax.rs`)
+        PageEvent::AxTree(_) | PageEvent::AxLocation(_) => Routed::Ignore,
         PageEvent::ImeBounds { rect, .. } => Routed::ImeBounds(rect),
         PageEvent::PermissionRequested {
             id,
@@ -488,10 +493,12 @@ pub fn route(event: PageEvent) -> Routed {
             line,
         } => Routed::Console(format!("{level:?} {source}:{line}: {message}")),
         PageEvent::DragStarted { data, allowed, .. } => Routed::Drag { data, allowed },
+        PageEvent::DragCursor(op) => Routed::DragCursor(op),
         PageEvent::FaviconImage(icon) => Routed::Favicon(icon),
         PageEvent::PdfPrinted { path, ok } => Routed::Pdf {
             text: pdf_notice(&path, ok),
             path,
+            ok,
         },
         PageEvent::LinkStatus(text) => Routed::Status(text),
         PageEvent::Tooltip(text) => Routed::Tooltip(text),
@@ -555,7 +562,8 @@ mod tests {
             route(done),
             Routed::Pdf {
                 path: "/d/Page title.pdf".into(),
-                text: "Saved Page title.pdf".into()
+                text: "Saved Page title.pdf".into(),
+                ok: true,
             }
         );
         let failed = PageEvent::PdfPrinted {
@@ -566,7 +574,8 @@ mod tests {
             route(failed),
             Routed::Pdf {
                 path: "/d/x.pdf".into(),
-                text: "Could not save the PDF".into()
+                text: "Could not save the PDF".into(),
+                ok: false,
             }
         );
     }

@@ -1,0 +1,175 @@
+import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { SheetFrame } from "sheet-frame.slint";
+import { PrintSheetView } from "model.slint";
+import { Field, Segmented, Stepper } from "settings.slint";
+import { CheckBox } from "check-box.slint";
+
+// One labelled control of the print sheet: the label left, the control right.
+component PrintLine inherits HorizontalLayout {
+    in property <string> label;
+    spacing: Spacing.s3;
+    Text {
+        text: root.label;
+        horizontal-stretch: 1;
+        color: Palette.mist;
+        font-family: Fonts.ui;
+        font-size: Type.label.size;
+        font-weight: Type.label.weight;
+        vertical-alignment: center;
+    }
+    @children
+}
+
+// The print sheet (Ctrl+P, the menu's Print): where to (Save as PDF, then the printers CUPS
+// lists), the pages, orientation, paper, margins, scale, background graphics and copies. The
+// sheet shows `wubble_core::print::Sheet`; every change goes back through `edited` (the
+// destination index, pages, landscape, paper, margins and scale indices or numbers, background,
+// copies) and the host answers with the next view. `answered(true)` prints. Written from scratch
+// on the SheetFrame chrome and the settings controls: the design repo has no print sheet.
+export component PrintSheet inherits SheetFrame {
+    in property <PrintSheetView> sheet;
+    callback edited(int, string, bool, int, int, int, bool, int);
+    callback answered(bool);
+
+    open: root.sheet.open;
+    title: root.sheet.busy ? "Printing…" : "Print";
+    message: root.sheet.error;
+    accept-text: root.sheet.destination == 0 ? "Save" : "Print";
+    cancel-text: "Cancel";
+    accepted => {
+        // A bad range is refused by the host, which keeps the reason shown; a failure's
+        // message does not block a retry.
+        if !root.sheet.busy {
+            root.answered(true);
+        }
+    }
+    cancelled => {
+        root.answered(false);
+    }
+
+    function edit(destination: int, pages: string, landscape: bool, paper: int, margins: int,
+            scale: int, background: bool, copies: int) {
+        root.edited(destination, pages, landscape, paper, margins, scale, background, copies);
+    }
+
+    public function focus-sheet() {
+        root.take-focus();
+    }
+
+    // Each opening restarts the pages field from the sheet's own text.
+    property <int> serial: root.sheet.serial;
+    changed serial => {
+        pages.text = root.sheet.pages;
+        if root.sheet.open {
+            root.focus-sheet();
+        }
+    }
+
+    // Destinations: Save as PDF first, then each printer.
+    VerticalLayout {
+        spacing: Spacing.s1;
+        for name[i] in root.sheet.destinations: Rectangle {
+            height: Shell.icon-button;
+            border-radius: Shell.sheet-button-radius;
+            background: i == root.sheet.destination ? Shell.track : ta.has-hover ? Shell.icon-button-hover : transparent;
+            ta := TouchArea {
+                clicked => {
+                    root.edit(i, pages.text, root.sheet.landscape, root.sheet.paper,
+                        root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+                }
+            }
+            Text {
+                x: Spacing.s3;
+                width: parent.width - 2 * Spacing.s3;
+                text: name;
+                color: Palette.ink;
+                font-family: Fonts.ui;
+                font-size: Type.body.size;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+    pages := Field {
+        placeholder: "Pages: all, or like 1-3, 5";
+        edited(t) => {
+            root.edit(root.sheet.destination, t, root.sheet.landscape, root.sheet.paper,
+                root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+        }
+        accepted => {
+            root.accepted();
+        }
+        escaped => {
+            root.cancelled();
+        }
+    }
+    PrintLine {
+        label: "Layout";
+        Segmented {
+            labels: ["Portrait", "Landscape"];
+            selected: root.sheet.landscape ? 1 : 0;
+            chosen(i) => {
+                root.edit(root.sheet.destination, pages.text, i == 1, root.sheet.paper,
+                    root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+            }
+        }
+    }
+    PrintLine {
+        label: "Paper";
+        Segmented {
+            labels: ["Letter", "A4", "Legal"];
+            selected: root.sheet.paper;
+            chosen(i) => {
+                root.edit(root.sheet.destination, pages.text, root.sheet.landscape, i,
+                    root.sheet.margins, root.sheet.scale, root.sheet.background, root.sheet.copies);
+            }
+        }
+    }
+    PrintLine {
+        label: "Margins";
+        Segmented {
+            labels: ["Default", "None", "Minimum"];
+            selected: root.sheet.margins;
+            chosen(i) => {
+                root.edit(root.sheet.destination, pages.text, root.sheet.landscape, root.sheet.paper,
+                    i, root.sheet.scale, root.sheet.background, root.sheet.copies);
+            }
+        }
+    }
+    PrintLine {
+        label: "Scale %";
+        Stepper {
+            value: root.sheet.scale;
+            min: 10;
+            max: 200;
+            step: 10;
+            set(v) => {
+                root.edit(root.sheet.destination, pages.text, root.sheet.landscape, root.sheet.paper,
+                    root.sheet.margins, Math.round(v), root.sheet.background, root.sheet.copies);
+            }
+        }
+    }
+    if root.sheet.destination > 0: PrintLine {
+        label: "Copies";
+        Stepper {
+            value: root.sheet.copies;
+            min: 1;
+            max: 99;
+            set(v) => {
+                root.edit(root.sheet.destination, pages.text, root.sheet.landscape, root.sheet.paper,
+                    root.sheet.margins, root.sheet.scale, root.sheet.background, Math.round(v));
+            }
+        }
+    }
+    CheckBox {
+        text: "Background graphics";
+        checked: root.sheet.background;
+        changed checked => {
+            if self.checked != root.sheet.background {
+                root.edit(root.sheet.destination, pages.text, root.sheet.landscape, root.sheet.paper,
+                    root.sheet.margins, root.sheet.scale, self.checked, root.sheet.copies);
+            }
+        }
+    }
+}

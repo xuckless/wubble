@@ -40,13 +40,18 @@ impl Model {
     }
 
     /// The tabs a window shows, left to right: its Space's split or active tab, or its own tab.
+    /// The tab in picture-in-picture is its Pip window's, never its Space's window's.
     pub fn window_tabs(&self, id: WindowId) -> Vec<TabId> {
         match self.window(id).map(|w| w.shown) {
             // the window's peek, over its page, last
             Some(Shown::Space(s)) => {
-                let mut tabs = self
+                let pip = self.pip_tab();
+                let mut tabs: Vec<TabId> = self
                     .space_idx(s)
-                    .map_or_else(Vec::new, |si| self.space_tabs(si));
+                    .map_or_else(Vec::new, |si| self.space_tabs(si))
+                    .into_iter()
+                    .filter(|t| Some(*t) != pip)
+                    .collect();
                 if let Some(g) = self.glance_of(id)
                     && !tabs.contains(&g.tab)
                 {
@@ -54,7 +59,7 @@ impl Model {
                 }
                 tabs
             }
-            Some(Shown::Little(t) | Shown::Popup(t)) => vec![t],
+            Some(Shown::Little(t) | Shown::Popup(t) | Shown::Pip(t)) => vec![t],
             None => vec![],
         }
     }
@@ -62,6 +67,13 @@ impl Model {
     /// The page of window `id` that gets keys: its own tab, or its Space's active tab.
     pub fn window_tab(&self, id: WindowId) -> Option<TabId> {
         self.window(id).and_then(|w| self.focused_tab(w))
+    }
+
+    /// The page of window `id` that gets keys, if it is on screen there: a Main window whose
+    /// active tab is in picture-in-picture shows a card for it and sends it no keys.
+    pub fn window_key_tab(&self, id: WindowId) -> Option<TabId> {
+        self.window_tab(id)
+            .filter(|&t| self.window_of(t) == Some(id))
     }
 
     /// The split a window shows, if any.
@@ -72,7 +84,7 @@ impl Model {
     /// The page of `w` that gets keys: its own tab, or its Space's active tab.
     pub(super) fn focused_tab(&self, w: &Window) -> Option<TabId> {
         match w.shown {
-            Shown::Little(t) | Shown::Popup(t) => Some(t),
+            Shown::Little(t) | Shown::Popup(t) | Shown::Pip(t) => Some(t),
             Shown::Space(s) => self.space_idx(s).and_then(|si| self.spaces[si].active),
         }
     }
@@ -81,6 +93,31 @@ impl Model {
     /// focus): the one showing [`Model::active_space`], where its command bar and sidebar are.
     pub fn main_window(&self) -> WindowId {
         self.windows[self.main_idx()].id
+    }
+
+    /// The tab in picture-in-picture: the one a Pip window shows.
+    pub fn pip_tab(&self) -> Option<TabId> {
+        self.windows.iter().find_map(|w| match w.shown {
+            Shown::Pip(t) => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Whether `tab` can be shown in a Pip window: a known tab that is not a peek, not a Little
+    /// or Popup window's and not a split pane (its pane would leave a hole in the split).
+    pub fn can_pip(&self, tab: TabId) -> bool {
+        self.tabs.contains_key(&tab)
+            && !self.is_glance(tab)
+            && self.windowed(tab).is_none()
+            && self.split_of(tab).is_none()
+    }
+
+    /// The Pip window, if one is open.
+    pub fn pip_window(&self) -> Option<WindowId> {
+        self.windows
+            .iter()
+            .find(|w| w.kind() == WindowKind::Pip)
+            .map(|w| w.id)
     }
 
     /// The index of the focused Main window.
@@ -204,6 +241,8 @@ impl Model {
         match w.shown {
             // its tab closes; `prune_windows` then closes the window
             Shown::Little(t) | Shown::Popup(t) => self.close_tab(t),
+            // the tab stays, back in its Space's window
+            Shown::Pip(_) => self.close_pip(),
             Shown::Space(_) => {
                 if self
                     .windows
@@ -225,12 +264,12 @@ impl Model {
         }
     }
 
-    /// Closes the Little and Popup windows whose tab is gone.
+    /// Closes the Little, Popup and Pip windows whose tab is gone.
     pub(super) fn prune_windows(&mut self) -> Vec<Effect> {
         let gone: Vec<WindowId> = self
             .windows
             .iter()
-            .filter(|w| w.tab().is_some_and(|t| !self.tabs.contains_key(&t)))
+            .filter(|w| w.owner().is_some_and(|t| !self.tabs.contains_key(&t)))
             .map(|w| w.id)
             .collect();
         self.windows.retain(|w| !gone.contains(&w.id));
@@ -331,6 +370,59 @@ impl Model {
         fx
     }
 
+    /// A Pip window for `tab`, unfocused (picture-in-picture takes no keys from the window the
+    /// user is in), at the geometry the last one had. Refused for what [`Model::can_pip`]
+    /// refuses, and while a Pip window is open.
+    pub(super) fn open_pip(&mut self, tab: TabId) -> Vec<Effect> {
+        if !self.can_pip(tab) || self.pip_window().is_some() {
+            return vec![];
+        }
+        let id = WindowId(self.next_window);
+        self.next_window += 1;
+        let at = self.windows.len() - 1;
+        self.windows.insert(
+            at,
+            Window {
+                id,
+                shown: Shown::Pip(tab),
+                geometry: self.pip_geometry,
+            },
+        );
+        vec![Effect::WindowOpened(id)]
+    }
+
+    /// Closes the Pip window; its tab is shown in its Space's window again.
+    pub(super) fn close_pip(&mut self) -> Vec<Effect> {
+        let Some(id) = self.pip_window() else {
+            return vec![];
+        };
+        self.windows.retain(|w| w.id != id);
+        vec![Effect::WindowClosed(id)]
+    }
+
+    /// Closes the Pip window and shows its tab where it lives (its Space, in its window).
+    pub(super) fn return_pip(&mut self) -> Vec<Effect> {
+        let Some(tab) = self.pip_tab() else {
+            return vec![];
+        };
+        let mut fx = self.close_pip();
+        fx.extend(self.activate_tab(tab));
+        if let Some(i) = self.location(tab).and_then(|(s, _)| self.shown_by(s)) {
+            fx.extend(self.focus(self.windows[i].id));
+        }
+        fx
+    }
+
+    /// The window's size or position changed; a Pip window's is also remembered for the next.
+    pub(super) fn resize_window(&mut self, id: WindowId, geometry: Geometry) {
+        if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+            w.geometry = Some(geometry);
+            if w.kind() == WindowKind::Pip {
+                self.pip_geometry = Some(geometry);
+            }
+        }
+    }
+
     /// The window invariants (part of [`Model::check`]).
     pub(super) fn check_windows(&self) -> Result<(), String> {
         if !self.windows.iter().any(|w| w.kind() == WindowKind::Main) {
@@ -356,6 +448,17 @@ impl Model {
                 Shown::Little(t) | Shown::Popup(t) => {
                     if !self.tabs.contains_key(&t) {
                         return Err(format!("window {:?} shows unknown tab", w.id));
+                    }
+                }
+                Shown::Pip(t) => {
+                    if self.windows[..i]
+                        .iter()
+                        .any(|o| o.kind() == WindowKind::Pip)
+                    {
+                        return Err("two Pip windows".into());
+                    }
+                    if !self.can_pip(t) {
+                        return Err(format!("Pip window {:?} shows {t:?}", w.id));
                     }
                 }
             }

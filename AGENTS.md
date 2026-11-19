@@ -56,9 +56,11 @@ from scratch only when the bucket has nothing for it (then say so in your report
     WUBBLE_CODEC_CLIPS=DIR cargo run -p wubble -- --smoke codecs   # windowless: which codecs and media sources play with the browser's blocker, observer and kit (`codecs=bare`: without them); clips from scripts/codec-clips.sh DIR (none: the bundled clip only); exits
     cargo run -p wubble-engine --example local_probe   # windowless: localhost, 127.0.0.1, [::1] and the LAN address load with fetch, cookies, WebSocket and a service worker; exits
     cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
+    cargo run -p wubble -- --smoke ax   # a11y.web on: the page's accessible items, a click and a field's value through them, exits; run by hand only
+    cargo run -p wubble-engine --example ax_smoke   # windowless: CEF's accessibility tree of a bundled page, mapped and printed (`-- --dump FILE` writes the JSON), exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
-    cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line; exits; run by hand only
+    cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line, the Pip window opened, returned and closed; exits; run by hand only
     cargo run -p wubble -- --smoke boost   # loopback pages: a Boost's CSS, tint and document-start script, a CSP page, turned off; exits; run by hand only
     cargo run -p wubble -- --measure load   # windowed, release: loopback pages cold and warm, in-page timings and first frame; `--load-variant`, `--runs`, `--load-page`, `--load-back`, `--serve-only`; `scripts/measure-load.sh` (a process per cold sample) and `scripts/measure-load-chromium.sh` compare plain Chromium; hand run only
     cargo run -p wubble -- --measure memory --out mem.csv   # process tree memory with 0/1/10/50 tabs, frozen, discarded; window; run by hand only

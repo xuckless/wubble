@@ -1,0 +1,78 @@
+import { AxItemView, AxKind } from "model.slint";
+
+// The visible page for screen readers: one invisible element per item of the page's
+// accessibility tree as wubble-ax flattens it (headings, links, buttons, fields, check boxes,
+// images, the text between them), in reading order, each at the node's place over the page.
+// Written from scratch: the design repo has nothing like it (it is never drawn). Slint 1.19 has
+// no link or heading role and builds one flat list here (no lists, tables, landmarks), and
+// `accessible-role` must be a constant, so each kind is its own branch: a link is a button
+// called "…, link", a heading text called "Heading level N, …". Nothing takes the pointer or the
+// keys; a screen reader's actions come back as `action(id, name, value)`: "click" for the
+// default action, "set-value" for a text field.
+export component PageAx inherits Rectangle {
+    in property <[AxItemView]> items;
+    callback action(int, string, string);
+
+    for item in root.items: Rectangle {
+        x: item.x;
+        y: item.y;
+        width: item.w;
+        height: item.h;
+        if item.kind == AxKind.heading: Rectangle {
+            accessible-role: text;
+            accessible-label: "Heading level " + item.level + ", " + item.label;
+        }
+        if item.kind == AxKind.link: Rectangle {
+            accessible-role: button;
+            accessible-label: item.label + ", link";
+            accessible-action-default => {
+                root.action(item.id, "click", "");
+            }
+        }
+        if item.kind == AxKind.button: Rectangle {
+            accessible-role: button;
+            accessible-label: item.label;
+            accessible-value: item.value;
+            accessible-action-default => {
+                root.action(item.id, "click", "");
+            }
+        }
+        if item.kind == AxKind.text-field: Rectangle {
+            accessible-role: text-input;
+            accessible-label: item.label;
+            accessible-value: item.value;
+            accessible-action-default => {
+                root.action(item.id, "click", "");
+            }
+            accessible-action-set-value(v) => {
+                root.action(item.id, "set-value", v);
+            }
+        }
+        if item.kind == AxKind.check-box: Rectangle {
+            accessible-role: checkbox;
+            accessible-label: item.label;
+            accessible-checkable: true;
+            accessible-checked: item.checked;
+            accessible-action-default => {
+                root.action(item.id, "click", "");
+            }
+        }
+        if item.kind == AxKind.radio-button: Rectangle {
+            accessible-role: radio-button;
+            accessible-label: item.label;
+            accessible-checkable: true;
+            accessible-checked: item.checked;
+            accessible-action-default => {
+                root.action(item.id, "click", "");
+            }
+        }
+        if item.kind == AxKind.image: Rectangle {
+            accessible-role: image;
+            accessible-label: item.label;
+        }
+        if item.kind == AxKind.text: Rectangle {
+            accessible-role: text;
+            accessible-label: item.label;
+        }
+    }
+}

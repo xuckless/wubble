@@ -14,8 +14,9 @@
 //! the builder shape follow `vendor/welding/src/cef_input.rs` (MPL-2.0).
 //! See THIRD_PARTY_NOTICES.md.
 //!
-//! What winit cannot tell us and is therefore lost: Caps Lock / Num Lock
-//! state (`EVENTFLAG_CAPS_LOCK_ON`, `NUM_LOCK_ON`), AltGr as a modifier
+//! Caps Lock / Num Lock state (`EVENTFLAG_CAPS_LOCK_ON`, `NUM_LOCK_ON`) is not
+//! winit's: the host reads it where it can ([`Locks`]). What winit cannot tell
+//! us and is therefore lost: AltGr as a modifier
 //! (`EVENTFLAG_ALTGR_DOWN`; the text it produces does arrive), and the
 //! layout's remapping of keys without text (they are identified by their
 //! physical position, so a Caps/Ctrl swap reports the physical key, and a
@@ -29,6 +30,7 @@ use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, PhysicalKey};
 
 /// `cef_event_flags_t` (cef-dll-sys 156).
 mod flag {
+    pub const CAPS_LOCK: u32 = 1 << 0;
     pub const SHIFT: u32 = 1 << 1;
     pub const CONTROL: u32 = 1 << 2;
     pub const ALT: u32 = 1 << 3;
@@ -36,6 +38,7 @@ mod flag {
     pub const MIDDLE_MOUSE: u32 = 1 << 5;
     pub const RIGHT_MOUSE: u32 = 1 << 6;
     pub const COMMAND: u32 = 1 << 7;
+    pub const NUM_LOCK: u32 = 1 << 8;
     pub const KEY_PAD: u32 = 1 << 9;
     pub const LEFT: u32 = 1 << 10;
     pub const RIGHT: u32 = 1 << 11;
@@ -76,6 +79,15 @@ impl Buttons {
 pub struct Modifiers {
     pub keys: ModifiersState,
     pub buttons: Buttons,
+    pub locks: Locks,
+}
+
+/// The lock keys that are on. winit does not report them; the host reads
+/// them from the platform where it can (Wayland's keyboard), else they stay off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Locks {
+    pub caps: bool,
+    pub num: bool,
 }
 
 /// The buttons CEF knows. Back/Forward mouse buttons have no CEF button.
@@ -118,6 +130,8 @@ pub fn cef_modifiers(m: &Modifiers) -> u32 {
         (m.buttons.left, flag::LEFT_MOUSE),
         (m.buttons.middle, flag::MIDDLE_MOUSE),
         (m.buttons.right, flag::RIGHT_MOUSE),
+        (m.locks.caps, flag::CAPS_LOCK),
+        (m.locks.num, flag::NUM_LOCK),
     ]
     .into_iter()
     .filter_map(|(on, bit)| on.then_some(bit))
@@ -713,7 +727,21 @@ mod tests {
         Modifiers {
             keys,
             buttons: Buttons::default(),
+            locks: Locks::default(),
         }
+    }
+
+    #[test]
+    fn lock_keys_set_cef_s_lock_flags() {
+        let mut m = mods(ModifiersState::empty());
+        assert_eq!(cef_modifiers(&m), 0);
+        m.locks.caps = true;
+        assert_eq!(cef_modifiers(&m), 1 << 0);
+        m.locks = Locks {
+            caps: false,
+            num: true,
+        };
+        assert_eq!(cef_modifiers(&m), 1 << 8);
     }
 
     #[test]
@@ -752,6 +780,8 @@ mod tests {
     fn flag_values_match_cef() {
         use cef::sys::cef_event_flags_t as F;
         let pairs = [
+            (flag::CAPS_LOCK, F::EVENTFLAG_CAPS_LOCK_ON),
+            (flag::NUM_LOCK, F::EVENTFLAG_NUM_LOCK_ON),
             (flag::SHIFT, F::EVENTFLAG_SHIFT_DOWN),
             (flag::CONTROL, F::EVENTFLAG_CONTROL_DOWN),
             (flag::ALT, F::EVENTFLAG_ALT_DOWN),

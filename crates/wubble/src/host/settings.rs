@@ -158,6 +158,7 @@ impl Host {
             } => self.set_sponsor(enabled, asked, acts),
             Applied::BoostsEnabled(on) => self.set_boosts_enabled(on),
             Applied::ReduceMotion(calm) => self.set_calm(calm),
+            Applied::WebAccessibility(setting) => self.set_web_ax(setting),
             Applied::TouchSizing(sizing) => self.set_touch_sizing(sizing),
             Applied::Glance(on) => self.glance_enabled = on,
             Applied::RestartOnly => {}

@@ -760,7 +760,8 @@ pub fn window_page_entries(model: &Model, window: WindowId) -> Vec<Entry> {
             "Open as Tab".into(),
             Command::MoveToWindow(tab, WindowTarget::Existing(model.main_window())),
         )],
-        Shown::Space(_) => vec![],
+        // its controls are its way out
+        Shown::Space(_) | Shown::Pip(_) => vec![],
     }
 }
 

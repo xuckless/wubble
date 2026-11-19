@@ -55,7 +55,7 @@ input, textarea, [contenteditable] { font: 16px monospace; }
 <script>
 const $ = (id) => document.getElementById(id);
 // What the page saw, for the smoke's checks.
-const seen = { keys: [], drops: [], files: [], dragstart: 0, grab: false, neutral: 0 };
+const seen = { keys: [], drops: [], files: [], custom: [], effect: '', dragstart: 0, grab: false, neutral: 0 };
 // The page's pixel ratio at 100 %: browser zoom scales it.
 const dpr = devicePixelRatio;
 const parity = {
@@ -86,6 +86,11 @@ const parity = {
       getSelection().removeAllRanges(); getSelection().addRange(r);
     } else { el.setSelectionRange(end, end); }
   },
+  // `text` in the field, all of it selected.
+  selectField(id, text) {
+    const el = $(id);
+    el.focus(); el.value = text; el.setSelectionRange(0, text.length);
+  },
   // Plain text selected in the paragraph (`from`..`to`).
   select(from, to) {
     document.activeElement && document.activeElement.blur();
@@ -94,7 +99,7 @@ const parity = {
     getSelection().removeAllRanges(); getSelection().addRange(r);
   },
   reset() {
-    seen.keys = []; seen.drops = []; seen.files = []; seen.dragstart = 0; seen.grab = false; seen.neutral = 0;
+    seen.keys = []; seen.drops = []; seen.files = []; seen.custom = []; seen.effect = ''; seen.dragstart = 0; seen.grab = false; seen.neutral = 0;
     getSelection().removeAllRanges();
     document.activeElement && document.activeElement.blur();
     scrollTo(0, 0);
@@ -112,9 +117,19 @@ addEventListener('keydown', (e) => {
   // A page that owns Ctrl+F (a web app's own search) when asked to.
   if (seen.grab && (e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); seen.keys.push('grabbed'); }
 });
-$('drag').addEventListener('dragstart', (e) => { seen.dragstart++; e.dataTransfer.setData('text/plain', 'payload'); });
+$('drag').addEventListener('dragstart', (e) => {
+  seen.dragstart++;
+  e.dataTransfer.setData('text/plain', 'payload');
+  e.dataTransfer.setData('application/x-wubble', 'custom');
+});
+// What a drag out of the first field did there (the drop target's choice).
+$('inp').addEventListener('dragend', (e) => { seen.effect = e.dataTransfer.dropEffect; });
 $('drop').addEventListener('dragover', (e) => e.preventDefault());
-$('drop').addEventListener('drop', (e) => { e.preventDefault(); seen.drops.push(e.dataTransfer.getData('text/plain')); });
+$('drop').addEventListener('drop', (e) => {
+  e.preventDefault();
+  seen.drops.push(e.dataTransfer.getData('text/plain'));
+  seen.custom.push(e.dataTransfer.getData('application/x-wubble'));
+});
 $('filezone').addEventListener('dragover', (e) => e.preventDefault());
 $('filezone').addEventListener('drop', (e) => { e.preventDefault(); seen.files = [...e.dataTransfer.files].map((f) => f.name); });
 $('copybtn').addEventListener('click', () => {

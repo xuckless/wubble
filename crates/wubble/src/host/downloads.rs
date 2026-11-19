@@ -39,8 +39,6 @@ pub(super) struct Downloads {
     /// Files wubble itself is writing (a print's PDF until `PdfPrinted`, a screenshot until
     /// it is saved): their paths are reserved meanwhile.
     reserved: HashSet<PathBuf>,
-    /// Prints started this run.
-    printed: usize,
     /// Entries whose progress is not yet stored (written on the tick).
     unsaved: BTreeSet<i64>,
     /// "Always ask where to save" (`settings::DOWNLOADS_ASK_WHERE`).
@@ -92,9 +90,9 @@ impl Downloads {
         self.reserved.remove(path);
     }
 
-    /// Downloads listed (this run's and earlier ones) and prints started this run.
+    /// Downloads listed (this run's and earlier ones, prints saved as PDF among them).
     pub(super) fn started(&self) -> usize {
-        self.list.len() + self.printed
+        self.list.len()
     }
 
     fn entry_of(&self, download: DownloadId) -> Option<i64> {
@@ -220,42 +218,6 @@ impl Host {
                 }
             },
             _ => {}
-        }
-    }
-
-    /// Ctrl+P: saves `tab`'s page as a PDF in the downloads folder, named after its title. The
-    /// result arrives as `PageEvent::PdfPrinted`, which toasts it (`Routed::Pdf`). A PDF in
-    /// Chromium's viewer is saved as itself, a download of its address: printing the viewer
-    /// gives a blank page, and CEF has no print dialog here for the viewer's own button.
-    pub(super) fn print(&mut self, tab: TabId) {
-        if self.is_pdf(tab) {
-            let url = self.committed.get(&tab).cloned();
-            if let (Some(url), Some(view)) = (url, self.tab_view(tab)) {
-                view.start_download(&url);
-            }
-            return;
-        }
-        let title = self
-            .model
-            .tabs
-            .get(&tab)
-            .map(crate::shell::tab_title)
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| "page".into());
-        let failure = match self.download_path(&format!("{title}.pdf")) {
-            Some(path) => match self.tab_view(tab).map(|view| view.print_to_pdf(&path)) {
-                Some(Ok(())) => {
-                    self.downloads.reserve(&path);
-                    self.downloads.printed += 1;
-                    return;
-                }
-                Some(Err(_)) => "Could not save the PDF",
-                None => return,
-            },
-            None => "Cannot print: no downloads folder",
-        };
-        if let Some(window) = self.w.window.upgrade() {
-            self.toast(&window, failure);
         }
     }
 
@@ -429,6 +391,28 @@ impl Host {
             self.render_downloads(&window);
         }
         id
+    }
+
+    /// A file wubble wrote itself (a print saved as PDF), listed as a finished download of `url`.
+    pub(super) fn add_finished_download(&mut self, url: &str, path: &Path) {
+        let size = std::fs::metadata(path).map_or(0, |m| m.len());
+        let d = &mut self.downloads;
+        let entry = DownloadEntry {
+            id: d.next_id,
+            url: url.to_owned(),
+            name: file_name(path),
+            path: path.to_path_buf(),
+            received: size,
+            total: Some(size),
+            state: DownloadState::Complete,
+            started_ms: now_ms(),
+        };
+        d.next_id += 1;
+        self.store.add_download(&entry);
+        self.downloads.list.insert(0, entry);
+        if let Some(window) = self.w.window.upgrade() {
+            self.render_downloads(&window);
+        }
     }
 
     /// The entry's file moved to `path` (a media download's final name).

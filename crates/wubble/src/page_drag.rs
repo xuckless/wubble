@@ -10,10 +10,11 @@
 //! tests drive (chromiumembedded/cef `tests/ceftests/os_rendering_unittest.cc`,
 //! `StartDragging`: `DragTargetDragEnter`, `DragTargetDragOver`,
 //! `DragTargetDrop`, `DragSourceEndedAt`, `DragSourceSystemDragEnded`;
-//! BSD-3-Clause, no code copied). Dragging out to other apps needs an OS drag
-//! source (TODO.md).
+//! BSD-3-Clause, no code copied). Where the platform has an OS drag source
+//! (Wayland, `crate::wl`), a drag that leaves the window becomes the OS's.
 
 use wubble_core::tab::TabId;
+use wubble_engine::nav::Cursor;
 use wubble_engine::page::{DragData, DragOps};
 
 /// Where the pointer is during a drag.
@@ -36,7 +37,13 @@ pub enum PageDrag {
         data: DragData,
         allowed: DragOps,
         over: Over,
+        /// What the page last said a drop would do (CEF `UpdateDragCursor`);
+        /// `None` until it says.
+        chosen: Option<DragOps>,
     },
+    /// The drag left the window and is the OS's (a Wayland drag source):
+    /// it ends when the OS says.
+    Outside { source: TabId },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +58,13 @@ pub enum DragInput {
     Moved(Over),
     /// The button came up.
     Released(Over),
+    /// The page named what a drop at the pointer would do.
+    Cursor(DragOps),
+    /// The pointer left the window with the button held, where the platform
+    /// can hand the drag to the OS.
+    LeftWindow,
+    /// The OS drag ended with this operation done (`NONE`: cancelled).
+    OsEnded(DragOps),
     /// Escape, or the window lost the pointer.
     Cancelled,
 }
@@ -58,8 +72,9 @@ pub enum DragInput {
 /// Engine calls on the source page's view, and the host's own drop target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DragEffect {
-    /// `DragTargetDragEnter` with what is dragged.
-    Enter(DragData, DragOps),
+    /// `DragTargetDragEnter` with the page's own drag data (custom types
+    /// included; `DragPhase::EnterSource`).
+    Enter(DragOps),
     /// `DragTargetDragOver` at the pointer.
     Over(DragOps),
     /// `DragTargetDragLeave`.
@@ -71,16 +86,44 @@ pub enum DragEffect {
     End(DragOps),
     /// Open the URL in a new tab after the source's.
     OpenTab(String),
+    /// Show the pointer for this operation ([`cursor`]).
+    Feedback(DragOps),
+    /// Hand the drag to the OS with what it carries.
+    StartOs(DragData, DragOps),
 }
 
-/// The operation a drop does: Chromium's preference among those the page
-/// allows (copy, then move, then link). CEF's `UpdateDragCursor` would name
-/// the target's choice; welding does not report it yet.
+/// The operation a drop does before the page has said: Chromium's
+/// preference among those the page allows (copy, then move, then link).
 pub fn drop_operation(allowed: DragOps) -> DragOps {
     [DragOps::COPY, DragOps::MOVE, DragOps::LINK]
         .into_iter()
         .find(|op| allowed.0 & op.0 != 0)
         .unwrap_or(DragOps::NONE)
+}
+
+/// The pointer during a drag that would do `op`, as Chromium's drag
+/// feedback: copy and link have their own, a move the plain arrow.
+pub fn cursor(op: DragOps) -> Cursor {
+    if op.0 & DragOps::COPY.0 != 0 {
+        Cursor::Copy
+    } else if op.0 & DragOps::MOVE.0 != 0 {
+        Cursor::Default
+    } else if op.0 & DragOps::LINK.0 != 0 {
+        Cursor::Alias
+    } else {
+        Cursor::NotAllowed
+    }
+}
+
+/// What a drop off the page does: a link dropped on the sidebar opens as a
+/// tab (a copy or a link); nothing else takes it.
+fn off_page_operation(data: &DragData, allowed: DragOps, at: Over) -> DragOps {
+    match (&data.link_url, at) {
+        (Some(url), Over::Sidebar) if !url.is_empty() => {
+            drop_operation(DragOps(allowed.0 & (DragOps::COPY.0 | DragOps::LINK.0)))
+        }
+        _ => DragOps::NONE,
+    }
 }
 
 pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffect>) {
@@ -96,11 +139,12 @@ pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffec
         ) => (
             PageDrag::Dragging {
                 source,
-                data: data.clone(),
+                data,
                 allowed,
                 over: Over::Page,
+                chosen: None,
             },
-            vec![E::Enter(data, allowed), E::Over(allowed)],
+            vec![E::Enter(allowed), E::Over(allowed)],
         ),
         (
             PageDrag::Dragging {
@@ -108,28 +152,60 @@ pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffec
                 data,
                 allowed,
                 over,
+                chosen,
             },
             DragInput::Moved(to),
         ) => {
             let effects = match (over, to) {
                 (Over::Page, Over::Page) => vec![E::Over(allowed)],
-                (Over::Page, _) => vec![E::Leave],
-                (_, Over::Page) => vec![E::Enter(data.clone(), allowed), E::Over(allowed)],
-                _ => vec![],
+                (_, Over::Page) => vec![E::Enter(allowed), E::Over(allowed)],
+                (from, to) if from == to => vec![],
+                (from, to) => {
+                    let mut fx = if from == Over::Page {
+                        vec![E::Leave]
+                    } else {
+                        vec![]
+                    };
+                    fx.push(E::Feedback(off_page_operation(&data, allowed, to)));
+                    fx
+                }
             };
+            // Off the page, nothing the page said holds.
+            let chosen = if to == Over::Page { chosen } else { None };
             let next = PageDrag::Dragging {
                 source,
                 data,
                 allowed,
                 over: to,
+                chosen,
             };
             (next, effects)
+        }
+        (
+            PageDrag::Dragging {
+                source,
+                data,
+                allowed,
+                over: Over::Page,
+                ..
+            },
+            DragInput::Cursor(op),
+        ) => {
+            let next = PageDrag::Dragging {
+                source,
+                data,
+                allowed,
+                over: Over::Page,
+                chosen: Some(op),
+            };
+            (next, vec![E::Feedback(op)])
         }
         (
             PageDrag::Dragging {
                 data,
                 allowed,
                 over,
+                chosen,
                 ..
             },
             DragInput::Released(at),
@@ -137,26 +213,45 @@ pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffec
             let mut effects = match (over, at) {
                 (Over::Page, Over::Page) => vec![],
                 (Over::Page, _) => vec![E::Leave],
-                (_, Over::Page) => vec![E::Enter(data.clone(), allowed)],
+                (_, Over::Page) => vec![E::Enter(allowed)],
                 _ => vec![],
             };
             match at {
                 Over::Page => {
-                    effects.extend([E::Over(allowed), E::Drop, E::End(drop_operation(allowed))])
+                    let op = chosen.unwrap_or_else(|| drop_operation(allowed));
+                    effects.extend([E::Over(allowed), E::Drop, E::End(op)])
                 }
-                Over::Sidebar => match data.link_url {
-                    Some(url) if !url.is_empty() => {
-                        let op = drop_operation(DragOps(
-                            allowed.0 & (DragOps::COPY.0 | DragOps::LINK.0),
-                        ));
-                        effects.extend([E::End(op), E::OpenTab(url)]);
+                Over::Sidebar | Over::Elsewhere => {
+                    let op = off_page_operation(&data, allowed, at);
+                    effects.push(E::End(op));
+                    if op != DragOps::NONE
+                        && let Some(url) = data.link_url
+                    {
+                        effects.push(E::OpenTab(url));
                     }
-                    _ => effects.push(E::End(DragOps::NONE)),
-                },
-                Over::Elsewhere => effects.push(E::End(DragOps::NONE)),
+                }
             }
             (PageDrag::Idle, effects)
         }
+        (
+            PageDrag::Dragging {
+                source,
+                data,
+                allowed,
+                over,
+                ..
+            },
+            DragInput::LeftWindow,
+        ) => {
+            let mut effects = if over == Over::Page {
+                vec![E::Leave]
+            } else {
+                vec![]
+            };
+            effects.push(E::StartOs(data, allowed));
+            (PageDrag::Outside { source }, effects)
+        }
+        (PageDrag::Outside { .. }, DragInput::OsEnded(op)) => (PageDrag::Idle, vec![E::End(op)]),
         (PageDrag::Dragging { over, .. }, DragInput::Cancelled) => {
             let mut effects = if over == Over::Page {
                 vec![E::Leave]
@@ -166,8 +261,12 @@ pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffec
             effects.push(E::End(DragOps::NONE));
             (PageDrag::Idle, effects)
         }
+        (PageDrag::Outside { .. }, DragInput::Cancelled) => {
+            (PageDrag::Idle, vec![E::End(DragOps::NONE)])
+        }
         // A second start while dragging is CEF's to refuse (the engine's
-        // `DragSource` gate); pointer input while idle is not a drag.
+        // `DragSource` gate); pointer input while idle or outside is not
+        // this drag's; a report off the page is stale.
         (state, _) => (state, vec![]),
     }
 }
@@ -214,7 +313,7 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(fx, [E::Enter(link(), ALL), E::Over(ALL)]);
+        assert_eq!(fx, [E::Enter(ALL), E::Over(ALL)]);
     }
 
     #[test]
@@ -229,11 +328,27 @@ mod tests {
     #[test]
     fn leaving_and_coming_back_enters_again() {
         let (s, fx) = transition(started(link()), DragInput::Moved(Over::Elsewhere));
-        assert_eq!(fx, [E::Leave]);
-        let (s, fx) = transition(s, DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Leave, E::Feedback(DragOps::NONE)]);
+        let (s, fx) = transition(s, DragInput::Moved(Over::Elsewhere));
         assert!(fx.is_empty());
         let (_, fx) = transition(s, DragInput::Moved(Over::Page));
-        assert_eq!(fx, [E::Enter(link(), ALL), E::Over(ALL)]);
+        assert_eq!(fx, [E::Enter(ALL), E::Over(ALL)]);
+    }
+
+    #[test]
+    fn the_sidebar_shows_what_a_drop_there_does() {
+        let (s, fx) = transition(started(link()), DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Leave, E::Feedback(DragOps::COPY)]);
+        let (s, fx) = transition(s, DragInput::Moved(Over::Elsewhere));
+        assert_eq!(fx, [E::Feedback(DragOps::NONE)]);
+        let (_, fx) = transition(s, DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Feedback(DragOps::COPY)]);
+        let text = DragData {
+            text: Some("words".into()),
+            ..DragData::default()
+        };
+        let (_, fx) = transition(started(text), DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Leave, E::Feedback(DragOps::NONE)]);
     }
 
     #[test]
@@ -283,5 +398,54 @@ mod tests {
         );
         assert_eq!(drop_operation(DragOps::LINK), DragOps::LINK);
         assert_eq!(drop_operation(DragOps::NONE), DragOps::NONE);
+    }
+
+    #[test]
+    fn the_page_s_choice_is_the_drop_s_operation() {
+        let (s, fx) = transition(started(link()), DragInput::Cursor(DragOps::MOVE));
+        assert_eq!(fx, [E::Feedback(DragOps::MOVE)]);
+        let (_, fx) = transition(s.clone(), DragInput::Released(Over::Page));
+        assert_eq!(fx, [E::Over(ALL), E::Drop, E::End(DragOps::MOVE)]);
+        // Leaving the page forgets it; a stale report off the page is ignored.
+        let (s, _) = transition(s, DragInput::Moved(Over::Elsewhere));
+        let (s, fx) = transition(s, DragInput::Cursor(DragOps::MOVE));
+        assert!(fx.is_empty());
+        let (s, _) = transition(s, DragInput::Moved(Over::Page));
+        let (_, fx) = transition(s, DragInput::Released(Over::Page));
+        assert_eq!(fx.last(), Some(&E::End(DragOps::COPY)));
+    }
+
+    #[test]
+    fn leaving_the_window_hands_the_drag_to_the_os_once() {
+        let (s, fx) = transition(started(link()), DragInput::LeftWindow);
+        assert_eq!(s, PageDrag::Outside { source: TabId(1) });
+        assert_eq!(fx, [E::Leave, E::StartOs(link(), ALL)]);
+        let (s, fx) = transition(s, DragInput::LeftWindow);
+        assert!(fx.is_empty());
+        let (s, fx) = transition(s, DragInput::Released(Over::Page));
+        assert!(fx.is_empty(), "the OS has the drag");
+        let (s, fx) = transition(s, DragInput::OsEnded(DragOps::COPY));
+        assert_eq!(s, PageDrag::Idle);
+        assert_eq!(fx, [E::End(DragOps::COPY)]);
+        let (_, fx) = transition(PageDrag::Idle, DragInput::OsEnded(DragOps::COPY));
+        assert!(fx.is_empty());
+    }
+
+    #[test]
+    fn cancelling_an_os_drag_ends_it() {
+        let (s, _) = transition(started(link()), DragInput::Moved(Over::Elsewhere));
+        let (s, fx) = transition(s, DragInput::LeftWindow);
+        assert_eq!(fx, [E::StartOs(link(), ALL)]);
+        let (s, fx) = transition(s, DragInput::Cancelled);
+        assert_eq!(s, PageDrag::Idle);
+        assert_eq!(fx, [E::End(DragOps::NONE)]);
+    }
+
+    #[test]
+    fn the_pointer_shows_the_operation() {
+        assert_eq!(cursor(DragOps::COPY), Cursor::Copy);
+        assert_eq!(cursor(DragOps::MOVE), Cursor::Default);
+        assert_eq!(cursor(DragOps::LINK), Cursor::Alias);
+        assert_eq!(cursor(DragOps::NONE), Cursor::NotAllowed);
     }
 }

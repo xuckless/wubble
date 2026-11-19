@@ -89,6 +89,9 @@ mod cef_input;
 // wubble change: the platform-independent CEF handlers.
 #[cfg(feature = "cef-runtime")]
 mod handlers;
+// wubble change 50: the accessibility handler.
+#[cfg(feature = "cef-runtime")]
+mod accessibility;
 #[cfg(feature = "cef-runtime")]
 mod drag;
 // wubble change, see `WUBBLE_CHANGES.md`.
@@ -149,7 +152,7 @@ pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode, 
 pub use surface::{
     AcceptFilter, BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
     CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuMedia, ContextMenuTarget, Cookie,
-    CursorShape, Panning, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
+    CursorShape, Panning, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers, PdfMargins, PdfOptions,
     FileChooserMode, FocusDirection, ImeComposition, JsDialogKind, KeyEvent, KeyEventKind,
     MAX_MENU_DEPTH, MenuItem, MenuItemKind, MouseAction, MouseButton, MouseEvent,
     NavigationEvent, NewWindowKind, PopupRect, PopupSurface, ProcessTerminationStatus, RequestAction,

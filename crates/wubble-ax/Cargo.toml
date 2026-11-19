@@ -10,6 +10,5 @@ license.workspace = true
 [dependencies]
 # The version Slint 1.19's winit backend already links (Cargo.lock), MIT OR Apache-2.0.
 accesskit = "0.25"
-
-[dev-dependencies]
+# The JSON CEF writes of its values (welding change 50), read into `AxValue`.
 serde_json.workspace = true

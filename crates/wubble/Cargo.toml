@@ -9,6 +9,8 @@ license.workspace = true
 
 [dependencies]
 wubble-core.workspace = true
+# Pages for screen readers (`host/ax.rs`).
+wubble-ax.workspace = true
 wubble-engine.workspace = true
 wubble-gfx.workspace = true
 wubble-ui.workspace = true
@@ -33,6 +35,8 @@ rfd = "0.18"
 opener = { version = "0.9", features = ["reveal"] }
 # The OS downloads directory (MIT OR Apache-2.0).
 dirs = "6"
+# The printer jobs' private temp folder (`host/print.rs`); MIT/Apache-2.0, already in Cargo.lock.
+tempfile = "3"
 # The local UTC offset for the history page's day groups; only the clock (MIT OR Apache-2.0).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The live suggestion fetch (`suggest_fx.rs`, HTTPS only) and SponsorBlock's lookup
@@ -67,10 +71,12 @@ interprocess = "2.2"
 dispatch2 = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# The system clipboard and primary selection on the window's Wayland connection, for the
-# pages' clipboard (`clipboard.rs`); the crate Slint's winit backend uses, already in
-# Cargo.lock (MIT).
-smithay-clipboard = "0.7"
+# The system clipboard and primary selection, drops from and drags to other apps, touchpad pinch
+# and swipe and the lock keys, on the windows' Wayland connection (`wl/wayland.rs`, ported from
+# smithay-clipboard): smithay-client-toolkit and wayland-backend, the versions already in
+# Cargo.lock through Slint's winit backend (MIT).
+sctk = { package = "smithay-client-toolkit", version = "0.20", default-features = false, features = ["calloop"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
 # The OS reduced-motion preference through the XDG Settings portal (`os_motion.rs`); already in
 # Cargo.lock through souvlaki (MIT).
 zbus = "5"
@@ -83,6 +89,3 @@ winresource = "0.1"
 # `--measure memory` reports the Rust heap through a counting global allocator
 # (`alloc_count.rs`); off by default, no dependency.
 alloc-count = []
-
-[dev-dependencies]
-tempfile = "3"

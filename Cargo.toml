@@ -14,6 +14,7 @@ publish = false
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
+wubble-ax = { path = "crates/wubble-ax" }
 wubble-blocker = { path = "crates/wubble-blocker" }
 wubble-core = { path = "crates/wubble-core" }
 wubble-engine = { path = "crates/wubble-engine" }

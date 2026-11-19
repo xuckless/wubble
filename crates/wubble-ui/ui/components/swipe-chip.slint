@@ -1,0 +1,37 @@
+import { Palette, Motion, Spacing } from "../tokens.slint";
+import { Shell } from "../app-tokens.slint";
+import { Chip } from "raised.slint";
+import { Icon, IconPaths } from "icon.slint";
+
+// The touchpad history swipe's indicator: a round chip with the back (left edge) or forward
+// (right edge) arrow, pulled in from the edge as the fingers travel (`shift`, rubber-banded by
+// the host with the design's band, motion.rs) and turning mint once a release goes there.
+// Written from scratch on the shell's Chip and icons: the design repo has no swipe indicator.
+export component SwipeChip inherits Rectangle {
+    // -1..1: forward (negative) or back; 0: hidden.
+    in property <float> progress;
+    in property <length> shift;
+
+    property <bool> back: root.progress > 0;
+    property <bool> ready: abs(root.progress) >= 1;
+    property <length> size: Shell.icon-button + Spacing.s3;
+
+    chip := Chip {
+        width: root.size;
+        height: root.size;
+        radius: root.size / 2;
+        x: root.back ? root.shift - root.size : root.width - root.shift;
+        y: (root.height - root.size) / 2;
+        opacity: min(1, abs(root.progress) * 2);
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            path: root.back ? IconPaths.back : IconPaths.forward;
+            tint: root.ready ? Palette.mint : Palette.ink;
+            animate tint {
+                duration: Shell.menu-hover-ms;
+                easing: Motion.easeOut;
+            }
+        }
+    }
+}

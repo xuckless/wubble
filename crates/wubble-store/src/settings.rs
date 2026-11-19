@@ -270,6 +270,8 @@ settings! {
     VideoCollapsed: bool = defs::VIDEO_COLLAPSED;
     MediaKeys: bool = defs::MEDIA_KEYS;
     PipOnTabSwitch: bool = defs::PIP_ON_TAB_SWITCH;
+    /// Pages for screen readers: auto, on or off (`wubble_core::apply::web_accessibility`).
+    A11yWeb: String = defs::A11Y_WEB;
     /// Off until the user turns it on: a request wubble makes itself.
     SponsorEnabled: bool = defs::SPONSOR_ENABLED;
     SponsorAsked: bool = defs::SPONSOR_ASKED;
