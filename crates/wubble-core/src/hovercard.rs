@@ -161,10 +161,28 @@ pub fn shown<K: Copy>(state: Hover<K>) -> Option<K> {
     }
 }
 
+/// The key the pointer is on now (waiting to show, or shown): the one a leave applies to.
+pub fn active<K: Copy>(state: Hover<K>) -> Option<K> {
+    match state {
+        Hover::Pending { key, .. } | Hover::Shown { key } => Some(key),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tab::TabId;
+
+    #[test]
+    fn the_active_key_is_the_one_waiting_or_shown() {
+        let k = TabId(1);
+        assert_eq!(active(Hover::Pending { key: k, due: 5 }), Some(k));
+        assert_eq!(active(Hover::Shown { key: k }), Some(k));
+        assert_eq!(active(Hover::Leaving { key: k, at: 5 }), None);
+        assert_eq!(active::<TabId>(Hover::Cooling { until: 5 }), None);
+        assert_eq!(active::<TabId>(Hover::Idle), None);
+    }
 
     type Hover = super::Hover<TabId>;
     type Event = super::Event<TabId>;

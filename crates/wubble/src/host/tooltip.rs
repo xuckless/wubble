@@ -26,8 +26,9 @@ pub(super) struct Tips {
     clock: HoverClock<TipKey>,
     /// The page's tooltip text, per tab that has one.
     page: Option<(TabId, String)>,
-    /// The shell button hovered last and where its tooltip hangs (window px: centre, bottom).
-    button: Option<(Action, f32, f32)>,
+    /// The shell button hovered last and where its tooltip hangs (window px: centre, top,
+    /// bottom).
+    button: Option<(Action, f32, (f32, f32))>,
     /// The pointer over a page: (tab, pane px), where its tooltip hangs.
     pointer: Option<(TabId, f32, f32)>,
 }
@@ -62,13 +63,13 @@ impl Host {
     }
 
     /// A shell button's hover (`Tips.hover` in tooltip.slint): its action id and where its
-    /// tooltip hangs.
-    pub(crate) fn shell_tip(&mut self, id: &str, x: f32, y: f32, on: bool) {
+    /// tooltip hangs (`ys`: the button's top and bottom).
+    pub(crate) fn shell_tip(&mut self, id: &str, x: f32, ys: (f32, f32), on: bool) {
         let Some(action) = Action::from_id(id) else {
             return;
         };
         if on {
-            self.tips.button = Some((action, x, y));
+            self.tips.button = Some((action, x, ys));
             self.tip_enter(TipKey::Shell(action), false);
         } else {
             self.tip_leave(TipKey::Shell(action));
@@ -106,14 +107,7 @@ impl Host {
     }
 
     fn tip_leave(&mut self, key: TipKey) {
-        let on = match self.tips.clock.state() {
-            Hover::Pending { key, .. } | Hover::Shown { key } => Some(key),
-            _ => None,
-        };
-        if on == Some(key) {
-            let now = self.tips.clock.now();
-            self.tip_step(Event::Leave { now });
-        }
+        self.tips.clock.leave_if(key, Self::tip_tick);
     }
 
     fn tip_tick(&mut self) {
@@ -150,28 +144,30 @@ impl Host {
                 .zip(self.tips.pointer.filter(|(t, ..)| *t == tab))
                 .map(|((_, text), (_, x, y))| {
                     let (ox, oy) = self.pane_origin(&window, tab);
-                    let at = (ox + x + POINTER_OFFSET.0, oy + y + POINTER_OFFSET.1, false);
+                    let (x, y) = (ox + x, oy + y);
+                    let at = (x + POINTER_OFFSET.0, y + POINTER_OFFSET.1, y, false);
                     (text.clone(), String::new(), at)
                 }),
             Some(TipKey::Shell(action)) => {
                 self.tips
                     .button
                     .filter(|(a, ..)| *a == action)
-                    .map(|(_, x, y)| {
+                    .map(|(_, x, (top, bottom))| {
                         let (name, keys) = self.keymap.tooltip_text(action);
-                        (name, keys, (x, y, true))
+                        (name, keys, (x, bottom, top, true))
                     })
             }
             None => None,
         };
         match content {
-            Some((text, shortcut, (x, y, centered))) => {
+            Some((text, shortcut, (x, y, top, centered))) => {
                 view = TipView {
                     shown: true,
                     text: text.into(),
                     shortcut: shortcut.into(),
                     anchor_x: x,
                     anchor_y: y,
+                    anchor_top: top,
                     centered,
                     jump,
                 };

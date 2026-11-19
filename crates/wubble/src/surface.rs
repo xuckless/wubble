@@ -435,10 +435,11 @@ pub fn route(event: PageEvent) -> Routed {
             origin,
             permissions,
         } => Routed::Permission(PermissionEvent::Requested(PermissionRequest {
-            id,
             origin,
-            kinds: permissions,
-            external: None,
+            ask: prompt::Ask::Engine {
+                id,
+                kinds: permissions,
+            },
         })),
         PageEvent::AuthRequested {
             id,
@@ -965,10 +966,11 @@ mod tests {
             popup: Some(Rect::default()),
             permission: PermissionPrompt::Open {
                 shown: PermissionRequest {
-                    id: RequestId(3),
                     origin: "https://a.test".into(),
-                    kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
-                    external: None,
+                    ask: prompt::Ask::Engine {
+                        id: RequestId(3),
+                        kinds: vec![wubble_engine::page::PermissionKind::Geolocation],
+                    },
                 },
                 queued: Default::default(),
             },

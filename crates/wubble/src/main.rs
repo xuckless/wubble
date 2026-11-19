@@ -1049,7 +1049,9 @@ fn connect_input(window: &AppWindow, win: WindowId) {
     });
     window
         .global::<wubble_ui::Tips>()
-        .on_hover(move |id, x, y, on| with_host_in(win, |host| host.shell_tip(&id, x, y, on)));
+        .on_hover(move |id, x, top, bottom, on| {
+            with_host_in(win, |host| host.shell_tip(&id, x, (top, bottom), on))
+        });
     window.on_web_pointer_left(move |pane, x, y| {
         with_host_in(win, |host| host.pointer_left(pane, point(x, y)))
     });

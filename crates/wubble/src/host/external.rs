@@ -6,10 +6,9 @@
 
 use wubble_core::external::{self, Verdict};
 use wubble_core::tab::TabId;
-use wubble_engine::page::RequestId;
 
 use super::Host;
-use crate::prompt::{PermissionEvent, PermissionRequest};
+use crate::prompt::{Ask, PermissionEvent, PermissionRequest};
 
 /// How a link reaches its app: the OS by default; `--smoke parity` records it instead.
 pub(crate) type Opener = fn(&str);
@@ -30,10 +29,6 @@ pub(crate) fn open_with_os(url: &str) {
     }
 }
 
-/// The ids of the host's own external-link prompts, apart from the engine's request ids (which
-/// count up from 1 per view) and small enough for the prompt's serial.
-const FIRST_ASK: u32 = 1_000_000_000;
-
 impl Host {
     /// The page in `tab` went to a link another app handles. `gesture` is CEF's word on a user
     /// gesture, when it gave one; without it the link is treated as made without one.
@@ -43,12 +38,9 @@ impl Host {
             Verdict::Open => self.open_in_app(&url),
             Verdict::Block => eprintln!("wubble: {url}: not opened (no click, or blocked)"),
             Verdict::Ask => {
-                self.external_asks += 1;
                 let request = PermissionRequest {
-                    id: RequestId(FIRST_ASK + self.external_asks),
                     origin: page,
-                    kinds: vec![],
-                    external: Some(url),
+                    ask: Ask::ExternalLink { url },
                 };
                 self.apply_permission(tab, PermissionEvent::Requested(request));
             }

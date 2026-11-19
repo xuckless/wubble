@@ -709,6 +709,14 @@ impl<K: PartialEq> PageQueue<K> {
     }
 }
 
+/// Whether `url` belongs to another app (`mailto:`, `tel:`, an app's scheme) rather than to
+/// the engine: the same list the engine cancels such navigations by
+/// ([`PageEvent::ExternalProtocol`]), so the host can hand a URL over before opening a tab
+/// or loading it.
+pub fn is_external(url: &str) -> bool {
+    !welding::chromium_handles(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -728,6 +736,14 @@ mod tests {
             received,
             total: None,
         }
+    }
+
+    #[test]
+    fn external_urls_are_the_ones_the_engine_does_not_load() {
+        assert!(is_external("mailto:a@b"));
+        assert!(is_external("magnet:?xt=1"));
+        assert!(!is_external("https://a.test/"));
+        assert!(!is_external("about:blank"));
     }
 
     #[test]

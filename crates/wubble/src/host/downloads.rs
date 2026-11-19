@@ -156,17 +156,7 @@ impl Host {
                 if path.is_none() {
                     self.toast(window, "Cannot download: no downloads folder");
                 }
-                if let Some(path) = &path {
-                    let reserved = Inflight {
-                        tab,
-                        path: path.clone(),
-                        entry: None,
-                    };
-                    self.downloads.inflight.insert(download, reserved);
-                }
-                if let Some(view) = self.tab_view(tab) {
-                    view.answer_download_path(id, path.as_deref());
-                }
+                self.download_path_chosen(tab, id, download, path);
             }
             PageEvent::DownloadStarted {
                 download,
@@ -269,7 +259,6 @@ impl Host {
         }
     }
 
-    /// A unique path in the downloads directory, created if needed.
     /// Save ... As from a menu: downloads `url` with the page's cookies, asking where.
     pub(super) fn save_as(&mut self, tab: TabId, url: String) {
         if let Some(view) = self.tab_view(tab) {
@@ -333,6 +322,7 @@ impl Host {
         }
     }
 
+    /// A unique path in the downloads directory, created if needed.
     pub(super) fn download_path(&self, suggested: &str) -> Option<PathBuf> {
         let dir = self.downloads.dir.as_deref()?;
         if let Err(e) = std::fs::create_dir_all(dir) {

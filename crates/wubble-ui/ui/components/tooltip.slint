@@ -1,11 +1,11 @@
 import { Palette, Motion, Fonts } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 
-// The shell's buttons report their hover here: (Action id, the window point the tooltip hangs
-// from: the button's centre x and bottom y, on). One global, so any button reaches the host
+// The shell's buttons report their hover here: (Action id, where the tooltip hangs in window
+// px: the button's centre x, top y and bottom y, on). One global, so any button reaches the host
 // without a callback through every parent.
 export global Tips {
-    callback hover(string, length, length, bool);
+    callback hover(string, length, length, length, bool);
 }
 
 // One tooltip for the window: a page's `title` near the pointer and the shell's icon buttons'
@@ -24,18 +24,25 @@ export component Tooltip inherits Rectangle {
     in property <string> shortcut;
     // Window px: where it hangs from. `centered`: `anchor-x` is its centre and `anchor-y` the
     // bottom of a button, which it hangs `tip-gap` below; else its top left (by the pointer).
+    // Without room below it sits `tip-gap` above `anchor-top` (the button's top, the pointer),
+    // as Chromium's tooltips flip.
     in property <length> anchor-x;
     in property <length> anchor-y;
+    in property <length> anchor-top;
     in property <bool> centered;
     in property <bool> jump;
-    // The window's width, to keep it inside.
+    // The window's size, to keep it inside.
     in property <length> bounds-width;
+    in property <length> bounds-height;
 
     property <length> want-x: root.centered ? root.anchor-x - self.width / 2 : root.anchor-x;
+    property <length> below-y: root.anchor-y + (root.centered ? Shell.tip-gap : 0px);
+    property <length> above-y: root.anchor-top - Shell.tip-gap - self.height;
+    property <bool> fits-below: root.below-y + self.height + Shell.tip-edge <= root.bounds-height;
     width: row.preferred-width;
     height: Shell.tip-height;
     x: max(Shell.tip-edge, min(self.want-x, root.bounds-width - self.width - Shell.tip-edge));
-    y: root.anchor-y + (root.centered ? Shell.tip-gap : 0px);
+    y: root.fits-below ? root.below-y : max(Shell.tip-edge, root.above-y);
     animate x, y, width {
         duration: root.jump ? 0ms : Shell.tip-glide;
         easing: Motion.easeInOut;

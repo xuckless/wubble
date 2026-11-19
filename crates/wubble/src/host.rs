@@ -443,8 +443,6 @@ pub struct Host {
     tips: tooltip::Tips,
     /// How links to other apps are opened (`host/external.rs`).
     pub(crate) external_opener: external::Opener,
-    /// External-link prompts asked so far (their ids).
-    external_asks: u32,
     /// The GPU process's id, watched on the lifecycle tick (`host/gpu.rs`).
     gpu: gpu::GpuWatch,
     /// Probed busy reasons per frame (`host/busy.rs`).
@@ -618,7 +616,6 @@ impl Host {
             status: status::Status::new(),
             tips: tooltip::Tips::new(),
             external_opener,
-            external_asks: 0,
             gpu: gpu::GpuWatch::default(),
             busy: busy::BusyFrames::default(),
             pressure: busy::PressureGauge::system(),
@@ -774,6 +771,15 @@ impl Host {
 
     /// The only way tabs change: apply, then execute the effects.
     pub fn dispatch(&mut self, command: Command) {
+        // A tab is never opened or loaded for a link another app handles: the user asked for
+        // it (typed, a bookmark, a menu row), so it goes to the app as if clicked.
+        if let Some((opener, url)) = external_target(&command)
+            && let Some(tab) = opener.or_else(|| self.shown())
+        {
+            let url = url.to_owned();
+            self.external_link(tab, url, Some(true));
+            return;
+        }
         if persist::changes_session(&command) {
             self.save = self.save.changed();
         }
@@ -1451,6 +1457,11 @@ impl Host {
     /// window, or held back for the address pill).
     fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
         use wubble_core::popup::{self, Outcome};
+        // A `target=_blank` mailto: link opens the app and no tab, as in Chromium.
+        if wubble_engine::page::is_external(&request.url) {
+            self.external_link(tab, request.url, Some(request.gesture));
+            return;
+        }
         let site = self.site_of(tab);
         let remembered = site
             .as_deref()
@@ -3028,6 +3039,20 @@ fn tidy_summary(before: &[Item], after: &[Item]) -> (usize, usize) {
     (tabs, folders)
 }
 
+/// The URL a command would open a tab for or load, when another app handles it (and the tab
+/// the user asked from, if any): such a command is handed to `Host::external_link` instead.
+fn external_target(command: &Command) -> Option<(Option<TabId>, &str)> {
+    let (opener, url) = match command {
+        Command::Navigate { tab, url } => (Some(*tab), url),
+        Command::NewTab { url, opener, .. } => (*opener, url),
+        Command::BackgroundTab { url, opener } => (Some(*opener), url),
+        Command::OpenBeside { url } => (None, url),
+        _ => return None,
+    };
+    let external = InternalPage::from_url(url).is_none() && wubble_engine::page::is_external(url);
+    external.then_some((opener, url.as_str()))
+}
+
 fn new_tab(url: String, opener: Option<TabId>) -> Command {
     Command::NewTab {
         url,
@@ -3049,6 +3074,33 @@ mod tests {
         );
         let t = m.visible_tab().unwrap();
         (m, t)
+    }
+
+    #[test]
+    fn links_to_other_apps_open_no_tab_and_load_nothing() {
+        let t = TabId(7);
+        let nav = |url: &str| Command::Navigate {
+            tab: t,
+            url: url.into(),
+        };
+        assert_eq!(
+            external_target(&nav("mailto:a@b.test")),
+            Some((Some(t), "mailto:a@b.test"))
+        );
+        assert_eq!(
+            external_target(&new_tab("magnet:?xt=1".into(), None)),
+            Some((None, "magnet:?xt=1"))
+        );
+        assert_eq!(
+            external_target(&Command::BackgroundTab {
+                url: "tel:1".into(),
+                opener: t
+            }),
+            Some((Some(t), "tel:1"))
+        );
+        assert_eq!(external_target(&nav("https://a.test/")), None);
+        assert_eq!(external_target(&nav("wubble://settings")), None);
+        assert_eq!(external_target(&Command::CloseTab(t)), None);
     }
 
     #[test]

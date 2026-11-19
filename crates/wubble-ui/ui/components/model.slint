@@ -397,13 +397,15 @@ export struct PreviewView {
 
 // The window's one tooltip (tooltip.slint): a page's `title` or a shell button's name and
 // shortcut, hung from (anchor-x, anchor-y) in window px; `centered`: anchor-x is its centre.
-// `jump`: the first one appears in place, later ones glide.
+// `anchor-top`: the top of what it hangs from (the button's top, the pointer), which it sits
+// above when there is no room below. `jump`: the first one appears in place, later ones glide.
 export struct TipView {
     shown: bool,
     text: string,
     shortcut: string,
     anchor-x: length,
     anchor-y: length,
+    anchor-top: length,
     centered: bool,
     jump: bool,
 }

@@ -55,22 +55,17 @@ pub(super) fn status_chars(width: f64) -> usize {
 impl Host {
     /// The page's status text changed: a link is hovered (`text` is its URL), or none is.
     pub(super) fn link_status(&mut self, tab: TabId, text: String) {
-        let now = self.status.clock.now();
-        let event = if text.is_empty() {
-            let on =
-                hovercard::shown(self.status.clock.state()).or(match self.status.clock.state() {
-                    hovercard::Hover::Pending { key, .. } => Some(key),
-                    _ => None,
-                });
-            if on != Some(tab) {
-                return;
+        if text.is_empty() {
+            if self.status.clock.leave_if(tab, Self::status_tick) {
+                self.status_render();
             }
-            Event::Leave { now }
-        } else {
-            self.status.text = Some((tab, text));
-            Event::Enter { key: tab, now }
-        };
-        self.status.clock.step(event, Self::status_tick);
+            return;
+        }
+        self.status.text = Some((tab, text));
+        let now = self.status.clock.now();
+        self.status
+            .clock
+            .step(Event::Enter { key: tab, now }, Self::status_tick);
         self.status_render();
     }
 

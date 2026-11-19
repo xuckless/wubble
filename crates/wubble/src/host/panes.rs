@@ -157,8 +157,6 @@ impl Host {
         }
     }
 
-    /// The focused page's top left in the window, logical pixels: its menu, popup and IME
-    /// candidates are placed from there.
     /// Where `tab`'s pane starts in the window (logical px); the content area's corner when
     /// it is not on screen.
     pub(super) fn pane_origin(&self, window: &AppWindow, tab: TabId) -> (f32, f32) {
@@ -170,6 +168,8 @@ impl Host {
         (window.get_content_x() + x, window.get_content_y())
     }
 
+    /// The focused page's top left in the window, logical pixels: its menu, popup and IME
+    /// candidates are placed from there.
     pub(super) fn focus_origin(&self, window: &AppWindow) -> (f32, f32) {
         match self.shown() {
             Some(tab) => self.pane_origin(window, tab),

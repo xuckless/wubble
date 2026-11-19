@@ -268,8 +268,7 @@ macro_rules! item {
     ($($t:tt)*) => { item!(@gap false, $($t)*) };
 }
 
-/// An item for a known gap: see [`Item::gap`]. None is known today.
-#[allow(unused_macros)]
+/// An item for a known gap: see [`Item::gap`].
 macro_rules! gap {
     ($($t:tt)*) => { item!(@gap true, $($t)*) };
 }
@@ -861,8 +860,6 @@ pub const ITEMS: &[Item] = &[
         [Click(Left, NONE, at::DOWNLOAD), Settle(20)],
         [H(C::Downloads(1))]
     ),
-    // Before the items that open tabs: after F.window-open the next click has landed 11 px
-    // above its point (seen 2026-11-18, cause not found).
     item!(
         "F.mailto-to-os",
         [
@@ -890,6 +887,17 @@ pub const ITEMS: &[Item] = &[
             Settle(20)
         ],
         [H(C::Tabs(2))]
+    ),
+    // Known gap (TODO.md M1): after F.window-open the next click has landed 11 px above its
+    // point (seen 2026-11-18, cause not found). This item is that click, on the first field.
+    gap!(
+        "F.click-after-popup",
+        [
+            Host(HostOp::OnlyFirstTab),
+            Click(Left, NONE, at::INP),
+            Settle(5)
+        ],
+        [J("eq((seen.down || '').split('/')[0], 'inp@140,34')")]
     ),
 ];
 
@@ -1820,7 +1828,7 @@ mod tests {
     #[test]
     fn the_known_gaps_are_the_listed_ones() {
         let gaps: Vec<_> = ITEMS.iter().filter(|i| i.gap).map(|i| i.name).collect();
-        assert!(gaps.is_empty(), "{gaps:?}");
+        assert_eq!(gaps, ["F.click-after-popup"]);
     }
 
     #[test]

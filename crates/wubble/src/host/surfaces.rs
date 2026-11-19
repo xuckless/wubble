@@ -28,7 +28,7 @@ use crate::clipboard::Buffer;
 use crate::ime::{self, ImeCall, ImeInput};
 use crate::menu::{self, Command as MenuCommand, Menu, MenuEffect, MenuEvent, NavFlags};
 use crate::page_error::{self, ErrorEffect, ErrorEvent, PageError};
-use crate::prompt::{self, Auth, AuthEvent, PermissionEvent, PermissionPrompt, Secret};
+use crate::prompt::{self, Auth, AuthEvent, PermissionEvent, PermissionPrompt, Reply, Secret};
 use crate::screen::{self, Screen, ScreenEffect, ScreenEvent};
 use crate::surface::{self, Dialog, DialogEvent, FindBar, FindEffect, FindEvent, Routed};
 
@@ -143,7 +143,10 @@ impl Host {
             Routed::Frozen { frozen, ok } => self.frozen_answered(tab, frozen, ok),
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
-            Routed::Committed => self.busy_page_started(tab),
+            Routed::Committed => {
+                self.apply_permission(tab, PermissionEvent::PageChanged);
+                self.busy_page_started(tab);
+            }
             Routed::ImeBounds(rect) if visible => {
                 place_candidates(window, self.focus_origin(window), rect)
             }
@@ -234,15 +237,15 @@ impl Host {
                         .set_site_permission(site, kind, *decision, now_ms());
                 }
             }
-            match answer.external {
-                Some((url, open)) => {
+            match answer.reply {
+                Reply::External { url, open } => {
                     if open {
                         self.open_in_app(&url);
                     }
                 }
-                None => {
+                Reply::Engine { id, granted } => {
                     if let Some(view) = self.tab_view(tab) {
-                        view.answer_permission(answer.id, &answer.granted);
+                        view.answer_permission(id, &granted);
                     }
                 }
             }
@@ -907,8 +910,8 @@ fn permission_view(p: &PermissionPrompt) -> PermissionView {
                 remember: t.remember.into(),
                 allow: t.allow.into(),
                 block: t.block.into(),
-                // Unique per request, so a new prompt resets the toggle.
-                serial: i32::try_from(r.id.0).unwrap_or(i32::MAX),
+                // Per request, so a new prompt resets the toggle.
+                serial: r.serial(),
             }
         }
     }

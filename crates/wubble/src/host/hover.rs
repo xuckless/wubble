@@ -54,4 +54,15 @@ impl<K: Copy + PartialEq> HoverClock<K> {
         }
         (before, effect)
     }
+
+    /// The pointer left `key`: a leave if the machine is on it now (`hovercard::active`), else
+    /// nothing. A leave never shows or hides anything at once. Whether it stepped.
+    pub fn leave_if(&mut self, key: K, tick: fn(&mut Host)) -> bool {
+        let on = hovercard::active(self.state) == Some(key);
+        if on {
+            let now = self.now();
+            self.step(Event::Leave { now }, tick);
+        }
+        on
+    }
 }

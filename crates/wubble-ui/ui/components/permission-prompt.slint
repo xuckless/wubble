@@ -21,6 +21,7 @@ export component PermissionPrompt inherits Rectangle {
     property <PermissionView> shown;
     changed open => {
         if root.open {
+            root.remember = false;
             root.shown = root.prompt;
         }
     }
@@ -76,7 +77,8 @@ export component PermissionPrompt inherits Rectangle {
                 font-size: Type.body.size;
                 wrap: word-wrap;
             }
-            CheckBox {
+            // No toggle where nothing could be remembered (the host leaves it empty).
+            if root.shown.remember != "": CheckBox {
                 text: root.shown.remember;
                 checked <=> root.remember;
             }

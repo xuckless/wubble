@@ -605,8 +605,10 @@ impl Host {
         let name = shot::file_name(&title, chrono::Local::now().naive_local());
         let path = output.file().then(|| self.download_path(&name)).flatten();
         let job = shot_io::Job {
-            picture: shot_io::Picture::PngBase64(png),
-            path: path.clone(),
+            picture: shot_io::Picture::Png {
+                base64: png,
+                path: path.clone(),
+            },
             clipboard: output.clipboard(),
         };
         if let Some(path) = &path {
@@ -650,7 +652,6 @@ impl Host {
                 height: image.height,
                 bytes: image.rgba,
             },
-            path: None,
             clipboard: true,
         };
         self.saver().save(job, |saved| {

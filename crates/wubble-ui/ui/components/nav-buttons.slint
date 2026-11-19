@@ -19,7 +19,8 @@ export component IconButton inherits PressableButton {
     changed hovered => {
         if root.tip-action != "" {
             Tips.hover(root.tip-action, self.absolute-position.x + self.width / 2,
-                self.absolute-position.y + self.height, self.hovered && root.enabled);
+                self.absolute-position.y, self.absolute-position.y + self.height,
+                self.hovered && root.enabled);
         }
     }
     width: Shell.icon-button;

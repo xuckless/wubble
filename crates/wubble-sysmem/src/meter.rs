@@ -75,17 +75,19 @@ impl Meter {
     }
 
     /// The id of Chromium's GPU process among wubble's children, refreshing only the process
-    /// list and command lines (no memory or CPU, so it is cheap enough for a slow periodic
-    /// look). `None` when there is none now. On macOS and Windows it is the child launched with
+    /// list and command lines (no memory or CPU). It still reads every process on the system
+    /// (about 10 ms on a desktop's 800), so it belongs off the UI thread. `None` when there is
+    /// none now. On macOS and Windows it is the child launched with
     /// `--type=gpu-process`; on Linux Chromium forks it from its unsandboxed zygote, so its
     /// command line is the zygote's, and it is the process that runs Viz's compositor thread
     /// (`VizCompositorThread`, named `VizCompositorTh` by the kernel's 15-character limit).
     pub fn gpu_pid(&mut self) -> Option<u32> {
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet),
-        );
+        let kind = ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet);
+        // Threads are needed only to find Viz's on Linux.
+        #[cfg(not(target_os = "linux"))]
+        let kind = kind.without_tasks();
+        self.system
+            .refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
         let processes = self.system.processes();
         let table: Vec<(u32, Option<u32>)> = processes
             .iter()

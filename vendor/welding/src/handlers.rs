@@ -572,7 +572,6 @@ impl SharedHandlers {
                 scripts,
                 request_filter,
                 response_observer,
-                Arc::new(Mutex::new(Gestures::default())),
             ),
             download: WeldDownloadHandler::new(events.clone(), requests.clone()),
             permission: WeldPermissionHandler::new(events.clone(), requests.clone()),
@@ -592,17 +591,13 @@ cef::wrap_request_handler! {
         scripts: Arc<crate::app::PendingScripts>,
         request_filter: Option<RequestFilter>,
         response_observer: Option<ResponseObserver>,
-        // wubble change 40: the gesture bit of recent navigations, for
-        // `on_protocol_execution`, which has none.
-        gestures: Arc<Mutex<Gestures>>,
     }
 
     impl RequestHandler {
         // wubble change 40: a navigation to a scheme Chromium does not
         // handle is cancelled here and handed to the host, with its gesture
         // bit; otherwise CEF fails it with ERR_UNKNOWN_URL_SCHEME and commits
-        // an error page in place of the page the link was on. Every other
-        // navigation's gesture is remembered for `on_protocol_execution`.
+        // an error page in place of the page the link was on.
         fn on_before_browse(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -620,13 +615,13 @@ cef::wrap_request_handler! {
                 });
                 return 1;
             }
-            lock(&self.gestures).note(url, user_gesture != 0);
             0
         }
 
-        // wubble change: a resource-request handler for every request
-        // (change 40: unknown schemes reach `on_protocol_execution` only
-        // through it); without a filter or observer it changes nothing else.
+        // wubble change: a resource-request handler only when the host set
+        // a filter or a response observer (change 36), so without either
+        // CEF's default handling is untouched (it never runs an OS app:
+        // `allow_os_execution` defaults to false).
         // Shape from cefclient `ClientHandler::GetResourceRequestHandler`
         // (chromiumembedded/cef, BSD-3-Clause); no code copied.
         fn resource_request_handler(
@@ -639,6 +634,9 @@ cef::wrap_request_handler! {
             request_initiator: Option<&cef::CefString>,
             _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
         ) -> Option<cef::ResourceRequestHandler> {
+            if self.request_filter.is_none() && self.response_observer.is_none() {
+                return None;
+            }
             Some(WeldResourceRequestHandler::new(
                 self.request_filter.clone(),
                 self.response_observer.clone(),
@@ -646,7 +644,6 @@ cef::wrap_request_handler! {
                 is_navigation != 0,
                 Arc::new(Mutex::new(None)),
                 self.events.clone(),
-                self.gestures.clone(),
             ))
         }
 
@@ -811,13 +808,15 @@ cef::wrap_resource_request_handler! {
         served: Arc<Mutex<Option<Served>>>,
         // wubble change 40.
         events: Arc<WebEventQueue>,
-        gestures: Arc<Mutex<Gestures>>,
     }
 
     impl ResourceRequestHandler {
         // wubble change 40: an unknown scheme never goes to the OS from
         // here; the host asks the user and opens it itself. Called on the
-        // IO thread, and the answer is synchronous, hence the event.
+        // IO thread, and the answer is synchronous, hence the event. Only a
+        // scheme `chromium_handles` wrongly claims gets here (the rest were
+        // cancelled in `on_before_browse`); CEF gives no gesture bit, so the
+        // host treats it as made without one.
         fn on_protocol_execution(
             &self,
             _browser: Option<&mut cef::Browser>,
@@ -830,8 +829,7 @@ cef::wrap_resource_request_handler! {
             }
             let Some(request) = request else { return };
             let url = cef_string(request.url());
-            let user_gesture = lock(&self.gestures).take(&url);
-            push(&self.events, NavigationEvent::ProtocolExecution { url, user_gesture });
+            push(&self.events, NavigationEvent::ProtocolExecution { url, user_gesture: None });
         }
 
         // Called on the IO thread; the only place CEF lets the request be
@@ -937,8 +935,9 @@ cef::wrap_resource_request_handler! {
 /// it to an OS app: the web, local and data schemes and its own pages
 /// (`url/url_constants.h`, `content/public/common/url_constants.h`). An
 /// unknown scheme that is missing here still reaches the host, through
-/// `on_protocol_execution`.
-fn chromium_handles(url: &str) -> bool {
+/// `on_protocol_execution`. Public so a host can tell, before it opens a tab
+/// or loads a URL, that the URL belongs to another app.
+pub fn chromium_handles(url: &str) -> bool {
     let Some((scheme, _)) = url.split_once(':') else { return true };
     const HANDLED: &[&str] = &[
         "http", "https", "ws", "wss", "file", "data", "blob", "filesystem", "about",
@@ -946,33 +945,6 @@ fn chromium_handles(url: &str) -> bool {
         "devtools", "view-source",
     ];
     HANDLED.iter().any(|s| s.eq_ignore_ascii_case(scheme))
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// wubble change 40: the last few navigations' URLs and whether a user
-/// gesture started them (`OnBeforeBrowse`, UI thread), looked up by URL when
-/// the same URL turns out to have an unknown scheme (IO thread).
-#[derive(Debug, Default)]
-pub(crate) struct Gestures(std::collections::VecDeque<(String, bool)>);
-
-impl Gestures {
-    const KEEP: usize = 8;
-
-    fn note(&mut self, url: String, gesture: bool) {
-        if self.0.len() == Self::KEEP {
-            self.0.pop_front();
-        }
-        self.0.push_back((url, gesture));
-    }
-
-    /// The newest entry for `url`, removed.
-    fn take(&mut self, url: &str) -> Option<bool> {
-        let i = self.0.iter().rposition(|(u, _)| u == url)?;
-        self.0.remove(i).map(|(_, g)| g)
-    }
 }
 
 /// wubble change 35: a response given as a `data:` URL.
@@ -1493,7 +1465,7 @@ cef::wrap_dialog_handler! {
 // wubble change: the request filter's top-page rule.
 #[cfg(test)]
 mod request_filter_tests {
-    use super::{Gestures, Served, chromium_handles, top_url};
+    use super::{Served, chromium_handles, top_url};
 
     // wubble change 35.
     #[test]
@@ -1504,21 +1476,6 @@ mod request_filter_tests {
         for url in ["mailto:a@b", "tel:123", "magnet:?xt=1", "slack://open", "ftp://a/"] {
             assert!(!chromium_handles(url), "{url}");
         }
-    }
-
-    #[test]
-    fn a_gesture_is_found_by_url_newest_first_and_only_once() {
-        let mut g = Gestures::default();
-        g.note("a".into(), false);
-        g.note("a".into(), true);
-        assert_eq!(g.take("a"), Some(true));
-        assert_eq!(g.take("a"), Some(false));
-        assert_eq!(g.take("a"), None);
-        for i in 0..20 {
-            g.note(i.to_string(), true);
-        }
-        assert_eq!(g.take("0"), None, "only the last few are kept");
-        assert_eq!(g.take("19"), Some(true));
     }
 
     #[test]

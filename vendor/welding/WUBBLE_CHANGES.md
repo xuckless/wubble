@@ -393,12 +393,13 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    and Chromium page schemes) and queues `NavigationEvent::ProtocolExecution
    { url, user_gesture }` with its gesture bit; without the cancel, CEF
    fails it with `ERR_UNKNOWN_URL_SCHEME` and commits an error page in place
-   of the page the link was on. Every other navigation's gesture is kept
-   (`Gestures`, the last 8) for `on_protocol_execution`, which the
-   resource-request handler now implements as a backstop (IO thread): it
-   answers `allow_os_execution = 0` and queues the same event. The
-   resource-request handler is therefore returned for every request (it
-   changes nothing else without a filter or observer).
+   of the page the link was on. `chromium_handles` is public
+   (`welding::chromium_handles`) so a host can tell an external URL before
+   it opens a tab for it. The resource-request handler (returned only with a
+   filter or observer, as before) implements `on_protocol_execution` as a
+   backstop for a scheme the list wrongly claims (IO thread): it answers
+   `allow_os_execution = 0` and queues the same event with no gesture bit
+   (CEF gives none there).
 41. **A download request names its original URL.** `DownloadRequested` gains
    `original_url` (`CefDownloadItem::GetOriginalUrl`): the URL
    `start_download` was given, before redirects, so a host can tell its own

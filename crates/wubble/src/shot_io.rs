@@ -13,8 +13,11 @@ use base64::Engine as _;
 
 /// The image of one job.
 pub enum Picture {
-    /// A PNG, base64 (`Page.captureScreenshot`'s `data`).
-    PngBase64(String),
+    /// A PNG, base64 (`Page.captureScreenshot`'s `data`), written to `path` if given.
+    Png {
+        base64: String,
+        path: Option<PathBuf>,
+    },
     /// Straight RGBA rows (Copy Image's `View::download_image`).
     Rgba {
         width: u32,
@@ -26,8 +29,6 @@ pub enum Picture {
 /// What to do with one screenshot or copied image.
 pub struct Job {
     pub picture: Picture,
-    /// Write it here (a PNG only).
-    pub path: Option<PathBuf>,
     /// Put it on the clipboard.
     pub clipboard: bool,
 }
@@ -74,35 +75,31 @@ impl Saver {
 }
 
 fn run(job: Job, clipboard: &mut Option<arboard::Clipboard>) -> Saved {
-    let (png, size) = match job.picture {
-        Picture::PngBase64(text) => {
-            let Ok(png) = base64::engine::general_purpose::STANDARD.decode(text.trim()) else {
+    // The file is written now; the pixels are decoded only for the clipboard.
+    let (file, size, pixels) = match job.picture {
+        Picture::Png { base64, path } => {
+            let Ok(png) = base64::engine::general_purpose::STANDARD.decode(base64.trim()) else {
                 eprintln!("wubble: screenshot: the image is not base64");
                 return Saved::default();
             };
-            let size = png_size(&png);
-            (Ok(png), size)
+            let file = path.map(|path| {
+                std::fs::write(&path, &png)
+                    .map_err(|e| eprintln!("wubble: screenshot {}: {e}", path.display()))
+                    .is_ok()
+            });
+            (file, png_size(&png), job.clipboard.then(|| rgba(&png)))
         }
         Picture::Rgba {
             width,
             height,
             bytes,
-        } => (Err((width, height, bytes)), Some((width, height))),
+        } => (
+            None,
+            Some((width, height)),
+            job.clipboard.then_some(Ok((width, height, bytes))),
+        ),
     };
-    let file = job.path.map(|path| {
-        let written = match &png {
-            Ok(png) => std::fs::write(&path, png).map_err(|e| e.to_string()),
-            Err(_) => Err("raw pixels are not written to files".into()),
-        };
-        written
-            .map_err(|e| eprintln!("wubble: screenshot {}: {e}", path.display()))
-            .is_ok()
-    });
-    let copied = job.clipboard.then(|| {
-        let decoded = match png {
-            Ok(png) => rgba(&png),
-            Err(raw) => Ok(raw),
-        };
+    let copied = pixels.map(|decoded| {
         let (width, height, bytes) = match decoded {
             Ok(image) => image,
             Err(e) => {
@@ -207,8 +204,10 @@ mod tests {
         let path = dir.path().join("shot.png");
         let png = tiny_png();
         let job = Job {
-            picture: Picture::PngBase64(base64::engine::general_purpose::STANDARD.encode(&png)),
-            path: Some(path.clone()),
+            picture: Picture::Png {
+                base64: base64::engine::general_purpose::STANDARD.encode(&png),
+                path: Some(path.clone()),
+            },
             clipboard: false,
         };
         let saved = run(job, &mut None);
@@ -222,28 +221,12 @@ mod tests {
         );
         assert_eq!(std::fs::read(path).unwrap(), png);
         let bad = Job {
-            picture: Picture::PngBase64("***".into()),
-            path: None,
+            picture: Picture::Png {
+                base64: "***".into(),
+                path: None,
+            },
             clipboard: false,
         };
         assert_eq!(run(bad, &mut None), Saved::default());
-    }
-
-    #[test]
-    fn raw_pixels_are_never_written_as_a_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("copy.png");
-        let job = Job {
-            picture: Picture::Rgba {
-                width: 1,
-                height: 1,
-                bytes: vec![0, 0, 0, 255],
-            },
-            path: Some(path.clone()),
-            clipboard: false,
-        };
-        let saved = run(job, &mut None);
-        assert_eq!((saved.file, saved.size), (Some(false), Some((1, 1))));
-        assert!(!path.exists());
     }
 }
