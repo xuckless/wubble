@@ -2466,8 +2466,8 @@ impl Host {
                 };
                 let height = window.get_content_height();
                 match self.w.panes.seams(height.into()).first() {
-                    Some(&(x, _, _)) => {
-                        let (x, y) = (x as f32, height / 2.0);
+                    Some(seam) => {
+                        let (x, y) = (seam.x as f32, height / 2.0);
                         self.split_grab(0, x, y);
                         self.split_drag(x - by, y);
                     }

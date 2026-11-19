@@ -212,6 +212,11 @@ export function readDecl(prop, value, R) {
       return out.length ? out : null;
     }
     case 'font': return null;
+    // unitless: a bare `0` is a number here, never a length
+    case 'opacity': {
+      const v = R.percent(value) ?? (R.num(value) !== null ? { t: 'float', v: R.num(value) } : null);
+      return v ? [['', v]] : null;
+    }
     default: {
       if (words.length === 1) {
         const m = /^clamp\(([^,]+),([^,]+),([^,]+)\)$/.exec(value);

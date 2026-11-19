@@ -41,7 +41,7 @@ use super::window::{PANEL_SLOT, PEEK_SLOT, pick_slot};
 use super::{Host, PaneFrame, Snapshot};
 use crate::measure;
 use crate::menu::{self, MenuEvent};
-use crate::panes::{PageRect, RADIUS, page_width};
+use crate::panes::{PageRect, RADIUS, SeamView, page_width};
 use crate::screen::Screen;
 use crate::{physical, pixels, slint_int, with_host};
 
@@ -569,27 +569,31 @@ impl Host {
                     gy: source.gy - f64::from(window.get_content_y()),
                 };
                 let x = x - SPLIT::gap / 2.0;
-                (
+                SeamView {
                     x,
-                    if source.held || source.bend.x.abs() > BOWED {
+                    path: if source.held || source.bend.x.abs() > BOWED {
                         string_line(x, height, RADIUS, bow)
                     } else {
                         String::new()
                     },
-                    source.held,
-                )
+                    held: source.held,
+                    bend: bow.bend,
+                    gy: bow.gy,
+                }
             });
             self.w
                 .panes
                 .seams(height)
                 .into_iter()
                 .chain(panel)
-                .map(|(x, path, held)| SplitSeam {
-                    x: x as f32,
-                    path: path.into(),
-                    held,
-                    // the pill's bend and height: mid height until wired (controls kit B)
-                    ..Default::default()
+                // the pill at the string's bend and the grab height (chrome.tsx `layoutSplit`:
+                // `translate(sm.x + sm.bend, sm.gy)`)
+                .map(|s| SplitSeam {
+                    x: s.x as f32,
+                    path: s.path.into(),
+                    held: s.held,
+                    bend: s.bend as f32,
+                    gy: s.gy as f32,
                 })
                 .collect()
         };

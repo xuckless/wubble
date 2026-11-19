@@ -82,6 +82,17 @@ fn ids(tabs: &[TabId]) -> Vec<u64> {
     tabs.iter().map(|t| t.0).collect()
 }
 
+/// One split seam as drawn: its x, the bowed string ("" when straight), whether it is held, and
+/// the string's bend and grab height, where its pill rides (pane-local px).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SeamView {
+    pub x: f64,
+    pub path: String,
+    pub held: bool,
+    pub bend: f64,
+    pub gy: f64,
+}
+
 impl Panes {
     /// One frame of `dt` seconds over a content area of `width` x `height`: adopt the model's
     /// shown split (forgetting the layout on a Space switch or when none shows), step the strings,
@@ -183,8 +194,9 @@ impl Panes {
         if self.shown() { self.split.n() - 1 } else { 0 }
     }
 
-    /// The seams: centre x and the bowed string while held or twanging ("" when straight).
-    pub fn seams(&self, height: f64) -> Vec<(f64, String, bool)> {
+    /// The seams: centre x, the bowed string while held or twanging ("" when straight), and
+    /// where the pill rides it.
+    pub fn seams(&self, height: f64) -> Vec<SeamView> {
         if !self.shown() {
             return vec![];
         }
@@ -199,7 +211,13 @@ impl Panes {
                 } else {
                     String::new()
                 };
-                (x, path, held)
+                SeamView {
+                    x,
+                    path,
+                    held,
+                    bend,
+                    gy,
+                }
             })
             .collect()
     }
@@ -373,7 +391,17 @@ mod tests {
         let want = [(TabId(2), 0.0, 500.0), (TabId(1), 508.0, 500.0)]
             .map(|(tab, x, width)| PageRect { tab, x, width });
         assert_eq!(rects, want);
-        assert_eq!(p.seams(700.0), vec![(504.0, String::new(), false)]);
+        assert_eq!(
+            p.seams(700.0),
+            vec![SeamView {
+                x: 504.0,
+                path: String::new(),
+                held: false,
+                bend: 0.0,
+                // never grabbed: the pill sits at mid height (SplitView)
+                gy: 0.0,
+            }]
+        );
         assert!(p.ring(m.visible_tab(), 700.0).starts_with("M"));
         // physical pixels per pane
         let l = rects[1].layout(700.0, 1.5);
@@ -403,8 +431,10 @@ mod tests {
         };
         assert_eq!(right, left);
         assert!(right.at(300.0) < -1.0, "bowed toward the pointer");
-        let (x, path, held) = p.seams(700.0)[0].clone();
-        assert!(!path.is_empty() && x > 380.0 && held);
+        let s = p.seams(700.0)[0].clone();
+        assert!(!s.path.is_empty() && s.x > 380.0 && s.held);
+        // the pill rides the string where the pointer holds it (chrome.tsx `layoutSplit`)
+        assert!(s.bend < -1.0 && s.gy == 300.0);
     }
 
     #[test]
