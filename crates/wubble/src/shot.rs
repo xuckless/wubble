@@ -43,7 +43,7 @@ pub fn request(args: crate::cli::ShotArgs) {
     PARITY.with(|p| *p.borrow_mut() = args.parity);
 }
 
-/// `--frozen-backdrop`: the liquid holds still, so two runs shoot the same backdrop.
+/// `--frozen-backdrop`: the scene's clock holds still, so two runs shoot the same picture.
 pub fn frozen_backdrop() -> bool {
     FROZEN.with(std::cell::Cell::get)
 }

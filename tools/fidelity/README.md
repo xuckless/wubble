@@ -47,7 +47,10 @@ clone moves and commit the JSON.
 2. `capture.mjs` shoots each scene of `scenes.json` in headless Chromium (WebGL on SwiftShader)
    at DPR 1 and 2. Time moves only by `__wb.step(1000/120)`; CSS animations and transitions are
    paused and set to the same clock each step, so stills settle exactly and a `frames` scene is a
-   sequence at exactly 1/120 s per frame. The backdrop is frozen after the settle.
+   sequence at exactly 1/120 s per frame. The backdrop is frozen after the settle: the emitters
+   stop and the liquid is replaced by wubble's still dye (`crates/wubble-gfx/src/scene/still_dye.txt`,
+   the browser window's own backdrop), splatted into the `.wb-window` rect on the desktop canvas
+   (`lib/still.mjs`), so both sides show one dye.
 3. Builds wubble and runs `--smoke gallery --frozen-backdrop --parity OUT/parity.json` at the web
    window's logical size (`WUBBLE_SHOT_SIZE`) and each DPR (`SLINT_SCALE_FACTOR`). The parity
    profile is the design's model: Spaces Personal/Work/Study with their tints and icons, the four
@@ -78,13 +81,15 @@ scene there (data over host state), then the web scene here.
   (about 120 ms apart on the Linux box) and records each frame's time; the scorer compares each
   with the web frame at the same time. Exact-dt motion comparison is the curve tests' job (Slint
   mock time, `wubble-core` machines).
-- The liquid is chaotic and the two sides do not share it: both freeze theirs, but the frozen
-  states differ until lane L1 lands a shared frozen dye. Glass crops score the frost over
-  different backdrops until then.
+- Both sides show the still dye, from one table (`still_dye.txt`). What still differs: the dye's
+  grid (256 texels on the short side of the web's whole desktop canvas, of wubble's window on
+  wubble) and the scene clock (frozen at the settle's time on the web, at 0 on wubble: only the
+  touched film rim's drift depends on it).
 - The 2x window must fit the screen the gallery runs on, so 2x uses `viewportByDpr` (a smaller
   window) on both sides.
 - Nothing here runs in `cargo test` or CI. `node --test tools/fidelity/test/*.test.mjs` covers
-  the pure parts (geometry, metrics, PNG, CSS reading, the ease table, text roles). Scores are reported, not asserted.
+  the pure parts (geometry, metrics, PNG, CSS reading, the ease table, text roles, the still
+  dye's mapping). Scores are reported, not asserted.
 
 ## Kit lock
 

@@ -47,11 +47,7 @@ fn scene_renders_glass_over_the_backdrop() {
         return;
     };
     eprintln!("adapter: {name}");
-    let full = |glass| Run {
-        glass,
-        quality: Quality::Full,
-        frames: FRAMES,
-    };
+    let full = |glass| Run::liquid(glass, Quality::Full, FRAMES);
     let (w, h, with_glass) = render(&device, &queue, full(true));
     assert_eq!((w, h), (640, 400), "logical 320×200 at dpr 2");
     assert_eq!(with_glass.len(), (w * h * 4) as usize);
@@ -110,15 +106,7 @@ fn every_quality_draws_glass_and_flat_freezes_and_flattens() {
         return;
     };
     let run = |quality, glass, frames| {
-        let (w, h, img) = render(
-            &device,
-            &queue,
-            Run {
-                glass,
-                quality,
-                frames,
-            },
-        );
+        let (w, h, img) = render(&device, &queue, Run::liquid(glass, quality, frames));
         assert_eq!((w, h), (640, 400));
         assert!(img.chunks(4).all(|p| p[3] == 255), "{quality:?} is opaque");
         img
@@ -197,6 +185,8 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
         hover: false,
         focus: false,
         tint: [0.0; 3],
+        shadow: 0.6,
+        beam: false,
     };
     // the same liquid each run; `grow` widens the panel for the last frame
     let run = |glass: Option<(f32, f32)>| {
@@ -227,6 +217,75 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
             region(&without, tw, column),
             "no glass at x {x} of a panel 280 wide"
         );
+    }
+}
+
+/// The browser window's still backdrop: the same inputs give the same image, and its composite and
+/// pyramid render only when its dye, ripples or size change (a count, not a clock).
+#[test]
+fn a_still_backdrop_is_deterministic_and_renders_only_on_change() {
+    use headless::renderer;
+    use wubble_gfx::scene::{Backdrop, Renderer};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let still = |glass| Run {
+        glass,
+        quality: Quality::Full,
+        frames: FRAMES,
+        backdrop: Backdrop::Still,
+    };
+    let (_, _, a) = render(&device, &queue, still(true));
+    let (_, _, b) = render(&device, &queue, still(true));
+    assert!(a == b, "two still renders of the same inputs are equal");
+    assert!(distinct_colours(&a, 640, 400) >= 8, "the dye shows");
+
+    // once the ripple of frame 1 has ended (1.15 s), nothing re-renders the backdrop
+    let (w, h, dpr) = VIEW;
+    let mut r: Renderer = renderer(&device, &queue, still(false));
+    for _ in 0..80 {
+        r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    let settled = r.backdrops();
+    for _ in 0..5 {
+        r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    assert_eq!(r.backdrops(), settled, "nothing changed");
+    r.scene.tap(100.0, 100.0);
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(r.backdrops(), settled + 1, "a ripple runs through it");
+    for _ in 0..200 {
+        r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    let after = r.backdrops();
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(r.backdrops(), after, "the ripple ended");
+    r.scene.set_palette([[1.0, 1.0, 1.0]; 3]);
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(r.backdrops(), after + 1, "a new palette");
+    r.render_under_ui(w + 40.0, h, dpr, 1.0 / 60.0);
+    assert!(r.backdrops() >= after + 2, "a new size");
+}
+
+/// A tiny view still builds every pyramid level (b3 is 1/16 of the view).
+#[test]
+fn a_tiny_view_builds_the_whole_pyramid() {
+    use wubble_gfx::scene::{Backdrop, Renderer, SceneOptions};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    for backdrop in [Backdrop::Liquid, Backdrop::Still] {
+        let opts = SceneOptions {
+            backdrop,
+            ..SceneOptions::default()
+        };
+        let mut r = Renderer::from_device(device.clone(), queue.clone(), opts).expect("builds");
+        for (w, h) in [(160.0, 100.0), (3.0, 2.0)] {
+            r.render_under_ui(w, h, 1.0, 1.0 / 60.0);
+            assert!(r.output().is_some());
+        }
     }
 }
 

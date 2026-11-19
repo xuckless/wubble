@@ -1,3 +1,4 @@
+// translates: core/gl/util.ts:3-19
 // Vertex stages shared by the full-screen passes (fluid, composite, blur, blit).
 // Translated from VERT_FS in core/gl/util.ts.
 //
@@ -23,7 +24,7 @@ struct VsOut {
 
 // One full-screen triangle-strip quad (4 vertices, no vertex buffer).
 fn stripCorner(i: u32) -> vec2<f32> {
-  var c = array<vec2<f32>, 4>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0));
+  var c = array<vec2<f32>, 4>(vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0)); // wubble change: util.ts quad()'s buffer, inline
   return c[i];
 }
 
@@ -32,7 +33,7 @@ fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> VsOut {
   let aPos = stripCorner(vi);
   var o: VsOut;
   o.pos = vec4<f32>(aPos, 0.0, 1.0);
-  o.vUv = vec2<f32>(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  o.vUv = vec2<f32>(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5); // wubble change: v runs down in wgpu textures, so it is flipped
   return o;
 }
 

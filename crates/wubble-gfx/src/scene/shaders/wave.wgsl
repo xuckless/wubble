@@ -1,3 +1,4 @@
+// translates: core/gl/glsl.ts:68-91
 // Wave lens, translated line for line from WAVE in core/gl/glsl.ts (after Ultra Reactivate's
 // distortion-waves renderer: its waveLens + waveBlurMask + waveBand). A wavefront at signed
 // distance d from each pixel lifts a Gaussian lens around the front, narrower ahead (d > 0) than
@@ -21,10 +22,10 @@ fn waveAt(p: vec2<f32>, wv: vec4<f32>, amp: f32, width: f32) -> WaveHit {
   let bend = 0.62 * sin(2.0 * a + k * 6.0) + 0.38 * sin(3.0 * a - k * 9.0 + 1.7);
   let d = r - rad + bend * width * 0.18 * (1.0 - k);
   let energy = (1.0 - k) * (1.0 - k);
-  let u = d / (width * select(1.5, 0.85, d > 0.0));
+  var u: f32; if (d > 0.0) { u = d / (width * 0.85); } else { u = d / (width * 1.5); }
   let lift = exp(-u * u);
   h.disp = n * energy * amp * lift;
-  let bu = d / select(width * 0.9, width * 1.6, d > 0.0);
+  var bu: f32; if (d > 0.0) { bu = d / (width * 1.6); } else { bu = d / (width * 0.9); }
   h.blur = energy * exp(-bu * bu);
   if (d >= 0.0) { let q = clamp(1.0 - d / (width * 1.1), 0.0, 1.0); h.band = q * q * q * (q * (q * 6.0 - 15.0) + 10.0); }
   else { h.band = pow(1.0 - clamp(-d / (width * 2.4), 0.0, 1.0), 2.3); }

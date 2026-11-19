@@ -1,3 +1,4 @@
+// translates: core/gl/scene.ts:108-121
 // Separable Gaussian for the glass blur pyramid, translated from BLUR in core/gl/scene.ts.
 // Run twice per level: uStep = (1/src.w, 0) into the temp target, then (0, 1/tmp.h) into the
 // level. bg (half res) → b1 (quarter, σ 3.5) → b2 (eighth, σ 4.5). Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl (render.rs always prepends all four).
@@ -20,7 +21,7 @@ fn fs_blur(fin: VsOut) -> @location(0) vec4<f32> {
   for (var i = -12.0; i <= 12.0; i += 1.0) {
     if (abs(i) > r) { continue; }
     let w = exp(-i * i / (2.0 * U.uSigma * U.uSigma));
-    s += textureSampleLevel(uTex, samp, fin.vUv + U.uStep * i, 0.0) * w; wsum += w;
+    s += textureSampleLevel(uTex, samp, fin.vUv + U.uStep * i, 0.0) * w; wsum += w; // wubble change: WGSL samples in a loop at level 0 explicitly (textureSampleLevel)
   }
   return s / wsum;
 }

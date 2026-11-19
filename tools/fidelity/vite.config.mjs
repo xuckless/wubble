@@ -3,16 +3,45 @@
 //    (`window.__wb.step(ms)` advances rAF, timers, performance.now and Date.now by `ms`; CSS
 //    animations are stepped by capture.mjs through the Web Animations API);
 //  - a frozen-backdrop switch: `globalThis.__wbFrozen = true` stops the liquid's emitters and
-//    its fluid step (core/gl/scene.ts, patched in the transform hook);
+//    replaces its fluid step by wubble's still dye (core/gl/scene.ts, patched in the transform
+//    hook): the table wubble's browser window shows (crates/wubble-gfx/src/scene/still_dye.txt),
+//    splatted into the window's rect on the desktop canvas (lib/still.mjs), afresh whenever the
+//    palette, the canvas or the window's rect changes; so both sides of a pair show one dye;
 //  - the parity pages wubble's gallery loads (`/__parity/manifest.json`, `/__parity/tab/<id>`):
 //    the design's Spaces and tabs with its titles and favicons.
 // Run by run.sh as `npx vite --config <this> --port 5199` from the clone's directory.
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { parseStill, toCanvas } from './lib/still.mjs';
 
 const root = process.env.WUBBLE_DESIGN_ROOT || process.cwd();
 const src = resolve(root, 'src');
 const PORT = Number(process.env.FIDELITY_PORT || 5199);
+
+const here = dirname(fileURLToPath(import.meta.url));
+const STILL_DYE = readFileSync(resolve(here, '../../crates/wubble-gfx/src/scene/still_dye.txt'), 'utf8');
+
+/** `__wbStill(scene)`: the frozen liquid's dye, wubble's still dye (lib/still.mjs). */
+const STILL = `<script>(() => {
+  const parseStill = ${parseStill};
+  const toCanvas = ${toCanvas};
+  const blobs = parseStill(${JSON.stringify(STILL_DYE)});
+  globalThis.__wbStill = scene => {
+    const c = scene.canvas.getBoundingClientRect();
+    const win = document.querySelector('.wb-window');
+    const b = win ? win.getBoundingClientRect() : c;
+    const rect = { x: b.x - c.x, y: b.y - c.y, w: b.width, h: b.height };
+    const key = JSON.stringify([scene.w, scene.h, rect, scene.palette.map(p => p.map(v => Math.round(v * 1000)))]);
+    if (scene.__wbStillKey === key) return;
+    scene.__wbStillKey = key;
+    scene.fluid.resize(scene.w, scene.h);
+    for (const blob of blobs) {
+      const p = toCanvas(blob, rect, scene.w, scene.h);
+      scene.fluid.splat(p.x, p.y, 0, 0, scene.palette[blob.color % 3].map(v => v * blob.strength), p.radius);
+    }
+  };
+})();</script>`;
 
 /** The clock and the seeded random, before any page script. */
 const CLOCK = `<script>(() => {
@@ -59,12 +88,12 @@ function fidelity() {
   return {
     name: 'wubble-fidelity',
     transformIndexHtml(html) {
-      return html.replace('<head>', `<head>${CLOCK}`);
+      return html.replace('<head>', `<head>${CLOCK}${STILL}`);
     },
     transform(code, id) {
       if (!id.endsWith('/src/wubble/core/gl/scene.ts')) return null;
       const patches = [
-        ['this.fluid.step(dt);', 'this.fluid.step(globalThis.__wbFrozen ? 0 : dt);'],
+        ['this.fluid.step(dt);', 'if (globalThis.__wbFrozen) globalThis.__wbStill?.(this); else this.fluid.step(dt);'],
         ['if (this.opts.ambient > 0) {', 'if (this.opts.ambient > 0 && !globalThis.__wbFrozen) {'],
       ];
       for (const [from, to] of patches) {

@@ -1,3 +1,4 @@
+// translates: core/gl/fluid.ts:9-108
 // Stable fluids (Stam 1999), translated line for line from core/gl/fluid.ts.
 // Semi-Lagrangian advection, vorticity confinement, divergence, Jacobi pressure, projection.
 // Carries RGB dye. Splat coordinates are 0..1 with y up (see common.wgsl: the textures keep the
@@ -34,7 +35,7 @@ struct FluidU {
 @group(0) @binding(5) var uP: texture_2d<f32>;
 @group(0) @binding(6) var uDiv: texture_2d<f32>;
 
-fn tex(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> { return textureSampleLevel(t, samp, uv, 0.0); }
+fn tex(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> { return textureSampleLevel(t, samp, uv, 0.0); } // wubble change: level 0 explicitly (textureSampleLevel)
 
 // @source slint-fluid-wgsl
 @fragment
@@ -55,7 +56,7 @@ fn fs_splat(fin: VsOut) -> @location(0) vec4<f32> {
     // outward push: a ripple. Velocity points away from the centre, strongest on a thin ring.
     let d = sqrt(d2);
     let ring = exp(-sq(d - U.uRadius * 3.0) / (U.uRadius * U.uRadius * 0.6));
-    var dir = select(vec2<f32>(0.0), p / d, d > 1e-5);
+    var dir: vec2<f32>; if (d > 1e-5) { dir = p / d; } else { dir = vec2<f32>(0.0); }
     dir.x /= U.uAspect;
     add = vec3<f32>(dir * U.uValue.x * ring, 0.0);
   } else {

@@ -50,8 +50,9 @@ const WARMUP: Duration = Duration::from_secs(1);
 /// How often [`tick`] runs: input injection and window resizes.
 pub const TICK: Duration = Duration::from_millis(16);
 
-/// `idle`'s warm-up: past the scene's pointer hold (a window opening under the pointer gets one
-/// move), so the window is measured in its idle state.
+/// `idle`'s warm-up: long enough for the scene to settle after the window opens (a window
+/// opening under the pointer gets one move, and the light catches up), so the window is measured
+/// in its idle state.
 const IDLE_WARMUP: Duration = Duration::from_secs(4);
 
 /// `idle`'s tick: it only ends the run, and is itself a wake-up (counted).
@@ -172,8 +173,6 @@ pub enum Count {
     Pump,
     /// ... of which CEF did work.
     PumpWorked,
-    /// The scene's idle timer asked for a frame.
-    IdleTick,
     /// The host's timers.
     MediaPoll,
     VideoTick,
@@ -186,13 +185,12 @@ pub enum Count {
 }
 
 impl Count {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 11] = [
         Self::CefFrame,
         Self::SlintRender,
         Self::SceneRender,
         Self::Pump,
         Self::PumpWorked,
-        Self::IdleTick,
         Self::MediaPoll,
         Self::VideoTick,
         Self::AudibleProbe,
@@ -208,7 +206,6 @@ impl Count {
             Self::SceneRender => "scene_renders",
             Self::Pump => "pump_runs",
             Self::PumpWorked => "pump_worked",
-            Self::IdleTick => "idle_ticks",
             Self::MediaPoll => "media_polls",
             Self::VideoTick => "video_ticks",
             Self::AudibleProbe => "audible_probes",
@@ -1664,7 +1661,7 @@ mod tests {
     #[test]
     fn counts_and_their_rates() {
         let mut r = Recorder::default();
-        for c in [Count::Pump, Count::Pump, Count::IdleTick, Count::Pump] {
+        for c in [Count::Pump, Count::Pump, Count::MediaPoll, Count::Pump] {
             r.record(Event::Count(c));
         }
         assert_eq!(r.counted(Count::Pump), 3);
@@ -1675,7 +1672,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("idle_ticks                    1      0.50\n"),
+            text.contains("media_polls                   1      0.50\n"),
             "{text}"
         );
         // no time, no rate
@@ -1764,9 +1761,9 @@ mod tests {
     }
 
     #[test]
-    fn the_idle_scenario_warms_up_past_the_pointer_hold() {
-        // a window opening under the pointer gets one move: the recording must start Idle
-        const { assert!(IDLE_WARMUP.as_millis() > wubble_gfx::scene::run::POINTER_HOLD.as_millis()) };
+    fn the_idle_scenario_warms_up_longer_than_the_others() {
+        // a window opening under the pointer gets one move: the recording must start still
+        const { assert!(IDLE_WARMUP.as_millis() > WARMUP.as_millis()) };
         assert_eq!(Scenario::Idle.warmup(), IDLE_WARMUP);
         assert_eq!(Scenario::Scroll.warmup(), WARMUP);
         assert!(Scenario::Idle.host_timers() && !Scenario::Scroll.host_timers());

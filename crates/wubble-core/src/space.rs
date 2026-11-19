@@ -149,12 +149,17 @@ pub const DYE_LIGHTNESS: (f64, f64) = (0.38, 0.45);
 /// a neon one is calmed.
 pub const DYE_SATURATION: (f64, f64) = (0.45, 0.65);
 
-/// The three colours the backdrop's liquid is dyed with, derived from a
-/// Space's one tint: the tint, then its hue turned by +/- [`DYE_HUE_STEP`],
-/// all at the design's lightness and saturation. The design hand-picks three
-/// per Space (tokens.slint `Spaces`); wubble's Spaces have one tint, so the
-/// other two follow from it.
+/// The three colours the backdrop's liquid is dyed with, from a Space's one
+/// tint. A tint that is one of the design's Space accents (sky, lilac, mint) gets
+/// that Space's hand-picked three (core/tokens.ts `spaces`, generated into
+/// [`crate::kit_gen::spaces`]); any other follows from it: the tint, then its hue
+/// turned by +/- [`DYE_HUE_STEP`], all at the design's lightness and saturation.
 pub fn dye(tint: Rgb) -> [Rgb; 3] {
+    use crate::kit_gen::spaces::{ACCENT, DYE};
+    let Rgb(r, g, b) = tint;
+    if let Some(i) = ACCENT.iter().position(|&a| a == [r, g, b]) {
+        return DYE[i].map(|[r, g, b]| Rgb(r, g, b));
+    }
     let (h, s, l) = hsl(tint);
     let s = s.clamp(DYE_SATURATION.0, DYE_SATURATION.1);
     let l = l.clamp(DYE_LIGHTNESS.0, DYE_LIGHTNESS.1);
@@ -210,6 +215,39 @@ mod tests {
         assert_eq!(SpaceIcon::from_id("rocket"), None);
         assert_eq!(SpaceIcon::nth(0), SpaceIcon::Personal);
         assert_eq!(SpaceIcon::nth(4), SpaceIcon::Work);
+    }
+
+    #[test]
+    fn the_design_s_accents_get_their_space_s_dyes() {
+        // core/tokens.ts: Personal (sky), Work (lilac), Study (mint)
+        assert_eq!(
+            dye(Rgb(0x7C, 0xC8, 0xFF)),
+            [
+                Rgb(0x2F, 0x5F, 0xC4),
+                Rgb(0x75, 0x63, 0xD8),
+                Rgb(0x23, 0x7E, 0x69)
+            ]
+        );
+        assert_eq!(
+            dye(Rgb(0xB8, 0xA6, 0xFF)),
+            [
+                Rgb(0x6A, 0x4F, 0xD0),
+                Rgb(0xA8, 0x48, 0x86),
+                Rgb(0x2F, 0x5F, 0xC4)
+            ]
+        );
+        assert_eq!(
+            dye(Rgb(0x8A, 0xF2, 0xD0)),
+            [
+                Rgb(0x1F, 0x8A, 0x72),
+                Rgb(0x2F, 0x5F, 0xC4),
+                Rgb(0x5E, 0x8F, 0x3A)
+            ]
+        );
+        // one step off an accent is a user colour: derived, and the same each time
+        let near = Rgb(0x7C, 0xC8, 0xFE);
+        assert_ne!(dye(near)[1], Rgb(0x75, 0x63, 0xD8));
+        assert_eq!(dye(near), dye(near));
     }
 
     #[test]

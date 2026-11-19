@@ -1414,8 +1414,8 @@ impl Host {
         Ok(())
     }
 
-    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame. The
+    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the frosted
+    /// backdrop), not a flat fill, and be the scene's current frame. The
     /// smoke pins the glass at `Full` (`Host::new`), so the verdict never depends on the
     /// quality governor; the line says the level it checked.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
@@ -1445,13 +1445,13 @@ impl Host {
         };
         let sample = pixels::check_varied(shot, region)?;
         // What the window shows there is the scene's frame of this render, not an older one.
-        let (_, _, scene) = self
+        let (sw, sh, scene) = self
             .w
             .glass
             .borrow()
             .readback()
             .ok_or("the scene has no frame")?;
-        let diff = pixels::check_shows_scene(shot, &scene, region)?;
+        let diff = pixels::check_shows_scene(shot, (sw, sh, &scene), region)?;
         println!(
             "smoke: glass ok quality={} distinct={} diff={diff}",
             self.w
