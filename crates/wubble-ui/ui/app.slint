@@ -179,6 +179,11 @@ export component AppWindow inherits Window {
     in property <float> space-enter <=> sidebar.space-enter;
     // The shown page's entrance after a tab switch, 0..1 (the driver; 1 at rest).
     in property <float> page-enter: 1;
+    // The page a tab switch hid, leaving under the shown one (the design's `wb-out`, webview.tsx:
+    // 190 ms in-out, clearing and rising 5 px): the host's copy of its last frame, and the
+    // driver's progress, 0..1 (1 at rest).
+    in property <image> exit-page;
+    in property <float> exit-t: 1;
     in property <int> selected-row <=> sidebar.selected;
     in property <length> indicator-y <=> sidebar.indicator-y;
     in property <float> indicator-stretch <=> sidebar.indicator-stretch;
@@ -675,6 +680,14 @@ export component AppWindow inherits Window {
                 height: 100%;
                 changed has-focus => {
                     root.web-focus-changed(self.has-focus);
+                }
+                if root.exit-t < 1 && root.exit-page.width > 0: Image {
+                    y: -Shell.page-exit-shift * root.exit-t;
+                    width: 100%;
+                    height: 100%;
+                    source: root.exit-page;
+                    image-fit: fill;
+                    opacity: 1 - root.exit-t;
                 }
                 // A newly shown page arrives with the Overlap entrance (webview.tsx: the shown
                 // view gets `wb-in`), timed by the driver on a tab switch.

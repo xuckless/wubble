@@ -29,7 +29,10 @@ use std::time::Instant;
 use slint::{ComponentHandle, Model, ModelRc, SetRenderingNotifierError, VecModel, Weak};
 use wubble_core::beam::{self, Beam};
 use wubble_core::bow::{BOWED, EdgeTable};
-use wubble_core::motion::{DT_CAP, OVERLAP_IN, overlap_in};
+use wubble_core::motion::{DT_CAP, OVERLAP_IN, bezier, ease, overlap_in};
+
+/// The outgoing page's exit, s: the design's `wb-out` (`webview.tsx`, 190 ms in-out).
+const PAGE_OUT: f64 = 0.19;
 use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
 use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
@@ -86,6 +89,8 @@ pub struct Driver {
     /// Overlap entrance (webview.tsx gives the shown view `wb-in`).
     page_tab: Option<i64>,
     page_t: f64,
+    /// Seconds since the outgoing page started leaving ([`PAGE_OUT`] or more at rest).
+    exit_t: f64,
     /// Seconds since another Space was shown: its name enters (`wb-in`).
     space_t: f64,
     /// The command bar's beam while typing, and the query it last saw.
@@ -174,6 +179,7 @@ impl Driver {
             laps: 0,
             page_tab: None,
             page_t: OVERLAP_IN,
+            exit_t: PAGE_OUT,
             space_t: OVERLAP_IN,
             thinking: beam::Thinking::Idle,
             query: Default::default(),
@@ -379,11 +385,19 @@ impl Driver {
         let was = std::mem::replace(&mut self.page_tab, tab);
         if was.is_some() && tab.is_some() && was != tab && window.get_panes().row_count() <= 1 {
             self.page_t = 0.0;
+            self.exit_t = 0.0;
         } else {
             self.page_t = (self.page_t + dt).min(OVERLAP_IN);
+            self.exit_t = (self.exit_t + dt).min(PAGE_OUT);
         }
         window.set_page_enter(overlap_in(self.page_t) as f32);
-        self.page_t < OVERLAP_IN
+        // The outgoing page (the host's copy of its last frame, `exit-page`) leaves under the
+        // incoming one; once gone, or when no switch started it, the copy is dropped.
+        window.set_exit_t(bezier(ease::inOut, self.exit_t / PAGE_OUT) as f32);
+        if self.exit_t >= PAGE_OUT && window.get_exit_page().size().width > 0 {
+            window.set_exit_page(slint::Image::default());
+        }
+        self.page_t < OVERLAP_IN || self.exit_t < PAGE_OUT
     }
 
     fn step_beam(&mut self, window: &AppWindow, dt: f64) -> bool {

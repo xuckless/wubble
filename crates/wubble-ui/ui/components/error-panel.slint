@@ -18,16 +18,26 @@ export component ErrorPanel inherits Rectangle {
     callback secondary();
 
     property <bool> open: root.error.open;
+    // What the panel shows: the open error, kept while it leaves (the host clears its view).
+    property <ErrorView> held;
+    changed error => {
+        if root.error.open {
+            root.held = root.error;
+        }
+    }
+    property <ErrorView> e: root.error.open ? root.error : root.held;
 
     public function take-focus() {
         keys.focus();
     }
 
-    visible: root.open;
+    // The exit is seen: drawn until the glass has faded; only the open panel answers.
+    visible: root.open || glass.opacity > 0;
 
     TouchArea {
+        enabled: root.open;
         scroll-event(e) => {
-            accept
+            root.open ? accept : reject
         }
     }
 
@@ -35,7 +45,7 @@ export component ErrorPanel inherits Rectangle {
         width: 0px;
         height: 0px;
         key-pressed(event) => {
-            if event.text == Key.Return {
+            if root.open && event.text == Key.Return {
                 root.primary();
                 return accept;
             }
@@ -43,14 +53,14 @@ export component ErrorPanel inherits Rectangle {
         }
     }
 
-    GlassPanel {
+    glass := GlassPanel {
         tier: GlassTier.thick;
         radius: 0px;
         over-content: true;
         opacity: root.open ? 1 : 0;
         animate opacity {
-            duration: Shell.sheet-in;
-            easing: Motion.easeOut;
+            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
+            easing: root.open ? Motion.easeOut : Motion.easeInOut;
         }
 
         column := VerticalLayout {
@@ -60,12 +70,12 @@ export component ErrorPanel inherits Rectangle {
             height: self.preferred-height;
             spacing: Spacing.s3;
             Icon {
-                path: root.error.cert ? IconPaths.lock : IconPaths.globe;
+                path: root.e.cert ? IconPaths.lock : IconPaths.globe;
                 size: Shell.error-icon;
-                tint: root.error.cert ? Palette.coral : Palette.mist;
+                tint: root.e.cert ? Palette.coral : Palette.mist;
             }
             Text {
-                text: root.error.title;
+                text: root.e.title;
                 color: Palette.ink;
                 font-family: Fonts.ui;
                 font-size: Type.title.size;
@@ -73,7 +83,7 @@ export component ErrorPanel inherits Rectangle {
                 wrap: word-wrap;
             }
             Text {
-                text: root.error.summary;
+                text: root.e.summary;
                 color: Palette.mist;
                 font-family: Fonts.ui;
                 font-size: Shell.sheet-body;
@@ -81,7 +91,7 @@ export component ErrorPanel inherits Rectangle {
             }
             Text {
                 visible: self.text != "";
-                text: root.error.detail;
+                text: root.e.detail;
                 color: Palette.haze;
                 font-family: Fonts.mono;
                 font-size: Type.label.size;
@@ -94,16 +104,20 @@ export component ErrorPanel inherits Rectangle {
                 alignment: start;
                 spacing: Spacing.s2;
                 SheetButton {
-                    text: root.error.primary;
+                    text: root.e.primary;
                     primary: true;
                     clicked => {
-                        root.primary();
+                        if root.open {
+                            root.primary();
+                        }
                     }
                 }
-                if root.error.secondary != "": SheetButton {
-                    text: root.error.secondary;
+                if root.e.secondary != "": SheetButton {
+                    text: root.e.secondary;
                     clicked => {
-                        root.secondary();
+                        if root.open {
+                            root.secondary();
+                        }
                     }
                 }
             }
