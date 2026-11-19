@@ -2,9 +2,10 @@
 //! for review by eye: the surfaces that need a live page in the app (the video strip and its
 //! speed menu, the picture-in-picture strip and card, reader controls, the Boost editor, the
 //! screenshot picker, the swipe chip, the autoscroll pointer) are put on the shell from
-//! properties here. A tool, not an assertion: without `WUBBLE_OVERLAY_B_SHOTS=DIR` (or a wgpu
-//! adapter) it returns at once. It writes `DIR/NN-name.rgba` (u32 width, u32 height, little
-//! endian, then RGBA) at 1x. The clock is the test's own: each state is shown, the clock moved
+//! properties here. A review tool, run by hand
+//! (`cargo run -p wubble-ui --example overlay_b_shots -- DIR`); without a wgpu adapter it
+//! returns at once. It writes `DIR/NN-name.rgba` (u32 width, u32 height, little
+//! endian, then RGBA) at 1x. The clock is the tool's own: each state is shown, the clock moved
 //! on until its motion settled, then drawn (no wall clock). The glass is Slint's fallback (no
 //! scene under it). Pattern: tests/icon_sheet.rs (the offscreen platform).
 
@@ -147,10 +148,10 @@ fn video() -> VideoView {
     }
 }
 
-#[test]
-fn draw_overlays_b() {
-    let Some(dir) = std::env::var_os("WUBBLE_OVERLAY_B_SHOTS").map(PathBuf::from) else {
-        return;
+fn main() {
+    let Some(dir) = std::env::args_os().nth(1).map(PathBuf::from) else {
+        eprintln!("usage: overlay_b_shots DIR");
+        std::process::exit(2);
     };
     if !init() {
         eprintln!("overlay_b_shots: no wgpu adapter for Skia, skipped");
