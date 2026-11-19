@@ -1,3 +1,4 @@
+// translates: core/gl/scene.ts:77-105
 // The living backdrop: dye → lit liquid on the dark ground, muted by `uMute` (SceneOptions
 // intensity, default 0.3), with tap ripples as distortion waves. Translated line for line from
 // COMPOSITE in core/gl/scene.ts. Drawn at HALF resolution into `bg` (RGBA16Float), which keeps
@@ -18,7 +19,7 @@ struct CompositeU {
 @group(0) @binding(1) var samp: sampler;
 @group(0) @binding(2) var uDye: texture_2d<f32>;
 
-fn dyeAt(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(uDye, samp, uv, 0.0).rgb; }
+fn dyeAt(uv: vec2<f32>) -> vec3<f32> { return textureSampleLevel(uDye, samp, uv, 0.0).rgb; } // wubble change: level 0 explicitly (textureSampleLevel)
 
 @fragment
 fn fs_composite(fin: VsOut) -> @location(0) vec4<f32> {

@@ -16,11 +16,7 @@ fn main() {
         eprintln!("no GPU adapter");
         std::process::exit(1);
     };
-    let run = headless::Run {
-        glass: true,
-        quality: Quality::Full,
-        frames: 90,
-    };
+    let run = headless::Run::liquid(true, Quality::Full, 90);
     let (w, h, data) = headless::render(&device, &queue, run);
     let mut ppm = format!("P6 {w} {h} 255\n").into_bytes();
     for px in data.chunks(4) {

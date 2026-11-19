@@ -1,7 +1,7 @@
 import { Palette, Spacing, Fonts, Type, Motion } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier } from "model.slint";
+import { GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { SheetButton } from "sheet-button.slint";
 
 // The screenshot region picker over the page: the page dims, a drag cuts a clear rectangle out
@@ -113,6 +113,10 @@ export component ShotOverlay inherits Rectangle {
     // The toolbar, at the pane's bottom centre; hidden while dragging so it never covers the
     // region being drawn.
     bar := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.shot;
+        over-layer: GlassOver.card;
+        present: root.active;
         visible: !root.dragging;
         tier: GlassTier.thick;
         radius: Shell.menu-radius;

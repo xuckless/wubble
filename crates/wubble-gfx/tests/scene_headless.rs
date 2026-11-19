@@ -47,11 +47,7 @@ fn scene_renders_glass_over_the_backdrop() {
         return;
     };
     eprintln!("adapter: {name}");
-    let full = |glass| Run {
-        glass,
-        quality: Quality::Full,
-        frames: FRAMES,
-    };
+    let full = |glass| Run::liquid(glass, Quality::Full, FRAMES);
     let (w, h, with_glass) = render(&device, &queue, full(true));
     assert_eq!((w, h), (640, 400), "logical 320×200 at dpr 2");
     assert_eq!(with_glass.len(), (w * h * 4) as usize);
@@ -110,15 +106,7 @@ fn every_quality_draws_glass_and_flat_freezes_and_flattens() {
         return;
     };
     let run = |quality, glass, frames| {
-        let (w, h, img) = render(
-            &device,
-            &queue,
-            Run {
-                glass,
-                quality,
-                frames,
-            },
-        );
+        let (w, h, img) = render(&device, &queue, Run::liquid(glass, quality, frames));
         assert_eq!((w, h), (640, 400));
         assert!(img.chunks(4).all(|p| p[3] == 255), "{quality:?} is opaque");
         img
@@ -197,6 +185,10 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
         hover: false,
         focus: false,
         tint: [0.0; 3],
+        shadow: 0.6,
+        beam: false,
+        layer: None,
+        alpha: 1.0,
     };
     // the same liquid each run; `grow` widens the panel for the last frame
     let run = |glass: Option<(f32, f32)>| {
@@ -227,6 +219,75 @@ fn a_glass_rect_that_grows_is_drawn_across_its_new_width() {
             region(&without, tw, column),
             "no glass at x {x} of a panel 280 wide"
         );
+    }
+}
+
+/// The browser window's still backdrop: the same inputs give the same image, and its composite and
+/// pyramid render only when its dye, ripples or size change (a count, not a clock).
+#[test]
+fn a_still_backdrop_is_deterministic_and_renders_only_on_change() {
+    use headless::renderer;
+    use wubble_gfx::scene::{Backdrop, Renderer};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let still = |glass| Run {
+        glass,
+        quality: Quality::Full,
+        frames: FRAMES,
+        backdrop: Backdrop::Still,
+    };
+    let (_, _, a) = render(&device, &queue, still(true));
+    let (_, _, b) = render(&device, &queue, still(true));
+    assert!(a == b, "two still renders of the same inputs are equal");
+    assert!(distinct_colours(&a, 640, 400) >= 8, "the dye shows");
+
+    // once the ripple of frame 1 has ended (1.15 s), nothing re-renders the backdrop
+    let (w, h, dpr) = VIEW;
+    let mut r: Renderer = renderer(&device, &queue, still(false));
+    for _ in 0..80 {
+        r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    let settled = r.backdrops();
+    for _ in 0..5 {
+        r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    assert_eq!(r.backdrops(), settled, "nothing changed");
+    r.scene.tap(100.0, 100.0);
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(r.backdrops(), settled + 1, "a ripple runs through it");
+    for _ in 0..200 {
+        r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    let after = r.backdrops();
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(r.backdrops(), after, "the ripple ended");
+    r.scene.set_palette([[1.0, 1.0, 1.0]; 3]);
+    r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(r.backdrops(), after + 1, "a new palette");
+    r.render_under_ui(w + 40.0, h, dpr, 1.0 / 60.0);
+    assert!(r.backdrops() >= after + 2, "a new size");
+}
+
+/// A tiny view still builds every pyramid level (b3 is 1/16 of the view).
+#[test]
+fn a_tiny_view_builds_the_whole_pyramid() {
+    use wubble_gfx::scene::{Backdrop, Renderer, SceneOptions};
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    for backdrop in [Backdrop::Liquid, Backdrop::Still] {
+        let opts = SceneOptions {
+            backdrop,
+            ..SceneOptions::default()
+        };
+        let mut r = Renderer::from_device(device.clone(), queue.clone(), opts).expect("builds");
+        for (w, h) in [(160.0, 100.0), (3.0, 2.0)] {
+            r.render_under_ui(w, h, 1.0, 1.0 / 60.0);
+            assert!(r.output().is_some());
+        }
     }
 }
 
@@ -401,4 +462,131 @@ fn the_mask_cuts_and_bulges_along_the_tables() {
             img[o + c]
         );
     }
+}
+
+/// The page in the scene: overlay glass over a pane frosts the page (its colour, not the
+/// backdrop's) in its layer's image; the glass under the page picks up the page's light at its
+/// edge (the ambience); with nothing over the page a new page frame builds nothing.
+#[test]
+fn overlay_glass_frosts_the_page_and_the_window_glass_picks_up_its_light() {
+    use wubble_gfx::scene::{
+        Backdrop, GlassRect, OverLayer, PagePane, PageRect, Rect, Renderer, SceneOptions, Tier,
+    };
+    let Some((device, queue, _)) = device() else {
+        eprintln!("skipping: no GPU adapter");
+        return;
+    };
+    let (w, h, dpr) = VIEW;
+    let red = solid(&device, &queue, 64, 64, [230, 20, 20, 255]);
+    let page = |tex: &wgpu::Texture| PagePane {
+        rect: PageRect {
+            rect: Rect::new(160.0, 8.0, 152.0, 184.0),
+            radius: 12.0,
+        },
+        texture: tex.clone(),
+        clip: (64, 64),
+    };
+    let glass = |rect, layer| GlassRect {
+        rect,
+        radius: 12.0,
+        tier: Tier::Thick,
+        pressed: false,
+        hover: false,
+        focus: false,
+        tint: [0.0; 3],
+        shadow: 0.6,
+        beam: false,
+        layer,
+        alpha: 1.0,
+    };
+    let menu = glass(Rect::new(190.0, 60.0, 100.0, 60.0), Some(OverLayer::Top));
+    let window = glass(Rect::new(0.0, 0.0, w, h), None);
+    let redness = |p: [u8; 4]| i32::from(p[0]) - (i32::from(p[1]) + i32::from(p[2])) / 2;
+    let px = |img: &[u8], x: f32, y: f32| {
+        let o = ((((y * dpr) as u32) * (w * dpr) as u32 + (x * dpr) as u32) * 4) as usize;
+        [img[o], img[o + 1], img[o + 2], img[o + 3]]
+    };
+    let run = |pages: bool, items: &[GlassRect], ambience: f32| {
+        let mut r = Renderer::from_device(
+            device.clone(),
+            queue.clone(),
+            SceneOptions {
+                backdrop: Backdrop::Still,
+                ..SceneOptions::default()
+            },
+        )
+        .expect("the scene builds");
+        r.set_quality(Quality::Full);
+        r.set_ambience(ambience);
+        r.scene.set_glass(items);
+        if pages {
+            r.set_pages(vec![page(&red)]);
+        }
+        for _ in 0..3 {
+            r.render_under_ui(w, h, dpr, 1.0 / 60.0);
+        }
+        r
+    };
+
+    // the menu over the red page, against the same menu over the backdrop alone
+    let over = |r: &Renderer| {
+        let t = r
+            .over_texture(OverLayer::Top)
+            .expect("the menu's layer has an image");
+        wubble_gfx::scene::readback_rgba8(&device, &queue, t)
+    };
+    let with_page = run(true, &[menu], 0.0);
+    let without = run(false, &[menu], 0.0);
+    let (a, b) = (
+        px(&over(&with_page), 240.0, 90.0),
+        px(&over(&without), 240.0, 90.0),
+    );
+    assert_eq!(
+        (a[3], b[3]),
+        (255, 255),
+        "the frost is opaque inside the menu"
+    );
+    assert!(
+        redness(a) > redness(b) + 40,
+        "the page's red under the menu: {a:?} against {b:?}"
+    );
+    // outside the menu (and its shadow) the layer is clear; the menu is not in the back image
+    assert_eq!(px(&over(&with_page), 20.0, 180.0)[3], 0);
+    assert!(with_page.over_texture(OverLayer::Card).is_none());
+    // built with the backdrop's first renders, then kept while no new frame comes
+    let mut kept = with_page;
+    let built = kept.pages_built();
+    assert!(built >= 1);
+    for _ in 0..3 {
+        kept.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    }
+    assert_eq!(kept.pages_built(), built, "no new page frame, no build");
+    // a new frame under the menu: built on the next frame
+    let green = solid(&device, &queue, 64, 64, [20, 230, 20, 255]);
+    kept.set_pages(vec![page(&green)]);
+    kept.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(kept.pages_built(), built + 1);
+
+    // nothing over the page, no ambience: a new page frame builds nothing
+    let mut idle = run(true, &[glass(Rect::new(8.0, 8.0, 100.0, 50.0), None)], 0.0);
+    idle.set_pages(vec![page(&green)]);
+    idle.render_under_ui(w, h, dpr, 1.0 / 60.0);
+    assert_eq!(idle.pages_built(), 0);
+    assert!(idle.over_texture(OverLayer::Top).is_none());
+
+    // the ambience: the window's glass just left of the page is redder with it on
+    let out =
+        |r: &Renderer| wubble_gfx::scene::readback_rgba8(&device, &queue, r.output().unwrap());
+    let lit = out(&run(true, &[window], 0.2));
+    let dark = out(&run(true, &[window], 0.0));
+    let (near, far) = ((150.0, 100.0), (20.0, 100.0));
+    assert!(
+        redness(px(&lit, near.0, near.1)) > redness(px(&dark, near.0, near.1)) + 3,
+        "page light at the edge: {:?} against {:?}",
+        px(&lit, near.0, near.1),
+        px(&dark, near.0, near.1)
+    );
+    // and it falls off: far from the page the two agree within a few levels
+    let (l, d) = (px(&lit, far.0, far.1), px(&dark, far.0, far.1));
+    assert!((redness(l) - redness(d)).abs() <= 4, "{l:?} against {d:?}");
 }

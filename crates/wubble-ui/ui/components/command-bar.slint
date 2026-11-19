@@ -1,7 +1,7 @@
 import { Palette, Motion, Radius, Spacing, Fonts } from "../tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
-import { BeamShape, CommandBarEvent, CommandBarState, CommandResult, GlassTier, Origin } from "model.slint";
+import { BeamShape, CommandBarEvent, CommandBarState, CommandResult, GlassTier, Origin, GlassKeys, GlassOver } from "model.slint";
 import { BorderBeam } from "border-beam.slint";
 import { CommandRow } from "command-row.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -131,6 +131,9 @@ export component CommandBar inherits Rectangle {
     }
 
     panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.command-bar;
+        over-layer: GlassOver.card;
         width: min(Shell.command-bar-width, root.width - Spacing.s4 * 2);
         x: (root.width - self.width) / 2;
         height: Shell.side-pad + Shell.command-input-height + (root.count > 0 ? Spacing.s1 + root.visible-rows * root.row-pitch : 0px) + Spacing.s2;

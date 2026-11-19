@@ -379,15 +379,6 @@ components/window-lights.slint	paint	background	1
 components/window-lights.slint	token	Motion	5
 components/window-lights.slint	token	Palette	4
 components/wobble.slint	animate	animate	1
-crates/wubble-gfx/src/scene/shaders/beam.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/blit.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/blur.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/common.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/composite.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/film.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/fluid.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/glass.wgsl	shader-header	translates	1
-crates/wubble-gfx/src/scene/shaders/wave.wgsl	shader-header	translates	1
 kit/chrome/space-icon.slint	kit-literal	1.7px	1
 kit/chrome/space-icon.slint	kit-literal	150ms	1
 kit/chrome/space-icon.slint	kit-literal	24px	2

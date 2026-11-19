@@ -103,26 +103,38 @@ pub fn check(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region) -> Result
 const MAX_SCENE_DIFF: u32 = 4;
 
 /// The window shows the scene's current frame in `region` (where Slint draws nothing over it):
-/// `scene` is that frame read back, RGBA8 at the snapshot's size. Returns the mean difference.
-/// A frozen copy (Slint's rounded-clip layer cache) differs wherever the liquid moved or the
-/// glass changed.
+/// `scene` is that frame read back, RGBA8, `(width, height, pixels)`. It is the snapshot's size,
+/// or smaller above `DPR_MAX` (Slint stretches it to the window): each sample point is then read
+/// at the same place in the frame. Returns the mean difference.
+/// A frozen copy (Slint's rounded-clip layer cache) differs wherever the backdrop or the glass
+/// changed.
 pub fn check_shows_scene(
     snapshot: &SharedPixelBuffer<Rgba8Pixel>,
-    scene: &[u8],
+    (sw, sh, scene): (u32, u32, &[u8]),
     region: Region,
 ) -> Result<u32, String> {
-    let width = snapshot.width();
-    if scene.len() != snapshot.as_slice().len() * 4 {
-        return Err("the scene's frame is not the window's size".into());
+    let (width, height) = (snapshot.width(), snapshot.height());
+    // the frame's size is rounded from the window's logical size: its shape within a pixel
+    let same_shape = (u64::from(sw) * u64::from(height)).abs_diff(u64::from(sh) * u64::from(width))
+        <= u64::from(width.max(height));
+    if scene.len() != (sw * sh * 4) as usize || sw > width || sh > height || !same_shape {
+        return Err(format!(
+            "the scene's frame ({sw}x{sh}) is not the window's ({width}x{height}) shape"
+        ));
     }
     let pixels = snapshot.as_slice();
+    // a snapshot pixel's centre, in the frame
+    let at = |v: u32, from: u32, to: u32| {
+        ((u64::from(v) * 2 + 1) * u64::from(to) / (u64::from(from) * 2)) as u32
+    };
     let mut sum = 0u32;
     for row in 0..GRID {
         for col in 0..GRID {
             let x = region.x + region.width * (2 * col + 1) / (2 * GRID);
             let y = region.y + region.height * (2 * row + 1) / (2 * GRID);
             let i = (y * width + x) as usize;
-            let (p, q) = (pixels[i], &scene[i * 4..i * 4 + 3]);
+            let j = (at(y, height, sh) * sw + at(x, width, sw)) as usize;
+            let (p, q) = (pixels[i], &scene[j * 4..j * 4 + 3]);
             sum += [p.r, p.g, p.b]
                 .iter()
                 .zip(q)
@@ -159,9 +171,52 @@ pub fn check_swatches(
     })
 }
 
+/// The mean colour of `region` (0-255 per channel), every pixel counted: `--smoke overlay`'s
+/// glass under an overlay.
+pub fn mean_rgb(
+    snapshot: &SharedPixelBuffer<Rgba8Pixel>,
+    region: Region,
+) -> Result<[f32; 3], String> {
+    let (width, height) = (snapshot.width(), snapshot.height());
+    let right = region.x.saturating_add(region.width).min(width);
+    let bottom = region.y.saturating_add(region.height).min(height);
+    if region.x >= right || region.y >= bottom {
+        return Err(format!(
+            "region {region:?} is empty inside the {width}x{height} snapshot"
+        ));
+    }
+    let pixels = snapshot.as_slice();
+    let mut sum = [0u64; 3];
+    for y in region.y..bottom {
+        for p in &pixels[(y * width + region.x) as usize..(y * width + right) as usize] {
+            sum[0] += u64::from(p.r);
+            sum[1] += u64::from(p.g);
+            sum[2] += u64::from(p.b);
+        }
+    }
+    let n = (u64::from(right - region.x) * u64::from(bottom - region.y)) as f32;
+    Ok(sum.map(|c| c as f32 / n))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mean_colour_counts_every_pixel_of_the_region() {
+        // left half red, right half blue
+        let b = buffer(64, 64, |x, _| {
+            if x < 32 {
+                Rgba8Pixel::new(200, 0, 0, 255)
+            } else {
+                Rgba8Pixel::new(0, 0, 100, 255)
+            }
+        });
+        assert_eq!(mean_rgb(&b, ALL), Ok([100.0, 0.0, 50.0]));
+        let left = Region { width: 16, ..ALL };
+        assert_eq!(mean_rgb(&b, left), Ok([200.0, 0.0, 0.0]));
+        assert!(mean_rgb(&b, Region { x: 64, ..ALL }).is_err());
+    }
 
     fn buffer(
         width: u32,
@@ -201,13 +256,33 @@ mod tests {
                 .flat_map(|p| [p.r.saturating_add(dx), p.g, p.b, 255])
                 .collect()
         };
-        assert_eq!(check_shows_scene(&b, &rgba(0), ALL), Ok(0));
+        assert_eq!(check_shows_scene(&b, (64, 64, &rgba(0)), ALL), Ok(0));
         assert!(
-            check_shows_scene(&b, &rgba(40), ALL)
+            check_shows_scene(&b, (64, 64, &rgba(40)), ALL)
                 .unwrap_err()
                 .contains("stale")
         );
-        assert!(check_shows_scene(&b, &[0; 4], ALL).is_err());
+        assert!(check_shows_scene(&b, (1, 1, &[0; 4]), ALL).is_err());
+    }
+
+    #[test]
+    fn a_scene_smaller_than_the_window_is_read_where_it_is_shown() {
+        // a 3x window, the scene drawn at 2x: 96 px of window show 64 px of frame
+        let b = buffer(96, 96, |x, y| {
+            Rgba8Pixel::new((x * 2 / 3) as u8, (y * 2 / 3) as u8, 9, 255)
+        });
+        let frame: Vec<u8> = (0..64u32)
+            .flat_map(|y| (0..64u32).flat_map(move |x| [x as u8, y as u8, 9, 255]))
+            .collect();
+        let all = Region {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 96,
+        };
+        assert!(check_shows_scene(&b, (64, 64, &frame), all).expect("shows it") <= 1);
+        // a frame of another shape is not this window's
+        assert!(check_shows_scene(&b, (64, 32, &frame[..64 * 32 * 4]), all).is_err());
     }
 
     #[test]

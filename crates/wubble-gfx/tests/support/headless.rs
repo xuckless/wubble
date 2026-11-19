@@ -6,7 +6,7 @@
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-use wubble_gfx::scene::{Beam, BeamRect, GlassRect, Quality, Rect, Renderer, SceneOptions, Tier};
+use wubble_gfx::scene::{Backdrop, Beam, GlassRect, Quality, Rect, Renderer, SceneOptions, Tier};
 
 /// Logical view size and scale of every run.
 pub const VIEW: (f32, f32, f32) = (320.0, 200.0, 2.0);
@@ -43,12 +43,40 @@ pub struct Run {
     pub glass: bool,
     pub quality: Quality,
     pub frames: u32,
+    pub backdrop: Backdrop,
+}
+
+impl Run {
+    /// A living liquid at `quality`, `frames` frames.
+    pub fn liquid(glass: bool, quality: Quality, frames: u32) -> Self {
+        Run {
+            glass,
+            quality,
+            frames,
+            backdrop: Backdrop::Liquid,
+        }
+    }
 }
 
 /// Renders `run` at [`VIEW`], 1/60 s per frame, and reads the output back:
 /// (width, height, tightly packed RGBA).
 pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32, Vec<u8>) {
-    let mut r = Renderer::from_device(device.clone(), queue.clone(), SceneOptions::default())
+    let r = renderer(device, queue, run);
+    let tex = r.output().expect("rendered at least one frame");
+    (
+        tex.width(),
+        tex.height(),
+        wubble_gfx::scene::readback_rgba8(device, queue, tex),
+    )
+}
+
+/// The renderer after `run`'s frames.
+pub fn renderer(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> Renderer {
+    let opts = SceneOptions {
+        backdrop: run.backdrop,
+        ..SceneOptions::default()
+    };
+    let mut r = Renderer::from_device(device.clone(), queue.clone(), opts)
         .expect("the scene builds on the test device");
     r.set_quality(run.quality);
     r.scene.pointer_move(150.0, 90.0);
@@ -67,16 +95,16 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
                     hover,
                     focus: false,
                     tint: [0.0; 3],
+                    shadow: 0.6,
+                    beam: hover,
+                    layer: None,
+                    alpha: 1.0,
                 };
                 let bar = Rect::new(16.0, 110.0, 100.0, 30.0);
                 r.scene.set_glass(&[
                     panel(THICK, 20.0, Tier::Thick, false),
                     panel(bar, 15.0, Tier::Thin, true),
                 ]);
-                r.scene.set_beam(Some(BeamRect {
-                    rect: bar,
-                    radius: 15.0,
-                }));
                 r.scene.set_beam_shape(Some(Beam {
                     head: 0.5,
                     length: 0.35,
@@ -94,10 +122,5 @@ pub fn render(device: &wgpu::Device, queue: &wgpu::Queue, run: Run) -> (u32, u32
         r.scene.pointer_move(150.0 + i as f32, 90.0);
         r.render_under_ui(w, h, dpr, dt);
     }
-    let tex = r.output().expect("rendered at least one frame");
-    (
-        tex.width(),
-        tex.height(),
-        wubble_gfx::scene::readback_rgba8(device, queue, tex),
-    )
+    r
 }

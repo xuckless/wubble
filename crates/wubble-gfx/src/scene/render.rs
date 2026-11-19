@@ -5,28 +5,43 @@
 //! `frame`) and `crate/examples/headless.rs` (the readback). Owner's code.
 //! Changed: built on the shared `GpuContext` device; no bubble, pop or
 //! W-field passes and no overlay mode; the backdrop work is skipped on the
-//! frames the quality level says (`Quality`), and its targets shrink with it.
+//! frames the quality level says (`Quality`), and its targets shrink with it;
+//! the still backdrop (`Backdrop::Still`, the browser window's).
 //!
 //! Per frame, back to front:
 //!   0. queued fluid ops (taps, resize seeds), then the ambient emitters and
-//!      the pointer push (splats)
+//!      the pointer push (splats); a still backdrop instead splats its dye table
+//!      afresh into a cleared dye when the palette or the shape changed
 //!   1. fluid step: curl → vorticity → divergence → pressure warm start (×0.8)
 //!      → Jacobi iterations → gradient subtract → advect velocity → advect dye
+//!      (not for a still backdrop)
 //!   2. composite the backdrop at half resolution into `bg`
-//!   3. blur pyramid: bg → b1 (¼ res, σ 3.5) → b2 (⅛ res, σ 4.5)
-//!   4. blit bg to `out`, then in the same render pass the glass quads and the
-//!      beam
+//!   3. blur pyramid: bg → b1 (¼ res, σ 3.5) → b2 (⅛ res, σ 4.5) → b3 (1/16 res,
+//!      σ 5, the frost), σ in texels of the level read ([`BLUR_SIGMA`])
+//!   4. blit bg to `out`, then in the same render pass the glass quads (the beam
+//!      inside its panel's glass)
 //!
-//! Steps 0-3 are the backdrop: they run only when `BackdropClock::tick` says
-//! so (every frame at `Full`/`HalfRes`), or when the pyramid is new, and step
-//! the time of the frames they skipped.
+//! wubble, the page in the scene ([`super::pages`]): between 3 and 4, when [`page_blur`] says
+//! so, `bg` is copied into a second pyramid `P`, every pane's latest frame drawn on it as its
+//! rounded card, and `P` blurred like the first. Overlay glass over a pane reads `P` instead of
+//! the backdrop's levels, the glass under the page mixes a little of it in (the ambience). Overlay
+//! glass is not drawn in `out` (Slint draws the page over that) but in one window-sized image per
+//! [`OverLayer`], above the page: premultiplied into a scratch target, then resolved to straight
+//! alpha (Skia draws a wgpu image as `AlphaType::Unpremul`).
+//!
+//! Steps 0-3 are the backdrop: a living liquid runs them when `BackdropClock::tick`
+//! says so (every frame at `Full`/`HalfRes`), or when the pyramid is new, and steps
+//! the time of the frames they skipped; a still one only when its dye or ripples
+//! changed or the pyramid is new.
 //!
 //! Targets (logical-px based, so they don't grow with DPR):
 //!   vel / pres ping-pong, div, curl   RGBA16Float  sim res 96 on the short side
 //!   dye ping-pong                     RGBA16Float  dye res 256 on the short side
 //!   bg                                RGBA16Float  round(w/2 · scale) × round(h/2 · scale)
-//!   b1, b1t / b2, b2t                 RGBA16Float  ceil(bg/2) / ceil(bg/4)
-//!   out (shown by Slint)              RGBA8Unorm   w·dpr × h·dpr
+//!   b1, b1t / b2, b2t / b3, b3t       RGBA16Float  ceil(bg/2) / ceil(bg/4) / ceil(bg/8)
+//!   out (shown by Slint)              RGBA8Unorm   w·min(dpr, 2) × h·min(dpr, 2)
+//!   P: bg and its levels, as above    RGBA16Float  only while a page is under glass or ambience
+//!   over (one per layer) + scratch    RGBA8Unorm   as `out`, only while the layer has glass
 //! `out` is Rgba8Unorm (not sRGB) on purpose: WebGL writes shader values
 //! straight to the canvas with no linear→sRGB encode, so a non-sRGB target
 //! reproduces the design's colours exactly.
@@ -39,8 +54,13 @@ use std::time::{Duration, Instant};
 
 use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
-use super::quality::{BackdropClock, Quality};
-use super::state::{FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms};
+use super::pages::{
+    OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur, rect_of,
+};
+use super::quality::{BackdropClock, MAX_DT, Quality};
+use super::state::{
+    Backdrop, FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms,
+};
 use crate::import::poll_once;
 use crate::{GfxError, GpuContext, bytes};
 
@@ -56,6 +76,58 @@ pub(super) const COMPOSITE_WGSL: &str = include_str!("shaders/composite.wgsl");
 pub(super) const BLUR_WGSL: &str = include_str!("shaders/blur.wgsl");
 pub(super) const BLIT_WGSL: &str = include_str!("shaders/blit.wgsl");
 pub(super) const GLASS_WGSL: &str = include_str!("shaders/glass.wgsl");
+pub(super) const PAGE_WGSL: &str = include_str!("shaders/page.wgsl");
+
+/// The blur pyramid's σ per level, in texels of the level each blur reads (scene.ts `frame`,
+/// `blur(this.bg, ..., 3.5)`, `blur(this.b1, ..., 4.5)`, `blur(this.b2, ..., 5.0)`): about 7, 19 and
+/// 44 CSS px in all. Below `Quality::Full` the levels are `scale` as big, so each σ is multiplied
+/// by `scale` to keep the design's blur in CSS px (wubble: map.md W-01).
+pub const BLUR_SIGMA: [f32; 3] = [3.5, 4.5, 5.0];
+/// Each pyramid level's divisor of the composite's size (scene.ts `resize`: `hw / 2`, `/ 4`, `/ 8`).
+pub const PYRAMID_DIV: [u32; 3] = [2, 4, 8];
+/// Px around each glass quad for its shadow and bloom (scene.ts `drawGlass`, `const pad = 70`).
+pub const GLASS_PAD: f64 = 70.0;
+/// The highest device pixel ratio drawn at (scene.ts `resize`, `Math.min(devicePixelRatio, 2)`).
+pub const DPR_MAX: f32 = 2.0;
+
+// The ambience: the page's light leaking into the glass under the page next to it (the sidebar).
+// Owner-requested (2026-11-19, "a slight ambience mode where the light from the webpage leaks
+// into the navbar"), no web counterpart: wubble's own values, started subtle, judged by eye.
+// It costs no pass: the glass mixes in the page-inclusive pyramid `P`, whose blur (σ ≈ 44 CSS px
+// at its 1/16 level) is the falloff: about 40 % of the page's colour 8 px past its edge, 15 % at
+// 44, 2 % at 90 (TODO.md Decided, "Overlay glass blurs the page").
+/// How much of `P` the glass under the page mixes in (`uAmb`).
+pub const AMBIENCE_STRENGTH: f32 = 0.20;
+/// Which of `P`'s levels: 0 its ⅛ level (σ ≈ 19 CSS px, a tighter glow), 1 its 1/16 (σ ≈ 44).
+pub const AMBIENCE_LEVEL: f32 = 1.0;
+/// How often a changing page (scroll, video) updates the ambience, per second, when nothing
+/// else needs `P`: a still page costs nothing.
+pub const AMBIENCE_HZ: f64 = 8.0;
+
+/// The ambience's update period, [`AMBIENCE_HZ`].
+pub fn ambience_every() -> Duration {
+    Duration::from_secs_f64(1.0 / AMBIENCE_HZ)
+}
+
+/// The scene's view of a window `width`×`height` physical px at `scale`: its logical size
+/// (the window's, whatever the scale) and the pixel ratio it draws at (at most [`DPR_MAX`]).
+/// A window above [`DPR_MAX`] gets a smaller texture, which Slint stretches to the window.
+pub fn view_of(width: u32, height: u32, scale: f32) -> (f32, f32, f32) {
+    let scale = scale.max(f32::MIN_POSITIVE);
+    (
+        width as f32 / scale,
+        height as f32 / scale,
+        scale.min(DPR_MAX),
+    )
+}
+
+/// The output texture's size, physical px, for a view of `w`×`h` logical px at `dpr`.
+pub fn out_size(w: f32, h: f32, dpr: f32) -> (u32, u32) {
+    (
+        ((w * dpr).round() as u32).max(1),
+        ((h * dpr).round() as u32).max(1),
+    )
+}
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -117,13 +189,26 @@ pub(super) struct GlassU {
     u_wave_n: i32,
     u_voice_amt: f32,
     u_material: f32,
-    _p: [f32; 3],
+    u_amb: f32,
+    u_amb_level: f32,
+    _p: f32,
     u_beam: [f32; 4],
     u_voice: [f32; 4],
     u_wave: [[f32; 4]; 4],
 } // 208 bytes
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct PageU {
+    u_quad: [f32; 4],
+    u_view: [f32; 2],
+    u_uv: [f32; 2],
+    u_r: f32,
+    _p: [f32; 3],
+} // 48 bytes
+
 const _: () = {
+    assert!(std::mem::size_of::<PageU>() == 48);
     assert!(std::mem::size_of::<FluidU>() == 64);
     assert!(std::mem::size_of::<CompositeU>() == 160);
     assert!(std::mem::size_of::<BlurU>() == 16);
@@ -157,10 +242,12 @@ fn target(
         dimension: wgpu::TextureDimension::D2,
         format,
         // TEXTURE_BINDING | RENDER_ATTACHMENT is what Slint's `Image::try_from`
-        // needs on `out`; COPY_SRC for readbacks (tests, screenshots)
+        // needs on `out`; COPY_SRC for readbacks (tests, screenshots) and `bg`'s copy into `P`,
+        // COPY_DST for that copy
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -227,6 +314,8 @@ struct Pyramid {
     b1t: Target,
     b2: Target,
     b2t: Target,
+    b3: Target,
+    b3t: Target,
     scale: f32,
     /// Rendered at least once since allocation.
     drawn: bool,
@@ -236,14 +325,15 @@ impl Pyramid {
     fn new(d: &wgpu::Device, w: f32, h: f32, scale: f32) -> Self {
         let hw = ((w / 2.0 * scale).round() as u32).max(1);
         let hh = ((h / 2.0 * scale).round() as u32).max(1);
-        let (q1w, q1h) = (hw.div_ceil(2), hh.div_ceil(2));
-        let (q2w, q2h) = (hw.div_ceil(4), hh.div_ceil(4));
+        let [q1, q2, q3] = PYRAMID_DIV.map(|n| (hw.div_ceil(n), hh.div_ceil(n)));
         Pyramid {
             bg: target(d, hw, hh, HDR, "bg"),
-            b1: target(d, q1w, q1h, HDR, "b1"),
-            b1t: target(d, q1w, q1h, HDR, "b1t"),
-            b2: target(d, q2w, q2h, HDR, "b2"),
-            b2t: target(d, q2w, q2h, HDR, "b2t"),
+            b1: target(d, q1.0, q1.1, HDR, "b1"),
+            b1t: target(d, q1.0, q1.1, HDR, "b1t"),
+            b2: target(d, q2.0, q2.1, HDR, "b2"),
+            b2t: target(d, q2.0, q2.1, HDR, "b2t"),
+            b3: target(d, q3.0, q3.1, HDR, "b3"),
+            b3t: target(d, q3.0, q3.1, HDR, "b3t"),
             scale,
             drawn: false,
         }
@@ -253,7 +343,35 @@ impl Pyramid {
 struct Sized {
     fluid: FluidTargets,
     pyramid: Pyramid,
+    /// wubble: `P`, the backdrop with the pages on it, blurred the same way; at the pyramid's
+    /// scale, allocated on the first build ([`page_blur`]).
+    page: Option<Pyramid>,
     out: Target,
+}
+
+/// `P` exists and has been drawn since it was allocated.
+fn page_drawn(sz: Option<&Sized>) -> bool {
+    sz.and_then(|s| s.page.as_ref()).is_some_and(|p| p.drawn)
+}
+
+/// One pane for the page-inclusive blur: its card and its latest frame, a texture on the scene's
+/// device (the presenter's ring target, never copied).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PagePane {
+    pub rect: PageRect,
+    pub texture: wgpu::Texture,
+    /// The shown part of the frame, physical px from its top left (`PaneFrame.clip`).
+    pub clip: (u32, u32),
+}
+
+/// What [`Renderer::before_rendering`] hands Slint: each image only when it is new.
+#[derive(Default)]
+pub struct Frame {
+    /// The back-most image (first frame, resize).
+    pub scene: Option<slint::Image>,
+    /// Each [`OverLayer`]'s image by [`OverLayer::index`]: a new texture, or an empty image
+    /// when the layer has no glass any more.
+    pub over: [Option<slint::Image>; 3],
 }
 
 // @source slint-render-arena
@@ -307,6 +425,8 @@ struct Pipelines {
     blur: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     glass: wgpu::RenderPipeline,
+    page: wgpu::RenderPipeline,
+    resolve: wgpu::RenderPipeline,
 }
 
 /// A shader body with the shared prelude, as every scene module is compiled.
@@ -368,6 +488,7 @@ impl Pipelines {
         let blur = module(device, "blur", BLUR_WGSL);
         let blit = module(device, "blit", BLIT_WGSL);
         let glass = module(device, "glass", GLASS_WGSL);
+        let page = module(device, "page", PAGE_WGSL);
         // premultiplied: gl.blendFunc(ONE, ONE_MINUS_SRC_ALPHA)
         let pm = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
         let fs = |name: &str| pipeline(device, &fluid, "vs_fullscreen", name, HDR, None);
@@ -384,6 +505,8 @@ impl Pipelines {
             blur: pipeline(device, &blur, "vs_fullscreen", "fs_blur", HDR, None),
             blit: pipeline(device, &blit, "vs_fullscreen", "fs_blit", OUT, None),
             glass: pipeline(device, &glass, "vs_glass", "fs_glass", OUT, pm),
+            page: pipeline(device, &page, "vs_page", "fs_page", HDR, pm),
+            resolve: pipeline(device, &page, "vs_fullscreen", "fs_resolve", OUT, None),
         }
     }
 }
@@ -415,6 +538,22 @@ pub struct Renderer {
     profiler: Option<GpuProfiler>,
     /// The GPU time of the latest frame whose timestamps came back, until taken.
     cost: Option<Duration>,
+    /// Backdrops (composite and pyramid) rendered so far: a count for tests and `--measure`.
+    backdrops: u64,
+    /// wubble: the panes under the scene's glass, as the host last set them.
+    pages: Vec<PagePane>,
+    /// A pane's frame or place changed since `P` was built.
+    pages_stale: bool,
+    /// When `P` was last built, and how many times so far (a count for the overlay smoke).
+    page_built: Option<Instant>,
+    pages_built: u64,
+    /// How much of `P` the glass under the page mixes in ([`AMBIENCE_STRENGTH`]; 0 is off).
+    ambience: f32,
+    /// Each overlay layer's image (straight alpha), and the premultiplied target it is drawn in.
+    over: [Option<Target>; 3],
+    scratch: Option<Target>,
+    /// Layers whose image is new or gone since the host last took them.
+    over_new: [bool; 3],
 }
 
 impl Renderer {
@@ -483,7 +622,103 @@ impl Renderer {
             last_frame: None,
             profiler,
             cost: None,
+            backdrops: 0,
+            pages: vec![],
+            pages_stale: false,
+            page_built: None,
+            pages_built: 0,
+            ambience: AMBIENCE_STRENGTH,
+            over: [None, None, None],
+            scratch: None,
+            over_new: [false; 3],
         })
+    }
+
+    /// How many backdrops (composite and blur pyramid) have been rendered: a still backdrop
+    /// renders one only when its dye, its ripples or its size changed.
+    pub fn backdrops(&self) -> u64 {
+        self.backdrops
+    }
+
+    /// How many times the page-inclusive blur `P` has been built ([`page_blur`]).
+    pub fn pages_built(&self) -> u64 {
+        self.pages_built
+    }
+
+    /// The ambience's strength: [`AMBIENCE_STRENGTH`], 0 for none (the overlay smoke's control).
+    pub fn set_ambience(&mut self, strength: f32) {
+        self.ambience = strength.max(0.0);
+    }
+
+    /// The panes under the glass, left to right: each card and its latest frame. A changed
+    /// frame or place makes `P` stale; it is rebuilt when [`page_blur`] says so. No panes (an
+    /// internal page, no frame yet) drop `P`.
+    pub fn set_pages(&mut self, pages: Vec<PagePane>) {
+        if pages == self.pages {
+            return;
+        }
+        if pages.is_empty()
+            && let Some(sz) = &mut self.sized
+        {
+            sz.page = None;
+        }
+        self.pages = pages;
+        self.pages_stale = true;
+    }
+
+    /// Whether to build `P` on the next frame, from the glass and panes as they are now and no
+    /// new backdrop: the host's `scene_due` input (`Build`) and its wake-up (`After`).
+    pub fn page_verdict(&self, now: Instant) -> PageBlur {
+        let built = page_drawn(self.sized.as_ref());
+        page_blur(&self.page_in(&self.scene.surfaces(), now, false, built))
+    }
+
+    fn page_rects(&self) -> Vec<PageRect> {
+        self.pages.iter().map(|p| p.rect).collect()
+    }
+
+    /// The rule's inputs; `built`: `P` exists and is drawn ([`page_drawn`]).
+    fn page_in(
+        &self,
+        surfaces: &[GlassSurface],
+        now: Instant,
+        backdrop_new: bool,
+        built: bool,
+    ) -> PageBlurIn {
+        let rects = self.page_rects();
+        PageBlurIn {
+            pages: !self.pages.is_empty(),
+            overlay: surfaces
+                .iter()
+                .any(|s| s.layer.is_some() && overlaps(&rect_of(s), &rects)),
+            ambience: self.ambience > 0.0 && surfaces.iter().any(|s| s.layer.is_none()),
+            stale: self.pages_stale,
+            backdrop_new,
+            built: built && !self.pages.is_empty(),
+            flat: self.quality == Quality::Flat,
+            since_build: self
+                .page_built
+                .map_or(Duration::MAX, |t| now.saturating_duration_since(t)),
+            ambience_every: ambience_every(),
+        }
+    }
+
+    /// The overlay layers' images that are new or gone since the last call: by
+    /// [`OverLayer::index`], `Some(Some(texture))` new, `Some(None)` gone, `None` unchanged.
+    pub fn take_over_changes(&mut self) -> [Option<Option<wgpu::Texture>>; 3] {
+        let mut out = [None, None, None];
+        for l in OverLayer::ALL {
+            let i = l.index();
+            if std::mem::take(&mut self.over_new[i]) {
+                out[i] = Some(self.over[i].as_ref().map(|t| t.tex.clone()));
+            }
+        }
+        out
+    }
+
+    /// An overlay layer's image as last drawn, for checks.
+    pub fn over_texture(&self, layer: OverLayer) -> Option<&wgpu::Texture> {
+        self.over[layer.index()].as_ref().map(|t| &t.tex)
     }
 
     /// Whether frame costs are measured: the device has GPU timestamps.
@@ -542,12 +777,13 @@ impl Renderer {
     }
 
     /// Call from the window's rendering notifier on `BeforeRendering`, before
-    /// Slint draws: sizes the scene to the window, advances it by the time
-    /// since the last call (capped at `max_dt`: `MAX_DT`, or `run::max_dt` of the run
-    /// state) and renders it. wubble change: it no longer asks for the next frame; the host
+    /// Slint draws: sizes the scene to the window (at most [`DPR_MAX`]), advances it by the
+    /// time since the last call (capped at `MAX_DT`) and renders it. `pace` is 1, or 0 to hold
+    /// the scene's clock (`--frozen-backdrop`, the fidelity harness). wubble change: it no longer asks for the next frame; the host
     /// does, by the run state (`run.rs`, [`Renderer::animating`]). Returns the image to show at
-    /// the back of the window when the output texture is new (first frame, resize);
-    /// `Ok(None)` means the image already set is still the one, as in the design.
+    /// the back of the window when the output texture is new (first frame, resize), and each
+    /// overlay layer's when it is new or gone ([`Frame`]); `None` means the image already set is
+    /// still the one, as in the design.
     /// Setting a property during rendering asks Slint for another frame, so an image set every
     /// frame kept the window rendering at the display rate even while the run state was Idle.
     /// (An earlier wubble change set it every frame: femtovg cached the window's rounded clip
@@ -559,18 +795,30 @@ impl Renderer {
         &mut self,
         window: &slint::Window,
         now: Instant,
-        max_dt: f32,
         pace: f32,
-    ) -> Result<Option<slint::Image>, GfxError> {
-        let dpr = window.scale_factor();
-        let size = window.size().to_logical(dpr);
+    ) -> Result<Frame, GfxError> {
+        let size = window.size();
+        let (w, h, dpr) = view_of(size.width, size.height, window.scale_factor());
         let dt = self
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        let tex = self.render_paced(size.width, size.height, dpr, dt.min(max_dt), pace);
-        tex.map(|t| slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string())))
-            .transpose()
+        let tex = self.render_paced(w, h, dpr, dt.min(MAX_DT), pace);
+        let image = |t: wgpu::Texture| {
+            slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string()))
+        };
+        let mut frame = Frame {
+            scene: tex.map(image).transpose()?,
+            ..Frame::default()
+        };
+        for (slot, change) in frame.over.iter_mut().zip(self.take_over_changes()) {
+            *slot = match change {
+                Some(Some(t)) => Some(image(t)?),
+                Some(None) => Some(slint::Image::default()),
+                None => None,
+            };
+        }
+        Ok(frame)
     }
 
     /// Size the scene to a `w`×`h` logical px view at `dpr`, advance it by
@@ -580,10 +828,10 @@ impl Renderer {
         self.render_paced(w, h, dpr, dt, 1.0)
     }
 
-    /// [`Renderer::render_under_ui`] with the liquid running at `pace` (0 to 1, `run::pace`) of
-    /// its speed: its clock, its ambient emitters and its fluid step get `dt * pace`, while the
-    /// rest (glass waves, ripples, the palette crossfade, the light) gets the whole `dt`, so a
-    /// tap right after a wake does not play in slow motion.
+    /// [`Renderer::render_under_ui`] with the scene's clock running at `pace` (0 to 1) of its
+    /// speed: its clock, its ambient emitters and its fluid step get `dt * pace`, while the rest
+    /// (glass waves, ripples, the palette crossfade, the light) gets the whole `dt`. The fidelity
+    /// harness holds it at 0.
     pub fn render_paced(
         &mut self,
         w: f32,
@@ -593,7 +841,8 @@ impl Renderer {
         pace: f32,
     ) -> Option<wgpu::Texture> {
         let tex = self.resize(w, h, dpr);
-        self.frame(dt, pace.clamp(0.0, 1.0));
+        let now = self.last_frame.unwrap_or_else(Instant::now);
+        self.frame(dt, pace.clamp(0.0, 1.0), now);
         tex
     }
 
@@ -608,6 +857,7 @@ impl Renderer {
         {
             if sz.pyramid.scale != scale {
                 sz.pyramid = Pyramid::new(d, w, h, scale);
+                sz.page = None;
             }
             return None;
         }
@@ -616,17 +866,13 @@ impl Renderer {
             Some(s) if !rs.fluid => s.fluid,
             _ => fluid_targets(d, w, h, &self.scene.opts.fluid),
         };
-        let out = target(
-            d,
-            ((w * dpr).round() as u32).max(1),
-            ((h * dpr).round() as u32).max(1),
-            OUT,
-            "wubble scene",
-        );
+        let (ow, oh) = out_size(w, h, dpr);
+        let out = target(d, ow, oh, OUT, "wubble scene");
         let tex = out.tex.clone();
         self.sized = Some(Sized {
             fluid,
             pyramid: Pyramid::new(d, w, h, scale),
+            page: None,
             out,
         });
         Some(tex)
@@ -695,8 +941,8 @@ impl Renderer {
     }
 
     // @source slint-render-frame
-    /// Advance the scene by `dt` seconds and render into `out`.
-    fn frame(&mut self, dt: f32, pace: f32) {
+    /// Advance the scene by `dt` seconds and render into `out` (and the overlay layers' images).
+    fn frame(&mut self, dt: f32, pace: f32, now: Instant) {
         let Some(mut sz) = self.sized.take() else {
             return;
         };
@@ -717,14 +963,27 @@ impl Renderer {
             .map(|p| p.begin_query("wubble scene", &mut enc));
         let (vw, vh, t) = (self.scene.w, self.scene.h, self.scene.time);
 
-        if let Some(dt) = self.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn) {
+        let (dye, still) = self.scene.take_still_work();
+        let backdrop = match self.scene.opts.backdrop {
+            Backdrop::Liquid => self.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn),
+            Backdrop::Still => (still || !sz.pyramid.drawn).then_some(0.0),
+        };
+        if let Some(dt) = backdrop {
             let f = &mut sz.fluid;
-            // 0. splats (queued taps first, then emitters and the pointer: the TS order)
-            for op in self.scene.fluid_ops(dt) {
-                self.fluid_op(&mut enc, f, op);
+            if self.scene.opts.backdrop == Backdrop::Liquid {
+                // 0. splats (queued taps first, then emitters and the pointer: the TS order)
+                for op in self.scene.fluid_ops(dt) {
+                    self.fluid_op(&mut enc, f, op);
+                }
+                // 1. the fluid step
+                self.fluid_step(&mut enc, f, dt);
+            } else if dye {
+                // 0. the still dye, afresh in the current palette
+                self.clear(&mut enc, &f.dye.read.view);
+                for op in self.scene.still_ops() {
+                    self.fluid_op(&mut enc, f, op);
+                }
             }
-            // 1. the fluid step
-            self.fluid_step(&mut enc, f, dt);
 
             // 2. composite the backdrop at half resolution
             let mut cu = CompositeU {
@@ -746,58 +1005,72 @@ impl Renderer {
             );
             self.run(&mut enc, &self.p.comp, &b, &py.bg.view);
 
-            // 3. blur pyramid for the glass
-            self.blur(&mut enc, &py.bg, &py.b1t, &py.b1, 3.5);
-            self.blur(&mut enc, &py.b1, &py.b2t, &py.b2, 4.5);
+            // 3. blur pyramid for the glass: σ in texels, scaled so its CSS px stay the design's
+            let [s1, s2, s3] = BLUR_SIGMA.map(|s| s * py.scale);
+            self.blur(&mut enc, &py.bg, &py.b1t, &py.b1, s1);
+            self.blur(&mut enc, &py.b1, &py.b2t, &py.b2, s2);
+            self.blur(&mut enc, &py.b2, &py.b3t, &py.b3, s3); // the frost: ≈44 CSS px σ in all
             py.drawn = true;
+            self.backdrops += 1;
         }
 
-        // 4. one pass on the output: backdrop, glass, beam
+        // wubble: the page-inclusive pyramid `P`, when the page blur's rule says so
+        let surfaces = self.scene.surfaces();
+        let built = page_drawn(Some(&sz));
+        if page_blur(&self.page_in(&surfaces, now, backdrop.is_some(), built)) == PageBlur::Build {
+            self.build_page(&mut enc, &mut sz);
+            self.page_built = Some(now);
+        }
+
+        // 4. one pass on the output: backdrop, then the glass under the page (the beam inside
+        // its panel's); then each overlay layer's glass in its own image
         let py = &sz.pyramid;
+        let page = sz
+            .page
+            .as_ref()
+            .filter(|p| p.drawn && !self.pages.is_empty());
+        let rects = self.page_rects();
         let blit = self.bind(&self.p.blit, &[Res::Tex(2, &py.bg.view)]);
-        let surfaces: Vec<GlassSurface> = (self.scene.glass.iter().cloned())
-            .chain(self.scene.beam_surface())
-            .filter(|s| s.alpha > 0.001 && s.w >= 1.0 && s.h >= 1.0)
-            .collect();
         let mut glass = Vec::with_capacity(surfaces.len());
         for s in &surfaces {
-            let gu = self.glass_u(s);
+            // overlay glass over a pane frosts the page; the glass under the page mixes it in
+            let over_page = s.layer.is_some() && overlaps(&rect_of(s), &rects);
+            let levels = match page {
+                Some(pg) if over_page => pg,
+                _ => py,
+            };
+            let ambient = page.filter(|_| s.layer.is_none());
+            let mut gu = self.glass_u(s);
+            if ambient.is_some() {
+                gu.u_amb = self.ambience;
+                gu.u_amb_level = AMBIENCE_LEVEL;
+            }
+            let amb = ambient.unwrap_or(levels);
             let u = self.arena.push(&gu);
             glass.push(self.bind(
                 &self.p.glass,
                 &[
                     Res::U(u.0, u.1),
-                    Res::Tex(3, &py.b1.view),
-                    Res::Tex(4, &py.b2.view),
+                    Res::Tex(3, &levels.b2.view),
+                    Res::Tex(4, &levels.b3.view),
+                    Res::Tex(5, &amb.b2.view),
+                    Res::Tex(6, &amb.b3.view),
                 ],
             ));
         }
+        let layers = by_layer(&surfaces);
         {
-            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("wubble scene out"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &sz.out.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            let mut rp = self.pass(&mut enc, "wubble scene out", &sz.out.view);
             rp.set_pipeline(&self.p.blit);
             rp.set_bind_group(0, &blit, &[]);
             rp.draw(0..4, 0..1);
             rp.set_pipeline(&self.p.glass);
-            for b in &glass {
-                rp.set_bind_group(0, b, &[]);
+            for &i in &layers[0] {
+                rp.set_bind_group(0, &glass[i], &[]);
                 rp.draw(0..4, 0..1);
             }
         }
+        self.draw_over(&mut enc, &sz.out, &layers, &glass);
 
         if let (Some(p), Some(q)) = (self.profiler.as_mut(), timer) {
             p.end_query(&mut enc, q);
@@ -808,6 +1081,152 @@ impl Renderer {
         self.queue.submit([enc.finish()]);
         self.sized = Some(sz);
         self.collect_cost();
+    }
+
+    /// A render pass on `view` that clears it to transparent.
+    fn pass<'e>(
+        &self,
+        enc: &'e mut wgpu::CommandEncoder,
+        label: &str,
+        view: &wgpu::TextureView,
+    ) -> wgpu::RenderPass<'e> {
+        enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        })
+    }
+
+    /// wubble: builds `P`: the backdrop's `bg` copied, every pane's latest frame drawn on it as
+    /// its rounded card, then blurred as the backdrop's pyramid is. Half resolution, no readback.
+    fn build_page(&mut self, enc: &mut wgpu::CommandEncoder, sz: &mut Sized) {
+        let py = &sz.pyramid;
+        let mut page = match sz.page.take() {
+            Some(p) => p,
+            None => Pyramid::new(&self.device, self.scene.w, self.scene.h, py.scale),
+        };
+        enc.copy_texture_to_texture(
+            py.bg.tex.as_image_copy(),
+            page.bg.tex.as_image_copy(),
+            py.bg.tex.size(),
+        );
+        // moved out while `self` binds, put back below
+        let pages = std::mem::take(&mut self.pages);
+        let binds: Vec<wgpu::BindGroup> = pages
+            .iter()
+            .map(|p| {
+                let (tw, th) = (p.texture.width().max(1), p.texture.height().max(1));
+                let u = self.arena.push(&PageU {
+                    u_quad: [p.rect.rect.x, p.rect.rect.y, p.rect.rect.w, p.rect.rect.h],
+                    u_view: [self.scene.w, self.scene.h],
+                    u_uv: [
+                        p.clip.0.min(tw) as f32 / tw as f32,
+                        p.clip.1.min(th) as f32 / th as f32,
+                    ],
+                    u_r: p.rect.radius,
+                    _p: [0.0; 3],
+                });
+                let view = p
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                self.bind(&self.p.page, &[Res::U(u.0, u.1), Res::Tex(2, &view)])
+            })
+            .collect();
+        self.pages = pages;
+        {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("wubble scene pages"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &page.bg.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            rp.set_pipeline(&self.p.page);
+            for b in &binds {
+                rp.set_bind_group(0, b, &[]);
+                rp.draw(0..4, 0..1);
+            }
+        }
+        let [s1, s2, s3] = BLUR_SIGMA.map(|s| s * page.scale);
+        self.blur(enc, &page.bg, &page.b1t, &page.b1, s1);
+        self.blur(enc, &page.b1, &page.b2t, &page.b2, s2);
+        self.blur(enc, &page.b2, &page.b3t, &page.b3, s3);
+        page.drawn = true;
+        sz.page = Some(page);
+        self.pages_stale = false;
+        self.pages_built += 1;
+    }
+
+    /// wubble: each overlay layer's glass into its own image, the size of `out`: premultiplied
+    /// into the scratch target, then resolved to straight alpha. A layer without glass drops its
+    /// image (the host clears Slint's); the scratch goes with the last one.
+    fn draw_over(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        out: &Target,
+        layers: &[Vec<usize>; 4],
+        glass: &[wgpu::BindGroup],
+    ) {
+        for l in OverLayer::ALL {
+            let i = l.index();
+            let items = &layers[i + 1];
+            if items.is_empty() {
+                if self.over[i].take().is_some() {
+                    self.over_new[i] = true;
+                }
+                continue;
+            }
+            if self.over[i]
+                .as_ref()
+                .is_none_or(|t| (t.w, t.h) != (out.w, out.h))
+            {
+                self.over[i] = Some(target(&self.device, out.w, out.h, OUT, "wubble over"));
+                self.over_new[i] = true;
+            }
+            if self
+                .scratch
+                .as_ref()
+                .is_none_or(|t| (t.w, t.h) != (out.w, out.h))
+            {
+                self.scratch = Some(target(&self.device, out.w, out.h, OUT, "wubble over pm"));
+            }
+            let (Some(scratch), Some(shown)) = (&self.scratch, &self.over[i]) else {
+                continue;
+            };
+            {
+                let mut rp = self.pass(enc, "wubble over glass", &scratch.view);
+                rp.set_pipeline(&self.p.glass);
+                for &g in items {
+                    rp.set_bind_group(0, &glass[g], &[]);
+                    rp.draw(0..4, 0..1);
+                }
+            }
+            let b = self.bind(&self.p.resolve, &[Res::Tex(2, &scratch.view)]);
+            self.run(enc, &self.p.resolve, &b, &shown.view);
+        }
+        if self.over.iter().all(Option::is_none) {
+            self.scratch = None;
+        }
     }
 
     /// Closes the profiler frame and picks up any finished one. The poll does
@@ -831,7 +1250,7 @@ impl Renderer {
     /// page's: its fields stay zero. Under `Quality::Flat` full glass is sent
     /// as `uMaterial` 2, the flat fill (the one change to glass.wgsl).
     fn glass_u(&self, s: &GlassSurface) -> GlassU {
-        let pad = 70.0;
+        let pad = GLASS_PAD;
         let (u_wave, u_wave_n) = wave_uniforms(&s.waves);
         GlassU {
             u_quad: [
@@ -859,7 +1278,9 @@ impl Renderer {
             } else {
                 s.material as f32
             },
-            _p: [0.0; 3],
+            u_amb: 0.0,
+            u_amb_level: 0.0,
+            _p: 0.0,
             u_beam: s
                 .beam
                 .map(|b| {
@@ -884,10 +1305,55 @@ impl Renderer {
         }
     }
 
+    /// Clears a target to transparent black (a still dye before its splats).
+    fn clear(&self, enc: &mut wgpu::CommandEncoder, out: &wgpu::TextureView) {
+        enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: out,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+
+    /// The dye half of `Fluid.splat`: `value` added to the dye around (x, y).
+    fn dye_splat(&mut self, enc: &mut wgpu::CommandEncoder, f: &mut FluidTargets, u: FluidU) {
+        let s = self.arena.push(&u);
+        let b = self.bind(
+            &self.p.splat,
+            &[Res::U(s.0, s.1), Res::Tex(3, &f.dye.read.view)],
+        );
+        self.run(enc, &self.p.splat, &b, &f.dye.write.view);
+        f.dye.swap();
+    }
+
     // @source slint-render-fluid-ops
-    /// `Fluid.splat` and `Fluid.ripple`.
+    /// `Fluid.splat` and `Fluid.ripple`; wubble: `FluidOp::Dye`, a splat of dye only.
     fn fluid_op(&mut self, enc: &mut wgpu::CommandEncoder, f: &mut FluidTargets, op: FluidOp) {
         match op {
+            FluidOp::Dye {
+                x,
+                y,
+                color,
+                radius,
+            } => {
+                let u = FluidU {
+                    u_point: [x, y],
+                    u_radius: radius,
+                    u_value: color,
+                    ..self.fluid_u(f)
+                };
+                self.dye_splat(enc, f, u);
+            }
             FluidOp::Splat {
                 x,
                 y,
@@ -912,13 +1378,7 @@ impl Renderer {
                 f.vel.swap();
                 if let Some(c) = color {
                     u.u_value = c;
-                    let s = self.arena.push(&u);
-                    let b = self.bind(
-                        &self.p.splat,
-                        &[Res::U(s.0, s.1), Res::Tex(3, &f.dye.read.view)],
-                    );
-                    self.run(enc, &self.p.splat, &b, &f.dye.write.view);
-                    f.dye.swap();
+                    self.dye_splat(enc, f, u);
                 }
             }
             FluidOp::Ripple {
@@ -1157,8 +1617,30 @@ mod tests {
     }
 
     #[test]
+    fn a_window_above_the_dpr_cap_keeps_its_logical_size_and_gets_a_smaller_texture() {
+        // 1000x600 logical at 3x: the scene's view is the window's, drawn at 2x
+        let (w, h, dpr) = view_of(3000, 1800, 3.0);
+        assert_eq!((w, h, dpr), (1000.0, 600.0, 2.0));
+        assert_eq!(out_size(w, h, dpr), (2000, 1200));
+        // at or below the cap the texture is the window's
+        let (w, h, dpr) = view_of(2720, 1760, 2.0);
+        assert_eq!(out_size(w, h, dpr), (2720, 1760));
+        let (w, h, dpr) = view_of(1700, 1100, 1.25);
+        assert_eq!(out_size(w, h, dpr), (1700, 1100));
+    }
+
+    #[test]
+    fn the_ambience_updates_at_its_rate() {
+        assert_eq!(ambience_every(), Duration::from_millis(125));
+    }
+
+    // the ambience is subtle, and reads one of `P`'s two levels or a mix of them
+    const _: () = assert!(AMBIENCE_STRENGTH > 0.0 && AMBIENCE_STRENGTH < 0.5);
+    const _: () = assert!(AMBIENCE_LEVEL >= 0.0 && AMBIENCE_LEVEL <= 1.0);
+
+    #[test]
     fn every_shader_validates_with_its_entry_points() {
-        let modules: [(&str, &[&str]); 5] = [
+        let modules: [(&str, &[&str]); 6] = [
             (
                 FLUID_WGSL,
                 &[
@@ -1177,6 +1659,7 @@ mod tests {
             (BLUR_WGSL, &["vs_fullscreen", "fs_blur"]),
             (BLIT_WGSL, &["vs_fullscreen", "fs_blit"]),
             (GLASS_WGSL, &["vs_glass", "fs_glass"]),
+            (PAGE_WGSL, &["vs_page", "fs_page", "fs_resolve"]),
         ];
         for (body, entries) in modules {
             let m = validated(body);
@@ -1190,11 +1673,27 @@ mod tests {
     }
 
     #[test]
+    fn the_glass_reads_the_two_deepest_levels_where_the_frame_binds_them() {
+        let m = validated(GLASS_WGSL);
+        let binding = |name: &str| {
+            m.global_variables
+                .iter()
+                .find(|(_, v)| v.name.as_deref() == Some(name))
+                .and_then(|(_, v)| v.binding.as_ref())
+                .map(|b| b.binding)
+        };
+        // `frame` binds b2 at 3 and b3 at 4, and the page pyramid's at 5 and 6
+        assert_eq!((binding("uB2"), binding("uB3")), (Some(3), Some(4)));
+        assert_eq!((binding("uP2"), binding("uP3")), (Some(5), Some(6)));
+    }
+
+    #[test]
     fn uniform_mirrors_match_the_wgsl_layout() {
         let size = |body, name| struct_size(&validated(body), name) as usize;
         assert_eq!(size(FLUID_WGSL, "FluidU"), size_of::<FluidU>());
         assert_eq!(size(COMPOSITE_WGSL, "CompositeU"), size_of::<CompositeU>());
         assert_eq!(size(BLUR_WGSL, "BlurU"), size_of::<BlurU>());
         assert_eq!(size(GLASS_WGSL, "GlassU"), size_of::<GlassU>());
+        assert_eq!(size(PAGE_WGSL, "PageU"), size_of::<PageU>());
     }
 }

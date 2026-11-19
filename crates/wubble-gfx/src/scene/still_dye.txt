@@ -1,0 +1,26 @@
+# The still dye: the browser window's backdrop held still (owner override of the design,
+# 2026-11-19: "still frosted translucent glass", no moving liquid under the sidebar).
+# Read by wubble-gfx (`scene::still_blobs`, splatted through fs_splat = SPLAT in core/gl/fluid.ts)
+# and by the fidelity harness (tools/fidelity/vite.config.mjs replaces the web liquid with it when
+# frozen), so both sides of a glass pair show the same dye.
+#
+# One blob per line: fx fy colour radius strength
+#   fx fy     centre, fractions of the window (0..1, top-left origin)
+#   colour    which of the Space's three dye colours (0, 1, 2; core/tokens.ts SPACES[].dye)
+#   radius    Fluid.splat's radius (fluid.ts SPLAT: dye += value * exp(-d^2 / radius), d in
+#             heights of the canvas) for a canvas as tall as the window
+#   strength  the colour's scale (the design seeds its liquid at .9: scene.ts resize)
+# Not the design's numbers (the design has no still liquid): a dozen of its resize seeds
+# (radius .02 to .03), spread over the window with every colour under the sidebar.
+0.06 0.14 0 0.022 0.9
+0.16 0.42 1 0.026 0.9
+0.05 0.70 2 0.024 0.9
+0.18 0.88 0 0.020 0.8
+0.34 0.20 2 0.028 0.8
+0.46 0.62 0 0.030 0.8
+0.58 0.10 1 0.024 0.8
+0.66 0.84 2 0.026 0.8
+0.78 0.36 0 0.028 0.8
+0.92 0.12 2 0.022 0.8
+0.94 0.62 1 0.026 0.8
+0.84 0.94 0 0.020 0.8

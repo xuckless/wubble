@@ -26,6 +26,7 @@ mod menu;
 mod nav_smoke;
 mod os_motion;
 mod os_scope;
+mod overlay_smoke;
 mod page_drag;
 mod page_error;
 mod page_smoke;
@@ -95,6 +96,8 @@ pub const SMOKE_MAX_IDLE_RUNS: u32 = 2_000;
 
 /// The bundled animated test page.
 const SMOKE_PAGE: &str = include_str!("../assets/smoke.html");
+/// `--smoke overlay`'s page: green on top, red below (`#dark`: dark).
+const OVERLAY_PAGE: &str = include_str!("../assets/overlay.html");
 
 /// The page `--smoke nav` navigates to.
 pub const NAV_PAGE: &str = include_str!("../assets/nav.html");
@@ -284,6 +287,12 @@ fn main() -> ExitCode {
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
                 Smoke::Ax => Mode::Ax,
+                Smoke::Overlay { dark, dir } => {
+                    if let Some(dir) = dir {
+                        shot::request_dir(dir);
+                    }
+                    Mode::Overlay { dark }
+                }
                 Smoke::Gallery { dir } => {
                     shot::request_dir(dir);
                     Mode::Gallery
@@ -541,6 +550,8 @@ struct Outcome {
     video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     ax_passed: Option<usize>,
+    /// `--smoke overlay` reached its end.
+    overlay_passed: bool,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
     /// so a teardown that hangs loses nothing; `Err` when the CSV could not be written.
     measured: Option<Result<(), String>>,
@@ -589,6 +600,8 @@ enum Mode {
     Boost,
     /// `--smoke ax`.
     Ax,
+    /// `--smoke overlay` (`dark`: the dark page).
+    Overlay { dark: bool },
     /// One phase of `--smoke session`.
     Session(Phase),
     /// `--measure`: the scenario's bundled page, measured until it ends;
@@ -1211,6 +1224,7 @@ fn run(
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
+        overlay_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
     };
@@ -1352,6 +1366,13 @@ fn run(
             Some(page_url(ax_smoke::PAGE)),
             Checks {
                 ax_smoke: Some(ax_smoke::AxSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Overlay { dark } => (
+            Some(page_url(OVERLAY_PAGE) + if *dark { "#dark" } else { "" }),
+            Checks {
+                overlay_smoke: Some(Default::default()),
                 ..none
             },
         ),
@@ -1624,6 +1645,7 @@ fn run(
         builtins_passed: host.builtins_passed.take(),
         video_passed: host.video_passed.take(),
         ax_passed: host.ax_passed,
+        overlay_passed: host.overlay_passed,
         measured,
     };
     let code = Verdict::of(mode, &outcome).print();

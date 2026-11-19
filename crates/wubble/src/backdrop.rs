@@ -7,7 +7,10 @@
 //! UI and its image is the window's bottom layer. The scene is fed from data only: the glass
 //! list the panels report (`wubble_ui::glass`), the active Space's tint, the address pill's
 //! beam (`address-beam`, the driver's), the pointer (from the host's winit filter) and, for the quality governor, each
-//! frame's load ([`frame_load`]).
+//! frame's load ([`frame_load`]). The panes' latest frames go to it too ([`Glass::set_pages`]):
+//! overlay glass over a pane frosts the page, and the window's glass picks up the page's light
+//! (`wubble_gfx::scene::pages`). Overlay glass comes back as one image per layer, shown above
+//! the page (`over-card`, `over-peek`, `over-top`).
 
 use std::time::{Duration, Instant};
 
@@ -17,10 +20,11 @@ use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
 use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
-    Beam, BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
+    Backdrop, Beam, GlassRect, Governor, OverLayer, PageBlur, PagePane, Quality, Rect, Renderer,
+    SceneOptions, Signal, Tier, out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
-use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
+use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassOver, GlassTier};
 
 /// Set to `slint` to force the Slint-only glass (by hand, to see the fallback).
 pub const GLASS_ENV: &str = "WUBBLE_GLASS";
@@ -99,8 +103,10 @@ pub struct SceneHost {
     /// The last logical pointer position, for taps.
     pointer: Option<(f32, f32)>,
     image_error_logged: bool,
-    /// When the scene draws (`run_state`): full rate, idle drift or paused.
+    /// When the scene draws (`run_state`): running, still or paused.
     run: crate::run_state::Runner,
+    /// Wakes the window when the page blur is due later (`PageBlur::After`: the ambience's rate).
+    page_wake: slint::Timer,
 }
 
 /// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value, `scene` the
@@ -123,7 +129,14 @@ pub fn choose_with<R>(
 pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
     let forced = std::env::var(GLASS_ENV).ok();
     match choose_with(forced.as_deref(), scene, || {
-        Renderer::try_new(gpu, SceneOptions::default())
+        // the browser window's backdrop is the still dye (owner, 2026-11-19: no moving liquid)
+        Renderer::try_new(
+            gpu,
+            SceneOptions {
+                backdrop: Backdrop::Still,
+                ..SceneOptions::default()
+            },
+        )
     }) {
         Ok(renderer) => {
             let signal = if renderer.measures_cost() {
@@ -147,6 +160,7 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
                 pointer: None,
                 image_error_logged: false,
                 run: Default::default(),
+                page_wake: slint::Timer::default(),
             }))
         }
         Err(reason) => {
@@ -156,8 +170,55 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
     }
 }
 
+/// The shell's glass keys that the scene treats apart (`GlassKeys`, model.slint).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Keys {
+    /// The window's own glass (`GlassKeys.sidebar`).
+    pub window: i32,
+    pub address: i32,
+    /// The first favourite tile; a tile's key is this plus its tab id.
+    pub favourites: i32,
+    /// The first overlay's key: every overlay's is at least this.
+    pub overlays: i32,
+    /// `GlassItem.layer` of each [`OverLayer`], by [`OverLayer::index`] (`GlassOver`): Slint
+    /// holds the numbers.
+    pub layers: [i32; 3],
+}
+
+impl Keys {
+    fn of(window: &AppWindow) -> Self {
+        let k = window.global::<GlassKeys>();
+        Keys {
+            window: k.get_sidebar(),
+            address: k.get_address(),
+            favourites: k.get_favourites(),
+            overlays: k.get_overlays(),
+            layers: {
+                let o = window.global::<GlassOver>();
+                OverLayer::ALL.map(|l| match l {
+                    OverLayer::Card => o.get_card(),
+                    OverLayer::Peek => o.get_peek(),
+                    OverLayer::Top => o.get_top(),
+                })
+            },
+        }
+    }
+
+    /// The design's drop-shadow weight of a panel: the window's glass 1 (desktop.tsx:50), the
+    /// address bar 0 (chrome.tsx:35), a favourite 0.3 (chrome.tsx:72), any other `useGlass`'s
+    /// 0.6 (browser/layer.ts:40).
+    pub fn shadow(&self, key: i32) -> f32 {
+        match key {
+            k if k == self.window => 1.0,
+            k if k == self.address => 0.0,
+            k if k >= self.favourites && k < self.overlays => 0.3,
+            _ => 0.6,
+        }
+    }
+}
+
 /// The scene's rect for a panel's item (logical px either side).
-pub fn to_rect(item: &GlassItem) -> GlassRect {
+pub fn to_rect(item: &GlassItem, keys: &Keys) -> GlassRect {
     GlassRect {
         rect: Rect::new(item.x, item.y, item.width, item.height),
         radius: item.radius,
@@ -171,6 +232,13 @@ pub fn to_rect(item: &GlassItem) -> GlassRect {
         } else {
             [item.tint.red(), item.tint.green(), item.tint.blue()].map(|c| f32::from(c) / 255.0)
         },
+        shadow: keys.shadow(item.key),
+        // the beam runs round the address pill's glass
+        beam: item.key == keys.address,
+        layer: OverLayer::ALL
+            .into_iter()
+            .find(|l| keys.layers[l.index()] == item.layer),
+        alpha: item.alpha,
     }
 }
 
@@ -254,29 +322,29 @@ impl Glass {
         if let Some(items) = glass {
             s.set_items(window, items);
         }
+        // against the texture `before_rendering` sizes, which is smaller than the window above
+        // `DPR_MAX`
         let size = window.window().size();
+        let (w, h, dpr) = view_of(size.width, size.height, window.window().scale_factor());
         let resized = s
             .renderer
             .output()
-            .is_none_or(|t| (t.width(), t.height()) != (size.width, size.height));
-        // the scene's own motion starting (a beam lap, a Space's palette) wakes a liquid that
-        // has come to a stop, as input does; a page's frames do not
+            .is_none_or(|t| (t.width(), t.height()) != out_size(w, h, dpr));
+        // the scene's own motion starting (a beam lap, a Space's palette) wakes a still scene,
+        // as input does; a page's frames do not
         let tint = active_tint(window);
         if window.get_address_beam().strength > 0.0 || (tint.is_some() && tint != s.tint) {
-            s.run.wake_if_dozing(window);
+            s.run.wake_if_still(window);
+        }
+        let covered = window.get_page_fullscreen();
+        let page_due = s.schedule_pages(window, now, covered);
+        if !scene_due(s.run.state(), covered, glass.is_some() || resized, page_due) {
+            return false;
         }
         let since = s
             .renderer
             .last_frame()
             .map(|t| now.saturating_duration_since(t));
-        if !scene_due(
-            s.run.state(),
-            window.get_page_fullscreen(),
-            glass.is_some() || resized,
-            since,
-        ) {
-            return false;
-        }
         crate::measure::count(crate::measure::Count::SceneRender);
         if tint != s.tint
             && let Some(t) = tint
@@ -295,24 +363,34 @@ impl Glass {
                 hue: b.hue.into(),
             }));
 
-        // Idle frames are slow on purpose, and the first frame after a change of run state
-        // follows a gap (an idle tick, a pause): neither says anything about the frame's load.
+        // The first frame after a change of run state follows a gap (a still spell, a pause):
+        // it says nothing about the frame's load.
         let steady = !s.run.take_changed();
-        // `--frozen-backdrop` (fidelity harness): the liquid's clock never advances.
+        // `--frozen-backdrop` (fidelity harness): the scene's clock never advances.
         let pace = if crate::shot::frozen_backdrop() {
             0.0
         } else {
-            s.run.pace()
+            1.0
         };
-        let full_rate = steady && matches!(s.run.state(), RunState::Running { .. });
+        let full_rate = steady && s.run.state() == RunState::Running;
         let interval = since.filter(|_| full_rate);
-        match s
-            .renderer
-            .before_rendering(window.window(), now, s.run.max_dt(), pace)
-        {
-            // a new texture only (first frame, resize): see `Renderer::before_rendering`
-            Ok(Some(image)) => window.set_scene(image),
-            Ok(None) => {}
+        match s.renderer.before_rendering(window.window(), now, pace) {
+            // new textures only (first frame, resize, a layer's glass appearing or gone): see
+            // `Renderer::before_rendering`
+            Ok(frame) => {
+                if let Some(image) = frame.scene {
+                    window.set_scene(image);
+                }
+                for (layer, image) in OverLayer::ALL.into_iter().zip(frame.over) {
+                    if let Some(image) = image {
+                        match layer {
+                            OverLayer::Card => window.set_over_card(image),
+                            OverLayer::Peek => window.set_over_peek(image),
+                            OverLayer::Top => window.set_over_top(image),
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 if !std::mem::replace(&mut s.image_error_logged, true) {
                     eprintln!("wubble: glass: scene image: {e}");
@@ -321,10 +399,39 @@ impl Glass {
         }
         s.govern(window, interval);
         let animating = s.renderer.animating();
-        // a changed window size is a change like a changed glass list: it wakes a still liquid
+        // a changed window size is a change like a changed glass list: it wakes a still scene
         s.run
-            .frame_done(window, now, since, animating, glass.is_some() || resized);
+            .frame_done(window, animating, glass.is_some() || resized);
         true
+    }
+
+    /// The panes under the glass, left to right, with their latest frames (the host's, on every
+    /// frame presented and every layout): the page blur follows them when an overlay is over a
+    /// pane or for the ambience, and asks for the frame that builds it.
+    pub fn set_pages(&mut self, window: &AppWindow, pages: Vec<PagePane>) {
+        if let Glass::Scene(s) = self {
+            s.renderer.set_pages(pages);
+            if s.schedule_pages(window, Instant::now(), window.get_page_fullscreen()) {
+                window.window().request_redraw();
+            }
+        }
+    }
+
+    /// How many times the page blur has been built (the overlay smoke's count).
+    pub fn pages_built(&self) -> Option<u64> {
+        match self {
+            Glass::Scene(s) => Some(s.renderer.pages_built()),
+            Glass::SlintOnly => None,
+        }
+    }
+
+    /// The ambience's strength (the overlay smoke's control: 0 off), drawn on the next frame.
+    pub fn set_ambience(&mut self, window: &AppWindow, strength: f32) {
+        if let Glass::Scene(s) = self {
+            s.renderer.set_ambience(strength);
+            s.run.wake_if_still(window);
+            window.window().request_redraw();
+        }
     }
 
     /// A window event that changes when the scene draws (`run_state::event_of`).
@@ -339,7 +446,6 @@ impl Glass {
         if let Glass::Scene(s) = self {
             s.pointer = Some((x, y));
             s.renderer.scene.pointer_move(x, y);
-            s.run.pointer_moved(Instant::now());
         }
     }
 
@@ -361,16 +467,34 @@ impl Glass {
 }
 
 impl SceneHost {
+    /// The page blur's verdict now (`PageBlur`): whether the next frame builds it, else arms the
+    /// wake-up for when it is due (the ambience's rate). Nothing while a page fills the window.
+    fn schedule_pages(&mut self, window: &AppWindow, now: Instant, covered: bool) -> bool {
+        if covered {
+            return false;
+        }
+        match self.renderer.page_verdict(now) {
+            PageBlur::Build => true,
+            PageBlur::Skip => false,
+            PageBlur::After(d) => {
+                if !self.page_wake.running() {
+                    let w = window.as_weak();
+                    self.page_wake
+                        .start(slint::TimerMode::SingleShot, d, move || {
+                            if let Some(w) = w.upgrade() {
+                                w.window().request_redraw();
+                            }
+                        });
+                }
+                false
+            }
+        }
+    }
+
     fn set_items(&mut self, window: &AppWindow, items: &[GlassItem]) {
-        let rects: Vec<GlassRect> = items.iter().map(to_rect).collect();
+        let keys = Keys::of(window);
+        let rects: Vec<GlassRect> = items.iter().map(|i| to_rect(i, &keys)).collect();
         self.renderer.scene.set_glass(&rects);
-        // the beam runs round the address pill's glass
-        let address = window.global::<GlassKeys>().get_address();
-        let beam = items.iter().find(|i| i.key == address).map(|i| BeamRect {
-            rect: Rect::new(i.x, i.y, i.width, i.height),
-            radius: i.radius,
-        });
-        self.renderer.scene.set_beam(beam);
     }
 
     /// Feeds the governor this frame's load ([`frame_load`]), at the edge, and applies its level.
@@ -427,9 +551,11 @@ mod tests {
             focus: true,
             tint: Default::default(),
             present: true,
+            layer: 0,
+            alpha: 1.0,
         };
         assert_eq!(
-            to_rect(&item),
+            to_rect(&item, &KEYS),
             GlassRect {
                 rect: Rect::new(1.0, 2.0, 30.0, 40.0),
                 radius: 12.0,
@@ -438,14 +564,49 @@ mod tests {
                 hover: false,
                 focus: true,
                 tint: [0.0; 3],
+                shadow: 0.6,
+                beam: false,
+                layer: None,
+                alpha: 1.0,
             }
         );
+        // an overlay's layer and entrance fade
+        let menu = GlassItem {
+            key: 1_000_330,
+            layer: 3,
+            alpha: 0.5,
+            ..item.clone()
+        };
+        let r = to_rect(&menu, &KEYS);
+        assert_eq!((r.layer, r.alpha), (Some(OverLayer::Top), 0.5));
+        assert_eq!(r.shadow, 0.6, "useGlass's");
         // a Space colour is mixed in (0..1); transparent is none
         let tinted = GlassItem {
             tint: slint::Color::from_rgb_u8(255, 0, 51),
             ..item
         };
-        assert_eq!(to_rect(&tinted).tint, [1.0, 0.0, 0.2]);
+        assert_eq!(to_rect(&tinted, &KEYS).tint, [1.0, 0.0, 0.2]);
+        // the address pill carries the beam
+        let address = GlassItem { key: 1, ..item };
+        assert!(to_rect(&address, &KEYS).beam && !to_rect(&item, &KEYS).beam);
+    }
+
+    const KEYS: Keys = Keys {
+        window: 0,
+        address: 1,
+        favourites: 100,
+        overlays: 1_000_000,
+        layers: [1, 2, 3],
+    };
+
+    #[test]
+    fn each_panel_casts_the_design_s_shadow() {
+        assert_eq!(KEYS.shadow(0), 1.0, "the window");
+        assert_eq!(KEYS.shadow(1), 0.0, "the address bar");
+        assert_eq!(KEYS.shadow(100), 0.3, "a favourite");
+        assert_eq!(KEYS.shadow(107), 0.3);
+        assert_eq!(KEYS.shadow(1_000_120), 0.6, "an overlay");
+        assert_eq!(KEYS.shadow(3), 0.6, "useGlass's default");
     }
 
     #[test]

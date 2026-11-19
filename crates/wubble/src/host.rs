@@ -31,6 +31,7 @@ mod hover;
 mod look;
 mod media;
 mod memory;
+mod overlay;
 mod pages;
 mod panes;
 mod parity;
@@ -289,6 +290,8 @@ pub struct Checks {
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
     /// `--smoke ax`.
     pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
+    /// `--smoke overlay` (`host/overlay.rs`).
+    pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).
     pub sponsor_endpoint: Option<String>,
     /// Views paint on external begin frames from [`Host::pace`].
@@ -507,6 +510,9 @@ pub struct Host {
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     pub ax_passed: Option<usize>,
+    /// `--smoke overlay` passed.
+    pub overlay_passed: bool,
+    overlay_timer: slint::Timer,
 }
 
 impl Host {
@@ -681,6 +687,8 @@ impl Host {
             ax: ax::WebAx::default(),
             video_passed: None,
             ax_passed: None,
+            overlay_passed: false,
+            overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
             glance_enabled: true,
         };
@@ -1255,6 +1263,7 @@ impl Host {
         self.pages_smoke_step();
         if self.frame_rate.is_some() {
             self.gallery_step(crate::gallery_smoke::Event::Ready);
+            self.overlay_ready();
         }
         let presented = self.stats.accelerated;
         if let Err(e) = self.show_frame(&window) {
@@ -1413,8 +1422,8 @@ impl Host {
         Ok(())
     }
 
-    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the
-    /// refracted, moving backdrop), not a flat fill, and be the scene's current frame. The
+    /// `--smoke frames`: with the scene, the sidebar's glass must show something (the frosted
+    /// backdrop), not a flat fill, and be the scene's current frame. The
     /// smoke pins the glass at `Full` (`Host::new`), so the verdict never depends on the
     /// quality governor; the line says the level it checked.
     fn check_glass(&self, window: &AppWindow, shot: &Snapshot) -> Result<(), String> {
@@ -1444,13 +1453,13 @@ impl Host {
         };
         let sample = pixels::check_varied(shot, region)?;
         // What the window shows there is the scene's frame of this render, not an older one.
-        let (_, _, scene) = self
+        let (sw, sh, scene) = self
             .w
             .glass
             .borrow()
             .readback()
             .ok_or("the scene has no frame")?;
-        let diff = pixels::check_shows_scene(shot, &scene, region)?;
+        let diff = pixels::check_shows_scene(shot, (sw, sh, &scene), region)?;
         println!(
             "smoke: glass ok quality={} distinct={} diff={diff}",
             self.w

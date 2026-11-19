@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
-import { GlassTier, DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
+import { GlassTier, DownloadItem, DownloadAction, DownloadStatus, GlassKeys, GlassOver } from "model.slint";
 import { DownloadRow } from "download-row.slint";
 
 // The downloads list, opened from the sidebar's download button: one row per download, newest
@@ -57,6 +57,9 @@ export component DownloadsPopover inherits Rectangle {
     property <length> list-height: min(root.items.length, Shell.download-max-rows) * Shell.download-row;
 
     panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: GlassKeys.downloads;
+        over-layer: GlassOver.top;
         width: Shell.downloads-width;
         height: root.list-height + 2 * Shell.menu-pad;
         x: max(Spacing.s2, min(root.anchor-x, root.width - self.width - Spacing.s2));

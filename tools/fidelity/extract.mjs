@@ -6,6 +6,8 @@
 //   node tools/fidelity/extract.mjs                 write the generated files
 //   node tools/fidelity/extract.mjs --check         fail (exit 1) when a generated file is stale
 //                                                   against the clone (or its commit moved)
+// Besides the kit files it copies the web GL sources verbatim into tools/fidelity/glsl-snapshot/
+// (with the commit), which the shader-constants test reads.
 //   node tools/fidelity/extract.mjs --report FILE   also write the differences between the
 //                                                   generated values and the ones wubble uses
 //   node tools/fidelity/extract.mjs --coverage INV  also list the inventory's A-rows whose cited
@@ -482,6 +484,14 @@ function rustGen(css) {
     }
     out.push('}', '');
   }
+  // the Spaces' accents and their three dye colours, as 8-bit RGB
+  const sl = lineOf('core/tokens.ts', 'export const spaces');
+  const rgb = h => { const n = parseInt(/^#([0-9A-Fa-f]{6})$/.exec(h)[1], 16); return `[${n >> 16}, ${(n >> 8) & 255}, ${n & 255}]`; };
+  use('core/tokens.ts', ...tokens.spaces.map((_, i) => sl + 1 + i));
+  out.push(`/// core/tokens.ts:${sl + 1}-${sl + tokens.spaces.length} (\`spaces\`: ${tokens.spaces.map(s => s.id).join(', ')})`, '#[rustfmt::skip]', 'pub mod spaces {');
+  out.push(`    pub const ACCENT: [[u8; 3]; ${tokens.spaces.length}] = [${tokens.spaces.map(s => rgb(s.accent)).join(', ')}];`);
+  out.push(`    pub const DYE: [[[u8; 3]; 3]; ${tokens.spaces.length}] = [${tokens.spaces.map(s => `[${s.dye.map(rgb).join(', ')}]`).join(', ')}];`);
+  out.push('}', '');
   out.push('/// core/tokens.ts', '#[rustfmt::skip]', 'pub mod tokens {');
   for (const k of ['radius', 'space', 'chrome', 'motion', 'type']) rmod(k, tokens[k], `core/tokens.ts:${lineOf('core/tokens.ts', `export const ${k}`)}`, 4, out);
   out.push('}', '');
@@ -511,11 +521,16 @@ const withHeader = body => {
 };
 
 const css = cssTables();
+// The web GL sources, verbatim (same line numbers as the clone), for the shader-constants test
+// (crates/wubble-gfx/tests/shader_constants.rs), which must run without the clone.
+const GL = ['core/gl/scene.ts', 'core/gl/glsl.ts', 'core/gl/fluid.ts', 'core/gl/util.ts'];
 const files = {
   'crates/wubble-ui/ui/kit/gen/tokens.slint': withHeader(tokensSlint(css)),
   'crates/wubble-ui/ui/kit/gen/css.slint': withHeader(cssSlint(css)),
   'crates/wubble-ui/ui/kit/gen/icons.slint': withHeader(iconsSlint()),
   'crates/wubble-core/src/kit_gen.rs': withHeader(rustGen(css)),
+  'tools/fidelity/glsl-snapshot/COMMIT': `${commit}\n`,
+  ...Object.fromEntries(GL.map(f => [`tools/fidelity/glsl-snapshot/${f}`, read(f)])),
 };
 
 if (dirty) console.warn(`extract: warning: the design clone has local changes under src/wubble (${commit}+)`);

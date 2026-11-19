@@ -19,6 +19,10 @@ export component SheetFrame inherits Rectangle {
     in property <string> accept-text: "OK";
     // Empty: no cancel button.
     in property <string> cancel-text;
+    // The scene's glass for the sheet, when it sits over the page (app.slint's sheets): its
+    // key (GlassKeys) and overlay layer (GlassOver). A sheet inside a page keeps the Slint glass.
+    in property <int> glass-key: -1;
+    in property <int> glass-layer: 0;
     callback accepted();
     callback cancelled();
 
@@ -68,6 +72,9 @@ export component SheetFrame inherits Rectangle {
     }
 
     panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: root.glass-key;
+        over-layer: root.glass-layer;
         width: min(Shell.sheet-width, root.width - 2 * Shell.sheet-margin);
         height: body.preferred-height;
         x: (root.width - self.width) / 2;

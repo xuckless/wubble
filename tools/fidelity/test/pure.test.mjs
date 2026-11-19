@@ -7,6 +7,8 @@ import { cropRects } from '../lib/geometry.mjs';
 import { encode, decode, blank, crop } from '../lib/png.mjs';
 import { parseCss, splitTop } from '../lib/css.mjs';
 import { makeReader, readDecl } from '../lib/values.mjs';
+import { parseStill, toCanvas } from '../lib/still.mjs';
+import { readFileSync } from 'node:fs';
 
 test('CIEDE2000 matches Sharma, Wu, Dalal 2005 test data', () => {
   // pairs 1, 7 and 17 of the paper's table
@@ -60,4 +62,21 @@ test('CSS declarations read as typed values with their lines', () => {
   assert.equal(t['-scale-easing'].v, 'cubic-bezier(0.22, 1, 0.36, 1)');
   assert.deepEqual(splitTop('a(b c) d', ' '), ['a(b c)', 'd']);
   assert.equal(readDecl('position', 'absolute', R), null);
+});
+
+test('the still dye table parses and maps onto the desktop canvas', () => {
+  const text = readFileSync(new URL('../../../crates/wubble-gfx/src/scene/still_dye.txt', import.meta.url), 'utf8');
+  const blobs = parseStill(text);
+  assert.ok(blobs.length >= 8);
+  for (const b of blobs) assert.ok([0, 1, 2].includes(b.color) && b.radius > 0 && b.strength > 0);
+  assert.throws(() => parseStill('0.1 0.2 0'));
+  const b = { fx: 0.5, fy: 0.25, color: 0, radius: 0.02, strength: 1 };
+  // the window filling the canvas: as wubble splats it (y up, radius as written)
+  assert.deepEqual(toCanvas(b, { x: 0, y: 0, w: 800, h: 400 }, 800, 400), { x: 0.5, y: 0.75, radius: 0.02 });
+  // the design's 1288x816 window at (36, 32) on its 1360x880 desktop
+  const p = toCanvas(b, { x: 36, y: 32, w: 1288, h: 816 }, 1360, 880);
+  assert.ok(Math.abs(p.x - (36 + 644) / 1360) < 1e-12);
+  assert.ok(Math.abs(p.y - (1 - (32 + 204) / 880)) < 1e-12);
+  // the same blob in px: d^2 / (H^2 r') = d^2 / (h^2 r)
+  assert.ok(Math.abs(p.radius * 880 ** 2 - 0.02 * 816 ** 2) < 1e-9);
 });

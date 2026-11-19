@@ -59,6 +59,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke ax   # a11y.web on: the page's accessible items, a click and a field's value through them, exits; run by hand only
     cargo run -p wubble-engine --example ax_smoke   # windowless: CEF's accessibility tree of a bundled page, mapped and printed (`-- --dump FILE` writes the JSON), exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
+    cargo run -p wubble -- --smoke overlay   # green/red page: menu, command bar and peek glass frost the page, the gutter takes its light, no page blur while nothing is over it; `overlay=dark`, `--shot-dir DIR` for one PNG a step; exits; run by hand only
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
     cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line, the Pip window opened, returned and closed; exits; run by hand only
     cargo run -p wubble -- --smoke boost   # loopback pages: a Boost's CSS, tint and document-start script, a CSP page, turned off; exits; run by hand only

@@ -9,6 +9,8 @@
 //! Left out: bubbles, pops, `stir`, the voice glow and overlay mode (the
 //! deferred start page and web overlay layer).
 
+use super::pages::OverLayer;
+
 // @source slint-rng (minis.rs)
 /// xorshift64* in [0, 1), standing in for `Math.random()`.
 #[derive(Clone, Debug)]
@@ -112,16 +114,20 @@ pub struct GlassRect {
     pub pressed: bool,
     pub hover: bool,
     pub focus: bool,
-    /// wubble: RGB 0..1 mixed into the glass at 10% (`GlassSurface::tint`); black = none. The
+    /// wubble: RGB 0..1 mixed into the glass (`GlassSurface::tint`); black = none. The
     /// window's glass carries the Space colour (design desktop.tsx `glass.tint = accent`).
     pub tint: [f32; 3],
-}
-
-/// Where the border beam runs: a rounded rect, logical px (the address bar).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BeamRect {
-    pub rect: Rect,
-    pub radius: f32,
+    /// The drop shadow's weight (`GlassSurface::shadow`): the design's per surface, set by the
+    /// host (window 1, address 0, favourites 0.3, else `useGlass`'s 0.6).
+    pub shadow: f32,
+    /// This panel carries the border beam (the address bar): the beam is drawn in its own glass
+    /// pass, `col += fx` (scene.ts GLASS), as the design does.
+    pub beam: bool,
+    /// wubble: an overlay's glass, drawn above the page in that layer's image; `None` is under
+    /// the page (the window's glass, the address bar, favourites).
+    pub layer: Option<OverLayer>,
+    /// The panel's own opacity (its entrance fade): `GlassSurface::alpha`.
+    pub alpha: f32,
 }
 
 // @source slint-render-scene-types (render.rs)
@@ -138,7 +144,7 @@ pub struct GlassSurface {
     /// 0..1, the touched film rim
     pub film: f64,
     pub alpha: f64,
-    /// RGB 0..1 tint mixed in at 10%; black = none
+    /// RGB 0..1 tint (`tint * .55 + .1` mixed in at 7 %); black = none
     pub tint: [f32; 3],
     pub shadow: f64,
     /// waves running through the glass (presses)
@@ -147,6 +153,8 @@ pub struct GlassSurface {
     pub beam: Option<Beam>,
     /// 1 = full glass; 0 = effects only (beam, glow) for surfaces drawn over live content
     pub material: f64,
+    /// wubble: the overlay layer it is drawn in (`GlassRect::layer`); `None` under the page.
+    pub layer: Option<OverLayer>,
 }
 
 impl Default for GlassSurface {
@@ -166,6 +174,7 @@ impl Default for GlassSurface {
             waves: vec![],
             beam: None,
             material: 1.0,
+            layer: None,
         }
     }
 }
@@ -179,9 +188,8 @@ pub struct Beam {
     pub hue: f64,
 }
 
-/// The glass surface for one panel of the chrome: `useGlass` defaults
-/// (browser/layer.ts: shadow 0.6), the film rim on while the panel is
-/// hovered, pressed or focused (browser/chrome.tsx sets `film = 1` on enter).
+/// The glass surface for one panel of the chrome: the panel's shadow weight, the film rim on
+/// while the panel is hovered, pressed or focused (browser/chrome.tsx sets `film = 1` on enter).
 pub fn surface_of(g: &GlassRect) -> GlassSurface {
     let touched = g.pressed || g.hover || g.focus;
     GlassSurface {
@@ -192,8 +200,10 @@ pub fn surface_of(g: &GlassRect) -> GlassSurface {
         r: g.radius.into(),
         tier: g.tier.shader_value(),
         film: if touched { 1.0 } else { 0.0 },
-        shadow: 0.6,
+        shadow: g.shadow.into(),
         tint: g.tint,
+        alpha: g.alpha.clamp(0.0, 1.0).into(),
+        layer: g.layer,
         ..Default::default()
     }
 }
@@ -255,6 +265,60 @@ impl Default for FluidOptions {
     }
 }
 
+/// What the backdrop under the glass is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backdrop {
+    /// The design's living liquid: emitters, the pointer's push and the fluid step every frame.
+    #[default]
+    Liquid,
+    /// wubble (owner override, 2026-11-19: "we can stop the wave effect in the side navbar and
+    /// make it still frosted translucent glass"): the Space-tinted dye held still. The dye is the
+    /// table in `still_dye.txt` ([`still_blobs`]), splatted afresh when the palette or the
+    /// window's shape changes; no fluid step, emitters or pushes. Tap ripples still run through
+    /// it (they are drawn by the composite, not the fluid).
+    Still,
+}
+
+/// One blob of the still dye, as `still_dye.txt` gives it: centre as fractions of the window
+/// (top-left origin), which of the Space's three colours, `Fluid.splat`'s radius for a canvas as
+/// tall as the window, and the colour's scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blob {
+    pub x: f32,
+    pub y: f32,
+    pub color: usize,
+    pub radius: f32,
+    pub strength: f32,
+}
+
+/// The still dye's table, one copy for wubble and the fidelity harness's frozen web liquid
+/// (`tools/fidelity/vite.config.mjs` reads the same file).
+pub const STILL_DYE: &str = include_str!("still_dye.txt");
+
+/// The blobs of [`STILL_DYE`]. Lines are `fx fy colour radius strength`; `#` starts a comment.
+/// Panics on a malformed line: the table is compiled in and checked by a test.
+pub fn still_blobs() -> Vec<Blob> {
+    STILL_DYE
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let v: Vec<f32> = l
+                .split_whitespace()
+                .map(|x| x.parse().unwrap_or_else(|_| panic!("still_dye.txt: {l}")))
+                .collect();
+            assert_eq!(v.len(), 5, "still_dye.txt: {l}");
+            Blob {
+                x: v[0],
+                y: v[1],
+                color: v[2] as usize,
+                radius: v[3],
+                strength: v[4],
+            }
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct SceneOptions {
     /// The Space's three dye colours, RGB 0..1.
@@ -265,6 +329,8 @@ pub struct SceneOptions {
     pub pointer_force: f32,
     /// how strongly the liquid shows over the ground, 0..1 (0.3 = muted, the default)
     pub intensity: f32,
+    /// wubble: a living liquid or the still dye.
+    pub backdrop: Backdrop,
 }
 
 /// `0xRRGGBB` to RGB 0..1.
@@ -285,6 +351,7 @@ impl Default for SceneOptions {
             ambient: 1.0,
             pointer_force: 1.0,
             intensity: 0.3,
+            backdrop: Backdrop::Liquid,
         }
     }
 }
@@ -333,10 +400,42 @@ pub(super) enum FluidOp {
         strength: f32,
         radius: f32,
     },
+    /// wubble: a splat of dye only (the still dye): `Splat` without its velocity pass.
+    Dye {
+        x: f32,
+        y: f32,
+        color: [f32; 3],
+        radius: f32,
+    },
 }
 
 /// Most glass surfaces drawn (each takes a 256-byte uniform slice).
 pub const MAX_GLASS: usize = 64;
+
+/// wubble: the panels [`Scene::set_glass`] keeps, in order: all of them up to [`MAX_GLASS`];
+/// past it every overlay's first (an overlay has no Slint fill of its own while the scene draws
+/// its glass), then the ones under the page back to front (the window's glass leads them).
+fn kept(rects: &[GlassRect]) -> Vec<&GlassRect> {
+    let mut over = rects
+        .iter()
+        .filter(|g| g.layer.is_some())
+        .count()
+        .min(MAX_GLASS);
+    let mut under = MAX_GLASS - over;
+    rects
+        .iter()
+        .filter(|g| {
+            let left = if g.layer.is_some() {
+                &mut over
+            } else {
+                &mut under
+            };
+            let keep = *left > 0;
+            *left = left.saturating_sub(1);
+            keep
+        })
+        .collect()
+}
 /// Most queued fluid ops kept while the backdrop is not rendered (Cached or
 /// Flat quality); the oldest go first.
 const MAX_OPS: usize = 64;
@@ -352,10 +451,14 @@ pub struct Scene {
     pub(super) glass: Vec<GlassSurface>,
     /// wubble: whether each surface is touched; its `film` eases toward it ([`film_level`]).
     touched: Vec<bool>,
-    /// The border beam: where it runs, and what it looks like this frame (the shell owns its
-    /// lifecycle: `wubble_core::beam`).
-    beam: Option<BeamRect>,
+    /// The surface that carries the border beam ([`GlassRect::beam`]), and the beam's shape this
+    /// frame (the shell owns its lifecycle: `wubble_core::beam`).
+    beam_at: Option<usize>,
     beam_shape: Option<Beam>,
+    /// [`Backdrop::Still`]: the dye must be splatted afresh (palette, shape), and the backdrop
+    /// composited again (the dye changed, ripples moved or just ended). Taken by the renderer.
+    dye_stale: bool,
+    backdrop_stale: bool,
     pub(super) ripples: Vec<Ripple>,
     pub(super) light: [f32; 2],
     light_target: [f32; 2],
@@ -393,8 +496,10 @@ impl Scene {
             time: 0.0,
             glass: vec![],
             touched: vec![],
-            beam: None,
+            beam_at: None,
             beam_shape: None,
+            dye_stale: false,
+            backdrop_stale: false,
             ripples: vec![],
             light: [0.0; 2],
             light_target: [0.0; 2],
@@ -412,6 +517,40 @@ impl Scene {
     /// The Space's dye colours; the liquid crossfades to them in about 600 ms.
     pub fn set_palette(&mut self, colors: [[f32; 3]; 3]) {
         self.palette_target = colors;
+        self.dye_stale = true;
+    }
+
+    fn still(&self) -> bool {
+        self.opts.backdrop == Backdrop::Still
+    }
+
+    /// [`Backdrop::Still`]: what the backdrop needs this frame, once: (splat the dye afresh,
+    /// composite the backdrop again). Always `(false, false)` for a living liquid, whose backdrop
+    /// renders by the quality's clock.
+    pub(super) fn take_still_work(&mut self) -> (bool, bool) {
+        let dye = std::mem::take(&mut self.dye_stale);
+        let backdrop = std::mem::take(&mut self.backdrop_stale);
+        if self.still() {
+            (dye, dye || backdrop)
+        } else {
+            (false, false)
+        }
+    }
+
+    /// The still dye's splats for the current palette ([`still_blobs`]), in sim coordinates.
+    pub(super) fn still_ops(&self) -> Vec<FluidOp> {
+        still_blobs()
+            .into_iter()
+            .map(|b| {
+                let c = self.palette[b.color % 3];
+                FluidOp::Dye {
+                    x: b.x,
+                    y: 1.0 - b.y,
+                    color: c.map(|v| v * b.strength),
+                    radius: b.radius,
+                }
+            })
+            .collect()
     }
 
     /// The chrome's glass panels, back to front; at most [`MAX_GLASS`] are
@@ -421,9 +560,10 @@ impl Scene {
     pub fn set_glass(&mut self, rects: &[GlassRect]) {
         let mut old = std::mem::take(&mut self.glass).into_iter();
         self.touched.clear();
-        self.glass = rects
-            .iter()
-            .take(MAX_GLASS)
+        let kept = kept(rects);
+        self.beam_at = kept.iter().position(|g| g.beam);
+        self.glass = kept
+            .into_iter()
             .map(|g| {
                 let new = surface_of(g);
                 self.touched.push(new.film > 0.0);
@@ -431,6 +571,14 @@ impl Scene {
                 GlassSurface { waves, film, ..new }
             })
             .collect();
+    }
+
+    /// The palette is still crossfading to the Space's colours.
+    fn palette_moving(&self) -> bool {
+        self.palette
+            .iter()
+            .zip(&self.palette_target)
+            .any(|(a, b)| a.iter().zip(b).any(|(x, y)| (x - y).abs() > 1e-3))
     }
 
     /// wubble: whether anything in the scene still moves on its own besides the ambient
@@ -442,11 +590,7 @@ impl Scene {
             .iter()
             .zip(&self.touched)
             .any(|(g, &t)| g.film != if t { 1.0 } else { 0.0 });
-        let palette = self
-            .palette
-            .iter()
-            .zip(&self.palette_target)
-            .any(|(a, b)| a.iter().zip(b).any(|(x, y)| (x - y).abs() > 1e-3));
+        let palette = self.palette_moving();
         let light = (self.light[0] - self.light_target[0]).abs() > 0.5
             || (self.light[1] - self.light_target[1]).abs() > 0.5;
         film || palette
@@ -455,37 +599,31 @@ impl Scene {
             || !self.ops.is_empty()
             || self.glass.iter().any(|g| !g.waves.is_empty())
             || self.beam_shape.is_some()
+            || self.dye_stale
+            || self.backdrop_stale
     }
 
-    /// Where the border beam runs (the address bar), or `None` to remove it. It is drawn
-    /// only while it has a shape ([`Scene::set_beam_shape`]), as effects only (stroke, glow,
-    /// bloom) over whatever is there.
-    pub fn set_beam(&mut self, at: Option<BeamRect>) {
-        self.beam = at;
-    }
-
-    /// The beam this frame (`None`: nothing drawn). wubble: the design times its lap in
-    /// chrome.tsx `Address`; here the shell's `wubble_core::beam` does, and hands the shape over
-    /// every frame. Kept without a rect, for when one arrives.
+    /// The beam this frame (`None`: nothing drawn), drawn in the glass of the panel that carries
+    /// it ([`GlassRect::beam`]). wubble: the design times its lap in chrome.tsx `Address`; here
+    /// the shell's `wubble_core::beam` does, and hands the shape over every frame. Kept without
+    /// such a panel, for when one arrives.
     pub fn set_beam_shape(&mut self, shape: Option<Beam>) {
         self.beam_shape = shape;
     }
 
-    /// The beam's surface this frame, if a lap is running.
-    pub(super) fn beam_surface(&self) -> Option<GlassSurface> {
-        let at = self.beam?;
-        let shape = self.beam_shape.filter(|s| s.strength > 0.001)?;
-        Some(GlassSurface {
-            x: at.rect.x.into(),
-            y: at.rect.y.into(),
-            w: at.rect.w.into(),
-            h: at.rect.h.into(),
-            r: at.radius.into(),
-            shadow: 0.0,
-            material: 0.0,
-            beam: Some(shape),
-            ..Default::default()
-        })
+    /// The surfaces drawn this frame, back to front: the glass list with the beam on its panel,
+    /// without the ones the design skips (`alpha <= .001`, under 1 px; scene.ts `drawGlass`).
+    pub(super) fn surfaces(&self) -> Vec<GlassSurface> {
+        let beam = self.beam_shape.filter(|s| s.strength > 0.001);
+        self.glass
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.alpha > 0.001 && s.w >= 1.0 && s.h >= 1.0)
+            .map(|(i, s)| GlassSurface {
+                beam: beam.filter(|_| self.beam_at == Some(i)),
+                ..s.clone()
+            })
+            .collect()
     }
 
     /// Reallocation the renderer must do for a view of `w`×`h` logical px.
@@ -496,12 +634,18 @@ impl Scene {
                 fluid: false,
             };
         }
+        // a still dye is splatted afresh for any new size, as the harness's web side does: kept,
+        // it would stretch with the window (a living liquid is sampled by uv and survives)
+        let still_reshaped = self.still() && (w, h) != (self.w, self.h);
         self.w = w;
         self.h = h;
         self.dpr = dpr;
         // the liquid survives resizes: it's sampled by uv, so only a big change of shape reallocates it
         let aspect = w / h.max(1.0);
-        if self.fluid_aspect != 0.0 && (aspect / self.fluid_aspect).ln().abs() < 0.35 {
+        if !still_reshaped
+            && self.fluid_aspect != 0.0
+            && (aspect / self.fluid_aspect).ln().abs() < 0.35
+        {
             return Resized {
                 targets: true,
                 fluid: false,
@@ -510,6 +654,14 @@ impl Scene {
         let fresh = self.fluid_aspect == 0.0;
         self.fluid_aspect = aspect;
         self.ops.clear();
+        if self.still() {
+            // new grids, an empty dye: the still dye is splatted afresh
+            self.dye_stale = true;
+            return Resized {
+                targets: true,
+                fluid: true,
+            };
+        }
         if !fresh {
             for i in 0..6 {
                 let c = self.palette[i % 3];
@@ -612,7 +764,7 @@ impl Scene {
         if self.ripples.len() > 8 {
             self.ripples.remove(0);
         }
-        if self.w > 0.0 {
+        if self.w > 0.0 && !self.still() {
             self.push_op(FluidOp::Ripple {
                 x: x / self.w,
                 y: 1.0 - y / self.h,
@@ -625,8 +777,13 @@ impl Scene {
     // @source slint-render-emitters (render.rs `advance`, split in two)
     /// The per-frame CPU part of `Scene.frame` that runs whether or not the
     /// backdrop is rendered: time, glass waves, palette crossfade, light lag,
-    /// and ripple ageing. `pace` (0 to 1, `run::pace`) slows only the scene's clock.
+    /// and ripple ageing. `pace` (0 or 1: the fidelity harness's frozen clock) scales only the
+    /// scene's clock.
     pub(super) fn advance(&mut self, dt: f32, pace: f32) {
+        // a still dye follows the crossfade by being splatted afresh while it moves, and the
+        // backdrop is composited while ripples run and once more when the last one ends
+        self.dye_stale |= self.palette_moving();
+        self.backdrop_stale |= !self.ripples.is_empty();
         self.time += dt * pace;
         for g in &mut self.glass {
             age_waves(&mut g.waves, dt.into());
@@ -713,6 +870,10 @@ mod tests {
             hover: false,
             focus: false,
             tint: [0.0; 3],
+            shadow: 0.6,
+            beam: false,
+            layer: None,
+            alpha: 1.0,
         }
     }
 
@@ -890,6 +1051,16 @@ mod tests {
         let many = vec![rect(0.0, 0.0, 10.0, 10.0); MAX_GLASS + 5];
         s.set_glass(&many);
         assert_eq!(s.glass.len(), MAX_GLASS);
+        // full of favourites: an overlay past the cap is kept, the last ones under the page go
+        let mut crowded = many.clone();
+        crowded.push(GlassRect {
+            layer: Some(OverLayer::Top),
+            ..rect(1.0, 2.0, 30.0, 40.0)
+        });
+        s.set_glass(&crowded);
+        assert_eq!(s.glass.len(), MAX_GLASS);
+        assert_eq!(s.glass[MAX_GLASS - 1].layer, Some(OverLayer::Top));
+        assert!(s.glass[..MAX_GLASS - 1].iter().all(|g| g.layer.is_none()));
     }
 
     #[test]
@@ -921,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn beam_shows_only_with_a_rect_and_a_shape() {
+    fn the_beam_is_drawn_in_the_glass_that_carries_it() {
         let mut s = sized();
         let shape = Beam {
             head: 0.4,
@@ -930,25 +1101,192 @@ mod tests {
             hue: 0.1,
         };
         s.set_beam_shape(Some(shape));
-        assert!(s.beam_surface().is_none(), "no rect yet");
-        let at = BeamRect {
-            rect: Rect::new(100.0, 10.0, 300.0, 32.0),
-            radius: 12.0,
-        };
-        s.set_beam(Some(at));
-        let b = s.beam_surface().expect("a rect and a shape");
-        assert_eq!((b.material, b.shadow, b.w), (0.0, 0.0, 300.0));
-        assert_eq!(b.beam, Some(shape));
+        let mut address = rect(100.0, 10.0, 300.0, 32.0);
+        s.set_glass(&[rect(0.0, 0.0, 800.0, 600.0), address]);
+        assert!(
+            s.surfaces().iter().all(|g| g.beam.is_none()),
+            "no panel carries it"
+        );
+        address.beam = true;
+        address.shadow = 0.0;
+        s.set_glass(&[rect(0.0, 0.0, 800.0, 600.0), address]);
+        let surfaces = s.surfaces();
+        assert_eq!(surfaces.len(), 2, "no surface of its own");
+        assert_eq!(surfaces[0].beam, None);
+        assert_eq!(surfaces[1].beam, Some(shape));
+        // full glass, with the panel's own shadow weight
+        assert_eq!((surfaces[1].material, surfaces[1].shadow), (1.0, 0.0));
         s.set_beam_shape(None);
-        assert!(s.beam_surface().is_none(), "the lap ended");
+        assert!(s.surfaces()[1].beam.is_none(), "the lap ended");
         s.set_beam_shape(Some(Beam {
             strength: 0.0,
             ..shape
         }));
-        assert!(s.beam_surface().is_none(), "a faded beam draws nothing");
-        s.set_beam_shape(Some(shape));
-        s.set_beam(None);
-        assert!(s.beam_surface().is_none());
+        assert!(s.surfaces()[1].beam.is_none(), "a faded beam draws nothing");
+    }
+
+    #[test]
+    fn surfaces_skip_what_the_design_skips() {
+        let mut s = sized();
+        s.set_glass(&[
+            rect(0.0, 0.0, 0.5, 100.0),
+            rect(0.0, 0.0, 100.0, 0.9),
+            rect(0.0, 0.0, 10.0, 10.0),
+        ]);
+        assert_eq!(s.surfaces().len(), 1);
+    }
+
+    #[test]
+    fn a_panel_s_layer_and_opacity_reach_its_surface_and_opacity_0_draws_nothing() {
+        let menu = GlassRect {
+            layer: Some(OverLayer::Top),
+            alpha: 0.4,
+            ..rect(10.0, 10.0, 100.0, 50.0)
+        };
+        let g = surface_of(&menu);
+        assert_eq!((g.layer, g.alpha), (Some(OverLayer::Top), 0.4f32 as f64));
+        assert_eq!(surface_of(&rect(0.0, 0.0, 9.0, 9.0)).layer, None);
+        // out of range opacities are held to 0..1
+        assert_eq!(surface_of(&GlassRect { alpha: 3.0, ..menu }).alpha, 1.0);
+        let mut s = sized();
+        s.set_glass(&[GlassRect { alpha: 0.0, ..menu }, menu]);
+        let drawn = s.surfaces();
+        assert_eq!(drawn.len(), 1);
+        assert_eq!(drawn[0].layer, Some(OverLayer::Top));
+    }
+
+    fn still() -> Scene {
+        let mut s = Scene::new(
+            SceneOptions {
+                backdrop: Backdrop::Still,
+                ..SceneOptions::default()
+            },
+            1,
+        );
+        s.resize(800.0, 600.0, 1.0);
+        s
+    }
+
+    #[test]
+    fn the_still_dye_table_parses() {
+        let blobs = still_blobs();
+        assert!(blobs.len() >= 8, "{}", blobs.len());
+        for b in &blobs {
+            assert!(
+                (-0.2..=1.2).contains(&b.x) && (-0.2..=1.2).contains(&b.y),
+                "{b:?}"
+            );
+            assert!(b.color < 3 && b.radius > 0.0 && b.radius < 0.1, "{b:?}");
+            assert!(b.strength > 0.0 && b.strength <= 1.0, "{b:?}");
+        }
+        // every colour is used
+        for c in 0..3 {
+            assert!(blobs.iter().any(|b| b.color == c));
+        }
+    }
+
+    #[test]
+    fn a_still_backdrop_pushes_no_liquid() {
+        let mut s = still();
+        assert!(s.ops.is_empty(), "no seeds");
+        s.pointer_move(10.0, 10.0);
+        s.pointer_move(100.0, 100.0);
+        s.tap(500.0, 500.0);
+        assert!(s.ops.is_empty(), "no ripple push");
+        assert_eq!(s.ripples.len(), 1, "the ring wave still runs");
+        // its dye: one dye-only splat per blob, y up, in the palette's colours
+        let ops = s.still_ops();
+        let blobs = still_blobs();
+        assert_eq!(ops.len(), blobs.len());
+        let pal = SceneOptions::default().palette;
+        match ops[0] {
+            FluidOp::Dye {
+                x,
+                y,
+                color,
+                radius,
+            } => {
+                assert_eq!(
+                    (x, y, radius),
+                    (blobs[0].x, 1.0 - blobs[0].y, blobs[0].radius)
+                );
+                assert_eq!(color, pal[blobs[0].color].map(|v| v * blobs[0].strength));
+            }
+            op => panic!("{op:?}"),
+        }
+    }
+
+    #[test]
+    fn a_still_dye_is_splatted_afresh_only_when_it_changed() {
+        let mut s = still();
+        // the first frame: dye and backdrop
+        assert_eq!(s.take_still_work(), (true, true));
+        assert_eq!(s.take_still_work(), (false, false));
+        s.advance(1.0 / 60.0, 1.0);
+        assert_eq!(s.take_still_work(), (false, false), "nothing moved");
+        assert!(!s.animating());
+        // any new size makes new grids and splats the dye afresh, a small change of shape too
+        // (kept, the dye would stretch with the window)
+        assert_eq!(
+            s.resize(900.0, 600.0, 1.0),
+            Resized {
+                targets: true,
+                fluid: true
+            }
+        );
+        assert_eq!(s.take_still_work(), (true, true));
+        s.resize(1800.0, 600.0, 1.0);
+        assert_eq!(s.take_still_work(), (true, true));
+        // another pixel ratio alone keeps it (the grids are in logical px)
+        assert_eq!(
+            s.resize(1800.0, 600.0, 2.0),
+            Resized {
+                targets: true,
+                fluid: false
+            }
+        );
+        assert_eq!(s.take_still_work(), (false, false));
+        // a palette: afresh while it crossfades, then not
+        s.set_palette([hex(0xFFFFFF); 3]);
+        assert!(s.animating());
+        let mut frames = 0;
+        loop {
+            s.advance(1.0 / 60.0, 1.0);
+            if s.take_still_work() != (true, true) {
+                break;
+            }
+            frames += 1;
+            assert!(frames < 1000);
+        }
+        assert!(frames > 10, "{frames}");
+        assert!(!s.animating());
+    }
+
+    #[test]
+    fn ripples_keep_a_still_backdrop_composited_until_they_end() {
+        let mut s = still();
+        s.take_still_work();
+        s.tap(400.0, 300.0);
+        let mut composited = 0;
+        while !s.ripples.is_empty() {
+            s.advance(0.1, 1.0);
+            assert_eq!(s.take_still_work(), (false, true));
+            composited += 1;
+        }
+        // the frame the last one ended in drew it gone; nothing after
+        assert!(composited >= 11, "{composited}");
+        s.advance(0.1, 1.0);
+        assert_eq!(s.take_still_work(), (false, false));
+    }
+
+    #[test]
+    fn a_living_liquid_takes_no_still_work() {
+        let mut s = sized();
+        s.set_palette([hex(0xFFFFFF); 3]);
+        s.tap(500.0, 500.0);
+        s.advance(0.1, 1.0);
+        assert_eq!(s.take_still_work(), (false, false));
+        assert!(!s.dye_stale && !s.backdrop_stale);
     }
 
     #[test]
