@@ -19,6 +19,9 @@ export component Thumb inherits Rectangle {
     callback move(length);
     callback up();
     out property <bool> hovered: ta.has-hover || root.preview-hover;
+    // what the curve tests read
+    out property <float> shown-opacity: bar.opacity;
+    out property <length> shown-width: root.w;
     property <length> w: root.hovered ? BrowserCss.wb-thumb-hover--width : BrowserCss.wb-thumb--width;
     animate w {
         duration: Calm.ms(BrowserCss.wb-thumb--transition-width-duration);

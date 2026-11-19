@@ -55,6 +55,10 @@ export component ElasticSlider inherits VerticalLayout {
     out property <bool> keyboard-focused: (keys.has-focus && root.tab-focus) || root.preview-focus;
     // the value shown (the knob's while held), in the domain's units
     out property <float> shown: root.live ? root.v.value : root.value;
+    // the tweens' progress, for the curve tests: the bubble's fade and rise, the label's fade
+    out property <float> bubble-fade: bub-op.t;
+    out property <float> bubble-rise: bub-tr.t;
+    out property <float> label-fade: out-fade.t;
 
     property <int> slot: -1;
     property <ControlView> v: Controls.view(root.slot);
