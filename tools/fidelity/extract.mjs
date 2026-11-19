@@ -301,6 +301,37 @@ function tokensSlint(css) {
       out.push(prop(`${n}-ms`, d, `${file}:${d.line}`));
     }
   }
+  out.push('}', '');
+  // The touch kit's menu (pages/touch.tsx `MENU`) and the settings Select's inline numbers
+  // (pages/settings.tsx `Select`: width, trigger gap, the view margin it keeps when it opens up).
+  const menu = table('pages/touch.tsx', 'MENU');
+  const mat = `pages/touch.tsx:${menu.first}-${menu.last}`;
+  out.push('// pages/touch.tsx `MENU` and pages/settings.tsx `Select` (the kit menu, controls/menu.slint;', '// the search capsule\'s icons, controls/search-capsule.slint)', 'export global TouchMenu {');
+  out.push(prop('first', D(menu.value.first), mat), prop('stagger', D(menu.value.stagger), mat), prop('gap', L(menu.value.gap), mat), prop('blur', L(menu.value.blur), mat), prop('confirm', D(menu.value.confirmMs), mat));
+  const sel = read('pages/settings.tsx');
+  const selLine = needle => { const l = lineOf('pages/settings.tsx', needle); use('pages/settings.tsx', l); return `pages/settings.tsx:${l}`; };
+  const sw = /GAP = (\d+), W = (\d+);/.exec(sel), se = /view\.bottom - (\d+)/.exec(sel);
+  if (!sw || !se) throw new Error('settings.tsx Select: GAP/W or the view margin not found');
+  out.push(prop('select-gap', L(Number(sw[1])), selLine('GAP = ')), prop('select-width', L(Number(sw[2])), selLine('GAP = ')), prop('select-edge', L(Number(se[1])), selLine('view.bottom - ')));
+  // the icon sizes and the chevron's stroke the menu, the Select and the settings search draw
+  // inline (`size={n}` on the JSX), by file, a needle on the line and the pattern
+  const inline = [
+    ['row-icon', 'pages/touch.tsx', 'name={r.icon} size=', /size=\{(\d+)\}/],
+    ['sub-icon', 'pages/touch.tsx', 'name="chevronRight" size=', /size=\{(\d+)\}/],
+    ['done-icon', 'pages/touch.tsx', 'class="tp-menu-done"><Icon', /size=\{(\d+)\}/],
+    ['chevron-icon', 'pages/touch.tsx', 'class={`tp-chev', /width="(\d+)"/],
+    ['chevron-stroke', 'pages/touch.tsx', 'class={`tp-chev', /stroke-width="([\d.]+)"/],
+    ['check-icon', 'pages/settings.tsx', 'class="st-mcheck">', /size=\{(\d+)\}/],
+    ['search-icon', 'pages/settings.tsx', 'StrokeIcon name="search" size=', /size=\{(\d+)\}/],
+    ['clear-icon', 'pages/settings.tsx', '<Icon name="close" size={14}', /size=\{(\d+)\}/],
+  ];
+  for (const [id, file, needle, re] of inline) {
+    const l = lineOf(file, needle);
+    const m = l && re.exec(read(file).split('\n')[l - 1]);
+    if (!m) throw new Error(`${file}: ${id} (${needle}) not found`);
+    use(file, l);
+    out.push(prop(id, id === 'chevron-stroke' ? F(Number(m[1])) : L(Number(m[1])), `${file}:${l}`));
+  }
   out.push('}');
   return out.join('\n');
 }

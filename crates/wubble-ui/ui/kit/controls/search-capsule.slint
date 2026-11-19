@@ -1,0 +1,184 @@
+// design: pages/settings.tsx:558-566, pages/settings.css:12-20 @598f814
+// The search capsule (`.st-search`): thin glass (`wb-thin wb-film`), 40 high, radius 20, padding
+// 0 6 0 14, gap 8, a 16 px mist search icon, the 14 px input (placeholder haze); the film ring is
+// on (`wb-on`) while it has the focus or a query. The clear button (`.st-clear`, 28, radius 14,
+// white .10, a 14 px ink close) shows only with a query: in from .8, clear and blurred 3 px
+// (opacity and blur .2 s, scale .24 s, ease-out), out over .15 s ease-in; hidden it takes no
+// pointer and no focus. Escape with a query clears it and is consumed (else `escaped()` and the
+// key goes on to the sheet or page around it); the clear button clears and gives the focus back to the input.
+
+import { Palette, TouchMenu } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Tween } from "../motion/tween.slint";
+import { Press } from "../motion/press.slint";
+import { OverlapLook } from "../motion/overlap.slint";
+import { Icon, Glyph } from "icon.slint";
+import { GlassTier } from "../../components/model.slint";
+import { FocusKeys } from "../../components/focus-ring.slint";
+
+export component SearchCapsule inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    callback edited(string);
+    callback accepted(string);
+    // Escape in an empty field: a sheet or page around it may close.
+    callback escaped();
+    out property <bool> focused: input.has-focus;
+    // the ring (`wb-on`) and the clear button's state
+    out property <bool> ring: input.has-focus || root.text != "";
+    out property <bool> clear-shown: root.text != "";
+    // the clear button's look (curve tests)
+    out property <float> clear-opacity: clear.e;
+    out property <float> clear-scale: clear-body.zoom;
+    out property <length> clear-blur: clear.blur;
+    public function take-focus() {
+        input.focus();
+    }
+    function clear-query() {
+        input.text = "";
+        root.edited("");
+    }
+
+    height: SettingsCss.st-search--height;
+
+    GlassPanel {
+        tier: GlassTier.thin;
+        radius: SettingsCss.st-search--border-radius;
+        film: root.ring;
+        // `cursor: text`: a press anywhere on the capsule focuses the input
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+        HorizontalLayout {
+            padding-left: SettingsCss.st-search--padding-left;
+            padding-right: SettingsCss.st-search--padding-right;
+            spacing: SettingsCss.st-search--gap;
+            VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.search-icon;
+                    path: Glyph.search;
+                    tint: SettingsCss.st-search--color;
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                KitText {
+                    role: Role.st-search-input;
+                    text: root.placeholder;
+                    visible: input.text == "";
+                    color: SettingsCss.st-search-input-placeholder--color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                input := TextInput {
+                    font-family: Role.st-search-input.family;
+                    font-size: Role.st-search-input.size;
+                    font-weight: Role.st-search-input.weight;
+                    color: SettingsCss.st-search-input--color;
+                    selection-background-color: Shell.selection-fill;
+                    selection-foreground-color: Shell.selection-ink;
+                    vertical-alignment: center;
+                    single-line: true;
+                    accessible-label: root.placeholder;
+                    edited => {
+                        root.edited(self.text);
+                    }
+                    accepted => {
+                        root.accepted(self.text);
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            if self.text != "" {
+                                root.clear-query();
+                                return accept;
+                            }
+                            // the web handles Escape only with a query: it goes on to
+                            // the sheet or page around the field
+                            root.escaped();
+                            return reject;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: SettingsCss.wb-st-clear--width;
+                    height: SettingsCss.wb-st-clear--height;
+                    // opacity and blur on one curve, the scale on its own (CSS: three transitions)
+                    fade := Tween {
+                        on: root.clear-shown;
+                        in-ms: SettingsCss.wb-st-clear-on--transition-opacity-duration;
+                        out-ms: SettingsCss.wb-st-clear--transition-opacity-duration;
+                        in-easing: SettingsCss.wb-st-clear-on--transition-opacity-easing;
+                        out-easing: SettingsCss.wb-st-clear--transition-opacity-easing;
+                    }
+                    grow := Tween {
+                        on: root.clear-shown;
+                        in-ms: SettingsCss.wb-st-clear-on--transition-scale-duration;
+                        out-ms: SettingsCss.wb-st-clear--transition-scale-duration;
+                        in-easing: SettingsCss.wb-st-clear-on--transition-scale-easing;
+                        out-easing: SettingsCss.wb-st-clear--transition-scale-easing;
+                    }
+                    press := Press {
+                        pressed: hit.pressed;
+                    }
+                    visible: fade.t > 0;
+                    clear := OverlapLook {
+                        e: fade.t;
+                        entering: root.clear-shown;
+                        shift-in: 0px;
+                        shift-out: 0px;
+                        scale-from: 1;
+                        blur-from: SettingsCss.wb-st-clear--filter-blur;
+                        clear-body := OverlapLook {
+                            e: grow.t;
+                            fade: 1;
+                            shift-in: 0px;
+                            shift-out: 0px;
+                            scale-from: SettingsCss.wb-st-clear--scale;
+                            blur-from: 0px;
+                            Rectangle {
+                                border-radius: SettingsCss.wb-st-clear--border-radius;
+                                background: SettingsCss.wb-st-clear--background;
+                                transform-scale: press.scale;
+                                Icon {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    size: TouchMenu.clear-icon;
+                                    path: Glyph.close;
+                                    tint: SettingsCss.wb-st-clear--color;
+                                }
+                            }
+                        }
+                    }
+                    hit := TouchArea {
+                        enabled: root.clear-shown;
+                        clicked => {
+                            root.clear-query();
+                            input.focus();
+                        }
+                    }
+                    keys := FocusKeys {
+                        enabled: root.clear-shown;
+                        accessible-role: AccessibleRole.button;
+                        accessible-label: "Clear search";
+                        activate => {
+                            root.clear-query();
+                            input.focus();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

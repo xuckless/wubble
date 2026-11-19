@@ -1,0 +1,101 @@
+// design: pages/settings.tsx:200-260, pages/settings.css:75-81 @598f814
+// The settings Select: "a picker that is the Touch everything menu". The trigger
+// (`.st-select-trig`: the glass button body, min 156 wide, 38 high, the current option swapped
+// in by the crossfade, the chevron turning over) opens a 220-wide Menu right-aligned to it,
+// grown from the trigger's centre, its rows radio items with the accent check on the current
+// one. It opens upward when the view (the page's scroller) has no room below and room above:
+// `bottom + 8 + H > view bottom - 8 && top - 8 - H > view top + 8`, H = rows · 36 + 12 (the
+// menu's height), decided as it opens. Keys as the menu's; ArrowDown on the closed trigger
+// opens it with the focus on the current option. `picked(i)` only when it changed.
+
+import { Palette, TouchMenu } from "../gen/tokens.slint";
+import { TouchCss, SettingsCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { MenuEntry } from "../../components/model.slint";
+import { Menu, MenuTrigger } from "menu.slint";
+
+export component Select inherits Rectangle {
+    // the options (their labels; the rest of each entry as the menu's)
+    in property <[MenuEntry]> options;
+    in property <int> value;
+    in property <string> label;
+    in property <color> accent: Palette.sky;
+    // the view the menu must stay inside (window coordinates; the page's scroller), for the
+    // upward flip; unbounded by default (it opens down)
+    in property <length> view-top: -Shell.no-clip;
+    in property <length> view-bottom: Shell.no-clip;
+    callback picked(int);
+    property <bool> open;
+    property <bool> via-key;
+    property <bool> up;
+    out property <bool> is-open: root.open;
+    out property <bool> opens-up: root.up;
+    property <int> current: root.value >= 0 && root.value < root.options.length ? root.value : 0;
+    property <length> menu-height: root.options.length * TouchCss.wb-tp-mrow--height + 2 * TouchCss.tp-menu--padding;
+    preferred-width: trigger.preferred-width;
+    min-width: trigger.min-width;
+    height: trigger.height;
+
+    // settings.tsx:216-218, as it opens
+    pure function fits-up() -> bool {
+        let top = root.absolute-position.y;
+        let bottom = top + root.height;
+        return bottom + TouchMenu.select-gap + root.menu-height > root.view-bottom - TouchMenu.select-edge && top - TouchMenu.select-gap - root.menu-height > root.view-top + TouchMenu.select-edge;
+    }
+    function toggle(by-key: bool) {
+        root.via-key = by-key;
+        if !root.open {
+            root.up = root.fits-up();
+        }
+        root.open = !root.open;
+        if root.open && by-key {
+            menu.take-focus();
+        }
+    }
+
+    trigger := MenuTrigger {
+        width: root.width;
+        least-width: SettingsCss.wb-st-select-trig--min-width;
+        trigger-height: SettingsCss.wb-st-select-trig--height;
+        text: root.current < root.options.length ? root.options[root.current].label : "";
+        label: root.label;
+        open: root.open;
+        clicked(by-key) => {
+            root.toggle(by-key);
+        }
+        down => {
+            root.toggle(true);
+        }
+    }
+    menu := Menu {
+        x: -root.absolute-position.x;
+        y: -root.absolute-position.y;
+        width: Shell.no-clip;
+        height: Shell.no-clip;
+        open: root.open;
+        via-key: root.via-key;
+        start: root.current;
+        entries: root.options;
+        label: root.label;
+        checks: true;
+        checked: root.current;
+        accent: root.accent;
+        menu-width: TouchMenu.select-width;
+        // `.st-menu { right: 0 }`; `.st-menu.up { bottom: calc(100% + gap) }`
+        panel-x: root.absolute-position.x + root.width - TouchMenu.select-width;
+        panel-y: root.up ? root.absolute-position.y - TouchMenu.select-gap - self.panel-height : root.absolute-position.y + root.height + TouchMenu.select-gap;
+        origin-x: TouchMenu.select-width - root.width / 2;
+        origin-y: root.up ? self.panel-height + TouchMenu.select-gap + root.height / 2 : -(TouchMenu.select-gap + root.height / 2);
+        chosen(i) => {
+            if i != root.value {
+                root.picked(i);
+            }
+        }
+        close-requested(refocus) => {
+            root.open = false;
+            if refocus {
+                trigger.focus-trigger();
+            }
+        }
+    }
+}

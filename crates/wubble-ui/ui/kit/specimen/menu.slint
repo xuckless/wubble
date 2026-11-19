@@ -1,0 +1,164 @@
+// derived: Menu, MenuRow, MenuHighlight, MenuTrigger, MenuButton(controls/menu.slint) + Select(controls/select.slint) + SearchCapsule(controls/search-capsule.slint) + Sheet(controls/sheet.slint)
+// The specimen of controls kit C on the design's ground (the touch page's stage, pages/touch.tsx
+// `Menu`; the settings page's Select and search): every control of the lane in each state it can
+// be put in from outside, each cell with an element id (`MenuSpecimen::<id>`) for the geometry
+// and still comparisons. Hover, focus and the keys are driven by the tests, not drawn here.
+
+import { Palette, Space, TouchMenu } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { MenuEntry } from "../../components/model.slint";
+import { Menu, MenuRow, MenuHighlight, MenuTrigger, MenuButton } from "../controls/menu.slint";
+import { Select } from "../controls/select.slint";
+import { SearchCapsule } from "../controls/search-capsule.slint";
+import { Sheet } from "../controls/sheet.slint";
+import { Glyph } from "../controls/icon.slint";
+
+export component MenuSpecimen inherits Rectangle {
+    // the design's MENU_ROWS (pages/touch.tsx)
+    property <[MenuEntry]> tab-rows: [
+        { label: "Duplicate", enabled: true, icon: "duplicate", shortcut: "Ctrl D" },
+        { label: "Move to Space", enabled: true, icon: "move" },
+        { label: "Copy link", enabled: true, icon: "link", shortcut: "Ctrl Shift C" },
+        { label: "Close tab", enabled: true, icon: "close", shortcut: "Ctrl W", danger: true },
+    ];
+    // wubble's: a separator and a disabled row (derived)
+    property <[MenuEntry]> page-rows: [
+        { label: "Back", enabled: true },
+        { label: "Forward", enabled: false },
+        { separator: true },
+        { label: "Copy", enabled: true, icon: "copy", shortcut: "Ctrl C" },
+    ];
+    property <[MenuEntry]> engines: [
+        { label: "DuckDuckGo", enabled: true },
+        { label: "Startpage", enabled: true },
+        { label: "Brave Search", enabled: true },
+    ];
+    background: Palette.deep;
+
+    HorizontalLayout {
+        padding: Space.s8;
+        spacing: Space.s8;
+        alignment: start;
+        // triggers, rows and the highlight in their states
+        VerticalLayout {
+            spacing: Space.s4;
+            alignment: start;
+            width: TouchCss.tp-menu--width;
+            menu-button := MenuButton {
+                text: "Tab actions";
+                entries: root.tab-rows;
+                done-labels: ["Duplicated", "Moved to Work", "Link copied", "Tab closed"];
+            }
+            trigger-open := MenuTrigger {
+                text: "Tab actions";
+                open: true;
+            }
+            trigger-done := MenuTrigger {
+                text: "Link copied";
+                done: true;
+            }
+            select := Select {
+                label: "Search engine";
+                options: root.engines;
+                value: 1;
+            }
+            Rectangle {
+                height: TouchCss.wb-tp-mrow--height * 4;
+                hl-row := MenuHighlight {
+                    on: true;
+                    top: 0px;
+                    panel-width: TouchCss.tp-menu--width;
+                }
+                hl-danger := MenuHighlight {
+                    on: true;
+                    danger: true;
+                    top: TouchCss.wb-tp-mrow--height * 3;
+                    panel-width: TouchCss.tp-menu--width;
+                }
+                VerticalLayout {
+                    padding-left: TouchCss.tp-menu--padding;
+                    padding-right: TouchCss.tp-menu--padding;
+                    row-rest := MenuRow {
+                        shown: true;
+                        label: "Duplicate";
+                        icon: Glyph.duplicate;
+                        kbd: "Ctrl D";
+                    }
+                    row-sub := MenuRow {
+                        shown: true;
+                        label: "Move to Space";
+                        icon: Glyph.move;
+                        sub: true;
+                    }
+                    row-disabled := MenuRow {
+                        shown: true;
+                        label: "Forward";
+                        enabled: false;
+                    }
+                    row-danger := MenuRow {
+                        shown: true;
+                        label: "Close tab";
+                        icon: Glyph.close;
+                        kbd: "Ctrl W";
+                        danger: true;
+                    }
+                }
+            }
+        }
+        // open menus: the design's, wubble's with a separator, the Select's
+        VerticalLayout {
+            spacing: Space.s4;
+            alignment: start;
+            width: TouchCss.tp-menu--width;
+            Rectangle {
+                height: menu-open.panel-height;
+                menu-open := Menu {
+                    open: true;
+                    entries: root.tab-rows;
+                    label: "Tab actions";
+                }
+            }
+            Rectangle {
+                height: menu-rules.panel-height;
+                menu-rules := Menu {
+                    open: true;
+                    entries: root.page-rows;
+                }
+            }
+            Rectangle {
+                height: menu-select.panel-height;
+                menu-select := Menu {
+                    open: true;
+                    entries: root.engines;
+                    checks: true;
+                    checked: 1;
+                    menu-width: TouchMenu.select-width;
+                    label: "Search engine";
+                }
+            }
+        }
+        // the search capsule, empty and with a query; a sheet
+        VerticalLayout {
+            spacing: Space.s4;
+            alignment: start;
+            width: TouchCss.tp-menu--width;
+            search-empty := SearchCapsule {
+                placeholder: "Search settings";
+            }
+            search-query := SearchCapsule {
+                placeholder: "Search settings";
+                text: "cookies";
+            }
+            Rectangle {
+                height: sheet.progress > 0 ? TouchCss.wb-tp-mrow--height * 6 : 0px;
+                sheet := Sheet {
+                    open: true;
+                    title: "Leave site?";
+                    message: "Changes you made may not be saved.";
+                    accept-text: "Leave";
+                    cancel-text: "Stay";
+                }
+            }
+        }
+    }
+}

@@ -39,6 +39,8 @@ fn pump() {
 fn the_shell_names_its_controls_and_runs_their_default_action() {
     init_integration_test_with_mock_time();
     let app = AppWindow::new().unwrap();
+    // the kit menu keeps its highlight and keys in the controls registry
+    let _controls = wubble_ui::controls::wire(&app);
     app.window().set_size(LogicalSize::new(1280.0, 800.0));
     let tab = |id: i32, title: &str| TabItem {
         id,

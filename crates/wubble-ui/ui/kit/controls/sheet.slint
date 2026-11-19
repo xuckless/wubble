@@ -1,0 +1,146 @@
+// derived: GlassPanel(material/glass.slint) thick + OverlapLayer(motion/overlap.slint) + SheetButton(components/sheet-button.slint), kit-plan 2.4 `Sheet`
+// The sheet every modal question shares (JS dialog, sign-in, the pages' clear / bookmark /
+// password sheets, print): the design has no sheet, so it is composed of the design's parts and
+// listed for the owner (notes/fidelity/derived-review.md). A scrim that blocks the page under
+// it (`Shell.scrim`, fading as the command bar's), thick glass anchored to the top of the content
+// area, entering and leaving as Overlap (`wb-in` / `wb-out`: 7 px up at .98, blurred, 240 ms in,
+// 190 ms out), the title as a settings section heading (`.st-sec-head h2`, 19 / 600), the message
+// in body mist, the sheet's own fields in `@children` and right-aligned buttons. Its geometry
+// stays the existing derived `Shell.sheet-*` values. Enter accepts, Escape cancels: `accepted`
+// and `cancelled` are intents, the owner acts. The buttons are today's `SheetButton`: swap them
+// for lane c1's `Button { kind: pri / ghost }` when it lands.
+
+import { Palette, Space } from "../gen/tokens.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { OverlapLayer } from "../motion/overlap.slint";
+import { Tween } from "../motion/tween.slint";
+import { GlassTier } from "../../components/model.slint";
+import { SheetButton } from "../../components/sheet-button.slint";
+
+export component Sheet inherits Rectangle {
+    in property <bool> open;
+    in property <string> title;
+    in property <string> message;
+    in property <string> accept-text: "OK";
+    // Empty: no cancel button.
+    in property <string> cancel-text;
+    // The scene's glass for the sheet, when it sits over the page (app.slint's sheets): its
+    // key (GlassKeys) and overlay layer (GlassOver). A sheet inside a page keeps the Slint glass.
+    in property <int> glass-key: -1;
+    in property <int> glass-layer: 0;
+    callback accepted();
+    callback cancelled();
+    // the entrance's progress (tests)
+    out property <float> progress: layer.progress;
+
+    // Takes the keyboard for Enter and Escape (a sheet with a field focuses the field instead).
+    public function take-focus() {
+        keys.focus();
+    }
+
+    // The exit is seen (Overlap: the old sheet shares the screen while it leaves): drawn until
+    // the panel has left; the sheet owning it keeps its view and only the open sheet answers.
+    visible: root.open || layer.progress > 0;
+
+    // The scrim: the page under it gets no pointer events while the sheet waits.
+    TouchArea {
+        enabled: root.open;
+        scroll-event(e) => {
+            root.open ? accept : reject
+        }
+    }
+    scrim := Tween {
+        on: root.open;
+        in-ms: Shell.scrim-in;
+        out-ms: Shell.scrim-out;
+    }
+    Rectangle {
+        background: Shell.scrim;
+        opacity: scrim.t;
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if !root.open {
+                return reject;
+            }
+            if event.text == Key.Escape {
+                root.cancelled();
+                return accept;
+            }
+            if event.text == Key.Return {
+                root.accepted();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    layer := OverlapLayer {
+        shown: root.open;
+        width: min(Shell.sheet-width, root.width - 2 * Shell.sheet-margin);
+        height: body.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: Shell.command-bar-top;
+        GlassPanel {
+            // the scene draws its glass above the page (GlassPanel `over-layer`)
+            key: root.glass-key;
+            over-layer: root.glass-layer;
+            // the entrance fades the layer, not this panel: the scene's glass shows only while it does
+            present: layer.progress > 0;
+            tier: GlassTier.thick;
+            radius: Shell.sheet-radius;
+            over-content: true;
+            TouchArea {
+                enabled: root.open;
+            }
+            body := VerticalLayout {
+                padding: Shell.sheet-pad;
+                spacing: Space.s2;
+                KitText {
+                    role: Role.st-sec-head-h2;
+                    text: root.title;
+                    color: Palette.ink;
+                    overflow: elide;
+                }
+                KitText {
+                    role: Role.body;
+                    text: root.message;
+                    visible: self.text != "";
+                    color: Palette.mist;
+                    wrap: word-wrap;
+                }
+                @children
+                Rectangle {
+                    height: Space.s3;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Space.s2;
+                    if root.cancel-text != "": SheetButton {
+                        text: root.cancel-text;
+                        clicked => {
+                            if root.open {
+                                root.cancelled();
+                            }
+                        }
+                    }
+                    SheetButton {
+                        text: root.accept-text;
+                        primary: true;
+                        clicked => {
+                            if root.open {
+                                root.accepted();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
