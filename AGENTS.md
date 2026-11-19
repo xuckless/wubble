@@ -58,6 +58,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
+    cargo run -p wubble -- --no-sandbox   # CEF without its sandbox, debugging only (warned at start)
 
 macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there; rsync the
 worktree without `target/` and `.git`; clippy needs `rustup component add clippy` once):

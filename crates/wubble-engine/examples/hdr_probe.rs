@@ -103,6 +103,7 @@ fn run(dir: &Path) -> Result<(), String> {
         features: Default::default(),
         clipboard_bridge: false,
         profile: wubble_engine::app::ProfileKind::Throwaway,
+        no_sandbox: false,
     })
     .map_err(|e| e.to_string())?;
     let id = engine

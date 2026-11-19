@@ -20,8 +20,20 @@ const PROBES: (&str, &str) = ("probes", include_str!("probes.js"));
 /// passed [`CLIPBOARD_SWITCH`] (browser side `crates/wubble/src/clipboard.rs`).
 const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
 /// Must match `CLIPBOARD_SWITCH` in wubble-engine/src/app.rs. Duplicated on purpose,
-/// as `sandbox` below: the helper cannot depend on wubble-engine.
+/// as [`NO_SANDBOX_SWITCH`]: the helper cannot depend on wubble-engine.
 const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
+/// Must match `NO_SANDBOX_SWITCH` in wubble-engine/src/app.rs; CEF passes it on to
+/// every subprocess when the browser runs unsandboxed.
+const NO_SANDBOX_SWITCH: &str = "no-sandbox";
+
+/// The same rule as wubble-engine's `sandbox_mode` (TODO.md Decided, "CEF sandbox").
+fn sandbox_mode(no_sandbox: bool, windows: bool) -> CefSandboxMode {
+    if no_sandbox || windows {
+        CefSandboxMode::UnsandboxedTrustedContent
+    } else {
+        CefSandboxMode::Sandboxed
+    }
+}
 
 /// One context script running `scripts`, each called with its own channel:
 /// `send(text)` posts `name\ntext`, and a browser message `name\ntext` reaches
@@ -53,10 +65,9 @@ fn compose(scripts: &[(&str, &str)]) -> String {
 fn main() {
     #[cfg(target_os = "macos")]
     let _framework = load_framework();
-    // Must match `SANDBOX` in wubble-engine/src/app.rs. Duplicated on purpose:
-    // the helper stays tiny and cannot depend on wubble-engine (TODO.md, "CEF sandbox").
-    let sandbox = CefSandboxMode::UnsandboxedTrustedContent;
-    let clipboard = std::env::args().any(|a| a.strip_prefix("--") == Some(CLIPBOARD_SWITCH));
+    let switch = |name| std::env::args().any(|a| a.strip_prefix("--") == Some(name));
+    let sandbox = sandbox_mode(switch(NO_SANDBOX_SWITCH), cfg!(windows));
+    let clipboard = switch(CLIPBOARD_SWITCH);
     let scripts: Vec<_> = [AUTOFILL, ZOOM, PROBES]
         .into_iter()
         .chain(clipboard.then_some(CLIPBOARD))
@@ -100,6 +111,20 @@ mod tests {
         assert!(script.contains("[\"probes\", "));
         // No script ends in a statement terminator inside the array.
         assert!(!script.contains("});,"));
+    }
+
+    #[test]
+    fn the_sandbox_follows_the_engines_rule() {
+        assert_eq!(NO_SANDBOX_SWITCH, "no-sandbox");
+        assert_eq!(sandbox_mode(false, false), CefSandboxMode::Sandboxed);
+        assert_eq!(
+            sandbox_mode(true, false),
+            CefSandboxMode::UnsandboxedTrustedContent
+        );
+        assert_eq!(
+            sandbox_mode(false, true),
+            CefSandboxMode::UnsandboxedTrustedContent
+        );
     }
 
     #[test]

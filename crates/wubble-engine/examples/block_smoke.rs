@@ -110,6 +110,7 @@ fn run(dir: &Path) -> Result<(), String> {
         response_observer: None,
         features: Default::default(),
         profile: wubble_engine::app::ProfileKind::Throwaway,
+        no_sandbox: false,
     })
     .map_err(|e| e.to_string())?;
     let view = engine
