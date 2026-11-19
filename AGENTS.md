@@ -58,6 +58,8 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
     cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line; exits; run by hand only
     cargo run -p wubble -- --smoke boost   # loopback pages: a Boost's CSS, tint and document-start script, a CSP page, turned off; exits; run by hand only
+    cargo run -p wubble -- --measure memory --out mem.csv   # process tree memory with 0/1/10/50 tabs, frozen, discarded; window; run by hand only
+    scripts/mem-compare.sh chromium-browser 10   # another browser's PSS sum on the same page; opens its window; run by hand only
     cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
     cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
     cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
