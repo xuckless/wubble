@@ -99,8 +99,6 @@ mod tests {
         let pid = std::process::id();
         if cfg!(target_os = "linux") {
             assert!(super::rollup(pid).and_then(|r| r.pss).is_some());
-        }
-        if cfg!(target_os = "linux") {
             assert!(super::namespace_pid(pid).is_some());
         }
         if cfg!(target_os = "macos") {

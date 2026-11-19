@@ -33,7 +33,7 @@ impl Host {
             views: self.engine.view_count(),
             blocker_busy: self.blocking.is_busy(),
         };
-        for action in memory::step(&seen) {
+        for action in memory::step(&seen, Instant::now()) {
             match action {
                 Action::Open(n) => {
                     let first = self.model.tabs.len();
@@ -49,10 +49,9 @@ impl Host {
                         format!("{}x{}@{scale}", size.width, size.height)
                     });
                     let window = window.unwrap_or_default();
-                    let ready_ms = crate::measure::TICK.as_millis() * u128::from(ready_after);
                     let wgpu = self.factory.gpu.allocator_bytes();
                     let renderers = self.tasks.renderer_pids();
-                    memory::sample(state, ready_ms, &seen, &renderers, &window, wgpu);
+                    memory::sample(state, ready_after, &seen, &renderers, &window, wgpu);
                 }
                 // The policy's own transitions at its own delays; the pressure stays out of it.
                 Action::Tick(sleep) => {

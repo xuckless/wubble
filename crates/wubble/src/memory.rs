@@ -10,13 +10,13 @@
 //! settings stay as they are. Each state is sampled once it holds (tabs open and loaded, the
 //! blocker idle, the policy's effects applied) and has held for [`SETTLE_TICKS`].
 //!
-//! [`next`] is pure and reads no clock; the host (`host/memory.rs`) gathers [`Seen`] and runs
-//! the actions, the sampling below reads the OS.
+//! [`next`] is pure: the host (`host/memory.rs`) hands it [`Seen`] and the time of the tick
+//! and runs the actions, the sampling below reads the OS.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wubble_core::memreport;
 use wubble_core::sleep::SleepPolicy;
@@ -91,11 +91,11 @@ pub struct Seen {
 pub enum Action {
     /// Open this many more tabs.
     Open(usize),
-    /// Sample the state, reached `ready_after` ticks after the phase began (the tabs opened and
-    /// loaded, or the policy applied), a coarse time to compare settings by.
+    /// Sample the state, reached `ready_after` after the phase began (the tabs opened and
+    /// loaded, or the policy applied): wall time between the ticks, to compare settings by.
     Sample {
         state: &'static str,
-        ready_after: u32,
+        ready_after: Duration,
     },
     /// A lifecycle tick past the policy's delay.
     Tick(Sleep),
@@ -106,10 +106,13 @@ pub enum Action {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Driver {
     pub phase: Phase,
-    /// Ticks the phase's state has held, once it does.
-    held: Option<u32>,
+    /// Ticks the phase's state has held and the tick its hold began on, once it does.
+    held: Option<(u32, Instant)>,
     /// Ticks since the phase began.
     ticks: u32,
+    /// When the phase began: the tick that opened its tabs or ticked the policy (the first
+    /// tick for the first phase).
+    began: Option<Instant>,
     done: bool,
 }
 
@@ -119,6 +122,7 @@ impl Default for Driver {
             phase: Phase::Tabs(0),
             held: None,
             ticks: 0,
+            began: None,
             done: false,
         }
     }
@@ -135,8 +139,8 @@ fn holds(phase: Phase, seen: &Seen) -> bool {
         }
 }
 
-/// One measure tick.
-pub fn next(d: Driver, seen: &Seen) -> (Driver, Vec<Action>) {
+/// One measure tick at `now`.
+pub fn next(d: Driver, seen: &Seen, now: Instant) -> (Driver, Vec<Action>) {
     if d.done {
         return (d, vec![]);
     }
@@ -148,13 +152,23 @@ pub fn next(d: Driver, seen: &Seen) -> (Driver, Vec<Action>) {
         );
         return (Driver { done: true, ..d }, vec![Action::Fail(why)]);
     }
-    let held = holds(d.phase, seen).then(|| d.held.map_or(0, |n| n + 1));
-    if held.is_none_or(|n| n < SETTLE_TICKS) {
-        return (Driver { held, ticks, ..d }, vec![]);
-    }
+    let began = d.began.unwrap_or(now);
+    let held = holds(d.phase, seen).then(|| d.held.map_or((0, now), |(n, at)| (n + 1, at)));
+    let Some((_, hold_began)) = held.filter(|&(n, _)| n >= SETTLE_TICKS) else {
+        let began = Some(began);
+        return (
+            Driver {
+                held,
+                ticks,
+                began,
+                ..d
+            },
+            vec![],
+        );
+    };
     let sample = Action::Sample {
         state: d.phase.name(),
-        ready_after: ticks.saturating_sub(SETTLE_TICKS + 1),
+        ready_after: hold_began.saturating_duration_since(began),
     };
     let (phase, then) = match d.phase {
         Phase::Tabs(i) if i + 1 < COUNTS.len() => (
@@ -172,6 +186,7 @@ pub fn next(d: Driver, seen: &Seen) -> (Driver, Vec<Action>) {
             phase,
             held: None,
             ticks: 0,
+            began: Some(now),
             done: false,
         },
         vec![sample, then],
@@ -215,12 +230,12 @@ pub fn url(n: usize) -> Option<String> {
 }
 
 /// One step of the driver.
-pub fn step(seen: &Seen) -> Vec<Action> {
+pub fn step(seen: &Seen, now: Instant) -> Vec<Action> {
     RUN.with_borrow_mut(|r| {
         let Some(r) = r.as_mut() else {
             return vec![];
         };
-        let (driver, actions) = next(r.driver, seen);
+        let (driver, actions) = next(r.driver, seen, now);
         r.driver = driver;
         actions
     })
@@ -233,7 +248,7 @@ pub fn step(seen: &Seen) -> Vec<Action> {
 /// `window` is the window's physical size and scale, `wgpu` the GPU allocator's bytes.
 pub fn sample(
     state: &str,
-    ready_ms: u128,
+    ready_after: Duration,
     seen: &Seen,
     renderers: &BTreeSet<u32>,
     window: &str,
@@ -259,8 +274,11 @@ pub fn sample(
         }
         let _ = writeln!(
             r.report,
-            "\ntabs={} views={} frozen={} window={window} ready_after_ms~{ready_ms}",
-            seen.tabs, seen.views, seen.frozen
+            "\ntabs={} views={} frozen={} window={window} ready_after_ms={}",
+            seen.tabs,
+            seen.views,
+            seen.frozen,
+            ready_after.as_millis()
         );
         r.report.push_str(&memreport::table(state, &procs));
         if let Some(b) = wubble_sysmem::rollup(std::process::id()) {
@@ -341,15 +359,22 @@ mod tests {
     fn sample(state: &'static str) -> Action {
         Action::Sample {
             state,
-            ready_after: 0,
+            ready_after: Duration::ZERO,
         }
     }
 
-    /// Runs the driver for `n` ticks against `seen`, collecting the actions.
+    /// One instant for every tick of a test that does not look at the time.
+    fn t0() -> Instant {
+        static T0: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+        *T0
+    }
+
+    /// Runs the driver for `n` ticks against `seen`, all at [`t0`], collecting the actions.
     fn run(mut d: Driver, seen: &Seen, n: u32) -> (Driver, Vec<Action>) {
+        let now = t0();
         let mut all = vec![];
         for _ in 0..n {
-            let (next_d, actions) = next(d, seen);
+            let (next_d, actions) = next(d, seen, now);
             d = next_d;
             all.extend(actions);
         }
@@ -371,7 +396,7 @@ mod tests {
         // Not yet held long enough.
         let (d, a) = run(d, &seen(0, 0), SETTLE_TICKS);
         assert!(a.is_empty());
-        let (d, a) = next(d, &seen(0, 0));
+        let (d, a) = next(d, &seen(0, 0), t0());
         assert_eq!(a, vec![sample("empty"), Action::Open(1)]);
         // A tab still loading does not count; the hold starts over when it breaks.
         let (d, a) = run(d, &seen(1, 0), SETTLE_TICKS * 2);
@@ -384,12 +409,7 @@ mod tests {
         let (d, a) = run(d, &busy, 3);
         assert!(a.is_empty());
         let (d, a) = run(d, &seen(1, 1), SETTLE_TICKS + 1);
-        // Ready from the last unbroken hold on: 2 x SETTLE loading, SETTLE - 1 held, 3 busy.
-        let one = Action::Sample {
-            state: "one",
-            ready_after: 3 * SETTLE_TICKS + 2,
-        };
-        assert_eq!(a, vec![one, Action::Open(9)]);
+        assert_eq!(a, vec![sample("one"), Action::Open(9)]);
         let (d, a) = run(d, &seen(10, 10), SETTLE_TICKS + 1);
         assert_eq!(a, vec![sample("ten"), Action::Open(40)]);
         let (d, a) = run(d, &seen(50, 50), SETTLE_TICKS + 1);
@@ -410,6 +430,50 @@ mod tests {
         let (d, a) = run(d, &discarded, SETTLE_TICKS + 1);
         assert_eq!(a, vec![sample("fifty-discarded"), Action::Finish]);
         assert_eq!(run(d, &discarded, 5).1, vec![]);
+    }
+
+    /// The time to ready is the clock's, from the tick that began the phase to the one its
+    /// last unbroken hold began on, however few ticks fell in between (a blocked main thread
+    /// fires the timer late and drops the ticks it missed).
+    #[test]
+    fn ready_after_is_wall_time_to_the_last_hold() {
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        // Empty: the first tick begins the phase, the state holds from it on.
+        let mut d = Driver::default();
+        let mut a = vec![];
+        for i in 0..=u64::from(SETTLE_TICKS) {
+            let (n, act) = next(d, &seen(0, 0), at(i));
+            d = n;
+            a.extend(act);
+        }
+        let empty = Action::Sample {
+            state: "empty",
+            ready_after: Duration::ZERO,
+        };
+        assert_eq!(a, vec![empty, Action::Open(1)]);
+        // The phase began at the opening tick (SETTLE ms); one late tick 900 ms on still
+        // loading, a hold broken by the blocker, then the hold that lasts from 1500 ms on.
+        let began = u64::from(SETTLE_TICKS);
+        let (d, a) = next(d, &seen(1, 0), at(began + 900));
+        assert!(a.is_empty());
+        let (d, _) = next(d, &seen(1, 1), at(began + 1000));
+        let busy = Seen {
+            blocker_busy: true,
+            ..seen(1, 1)
+        };
+        let (mut d, _) = next(d, &busy, at(began + 1200));
+        let mut a = vec![];
+        for i in 0..=u64::from(SETTLE_TICKS) {
+            let (n, act) = next(d, &seen(1, 1), at(began + 1500 + i));
+            d = n;
+            a.extend(act);
+        }
+        let one = Action::Sample {
+            state: "one",
+            ready_after: Duration::from_millis(1500),
+        };
+        assert_eq!(a, vec![one, Action::Open(9)]);
     }
 
     #[test]
