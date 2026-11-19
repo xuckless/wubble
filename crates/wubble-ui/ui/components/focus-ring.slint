@@ -10,7 +10,9 @@ import { Shell } from "../kit/derived.slint";
 export component FocusRing inherits Rectangle {
     in property <bool> shown;
     in property <length> radius;
-    property <length> out: Shell.focus-ring-offset + Shell.focus-ring-width;
+    // outline-offset: 2 by default; a negative one draws the ring inside (.wb-tab -2px)
+    in property <length> offset: Shell.focus-ring-offset;
+    property <length> out: root.offset + Shell.focus-ring-width;
     visible: root.shown;
     Rectangle {
         x: -root.out;

@@ -502,10 +502,13 @@ pub enum InternalPage {
     Archive,
     /// The Task manager: tabs and processes with memory, CPU and state.
     Tasks,
+    /// The start page, the new-tab page: the design's living bubble (`start`), a search capsule
+    /// and the shell's favourites (TODO.md Decided, "Start page").
+    Start,
 }
 
 impl InternalPage {
-    pub const ALL: [InternalPage; 7] = [
+    pub const ALL: [InternalPage; 8] = [
         InternalPage::Settings,
         InternalPage::History,
         InternalPage::Bookmarks,
@@ -513,6 +516,7 @@ impl InternalPage {
         InternalPage::Passwords,
         InternalPage::Archive,
         InternalPage::Tasks,
+        InternalPage::Start,
     ];
 
     pub fn url(self) -> &'static str {
@@ -524,6 +528,7 @@ impl InternalPage {
             InternalPage::Passwords => "wubble://passwords",
             InternalPage::Archive => "wubble://archive",
             InternalPage::Tasks => "wubble://tasks",
+            InternalPage::Start => "wubble://start",
         }
     }
 
@@ -537,6 +542,7 @@ impl InternalPage {
             InternalPage::Passwords => "Passwords",
             InternalPage::Archive => "Archive",
             InternalPage::Tasks => "Task manager",
+            InternalPage::Start => "New tab",
         }
     }
 
@@ -1272,6 +1278,14 @@ mod tests {
         );
         assert_eq!(InternalPage::from_url("https://settings"), None);
         assert_eq!(InternalPage::from_url("wubble://nope"), None);
+        // the new-tab page
+        assert_eq!(InternalPage::ALL.len(), 8);
+        assert_eq!(
+            InternalPage::from_url("Wubble://Start/"),
+            Some(InternalPage::Start)
+        );
+        assert_eq!(InternalPage::Start.url(), "wubble://start");
+        assert_eq!(InternalPage::Start.title(), "New tab");
     }
 
     #[test]

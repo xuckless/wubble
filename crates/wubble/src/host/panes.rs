@@ -515,10 +515,17 @@ impl Host {
         let focused = self.shown();
         let rects = self.pane_rects(window);
         let fill = rects.len() == 1;
-        let split = self.w.panes.seam_count() > 0;
         let panel_x = rects.iter().find(|r| r.tab == PANEL_TAB).map(|r| r.x);
+        // a start page has no frame and no pane fill: the scene's living layer shows there
+        let start = |t| {
+            self.model.tabs.get(&t).is_some_and(|t| {
+                wubble_core::pages::InternalPage::from_url(&t.url)
+                    == Some(wubble_core::pages::InternalPage::Start)
+            })
+        };
         let panes: Vec<SplitPane> = rects
             .into_iter()
+            .filter(|r| !start(r.tab))
             .map(|r| {
                 let frame = self.w.frames.get(&r.tab);
                 let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));
@@ -542,8 +549,10 @@ impl Host {
                     } else {
                         Some(r.tab) == focused
                     },
-                    // the panes of a split and the docked panel close; a lone page does not
-                    closable: split || r.tab == PANEL_TAB,
+                    // only the docked panel shows a close button (wubble's, derived): the design's
+                    // split panes have none (webview.tsx); a page leaves the split from the tab
+                    // menu's Take Out of Split View, Mod+| or the command bar's unsplit action
+                    closable: r.tab == PANEL_TAB,
                     edge: masked.as_ref().map(|m| m.image.clone()).unwrap_or_default(),
                     margin: masked.as_ref().map_or(0.0, |m| m.margin),
                     prev_opacity: prev.map_or(0.0, |p| p.2),
@@ -563,7 +572,6 @@ impl Host {
             let source = &self.devtools.seam;
             // the panel's string, after the split's (`Host::split_grab`)
             let panel = panel_x.map(|x| {
-                let held = source.held || source.bend.x.abs() > BOWED;
                 let bow = Bow {
                     bend: source.bend.x,
                     gy: source.gy - f64::from(window.get_content_y()),
@@ -571,11 +579,12 @@ impl Host {
                 let x = x - SPLIT::gap / 2.0;
                 (
                     x,
-                    if held {
+                    if source.held || source.bend.x.abs() > BOWED {
                         string_line(x, height, RADIUS, bow)
                     } else {
                         String::new()
                     },
+                    source.held,
                 )
             });
             self.w
@@ -583,10 +592,11 @@ impl Host {
                 .seams(height)
                 .into_iter()
                 .chain(panel)
-                .map(|(x, path)| SplitSeam {
+                .map(|(x, path, held)| SplitSeam {
                     x: x as f32,
                     path: path.into(),
-                    // the pill's bend, height and hold: mid height until wired (controls kit B)
+                    held,
+                    // the pill's bend and height: mid height until wired (controls kit B)
                     ..Default::default()
                 })
                 .collect()

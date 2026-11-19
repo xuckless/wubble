@@ -3,8 +3,8 @@
 //! Source: the-wallpaper-project `src/wubble/slint/render.rs` (`Renderer`,
 //! uniform mirrors, `Arena`, `Pipelines`, `fluid_op`, `fluid_step`, `blur`,
 //! `frame`) and `crate/examples/headless.rs` (the readback). Owner's code.
-//! Changed: built on the shared `GpuContext` device; no bubble, pop or
-//! W-field passes and no overlay mode; the backdrop work is skipped on the
+//! Changed: built on the shared `GpuContext` device; the bubble, pop and W-field
+//! passes only on the start page's own layer ([`super::start`]), no overlay mode; the backdrop work is skipped on the
 //! frames the quality level says (`Quality`), and its targets shrink with it;
 //! the still backdrop (`Backdrop::Still`, the browser window's).
 //!
@@ -58,6 +58,7 @@ use super::pages::{
     OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur, rect_of,
 };
 use super::quality::{BackdropClock, MAX_DT, Quality};
+use super::start::{self, Globals, StartCard, StartDraw, StartFx, bubble_u, pop_u};
 use super::state::{
     Backdrop, FluidOp, FluidOptions, GlassSurface, Scene, SceneOptions, wave_uniforms,
 };
@@ -77,6 +78,8 @@ pub(super) const BLUR_WGSL: &str = include_str!("shaders/blur.wgsl");
 pub(super) const BLIT_WGSL: &str = include_str!("shaders/blit.wgsl");
 pub(super) const GLASS_WGSL: &str = include_str!("shaders/glass.wgsl");
 pub(super) const PAGE_WGSL: &str = include_str!("shaders/page.wgsl");
+pub(super) const BUBBLE_WGSL: &str = include_str!("shaders/bubble.wgsl");
+pub(super) const POP_WGSL: &str = include_str!("shaders/pop.wgsl");
 
 /// The blur pyramid's σ per level, in texels of the level each blur reads (scene.ts `frame`,
 /// `blur(this.bg, ..., 3.5)`, `blur(this.b1, ..., 4.5)`, `blur(this.b2, ..., 5.0)`): about 7, 19 and
@@ -427,6 +430,11 @@ struct Pipelines {
     glass: wgpu::RenderPipeline,
     page: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
+    /// wubble: the start page's layer (start.rs): bubbles and pops into its card, the card
+    /// into the output
+    bubble: wgpu::RenderPipeline,
+    pop: wgpu::RenderPipeline,
+    card: wgpu::RenderPipeline,
 }
 
 /// A shader body with the shared prelude, as every scene module is compiled.
@@ -489,6 +497,8 @@ impl Pipelines {
         let blit = module(device, "blit", BLIT_WGSL);
         let glass = module(device, "glass", GLASS_WGSL);
         let page = module(device, "page", PAGE_WGSL);
+        let bubble = module(device, "bubble", BUBBLE_WGSL);
+        let pop = module(device, "pop", POP_WGSL);
         // premultiplied: gl.blendFunc(ONE, ONE_MINUS_SRC_ALPHA)
         let pm = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
         let fs = |name: &str| pipeline(device, &fluid, "vs_fullscreen", name, HDR, None);
@@ -507,6 +517,9 @@ impl Pipelines {
             glass: pipeline(device, &glass, "vs_glass", "fs_glass", OUT, pm),
             page: pipeline(device, &page, "vs_page", "fs_page", HDR, pm),
             resolve: pipeline(device, &page, "vs_fullscreen", "fs_resolve", OUT, None),
+            bubble: pipeline(device, &bubble, "vs_bubble", "fs_bubble", OUT, pm),
+            pop: pipeline(device, &pop, "vs_pop", "fs_pop", OUT, pm),
+            card: pipeline(device, &page, "vs_card", "fs_page", OUT, pm),
         }
     }
 }
@@ -554,7 +567,33 @@ pub struct Renderer {
     scratch: Option<Target>,
     /// Layers whose image is new or gone since the host last took them.
     over_new: [bool; 3],
+    /// wubble: the start page's living layer while a start tab shows ([`super::start`]).
+    start: Option<StartLayer>,
+    /// The Space's dye for the start page's liquid ([`Renderer::set_start_palette`]).
+    start_palette: [[f32; 3]; 3],
+    /// The W distance field (`uW`), once the host hands it over ([`Renderer::set_wfield`]).
+    w_tex: Option<Target>,
 }
+
+/// wubble: the start page's living layer: its own liquid (a second [`Scene`], `Liquid`) and
+/// clock, the frame to draw, and its GPU targets at the page card's size.
+struct StartLayer {
+    scene: Scene,
+    clock: BackdropClock,
+    draw: StartDraw,
+    sized: Option<StartSized>,
+}
+
+/// The layer's targets: its fluid grids and pyramid at the card's logical size, and the card's
+/// image (`Rgba8Unorm`, top-first, physical px at the scene's pixel ratio).
+struct StartSized {
+    fluid: FluidTargets,
+    pyramid: Pyramid,
+    card: Target,
+}
+
+/// The start page's liquid is seeded the same on every start page.
+const START_SEED: u64 = 0x057a_77ed;
 
 impl Renderer {
     /// The scene on the one device that Slint and the frame importer share.
@@ -631,6 +670,9 @@ impl Renderer {
             over: [None, None, None],
             scratch: None,
             over_new: [false; 3],
+            start: None,
+            start_palette: SceneOptions::default().palette,
+            w_tex: None,
         })
     }
 
@@ -766,9 +808,10 @@ impl Renderer {
         ))
     }
 
-    /// Whether the scene moves on its own beyond the ambient drift ([`Scene::animating`]).
+    /// Whether the scene moves on its own beyond the ambient drift ([`Scene::animating`]); a
+    /// shown start page always does (its liquid and bubble live).
     pub fn animating(&self) -> bool {
-        self.scene.animating()
+        self.scene.animating() || self.start.is_some()
     }
 
     /// The texture Slint shows, once the first frame has a size.
@@ -961,8 +1004,6 @@ impl Renderer {
             .profiler
             .as_ref()
             .map(|p| p.begin_query("wubble scene", &mut enc));
-        let (vw, vh, t) = (self.scene.w, self.scene.h, self.scene.time);
-
         let (dye, still) = self.scene.take_still_work();
         let backdrop = match self.scene.opts.backdrop {
             Backdrop::Liquid => self.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn),
@@ -985,32 +1026,9 @@ impl Renderer {
                 }
             }
 
-            // 2. composite the backdrop at half resolution
-            let mut cu = CompositeU {
-                u_ground: self.scene.ground,
-                u_time: t,
-                u_view: [vw, vh],
-                u_mute: self.scene.opts.intensity,
-                ..Default::default()
-            };
-            cu.u_rip_n = self.scene.ripples.len() as i32;
-            for (i, r) in self.scene.ripples.iter().enumerate() {
-                cu.u_rip[i] = [r.x, r.y, r.age / r.life, r.reach];
-            }
-            let u = self.arena.push(&cu);
-            let py = &mut sz.pyramid;
-            let b = self.bind(
-                &self.p.comp,
-                &[Res::U(u.0, u.1), Res::Tex(2, &f.dye.read.view)],
-            );
-            self.run(&mut enc, &self.p.comp, &b, &py.bg.view);
-
-            // 3. blur pyramid for the glass: σ in texels, scaled so its CSS px stay the design's
-            let [s1, s2, s3] = BLUR_SIGMA.map(|s| s * py.scale);
-            self.blur(&mut enc, &py.bg, &py.b1t, &py.b1, s1);
-            self.blur(&mut enc, &py.b1, &py.b2t, &py.b2, s2);
-            self.blur(&mut enc, &py.b2, &py.b3t, &py.b3, s3); // the frost: ≈44 CSS px σ in all
-            py.drawn = true;
+            // 2. composite the backdrop at half resolution, 3. its blur pyramid
+            let cu = composite_u(&self.scene);
+            self.backdrop_passes(&mut enc, &cu, &f.dye.read.view, &mut sz.pyramid);
             self.backdrops += 1;
         }
 
@@ -1021,6 +1039,9 @@ impl Renderer {
             self.build_page(&mut enc, &mut sz);
             self.page_built = Some(now);
         }
+
+        // wubble: the start page's living layer, into its card's image (start.rs)
+        let card = self.start_passes(&mut enc, dt, pace);
 
         // 4. one pass on the output: backdrop, then the glass under the page (the beam inside
         // its panel's); then each overlay layer's glass in its own image
@@ -1067,6 +1088,12 @@ impl Renderer {
             rp.set_pipeline(&self.p.glass);
             for &i in &layers[0] {
                 rp.set_bind_group(0, &glass[i], &[]);
+                rp.draw(0..4, 0..1);
+            }
+            // the start page's card over it: the living liquid only inside the page card
+            if let Some(b) = &card {
+                rp.set_pipeline(&self.p.card);
+                rp.set_bind_group(0, b, &[]);
                 rp.draw(0..4, 0..1);
             }
         }
@@ -1535,6 +1562,251 @@ impl Renderer {
     }
 }
 
+/// Step 2's uniforms for a scene: its ground, time, size, mute and running ripples.
+fn composite_u(scene: &Scene) -> CompositeU {
+    let mut cu = CompositeU {
+        u_ground: scene.ground,
+        u_time: scene.time,
+        u_view: [scene.w, scene.h],
+        u_mute: scene.opts.intensity,
+        ..Default::default()
+    };
+    cu.u_rip_n = scene.ripples.len() as i32;
+    for (i, r) in scene.ripples.iter().enumerate() {
+        cu.u_rip[i] = [r.x, r.y, r.age / r.life, r.reach];
+    }
+    cu
+}
+
+impl Renderer {
+    /// Steps 2 and 3 for one scene: the dye composited at half resolution into the pyramid's
+    /// `bg`, then its blur levels. wubble: shared by the window's backdrop and the start page's.
+    fn backdrop_passes(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        cu: &CompositeU,
+        dye: &wgpu::TextureView,
+        py: &mut Pyramid,
+    ) {
+        let u = self.arena.push(cu);
+        let b = self.bind(&self.p.comp, &[Res::U(u.0, u.1), Res::Tex(2, dye)]);
+        self.run(enc, &self.p.comp, &b, &py.bg.view);
+
+        // 3. blur pyramid for the glass: σ in texels, scaled so its CSS px stay the design's
+        let [s1, s2, s3] = BLUR_SIGMA.map(|s| s * py.scale);
+        self.blur(enc, &py.bg, &py.b1t, &py.b1, s1);
+        self.blur(enc, &py.b1, &py.b2t, &py.b2, s2);
+        self.blur(enc, &py.b2, &py.b3t, &py.b3, s3); // the frost: ≈44 CSS px σ in all
+        py.drawn = true;
+    }
+
+    // ----- wubble: the start page's living layer ([`super::start`])
+
+    /// The start page's frame: where its card is and what it draws. The first call makes the
+    /// layer (its liquid in the start palette); every frame after it, the layer's liquid steps
+    /// and the card is drawn over the window's backdrop and glass until [`Renderer::start_end`].
+    pub fn start_frame(&mut self, draw: StartDraw) {
+        let palette = self.start_palette;
+        let layer = self.start.get_or_insert_with(|| StartLayer {
+            scene: Scene::new(
+                SceneOptions {
+                    palette,
+                    ..SceneOptions::default()
+                },
+                START_SEED,
+            ),
+            clock: BackdropClock::new(),
+            draw: StartDraw::default(),
+            sized: None,
+        });
+        layer.draw = draw;
+    }
+
+    /// No start page is shown: the layer and its targets go, and nothing of it runs.
+    pub fn start_end(&mut self) {
+        self.start = None;
+    }
+
+    /// Whether the start page's layer is up.
+    pub fn start_shown(&self) -> bool {
+        self.start.is_some()
+    }
+
+    /// What the start page did to its liquid (page-local px). Nothing without a layer.
+    pub fn start_effect(&mut self, fx: StartFx) {
+        if let Some(l) = &mut self.start {
+            start::apply(&mut l.scene, fx);
+        }
+    }
+
+    /// The Space's three dye colours for the start page's liquid (the window's own crossfade:
+    /// about 600 ms); kept for the next layer.
+    pub fn set_start_palette(&mut self, colors: [[f32; 3]; 3]) {
+        self.start_palette = colors;
+        if let Some(l) = &mut self.start {
+            l.scene.set_palette(colors);
+        }
+    }
+
+    /// The W distance field, `size`² RGBA8 rows as they are (`wubble_core::start::wfield`):
+    /// uploaded once. Until it is here the start page draws its liquid without bubbles.
+    pub fn set_wfield(&mut self, rgba: &[u8], size: u32) {
+        let t = target(
+            &self.device,
+            size,
+            size,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "w field",
+        );
+        self.queue.write_texture(
+            t.tex.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 4),
+                rows_per_image: Some(size),
+            },
+            t.tex.size(),
+        );
+        self.w_tex = Some(t);
+    }
+
+    /// Whether the W field has been handed over.
+    pub fn has_wfield(&self) -> bool {
+        self.w_tex.is_some()
+    }
+
+    /// The start page's card image as last drawn, for checks.
+    pub fn start_texture(&self) -> Option<&wgpu::Texture> {
+        self.start.as_ref()?.sized.as_ref().map(|s| &s.card.tex)
+    }
+
+    /// The layer's frame: its liquid by its own clock (at the page's pace), then into the card's
+    /// image its backdrop, the bubbles and the pops. Returns the output pass's card bind group;
+    /// `None` without a layer or with no card yet.
+    fn start_passes(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        dt: f32,
+        pace: f32,
+    ) -> Option<wgpu::BindGroup> {
+        let mut l = self.start.take()?;
+        let out = self.start_layer_passes(enc, &mut l, dt, pace);
+        self.start = Some(l);
+        out
+    }
+
+    fn start_layer_passes(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        l: &mut StartLayer,
+        dt: f32,
+        pace: f32,
+    ) -> Option<wgpu::BindGroup> {
+        let StartCard { rect, radius } = l.draw.card;
+        if rect.w < 1.0 || rect.h < 1.0 {
+            return None;
+        }
+        let (w, h, dpr) = (rect.w, rect.h, self.scene.dpr);
+        let rs = l.scene.resize(w, h, dpr);
+        let scale = self.quality.scale();
+        let (cw, ch) = out_size(w, h, dpr);
+        let mut sz = match l.sized.take() {
+            Some(s) if !rs.targets && s.pyramid.scale == scale => s,
+            old => {
+                let d = &self.device;
+                StartSized {
+                    fluid: match old {
+                        Some(s) if !rs.fluid => s.fluid,
+                        _ => fluid_targets(d, w, h, &l.scene.opts.fluid),
+                    },
+                    pyramid: Pyramid::new(d, w, h, scale),
+                    card: target(d, cw, ch, OUT, "wubble start card"),
+                }
+            }
+        };
+        let pace = pace * l.draw.pace.clamp(0.0, 1.0);
+        l.scene.advance(dt, pace);
+        if let Some(dt) = l.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn) {
+            let f = &mut sz.fluid;
+            for op in l.scene.fluid_ops(dt) {
+                self.fluid_op(enc, f, op);
+            }
+            self.fluid_step(enc, f, dt);
+            let cu = composite_u(&l.scene);
+            self.backdrop_passes(enc, &cu, &f.dye.read.view, &mut sz.pyramid);
+        }
+
+        // the card: the layer's backdrop, the bubbles (body first), the pops
+        let py = &sz.pyramid;
+        let g = Globals {
+            view: [w, h],
+            dpr,
+            light: l.scene.light,
+            time: l.draw.time,
+        };
+        let blit = self.bind(&self.p.blit, &[Res::Tex(2, &py.bg.view)]);
+        // no bubble before the W field is here (a missing texture never draws a wrong frame)
+        let w_view = self.w_tex.as_ref().map(|t| t.view.clone());
+        let mut bubbles = Vec::with_capacity(l.draw.bubbles.len());
+        for (wv, b) in w_view
+            .iter()
+            .flat_map(|w| l.draw.bubbles.iter().map(move |b| (w, b)))
+        {
+            let u = self.arena.push(&bubble_u(b, g));
+            bubbles.push(self.bind(
+                &self.p.bubble,
+                &[
+                    Res::U(u.0, u.1),
+                    Res::Tex(2, &py.bg.view),
+                    Res::Tex(3, wv),
+                    Res::Tex(4, &py.b1.view),
+                    Res::Tex(5, &py.b2.view),
+                ],
+            ));
+        }
+        let pops: Vec<wgpu::BindGroup> = l
+            .draw
+            .pops
+            .iter()
+            .map(|p| {
+                let u = self.arena.push(&pop_u(p, g));
+                self.bind(&self.p.pop, &[Res::U(u.0, u.1)])
+            })
+            .collect();
+        {
+            let mut rp = self.pass(enc, "wubble start card", &sz.card.view);
+            rp.set_pipeline(&self.p.blit);
+            rp.set_bind_group(0, &blit, &[]);
+            rp.draw(0..4, 0..1);
+            rp.set_pipeline(&self.p.bubble);
+            for b in &bubbles {
+                rp.set_bind_group(0, b, &[]);
+                rp.draw(0..4, 0..1);
+            }
+            rp.set_pipeline(&self.p.pop);
+            for b in &pops {
+                rp.set_bind_group(0, b, &[]);
+                rp.draw(0..4, 0..1);
+            }
+        }
+        // the card in the output, rounded like the page card
+        let u = self.arena.push(&PageU {
+            u_quad: [rect.x, rect.y, rect.w, rect.h],
+            u_view: [self.scene.w, self.scene.h],
+            u_uv: [1.0, 1.0],
+            u_r: radius,
+            _p: [0.0; 3],
+        });
+        let card = self.bind(
+            &self.p.card,
+            &[Res::U(u.0, u.1), Res::Tex(2, &sz.card.view)],
+        );
+        l.sized = Some(sz);
+        Some(card)
+    }
+}
+
 // @source headless readback (crate/examples/headless.rs)
 /// Copies an `Rgba8Unorm` texture to the CPU as tightly packed RGBA rows and
 /// blocks until it is done. For tests and screenshots only: never on the frame
@@ -1640,7 +1912,7 @@ mod tests {
 
     #[test]
     fn every_shader_validates_with_its_entry_points() {
-        let modules: [(&str, &[&str]); 6] = [
+        let modules: [(&str, &[&str]); 8] = [
             (
                 FLUID_WGSL,
                 &[
@@ -1659,7 +1931,9 @@ mod tests {
             (BLUR_WGSL, &["vs_fullscreen", "fs_blur"]),
             (BLIT_WGSL, &["vs_fullscreen", "fs_blit"]),
             (GLASS_WGSL, &["vs_glass", "fs_glass"]),
-            (PAGE_WGSL, &["vs_page", "fs_page", "fs_resolve"]),
+            (PAGE_WGSL, &["vs_page", "vs_card", "fs_page", "fs_resolve"]),
+            (BUBBLE_WGSL, &["vs_bubble", "fs_bubble"]),
+            (POP_WGSL, &["vs_pop", "fs_pop"]),
         ];
         for (body, entries) in modules {
             let m = validated(body);
@@ -1695,5 +1969,7 @@ mod tests {
         assert_eq!(size(BLUR_WGSL, "BlurU"), size_of::<BlurU>());
         assert_eq!(size(GLASS_WGSL, "GlassU"), size_of::<GlassU>());
         assert_eq!(size(PAGE_WGSL, "PageU"), size_of::<PageU>());
+        assert_eq!(size(BUBBLE_WGSL, "BubbleU"), size_of::<start::BubbleU>());
+        assert_eq!(size(POP_WGSL, "PopU"), size_of::<start::PopU>());
     }
 }

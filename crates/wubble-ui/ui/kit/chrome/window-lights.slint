@@ -1,0 +1,111 @@
+// design: browser/chrome.tsx:84-90, browser/browser.css:23-31 @598f814
+// The window controls: close, minimise, full screen (`Lights`, `.wb-lights`/`.wb-light`):
+// 12 px circles, gap 8 (6 on the rail), white .18 at rest, coral / amber / mint while the group
+// is hovered (background .2 s); the glyph is transparent at rest and rgb(8 9 13 / .7) on group
+// hover (color .15 s); pressed squashed .8 x 1.15 on the spring over .3 s both ways.
+// The component only reports intent; wubble_ui::window acts on it.
+
+import { BrowserCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { Calm } from "../motion/calm.slint";
+
+component Light inherits Rectangle {
+    in property <color> tint;
+    in property <string> icon-path;
+    in property <bool> group-hover;
+    in property <float> icon-weight: Shell.light-stroke;
+    in property <string> label;
+    out property <color> mark-tint: mark.tint;
+    callback clicked();
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    width: BrowserCss.wb-light--width;
+    height: BrowserCss.wb-light--height;
+    border-radius: self.width * BrowserCss.wb-light--border-radius;
+    background: root.group-hover ? root.tint : BrowserCss.wb-light--background;
+    // CSS `transition: background-color .2s` (the default `ease`)
+    animate background {
+        duration: Calm.ms(BrowserCss.wb-light--transition-background-color-duration);
+        easing: ease;
+    }
+    transform-origin: { x: self.width / 2, y: self.height / 2 };
+    transform-scale-x: ta.pressed ? BrowserCss.wb-light-active--transform-scale-x : 1;
+    transform-scale-y: ta.pressed ? BrowserCss.wb-light-active--transform-scale-y : 1;
+    animate transform-scale-x, transform-scale-y {
+        duration: Calm.ms(BrowserCss.wb-light--transition-transform-duration);
+        easing: BrowserCss.wb-light--transition-transform-easing;
+    }
+
+    mark := Icon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        path: root.icon-path;
+        size: Shell.light-glyph;
+        weight: root.icon-weight;
+        tint: root.group-hover ? BrowserCss.wb-lights-hover-wb-light--color : BrowserCss.wb-light--color;
+        animate tint {
+            duration: Calm.ms(BrowserCss.wb-light--transition-color-duration);
+            easing: ease;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component WindowLights inherits Rectangle {
+    in property <bool> compact: false;
+    // The close light's glyph colour (transparent at rest, shown on group hover).
+    out property <color> close-mark: close.mark-tint;
+    callback close-requested();
+    callback minimise-requested();
+    callback toggle-fullscreen-requested();
+
+    property <length> gap: root.compact ? BrowserCss.wb-side-rail-wb-lights--gap : BrowserCss.wb-lights--gap;
+    width: BrowserCss.wb-light--width * 3 + root.gap * 2;
+    height: BrowserCss.wb-light--height;
+
+    // The group's hover: it stays true while the pointer is over a light.
+    group := TouchArea {
+        HorizontalLayout {
+            spacing: root.gap;
+            close := Light {
+                tint: BrowserCss.wb-lights-hover-wb-light-nth-child-1--background;
+                icon-path: Glyph.close;
+                label: "Close window";
+                group-hover: group.has-hover;
+                clicked => {
+                    root.close-requested();
+                }
+            }
+            Light {
+                tint: BrowserCss.wb-lights-hover-wb-light-nth-child-2--background;
+                icon-path: Glyph.minus;
+                label: "Minimise";
+                group-hover: group.has-hover;
+                clicked => {
+                    root.minimise-requested();
+                }
+            }
+            Light {
+                tint: BrowserCss.wb-lights-hover-wb-light-nth-child-3--background;
+                icon-path: Glyph.expand;
+                label: "Full screen";
+                icon-weight: Shell.light-stroke-expand;
+                group-hover: group.has-hover;
+                clicked => {
+                    root.toggle-fullscreen-requested();
+                }
+            }
+        }
+    }
+}

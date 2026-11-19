@@ -1,5 +1,5 @@
-//! `--smoke windows`: two tabs on the bundled page in one window, a second window (its command
-//! bar open there, not in the first), one tab dragged into it (no ghost left behind), both
+//! `--smoke windows`: two tabs on the bundled page in one window, a second window (its empty
+//! Space shows the start page there, not in the first), one tab dragged into it (no ghost left behind), both
 //! windows' pixels checked, the second window closed; then a link from
 //! another app in a Little window, made a tab of the Space. After each step the
 //! model, the engine and the windows must agree. Every wait is "until the host sees X", bounded
@@ -24,8 +24,8 @@ pub struct Seen {
     pub shown: usize,
     /// Windows whose command bar is open (or still closing).
     pub bars: usize,
-    /// The newest window's command bar is open.
-    pub bar_in_newest: bool,
+    /// The newest window shows a start page (`wubble://start`).
+    pub start_in_newest: bool,
     /// Windows still drawing a drag ghost.
     pub ghosts: usize,
     /// Every model window has its size recorded.
@@ -105,12 +105,15 @@ pub fn next(s: WindowsSmoke, seen: &Seen) -> (WindowsSmoke, Option<Action>) {
         Stage::Opened
             if seen.model_windows == 2
                 && seen.open_windows == 2
-                && seen.bars == 1
-                && seen.bar_in_newest =>
+                && seen.bars == 0
+                && seen.start_in_newest =>
         {
             Some((Stage::Moved, Action::MoveTab))
         }
-        Stage::Moved if seen.settled(2, 2) => Some((Stage::Closed, Action::CheckAndClose)),
+        // the moved tab shows there, in front of the start page
+        Stage::Moved if seen.settled(2, 2) && !seen.start_in_newest => {
+            Some((Stage::Closed, Action::CheckAndClose))
+        }
         Stage::Closed if seen.settled(1, 1) => Some((Stage::Little, Action::OpenLittle)),
         Stage::Little if seen.settled(2, 2) => Some((Stage::Promoted, Action::Promote)),
         Stage::Promoted if seen.settled(1, 1) => Some((Stage::Done, Action::Pass)),
@@ -149,7 +152,7 @@ mod tests {
             framed: true,
             shown,
             bars: 0,
-            bar_in_newest: false,
+            start_in_newest: false,
             ghosts: 0,
             geometry: true,
         }
@@ -162,19 +165,24 @@ mod tests {
         assert_eq!(a, Some(Action::OpenPage));
         let (s, a) = next(s, &seen(1, 1));
         assert_eq!(a, Some(Action::NewWindow));
-        let elsewhere = Seen {
-            bars: 1,
-            ..seen(2, 1)
-        };
-        let (s, a) = next(s, &elsewhere);
-        assert_eq!(a, None, "the bar opened in the old window");
+        let (s, a) = next(s, &seen(2, 1));
+        assert_eq!(a, None, "no start page in the new window yet");
         let in_newest = Seen {
-            bars: 1,
-            bar_in_newest: true,
-            ..seen(2, 1)
+            start_in_newest: true,
+            ..seen(2, 2)
         };
+        let (s, a) = next(
+            s,
+            &Seen {
+                bars: 1,
+                ..in_newest.clone()
+            },
+        );
+        assert_eq!(a, None, "a command bar opened instead");
         let (s, a) = next(s, &in_newest);
         assert_eq!(a, Some(Action::MoveTab));
+        let (s, a) = next(s, &in_newest);
+        assert_eq!(a, None, "the moved tab is not in front yet");
         let (s, a) = next(
             s,
             &Seen {

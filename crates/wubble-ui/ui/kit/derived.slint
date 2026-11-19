@@ -53,25 +53,15 @@ export global Shell {
     // Chrome buttons release at a third of the squash token (touch.tsx Buttons).
     // how far a press on bare chrome travels before it moves the window
     out property <length> move-threshold: 4px;
-    // .wb-side-top 30 high, lights 12 with gap 8 (6 on the rail), .wb-light glyph 8
+    // .wb-side-top 30 high, .wb-light glyph 8 (the lights themselves: kit/chrome/window-lights)
     out property <length> side-top: 30px;
     out property <length> command-origin-dx: 40px;   // chrome.tsx openCommand: r.left + 40
-    out property <duration> light-fill-ms: BrowserCss.wb-light--transition-background-color-duration;
-    out property <duration> light-glyph-ms: BrowserCss.wb-light--transition-color-duration;
-    out property <length> light: 12px;
-    out property <length> light-gap: 8px;
-    out property <length> light-gap-rail: 6px;
     out property <length> light-glyph: 8px;
-    out property <color> light-rest: BrowserCss.wb-light--background;
-    out property <color> light-glyph-ink: rgba(8, 9, 13, 0.7);
-    out property <float> light-press-x: 0.8;
-    out property <float> light-press-y: 1.15;
     // the ring's width: GlassPanel's film rim (1.5)
     out property <length> glow-width: Glass.film-width;
     // .wb-tab-x: a 22 px tile, radius 7, white 10% while hovered
     out property <length> tab-close-radius: BrowserCss.wb-tab-x--border-radius;
     // a closed row shrinks to 0.94 as it leaves (browser.css `wb-tab-out`)
-    out property <color> tab-close-hover: rgba(255, 255, 255, 0.1);
     // The Slint border beam's tail, in strokes (border-beam.slint)
     // one logical px: lengths to the beam path's viewbox numbers
     out property <length> beam-unit: 1px;

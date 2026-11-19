@@ -53,16 +53,20 @@ export component OverlapLook inherits Rectangle {
 }
 
 // For flips of a bool: `shown` in, not shown out.
+// An element with its own `wb-in` timing (pages/start.css: `animation: wb-in .4s ... 40ms`) sets
+// `delay` and `duration`; by default a row enters on the 30 ms stagger over 240 ms.
 export component OverlapLayer inherits Rectangle {
     in property <bool> shown: true;
     in property <int> index: 0;
+    in property <duration> delay: Motion.overlap-stagger * root.index;
+    in property <duration> duration: Motion.overlap-in;
     rp := Replay {
         on: root.shown;
-        in-ms: Motion.overlap-in;
+        in-ms: root.duration;
         out-ms: Motion.overlap-out;
         in-easing: Motion.ease-out;
         out-easing: Motion.ease-in-out;
-        delay: Motion.overlap-stagger * root.index;
+        delay: root.delay;
     }
     out property <float> progress: look.e;
     out property <length> offset: look.offset;

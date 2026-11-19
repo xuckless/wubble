@@ -1,0 +1,94 @@
+// design: browser/chrome.tsx:291-293, browser/browser.css:81-83, core/wubble.css:48-49 @598f814
+// The "New tab" row under the tab list (`.wb-newtab wb-press`): 36 high, radius 10, padding
+// 0 10, gap 10; mist, ink on hover, with the hover fill white .045 (both over .15 s, the
+// `.wb-press` transition); the plus 15 / 2 in the 18 px icon box; pressed .97 (`.wb-press`).
+// On the rail it is 40 wide and centred (`.wb-newtab-rail`).
+
+import { BrowserCss, WubbleCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { KitText } from "../text.slint";
+import { Press } from "../motion/press.slint";
+import { Calm } from "../motion/calm.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+
+export component NewTabRow inherits Rectangle {
+    in property <bool> compact: false;
+    callback activated();
+    public function take-focus() {
+        keys.focus();
+    }
+
+    height: BrowserCss.wb-newtab--height;
+    accessible-role: AccessibleRole.button;
+    accessible-label: "New tab";
+    accessible-action-default => {
+        root.activated();
+    }
+
+    property <color> ink: ta.has-hover ? BrowserCss.wb-newtab-hover--color : BrowserCss.wb-newtab--color;
+    press := Press {
+        pressed: ta.pressed;
+    }
+
+    body := Rectangle {
+        x: root.compact ? (root.width - self.width) / 2 : 0px;
+        width: root.compact ? BrowserCss.wb-newtab-rail--width : root.width;
+        border-radius: BrowserCss.wb-newtab--border-radius;
+        background: ta.has-hover ? BrowserCss.wb-newtab-hover--background : BrowserCss.wb-newtab--background;
+        animate background {
+            duration: Calm.ms(WubbleCss.wb-press--transition-background-color-duration);
+            easing: ease;
+        }
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: press.scale;
+
+        keys := FocusKeys {
+            activate => {
+                root.activated();
+            }
+        }
+        ta := TouchArea {
+            clicked => {
+                root.activated();
+            }
+        }
+
+        HorizontalLayout {
+            padding-left: root.compact ? (body.width - Shell.tab-icon) / 2 : BrowserCss.wb-newtab--padding-left;
+            padding-right: root.compact ? 0px : BrowserCss.wb-newtab--padding-right;
+            spacing: BrowserCss.wb-newtab--gap;
+            Rectangle {
+                width: Shell.tab-icon;
+                Icon {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    path: Glyph.plus;
+                    size: Shell.new-tab-icon;
+                    weight: Shell.new-tab-stroke;
+                    tint: root.ink;
+                    animate tint {
+                        duration: Calm.ms(WubbleCss.wb-press--transition-color-duration);
+                        easing: ease;
+                    }
+                }
+            }
+            if !root.compact: KitText {
+                role: Role.wb-newtab;
+                text: "New tab";
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                color: root.ink;
+                animate color {
+                    duration: Calm.ms(WubbleCss.wb-press--transition-color-duration);
+                    easing: ease;
+                }
+            }
+        }
+        FocusRing {
+            shown: keys.has-focus;
+            radius: body.border-radius;
+        }
+    }
+}
