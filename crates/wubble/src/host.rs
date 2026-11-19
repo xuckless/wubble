@@ -383,6 +383,8 @@ pub struct Host {
     print: wubble_core::print::Sheet,
     /// Opened print sheets: the pages field restarts with each.
     print_serial: i32,
+    /// The private folder printer jobs' PDFs go to, made with the first (removed on exit).
+    print_dir: Option<tempfile::TempDir>,
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
     /// The live suggestion fetch (debounce, worker); sends nothing unless `live_suggestions`.
@@ -603,6 +605,7 @@ impl Host {
             gestures: Default::default(),
             print: Default::default(),
             print_serial: 0,
+            print_dir: None,
             search_engine: None,
             live_suggestions: false,
             suggest: crate::suggest_fx::SuggestFx::new(crate::suggest_fx::Http::new(), |e| {
@@ -826,7 +829,6 @@ impl Host {
         }
         if let Command::CloseTab(tab) = command {
             self.remember_closed(tab);
-            self.print_tab_closed(tab);
         }
         if matches!(
             command,

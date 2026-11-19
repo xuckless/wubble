@@ -7,7 +7,8 @@
 //!   HTML, text) reach the page under the pointer;
 //! - a `wl_data_source` drag source: a page drag that leaves its window
 //!   becomes an OS drag (text, a link as `text/uri-list`, HTML);
-//! - `zwp_pointer_gestures_v1` pinch and swipe;
+//! - `zwp_pointer_gestures_v1` pinch and swipe, and the touchpad's two-finger
+//!   sideways scroll (`wl_pointer` axis frames from a finger) as the history swipe;
 //! - the lock keys from the worker's `wl_keyboard`'s `modifiers` event.
 //!
 //! One worker and one data device: a second `wl_data_device` of the same
@@ -43,7 +44,7 @@ use sctk::reexports::client::protocol::wl_data_device::WlDataDevice;
 use sctk::reexports::client::protocol::wl_data_device_manager::DndAction;
 use sctk::reexports::client::protocol::wl_data_source::WlDataSource;
 use sctk::reexports::client::protocol::wl_keyboard::{self, WlKeyboard};
-use sctk::reexports::client::protocol::wl_pointer::WlPointer;
+use sctk::reexports::client::protocol::wl_pointer::{AxisSource, WlPointer};
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
 use sctk::reexports::client::protocol::wl_surface::WlSurface;
 use sctk::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
@@ -57,7 +58,7 @@ use sctk::reexports::protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
 };
 use sctk::registry::{ProvidesRegistryState, RegistryState};
-use sctk::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
+use sctk::seat::pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler};
 use sctk::seat::{Capability, SeatHandler, SeatState};
 use sctk::{
     delegate_data_device, delegate_pointer, delegate_primary_selection, delegate_registry,
@@ -260,22 +261,73 @@ fn run(
     }
 }
 
-/// A drop from another app, from its `enter`.
-enum Incoming {
+/// A drop from another app, from its `enter`; `O` is the offer (sctk's `DragOffer`).
+enum Incoming<O> {
     None,
     /// Its data is being read; motion and the drop wait for it.
     Reading {
         window: WindowId,
-        offer: DragOffer,
+        offer: O,
         generation: u64,
         at: (f32, f32),
         dropped: bool,
     },
-    /// The page has it.
+    /// The page has it; `at` is the pointer's last point (the offer's own `x`/`y` are its
+    /// `enter`'s: sctk updates only the device's copy).
     Entered {
         window: WindowId,
-        offer: DragOffer,
+        offer: O,
+        at: (f32, f32),
     },
+}
+
+impl<O> Incoming<O> {
+    /// The pointer moved to `at`: what the page hears, once it has the drag.
+    fn moved(&mut self, to: (f32, f32)) -> Option<(WindowId, AuxEvent)> {
+        match self {
+            Incoming::Reading { at, .. } => {
+                *at = to;
+                None
+            }
+            Incoming::Entered { window, at, .. } => {
+                *at = to;
+                Some((*window, AuxEvent::DropMove { x: to.0, y: to.1 }))
+            }
+            Incoming::None => None,
+        }
+    }
+
+    /// The drop, at the pointer's last point: the page hears of it with the offer to finish
+    /// now, or once the data is read.
+    fn dropped(self) -> (Self, Option<(WindowId, AuxEvent, O)>) {
+        match self {
+            Incoming::Entered {
+                window,
+                offer,
+                at: (x, y),
+            } => (
+                Incoming::None,
+                Some((window, AuxEvent::Dropped { x, y }, offer)),
+            ),
+            Incoming::Reading {
+                window,
+                offer,
+                generation,
+                at,
+                ..
+            } => {
+                let reading = Incoming::Reading {
+                    window,
+                    offer,
+                    generation,
+                    at,
+                    dropped: true,
+                };
+                (reading, None)
+            }
+            Incoming::None => (Incoming::None, None),
+        }
+    }
 }
 
 struct State {
@@ -307,9 +359,11 @@ struct State {
     /// (Wayland's is since the begin).
     pinch_on: Option<(WindowId, f64)>,
     swipe_on: Option<WindowId>,
+    /// The window a two-finger scroll swipe is going on in.
+    scroll_on: Option<WindowId>,
     locks: Locks,
 
-    drop: Incoming,
+    drop: Incoming<DragOffer>,
     generation: u64,
     /// The OS drag a page drag became: its window, what it carries, the action chosen.
     source: Option<(WindowId, DragSource, Arc<Offered>, DndAction)>,
@@ -358,6 +412,7 @@ impl State {
             press: None,
             pinch_on: None,
             swipe_on: None,
+            scroll_on: None,
             locks: Locks::default(),
             drop: Incoming::None,
             generation: 0,
@@ -437,7 +492,7 @@ impl State {
             deliver(window, AuxEvent::Dropped { x, y });
             finish(&offer);
         } else {
-            self.drop = Incoming::Entered { window, offer };
+            self.drop = Incoming::Entered { window, offer, at };
         }
     }
 
@@ -582,7 +637,7 @@ fn offered(data: &DragData) -> Vec<(&'static str, Vec<u8>)> {
     let uris: Vec<String> = data
         .files
         .iter()
-        .map(|p| format!("file://{}", percent_encode(&p.to_string_lossy())))
+        .map(|p| dnd::file_uri(p))
         .chain(data.link_url.clone())
         .collect();
     if !uris.is_empty() {
@@ -597,17 +652,6 @@ fn offered(data: &DragData) -> Vec<(&'static str, Vec<u8>)> {
         }
     }
     out
-}
-
-fn percent_encode(path: &str) -> String {
-    path.bytes()
-        .map(|b| match b {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect()
 }
 
 /// Wayland has copy, move and ask; a link is a copy.
@@ -748,39 +792,19 @@ impl DataDeviceHandler for State {
     }
 
     fn motion(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice, x: f64, y: f64) {
-        let (x, y) = (x as f32, y as f32);
-        match &mut self.drop {
-            Incoming::Reading { at, .. } => *at = (x, y),
-            Incoming::Entered { window, .. } => deliver(*window, AuxEvent::DropMove { x, y }),
-            Incoming::None => {}
+        if let Some((window, event)) = self.drop.moved((x as f32, y as f32)) {
+            deliver(window, event);
         }
     }
 
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {}
 
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataDevice) {
-        match std::mem::replace(&mut self.drop, Incoming::None) {
-            Incoming::Entered { window, offer } => {
-                let (x, y) = (offer.x as f32, offer.y as f32);
-                deliver(window, AuxEvent::Dropped { x, y });
-                finish(&offer);
-            }
-            Incoming::Reading {
-                window,
-                offer,
-                generation,
-                at,
-                ..
-            } => {
-                self.drop = Incoming::Reading {
-                    window,
-                    offer,
-                    generation,
-                    at,
-                    dropped: true,
-                }
-            }
-            Incoming::None => {}
+        let (next, now) = std::mem::replace(&mut self.drop, Incoming::None).dropped();
+        self.drop = next;
+        if let Some((window, event, offer)) = now {
+            deliver(window, event);
+            finish(&offer);
         }
     }
 }
@@ -1006,9 +1030,67 @@ impl PointerHandler for State {
                     self.press = self.window_of(&event.surface).map(|w| (w, serial));
                 }
                 PointerEventKind::Release { serial, .. } => self.serial = serial,
+                PointerEventKind::Axis {
+                    horizontal,
+                    vertical,
+                    source,
+                    ..
+                } => {
+                    let window = self.scroll_on.or_else(|| self.window_of(&event.surface));
+                    let Some(window) = window else { continue };
+                    let (on, inputs) =
+                        scroll_swipe(self.scroll_on.is_some(), source, &horizontal, &vertical);
+                    self.scroll_on = on.then_some(window);
+                    let (x, y) = event.position;
+                    for input in inputs {
+                        let at = matches!(input, SwipeInput::Begin { .. })
+                            .then_some((x as f32, y as f32));
+                        deliver(window, AuxEvent::Swipe { input, at });
+                    }
+                }
+                PointerEventKind::Leave { .. } => {
+                    if let Some(window) = self.scroll_on.take() {
+                        let input = SwipeInput::End { cancelled: true };
+                        deliver(window, AuxEvent::Swipe { input, at: None });
+                    }
+                }
                 _ => {}
             }
         }
+    }
+}
+
+/// A scroll frame as history swipe input (`wubble_core::gesture`), given whether a swipe is
+/// going on: a finger's scroll begins one, its `axis_stop` ends it, a wheel's scroll cancels
+/// it. Wayland's values are the scroll's (positive: right, down), the swipe's the fingers'
+/// with natural scrolling (positive: right), so a scroll to the left goes back. Whether a swipe
+/// is going on after it, and the inputs.
+fn scroll_swipe(
+    on: bool,
+    source: Option<AxisSource>,
+    horizontal: &AxisScroll,
+    vertical: &AxisScroll,
+) -> (bool, Vec<SwipeInput>) {
+    let (dx, dy) = (-horizontal.absolute, -vertical.absolute);
+    let update = (dx != 0.0 || dy != 0.0).then_some(SwipeInput::Update { dx, dy });
+    let stop = horizontal.stop || vertical.stop;
+    match source {
+        Some(AxisSource::Finger) | None if on => {
+            let mut inputs: Vec<_> = update.into_iter().collect();
+            if stop {
+                inputs.push(SwipeInput::End { cancelled: false });
+            }
+            (!stop, inputs)
+        }
+        Some(AxisSource::Finger) if !stop && update.is_some() => (
+            true,
+            [SwipeInput::Begin { fingers: 2 }]
+                .into_iter()
+                .chain(update)
+                .collect(),
+        ),
+        _ if on => (false, vec![SwipeInput::End { cancelled: true }]),
+        _ => (false, vec![]),
     }
 }
 
@@ -1127,7 +1209,7 @@ impl Dispatch<ZwpPointerGestureSwipeV1, ()> for State {
             _ => return,
         };
         if let Some(window) = window {
-            deliver(window, AuxEvent::Swipe(input));
+            deliver(window, AuxEvent::Swipe { input, at: None });
         }
     }
 }
@@ -1178,6 +1260,89 @@ mod tests {
         );
         assert_eq!(out[1].0, "text/html");
         assert!(offered(&DragData::default()).is_empty());
+    }
+
+    #[test]
+    fn a_drop_lands_where_the_pointer_was_released() {
+        let w = WindowId(1);
+        let mut entered = Incoming::Entered {
+            window: w,
+            offer: (),
+            at: (5.0, 5.0),
+        };
+        assert_eq!(
+            entered.moved((300.0, 200.0)),
+            Some((w, AuxEvent::DropMove { x: 300.0, y: 200.0 }))
+        );
+        let (next, now) = entered.dropped();
+        assert!(matches!(next, Incoming::None));
+        assert_eq!(now, Some((w, AuxEvent::Dropped { x: 300.0, y: 200.0 }, ())));
+        // While the data is read, motion is kept and the drop waits for it.
+        let mut reading = Incoming::Reading {
+            window: w,
+            offer: (),
+            generation: 1,
+            at: (0.0, 0.0),
+            dropped: false,
+        };
+        assert_eq!(reading.moved((40.0, 50.0)), None);
+        let (next, now) = reading.dropped();
+        assert_eq!(now, None);
+        assert!(matches!(
+            next,
+            Incoming::Reading {
+                at: (40.0, 50.0),
+                dropped: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_two_finger_scroll_is_a_swipe_until_its_stop() {
+        let axis = |absolute: f64, stop: bool| AxisScroll {
+            absolute,
+            stop,
+            ..AxisScroll::default()
+        };
+        let finger = Some(AxisSource::Finger);
+        let none = axis(0.0, false);
+        // A finger's scroll to the left begins a swipe that goes back (positive dx).
+        assert_eq!(
+            scroll_swipe(false, finger, &axis(-8.0, false), &none),
+            (
+                true,
+                vec![
+                    SwipeInput::Begin { fingers: 2 },
+                    SwipeInput::Update { dx: 8.0, dy: 0.0 }
+                ]
+            )
+        );
+        // Frames without a source go on with it; the stop ends it.
+        assert_eq!(
+            scroll_swipe(true, None, &axis(-4.0, false), &axis(1.0, false)),
+            (true, vec![SwipeInput::Update { dx: 4.0, dy: -1.0 }])
+        );
+        assert_eq!(
+            scroll_swipe(true, finger, &axis(0.0, true), &axis(0.0, true)),
+            (false, vec![SwipeInput::End { cancelled: false }])
+        );
+        // A wheel never begins one and cancels one going on.
+        let wheel = Some(AxisSource::Wheel);
+        assert_eq!(
+            scroll_swipe(false, wheel, &axis(-10.0, false), &none),
+            (false, vec![])
+        );
+        assert_eq!(
+            scroll_swipe(true, wheel, &axis(-10.0, false), &none),
+            (false, vec![SwipeInput::End { cancelled: true }])
+        );
+        // A stop alone, or no motion, begins nothing.
+        assert_eq!(
+            scroll_swipe(false, finger, &axis(0.0, true), &none),
+            (false, vec![])
+        );
+        assert_eq!(scroll_swipe(false, finger, &none, &none), (false, vec![]));
     }
 
     #[test]

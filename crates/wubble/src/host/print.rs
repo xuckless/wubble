@@ -3,7 +3,7 @@
 //! from the CUPS command line (`lpstat`), on a thread; a system without it
 //! (Windows) offers Save as PDF only.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command as Process;
 
 use wubble_core::print::{self, Destination, Effect, Event, Margins, Paper, PrintSettings, Sheet};
@@ -232,11 +232,25 @@ impl Host {
                     }
                 }
             }
-            Destination::Printer(_) => std::env::temp_dir().join(format!(
-                "wubble-print-{}-{}.pdf",
-                std::process::id(),
-                self.print_serial
-            )),
+            Destination::Printer(_) => {
+                // A directory only this user can open (0700): a fixed name in the shared temp
+                // dir could be planted as a link that CEF would write through.
+                if self.print_dir.is_none() {
+                    self.print_dir = tempfile::Builder::new()
+                        .prefix("wubble-print-")
+                        .tempdir()
+                        .ok();
+                }
+                match &self.print_dir {
+                    Some(dir) => dir.path().join(format!("job-{}.pdf", self.print_serial)),
+                    None => {
+                        if let Some(window) = self.w.window.upgrade() {
+                            self.toast(&window, "Cannot print: no temporary folder");
+                        }
+                        return;
+                    }
+                }
+            }
         };
         self.print_event(Event::Submit(path));
     }
@@ -313,7 +327,7 @@ impl Host {
             }
             Effect::ListDownload(path) => {
                 self.downloads.release(&path);
-                let url = url.map_or_else(|| file_url(&path), str::to_owned);
+                let url = url.map_or_else(|| wubble_core::dnd::file_uri(&path), str::to_owned);
                 self.add_finished_download(&url, &path);
             }
             Effect::RemoveFile(path) => {
@@ -331,10 +345,6 @@ impl Host {
     fn render_print(&self, window: &AppWindow) {
         window.set_print_sheet_view(view(&self.print, self.print_serial));
     }
-}
-
-fn file_url(path: &Path) -> String {
-    format!("file://{}", PathBuf::from(path).display())
 }
 
 #[cfg(test)]

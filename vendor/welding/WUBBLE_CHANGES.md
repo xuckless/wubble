@@ -452,6 +452,10 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    `DragInput` enter with no payload re-enters with that clone, which keeps
    `DropData`'s custom types (`setData("application/x-...")`) that
    `DragPayload` cannot carry. Test: `drag::tests`.
+49. **Scroll offset.** The render handlers implement `OnScrollOffsetChanged`
+   as `NavigationEvent::ScrollOffset { x, y }` (Linux, macOS, Windows
+   `*/cef_backed.rs`, `surface.rs`), so the host can tell whether a page took
+   a sideways scroll before it turns a two-finger swipe into back or forward.
 
 ## Not changed, on purpose
 

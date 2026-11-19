@@ -288,7 +288,7 @@ impl Host {
     }
 
     /// The page on screen under `at` (window logical px).
-    fn pane_under(&self, window: &AppWindow, at: (f32, f32)) -> Option<TabId> {
+    pub(super) fn pane_under(&self, window: &AppWindow, at: (f32, f32)) -> Option<TabId> {
         let height = window.get_content_height();
         self.pane_rects(window).into_iter().find_map(|r| {
             let (x, y) = self.view_origin(window, r.tab);
@@ -327,7 +327,7 @@ impl Host {
             A::Dropped { x, y } => self.external_drag(&window, External::Drop, (x, y)),
             A::DragEnded(op) => self.os_drag_ended(op),
             A::Pinch(input) => self.pinch(input),
-            A::Swipe(input) => self.history_swipe(&window, input),
+            A::Swipe { input, at } => self.history_swipe(&window, input, at),
             A::Locks(locks) => self.input.locks = locks,
         }
     }

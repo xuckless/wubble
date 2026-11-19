@@ -33,6 +33,8 @@ rfd = "0.18"
 opener = { version = "0.9", features = ["reveal"] }
 # The OS downloads directory (MIT OR Apache-2.0).
 dirs = "6"
+# The printer jobs' private temp folder (`host/print.rs`); MIT/Apache-2.0, already in Cargo.lock.
+tempfile = "3"
 # The local UTC offset for the history page's day groups; only the clock (MIT OR Apache-2.0).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The live suggestion fetch (`suggest_fx.rs`, HTTPS only) and SponsorBlock's lookup
@@ -80,6 +82,3 @@ zbus = "5"
 # The exe's icon on Windows (`build.rs`); MIT.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
-
-[dev-dependencies]
-tempfile = "3"

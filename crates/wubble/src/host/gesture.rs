@@ -1,11 +1,11 @@
 //! Touchpad gestures over the window (`wubble_core::gesture`): pinch zooms the visible page in
-//! the zoom keys' steps, a three-finger sideways swipe goes back or forward with the edge chip
-//! (`swipe-chip.slint`) following the fingers. Wayland reports both through `crate::wl`; macOS
-//! pinch is winit's `PinchGesture`.
+//! the zoom keys' steps, a sideways swipe over a page goes back or forward with the edge chip
+//! (`swipe-chip.slint`) following the fingers, unless the page scrolls sideways with it.
+//! Wayland reports both through `crate::wl`; macOS pinch is winit's `PinchGesture`.
 
-use wubble_core::action::Action;
-use wubble_core::gesture::{self, Nav, Pinch, PinchInput, Swipe, SwipeEffect, SwipeInput, Zoom};
+use wubble_core::gesture::{self, Pinch, PinchInput, Swipe, SwipeEffect, SwipeInput};
 use wubble_core::motion;
+use wubble_core::tab::TabId;
 use wubble_ui::AppWindow;
 
 use super::Host;
@@ -19,6 +19,8 @@ const CHIP_BAND: f64 = 34.0;
 pub(super) struct Gestures {
     pinch: Pinch,
     swipe: Swipe,
+    /// The page a swipe is over, and its root's horizontal scroll at the begin.
+    page: Option<(TabId, f64)>,
 }
 
 /// The chip's travel in from the edge at `progress`: straight to the mark, rubber-banded past
@@ -32,14 +34,45 @@ impl Host {
         let (next, steps) = self.gestures.pinch.input(input);
         self.gestures.pinch = next;
         for step in steps {
-            self.perform(match step {
-                Zoom::In => Action::ZoomIn,
-                Zoom::Out => Action::ZoomOut,
-            });
+            self.perform(step);
         }
     }
 
-    pub(super) fn history_swipe(&mut self, window: &AppWindow, input: SwipeInput) {
+    /// A swipe's input; a begin `at` a window point (a two-finger scroll) counts only over a
+    /// page, one without (a pointer-gestures swipe) is over the visible page.
+    pub(super) fn history_swipe(
+        &mut self,
+        window: &AppWindow,
+        input: SwipeInput,
+        at: Option<(f32, f32)>,
+    ) {
+        match input {
+            SwipeInput::Begin { .. } => {
+                let tab = match at {
+                    Some(at) => self.pane_under(window, at),
+                    None => self.shown(),
+                };
+                self.gestures.page = tab.and_then(|t| Some((t, self.tab_view(t)?.scroll_x())));
+                if self.gestures.page.is_none() {
+                    // Over the sidebar (its own Space swipe) or no page: not a history swipe.
+                    return self.swipe_input(window, SwipeInput::End { cancelled: true });
+                }
+            }
+            SwipeInput::Update { .. } | SwipeInput::End { .. } => {
+                let scrolled = self
+                    .gestures
+                    .page
+                    .is_some_and(|(tab, x)| self.tab_view(tab).is_some_and(|v| v.scroll_x() != x));
+                if scrolled {
+                    self.swipe_input(window, SwipeInput::PageScrolled);
+                }
+            }
+            SwipeInput::PageScrolled => {}
+        }
+        self.swipe_input(window, input);
+    }
+
+    fn swipe_input(&mut self, window: &AppWindow, input: SwipeInput) {
         let (next, effects) = gesture::transition(self.gestures.swipe, input);
         self.gestures.swipe = next;
         let overshoot = match next {
@@ -53,8 +86,7 @@ impl Host {
                     window.set_swipe_shift(chip_shift(p, overshoot) as f32);
                 }
                 SwipeEffect::Hide => window.set_swipe_progress(0.0),
-                SwipeEffect::Go(Nav::Back) => self.perform(Action::Back),
-                SwipeEffect::Go(Nav::Forward) => self.perform(Action::Forward),
+                SwipeEffect::Go(action) => self.perform(action),
             }
         }
     }

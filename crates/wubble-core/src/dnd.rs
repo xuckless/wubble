@@ -5,7 +5,7 @@
 //! HTML, then plain text); the uri-list rules are RFC 2483 section 5 (one URI
 //! per line, CRLF, `#` comment lines). Written new, no code copied.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// What a drop is read as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +70,20 @@ pub fn parse_uri_list(text: &str) -> Option<UriList> {
     })
 }
 
+/// The `file:` URI of a local path, each byte outside RFC 3986's unreserved
+/// set and `/` percent-encoded ("/a b#c" is "file:///a%20b%23c"); what
+/// [`parse_uri_list`] reads back.
+pub fn file_uri(path: &Path) -> String {
+    let mut out = String::from("file://");
+    for (i, segment) in path.to_string_lossy().split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        crate::url::percent_encode_into(segment, &mut out);
+    }
+    out
+}
+
 /// The local path of a `file:` URI ("file:///a%20b", "file://localhost/a");
 /// `None` for another scheme or another host.
 fn file_path(uri: &str) -> Option<PathBuf> {
@@ -101,6 +115,18 @@ fn percent_decode(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_uris_encode_and_read_back() {
+        let path = Path::new("/home/a/My Doc #1.pdf");
+        let uri = file_uri(path);
+        assert_eq!(uri, "file:///home/a/My%20Doc%20%231.pdf");
+        assert_eq!(
+            parse_uri_list(&uri),
+            Some(UriList::Files(vec![path.to_path_buf()]))
+        );
+        assert_eq!(file_uri(Path::new("/tmp/ü")), "file:///tmp/%C3%BC");
+    }
 
     #[test]
     fn files_and_links_come_before_html_and_text() {

@@ -284,7 +284,8 @@ pub enum Effect {
     Lp(Vec<String>),
     /// A finished file in the downloads list.
     ListDownload(PathBuf),
-    /// A printer's temporary PDF is no longer needed.
+    /// The print's file is not needed: a printer's temporary PDF, or a PDF
+    /// that was never written. Its name is free again.
     RemoveFile(PathBuf),
     Toast(String),
 }
@@ -394,11 +395,7 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
             }
             // CEF says only that it failed: a range past the last page is the
             // usual reason (the page cannot be counted beforehand).
-            (destination, false) => {
-                let mut effects = vec![];
-                if matches!(destination, Destination::Printer(_)) {
-                    effects.push(F::RemoveFile(path));
-                }
+            (_, false) => {
                 let error = if settings.pages.trim().is_empty() {
                     "Could not print this page"
                 } else {
@@ -410,7 +407,7 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                     printers,
                     error: Some(error.into()),
                 };
-                (open, effects)
+                (open, vec![F::RemoveFile(path)])
             }
         },
         (
@@ -452,17 +449,10 @@ pub fn transition(sheet: Sheet, event: Event) -> (Sheet, Vec<Effect>) {
                 tab,
                 path,
                 stage: Stage::Rendering,
-                settings,
                 ..
             },
             Event::TabClosed(closed),
-        ) if tab == closed => {
-            let effects = match settings.destination {
-                Destination::Printer(_) => vec![F::RemoveFile(path)],
-                Destination::Pdf => vec![],
-            };
-            (Sheet::Closed, effects)
-        }
+        ) if tab == closed => (Sheet::Closed, vec![F::RemoveFile(path)]),
         // A second Ctrl+P, a click while working, a stale answer.
         (sheet, _) => (sheet, vec![]),
     }
@@ -651,7 +641,8 @@ mod tests {
         let (s, _) = transition(open(&[], None), Event::Edit(ranged));
         let (s, _) = transition(s, Event::Submit("/d/p.pdf".into()));
         let (s, fx) = transition(s, Event::Rendered { ok: false });
-        assert!(fx.is_empty());
+        // The name reserved for it is free again.
+        assert_eq!(fx, [Effect::RemoveFile("/d/p.pdf".into())]);
         assert!(error(&s).unwrap().contains("past the last page"));
     }
 
@@ -689,5 +680,20 @@ mod tests {
         let (s, fx) = transition(s, Event::TabClosed(T));
         assert_eq!(s, Sheet::Closed);
         assert_eq!(fx, [Effect::RemoveFile("/tmp/t.pdf".into())]);
+        let (s, _) = transition(open(&[], None), Event::Submit("/d/t.pdf".into()));
+        let (_, fx) = transition(s, Event::TabClosed(T));
+        assert_eq!(fx, [Effect::RemoveFile("/d/t.pdf".into())]);
+    }
+
+    #[test]
+    fn a_failed_print_can_be_retried_as_it_is() {
+        let s = open(&["Office"], Some("Office"));
+        let (s, _) = transition(s, Event::Submit("/tmp/w.pdf".into()));
+        let (s, _) = transition(s, Event::Rendered { ok: true });
+        let (s, _) = transition(s, Event::Sent(Err("offline".into())));
+        assert!(error(&s).is_some());
+        let (s, fx) = transition(s, Event::Submit("/tmp/w2.pdf".into()));
+        assert!(matches!(&fx[..], [Effect::PrintToPdf { .. }]));
+        assert!(matches!(s, Sheet::Working { .. }));
     }
 }

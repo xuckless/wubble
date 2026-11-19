@@ -38,7 +38,9 @@ export component PrintSheet inherits SheetFrame {
     accept-text: root.sheet.destination == 0 ? "Save" : "Print";
     cancel-text: "Cancel";
     accepted => {
-        if !root.sheet.busy && root.sheet.error == "" {
+        // A bad range is refused by the host, which keeps the reason shown; a failure's
+        // message does not block a retry.
+        if !root.sheet.busy {
             root.answered(true);
         }
     }

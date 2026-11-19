@@ -37,7 +37,11 @@ pub enum AuxEvent {
     /// The OS drag started by [`Aux::start_drag`] ended with this done.
     DragEnded(DragOps),
     Pinch(PinchInput),
-    Swipe(SwipeInput),
+    /// A history swipe's input; `at` is the pointer at a two-finger scroll's begin.
+    Swipe {
+        input: SwipeInput,
+        at: Option<(f32, f32)>,
+    },
     Locks(Locks),
 }
 

@@ -2059,6 +2059,9 @@ pub enum NavigationEvent {
     /// move, link), which the host shows as the cursor and reports back when
     /// the drag ends.
     DragCursor { operation: DragOperations },
+    /// wubble change 49: CEF's `OnScrollOffsetChanged`, the page's root
+    /// scroll offset in DIP, after it changed.
+    ScrollOffset { x: f64, y: f64 },
     /// How a page search is going. Chromium reports progressively: several of
     /// these arrive for one search as more of the page is scanned, and
     /// `final_update` marks the last.

@@ -279,6 +279,13 @@ cef::wrap_render_handler! {
                 },
             ));
         }
+
+        // wubble change 49: the root scroll offset, for the history swipe.
+        fn on_scroll_offset_changed(&self, _browser: Option<&mut cef::Browser>, x: f64, y: f64) {
+            self.handler.events.push(CefSurfaceEvent::Navigation(
+                crate::surface::NavigationEvent::ScrollOffset { x, y },
+            ));
+        }
     }
 }
 

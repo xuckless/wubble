@@ -1251,7 +1251,7 @@ fn run(
                 Checks {
                     builtin_smoke: Some(builtin_smoke::BuiltinSmoke::new(
                         page_url(TALL_PAGE),
-                        format!("file://{}", pdf.display()),
+                        wubble_core::dnd::file_uri(&pdf),
                     )),
                     ..none
                 },

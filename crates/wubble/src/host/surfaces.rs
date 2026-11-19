@@ -497,6 +497,8 @@ impl Host {
             self.dock_event(DockEvent::TabGone(tab));
         }
         self.builtins_view_gone(tab);
+        // Whatever closed the view (a tab, its window, a discard): CEF answers no PDF for it.
+        self.print_tab_closed(tab);
         if let Some(s) = self.surfaces.remove(&tab) {
             self.surfaces.insert(tab, s.view_gone());
         }

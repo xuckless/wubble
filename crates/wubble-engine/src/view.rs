@@ -220,6 +220,8 @@ pub struct View {
     host: Option<cef::BrowserHost>,
     clicks: ClickTracker,
     wheel: WheelRemainder,
+    /// The page's root horizontal scroll offset (DIP), as CEF last reported it.
+    scroll_x: f64,
     /// KEYUPs owed for keys pressed and not yet released, sent if focus
     /// leaves first so no key sticks.
     held_keys: Vec<(PhysicalKey, CefKey)>,
@@ -307,6 +309,7 @@ impl View {
             host: None,
             clicks: ClickTracker::default(),
             wheel: WheelRemainder::default(),
+            scroll_x: 0.0,
             held_keys: Vec::new(),
             page: Vec::new(),
             popup: PopupWidget::default(),
@@ -501,6 +504,12 @@ impl View {
         self.send(|host| {
             host.send_mouse_click_event(Some(&event), button, (!pressed).into(), count)
         });
+    }
+
+    /// The page's root horizontal scroll offset (DIP) as last reported: a change during a
+    /// sideways swipe means the page took it.
+    pub fn scroll_x(&self) -> f64 {
+        self.scroll_x
     }
 
     /// Deltas in logical pixels, positive = up / left.
@@ -774,6 +783,7 @@ impl View {
 
     fn apply_route(&mut self, routed: Route, mode: RequestMode) {
         match routed {
+            Route::ScrollX(x) => self.scroll_x = x,
             Route::Crashed => {
                 eprintln!("wubble-engine: view {}: renderer gone", self.browser_id);
                 // A host that asks about requests draws its own crash page,
@@ -1539,7 +1549,7 @@ impl View {
 
 /// Where one welding event goes: navigation, a page event, or one of the
 /// page state machines.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Route {
     Nav(NavInput),
     Page(PageEvent),
@@ -1554,6 +1564,8 @@ enum Route {
     /// The main frame committed a load (welding reports `LoadStart` for the
     /// main frame only).
     PageCommitted,
+    /// The root scroll offset's x.
+    ScrollX(f64),
 }
 
 /// Translates one welding event. Pure; events nothing uses map to nothing.
@@ -1868,6 +1880,7 @@ fn route(event: NavigationEvent) -> Vec<Route> {
         E::DragCursor { operation } => {
             one(Route::Page(PageEvent::DragCursor(DragOps(operation.0))))
         }
+        E::ScrollOffset { x, .. } => one(Route::ScrollX(x)),
         _ => vec![],
     }
 }

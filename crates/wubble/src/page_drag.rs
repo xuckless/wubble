@@ -115,6 +115,17 @@ pub fn cursor(op: DragOps) -> Cursor {
     }
 }
 
+/// What a drop off the page does: a link dropped on the sidebar opens as a
+/// tab (a copy or a link); nothing else takes it.
+fn off_page_operation(data: &DragData, allowed: DragOps, at: Over) -> DragOps {
+    match (&data.link_url, at) {
+        (Some(url), Over::Sidebar) if !url.is_empty() => {
+            drop_operation(DragOps(allowed.0 & (DragOps::COPY.0 | DragOps::LINK.0)))
+        }
+        _ => DragOps::NONE,
+    }
+}
+
 pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffect>) {
     use DragEffect as E;
     match (state, input) {
@@ -147,9 +158,17 @@ pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffec
         ) => {
             let effects = match (over, to) {
                 (Over::Page, Over::Page) => vec![E::Over(allowed)],
-                (Over::Page, _) => vec![E::Leave, E::Feedback(DragOps::NONE)],
                 (_, Over::Page) => vec![E::Enter(allowed), E::Over(allowed)],
-                _ => vec![],
+                (from, to) if from == to => vec![],
+                (from, to) => {
+                    let mut fx = if from == Over::Page {
+                        vec![E::Leave]
+                    } else {
+                        vec![]
+                    };
+                    fx.push(E::Feedback(off_page_operation(&data, allowed, to)));
+                    fx
+                }
             };
             // Off the page, nothing the page said holds.
             let chosen = if to == Over::Page { chosen } else { None };
@@ -202,16 +221,15 @@ pub fn transition(state: PageDrag, input: DragInput) -> (PageDrag, Vec<DragEffec
                     let op = chosen.unwrap_or_else(|| drop_operation(allowed));
                     effects.extend([E::Over(allowed), E::Drop, E::End(op)])
                 }
-                Over::Sidebar => match data.link_url {
-                    Some(url) if !url.is_empty() => {
-                        let op = drop_operation(DragOps(
-                            allowed.0 & (DragOps::COPY.0 | DragOps::LINK.0),
-                        ));
-                        effects.extend([E::End(op), E::OpenTab(url)]);
+                Over::Sidebar | Over::Elsewhere => {
+                    let op = off_page_operation(&data, allowed, at);
+                    effects.push(E::End(op));
+                    if op != DragOps::NONE
+                        && let Some(url) = data.link_url
+                    {
+                        effects.push(E::OpenTab(url));
                     }
-                    _ => effects.push(E::End(DragOps::NONE)),
-                },
-                Over::Elsewhere => effects.push(E::End(DragOps::NONE)),
+                }
             }
             (PageDrag::Idle, effects)
         }
@@ -311,10 +329,26 @@ mod tests {
     fn leaving_and_coming_back_enters_again() {
         let (s, fx) = transition(started(link()), DragInput::Moved(Over::Elsewhere));
         assert_eq!(fx, [E::Leave, E::Feedback(DragOps::NONE)]);
-        let (s, fx) = transition(s, DragInput::Moved(Over::Sidebar));
+        let (s, fx) = transition(s, DragInput::Moved(Over::Elsewhere));
         assert!(fx.is_empty());
         let (_, fx) = transition(s, DragInput::Moved(Over::Page));
         assert_eq!(fx, [E::Enter(ALL), E::Over(ALL)]);
+    }
+
+    #[test]
+    fn the_sidebar_shows_what_a_drop_there_does() {
+        let (s, fx) = transition(started(link()), DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Leave, E::Feedback(DragOps::COPY)]);
+        let (s, fx) = transition(s, DragInput::Moved(Over::Elsewhere));
+        assert_eq!(fx, [E::Feedback(DragOps::NONE)]);
+        let (_, fx) = transition(s, DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Feedback(DragOps::COPY)]);
+        let text = DragData {
+            text: Some("words".into()),
+            ..DragData::default()
+        };
+        let (_, fx) = transition(started(text), DragInput::Moved(Over::Sidebar));
+        assert_eq!(fx, [E::Leave, E::Feedback(DragOps::NONE)]);
     }
 
     #[test]
