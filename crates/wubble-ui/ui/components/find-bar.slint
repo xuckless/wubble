@@ -3,7 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { FindView, GlassTier, GlassKeys, GlassOver } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
 // Find in page: a strip at the content's top right, as Chromium places its find bar. Written
@@ -108,7 +108,7 @@ export component FindBar inherits Rectangle {
                     root.step(false);
                 }
                 Icon {
-                    path: IconPaths.chevron-up;
+                    path: Glyph.chevron-up;
                     y: (parent.height - self.height) / 2;
                 }
             }
@@ -120,7 +120,7 @@ export component FindBar inherits Rectangle {
                     root.step(true);
                 }
                 Icon {
-                    path: IconPaths.chevron-down;
+                    path: Glyph.chevron-down;
                     y: (parent.height - self.height) / 2;
                 }
             }
@@ -132,7 +132,7 @@ export component FindBar inherits Rectangle {
                     root.closed();
                 }
                 Icon {
-                    path: IconPaths.close;
+                    path: Glyph.close;
                     y: (parent.height - self.height) / 2;
                 }
             }

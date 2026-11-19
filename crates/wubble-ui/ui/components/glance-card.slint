@@ -4,7 +4,7 @@ import { GlassPanel } from "../kit/material/glass.slint";
 import { GlanceView, GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { SheetButton } from "sheet-button.slint";
 import { IconButton } from "nav-buttons.slint";
-import { IconPaths } from "icon.slint";
+import { Glyph } from "../kit/controls/icon.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
 // The peek (Shift+click on a link): the page in a card on thick glass over the page it was
@@ -122,7 +122,7 @@ export component GlanceCard inherits Rectangle {
             VerticalLayout {
                 alignment: center;
                 IconButton {
-                    icon-path: IconPaths.close;
+                    icon-path: Glyph.close;
                     clicked => {
                         if root.open {
                             root.closed();

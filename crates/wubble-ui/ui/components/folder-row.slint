@@ -1,6 +1,6 @@
 import { Palette, Radius, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem } from "model.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
@@ -55,7 +55,7 @@ export component FolderRow inherits Rectangle {
             Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                path: root.compact ? IconPaths.folder : root.tab.collapsed ? IconPaths.chevron-right : IconPaths.chevron-down;
+                path: root.compact ? Glyph.folder : root.tab.collapsed ? Glyph.chevron-right : Glyph.chevron-down;
                 tint: touch.has-hover ? Palette.ink : Shell.tab-ink;
             }
         }

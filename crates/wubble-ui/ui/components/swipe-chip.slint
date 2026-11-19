@@ -1,7 +1,7 @@
 import { Palette, Motion, Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { Chip } from "raised.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
 // The touchpad history swipe's indicator: a round chip with the back (left edge) or forward
@@ -27,7 +27,7 @@ export component SwipeChip inherits Rectangle {
         Icon {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            path: root.back ? IconPaths.back : IconPaths.forward;
+            path: root.back ? Glyph.back : Glyph.forward;
             tint: root.ready ? Palette.mint : Palette.ink;
         }
     }

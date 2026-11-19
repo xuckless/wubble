@@ -17,9 +17,8 @@ import { Palette, Radius, Space, Chrome, Fonts, Type, Motion } from "../kit/gen/
 import { Shell } from "../kit/derived.slint";
 import { TabRow } from "../kit/chrome/tab-row.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
-import { SpaceIcon } from "../kit/chrome/space-icon.slint";
 import { PressableButton } from "../kit/controls/button.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { TabItem, SpaceItem, Origin, BeamShape, LeavingRow } from "model.slint";
 import { AddressPill } from "address-pill.slint";
 import { FavGrid } from "fav-grid.slint";
@@ -549,7 +548,7 @@ export component Sidebar inherits Rectangle {
                 border-radius: Shell.control-radius;
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - parent.buttons * self.width;
                 y: root.compact ? parent.span + Shell.side-bottom-gap-rail : 0px;
-                icon-path: IconPaths.download;
+                icon-path: Glyph.download;
                 tip-action: "open-downloads";
                 label: "Downloads";
                 clicked => {
@@ -564,7 +563,7 @@ export component Sidebar inherits Rectangle {
                 border-radius: Shell.control-radius;
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - 2 * self.width;
                 y: root.compact ? parent.span + (parent.buttons - 2) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
-                icon-path: IconPaths.code;
+                icon-path: Glyph.code;
                 tip-action: "dev-tools";
                 label: "Developer tools";
                 clicked => {
@@ -578,7 +577,7 @@ export component Sidebar inherits Rectangle {
                 border-radius: Shell.control-radius;
                 x: root.compact ? (parent.width - self.width) / 2 : parent.width - self.width;
                 y: root.compact ? parent.span + (parent.buttons - 1) * parent.rail-pitch + Shell.side-bottom-gap-rail : 0px;
-                icon-path: IconPaths.settings;
+                icon-path: Glyph.settings;
                 tip-action: "open-settings";
                 label: "Settings";
                 clicked => {
@@ -636,12 +635,10 @@ export component Sidebar inherits Rectangle {
                         width: Shell.space-glyph;
                         height: Shell.space-glyph;
                         hit: tile.hit;
-                        SpaceIcon {
-                            width: parent.width;
-                            height: parent.height;
-                            // the icon is drawn at 17 px (tabs.tsx SpaceGlyph): stroke 1.7 on the 24 grid
-                            stroke-width: Shell.space-glyph * Shell.icon-stroke / Shell.icon-grid;
-                            kind: space.icon;
+                        Icon {
+                            // the icon is drawn at 17 px (tabs.tsx SpaceIcons): stroke 1.7 on the 24 grid
+                            size: Shell.space-glyph;
+                            path: Glyph.space(space.icon);
                             // .wb button: ink (the capsule under the active one carries its colour)
                             tint: Palette.ink;
                         }

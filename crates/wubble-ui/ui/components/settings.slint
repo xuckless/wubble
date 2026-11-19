@@ -12,17 +12,17 @@
 // The toggle and the slider are the springy ports in `controls/` (`wubble_core::controls`);
 // the other springs (the liquid indicator, the travelling ring) are not ported: Slint `animate`
 // moves them. Written for wubble, the design having none: the stepper,
-// the list editor and the chord recorder row. Reused: the port's PressableButton, SpaceIcon and
+// the list editor and the chord recorder row. Reused: the port's PressableButton, the kit Icon and
 // WubbleScroller, wubble's IconButton, Icon and Raised.
 
 import { Palette, Motion, Space, Fonts, Type, Radius, Glass, Keyframes } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
-import { SpaceIcon } from "../kit/chrome/space-icon.slint";
+import { Mark } from "../kit/chrome/mark.slint";
 import { WubbleScroller } from "../kit/controls/scroller.slint";
 import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, FilterListItem } from "model.slint";
 import { PageScroll } from "page-scroll.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { IconButton } from "nav-buttons.slint";
 import { Raised, Chip } from "raised.slint";
 import { Toggle } from "controls/toggle.slint";
@@ -260,7 +260,7 @@ export component Field inherits Rectangle {
         Icon {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            path: IconPaths.close;
+            path: Glyph.close;
             size: Shell.search-clear-icon;
             tint: Palette.ink;
         }
@@ -286,7 +286,7 @@ export component Stepper inherits HorizontalLayout {
     spacing: Space.s1;
     alignment: end;
     IconButton {
-        icon-path: IconPaths.minus;
+        icon-path: Glyph.minus;
         label: "Less";
         enabled: root.value > root.min;
         y: (parent.height - self.height) / 2;
@@ -304,7 +304,7 @@ export component Stepper inherits HorizontalLayout {
         }
     }
     IconButton {
-        icon-path: IconPaths.plus;
+        icon-path: Glyph.plus;
         label: "More";
         enabled: root.value < root.max;
         y: (parent.height - self.height) / 2;
@@ -401,7 +401,7 @@ export component EntryList inherits VerticalLayout {
             overflow: elide;
         }
         IconButton {
-            icon-path: IconPaths.close;
+            icon-path: Glyph.close;
             label: "Remove";
             clicked => {
                 root.removed(entry.key);
@@ -947,7 +947,7 @@ export component PageFrame inherits Rectangle {
                         capsule: true;
                         visible: root.searchable;
                         max-width: root.searchable ? Shell.settings-width : 0px;
-                        icon-path: IconPaths.search;
+                        icon-path: Glyph.search;
                         placeholder: root.placeholder;
                         edited(q) => {
                             page.reset();
@@ -964,11 +964,11 @@ export component PageFrame inherits Rectangle {
 // A section's icon in the list (settings.tsx SECTIONS), by the section's title.
 global SectionIcons {
     public pure function of(title: string) -> string {
-        if title == "General" { return IconPaths.globe; }
-        if title == "Privacy" { return IconPaths.shield; }
-        if title == "Appearance" { return IconPaths.palette; }
-        if title == "Performance" { return IconPaths.gauge; }
-        return IconPaths.globe;
+        if title == "General" { return Glyph.globe; }
+        if title == "Privacy" { return Glyph.shield; }
+        if title == "Appearance" { return Glyph.palette; }
+        if title == "Performance" { return Glyph.gauge; }
+        return Glyph.globe;
     }
 }
 
@@ -1211,13 +1211,11 @@ export component SettingsPage inherits Rectangle {
                                             root.space-icon-chosen(space.id, root.next-icon(space.icon));
                                         }
                                     }
-                                    SpaceIcon {
+                                    Icon {
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        width: Shell.lead-icon;
-                                        height: Shell.lead-icon;
-                                        stroke-width: Shell.lead-icon * Shell.icon-stroke / Shell.icon-grid;
-                                        kind: space.icon;
+                                        size: Shell.lead-icon;
+                                        path: Glyph.space(space.icon);
                                         tint: space.tint;
                                     }
                                 }
@@ -1353,7 +1351,7 @@ export component SettingsPage inherits Rectangle {
                             if list.custom: VerticalLayout {
                                 alignment: center;
                                 IconButton {
-                                    icon-path: IconPaths.close;
+                                    icon-path: Glyph.close;
                                     clicked => {
                                         root.entry-removed("blocker.custom_lists", list.key);
                                     }
@@ -1408,6 +1406,9 @@ export component SettingsPage inherits Rectangle {
                         Line {
                             label: "wubble " + root.about.version;
                             note: "Chromium " + root.about.chromium + " (CEF " + root.about.cef + ")";
+                            Mark {
+                                size: Shell.about-mark;
+                            }
                         }
                         Line {
                             label: "Licence";
@@ -1464,7 +1465,7 @@ export component SettingsPage inherits Rectangle {
             }
             search := Field {
                 capsule: true;
-                icon-path: IconPaths.search;
+                icon-path: Glyph.search;
                 placeholder: "Search settings";
                 edited(q) => {
                     page.reset();
@@ -1520,11 +1521,11 @@ export component SettingsPage inherits Rectangle {
                         }
                     }
                     for extra[i] in [
-                        { title: "Keyboard shortcuts", icon: IconPaths.keyboard, shown: root.bindings.length > 0 },
-                        { title: "Spaces", icon: IconPaths.stack, shown: !root.searching },
-                        { title: "Sites", icon: IconPaths.lock, shown: !root.searching },
-                        { title: "Filter lists", icon: IconPaths.shield, shown: !root.searching },
-                        { title: "About", icon: IconPaths.bubble, shown: !root.searching },
+                        { title: "Keyboard shortcuts", icon: Glyph.keyboard, shown: root.bindings.length > 0 },
+                        { title: "Spaces", icon: Glyph.stack, shown: !root.searching },
+                        { title: "Sites", icon: Glyph.lock, shown: !root.searching },
+                        { title: "Filter lists", icon: Glyph.shield, shown: !root.searching },
+                        { title: "About", icon: Glyph.bubble, shown: !root.searching },
                     ]: Rectangle {
                         height: root.pitch;
                         NavRow {

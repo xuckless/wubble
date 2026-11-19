@@ -9,7 +9,7 @@ import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { IconButton } from "nav-buttons.slint";
 import { GlassTier, GlassKeys, BeamShape } from "model.slint";
-import { Icon, IconPaths } from "icon.slint";
+import { Icon, Glyph } from "../kit/controls/icon.slint";
 import { BorderBeam } from "border-beam.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
@@ -104,7 +104,7 @@ export component AddressPill inherits Rectangle {
                 width: Shell.address-icon;
                 bubble := Icon {
                     y: (parent.height - self.height) / 2;
-                    path: IconPaths.bubble;
+                    path: Glyph.bubble;
                     size: Shell.address-icon;
                     weight: Shell.address-icon-stroke;
                     tint: Palette.mint;
@@ -146,7 +146,7 @@ export component AddressPill inherits Rectangle {
                     spacing: Space.s1;
                     Icon {
                         y: (parent.height - self.height) / 2;
-                        path: IconPaths.expand;
+                        path: Glyph.expand;
                         size: Shell.address-icon;
                         weight: Shell.address-icon-stroke;
                         tint: Palette.amber;
@@ -174,7 +174,7 @@ export component AddressPill inherits Rectangle {
                 }
                 Icon {
                     y: (parent.height - self.height) / 2;
-                    path: IconPaths.download;
+                    path: Glyph.download;
                     size: Shell.address-icon;
                     weight: Shell.address-icon-stroke;
                     tint: media-area.has-hover ? Palette.ink : Palette.mint;
@@ -196,7 +196,7 @@ export component AddressPill inherits Rectangle {
                     spacing: Space.s1;
                     Icon {
                         y: (parent.height - self.height) / 2;
-                        path: IconPaths.shield;
+                        path: Glyph.shield;
                         size: Shell.address-icon;
                         weight: Shell.address-icon-stroke;
                         tint: root.blocker-allowed ? Palette.haze : Palette.mint;
@@ -225,7 +225,7 @@ export component AddressPill inherits Rectangle {
                 }
                 Icon {
                     y: (parent.height - self.height) / 2;
-                    path: IconPaths.book;
+                    path: Glyph.book;
                     size: Shell.address-icon;
                     weight: Shell.address-icon-stroke;
                     tint: root.reader-on ? Palette.sky : book-area.has-hover ? Palette.ink : Palette.haze;
@@ -245,7 +245,7 @@ export component AddressPill inherits Rectangle {
                 }
                 Icon {
                     y: (parent.height - self.height) / 2;
-                    path: IconPaths.star;
+                    path: Glyph.star;
                     size: Shell.address-icon;
                     weight: Shell.address-icon-stroke;
                     fill: root.bookmarked ? Palette.amber : transparent;
@@ -267,7 +267,7 @@ export component AddressPill inherits Rectangle {
         width: Shell.rail-item;
         height: Chrome.address;
         border-radius: Shell.control-radius;
-        icon-path: IconPaths.search;
+        icon-path: Glyph.search;
         label: "Address";
         clicked => {
             root.activated();
