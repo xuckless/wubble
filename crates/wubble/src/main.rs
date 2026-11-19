@@ -227,7 +227,7 @@ fn main() -> ExitCode {
                 };
                 load_run::begin(
                     server.clone(),
-                    variant.name(),
+                    &variant.name(),
                     &pages,
                     m.load.runs.get() as usize,
                     m.load.back,
@@ -1514,12 +1514,15 @@ fn run(
         .flatten()
         .map(|(report, csv)| {
             println!("{report}");
-            let Some(path) = measure_out else {
-                return Ok(());
+            // A failed load run exits non-zero, so a script never counts its partial rows.
+            let failed = load_run::take_failure();
+            let written = match measure_out {
+                Some(path) => measure::write_csv(&path, &csv)
+                    .map(|()| println!("measure: samples written to {}", path.display()))
+                    .map_err(|e| format!("cannot write {}: {e}", path.display())),
+                None => Ok(()),
             };
-            measure::write_csv(&path, &csv)
-                .map(|()| println!("measure: samples written to {}", path.display()))
-                .map_err(|e| format!("cannot write {}: {e}", path.display()))
+            failed.map_or(written, Err)
         });
     drop(lifecycle);
     drop(audible);

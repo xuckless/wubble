@@ -26,20 +26,6 @@ const CLIPBOARD: (&str, &str) = ("clipboard", include_str!("clipboard.js"));
 /// the helper cannot depend on wubble-engine.
 const CLIPBOARD_SWITCH: &str = "wubble-clipboard-bridge";
 
-/// Measure only (`--measure load`, `scripts/measure-load.sh`): channel names, comma-separated, the
-/// renderer leaves out, to price each content script's document-start cost. The renderers inherit
-/// the browser's environment. Unset in every shipped run.
-const SKIP_ENV: &str = "WUBBLE_SKIP_CONTENT_SCRIPTS";
-
-/// `scripts` without the channels `skip` names (a comma list; `"all"` leaves none).
-fn without<'a>(scripts: Vec<(&'a str, &'a str)>, skip: &str) -> Vec<(&'a str, &'a str)> {
-    let skipped: Vec<&str> = skip.split(',').map(str::trim).collect();
-    scripts
-        .into_iter()
-        .filter(|(name, _)| !(skipped.contains(name) || skipped.contains(&"all")))
-        .collect()
-}
-
 /// One context script running `scripts`, each called with its own channel:
 /// `send(text)` posts `name\ntext`, and a browser message `name\ntext` reaches
 /// the function that channel registered. The dispatcher captures what it uses
@@ -78,7 +64,6 @@ fn main() {
         .into_iter()
         .chain(clipboard.then_some(CLIPBOARD))
         .collect();
-    let scripts = without(scripts, &std::env::var(SKIP_ENV).unwrap_or_default());
     // Built once per process and kept for its life.
     let script: &'static str = Box::leak(compose(&scripts).into_boxed_str());
     std::process::exit(CefRuntime::run_subprocess_with_script(
@@ -118,16 +103,7 @@ mod tests {
     }
 
     #[test]
-    fn the_measure_switch_leaves_named_channels_out_and_nothing_by_default() {
-        let all = vec![AUTOFILL, ZOOM, PROBES, COSMETIC];
-        assert_eq!(without(all.clone(), ""), all);
-        let kept: Vec<&str> = without(all.clone(), "probes, cosmetic")
-            .iter()
-            .map(|(n, _)| *n)
-            .collect();
-        assert_eq!(kept, ["autofill", "zoom"]);
-        assert!(without(all, "all").is_empty());
-        // An empty composition is still a valid script.
+    fn an_empty_composition_is_still_a_valid_script() {
         assert!(compose(&[]).starts_with("(function (send, register) {"));
     }
 

@@ -41,14 +41,11 @@ pub enum Variant {
 }
 
 impl Variant {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Blocker => "blocker",
-            Self::BlockerOff => "blocker-off",
-            Self::NoHook => "no-hook",
-            Self::NoObserver => "no-observer",
-            Self::ObserverOnly => "observer-only",
-        }
+    /// The name `--load-variant` takes (the clap value, so the CSV column matches the argument).
+    pub fn name(self) -> String {
+        clap::ValueEnum::to_possible_value(&self)
+            .map(|v| v.get_name().to_owned())
+            .unwrap_or_default()
     }
 
     /// Which of the engine's two hooks are installed: (request filter, response observer).
@@ -406,6 +403,13 @@ struct Run {
 
 thread_local! {
     static RUN: RefCell<Option<Run>> = const { RefCell::new(None) };
+    /// Why the finished run failed, until [`take_failure`].
+    static FAILURE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The failure of the run [`finish`] ended, if it had one.
+pub fn take_failure() -> Option<String> {
+    FAILURE.take()
 }
 
 fn with_run<T>(f: impl FnOnce(&mut Run) -> T) -> Option<T> {
@@ -572,6 +576,7 @@ pub fn finish() -> Option<(String, String)> {
     );
     if let Some(reason) = &run.failure {
         let _ = writeln!(report, "measure: FAILED: {reason}");
+        FAILURE.set(Some(reason.clone()));
     }
     report.push_str(&table(&run.samples));
     for s in run.samples.iter().filter(|s| !s.log.is_empty()) {
@@ -733,6 +738,18 @@ mod tests {
         assert_eq!(a, [Action::Framed, Action::Record(1), Action::Quit]);
         assert_eq!(s, State::Done);
         assert_eq!(next(State::Done, TICK, 2), (State::Done, vec![]));
+    }
+
+    #[test]
+    fn a_failed_run_hands_its_reason_to_the_exit_code() {
+        let server = LoadServer::start(0, false).expect("bind");
+        begin(server, "blocker", &["article".into()], 1, false);
+        assert!(take_failure().is_none());
+        with_run(|run| run.failure = Some("no timing".into()));
+        let (report, _) = finish().expect("a run was started");
+        assert!(report.contains("measure: FAILED: no timing"));
+        assert_eq!(take_failure().as_deref(), Some("no timing"));
+        assert!(take_failure().is_none());
     }
 
     #[test]
