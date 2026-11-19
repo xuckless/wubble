@@ -116,6 +116,7 @@ impl Host {
             }
             Routed::Find(e) => self.apply_find(tab, e),
             Routed::Drag { data, allowed } => self.drag_started(tab, data, allowed),
+            Routed::DragCursor(op) => self.drag_cursor(tab, op),
             Routed::Popup(rect) => self.surfaces.entry(tab).or_default().popup = rect,
             // Picture-in-picture's fullscreen is the video's, in its own window.
             Routed::Fullscreen(true) if self.pip_tab() == Some(tab) => {}
@@ -178,7 +179,8 @@ impl Host {
                     self.probe_report(tab, &frame, keys);
                 }
             }
-            Routed::Pdf { path, text } => {
+            Routed::Pdf { path, ok, .. } if self.print_rendered(&path, ok) => {}
+            Routed::Pdf { path, text, .. } => {
                 self.downloads.release(&path);
                 self.toast(window, &text);
             }

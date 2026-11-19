@@ -295,6 +295,9 @@ pub(crate) struct Requests {
     menus: Mutex<Held<cef::RunContextMenuCallback>>,
     /// Whether `StartDragging` may hand a page drag to the host.
     drag_source: AtomicBool,
+    /// wubble change 48: the page's own drag data from `StartDragging`,
+    /// until the host finishes that drag.
+    source_drag: Mutex<Option<cef::DragData>>,
 }
 
 /// Hold `callback`, or answer it with its default when the table is full.
@@ -351,6 +354,7 @@ impl Requests {
             certificates: Default::default(),
             menus: Default::default(),
             drag_source: AtomicBool::new(false),
+            source_drag: Mutex::new(None),
         };
         requests.auth.set_enabled(config.handle_auth_challenges);
         requests.permissions.set_enabled(config.handle_permission_requests);
@@ -406,6 +410,15 @@ impl Requests {
 
     pub(crate) fn drag_source(&self) -> bool {
         self.drag_source.load(Ordering::Acquire)
+    }
+
+    /// wubble change 48: keep (`Some`) or forget the page's drag data.
+    pub(crate) fn hold_source_drag(&self, data: Option<cef::DragData>) {
+        *self.source_drag.lock().unwrap() = data;
+    }
+
+    pub(crate) fn source_drag(&self) -> Option<cef::DragData> {
+        self.source_drag.lock().unwrap().clone()
     }
 
     pub(crate) fn answer_auth(

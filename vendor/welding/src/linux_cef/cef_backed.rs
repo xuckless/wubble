@@ -270,6 +270,9 @@ cef::wrap_render_handler! {
             // wubble change: refuse the drag unless the host can run one;
             // CEF waits for DragSourceEndedAt after a true here.
             if !self.handler.requests.drag_source() { return 0; }
+            // wubble change 48: keep the page's own data, custom types and
+            // all, for a drag that comes back into the window.
+            self.handler.requests.hold_source_drag(cef::ImplDragData::clone(drag_data));
             // CEF gives callback-scoped drag data and DIP coordinates. Copy
             // both into welding-owned values before the host starts its native
             // drag loop, which may outlive this callback by arbitrarily long.
@@ -283,6 +286,20 @@ cef::wrap_render_handler! {
                 }
             );
             1 // host now owns the system drag loop
+        }
+
+        // wubble change 48: what a drop at the pointer would do.
+        fn update_drag_cursor(
+            &self,
+            _browser: Option<&mut cef::Browser>,
+            operation: cef::DragOperationsMask,
+        ) {
+            push_navigation(
+                &self.handler.events,
+                crate::surface::NavigationEvent::DragCursor {
+                    operation: crate::drag::from_cef_operations(operation),
+                },
+            );
         }
     }
 }

@@ -552,6 +552,9 @@ pub enum PageEvent {
         x: i32,
         y: i32,
     },
+    /// During a drag over the view: what a drop at the pointer would do
+    /// (CEF `UpdateDragCursor`; `DragOps::NONE`: not allowed there).
+    DragCursor(DragOps),
     /// The context script (wubble-helper's `autofill.js`) in `frame` sent
     /// `text`. It may hold form values, so it is a `Secret`: never printed.
     /// Answer with `View::send_frame_message`.

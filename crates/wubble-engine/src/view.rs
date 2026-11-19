@@ -259,6 +259,9 @@ pub struct PopupLayer {
 pub enum DragPhase {
     /// The drag entered, carrying what is dragged.
     Enter(DragData),
+    /// The view's own page drag entered it again: CEF gets the data the page
+    /// gave, with the types [`DragData`] does not carry.
+    EnterSource,
     Over,
     Leave,
     Drop,
@@ -363,11 +366,28 @@ impl View {
         self.apply_nav(NavInput::HardReload);
     }
 
-    /// Prints the page to a PDF file (Chromium's default page size and
-    /// margins). Completion arrives as [`PageEvent::PdfPrinted`]. The system
-    /// print dialog is not offered: it needs an embedder print handler.
-    pub fn print_to_pdf(&mut self, path: &Path) -> Result<(), String> {
-        self.producer.print_to_pdf(path).map_err(|e| {
+    /// Prints the page to a PDF file as `options` ask (the print sheet's).
+    /// Completion arrives as [`PageEvent::PdfPrinted`]. The system print
+    /// dialog is not offered: it needs an embedder print handler.
+    pub fn print_to_pdf(
+        &mut self,
+        path: &Path,
+        options: &wubble_core::print::PdfOptions,
+    ) -> Result<(), String> {
+        use wubble_core::print::PdfMargins as M;
+        let options = welding::PdfOptions {
+            landscape: options.landscape,
+            background: options.background,
+            scale: options.scale,
+            paper_inches: options.paper_inches,
+            margins: match options.margins {
+                M::Default => welding::PdfMargins::Default,
+                M::None => welding::PdfMargins::None,
+                M::Custom(m) => welding::PdfMargins::Custom(m),
+            },
+            page_ranges: options.page_ranges.clone(),
+        };
+        self.producer.print_to_pdf(path, &options).map_err(|e| {
             let error = format!("view {}: print to PDF: {e}", self.browser_id);
             eprintln!("wubble-engine: {error}");
             error
@@ -1355,6 +1375,7 @@ impl View {
         }
         let (kind, payload) = match phase {
             DragPhase::Enter(data) => (welding::DragEventKind::Enter, Some(data.into())),
+            DragPhase::EnterSource => (welding::DragEventKind::Enter, None),
             DragPhase::Over => (welding::DragEventKind::Over, None),
             DragPhase::Leave => (welding::DragEventKind::Leave, None),
             DragPhase::Drop => (welding::DragEventKind::Drop, None),
@@ -1844,6 +1865,9 @@ fn route(event: NavigationEvent) -> Vec<Route> {
             x,
             y,
         })),
+        E::DragCursor { operation } => {
+            one(Route::Page(PageEvent::DragCursor(DragOps(operation.0))))
+        }
         _ => vec![],
     }
 }

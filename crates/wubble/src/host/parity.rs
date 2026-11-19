@@ -480,6 +480,9 @@ impl Host {
                     self.parity_host_op(window, HostOp::CloseFind);
                 }
                 self.parity_host_op(window, HostOp::CloseBar);
+                if self.print_open() {
+                    self.print_answered(false);
+                }
                 if let Some(p) = self.parity_run().and_then(|r| r.held) {
                     self.parity_input(window, Step::Release(p));
                 }
@@ -497,6 +500,7 @@ impl Host {
                     self.render_surfaces(window);
                 }
             }
+            HostOp::AnswerPrint => self.print_answered(true),
             HostOp::ZoomReset => {
                 if let Some(view) = self.view()
                     && view.zoom_percent() != 100
@@ -605,6 +609,10 @@ impl Host {
             HostCheck::AutoscrollStretched => {
                 let stretch = window.get_autoscroll_stretch();
                 is(stretch > 1.05, format!("autoscroll stretch {stretch}"))
+            }
+            HostCheck::PrintSheet(want) => {
+                let open = self.print_open();
+                is(open == want, format!("print sheet open: {open}"))
             }
             HostCheck::PageEntered => {
                 let e = window.get_page_enter();

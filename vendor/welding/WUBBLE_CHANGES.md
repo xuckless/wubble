@@ -438,6 +438,20 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    (`wubble-engine` `storage.rs`); before this every view had its own
    in-memory jar, so tabs never shared a login and nothing survived a
    restart. Test: `wubble-engine`'s `cookie_smoke` example.
+47. **Print settings.** `CefSurfaceProducer::print_to_pdf(path, &PdfOptions)`:
+   `PdfOptions` (landscape, background graphics, scale, paper size in
+   inches, `PdfMargins` default / none / custom inches, page ranges) is
+   filled into `cef::PdfPrintSettings` (`drag::pdf_settings`) by the Linux,
+   macOS and Windows producers, which used CEF's defaults before. wubble's
+   print sheet sets them.
+48. **Drag operation and the page's own drag data.** The render handlers
+   implement `UpdateDragCursor` as `NavigationEvent::DragCursor { operation }`,
+   so the host learns what a drop would do (a text drag between two fields
+   moves, not copies) and shows it. `StartDragging` keeps a CEF clone of the
+   drag data in `Requests` (dropped by `finish_drag_source`); a
+   `DragInput` enter with no payload re-enters with that clone, which keeps
+   `DropData`'s custom types (`setData("application/x-...")`) that
+   `DragPayload` cannot carry. Test: `drag::tests`.
 
 ## Not changed, on purpose
 

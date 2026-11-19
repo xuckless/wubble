@@ -486,6 +486,29 @@ export struct FolderChoiceItem {
     depth: int,
 }
 
+// The print sheet (`wubble_core::print::Sheet`).
+export struct PrintSheetView {
+    open: bool,
+    // Rendering or sending: the buttons wait.
+    busy: bool,
+    // Changes with each opening: the pages field restarts from `pages`.
+    serial: int,
+    // Why the last try failed, or a bad page range; empty when all is well.
+    error: string,
+    // "Save as PDF", then the printers.
+    destinations: [string],
+    destination: int,
+    pages: string,
+    landscape: bool,
+    // Letter, A4, Legal.
+    paper: int,
+    // Default, None, Minimum.
+    margins: int,
+    scale: int,
+    background: bool,
+    copies: int,
+}
+
 // What the bookmark sheet asks (Ctrl+D, rename, move, new folder).
 export struct BookmarkSheetView {
     open: bool,

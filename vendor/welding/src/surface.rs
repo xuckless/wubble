@@ -1455,7 +1455,14 @@ pub trait CefSurfaceProducer {
     /// [`NavigationEvent::PdfPrintFinished`]. Chromium prints what the page
     /// looks like to a printer, not a screenshot — a page that styles itself
     /// for `@media print` gets that.
-    fn print_to_pdf(&mut self, _path: &std::path::Path) -> Result<(), WeldError> {
+    ///
+    /// wubble change 47: `options` carries the print sheet's settings
+    /// (CEF's `cef_pdf_print_settings_t`).
+    fn print_to_pdf(
+        &mut self,
+        _path: &std::path::Path,
+        _options: &PdfOptions,
+    ) -> Result<(), WeldError> {
         Err(WeldError::PlatformUnsupported(
             "print to PDF is not wired for this producer",
         ))
@@ -1800,11 +1807,44 @@ pub struct DragPayload {
     pub fragment_base_url: Option<String>,
 }
 
+/// wubble change 47: how a page is printed to PDF, CEF's
+/// `cef_pdf_print_settings_t` without the header and footer templates.
+/// The default is Chromium's own: Letter, default margins, 100 %.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PdfOptions {
+    pub landscape: bool,
+    /// Print background colours and images.
+    pub background: bool,
+    /// 1.0 is 100 %; 0 or less is CEF's default.
+    pub scale: f64,
+    /// Paper width and height in inches; 0 or less is Letter.
+    pub paper_inches: (f64, f64),
+    pub margins: PdfMargins,
+    /// Pages as "1-5, 8, 11-13"; empty is every page. CEF fails the print
+    /// when a range starts after it ends or lies past the last page.
+    pub page_ranges: String,
+}
+
+/// wubble change 47: the page margins of a [`PdfOptions`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum PdfMargins {
+    /// Chromium's default, about 0.4 inch.
+    #[default]
+    Default,
+    None,
+    /// Top, right, bottom, left, in inches.
+    Custom([f64; 4]),
+}
+
 /// One stage of an OS drag/drop operation over the webview.
 #[derive(Clone, Debug)]
 pub struct DragInput {
     pub kind: DragEventKind,
-    /// Required for [`DragEventKind::Enter`], ignored otherwise.
+    /// The data of a [`DragEventKind::Enter`], ignored otherwise.
+    /// wubble change 48: `None` on an enter re-enters with the data of the
+    /// page's own drag, held since its `StartDragging`, so the types the
+    /// page set itself (`dataTransfer.setData("application/x-...")`, which
+    /// [`DragPayload`] cannot carry) survive a drag within the window.
     pub payload: Option<DragPayload>,
     pub x: i32,
     pub y: i32,
@@ -2014,6 +2054,11 @@ pub enum NavigationEvent {
         x: i32,
         y: i32,
     },
+    /// wubble change 48: CEF's `UpdateDragCursor`. After each drag enter or
+    /// move the page names the operation a drop there would do (none, copy,
+    /// move, link), which the host shows as the cursor and reports back when
+    /// the drag ends.
+    DragCursor { operation: DragOperations },
     /// How a page search is going. Chromium reports progressively: several of
     /// these arrive for one search as more of the page is scanned, and
     /// `final_update` marks the last.

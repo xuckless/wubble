@@ -48,6 +48,7 @@ mod ui_loop;
 mod verdict;
 mod video_smoke;
 mod windows_smoke;
+mod wl;
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -980,6 +981,16 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_shot_cancelled(move || with_host_in(win, Host::shot_cancelled));
     window.on_bookmark_deleted(move |id| with_host_in(win, |host| host.bookmark_deleted(id)));
     window.on_bookmark_folder_requested(move || with_host_in(win, Host::bookmark_folder_requested));
+    window.on_print_sheet_edited(
+        move |d, pages, landscape, paper, margins, scale, back, copies| {
+            with_host_in(win, |host| {
+                host.print_edited(d, &pages, landscape, paper, margins, scale, back, copies)
+            })
+        },
+    );
+    window.on_print_sheet_answered(move |accept| {
+        with_host_in(win, |host| host.print_answered(accept))
+    });
     window.on_bookmark_sheet_answered(move |accept, remove, name, folder| {
         with_host_in(win, |host| {
             host.bookmark_sheet_answered(accept, remove, &name, folder)

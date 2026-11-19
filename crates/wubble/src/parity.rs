@@ -150,6 +150,8 @@ pub enum HostOp {
     /// Back to the parity page's tab, closing every other tab.
     OnlyFirstTab,
     ZoomReset,
+    /// The print sheet's Save / Print, as its button.
+    AnswerPrint,
     /// Answers the visible page's permission prompt: allow (true) or block, not remembered.
     AnswerPrompt(bool),
     /// Undoes what input left: the page's menu, the command and find bars dismissed, a
@@ -232,6 +234,8 @@ pub enum HostCheck {
     AutoscrollStretched,
     /// A page drag runs (true) or none does (false).
     Drag(bool),
+    /// The print sheet is open (true) or not.
+    PrintSheet(bool),
     /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
     /// shifted and scaled, and a click lands where it is drawn, not at its point.
     PageEntered,
@@ -510,9 +514,16 @@ pub const ITEMS: &[Item] = &[
         [Click(Left, NONE, at::BLANK), Keys("Alt+Right")],
         [J("eq(location.hash, '#two')")]
     ),
+    // The print sheet opens; Save writes the PDF and lists it as a finished download.
     item!(
         "A.ctrl-p-print",
-        [Click(Left, NONE, at::BLANK), Keys("Ctrl+P")],
+        [
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+P"),
+            Until(H(C::PrintSheet(true))),
+            Host(HostOp::AnswerPrint),
+            Until(H(C::PrintSheet(false)))
+        ],
         [H(C::Downloads(1))]
     ),
     // B. Clipboard through the context menu, and the page's own copy.
@@ -732,6 +743,43 @@ pub const ITEMS: &[Item] = &[
             Release(at::DROP)
         ],
         [J("eq(seen.drops.join(), 'payload')")]
+    ),
+    // A type the page set itself (`application/x-wubble`) reaches the drop: the page's own drag
+    // data is re-entered as it was (welding change 48).
+    item!(
+        "D.custom-type-in-window",
+        [
+            Press(at::DRAG),
+            MoveTo(at::x(at::DRAG, 375.0)),
+            Until(H(C::Drag(true))),
+            MoveTo(at::x(at::DROP, 380.0)),
+            MoveTo(at::DROP),
+            Settle(10),
+            Release(at::DROP)
+        ],
+        [J("eq(seen.custom.join(), 'custom')")]
+    ),
+    // Selected text dragged from one field into another moves: the page's chosen operation
+    // (CEF `UpdateDragCursor`) ends the drag, so the source field deletes it.
+    item!(
+        "D.text-move-between-fields",
+        [
+            Js("parity.field('inp2', '')"),
+            Js("parity.selectField('inp', 'alpha')"),
+            Press(at::x(at::INP, 32.0)),
+            MoveTo(at::x(at::INP, 60.0)),
+            Until(H(C::Drag(true))),
+            MoveTo(at::x(at::INP2, 100.0)),
+            MoveTo(at::INP2),
+            Settle(10),
+            Release(at::INP2),
+            Settle(10)
+        ],
+        [
+            J("eq($('inp2').value, 'alpha')"),
+            J("eq($('inp').value, '')"),
+            J("eq(seen.effect, 'move')")
+        ]
     ),
     item!(
         "D.text-drag-to-input",
@@ -1095,6 +1143,7 @@ fn input(
         modifiers: Modifiers {
             keys,
             buttons: Buttons::default(),
+            locks: Default::default(),
         },
     }
 }

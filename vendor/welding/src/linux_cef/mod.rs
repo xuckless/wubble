@@ -805,19 +805,22 @@ impl CefSurfaceProducer for LinuxCefProducer {
         0.0
     }
 
-    fn print_to_pdf(&mut self, path: &std::path::Path) -> Result<(), WeldError> {
+    fn print_to_pdf(
+        &mut self,
+        path: &std::path::Path,
+        options: &crate::PdfOptions,
+    ) -> Result<(), WeldError> {
         #[cfg(feature = "cef-runtime")]
         if let Some(host) = self.browser.host() {
             let path_str: cef::CefString = path.to_string_lossy().as_ref().into();
             let mut callback = cef_backed::WeldPdfCallback::build(self.events.clone());
-            // Default settings: Chromium's own page size and margins, which is
-            // what a host that did not ask for anything else expects.
-            let settings = cef::PdfPrintSettings::default();
+            // wubble change 47: the sheet's settings.
+            let settings = crate::drag::pdf_settings(options);
             host.print_to_pdf(Some(&path_str), Some(&settings), Some(&mut callback));
             return Ok(());
         }
         #[cfg(not(feature = "cef-runtime"))]
-        let _ = path;
+        let _ = (path, options);
         Err(pending("cef_browser_host_t::print_to_pdf"))
     }
 
@@ -949,7 +952,7 @@ impl CefSurfaceProducer for LinuxCefProducer {
         #[cfg(feature = "cef-runtime")]
         if let Some(host) = self.browser.host() {
             let scale = self.metrics.lock().unwrap().scale();
-            return crate::drag::send_drag(&host, event, scale);
+            return crate::drag::send_drag(&host, event, self.requests.source_drag(), scale);
         }
         Err(pending("cef_browser_host_t drag target input"))
     }
@@ -964,6 +967,7 @@ impl CefSurfaceProducer for LinuxCefProducer {
         if let Some(host) = self.browser.host() {
             let scale = self.metrics.lock().unwrap().scale();
             crate::drag::finish_drag_source(&host, x, y, operation, scale);
+            self.requests.hold_source_drag(None);
             return Ok(());
         }
         Err(pending("cef_browser_host_t drag source completion"))

@@ -67,10 +67,12 @@ interprocess = "2.2"
 dispatch2 = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# The system clipboard and primary selection on the window's Wayland connection, for the
-# pages' clipboard (`clipboard.rs`); the crate Slint's winit backend uses, already in
-# Cargo.lock (MIT).
-smithay-clipboard = "0.7"
+# The system clipboard and primary selection, drops from and drags to other apps, touchpad pinch
+# and swipe and the lock keys, on the windows' Wayland connection (`wl/wayland.rs`, ported from
+# smithay-clipboard): smithay-client-toolkit and wayland-backend, the versions already in
+# Cargo.lock through Slint's winit backend (MIT).
+sctk = { package = "smithay-client-toolkit", version = "0.20", default-features = false, features = ["calloop"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
 # The OS reduced-motion preference through the XDG Settings portal (`os_motion.rs`); already in
 # Cargo.lock through souvlaki (MIT).
 zbus = "5"

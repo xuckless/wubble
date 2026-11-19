@@ -24,6 +24,7 @@ mod downloads;
 mod drag;
 mod external;
 mod gallery;
+mod gesture;
 mod gpu;
 mod hover;
 mod look;
@@ -32,6 +33,7 @@ mod pages;
 mod panes;
 mod parity;
 mod preview;
+mod print;
 mod settings;
 mod snapshots;
 mod status;
@@ -373,6 +375,14 @@ pub struct Host {
     autoscroll: autoscroll::AutoscrollPointer,
     page_drag: crate::page_drag::PageDrag,
     drag_point: Point,
+    /// A drag from another app over the window (`drag.rs`).
+    external_drag: Option<drag::ExternalDrag>,
+    /// Touchpad pinch and history swipe (`gesture.rs`).
+    gestures: gesture::Gestures,
+    /// The print sheet (`print.rs`).
+    print: wubble_core::print::Sheet,
+    /// Opened print sheets: the pages field restarts with each.
+    print_serial: i32,
     search_engine: Option<SearchEngine>,
     live_suggestions: bool,
     /// The live suggestion fetch (debounce, worker); sends nothing unless `live_suggestions`.
@@ -589,6 +599,10 @@ impl Host {
             autoscroll: Default::default(),
             page_drag: Default::default(),
             drag_point: Point { x: 0.0, y: 0.0 },
+            external_drag: None,
+            gestures: Default::default(),
+            print: Default::default(),
+            print_serial: 0,
             search_engine: None,
             live_suggestions: false,
             suggest: crate::suggest_fx::SuggestFx::new(crate::suggest_fx::Http::new(), |e| {
@@ -734,6 +748,7 @@ impl Host {
             self.enter(other);
         }
         if let Some(gone) = self.parked.remove(&id) {
+            self.aux().remove_window(id);
             let _ = gone.handle.hide();
         }
     }
@@ -811,6 +826,7 @@ impl Host {
         }
         if let Command::CloseTab(tab) = command {
             self.remember_closed(tab);
+            self.print_tab_closed(tab);
         }
         if matches!(
             command,
@@ -2748,6 +2764,7 @@ impl Host {
             return EventResult::Propagate;
         };
         self.clipboard.open(window.window());
+        self.add_aux_window(&window);
         if let Some(e) = crate::run_state::event_of(event, || {
             window
                 .window()
@@ -2777,6 +2794,8 @@ impl Host {
                     .pointer_move(position.x, position.y);
                 self.tab_drag_pointer(position.x, position.y, false);
             }
+            // macOS only in winit 0.30; Wayland's comes through `crate::wl`.
+            WindowEvent::PinchGesture { delta, phase, .. } => self.pinch_gesture(*delta, *phase),
             WindowEvent::HoveredFile(_)
             | WindowEvent::DroppedFile(_)
             | WindowEvent::HoveredFileCancelled => self.file_drop(&window, event),

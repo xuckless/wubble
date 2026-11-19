@@ -4,7 +4,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // SPDX-License-Identifier: MPL-2.0
 
-//! Translation between welding's portable drag/touch types and CEF.
+//! Translation between welding's portable drag/touch/print types and CEF.
 
 use cef::{ImplBrowserHost, ImplDragData};
 
@@ -79,9 +79,12 @@ pub(crate) fn send_touch(host: &cef::BrowserHost, event: TouchInput, scale: f32)
     host.send_touch_event(Some(&event));
 }
 
+/// wubble change 48: `held` is the page's own drag data, kept since its
+/// `StartDragging` (see [`DragInput::payload`]).
 pub(crate) fn send_drag(
     host: &cef::BrowserHost,
     event: DragInput,
+    held: Option<cef::DragData>,
     scale: f32,
 ) -> Result<(), WeldError> {
     let mouse = cef::MouseEvent {
@@ -93,10 +96,18 @@ pub(crate) fn send_drag(
 
     match event.kind {
         DragEventKind::Enter => {
-            let payload = event.payload.ok_or_else(|| {
-                WeldError::BrowserOp("DragInput::Enter requires a DragPayload".into())
-            })?;
-            let mut data = to_cef_payload(&payload)?;
+            let mut data = match (event.payload, held) {
+                (Some(payload), _) => to_cef_payload(&payload)?,
+                // CEF's Clone copies the whole DropData, custom types included.
+                (None, Some(held)) => ImplDragData::clone(&held).ok_or_else(|| {
+                    WeldError::BrowserOp("cef_drag_data_t::clone returned None".into())
+                })?,
+                (None, None) => {
+                    return Err(WeldError::BrowserOp(
+                        "DragInput::Enter without a DragPayload needs a page drag".into(),
+                    ));
+                },
+            };
             host.drag_target_drag_enter(Some(&mut data), Some(&mouse), allowed);
         },
         DragEventKind::Over => host.drag_target_drag_over(Some(&mouse), allowed),
@@ -104,6 +115,35 @@ pub(crate) fn send_drag(
         DragEventKind::Drop => host.drag_target_drop(Some(&mouse)),
     }
     Ok(())
+}
+
+/// wubble change 48: CEF's drag operation mask as welding's.
+pub(crate) fn from_cef_operations(operations: cef::DragOperationsMask) -> DragOperations {
+    DragOperations(operations.as_ref().0 as u32)
+}
+
+/// wubble change 47: the print sheet's options as CEF's settings.
+pub(crate) fn pdf_settings(options: &crate::PdfOptions) -> cef::PdfPrintSettings {
+    let flag = |b: bool| ::std::os::raw::c_int::from(b);
+    let (margin_type, [top, right, bottom, left]) = match options.margins {
+        crate::PdfMargins::Default => (cef::PdfPrintMarginType::DEFAULT, [0.0; 4]),
+        crate::PdfMargins::None => (cef::PdfPrintMarginType::NONE, [0.0; 4]),
+        crate::PdfMargins::Custom(m) => (cef::PdfPrintMarginType::CUSTOM, m),
+    };
+    cef::PdfPrintSettings {
+        landscape: flag(options.landscape),
+        print_background: flag(options.background),
+        scale: options.scale,
+        paper_width: options.paper_inches.0,
+        paper_height: options.paper_inches.1,
+        margin_type,
+        margin_top: top,
+        margin_right: right,
+        margin_bottom: bottom,
+        margin_left: left,
+        page_ranges: options.page_ranges.as_str().into(),
+        ..Default::default()
+    }
 }
 
 pub(crate) fn finish_drag_source(
@@ -207,4 +247,22 @@ fn userfree(value: cef::CefStringUserfree) -> String {
 
 fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // wubble change 48: the drag cursor's operation reads back as it went in.
+    #[test]
+    fn drag_operations_round_trip_through_cef() {
+        for ops in [
+            DragOperations::NONE,
+            DragOperations::COPY,
+            DragOperations::MOVE,
+            DragOperations::COPY | DragOperations::LINK | DragOperations::MOVE,
+        ] {
+            assert_eq!(from_cef_operations(operations(ops)), ops);
+        }
+    }
 }

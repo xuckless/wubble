@@ -70,6 +70,8 @@ pub(super) fn page_panes(slots: &[Option<TabId>; SLOTS]) -> usize {
 
 /// One window's share of the host.
 pub(crate) struct WindowHost {
+    /// The platform's extras (`crate::wl`) know this window: told with its first event.
+    pub(super) aux_added: bool,
     pub(super) id: WindowId,
     pub(super) kind: WindowKind,
     /// The strong handle: the window lives as long as this.
@@ -116,6 +118,7 @@ impl WindowHost {
     ) -> Self {
         let [a, b, c, popup_presenter, panel_presenter, peek_presenter] = presenters;
         Self {
+            aux_added: false,
             id,
             kind,
             window: handle.as_weak(),

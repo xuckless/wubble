@@ -48,6 +48,9 @@ pub enum Cursor {
     PanSW,
     PanW,
     PanNW,
+    /// A drop here copies, or links (drag feedback; CEF does not set these).
+    Copy,
+    Alias,
 }
 
 impl Cursor {

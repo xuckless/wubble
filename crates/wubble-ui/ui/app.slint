@@ -5,7 +5,7 @@
 import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing, Calm } from "tokens.slint";
 import { Shell } from "app-tokens.slint";
 import { Seam, GlassPanel, SplitView, SplitPane, SplitSeam } from "components.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandBarEvent, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView } from "components/model.slint";
 import { CommandBar } from "components/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
 import { GlanceView } from "components/model.slint";
@@ -17,6 +17,8 @@ import { ErrorPanel } from "components/error-panel.slint";
 import { SettingsPage } from "components/settings.slint";
 import { HistoryPage, BookmarksPage, DownloadsPage, PasswordsPage, TasksPage } from "components/pages.slint";
 import { BookmarkSheet } from "components/bookmark-sheet.slint";
+import { PrintSheet } from "components/print-sheet.slint";
+import { SwipeChip } from "components/swipe-chip.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
@@ -40,7 +42,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
+export { Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -414,6 +416,14 @@ export component AppWindow inherits Window {
     in property <[BookmarkLineItem]> bookmark-lines;
     in property <bool> bookmarks-searching;
     in property <BookmarkSheetView> bookmark-sheet-view;
+    // The print sheet (Ctrl+P): what it shows; its edits and its answer.
+    in property <PrintSheetView> print-sheet-view;
+    callback print-sheet-edited(int, string, bool, int, int, int, bool, int);
+    callback print-sheet-answered(bool);
+    // A touchpad history swipe: -1..1 of the way to forward (negative) or back; 0 hides the
+    // chip. `swipe-shift` is its rubber-banded travel from the edge (host side, motion.rs band).
+    in property <float> swipe-progress;
+    in property <length> swipe-shift;
     in property <[FolderChoiceItem]> bookmark-folders;
     callback bookmarks-query-changed(string);
     callback bookmark-toggled(int);
@@ -517,6 +527,7 @@ export component AppWindow inherits Window {
     property <bool> dialog-open: root.dialog.open;
     property <bool> error-open: root.page-error.open;
     property <bool> bookmark-open: root.bookmark-sheet-view.open;
+    property <bool> print-open: root.print-sheet-view.open;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
     property <bool> overlay-open: root.menu.open || root.downloads-open || root.dialog.open || root.page-error.open;
@@ -532,6 +543,8 @@ export component AppWindow inherits Window {
             error-ui.take-focus();
         } else if bookmark-sheet.open {
             bookmark-sheet.focus-sheet();
+        } else if print-sheet.open {
+            print-sheet.focus-sheet();
         } else if root.page == InternalPageKind.settings {
             settings-ui.take-focus();
         } else if root.page == InternalPageKind.history {
@@ -563,6 +576,9 @@ export component AppWindow inherits Window {
         root.settle-focus();
     }
     changed bookmark-open => {
+        root.settle-focus();
+    }
+    changed print-open => {
         root.settle-focus();
     }
     changed downloads-open => {
@@ -636,6 +652,8 @@ export component AppWindow inherits Window {
         MouseCursor.none, MouseCursor.none, MouseCursor.none, MouseCursor.none,
         MouseCursor.none, MouseCursor.none, MouseCursor.none, MouseCursor.none,
         MouseCursor.none, MouseCursor.none, MouseCursor.none,
+        // A drag's feedback: copy, alias (link).
+        MouseCursor.copy, MouseCursor.alias,
     ];
 
     // The bottom layer: the scene (the design's demo.slint `Image { source: root.scene }`, first
@@ -1022,6 +1040,20 @@ export component AppWindow inherits Window {
                 answered(accept, remove, name, folder) => {
                     root.bookmark-sheet-answered(accept, remove, name, folder);
                 }
+            }
+            print-sheet := PrintSheet {
+                sheet: root.print-sheet-view;
+                edited(d, p, l, pa, m, s, b, c) => {
+                    root.print-sheet-edited(d, p, l, pa, m, s, b, c);
+                }
+                answered(accept) => {
+                    root.print-sheet-answered(accept);
+                }
+            }
+            // The history swipe's chip at the edge it goes toward.
+            if root.swipe-progress != 0: SwipeChip {
+                progress: root.swipe-progress;
+                shift: root.swipe-shift;
             }
             // The peek: over the page, under the sheets and the command bar.
             GlanceCard {

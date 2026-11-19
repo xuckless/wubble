@@ -4,8 +4,10 @@
 //! The pages' Chromium cannot reach them on Wayland (it has no surface, so no
 //! input serial to set the selection with and no keyboard focus to be offered
 //! one), so their copies and pastes come here (wubble-helper `clipboard.js`,
-//! `PageEvent::Clipboard`). The window has both. smithay-clipboard (MIT) is the
-//! crate Slint's winit backend uses for the same job; it carries text only.
+//! `PageEvent::Clipboard`). The window has both. On Wayland they go through
+//! wubble's one Wayland worker (`crate::wl::wayland`, ported from
+//! smithay-clipboard, the crate Slint's winit backend uses for the same job); it
+//! carries text only.
 //! Images (Copy Image, screenshots) go through the one worker that owns an
 //! `arboard` clipboard for them (`shot_io`), which offers `image/png`.
 //! Elsewhere (X11, macOS, Windows) Chromium's own clipboard works and the
@@ -40,6 +42,11 @@ pub trait Bridge: Default {
 
     /// The text on `buffer`, if any.
     fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String>;
+
+    /// The platform's extras on the same connection (`crate::wl`), once open.
+    fn extras(&self) -> Option<&dyn crate::wl::Aux> {
+        None
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -107,30 +114,23 @@ impl Bridge for Arboard {
 #[cfg(target_os = "linux")]
 mod wayland {
     use super::{Bridge, Buffer};
-    use slint::winit_030::WinitWindowAccessor;
-    use slint::winit_030::winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+    use crate::wl::wayland::Worker;
 
-    /// The window's Wayland clipboard; none under X11, where Chromium's own works.
+    /// The window's Wayland clipboard; none under X11, where Chromium's own works. The
+    /// worker also serves drops, drags out, gestures and lock keys (`crate::wl`): one data
+    /// device for the process.
     #[derive(Default)]
     pub struct Wayland {
         /// Opened on first use: the window's Wayland connection exists by then.
-        clipboard: Option<smithay_clipboard::Clipboard>,
+        worker: Option<Worker>,
     }
 
     impl Wayland {
-        fn get(&mut self, window: &slint::Window) -> Option<&smithay_clipboard::Clipboard> {
-            if self.clipboard.is_none() {
-                let display = window
-                    .with_winit_window(|w| match w.display_handle().map(|h| h.as_raw()) {
-                        Ok(RawDisplayHandle::Wayland(h)) => Some(h.display.as_ptr()),
-                        _ => None,
-                    })
-                    .flatten()?;
-                // Safety: the display is winit's live `wl_display`, which outlives
-                // the window and so this clipboard (the host drops it first).
-                self.clipboard = Some(unsafe { smithay_clipboard::Clipboard::new(display) });
+        fn get(&mut self, window: &slint::Window) -> Option<&Worker> {
+            if self.worker.is_none() {
+                self.worker = Worker::open(window);
             }
-            self.clipboard.as_ref()
+            self.worker.as_ref()
         }
     }
 
@@ -140,24 +140,19 @@ mod wayland {
         }
 
         fn store(&mut self, window: &slint::Window, buffer: Buffer, text: &str) -> bool {
-            let Some(clipboard) = self.get(window) else {
+            let Some(worker) = self.get(window) else {
                 return false;
             };
-            match buffer {
-                Buffer::Clipboard => clipboard.store(text),
-                Buffer::Primary => clipboard.store_primary(text),
-            }
+            worker.store(buffer, text);
             true
         }
 
         fn load(&mut self, window: &slint::Window, buffer: Buffer) -> Option<String> {
-            let clipboard = self.get(window)?;
-            let text = match buffer {
-                Buffer::Clipboard => clipboard.load(),
-                Buffer::Primary => clipboard.load_primary(),
-            };
-            text.inspect_err(|e| log::debug!("clipboard: nothing to paste: {e}"))
-                .ok()
+            self.get(window)?.load(buffer)
+        }
+
+        fn extras(&self) -> Option<&dyn crate::wl::Aux> {
+            self.worker.as_ref().map(|w| w as &dyn crate::wl::Aux)
         }
     }
 }
