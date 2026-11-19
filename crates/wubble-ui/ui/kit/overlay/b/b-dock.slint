@@ -37,6 +37,32 @@ import { OverlapLook } from "../../motion/overlap.slint";
 import { Icon, Glyph } from "../../controls/icon.slint";
 import { GlassTier } from "../../../components/model.slint";
 
+// Overlap's timing (`wb-in` / `wb-out`: 240 ms ease-out in, 190 ms ease-in-out out), for every
+// strip and panel of these overlays.
+export component BOverlapTween inherits Tween {
+    in-ms: Motion.overlap-in;
+    out-ms: Motion.overlap-out;
+    in-easing: Motion.ease-out;
+    out-easing: Motion.ease-in-out;
+}
+
+// The number role (`.wb-mono` in a slider's sizes, G5): `output` the slider label's 13 / 500
+// (the strips' values), `bubble` the value bubble's (the screenshot picker's size).
+export global BNumber {
+    out property <TextRole> output: {
+        family: Fonts.mono,
+        size: Role.tp-sl-label-output.size,
+        weight: Role.tp-sl-label-output.weight,
+        line-height: Role.tp-sl-label-output.line-height,
+    };
+    out property <TextRole> bubble: {
+        family: Fonts.mono,
+        size: Role.tp-sl-bub-b.size,
+        weight: Role.tp-sl-bub-b.weight,
+        line-height: Role.tp-sl-bub-b.line-height,
+    };
+}
+
 export component BDock inherits Rectangle {
     in property <bool> shown;
     // the scene's glass (GlassKeys, GlassOver)
@@ -57,12 +83,8 @@ export component BDock inherits Rectangle {
     height: max(2 * TouchCss.tp-dock--padding + Shell.icon-button, row.preferred-height);
     visible: root.reachable-hidden || root.shown || tw.t > 0;
 
-    tw := Tween {
+    tw := BOverlapTween {
         on: root.shown;
-        in-ms: Motion.overlap-in;
-        out-ms: Motion.overlap-out;
-        in-easing: Motion.ease-out;
-        out-easing: Motion.ease-in-out;
     }
     OverlapLook {
         e: tw.t;
@@ -97,12 +119,8 @@ export component BDockTab inherits Rectangle {
 
     visible: root.shown || tw.t > 0;
 
-    tw := Tween {
+    tw := BOverlapTween {
         on: root.shown;
-        in-ms: Motion.overlap-in;
-        out-ms: Motion.overlap-out;
-        in-easing: Motion.ease-out;
-        out-easing: Motion.ease-in-out;
     }
     OverlapLook {
         e: tw.t;
@@ -141,14 +159,29 @@ export component BDockTab inherits Rectangle {
     }
 }
 
+export component BDockValue inherits Rectangle {
+    in property <string> value;
+    in property <color> ink: Palette.ink;
+    // one cell as wide as the value now (the leaving one may overhang it as it goes)
+    width: measure.preferred-width;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.value;
+    measure := KitText {
+        role: BNumber.output;
+        text: root.value;
+        visible: false;
+    }
+    CrossfadeText {
+        role: BNumber.output;
+        text: root.value;
+        ink: root.ink;
+        align: center;
+        along-x: true;
+    }
+}
+
 export component BDockText inherits PressableButton {
     in property <string> value;
-    property <TextRole> number: {
-        family: Fonts.mono,
-        size: Role.tp-sl-label-output.size,
-        weight: Role.tp-sl-label-output.weight,
-        line-height: Role.tp-sl-label-output.line-height,
-    };
     height: BrowserCss.wb-ib--height;
     padding-x: TouchCss.wb-tp-mrow--padding-left;
     border-radius: BrowserCss.wb-ib--border-radius;
@@ -157,45 +190,10 @@ export component BDockText inherits PressableButton {
     rest-ink: Palette.ink;
     hover-ink: BrowserCss.wb-ib-hover-not-disabled--color;
     accessible-label: root.label != "" ? root.label : root.value;
-    // one cell as wide as the value now (the leaving one may overhang it as it goes)
-    Rectangle {
-        width: measure.preferred-width;
-        measure := KitText {
-            role: root.number;
-            text: root.value;
-            visible: false;
-        }
-        CrossfadeText {
-            role: root.number;
-            text: root.value;
-            ink: root.ink;
-            along-x: true;
-        }
-    }
-}
-
-export component BDockValue inherits Rectangle {
-    in property <string> value;
-    property <TextRole> number: {
-        family: Fonts.mono,
-        size: Role.tp-sl-label-output.size,
-        weight: Role.tp-sl-label-output.weight,
-        line-height: Role.tp-sl-label-output.line-height,
-    };
-    width: measure.preferred-width;
-    accessible-role: AccessibleRole.text;
-    accessible-label: root.value;
-    measure := KitText {
-        role: root.number;
-        text: root.value;
-        visible: false;
-    }
-    CrossfadeText {
-        role: root.number;
-        text: root.value;
-        ink: Palette.ink;
-        align: center;
-        along-x: true;
+    BDockValue {
+        value: root.value;
+        ink: root.ink;
+        accessible-role: none;
     }
 }
 

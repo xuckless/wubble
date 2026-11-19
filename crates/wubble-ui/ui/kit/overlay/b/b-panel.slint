@@ -11,13 +11,13 @@
 // primitive: no line numbers, `.wb-code-n`, since Slint cannot count a text's lines, and no
 // token colours).
 
-import { Palette, Fonts, Motion, Radius } from "../../gen/tokens.slint";
+import { Palette, Fonts, Radius } from "../../gen/tokens.slint";
 import { BrowserCss, SettingsCss, TouchCss, WubbleCss } from "../../gen/css.slint";
 import { Role, TextRole } from "../../gen/text.slint";
 import { Shell } from "../../derived.slint";
 import { KitText } from "../../text.slint";
 import { GlassPanel } from "../../material/glass.slint";
-import { Tween } from "../../motion/tween.slint";
+import { BOverlapTween } from "b-dock.slint";
 import { OverlapLook } from "../../motion/overlap.slint";
 import { IconButton } from "../../controls/icon-button.slint";
 import { Glyph } from "../../controls/icon.slint";
@@ -34,12 +34,8 @@ export component BSidePanel inherits Rectangle {
 
     visible: root.shown || tw.t > 0;
 
-    tw := Tween {
+    tw := BOverlapTween {
         on: root.shown;
-        in-ms: Motion.overlap-in;
-        out-ms: Motion.overlap-out;
-        in-easing: Motion.ease-out;
-        out-easing: Motion.ease-in-out;
     }
     OverlapLook {
         e: tw.t;

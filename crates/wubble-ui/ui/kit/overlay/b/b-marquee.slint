@@ -8,12 +8,11 @@
 // derived (notes/fidelity/derived-review.md "Overlays B"): the marquee itself (a new primitive
 // in wubble-only.md), composed of those three.
 
-import { Fonts } from "../../gen/tokens.slint";
 import { BrowserCss, TouchCss } from "../../gen/css.slint";
-import { Role, TextRole } from "../../gen/text.slint";
 import { Shell } from "../../derived.slint";
 import { KitText } from "../../text.slint";
 import { Tween } from "../../motion/tween.slint";
+import { BNumber } from "b-dock.slint";
 
 export component BMarquee inherits Rectangle {
     in property <bool> shown;
@@ -28,12 +27,6 @@ export component BMarquee inherits Rectangle {
     out property <float> fade: dim.t;
 
     property <length> rim: BrowserCss.wb-split-line--stroke-width * Shell.px;
-    property <TextRole> number: {
-        family: Fonts.mono,
-        size: Role.tp-sl-bub-b.size,
-        weight: Role.tp-sl-bub-b.weight,
-        line-height: Role.tp-sl-bub-b.line-height,
-    };
 
     dim := Tween {
         on: root.shown;
@@ -115,7 +108,7 @@ export component BMarquee inherits Rectangle {
         border-radius: TouchCss.tp-sl-bub-b--border-radius;
         background: TouchCss.tp-sl-bub-b--background;
         size := KitText {
-            role: root.number;
+            role: BNumber.bubble;
             text: round((root.x1 - root.x0) / Shell.px) + " × " + round((root.y1 - root.y0) / Shell.px);
             color: TouchCss.tp-sl-bub-b--color;
             horizontal-alignment: center;
