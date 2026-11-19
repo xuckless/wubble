@@ -16,7 +16,7 @@ use wubble_ui::{AppWindow, AutofillView};
 
 use super::Host;
 use super::autofill::shell_view;
-use crate::gallery_smoke::{self, Action, Overlay, SCENES, Scene, Seen};
+use crate::gallery_smoke::{self, Action, Event, Overlay, SCENES, Scene};
 use crate::menu::{self, Menu};
 use crate::page_error::PageError;
 use crate::prompt::{PermissionPrompt, PermissionRequest};
@@ -36,8 +36,9 @@ const TAB_MENU_AT: (f32, f32) = (120.0, 150.0);
 const SITE_MENU_AT: (f32, f32) = (560.0, 96.0);
 
 impl Host {
-    /// One step of the walk; called each CEF work run and by the settle timer.
-    pub(super) fn gallery_step(&mut self) {
+    /// One step of the walk: `Ready` each CEF work run once the frame rate is known, `Settled`
+    /// from the settle timer, `Shot` after a write.
+    pub(super) fn gallery_step(&mut self, event: Event) {
         let Some(stage) = self.checks.gallery_smoke.take() else {
             return;
         };
@@ -45,11 +46,7 @@ impl Host {
             self.checks.gallery_smoke = Some(stage);
             return;
         };
-        let seen = Seen {
-            ready: self.frame_rate.is_some(),
-            settled: self.gallery_settled,
-        };
-        let (stage, action) = gallery_smoke::next(stage, &seen);
+        let (stage, action) = gallery_smoke::next(stage, event);
         self.checks.gallery_smoke = Some(stage);
         match action {
             Some(Action::Show(i)) => {
@@ -65,7 +62,7 @@ impl Host {
                     Ok(path) => println!("smoke: shot {}", path.display()),
                     Err(e) => return self.fail(format!("gallery shot {}: {e}", SCENES[i].name)),
                 }
-                self.gallery_step();
+                self.gallery_step(Event::Shot);
             }
             Some(Action::Finish) => {
                 self.gallery_passed = true;
@@ -77,12 +74,10 @@ impl Host {
 
     /// The scene now on screen is not yet settled; the timer says when it is.
     fn gallery_wait(&mut self) {
-        self.gallery_settled = false;
         self.gallery_timer
             .start(slint::TimerMode::SingleShot, SETTLE, || {
                 with_host(|host| {
-                    host.gallery_settled = true;
-                    host.gallery_step();
+                    host.gallery_step(Event::Settled);
                 })
             });
     }

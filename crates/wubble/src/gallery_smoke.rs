@@ -119,13 +119,15 @@ pub const SCENES: &[Scene] = &[
     on("task-manager", InternalPage::Tasks),
 ];
 
-/// What the host sees.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Seen {
+/// What the host reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
     /// The window can open views (the frame rate is known).
-    pub ready: bool,
-    /// The scene's wait is over (the host's timer fired since the last show or scroll).
-    pub settled: bool,
+    Ready,
+    /// The settle timer of the last show or scroll fired.
+    Settled,
+    /// The shot was written.
+    Shot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,20 +151,21 @@ pub enum Action {
     Finish,
 }
 
-/// One step. The host calls it again after every action but `Show` and `Scroll` (which wait
-/// for the timer), until it returns no action.
-pub fn next(stage: Stage, seen: &Seen) -> (Stage, Option<Action>) {
-    match stage {
-        Stage::Start if seen.ready => (Stage::Shown(0), Some(Action::Show(0))),
-        Stage::Shown(i) if seen.settled && SCENES[i].wheel > 0 => {
+/// One step: the stage and what just happened give the next stage and what to do.
+pub fn next(stage: Stage, event: Event) -> (Stage, Option<Action>) {
+    match (stage, event) {
+        (Stage::Start, Event::Ready) => (Stage::Shown(0), Some(Action::Show(0))),
+        (Stage::Shown(i), Event::Settled) if SCENES[i].wheel > 0 => {
             (Stage::Scrolled(i), Some(Action::Scroll(i)))
         }
-        Stage::Shown(i) | Stage::Scrolled(i) if seen.settled => {
+        (Stage::Shown(i) | Stage::Scrolled(i), Event::Settled) => {
             (Stage::Shot(i), Some(Action::Shoot(i)))
         }
-        Stage::Shot(i) if i + 1 < SCENES.len() => (Stage::Shown(i + 1), Some(Action::Show(i + 1))),
-        Stage::Shot(_) => (Stage::Done, Some(Action::Finish)),
-        stage => (stage, None),
+        (Stage::Shot(i), Event::Shot) if i + 1 < SCENES.len() => {
+            (Stage::Shown(i + 1), Some(Action::Show(i + 1)))
+        }
+        (Stage::Shot(_), Event::Shot) => (Stage::Done, Some(Action::Finish)),
+        (stage, _) => (stage, None),
     }
 }
 
@@ -173,25 +176,16 @@ mod tests {
 
     /// Runs the walk with a host that settles every wait at once: the actions, in order.
     fn walk() -> Vec<Action> {
-        let mut seen = Seen {
-            ready: true,
-            settled: false,
-        };
-        let (mut stage, mut out) = (Stage::Start, Vec::new());
+        let (mut stage, mut out, mut event) = (Stage::Start, Vec::new(), Event::Ready);
         while stage != Stage::Done {
-            let (to, action) = next(stage, &seen);
+            let (to, action) = next(stage, event);
             stage = to;
-            match action {
-                Some(a @ (Action::Show(_) | Action::Scroll(_))) => {
-                    out.push(a);
-                    seen.settled = true;
-                }
-                Some(a) => out.push(a),
-                None => panic!("stuck at {stage:?}"),
-            }
-            if matches!(action, Some(Action::Shoot(_))) {
-                seen.settled = false;
-            }
+            let a = action.unwrap_or_else(|| panic!("stuck at {stage:?}"));
+            out.push(a);
+            event = match a {
+                Action::Show(_) | Action::Scroll(_) => Event::Settled,
+                _ => Event::Shot,
+            };
         }
         out
     }
@@ -213,21 +207,17 @@ mod tests {
 
     #[test]
     fn nothing_starts_before_the_window_is_ready() {
-        let idle = Seen {
-            ready: false,
-            settled: true,
-        };
-        assert_eq!(next(Stage::Start, &idle), (Stage::Start, None));
+        for event in [Event::Settled, Event::Shot] {
+            assert_eq!(next(Stage::Start, event), (Stage::Start, None));
+        }
     }
 
     #[test]
     fn a_scene_is_shot_only_once_it_settled() {
-        let waiting = Seen {
-            ready: true,
-            settled: false,
-        };
         for stage in [Stage::Shown(3), Stage::Scrolled(3)] {
-            assert_eq!(next(stage, &waiting), (stage, None));
+            for event in [Event::Ready, Event::Shot] {
+                assert_eq!(next(stage, event), (stage, None));
+            }
         }
     }
 

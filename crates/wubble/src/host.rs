@@ -347,7 +347,6 @@ pub struct Host {
     /// `--smoke gallery` shot every scene.
     pub gallery_passed: bool,
     /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
-    gallery_settled: bool,
     gallery_timer: slint::Timer,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
@@ -554,7 +553,6 @@ impl Host {
             settings_passed: false,
             pages_passed: false,
             gallery_passed: false,
-            gallery_settled: false,
             gallery_timer: slint::Timer::default(),
             settings_read: None,
             input: InputState::default(),
@@ -1158,7 +1156,9 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
-        self.gallery_step();
+        if self.frame_rate.is_some() {
+            self.gallery_step(crate::gallery_smoke::Event::Ready);
+        }
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }
