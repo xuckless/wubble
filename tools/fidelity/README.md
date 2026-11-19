@@ -36,6 +36,17 @@ blur, box-shadow spread and alpha, a fold's height
 per frame): the truth `crates/wubble-ui/tests/motion_curves.rs` and wubble-core's motion
 tests compare the kit with (>= 0.90 per property, mock time, no wall clock). Rerun it when the
 clone moves and commit the JSON.
+Inline literals (numbers inside the design's functions, not in a table) are listed in
+`literals.mjs` by needle: the exact source text with the value marked `⟦ ⟧`, which must occur
+once in its file, so a changed value fails `--check`. They land in `kit_gen.rs` (`pub mod
+scene / softbody / minis / living / start`) and, when marked `slint`, in `gen/literals.slint`.
+
+    node --disable-warning=ExperimentalWarning tools/fidelity/sample-start.mjs
+
+samples the design's own `SoftBody` and `Minis` (imported through `lib/ts-loader.mjs`, node's
+`stripTypeScriptTypes`), its `living.ts` loop (transcribed) and `wTexture()` on the fixed 1/120 s
+clock with a recorded `Math.random`, into `crates/wubble-core/tests/fixtures/start_*.json`, which
+`wubble_core::start`'s tests replay. Re-run it when the design's start-page code changes.
 
 ## Harness
 
