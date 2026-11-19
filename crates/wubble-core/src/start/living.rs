@@ -39,18 +39,6 @@ impl Options {
     }
 }
 
-impl Default for Options {
-    /// living.ts's defaults.
-    fn default() -> Self {
-        Options {
-            size: K::size,
-            at: (K::at_x, K::at_y),
-            ambient: true,
-            wobble: K::wobble,
-        }
-    }
-}
-
 /// Pointer events in page-local logical px; `t_ms` is the event's timestamp (for the fling's
 /// velocity), any monotonic ms clock the host has.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -82,7 +70,8 @@ pub enum Event {
     Active(bool),
     /// Reduced motion (`reducedMotion()`): no wobble, no ambient minis, the scene at 0.3 speed.
     Reduced(bool),
-    /// One fixed step of `dt` seconds.
+    /// One step of `dt` seconds, capped at the web loop's `DT_CAP`; a non-finite or negative
+    /// dt is ignored.
     Tick {
         dt: f64,
     },
@@ -189,9 +178,11 @@ impl<R: Random> Living<R> {
     }
 
     fn tick(&mut self, dt: f64, fx: &mut Vec<Effect>) {
-        if !self.active {
+        // physics.ts `Loop` caps every frame's dt before it reaches the living loop
+        if !self.active || !dt.is_finite() || dt < 0.0 {
             return;
         }
+        let dt = dt.min(crate::kit_gen::physics::DT_CAP);
         let still = self.still;
         self.body.wobble = if still { 0.0 } else { self.opts.wobble };
         self.body.step(dt);
@@ -348,6 +339,21 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_dt_steps_like_the_cap_and_a_bad_one_is_ignored() {
+        let cap = crate::kit_gen::physics::DT_CAP;
+        let (a, _) = transition(living(vec![]), Event::Tick { dt: 0.25 });
+        let (b, _) = transition(living(vec![]), Event::Tick { dt: cap });
+        assert_eq!((a.body.t, a.time), (b.body.t, b.time));
+        assert_eq!(a.body.center(), b.body.center());
+        for dt in [f64::NAN, f64::INFINITY, -1.0] {
+            let l = living(vec![]);
+            let before = (l.body.t, l.time, l.body.center());
+            let (l, _) = transition(l, Event::Tick { dt });
+            assert_eq!((l.body.t, l.time, l.body.center()), before);
+        }
+    }
+
+    #[test]
     fn an_inactive_page_ignores_ticks() {
         let l = living(vec![]);
         let before = (l.body.t, l.time);
@@ -489,6 +495,50 @@ mod tests {
             (l.body.R * K::fling_wave, K::fling_wave_life)
         );
         assert!(l.minis.list.is_empty());
+    }
+
+    #[test]
+    fn the_shell_reduced_motion_flag_does_not_snap_the_body() {
+        // `Event::Reduced` is the only reduced-motion input: the web keeps the body's physics
+        fn fling_travel() -> f64 {
+            let l = living(vec![]);
+            let (cx, cy) = l.body.center();
+            let mut l = transition(
+                l,
+                Event::Down {
+                    x: cx,
+                    y: cy,
+                    t_ms: 0.0,
+                },
+            )
+            .0;
+            for i in 1..=4 {
+                let x = cx + 10.0 * i as f64;
+                l = transition(
+                    l,
+                    Event::Move {
+                        x,
+                        y: cy,
+                        t_ms: 4.0 * i as f64,
+                    },
+                )
+                .0;
+                l = transition(l, Event::Tick { dt: DT }).0;
+            }
+            l = transition(l, Event::Up).0;
+            let mut most: f64 = 0.0;
+            for _ in 0..60 {
+                l = transition(l, Event::Tick { dt: DT }).0;
+                most = most.max((l.body.center().0 - cx).abs());
+            }
+            most
+        }
+        let free = fling_travel();
+        crate::motion::set_reduced(true);
+        let flagged = fling_travel();
+        crate::motion::set_reduced(false);
+        assert!(free > 10.0);
+        assert_eq!(flagged, free);
     }
 
     #[test]

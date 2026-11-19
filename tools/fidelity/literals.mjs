@@ -157,10 +157,7 @@ export const LITERALS = [
 
   // ── core/living.ts ──
   ['living', 'spawn_first', LI, 'let spawnT = ⟦0.6⟧'],
-  ['living', 'at_x', LI, 'const at = o.at ?? { x: ⟦0.5⟧, y: 0.5 };'],
-  ['living', 'at_y', LI, 'const at = o.at ?? { x: 0.5, y: ⟦0.5⟧ };'],
   ['living', 'wobble', LI, 'new SoftBody({ wobble: o.wobble ?? ⟦1⟧ })'],
-  ['living', 'size', LI, 'Math.min(w, h) * (o.size ?? ⟦0.2⟧)'],
   ['living', 'r_min', LI, 'body.R = Math.max(⟦40⟧, Math.min(w, h)'],
   ['living', 'desk_minis', LI, 'minis.spawn(p.x, p.y, ⟦4⟧, true, 0.8);', { type: 'usize' }],
   ['living', 'desk_size', LI, 'minis.spawn(p.x, p.y, 4, true, ⟦0.8⟧);'],
@@ -190,5 +187,5 @@ export const LITERALS = [
   ['start', 'search_icon', ST, '<Icon name="search" size={⟦18⟧} />', { slint: ['StartGen', 'search-icon', 'length'] }],
   ['start', 'favicon', ST, "<Favicon loc={{ kind: 'site', site: s.id }} size={⟦22⟧} />", { slint: ['StartGen', 'favicon', 'length'] }],
   ['start', 'search_max_width', SCSS, 'width: min(⟦520⟧px, 100%)', { slint: ['StartGen', 'search-max-width', 'length'] }],
-  ['start', 'compact_below', SCSS, '@media (max-height: ⟦560⟧px)', { slint: ['StartGen', 'compact-below', 'length'] }],
+  ['start', 'compact_max', SCSS, '@media (max-height: ⟦560⟧px)', { slint: ['StartGen', 'compact-max', 'length'] }],
 ];

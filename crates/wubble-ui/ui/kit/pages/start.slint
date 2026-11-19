@@ -45,7 +45,7 @@ export component StartPage inherits Rectangle {
     callback site-activated(int);
 
     // @media (max-height: 560px): higher up, tighter, no tiles
-    property <bool> compact: root.height < StartGen.compact-below;
+    property <bool> compact: root.height <= StartGen.compact-max;
     property <length> pad-x: StartCss.wb-start-front--padding-left;
     property <length> inner: root.width - root.pad-x - StartCss.wb-start-front--padding-right;
     property <length> gap: root.compact ? StartCss.max-height-560px-wb-start-front--gap : StartCss.wb-start-front--gap;

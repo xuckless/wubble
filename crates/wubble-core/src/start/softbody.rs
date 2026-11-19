@@ -15,7 +15,7 @@
 
 use super::grab::{self, Grab, GrabEffect, GrabEvent};
 use crate::kit_gen::{scene as S, softbody as K};
-use crate::motion::{Spring, Velocity, band, clamp, js_sign, spring, step};
+use crate::motion::{Spring, Velocity, band, clamp, js_sign, spring, step_raw};
 use std::f64::consts::PI;
 
 // @source slint-bubble-state
@@ -331,14 +331,14 @@ impl SoftBody {
         // centre: rubber-band after the pointer while dragged, else lean toward it and breathe
         match (drag, ptr) {
             (Some(h), Some(p)) => {
-                step(
+                step_raw(
                     &mut self.cx,
                     band(p.0 - h.start.0, K::drag_band),
                     K::drag_k,
                     K::drag_c,
                     dt,
                 );
-                step(
+                step_raw(
                     &mut self.cy,
                     band(p.1 - h.start.1, K::drag_band),
                     K::drag_k,
@@ -353,8 +353,8 @@ impl SoftBody {
                     ty = clamp((p.1 - self.home.1) * K::lean, -K::lean_max, K::lean_max);
                 }
                 ty += (t * K::breathe_freq).sin() * K::breathe_amp * wob;
-                step(&mut self.cx, tx, K::centre_k, K::centre_c, dt);
-                step(&mut self.cy, ty, K::centre_k, K::centre_c, dt);
+                step_raw(&mut self.cx, tx, K::centre_k, K::centre_c, dt);
+                step_raw(&mut self.cy, ty, K::centre_k, K::centre_c, dt);
             }
         }
         // ring: target shape (ambient wobble + drag stretch), spring to it, couple to neighbours, keep volume
@@ -422,9 +422,9 @@ impl SoftBody {
             ) as f32;
         }
         // W: squash springs, lean toward the pointer, a little bob
-        step(&mut self.wsx, 1.0, K::w_squash_k, K::w_squash_c, dt);
-        step(&mut self.wsy, 1.0, K::w_squash_k, K::w_squash_c, dt);
-        step(&mut self.wr, 0.0, K::w_turn_k, K::w_turn_c, dt);
+        step_raw(&mut self.wsx, 1.0, K::w_squash_k, K::w_squash_c, dt);
+        step_raw(&mut self.wsy, 1.0, K::w_squash_k, K::w_squash_c, dt);
+        step_raw(&mut self.wr, 0.0, K::w_turn_k, K::w_turn_c, dt);
         let (mut wtx, mut wty) = (0.0, 0.0);
         if let Some(p) = ptr {
             let c = self.center();
@@ -435,8 +435,8 @@ impl SoftBody {
             wtx = -self.cx.x * K::w_drag;
             wty = -self.cy.x * K::w_drag;
         }
-        step(&mut self.wx, wtx, K::w_k, K::w_c, dt);
-        step(
+        step_raw(&mut self.wx, wtx, K::w_k, K::w_c, dt);
+        step_raw(
             &mut self.wy,
             wty + (t * K::w_bob_freq).sin() * K::w_bob_amp * wob,
             K::w_k,
@@ -464,8 +464,8 @@ impl SoftBody {
             fy = -(self.cx.v / K::face_drag_speed).tanh() * K::face_drag;
             fp = -(self.cy.v / K::face_drag_speed).tanh() * K::face_drag;
         }
-        step(&mut self.yaw, fy, K::face_k, K::face_c, dt);
-        step(&mut self.pitch, fp, K::face_k, K::face_c, dt);
+        step_raw(&mut self.yaw, fy, K::face_k, K::face_c, dt);
+        step_raw(&mut self.pitch, fp, K::face_k, K::face_c, dt);
         // swirl decays, the film keeps a slow drift
         self.swirl.v *= (-dt * K::swirl_decay).exp();
         self.swirl.x += self.swirl.v * dt;

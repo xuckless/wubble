@@ -145,6 +145,13 @@ pub fn step(s: &mut Spring, target: f64, k: f64, c: f64, dt: f64) -> bool {
         s.v = 0.0;
         return false;
     }
+    step_raw(s, target, k, c, dt)
+}
+
+/// wubble change: [`step`] without the reduced-motion snap: physics.ts `step` exactly, for ports
+/// that own their reduced-motion handling (the start page's soft body).
+#[inline]
+pub fn step_raw(s: &mut Spring, target: f64, k: f64, c: f64, dt: f64) -> bool {
     let a = -k * (s.x - target) - c * s.v;
     s.v += a * dt;
     s.x += s.v * dt;
