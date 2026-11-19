@@ -145,6 +145,9 @@ pub const SCENES: &[Scene] = &[
     },
     on("archive", InternalPage::Archive),
     on("task-manager", InternalPage::Tasks),
+    // the new-tab page: under `--frozen-backdrop` its liquid holds and its bubble steps on the
+    // harness's fixed clock (backdrop.rs), so it is shot at rest the same way every run
+    on("start", InternalPage::Start),
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile

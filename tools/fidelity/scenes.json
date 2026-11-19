@@ -168,6 +168,15 @@
       "crops": [
         {"name": "page"}
       ]
+    },
+    {
+      "name": "start", "surface": "Start page", "url": "/wubble/", "wubble": "start",
+      "why": "the web's default state is its start page (wubble://start); wubble's start page on the parity profile: its tiles are the parity favourites, the design's are its sample sites",
+      "crops": [
+        {"name": "window", "gate": false, "why": "the sidebar's active row differs: the design's start tab is one of its tabs, wubble's a new tab"},
+        {"name": "page", "web": ".wb-start", "mask": [{"web": ".wb-start-sites", "pad": 4}], "why": "the tiles show each side's own sites"},
+        {"name": "front", "web": ".wb-start-front", "mask": [{"web": ".wb-start-sites", "pad": 4}], "why": "the tiles show each side's own sites"}
+      ]
     }
   ]
 }

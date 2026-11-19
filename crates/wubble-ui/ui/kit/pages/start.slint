@@ -57,11 +57,14 @@ export global StartBridge {
 component StartSearch inherits PressableButton {
     in property <string> placeholder;
     in property <string> shortcut;
+    // `width: min(520px, 100%)`: the button's own layout would shrink it to its content
+    in property <length> capsule-width;
     padding-x: 0px;
     border-radius: StartCss.wb-start-search--border-radius;
     background: transparent;
     label: root.placeholder;
     Rectangle {
+        min-width: root.capsule-width;
         GlassPanel {
             tier: GlassTier.thin;
             radius: StartCss.wb-start-search--border-radius;
@@ -224,6 +227,7 @@ export component StartPage inherits Rectangle {
             search := StartSearch {
                 x: (parent.width - root.search-width) / 2;
                 width: root.search-width;
+                capsule-width: root.search-width;
                 height: parent.height;
                 placeholder: root.placeholder;
                 shortcut: root.shortcut;
