@@ -352,6 +352,7 @@ Measured by hand on the owner's machines, never in tests. Each item starts with 
 - [ ] Input: key and pointer to pixels, scroll smoothness at the display rate
 - [ ] Memory: per-tab cost live, frozen and discarded; shell and scene baseline; renderer process limits
 - [ ] Video playback under load (owner, 2026-11-18: a 4K60 YouTube video used about 20% of every core, and while lane builds ran the UI lagged, connections dropped and the video froze): find whether 4K VP9/AV1 decodes in software on Linux NVIDIA (prebuilt CEF, no VA-API), what hardware decode needs, and give the browser, GPU and network processes priority over background work
+- [ ] macOS idle and video cost (owner's observation on the MacBook, debug build, 2026-11-18; which checkout was run is not recorded): an idle Wikipedia page about 55% CPU and 45% GPU; one YouTube tab at 1440p about 20% CPU and 20% GPU paused, 50 to 60% of each while playing. The idle figures are the ones that are plainly wrong: a still page should cost close to nothing. Find what keeps drawing (the backdrop scene redrawing every frame, Chromium free-running at the display rate, the per-frame texture copy, the pump) and whether the run-state rule (Running / Idle / Paused) is active on macOS; repeat on a release build before judging the video figures
 - [ ] CPU and GPU at idle and during video: no redraw when nothing changes, scene paused when hidden, glass cost
 - [ ] Release build settings (LTO, codegen units, symbols) and binary size
 
