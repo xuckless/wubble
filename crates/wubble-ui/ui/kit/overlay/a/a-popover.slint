@@ -1,0 +1,65 @@
+// derived: Menu body (controls/menu.slint: Tween, OverlapLook, GlassPanel thick, tp-menu radius)
+// The popover every wubble-only overlay over the page stands on (notes/fidelity/wubble-only.md,
+// derived-review.md "Popover"): the touch kit's menu body without its rows, scrim or keys. Thick
+// glass over content, the menu's radius (16); it grows from `origin` (in the panel) from .95,
+// clear and blurred 4 px, over 220 ms ease-out and shrinks back over 176 ms ease-in-out, a
+// transition (reopening mid-exit turns back). Arrowless. The scene's glass shows only while the
+// body does (`present` from the tween: the batch's fading-wrapper rule). A press on the panel is
+// the panel's (it never reaches the page under it). The caller sizes it and fills it
+// (`@children`); `mounted` keeps the caller drawn through the exit.
+
+import { Motion } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Tween } from "../../motion/tween.slint";
+import { OverlapLook } from "../../motion/overlap.slint";
+import { GlassTier, GlassOver } from "../../../components/model.slint";
+
+export component APopover inherits Rectangle {
+    in property <bool> open;
+    // the scene's glass (GlassKeys) and its layer (GlassOver)
+    in property <int> key: -1;
+    in property <int> layer: GlassOver.top;
+    in property <GlassTier> tier: GlassTier.thick;
+    in property <length> radius: TouchCss.tp-menu--border-radius;
+    // where it grows from, in the panel (its top left by default: the anchor it hangs from)
+    in property <length> origin-x: 0px;
+    in property <length> origin-y: 0px;
+    // the film rim (the find capsule's ring while focused)
+    in property <bool> film: false;
+    out property <float> progress: tween.t;
+    out property <bool> mounted: root.open || tween.t > 0;
+    // the body's look (curve tests)
+    out property <float> zoom: look.zoom;
+    out property <bool> glass-present: panel.item.present;
+    tween := Tween {
+        on: root.open;
+        in-ms: Motion.dropdown-in;
+        out-ms: Motion.dropdown-out;
+        in-easing: Motion.ease-out;
+        out-easing: Motion.ease-in-out;
+    }
+    look := OverlapLook {
+        e: tween.t;
+        entering: root.open;
+        shift-in: 0px;
+        shift-out: 0px;
+        scale-from: Motion.dropdown-from;
+        origin-x: root.origin-x;
+        origin-y: root.origin-y;
+        visible: root.mounted;
+        panel := GlassPanel {
+            key: root.key;
+            over-layer: root.layer;
+            present: root.mounted && tween.t > 0;
+            tier: root.tier;
+            radius: root.radius;
+            film: root.film;
+            over-content: true;
+            TouchArea {
+                enabled: root.open;
+            }
+            @children
+        }
+    }
+}

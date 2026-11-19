@@ -1,0 +1,102 @@
+// derived: GlassPanel thick, KitText heading-face title and mono address (st-path-wb-mono family), Tooltip motion (.tp-tip / .tp-tip-show)
+// The tab hover preview (wubble-only.md: preview card): title, address and the page's last
+// frame on thick glass beside the sidebar at the hovered row. Title in ink at the row title's
+// weight, the address in the mono face in haze, the frame clipped to a concentric radius
+// (card radius minus its padding). It arrives and leaves as the touch kit's tooltip does
+// (opacity .16 s / .13 s, from 4 px down at .95 over .2 s / .16 s). Pointer events pass
+// through. When it shows is `wubble_core::hovercard` (Firefox's delays); the host drives `shown`.
+// derived (notes/fidelity/derived-review.md "Preview card"): 240 wide, padding 10, gap 6, radius
+// 12 (frame 8), title 13 px, address 11.5 px.
+
+import { Palette } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { Role, TextRole } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { Tween } from "../../motion/tween.slint";
+import { GlassTier, GlassOver } from "../../../components/model.slint";
+
+export component APreviewCard inherits Rectangle {
+    in property <bool> shown: false;
+    in property <string> title;
+    in property <string> address;
+    // The page's last frame; an empty image leaves the thumbnail out.
+    in property <image> thumb;
+    in property <int> key: -1;
+    in property <int> layer: GlassOver.card;
+    out property <float> progress: fade.t;
+
+    fade := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-tip-show--transition-opacity-duration;
+        out-ms: TouchCss.tp-tip--transition-opacity-duration;
+        in-easing: TouchCss.tp-tip-show--transition-opacity-easing;
+        out-easing: TouchCss.tp-tip--transition-opacity-easing;
+    }
+    move := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-tip-show--transition-transform-duration;
+        out-ms: TouchCss.tp-tip--transition-transform-duration;
+        in-easing: TouchCss.tp-tip-show--transition-transform-easing;
+        out-easing: TouchCss.tp-tip--transition-transform-easing;
+    }
+    property <TextRole> title-role: {
+        family: Role.st-row-title.family,
+        size: Shell.preview-title,
+        weight: Role.st-row-title.weight,
+        line-height: Role.st-row-title.line-height,
+    };
+    property <TextRole> address-role: {
+        family: Role.st-path-wb-mono.family,
+        size: Shell.preview-address,
+        weight: Role.st-path-wb-mono.weight,
+        line-height: Role.st-path-wb-mono.line-height,
+    };
+
+    width: Shell.preview-width;
+    height: column.preferred-height + 2 * Shell.preview-pad;
+    visible: fade.t > 0;
+
+    panel := GlassPanel {
+        // the scene draws its glass above the page (GlassPanel `over-layer`)
+        key: root.key;
+        over-layer: root.layer;
+        tier: GlassTier.thick;
+        radius: Shell.preview-radius;
+        over-content: true;
+        y: TouchCss.tp-tip--transform-translatey * (1 - move.t);
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        scale: 1 - (1 - TouchCss.tp-tip--transform-scale) * (1 - move.t);
+        opacity: fade.t;
+        VerticalLayout {
+            padding: Shell.preview-pad;
+            column := VerticalLayout {
+                spacing: Shell.preview-gap;
+                KitText {
+                    role: root.title-role;
+                    text: root.title;
+                    overflow: elide;
+                    color: Palette.ink;
+                }
+                KitText {
+                    role: root.address-role;
+                    text: root.address;
+                    overflow: elide;
+                    color: Palette.haze;
+                }
+                if root.thumb.width > 0: Rectangle {
+                    height: self.width * root.thumb.height / root.thumb.width;
+                    border-radius: Shell.preview-thumb-radius;
+                    clip: true;
+                    Image {
+                        source: root.thumb;
+                        width: 100%;
+                        height: 100%;
+                        image-fit: cover;
+                    }
+                }
+            }
+        }
+    }
+}

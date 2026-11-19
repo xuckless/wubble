@@ -1,21 +1,16 @@
-import { Palette, Motion, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier, PermissionView, GlassKeys, GlassOver } from "model.slint";
-import { CheckBox } from "check-box.slint";
-import { SheetButton } from "sheet-button.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { PermissionView, GlassKeys } from "model.slint";
+import { APrompt } from "../kit/overlay/a/a-prompt.slint";
 
 // A site asks for a permission: "<site> wants to", one line per kind, a "Remember for this site"
 // toggle, Block and Allow; or a link wants another app: "Open mailto link?", the link, "Always
-// for <site> and mailto links", Cancel and Open (the host's words, `prompt::permission_text`). Placed by the parent under the address pill, where Chromium puts its
-// bubble; not modal (the page stays usable, as Chromium's bubble is), and it never takes the
-// keyboard, so no keystroke meant for the page answers it (keyjacking). Written from scratch: the
-// design repo has no permission prompt. Looks and timings are the context menu's and the dialog
-// sheet's (Ultra Reactivate `.ur-o-surface` / `.ur-o-dialog`, overlays.css): thick glass over
-// content, radius 14, buttons 42 high; it drops in at .95 over 200 ms ease-out from its top left.
-// Only its buttons answer. `answered` is the intent; the host answers the engine (and stores a
-// remembered decision).
+// for <site> and mailto links", Cancel and Open (the host's words, `prompt::permission_text`).
+// Placed by the parent under the address pill, where Chromium puts its bubble; not modal (the
+// page stays usable, as Chromium's bubble is), and it never takes the keyboard, so no keystroke
+// meant for the page answers it (keyjacking). Derived from the kit: the Prompt
+// (kit/overlay/a/a-prompt.slint), Block a ghost button, Allow the primary. Only its buttons
+// answer. `answered` is the intent; the host answers the engine (and stores a remembered
+// decision).
 export component PermissionPrompt inherits Rectangle {
     in property <PermissionView> prompt;
     // What the panel shows: the open request's, kept while it leaves.
@@ -42,74 +37,21 @@ export component PermissionPrompt inherits Rectangle {
     }
 
     width: Shell.prompt-width;
-    height: body.preferred-height;
-    // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
-    // the panel has faded; only the open prompt answers.
-    visible: root.open || panel.opacity > 0;
+    height: body.height;
+    visible: body.mounted;
 
-    panel := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
+    body := APrompt {
+        open: root.open;
         key: GlassKeys.permission;
-        over-layer: GlassOver.top;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        transform-origin: { x: 0px, y: 0px };
-        transform-scale: root.open ? 1 : Motion.dropdown-from;
-        opacity: root.open ? 1 : 0;
-        animate transform-scale, opacity {
-            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
-            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
-        }
-        TouchArea { }
-
-        body := VerticalLayout {
-            padding: Space.s4;
-            spacing: Space.s2;
-            Text {
-                text: root.shown.title;
-                color: Palette.ink;
-                font-family: Fonts.ui;
-                font-size: Type.heading.size;
-                font-weight: Type.heading.weight;
-                overflow: elide;
-            }
-            for line in root.shown.lines: Text {
-                text: line;
-                color: Palette.mist;
-                font-family: Fonts.ui;
-                font-size: Type.body.size;
-                wrap: word-wrap;
-            }
-            // No toggle where nothing could be remembered (the host leaves it empty).
-            if root.shown.remember != "": CheckBox {
-                text: root.shown.remember;
-                checked <=> root.remember;
-            }
-            Rectangle {
-                height: Space.s1;
-            }
-            HorizontalLayout {
-                alignment: end;
-                spacing: Space.s2;
-                SheetButton {
-                    text: root.shown.block;
-                    clicked => {
-                        if root.open {
-                            root.answered(false, root.remember);
-                        }
-                    }
-                }
-                SheetButton {
-                    text: root.shown.allow;
-                    primary: true;
-                    clicked => {
-                        if root.open {
-                            root.answered(true, root.remember);
-                        }
-                    }
-                }
-            }
+        title: root.shown.title;
+        lines: root.shown.lines;
+        // No toggle where nothing could be remembered (the host leaves it empty).
+        remember: root.shown.remember;
+        checked <=> root.remember;
+        ghost-a: root.shown.block;
+        primary: root.shown.allow;
+        answered(i) => {
+            root.answered(i == 2, root.remember);
         }
     }
 }

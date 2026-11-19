@@ -1,21 +1,18 @@
-import { Palette, Motion, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { OverlapLayer } from "../kit/motion/overlap.slint";
-import { GlassTier, GlassKeys, GlassOver } from "model.slint";
-import { SheetButton } from "sheet-button.slint";
-import { IconButton } from "nav-buttons.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { GlassKeys } from "model.slint";
+import { IconButton } from "../kit/controls/icon-button.slint";
 import { Glyph } from "../kit/controls/icon.slint";
+import { AMenuPopover } from "../kit/overlay/a/a-menu-list.slint";
+import { APrompt } from "../kit/overlay/a/a-prompt.slint";
 
 // Password autofill (wubble host/autofill.rs): the key chip a sign-in form shows, its menu of
 // saved logins (and "Suggest a strong password" on a sign-up form), and the save / update prompt
-// after a sign-in. Written from scratch: the design repo has no password UI. The menu's rows are
-// the context menu's (context-menu.slint: Ultra Reactivate `.ur-o-surface`, rows 40 high,
-// radius 9, staggered in), the prompt is the permission prompt's (permission-prompt.slint: thick
-// glass, radius 14, 42-high buttons, drop-in at .95 over 200 ms from its top left). Placed by the
-// parent under the address pill. Never modal and never focused: no keystroke meant for the page
-// can pick a login or answer the prompt (keyjacking). Intents only; the host fills and saves.
+// after a sign-in. Derived from the kit (notes/fidelity/wubble-only.md): the chip is a kit
+// IconButton, lit while its menu is open; the menu is the touch menu's rows on the Popover
+// (kit/overlay/a/a-menu-list.slint); the prompt is the Prompt (kit/overlay/a/a-prompt.slint):
+// Never (ghost, coral), Not now (ghost), Save or Update (primary). Placed by the parent under the
+// address pill. Never modal and never focused: no keystroke meant for the page can pick a login
+// or answer the prompt (keyjacking). Intents only; the host fills and saves.
 // The save prompt's buttons (host/autofill.rs `autofill_answer`).
 export enum AutofillAnswer { save, never, not-now }
 
@@ -36,154 +33,55 @@ export component AutofillMenu inherits Rectangle {
     callback menu(int);
     callback answer(AutofillAnswer);
 
-    // The host keeps the prompt's text while it leaves.
     property <bool> prompting: root.view.prompt;
-    property <bool> leaving: !root.prompting && prompt-panel.opacity > 0;
+    property <bool> leaving: !root.prompting && prompt.mounted;
 
     width: Shell.prompt-width;
-    height: root.prompting || root.leaving ? prompt.preferred-height : chip.height + (root.view.menu-open ? Shell.prompt-gap + list.preferred-height : 0px);
+    height: root.prompting || root.leaving ? prompt.height : chip.height + (root.view.menu-open ? Shell.prompt-gap + list.height : 0px);
     visible: root.view.chip || root.prompting || root.leaving;
 
     chip := IconButton {
         x: 0px;
         y: 0px;
-        visible: root.view.chip;
+        // the prompt takes the chip's place
+        visible: root.view.chip && !root.prompting && !root.leaving;
         icon-path: Glyph.key;
         label: "Passwords";
+        on: root.view.menu-open;
         clicked => {
             root.menu(root.view.menu-open ? -2 : -1);
         }
     }
 
-    menu-panel := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
-        key: GlassKeys.autofill-menu;
-        over-layer: GlassOver.top;
+    list := AMenuPopover {
         x: 0px;
         y: chip.height + Shell.prompt-gap;
-        width: Shell.menu-width;
-        height: list.preferred-height;
-        visible: root.view.chip;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        transform-origin: { x: 0px, y: 0px };
-        transform-scale: root.view.menu-open ? 1 : Motion.dropdown-from;
-        opacity: root.view.menu-open ? 1 : 0;
-        animate transform-scale, opacity {
-            duration: Calm.ms(root.view.menu-open ? Motion.dropdown-in : Motion.dropdown-out);
-            easing: root.view.menu-open ? Motion.ease-out : Motion.ease-in-out;
-        }
-        TouchArea {
-            enabled: root.view.menu-open;
-        }
-
-        list := VerticalLayout {
-            padding: Shell.menu-pad;
-            for row[i] in root.view.rows: OverlapLayer {
-                shown: root.view.menu-open;
-                index: i;
-                height: Shell.menu-row;
-                Rectangle {
-                    border-radius: Shell.menu-row-radius;
-                    background: row-touch.has-hover ? Shell.command-selected : transparent;
-                    animate background {
-                        duration: Calm.ms(Shell.menu-hover-ms);
-                        easing: Motion.ease-out;
-                    }
-                    row-touch := TouchArea {
-                        enabled: root.view.menu-open;
-                        clicked => {
-                            root.menu(i);
-                        }
-                    }
-                    Text {
-                        x: Shell.menu-row-pad;
-                        width: parent.width - 2 * Shell.menu-row-pad;
-                        height: parent.height;
-                        text: row;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        color: Palette.ink;
-                        font-family: Fonts.ui;
-                        font-size: Type.body.size;
-                    }
-                }
+        visible: root.view.chip && self.mounted;
+        open: root.view.menu-open;
+        key: GlassKeys.autofill-menu;
+        rows: root.view.rows;
+        icon: Glyph.key;
+        label: "Saved passwords";
+        picked(i) => {
+            if root.view.menu-open {
+                root.menu(i);
             }
         }
     }
 
-    prompt-panel := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
-        key: GlassKeys.autofill-prompt;
-        over-layer: GlassOver.top;
+    // The host keeps the prompt's text while it leaves.
+    prompt := APrompt {
         width: root.width;
-        height: prompt.preferred-height;
-        visible: root.prompting || self.opacity > 0;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        transform-origin: { x: 0px, y: 0px };
-        transform-scale: root.prompting ? 1 : Motion.dropdown-from;
-        opacity: root.prompting ? 1 : 0;
-        animate transform-scale, opacity {
-            duration: Calm.ms(root.prompting ? Motion.dropdown-in : Motion.dropdown-out);
-            easing: root.prompting ? Motion.ease-out : Motion.ease-in-out;
-        }
-        TouchArea {
-            enabled: root.prompting;
-        }
-
-        prompt := VerticalLayout {
-            padding: Space.s4;
-            spacing: Space.s2;
-            Text {
-                text: root.view.title;
-                color: Palette.ink;
-                font-family: Fonts.ui;
-                font-size: Type.heading.size;
-                font-weight: Type.heading.weight;
-                overflow: elide;
-            }
-            Text {
-                text: root.view.detail;
-                color: Palette.mist;
-                font-family: Fonts.ui;
-                font-size: Type.body.size;
-                wrap: word-wrap;
-            }
-            Rectangle {
-                height: Space.s1;
-            }
-            HorizontalLayout {
-                alignment: end;
-                spacing: Space.s2;
-                SheetButton {
-                    text: "Never";
-                    clicked => {
-                        if root.prompting {
-                            root.answer(AutofillAnswer.never);
-                        }
-                    }
-                }
-                SheetButton {
-                    text: "Not now";
-                    clicked => {
-                        if root.prompting {
-                            root.answer(AutofillAnswer.not-now);
-                        }
-                    }
-                }
-                SheetButton {
-                    text: root.view.accept;
-                    primary: true;
-                    clicked => {
-                        if root.prompting {
-                            root.answer(AutofillAnswer.save);
-                        }
-                    }
-                }
-            }
+        open: root.prompting;
+        key: GlassKeys.autofill-prompt;
+        title: root.view.title;
+        detail: root.view.detail;
+        ghost-a: "Never";
+        danger: true;
+        ghost-b: "Not now";
+        primary: root.view.accept;
+        answered(i) => {
+            root.answer(i == 0 ? AutofillAnswer.never : i == 1 ? AutofillAnswer.not-now : AutofillAnswer.save);
         }
     }
 }

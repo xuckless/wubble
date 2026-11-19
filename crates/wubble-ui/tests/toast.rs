@@ -21,8 +21,8 @@ fn shown(app: &AppWindow, text: &str, serial: i32) -> [f32; 6] {
     app.set_toast_text(text.into());
     app.set_toast_serial(serial);
     mock_elapsed_time(Duration::from_millis(600));
-    let pill = element(app, "Toast::pill");
-    let label = element(app, "Toast::label");
+    let pill = element(app, "AToast::pill");
+    let label = element(app, "AToast::label");
     let (p, ps) = (pill.absolute_position(), pill.size());
     let (l, ls) = (label.absolute_position(), label.size());
     [
