@@ -35,7 +35,7 @@ use wubble_core::motion::{DT_CAP, OVERLAP_IN, ease, overlap_in, tween};
 const PAGE_OUT: f64 = 0.19;
 use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
-use wubble_core::tabs::{SpaceSwitcher, TabRows, TabUp};
+use wubble_core::tabs::{self, SpaceSwitcher, TabRows, TabUp};
 
 use crate::glass::{GlassFrame, GlassRegistry};
 use crate::{
@@ -279,6 +279,9 @@ impl Driver {
             self.tabs.rows.iter().map(|r| r.entrance() as f32).collect(),
         );
         window.set_list_enter(self.tabs.list_entrance() as f32);
+        let tabs = &self.tabs;
+        let dragged = tabs.rows.iter().position(|r| tabs.is_dragging(r.id));
+        window.set_dragged_row(slint_index(dragged));
         let leaving = &self.tabs.leaving;
         self.gone.retain(|g| leaving.iter().any(|l| same(g, l.id)));
         let rows = leaving
@@ -573,6 +576,14 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
             s.read_model(w);
             None
         })
+    });
+
+    // Up / Down in the tab list: the nearest tab row (folder headers are not stops)
+    let w = window.as_weak();
+    window.on_tab_step(move |i, down| {
+        let Some(w) = w.upgrade() else { return i };
+        let is_tab: Vec<bool> = w.get_tabs().iter().map(|t| t.kind == 0).collect();
+        slint_index(Some(tabs::step_focus(&is_tab, index(i), down)))
     });
 
     // seam: one gesture for resize, rail and hidden

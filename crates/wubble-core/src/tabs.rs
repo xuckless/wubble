@@ -426,9 +426,42 @@ impl SpaceSwitcher {
     }
 }
 
+/// wubble change: the tab list's Up / Down keys (`tabs.tsx` row `onKeyDown`:
+/// `clamp(i ± 1, 0, n - 1)`, no wrap), over wubble's rows, where folder headers sit between the
+/// tabs: from row `from`, the nearest tab row (`is_tab`) one way, or `from` itself at the end.
+pub fn step_focus(is_tab: &[bool], from: usize, down: bool) -> usize {
+    let next = if down {
+        is_tab.iter().enumerate().skip(from + 1).find(|(_, t)| **t)
+    } else {
+        is_tab
+            .iter()
+            .enumerate()
+            .take(from.min(is_tab.len()))
+            .rev()
+            .find(|(_, t)| **t)
+    };
+    next.map_or(from, |(i, _)| i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn step_focus_clamps_and_skips_folders() {
+        let rows = [true, true, true];
+        assert_eq!(step_focus(&rows, 0, true), 1);
+        assert_eq!(step_focus(&rows, 2, true), 2, "no wrap at the end");
+        assert_eq!(step_focus(&rows, 0, false), 0, "no wrap at the start");
+        assert_eq!(step_focus(&rows, 2, false), 1);
+        let folders = [false, true, false, true];
+        assert_eq!(step_focus(&folders, 1, true), 3, "past a folder header");
+        assert_eq!(step_focus(&folders, 1, false), 1, "a header is not a stop");
+        assert_eq!(step_focus(&[true], 0, true), 0);
+        assert_eq!(step_focus(&[true], 0, false), 0);
+        assert_eq!(step_focus(&[], 0, true), 0, "empty list");
+        assert_eq!(step_focus(&[], 0, false), 0);
+    }
 
     #[test]
     fn inserted_rows_enter_and_first_rows_do_not() {
