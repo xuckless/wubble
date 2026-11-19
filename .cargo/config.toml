@@ -1,7 +1,13 @@
-# cef-dll-sys copies libcef.so and its resources into target/<profile>/ but sets
-# no rpath. `$ORIGIN` covers wubble and wubble-helper; `$ORIGIN/..` covers test
-# binaries in target/<profile>/deps/ and examples/; `$ORIGIN/../../../..` covers
-# test binaries that newer cargo (build-dir layout v2) runs from
-# target/<profile>/build/<package>/<hash>/out/.
+# cef-dll-sys copies libcef.so and its resources three directories above its build
+# script's OUT_DIR and sets no rpath. Under cargo's first build-dir layout that is
+# target/<profile>/; under the layout cargo 1.100 made the default (OUT_DIR one level
+# deeper, build/<package>/<hash>/out) it is target/<profile>/build/. The search path
+# covers both, for every place cargo puts a binary:
+#   $ORIGIN, $ORIGIN/build           wubble, wubble-helper   (target/<profile>/)
+#   $ORIGIN/.., $ORIGIN/../build     examples, old-layout tests (examples/, deps/)
+#   $ORIGIN/../../..                 new-layout tests (build/<package>/<hash>/out/)
+# `cargo test` hides a miss whenever CEF was unpacked inside the target directory (it puts
+# link-search paths there on LD_LIBRARY_PATH), so CI, whose CEF_PATH is outside it, is where
+# a missing entry shows: check a test binary with `ldd` when this changes.
 [target.'cfg(target_os = "linux")']
-rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/..:$ORIGIN/../../../.."]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/build:$ORIGIN/..:$ORIGIN/../build:$ORIGIN/../../.."]
