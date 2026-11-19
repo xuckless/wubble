@@ -266,28 +266,30 @@ pub fn squash_of(s: f64) -> f64 {
     1.0 / s.sqrt()
 }
 
-// The squash token's keys, in a file of their own that `wubble-ui`'s build script also reads
-// (it writes them into the Slint squash), so the table has one copy.
-mod squash;
-pub use squash::{SQUASH_KEYS, SQUASH_MS};
+// wubble change: ported from `pages/touch-kit.tsx` `SQUASH` / `squashAt` (@source touch-squash);
+// the keys and length are the generated `SQUASH` (kit_gen.rs), the Slint side plays the CSS
+// `wb-sq-a` table (kit/motion/keys.slint).
+/// The squash token's length, ms.
+pub const SQUASH_MS: f64 = crate::kit_gen::touch_kit::SQUASH::ms;
 
-/// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token).
+/// The squash at `t` (0..1 of [`SQUASH_MS`]), its strength scaled by `amp` (1 = the token):
+/// 1.30×0.78 → 0.93×1.07 → 1.03×0.98 (README › Motion tokens › Squash).
 /// Ease-out between keys; outside 0..1 it is at rest, `(1, 1)`.
 pub fn squash_at(t: f64, amp: f64) -> (f64, f64) {
     // wubble change: cut under reduced motion (the design's `squashAt`).
     if reduced() || !(0.0..1.0).contains(&t) {
         return (1.0, 1.0);
     }
-    let k = &SQUASH_KEYS;
+    let k = &crate::kit_gen::touch_kit::SQUASH::keys;
     let mut i = 0;
-    while i < k.len() - 2 && t > k[i + 1].0 {
+    while i < k.len() - 2 && t > k[i + 1][0] {
         i += 1;
     }
     let (a, b) = (k[i], k[i + 1]);
-    let u = (t - a.0) / (b.0 - a.0);
+    let u = (t - a[0]) / (b[0] - a[0]);
     let e = 1.0 - (1.0 - u) * (1.0 - u);
-    let sx = a.1 + (b.1 - a.1) * e;
-    let sy = a.2 + (b.2 - a.2) * e;
+    let sx = a[1] + (b[1] - a[1]) * e;
+    let sy = a[2] + (b[2] - a[2]) * e;
     (1.0 + (sx - 1.0) * amp, 1.0 + (sy - 1.0) * amp)
 }
 
@@ -362,11 +364,21 @@ pub fn bezier(p: [f64; 4], t: f64) -> f64 {
     at(p[1], p[3], (lo + hi) / 2.0)
 }
 
+/// A fixed-curve tween a driver times itself: `curve` over `len` seconds, `secs` after it began,
+/// 0..1. wubble change: at its end under reduced motion, as the design's 1 ms lands every CSS
+/// animation at once (the Slint side's `Calm.ms`); the one chokepoint for Rust-timed tweens.
+pub fn tween(curve: [f64; 4], secs: f64, len: f64) -> f64 {
+    if reduced() {
+        return 1.0;
+    }
+    bezier(curve, secs / len)
+}
+
 /// How far the Overlap entrance (`wb-in` in core/wubble.css: 240 ms on the ease-out curve) is,
 /// 0..1, `secs` after it began. The drawing side maps it as `wb-in` does: opacity e, 7 px below
 /// → in place, scale 0.98 → 1, blur 4 px → 0 (Slint `Entering`, kit/motion/overlap.slint).
 pub fn overlap_in(secs: f64) -> f64 {
-    bezier(ease::out, secs / OVERLAP_IN)
+    tween(ease::out, secs, OVERLAP_IN)
 }
 
 /// `motion.overlap.in` in tokens.ts, seconds.
@@ -395,6 +407,16 @@ mod tests {
         assert!(step(&mut s, 100.0, 300.0, 15.0, 0.016));
         assert!(s.x < 100.0);
         assert_ne!(squash_at(0.3, 1.0), (1.0, 1.0));
+    }
+
+    #[test]
+    fn reduced_motion_lands_rust_timed_tweens() {
+        set_reduced(true);
+        assert_eq!(overlap_in(0.0), 1.0);
+        assert_eq!(tween(ease::inOut, 0.0, 0.19), 1.0);
+        set_reduced(false);
+        assert_eq!(overlap_in(0.0), 0.0);
+        assert_eq!(tween(ease::inOut, 0.0, 0.19), 0.0);
     }
 
     #[test]

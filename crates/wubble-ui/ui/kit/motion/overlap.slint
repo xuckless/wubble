@@ -2,7 +2,8 @@
 // Overlap (`wb-in` / `wb-out`): old and new share the screen. The incoming layer comes from 7 px
 // below at .98 and clear, blurred 4 px, into place over 240 ms ease-out; the outgoing one goes
 // 5 px up to .98 and clear, blurring, over 190 ms ease-in-out. Rows enter 30 ms apart (`index`).
-// A re-entry starts from 7 px below, as the web restarts `wb-in` (the port re-entered from -5).
+// Each flip restarts its keyframes, as the web's `wb-in` / `wb-out` animations do: a re-entry
+// mid-exit starts again clear and 7 px below, an exit mid-entry from in place (Replay).
 // The blur is a transparent backdrop-blur rectangle over the content inside the layer: while
 // the layer's opacity is below 1 Skia blurs only the layer's own pixels (Slint's
 // builtin_elements.rs `backdrop-blur`); it is gone at rest. Skia only: other renderers fade and
@@ -10,7 +11,7 @@
 
 import { Motion } from "../gen/tokens.slint";
 import { WubbleCss } from "../gen/css.slint";
-import { Tween } from "tween.slint";
+import { Replay } from "tween.slint";
 
 // The layer's look at eased progress `e` (1 = in place) heading in (`entering`) or out: from
 // `shift-in` below or to `shift-out`, at `scale-from`, blurred. Overlap's values by default;
@@ -25,10 +26,9 @@ export component OverlapLook inherits Rectangle {
     opacity: root.e;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     property <length> shift: root.entering ? root.shift-in : root.shift-out;
-    property <float> scale: root.scale-from;
     // the look at `e`, also read by the curve tests
     out property <length> offset: root.shift * (1 - root.e);
-    out property <float> zoom: 1 - (1 - root.scale) * (1 - root.e);
+    out property <float> zoom: 1 - (1 - root.scale-from) * (1 - root.e);
     out property <length> blur: Motion.overlap-blur * (1 - root.e);
     transform-scale: root.zoom;
     Rectangle {
@@ -45,20 +45,20 @@ export component OverlapLook inherits Rectangle {
 export component OverlapLayer inherits Rectangle {
     in property <bool> shown: true;
     in property <int> index: 0;
-    tw := Tween {
+    rp := Replay {
         on: root.shown;
         in-ms: Motion.overlap-in;
         out-ms: Motion.overlap-out;
         in-easing: Motion.ease-out;
         out-easing: Motion.ease-in-out;
-        delay: root.shown ? Motion.overlap-stagger * root.index : 0ms;
+        delay: Motion.overlap-stagger * root.index;
     }
     out property <float> progress: look.e;
     out property <length> offset: look.offset;
     out property <float> zoom: look.zoom;
     out property <length> blur: look.blur;
     look := OverlapLook {
-        e: tw.t;
+        e: root.shown ? rp.run : 1 - rp.run;
         entering: root.shown;
         @children
     }

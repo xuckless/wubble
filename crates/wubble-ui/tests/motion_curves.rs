@@ -3,7 +3,8 @@
 //! 1/120 s (`node tools/fidelity/curves.mjs`); here the kit primitives run on the testing
 //! backend's mock time, stepped by the same 1/120 s, and each property's curve must agree with
 //! the web's to 0.90 or better (1 - RMS difference / the web curve's range). Reduced motion: every
-//! primitive lands in its end state within two frames. No wall clock; one test (one platform per
+//! primitive lands in its end state within two frames. A flip mid-run restarts Overlap and the
+//! keyframes. No wall clock; one test (one platform per
 //! process).
 
 use std::fs;
@@ -41,6 +42,7 @@ slint::slint! {
             film.shown,
             wob.rotation / 1deg, wob.scale-x, wob.scale-y,
             pulse.e, fold.e, xf.e, xf.leaving,
+            pulse.spread / 1px, pulse.ring.to-hsv().alpha, fold.height / 40px,
         ];
     }
 }
@@ -59,6 +61,8 @@ const PAIRS: &[(&str, &[(&str, usize)])] = &[
     ("wobble", &[("rot", 6), ("sx", 7), ("sy", 8)]),
     // the Swap's entrance is `wb-in`'s (touch.css:28-29: 240 ms ease-out, +7, .98, blur 4)
     ("overlap-in", &[("opacity", 11)]),
+    ("pulse", &[("spread", 13), ("alpha", 14)]),
+    ("fold-in", &[("h", 15), ("opacity", 10)]),
 ];
 const PAIRS_OUT: &[(&str, &[(&str, usize)])] = &[
     (
@@ -69,7 +73,11 @@ const PAIRS_OUT: &[(&str, &[(&str, usize)])] = &[
     ("film-out", &[("opacity", 5)]),
     // the Swap's exit fades as `wb-out` (touch.css:30: 190 ms ease-in-out; it shifts -7, not -5)
     ("overlap-out", &[("opacity", 12)]),
+    ("fold-out", &[("h", 15), ("opacity", 10)]),
 ];
+
+/// The wobble's values in `Probe.now`.
+const WOBBLE: std::ops::Range<usize> = 6..9;
 
 fn web(name: &str) -> serde_json::Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -126,28 +134,39 @@ fn similarity(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
+/// Asserts that the kit's `kit` frames follow the web curve `name` in each of `props`.
+fn check(name: &str, props: &[(&str, usize)], kit: &[Vec<f32>], report: &mut Vec<String>) {
+    let w = web(name);
+    for (prop, i) in props {
+        let web: Vec<f64> = w["frames"][prop]
+            .as_array()
+            .expect("prop")
+            .iter()
+            .map(|v| v.as_f64().expect("number"))
+            .collect();
+        let ours: Vec<f64> = kit.iter().map(|f| f64::from(f[*i])).collect();
+        let s = similarity(&ours, &web);
+        report.push(format!("{name}.{prop} (kit value {i}): {s:.3}"));
+        assert!(
+            s >= 0.90,
+            "{name}.{prop}: {s:.3}\nkit {ours:?}\nweb {web:?}"
+        );
+    }
+}
+
+fn frames(name: &str) -> usize {
+    web(name)["frames"]["opacity"]
+        .as_array()
+        .expect("frames")
+        .len()
+}
+
 fn compare(p: &Probe, on: bool, pairs: &[(&str, &[(&str, usize)])], report: &mut Vec<String>) {
     for (name, props) in pairs {
-        let w = web(name);
-        let len = w["frames"]["opacity"].as_array().expect("frames").len();
         // from rest in the start state
         settle(p, !on);
-        let kit = run(p, on, len);
-        for (prop, i) in *props {
-            let web: Vec<f64> = w["frames"][prop]
-                .as_array()
-                .expect("prop")
-                .iter()
-                .map(|v| v.as_f64().expect("number"))
-                .collect();
-            let ours: Vec<f64> = kit.iter().map(|f| f64::from(f[*i])).collect();
-            let s = similarity(&ours, &web);
-            report.push(format!("{name}.{prop} (kit value {i}): {s:.3}"));
-            assert!(
-                s >= 0.90,
-                "{name}.{prop}: {s:.3}\nkit {ours:?}\nweb {web:?}"
-            );
-        }
+        let kit = run(p, on, frames(name));
+        check(name, props, &kit, report);
     }
 }
 
@@ -159,6 +178,31 @@ fn kit_motion_follows_the_web_curves() {
     let mut report = Vec::new();
     compare(&p, true, PAIRS, &mut report);
     compare(&p, false, PAIRS_OUT, &mut report);
+
+    // A flip mid-run restarts the keyframes, as the web's two names per animation do: a re-entry
+    // mid-exit comes in from clear and 7 px below again; a second wobble plays from its start.
+    settle(&p, true);
+    run(&p, false, 12);
+    let back = run(&p, true, frames("overlap-in"));
+    assert!(
+        back[0][0] < 1e-3 && (back[0][1] - 7.0).abs() < 1e-3,
+        "re-entry restarts: {:?}",
+        &back[0][..4]
+    );
+    check(
+        "overlap-in",
+        &[("opacity", 0), ("ty", 1)],
+        &back,
+        &mut report,
+    );
+    run(&p, false, 20);
+    let again = run(&p, true, frames("wobble"));
+    check(
+        "wobble",
+        &[("rot", 6), ("sx", 7), ("sy", 8)],
+        &again,
+        &mut report,
+    );
     eprintln!("{}", report.join("\n"));
 
     // Reduced motion: the design's 1 ms; every primitive is at its end within two frames.
@@ -168,13 +212,15 @@ fn kit_motion_follows_the_web_curves() {
         settle(&p, !on);
         let frames = run(&p, on, 3);
         // the wobble plays per flip (no end state of its own); the rest land
-        for (i, (a, b)) in frames[2].iter().zip(&rest_end).enumerate().take(6) {
-            assert!(
-                (a - b).abs() < 1e-3,
-                "reduced, on={on}, value {i}: {a} vs {b}"
-            );
+        for (i, (a, b)) in frames[2].iter().zip(&rest_end).enumerate() {
+            if !WOBBLE.contains(&i) {
+                assert!(
+                    (a - b).abs() < 1e-3,
+                    "reduced, on={on}, value {i}: {a} vs {b}"
+                );
+            }
         }
-        let wob = &frames[2][6..];
+        let wob = &frames[2][WOBBLE];
         assert!(
             wob.iter()
                 .zip([0.0, 1.0, 1.0])

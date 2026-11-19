@@ -129,6 +129,13 @@ function cssTables() {
         base = (rule.at ? `${slug(rule.at.replace(/^@\w+/, ''))}-` : '') + slug(first);
       }
       if (!/^[a-z]/.test(base)) base = `r-${base}`;
+      // a width query's breakpoint, once per query, so the kit switches where the design does
+      const q = /^@(?:container|media)\b.*\(max-width:\s*([\d.]+)px\)/.exec(rule.at);
+      const qid = q && `${slug(rule.at.replace(/^@\w+/, ''))}--query-max-width`;
+      if (q && rule.decls.length && !seen.has(qid)) {
+        seen.add(qid);
+        props.push({ id: qid, t: 'length', v: Number(q[1]), line: rule.decls[0].line, src: `${rule.at} (its breakpoint)` });
+      }
       for (const d of rule.decls) {
         if (d.prop.startsWith('--') || d.prop.startsWith('-webkit-') && d.prop !== '-webkit-backdrop-filter') continue;
         if (d.prop === '-webkit-backdrop-filter') continue; // the same as backdrop-filter

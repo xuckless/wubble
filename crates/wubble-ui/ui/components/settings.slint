@@ -15,7 +15,7 @@
 // the list editor and the chord recorder row. Reused: the port's PressableButton, SpaceIcon and
 // WubbleScroller, wubble's IconButton, Icon and Raised.
 
-import { Palette, Motion, Space, Fonts, Type, Radius, Glass } from "../kit/gen/tokens.slint";
+import { Palette, Motion, Space, Fonts, Type, Radius, Glass, Keyframes } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { SpaceIcon } from "../kit/chrome/space-icon.slint";
@@ -28,7 +28,8 @@ import { Raised, Chip } from "raised.slint";
 import { Toggle } from "controls/toggle.slint";
 import { Slider } from "controls/slider.slint";
 import { Controls, ControlView } from "controls/registry.slint";
-import { Squash } from "../kit/motion/squash.slint";
+import { Keys } from "../kit/motion/keys.slint";
+import { TouchCss, SettingsCss } from "../kit/gen/css.slint";
 import { Calm } from "../kit/motion/calm.slint";
 import { KitText } from "../kit/text.slint";
 import { Role } from "../kit/gen/text.slint";
@@ -340,8 +341,9 @@ export component TextButton inherits Rectangle {
     }
     transform-scale-x: root.press * sq.sx;
     transform-scale-y: root.press * sq.sy;
-    sq := Squash {
-        amp: Shell.squash-chrome;
+    sq := Keys {
+        keys: Keyframes.button-squash;
+        length: TouchCss.tp-btn-body-sq-a--animation-duration;
     }
     property <bool> down: ta.pressed;
     changed down => {
@@ -893,9 +895,11 @@ component PageScroller inherits Rectangle {
     }
 }
 
-// The page's title in the display face (.st-pin h1).
+// The page's title in the display face (.st-pin h1); smaller when the page (the design's
+// `.tp-page` container) is `narrow`, at most the settings.css query's 759 px wide.
 component PageTitle inherits KitText {
-    role: Role.st-title;
+    in property <bool> narrow;
+    role: root.narrow ? Role.st-title-narrow : Role.st-title;
     color: Palette.ink;
     vertical-alignment: center;
 }
@@ -936,6 +940,7 @@ export component PageFrame inherits Rectangle {
                     padding-bottom: Shell.settings-title-below;
                     PageTitle {
                         text: root.title;
+                        narrow: root.width <= SettingsCss.max-width-759px--query-max-width;
                     }
                     search := Field {
                         horizontal-stretch: 1;
@@ -1454,6 +1459,7 @@ export component SettingsPage inherits Rectangle {
                 padding-bottom: Shell.settings-title-below;
                 PageTitle {
                     text: "Settings";
+                    narrow: root.width <= SettingsCss.max-width-759px--query-max-width;
                 }
             }
             search := Field {

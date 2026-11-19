@@ -1,6 +1,6 @@
 import { Palette, Motion, Space, Fonts, Type, Radius } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { Squash } from "../kit/motion/squash.slint";
+import { Keys } from "../kit/motion/keys.slint";
 import { Calm } from "../kit/motion/calm.slint";
 
 // A check box and its label, one target. Mint when checked, the tick drawn over it. Its motion
@@ -19,7 +19,7 @@ export component CheckBox inherits Rectangle {
             root.checked = !root.checked;
         }
     }
-    sq := Squash {}
+    sq := Keys {}
     changed checked => {
         if root.checked {
             sq.hit = !sq.hit;
@@ -34,7 +34,7 @@ export component CheckBox inherits Rectangle {
         border-color: root.checked ? Palette.mint : Palette.haze;
         clip: true;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        // pressing squeezes; filling squashes (the squash token, squash.slint)
+        // pressing squeezes; filling squashes (the squash token, keys.slint)
         property <float> px: ta.pressed ? 1.12 : 1;
         property <float> py: ta.pressed ? 0.9 : 1;
         animate px, py {

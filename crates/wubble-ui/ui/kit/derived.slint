@@ -462,7 +462,6 @@ export global Shell {
     // derived: values with no design equal (notes/fidelity/derived-review.md, for the owner).
     // Each line names the design rule it derives from; an expression of design tokens where one fits.
     out property <color> selection-fill: Palette.sky.transparentize(0.65); // derived from the Space accent sky (core/tokens.ts color.sky) at .35: selected text in a field; the design styles no ::selection
-    out property <float> squash-chrome: 1 / 3; // derived from pages/touch.tsx:443 Buttons: the squash token "at a third of its strength" on chrome
     out property <duration> check-tick-delay: 70ms; // derived from pages/touch.tsx:554 CHECKS.tickDelay (generated in kit_gen.rs touch::CHECKS, not in gen/*.slint)
     out property <float> tab-exit-shrink: 1 - BrowserCss.wb-tab-out-k-to--scale; // derived from browser/browser.css:72 @keyframes wb-tab-out to scale(.94)
     out property <int> beam-segments: 10; // derived from wubble-only: the Slint border beam stand-in (GLASS beam is scene-drawn in the design); strokes in its tail

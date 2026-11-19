@@ -32,7 +32,8 @@ equal value by the CSS rule its comment cites and the property kind; it prints, 
 alias is a reviewed hand edit). `curves.mjs` loads `core/wubble.css` with its token variables in
 headless Chromium, pauses every animation and transition, steps them on the fixed 1/120 s clock
 and writes `tools/fidelity/curves/<motion>.json` (opacity, translate y, scale x/y, rotation,
-blur per frame): the truth `crates/wubble-ui/tests/motion_curves.rs` and wubble-core's motion
+blur, box-shadow spread and alpha, a fold's height
+per frame): the truth `crates/wubble-ui/tests/motion_curves.rs` and wubble-core's motion
 tests compare the kit with (>= 0.90 per property, mock time, no wall clock). Rerun it when the
 clone moves and commit the JSON.
 

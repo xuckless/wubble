@@ -2,11 +2,11 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Space, Chrome, Fonts, Type, Motion, Radius } from "../gen/tokens.slint";
+import { Palette, Space, Chrome, Fonts, Type, Motion, Radius, Keyframes } from "../gen/tokens.slint";
 import { Shell } from "../derived.slint";
-import { Squash } from "../motion/squash.slint";
+import { Keys } from "../motion/keys.slint";
 import { Press } from "../motion/press.slint";
-import { WubbleCss } from "../gen/css.slint";
+import { WubbleCss, TouchCss } from "../gen/css.slint";
 import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
 import { Calm } from "../motion/calm.slint";
 import { KitText } from "../text.slint";
@@ -44,15 +44,16 @@ export component PressableButton inherits Rectangle {
     animate background { duration: Calm.ms(WubbleCss.wb-press--transition-background-color-duration); easing: ease; }
 
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    // wubble change: the release squash (wubble.css `wb-sq` at a third, squash.slint) times the
+    // wubble change: the release squash (touch.css `tp-bq-a`, the squash token at a third, keys.slint) times the
     // press, on one transform.
     press := Press {
         pressed: touch.pressed;
     }
     transform-scale-x: press.scale * sq.sx;
     transform-scale-y: press.scale * sq.sy;
-    sq := Squash {
-        amp: Shell.squash-chrome;
+    sq := Keys {
+        keys: Keyframes.button-squash;
+        length: TouchCss.tp-btn-body-sq-a--animation-duration;
     }
     changed pressed => {
         if !self.pressed {

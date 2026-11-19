@@ -6,22 +6,23 @@
 
 import { WubbleCss } from "../gen/css.slint";
 import { TouchCss } from "../gen/css.slint";
-import { Calm } from "calm.slint";
+import { Replay } from "tween.slint";
 
 export component Pulse inherits Rectangle {
     in property <bool> hit: false;
     in property <length> radius;
-    // one eased run per flip: 0 → 1 on ease-out either way
-    property <float> phase: root.hit ? 1 : 0;
-    animate phase {
-        duration: Calm.ms(TouchCss.tp-pulse--animation-duration);
-        easing: TouchCss.tp-pulse--animation-easing;
+    // one eased run from the start per flip (the web remounts `.tp-pulse`)
+    rp := Replay {
+        on: root.hit;
+        in-ms: TouchCss.tp-pulse--animation-duration;
+        in-easing: TouchCss.tp-pulse--animation-easing;
     }
     // 1 (done) until the first flip
-    out property <float> e: root.hit ? root.phase : 1 - root.phase;
+    out property <float> e: rp.run;
     out property <length> spread: WubbleCss.wb-pulse-k-from--box-shadow-shadow-1-spread + (WubbleCss.wb-pulse-k-to--box-shadow-shadow-1-spread - WubbleCss.wb-pulse-k-from--box-shadow-shadow-1-spread) * root.e;
     property <color> from: WubbleCss.wb-pulse-k-from--box-shadow-shadow-1-color;
     property <color> to: WubbleCss.wb-pulse-k-to--box-shadow-shadow-1-color;
+    out property <color> ring: root.to.mix(root.from, root.e);
     Rectangle {
         x: -root.spread;
         y: -root.spread;
@@ -29,7 +30,7 @@ export component Pulse inherits Rectangle {
         height: root.height + 2 * root.spread;
         border-radius: root.radius + root.spread;
         border-width: root.spread;
-        border-color: root.to.mix(root.from, root.e);
+        border-color: root.ring;
         visible: root.e < 1;
     }
 }
