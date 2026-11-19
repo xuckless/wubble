@@ -8,6 +8,7 @@ mod builtin_smoke;
 mod chooser;
 mod cli;
 mod clipboard;
+mod gallery_smoke;
 mod host;
 mod ime;
 mod input;
@@ -348,6 +349,30 @@ fn main() -> ExitCode {
                 }
                 Ok(Outcome { .. }) => {
                     eprintln!("smoke: settings FAILED: the window closed first");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Smoke(Smoke::Gallery { dir }) => {
+            shot::request_dir(dir);
+            match with_smoke_dir(|config, dir| run(Mode::Gallery, config, dir)) {
+                Ok(Outcome {
+                    failure: None,
+                    gallery_passed: true,
+                    ..
+                }) => {
+                    println!("smoke: gallery ok");
+                    ExitCode::SUCCESS
+                }
+                Ok(Outcome {
+                    failure: Some(e), ..
+                })
+                | Err(e) => {
+                    eprintln!("smoke: gallery FAILED: {e}");
+                    ExitCode::FAILURE
+                }
+                Ok(Outcome { .. }) => {
+                    eprintln!("smoke: gallery FAILED: the window closed first");
                     ExitCode::FAILURE
                 }
             }
@@ -788,6 +813,7 @@ struct Outcome {
     /// `--smoke settings` reached its end.
     settings_passed: bool,
     pages_passed: bool,
+    gallery_passed: bool,
     /// `--smoke autofill` reached its end.
     autofill_passed: bool,
     /// `--smoke media` reached its end.
@@ -830,6 +856,8 @@ enum Mode {
     Settings,
     /// `--smoke pages`.
     Pages,
+    /// `--smoke gallery` (on the pages smoke's seeded profile).
+    Gallery,
     /// `--smoke autofill`.
     Autofill,
     /// `--smoke media`.
@@ -1374,7 +1402,7 @@ fn run(
     // thread then gets.
     let keyring: Box<dyn wubble_vault::KeyRing + Send> = match mode {
         Mode::Browse { .. } => Box::new(wubble_vault::OsKeyRing),
-        Mode::Pages => {
+        Mode::Pages | Mode::Gallery => {
             let keyring = wubble_vault::FakeKeyRing::default();
             pages_smoke::seed(&db, &keyring)?;
             Box::new(keyring)
@@ -1414,6 +1442,7 @@ fn run(
         split_smoke: None,
         settings_smoke: None,
         pages_smoke: None,
+        gallery_smoke: None,
         autofill_smoke: None,
         windows_smoke: None,
         media_smoke: None,
@@ -1504,6 +1533,13 @@ fn run(
             Some(bundled()),
             Checks {
                 pages_smoke: Some(pages_smoke::PagesSmoke::default()),
+                ..none
+            },
+        ),
+        Mode::Gallery => (
+            Some(bundled()),
+            Checks {
+                gallery_smoke: Some(gallery_smoke::Stage::Start),
                 ..none
             },
         ),
@@ -1726,6 +1762,7 @@ fn run(
         windows_passed: host.windows_passed,
         settings_passed: host.settings_passed,
         pages_passed: host.pages_passed,
+        gallery_passed: host.gallery_passed,
         session_passed: host.session_passed,
         page_zoom: host.page_zoom,
         blocked_seen: host.blocked_seen,

@@ -20,6 +20,18 @@ pub const SIZE: (f32, f32) = (1360.0, 880.0);
 thread_local! {
     static SHOT: RefCell<Option<(PathBuf, slint::Weak<AppWindow>)>> = const { RefCell::new(None) };
     static PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    static DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
+/// `--shot-dir`'s folder (`--smoke gallery`), before the window exists.
+pub fn request_dir(dir: PathBuf) {
+    DIR.with(|d| *d.borrow_mut() = Some(dir));
+}
+
+/// The gallery's file for scene `index` (counted from 0): `dir/NN-name.png`, so a listing
+/// sorts in the order the scenes were shot.
+pub fn scene_path(dir: &std::path::Path, index: usize, name: &str) -> PathBuf {
+    dir.join(format!("{:02}-{name}.png", index + 1))
 }
 
 /// `--shot`'s file, before the window exists.
@@ -34,11 +46,26 @@ pub fn requested() -> bool {
 
 /// The window the shot is taken of; sized like the design's screenshot.
 pub fn attach(window: &AppWindow) {
-    if let Some(path) = PATH.with(|p| p.borrow().clone()) {
+    let path = PATH.with(|p| p.borrow().clone());
+    if path.is_some() || DIR.with(|d| d.borrow().is_some()) {
         let (w, h) = size();
         window.window().set_size(slint::LogicalSize::new(w, h));
+    }
+    if let Some(path) = path {
         SHOT.with(|s| *s.borrow_mut() = Some((path, window.as_weak())));
     }
+}
+
+/// Writes `window` as `dir/NN-name.png` for the gallery's scene `index`; the window's own
+/// size, so `WUBBLE_SHOT_SIZE` and `SLINT_SCALE_FACTOR` set the PNG's.
+pub fn take_scene(window: &AppWindow, index: usize, name: &str) -> Result<PathBuf, String> {
+    let dir = DIR
+        .with(|d| d.borrow().clone())
+        .ok_or("no --shot-dir was given")?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = scene_path(&dir, index, name);
+    take_to(window, &path)?;
+    Ok(path)
 }
 
 /// [`SIZE`], or `WUBBLE_SHOT_SIZE=<w>x<h>` (logical px): to shoot at another window's size,
@@ -122,6 +149,11 @@ fn scroll_page() {
     let Some(window) = SHOT.with(|s| s.borrow().as_ref().and_then(|(_, w)| w.upgrade())) else {
         return;
     };
+    wheel(&window, px);
+}
+
+/// A wheel over the page, `px` logical px down.
+pub fn wheel(window: &AppWindow, px: f32) {
     let position = slint::LogicalPosition::new(
         window.get_content_x() + window.get_content_width() * 0.7,
         window.get_content_y() + 200.0,
@@ -143,15 +175,16 @@ fn take() {
     let Some(window) = window.upgrade() else {
         return;
     };
-    match window
-        .window()
-        .take_snapshot()
-        .map_err(|e| e.to_string())
-        .and_then(|shot| write_png(&path, &shot))
-    {
+    match take_to(&window, &path) {
         Ok(()) => println!("smoke: shot {}", path.display()),
         Err(e) => eprintln!("smoke: shot failed: {e}"),
     }
+}
+
+/// `window` as rendered, written to `path`.
+fn take_to(window: &AppWindow, path: &std::path::Path) -> Result<(), String> {
+    let shot = window.window().take_snapshot().map_err(|e| e.to_string())?;
+    write_png(path, &shot)
 }
 
 fn write_png(
@@ -166,4 +199,19 @@ fn write_png(
     writer
         .write_image_data(shot.as_bytes())
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_files_sort_in_shooting_order() {
+        let dir = std::path::Path::new("/tmp/g");
+        assert_eq!(
+            scene_path(dir, 0, "sidebar-extended"),
+            PathBuf::from("/tmp/g/01-sidebar-extended.png")
+        );
+        assert!(scene_path(dir, 8, "a") < scene_path(dir, 9, "a"));
+    }
 }

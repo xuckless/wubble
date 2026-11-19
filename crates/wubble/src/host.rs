@@ -22,6 +22,7 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+mod gallery;
 mod look;
 mod media;
 mod pages;
@@ -263,6 +264,7 @@ pub struct Checks {
     pub split_smoke: Option<SplitSmoke>,
     pub settings_smoke: Option<SettingsSmoke>,
     pub pages_smoke: Option<PagesSmoke>,
+    pub gallery_smoke: Option<crate::gallery_smoke::Stage>,
     pub autofill_smoke: Option<crate::autofill_smoke::AutofillSmoke>,
     pub windows_smoke: Option<crate::windows_smoke::WindowsSmoke>,
     pub media_smoke: Option<crate::media_smoke::MediaSmoke>,
@@ -342,6 +344,11 @@ pub struct Host {
     pub windows_passed: bool,
     pub settings_passed: bool,
     pub pages_passed: bool,
+    /// `--smoke gallery` shot every scene.
+    pub gallery_passed: bool,
+    /// The scene on screen waited out [`gallery::SETTLE`] (`host/gallery.rs`).
+    gallery_settled: bool,
+    gallery_timer: slint::Timer,
     /// `--smoke settings`: the stored value of the setting it flipped, read back.
     settings_read: Option<String>,
     pub(crate) input: InputState,
@@ -546,6 +553,9 @@ impl Host {
             windows_passed: false,
             settings_passed: false,
             pages_passed: false,
+            gallery_passed: false,
+            gallery_settled: false,
+            gallery_timer: slint::Timer::default(),
             settings_read: None,
             input: InputState::default(),
             // `replay_settings` below applies the stored overrides, engine, zoom, ...
@@ -1148,6 +1158,7 @@ impl Host {
         self.session_smoke_step();
         self.settings_smoke_step();
         self.pages_smoke_step();
+        self.gallery_step();
         if let Err(e) = self.show_frame(&window) {
             self.fail(e);
         }

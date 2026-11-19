@@ -427,7 +427,7 @@ pub(super) fn fill_message(origin: &str, fields: &[(FieldId, Secret)]) -> Secret
 }
 
 /// What the shell shows for one tab's autofill.
-fn shell_view(view: &View) -> AutofillView {
+pub(super) fn shell_view(view: &View) -> AutofillView {
     let named = |user: &str| {
         if user.is_empty() {
             "(no username)".to_owned()

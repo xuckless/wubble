@@ -56,6 +56,10 @@ struct Cli {
     /// three Spaces and a few tabs at the design's 1360x880, to compare with the design).
     #[arg(long, value_name = "PNG", requires = "smoke")]
     shot: Option<PathBuf>,
+    /// Hand run only, with `--smoke gallery`: the folder the gallery writes one numbered PNG
+    /// per shell surface into.
+    #[arg(long, value_name = "DIR", requires = "smoke", conflicts_with = "shot")]
+    shot_dir: Option<PathBuf>,
 }
 
 /// The `--smoke` value alone; `--url` is joined in by `Command::try_from`.
@@ -72,6 +76,7 @@ enum SmokeArg {
     Block,
     Settings,
     Pages,
+    Gallery,
     Session,
     Autofill,
     Windows,
@@ -94,6 +99,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "block" => Ok(SmokeArg::Block),
         None if value == "settings" => Ok(SmokeArg::Settings),
         None if value == "pages" => Ok(SmokeArg::Pages),
+        None if value == "gallery" => Ok(SmokeArg::Gallery),
         None if value == "session" => Ok(SmokeArg::Session),
         None if value == "autofill" => Ok(SmokeArg::Autofill),
         None if value == "windows" => Ok(SmokeArg::Windows),
@@ -109,7 +115,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
             "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
-             `settings`, `pages`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
+             `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
              `boost` or `session-phase=1|2`"
                 .into(),
         ),
@@ -147,6 +153,8 @@ pub enum Smoke {
     Settings,
     /// Open history, bookmarks, downloads and passwords on a seeded profile, check their rows.
     Pages,
+    /// Walk the shell through its surfaces on a seeded profile, one PNG each into `dir`.
+    Gallery { dir: PathBuf },
     /// Runs both session phases on a temporary profile.
     Session,
     /// A loopback sign-in page: fill from the key menu, submit, save, the vault row.
@@ -213,6 +221,9 @@ impl TryFrom<Cli> for Command {
                 begin_frames: cli.begin_frames,
             }));
         }
+        if cli.shot_dir.is_some() != matches!(cli.smoke, Some(SmokeArg::Gallery)) {
+            return conflict("--smoke gallery and --shot-dir go together");
+        }
         let smoke = match (cli.smoke, cli.url, cli.profile) {
             (None, _, profile) => {
                 return Ok(Command::Run {
@@ -247,6 +258,9 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Block), None, None) => Smoke::Block,
             (Some(SmokeArg::Settings), None, None) => Smoke::Settings,
             (Some(SmokeArg::Pages), None, None) => Smoke::Pages,
+            (Some(SmokeArg::Gallery), None, None) => Smoke::Gallery {
+                dir: cli.shot_dir.expect("checked with the smoke above"),
+            },
             (Some(SmokeArg::Session), None, None) => Smoke::Session,
             (Some(SmokeArg::Autofill), None, None) => Smoke::Autofill,
             (Some(SmokeArg::Windows), None, None) => Smoke::Windows,
@@ -393,6 +407,29 @@ mod tests {
         );
         assert!(parse(["wubble", "--smoke", "pages", "--url", "about:blank"]).is_err());
         assert!(parse(["wubble", "--smoke", "pages", "--profile", "/tmp/p"]).is_err());
+    }
+
+    #[test]
+    fn the_gallery_needs_its_folder_and_nothing_else_takes_it() {
+        assert_eq!(
+            parse(["wubble", "--smoke", "gallery", "--shot-dir", "/tmp/g"]).ok(),
+            Some(Command::Smoke(Smoke::Gallery {
+                dir: PathBuf::from("/tmp/g")
+            }))
+        );
+        assert!(parse(["wubble", "--smoke", "gallery"]).is_err());
+        assert!(parse(["wubble", "--smoke", "pages", "--shot-dir", "/tmp/g"]).is_err());
+        assert!(parse(["wubble", "--shot-dir", "/tmp/g"]).is_err());
+        let both = [
+            "wubble",
+            "--smoke",
+            "gallery",
+            "--shot-dir",
+            "/tmp/g",
+            "--shot",
+            "/tmp/s.png",
+        ];
+        assert!(parse(both).is_err());
     }
 
     #[test]

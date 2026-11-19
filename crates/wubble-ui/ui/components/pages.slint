@@ -570,22 +570,39 @@ export component TasksPage inherits PageFrame {
                 width: Shell.task-cpu;
                 text: item.cpu;
             }
-            if item.tab >= 0: TextButton {
-                text: item.never-sleep ? "Allow sleep" : "Never sleep";
-                clicked => {
-                    root.action(item.tab, item.pid, TaskAction.never-sleep);
+            // A slot per button whether it shows or not, so the columns line up row to row,
+            // and each button sits on the row's middle.
+            Rectangle {
+                width: Shell.task-sleep;
+                if item.tab >= 0: TextButton {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: item.never-sleep ? "Allow sleep" : "Never sleep";
+                    clicked => {
+                        root.action(item.tab, item.pid, TaskAction.never-sleep);
+                    }
                 }
             }
-            if item.can-discard: TextButton {
-                text: "Discard";
-                clicked => {
-                    root.action(item.tab, item.pid, TaskAction.discard);
+            Rectangle {
+                width: Shell.task-discard;
+                if item.can-discard: TextButton {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "Discard";
+                    clicked => {
+                        root.action(item.tab, item.pid, TaskAction.discard);
+                    }
                 }
             }
-            if item.can-end: TextButton {
-                text: "End";
-                clicked => {
-                    root.action(item.tab, item.pid, TaskAction.end);
+            Rectangle {
+                width: Shell.task-end;
+                if item.can-end: TextButton {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    text: "End";
+                    clicked => {
+                        root.action(item.tab, item.pid, TaskAction.end);
+                    }
                 }
             }
         }
