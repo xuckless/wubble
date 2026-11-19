@@ -42,13 +42,14 @@ pub use settings::{
     HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MediaAskEachTime, MediaConcurrency,
     MediaEnabled, MediaKeys, MediaMinBytes, MediaQuality, MediaSaveDir, MediaYoutube,
     MemoryBackForwardCache, MemoryMaxDecodedImageMb, MiddleClickAutoscroll, OverlayScrollbars,
-    PageThemeDefault, PageThemeSites, PagesContrast, PagesMinFontSize, PagesMotion, PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch,
-    ProcessRendererLimit, ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect,
-    ReaderFontSetting, ReaderSize, ReaderThemeSetting, ReaderWidthSetting, ReduceMotion,
-    RoutingRules, ScreenshotOutput, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth,
-    SiteZoom, SleepDiscardAfter, SleepFreezeAfter, SleepKeepPinned, SleepNeverSites,
-    SponsorActions, SponsorAsked, SponsorEnabled, TouchSizing, VideoCollapsed, VideoControls,
-    VideoHiddenSites, VideoRates, ZoomDefault, text_of,
+    PageThemeDefault, PageThemeSites, PagesContrast, PagesMinFontSize, PagesMotion,
+    PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch, ProcessRendererLimit,
+    ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
+    ReaderThemeSetting, ReaderWidthSetting, ReduceMotion, RoutingRules, ScreenshotOutput,
+    SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter,
+    SleepFreezeAfter, SleepKeepPinned, SleepNeverSites, SponsorActions, SponsorAsked,
+    SponsorEnabled, TouchSizing, VideoCollapsed, VideoControls, VideoHiddenSites, VideoRates,
+    ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

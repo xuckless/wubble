@@ -19,7 +19,7 @@ use super::autofill::shell_view;
 use crate::gallery_smoke::{self, Action, Event, Overlay, SCENES, Scene};
 use crate::menu::{self, Menu};
 use crate::page_error::PageError;
-use crate::prompt::{PermissionPrompt, PermissionRequest};
+use crate::prompt::{Ask, PermissionPrompt, PermissionRequest};
 use crate::surface::{Dialog, FindBar, OpenDialog, Surfaces};
 use crate::{quit, shot, with_host};
 
@@ -133,9 +133,11 @@ impl Host {
             Overlay::Permission => {
                 surfaces.permission = PermissionPrompt::Open {
                     shown: PermissionRequest {
-                        id: FAKE,
                         origin: origin.clone(),
-                        kinds: vec![PermissionKind::CameraStream, PermissionKind::MicStream],
+                        ask: Ask::Engine {
+                            id: FAKE,
+                            kinds: vec![PermissionKind::CameraStream, PermissionKind::MicStream],
+                        },
                     },
                     queued: VecDeque::new(),
                 }
