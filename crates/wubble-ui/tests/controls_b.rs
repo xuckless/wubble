@@ -13,9 +13,10 @@ use i_slint_backend_testing::{
 };
 use slint::platform::PointerEventButton;
 use slint::platform::{Key, WindowEvent};
-use slint::{ComponentHandle, Model, SharedString};
+use slint::{ComponentHandle, LogicalPosition, Model, SharedString};
 use wubble_core::controls::slider::{Cfg, Key as SliderKey};
 use wubble_core::controls::{Ring, Segmented, Slider};
+use wubble_core::kit_gen::settings::SWATCH;
 
 slint::slint! {
     #[edition = "1.19"]
@@ -110,12 +111,8 @@ fn wire(app: &SlideSpecimen) -> Reg {
     });
     let (r, w) = (reg.clone(), write.clone());
     g.on_configure(move |id, min, max, step| {
-        match r.borrow_mut().get_mut(id as usize) {
-            Some(Slot::Slider(s)) => {
-                s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)))
-            }
-            Some(Slot::Swatches(ring)) => ring.set_count(max as usize),
-            _ => {}
+        if let Some(Slot::Slider(s)) = r.borrow_mut().get_mut(id as usize) {
+            s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)));
         }
         w(id);
     });
@@ -128,8 +125,12 @@ fn wire(app: &SlideSpecimen) -> Reg {
     });
     let (r, w) = (reg.clone(), write.clone());
     g.on_segment(move |id, i, left, width| {
-        if let Some(Slot::Segmented(s)) = r.borrow_mut().get_mut(id as usize) {
-            s.set_segment(i as usize, f64::from(left), f64::from(width));
+        match r.borrow_mut().get_mut(id as usize) {
+            Some(Slot::Segmented(s)) => {
+                s.set_segment(i as usize, f64::from(left), f64::from(width))
+            }
+            Some(Slot::Swatches(ring)) => ring.place(i as usize),
+            _ => {}
         }
         w(id);
     });
@@ -145,27 +146,10 @@ fn wire(app: &SlideSpecimen) -> Reg {
     });
     let (r, w) = (reg.clone(), write.clone());
     g.on_key(move |id, code, shift| {
-        let dir = match code {
-            0 => -1,
-            1 => 1,
-            _ => 0,
-        };
+        let key = SliderKey::from_code(code);
         let v = match r.borrow_mut().get_mut(id as usize) {
-            Some(Slot::Slider(s)) => SliderKey::from_code(code)
-                .and_then(|k| s.key(k, shift))
-                .unwrap_or(s.view().value),
-            Some(Slot::Segmented(s)) => {
-                if dir != 0 {
-                    s.key(dir);
-                }
-                s.view().selected as f64
-            }
-            Some(Slot::Swatches(ring)) => {
-                if dir != 0 {
-                    ring.key(dir);
-                }
-                ring.idx() as f64
-            }
+            Some(Slot::Slider(s)) => key.and_then(|k| s.key(k, shift)).unwrap_or(s.view().value),
+            Some(Slot::Segmented(s)) => s.key(key.and_then(SliderKey::dir).unwrap_or(0)) as f64,
             _ => -1.0,
         };
         w(id);
@@ -177,6 +161,15 @@ fn wire(app: &SlideSpecimen) -> Reg {
             s.press(f64::from(px));
         }
         w(id);
+    });
+    // a drag stands in for the shell's frame too (one step), but its view reaches Slint only
+    // with the release's: the frame and the pointer-up handled before `changed shown` runs
+    let r = reg.clone();
+    g.on_drag(move |id, px| {
+        if let Some(Slot::Slider(s)) = r.borrow_mut().get_mut(id as usize) {
+            s.drag(f64::from(px));
+            s.step(1.0 / 120.0);
+        }
     });
     let (r, w) = (reg.clone(), write);
     g.on_release(move |id| {
@@ -218,7 +211,7 @@ fn tab(app: &SlideSpecimen) {
 fn the_specimen_holds_every_control_and_state() {
     init_integration_test_with_mock_time();
     let app = SlideSpecimen::new().expect("the specimen builds");
-    let _reg = wire(&app);
+    let reg = wire(&app);
     // the controls took their slots before the registry was wired: create them again
     app.set_staged(false);
     assert_eq!(
@@ -300,6 +293,23 @@ fn the_specimen_holds_every_control_and_state() {
     assert_eq!(seam.accessible_value_maximum(), Some(340.0));
     assert_eq!(seam.accessible_value().as_deref(), Some("252"));
 
+    // each swatches' ring starts on its value's swatch, not sliding in from the first
+    // (`sw-focus` is on lilac, the second)
+    {
+        let r = reg.borrow();
+        let rings: Vec<&Ring> = r
+            .iter()
+            .filter_map(|s| match s {
+                Slot::Swatches(ring) => Some(ring),
+                _ => None,
+            })
+            .collect();
+        assert!(rings.iter().any(|ring| ring.idx() == 1), "lilac's ring");
+        for ring in rings {
+            assert_eq!(ring.view().x, ring.idx() as f64 * SWATCH::pitch);
+        }
+    }
+
     // keys: the first Tab reaches the volume slider, and its ring shows (focus-visible)
     assert!(!app.get_slider_focus_ring());
     tab(&app);
@@ -312,8 +322,35 @@ fn the_specimen_holds_every_control_and_state() {
     assert_eq!(app.get_rest_value(), 0.0);
     key(&app, Key::PageUp);
     assert_eq!(app.get_rest_value(), 10.0, "Page: a tenth of the range");
-    // a click focuses without the ring
+    // a quick drag, released before a frame: the value it lands on is reported
     let volume = role_of(&app, "Tab volume", AccessibleRole::Slider);
+    let (p, size) = (volume.absolute_position(), volume.size());
+    let at = |f: f32| LogicalPosition::new(p.x + size.width * f, p.y + size.height / 2.0);
+    for e in [
+        WindowEvent::PointerPressed {
+            position: at(0.3),
+            button: PointerEventButton::Left,
+        },
+        WindowEvent::PointerMoved { position: at(0.8) },
+        WindowEvent::PointerReleased {
+            position: at(0.8),
+            button: PointerEventButton::Left,
+        },
+    ] {
+        app.window().dispatch_event(e);
+    }
+    mock_elapsed_time(std::time::Duration::from_millis(16));
+    let landed = app.get_rest_value();
+    assert!(
+        landed > 10.0,
+        "the release's value reached the setting: {landed}"
+    );
+    assert_eq!(
+        volume.accessible_value(),
+        Some(SharedString::from(format!("{landed}"))),
+        "the slider and the setting agree"
+    );
+    // a click focuses without the ring
     let seg = role_of(&app, "Space", AccessibleRole::TabList);
     seg.mock_single_click(PointerEventButton::Left);
     assert!(!app.get_slider_focus_ring());
@@ -323,9 +360,11 @@ fn the_specimen_holds_every_control_and_state() {
         !app.get_slider_focus_ring(),
         "a click focuses without the ring"
     );
+    let before = app.get_rest_value();
     key(&app, Key::LeftArrow);
-    assert!(
-        app.get_rest_value() < 100.0,
+    assert_eq!(
+        app.get_rest_value(),
+        before - 1.0,
         "the clicked slider takes keys"
     );
 

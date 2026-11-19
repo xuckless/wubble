@@ -242,6 +242,14 @@ impl Stretch {
         self.s.x
     }
 
+    /// wubble change: the stretched body's transform origin along its travel, its trailing side
+    /// (0.3 moving forward, 0.7 back: the design's `'30% 50%' : '70% 50%'` for the settings
+    /// swatches' ring and tab indicator). The slider's knob takes the leading side, `1 - origin`
+    /// (touch.tsx `'70% 50%' : '30% 50%'`).
+    pub fn origin(&self) -> f64 {
+        if self.dir > 0.0 { 0.3 } else { 0.7 }
+    }
+
     /// wubble change: take `value` as the last one seen without measuring a velocity (a frame
     /// with no time passed: the size jumped, nothing moved at a speed). Returns whether it moved
     /// from a known last value: the caller then keeps its clock running, so the next frame

@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use i_slint_backend_testing::{init_integration_test_with_mock_time, mock_elapsed_time};
 use slint::{ComponentHandle, Model};
+use wubble_core::controls::segmented::key_select;
 use wubble_core::controls::slider::{Cfg, Key};
 use wubble_core::controls::{Ring, Segmented, Slider};
 
@@ -37,9 +38,9 @@ slint::slint! {
             (p.shown-colour.red - 163) / (124 - 163),
             th.shown-opacity, th.shown-width / 1px,
             // the bubble: opacity, scale, lift (px), blur (px)
-            sl.bubble-fade, 0.6 + 0.4 * sl.bubble-rise, 8 * (1 - sl.bubble-rise), 3 * (1 - sl.bubble-fade),
+            sl.bubble-fade, sl.bubble-scale, sl.bubble-lift / 1px, sl.bubble-blur / 1px,
             // the label: opacity, blur (px)
-            sl.label-fade, 3 * (1 - sl.label-fade),
+            sl.label-fade, sl.label-blur / 1px,
         ];
     }
 }
@@ -132,8 +133,11 @@ fn slider_curves(name: &str, report: &mut Vec<String>) {
             if let Some(px) = e["move"].as_f64() {
                 s.drag(px);
             }
-            if e["release"].as_bool() == Some(true) {
-                s.release();
+            // the release asks for a segment; the value comes back and the indicator follows
+            if e["release"].as_bool() == Some(true)
+                && let Some(i) = s.release()
+            {
+                s.set(i);
             }
             if e["key"].as_str() == Some("End") {
                 s.key(Key::End, false);
@@ -171,8 +175,11 @@ fn segmented_curves(report: &mut Vec<String>) {
             if let Some(px) = e["press"].as_f64() {
                 s.press(px, t);
             }
-            if e["release"].as_bool() == Some(true) {
-                s.release();
+            // the release asks for a segment; the value comes back and the indicator follows
+            if e["release"].as_bool() == Some(true)
+                && let Some(i) = s.release()
+            {
+                s.set(i);
             }
         }
         s.step(DT);
@@ -189,13 +196,14 @@ fn segmented_curves(report: &mut Vec<String>) {
 fn swatches_curves(report: &mut Vec<String>) {
     let w = web("swatches");
     let mut r = Ring::new(num(&w, "start") as usize);
-    r.set_count(num(&w, "n") as usize);
+    let n = num(&w, "n") as usize;
     let script = script(&w);
     let mut ours: Vec<Vec<f64>> = vec![vec![]; 3];
     for f in 0..frame_count(&w) {
         for (_, e) in script.iter().filter(|(at, _)| *at == f) {
+            // the key asks for the neighbour; the value comes back and the ring follows it
             if e["key"].as_str() == Some("ArrowRight") {
-                r.key(1);
+                r.set(key_select(r.idx(), n, 1));
             }
         }
         r.step(DT);

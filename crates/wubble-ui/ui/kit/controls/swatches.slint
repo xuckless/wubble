@@ -4,8 +4,9 @@
 // stretches along its travel (volume kept) about its trailing side, the same body as the tab
 // indicator. A dot swells to 1.12 under the pointer; a target presses (`wb-press`). ArrowLeft/
 // Right choose the neighbour. Role radiogroup, each target a radio.
-// The ring's spring is Rust's (`wubble_core::controls::swatches`, the `Controls` registry, kind 3;
-// its count goes through `configure`'s max).
+// The ring's spring is Rust's (`wubble_core::controls::swatches`, the `Controls` registry, kind 3):
+// controlled, as the TSX: a click or a key only asks for a value (`chosen`), and the ring follows
+// `value`. It starts at the chosen swatch (`Controls.segment` places it there) without travelling.
 
 import { Palette } from "../gen/tokens.slint";
 import { SettingsCss } from "../gen/css.slint";
@@ -40,7 +41,6 @@ export component Swatches inherits Rectangle {
 
     init => {
         root.slot = Controls.acquire(3, root.index);
-        Controls.configure(root.slot, 0, root.colours.length, 1);
     }
     changed index => {
         Controls.set-value(root.slot, root.index);
@@ -71,6 +71,9 @@ export component Swatches inherits Rectangle {
             init => {
                 if self.on {
                     root.index = i;
+                    // the ring starts here (a no-op before the slot is acquired: it is then
+                    // acquired at this index)
+                    Controls.segment(root.slot, i, 0, 0);
                 }
             }
             changed on => {
@@ -140,12 +143,13 @@ export component Swatches inherits Rectangle {
             root.tab-focus = false;
         }
         key-pressed(e) => {
-            let code = SliderKeys.code(e.text);
-            if code != 0 && code != 1 {
+            let dir = SliderKeys.dir(e.text);
+            if dir == 0 {
                 return reject;
             }
-            let i = round(Controls.key(root.slot, code, false));
-            if i >= 0 && i < root.colours.length && i != root.index {
+            // the neighbour, clamped at both ends (`segmented::key_select`)
+            let i = Math.clamp(root.index + dir, 0, root.colours.length - 1);
+            if i != root.index {
                 root.chosen(root.colours[i]);
             }
             accept

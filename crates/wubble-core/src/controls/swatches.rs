@@ -3,7 +3,6 @@
 //! along its travel (volume kept), its trailing side as the origin; the same body as the tab
 //! indicator. No lifecycle beyond the spring: the chosen index is the state.
 
-pub use super::segmented::key_select;
 use crate::kit_gen::physics::K;
 use crate::kit_gen::settings::SWATCH;
 use crate::motion::{Spring, Stretch, spring, squash_of, step_k};
@@ -24,8 +23,6 @@ pub struct Ring {
     x: Spring,
     st: Stretch,
     idx: usize,
-    /// How many swatches there are (for the keys).
-    n: usize,
 }
 
 impl Ring {
@@ -34,23 +31,20 @@ impl Ring {
             x: spring(idx as f64 * SWATCH::pitch),
             st: Stretch::new(),
             idx,
-            n: idx + 1,
         }
     }
 
-    pub fn set_count(&mut self, n: usize) {
-        self.n = n;
-    }
-
-    /// ArrowLeft (`dir` < 0) or ArrowRight: the neighbour, clamped.
-    pub fn key(&mut self, dir: i32) -> usize {
-        self.idx = key_select(self.idx, self.n, dir);
-        self.idx
-    }
-
-    /// A swatch chosen (a click, a key, the setting): the ring travels there.
+    /// The value chose a swatch (a click, a key, the setting): the ring travels there. The
+    /// control is controlled, as the TSX's: only the value moves the ring; a key or a click
+    /// only asks for a value (the neighbour is `segmented::key_select`).
     pub fn set(&mut self, idx: usize) {
         self.idx = idx;
+    }
+
+    /// The chosen swatch was laid out (the control appeared): the ring starts there, as the
+    /// TSX's `spring(idx * SWATCH.pitch)`, without travelling.
+    pub fn place(&mut self, idx: usize) {
+        *self = Self::new(idx);
     }
 
     pub fn idx(&self) -> usize {
@@ -68,7 +62,7 @@ impl Ring {
             x: self.x.x,
             scale_x: sx,
             scale_y: squash_of(sx),
-            origin: if self.st.dir > 0.0 { 0.3 } else { 0.7 },
+            origin: self.st.origin(),
         }
     }
 }
@@ -105,13 +99,14 @@ mod tests {
     }
 
     #[test]
-    fn keys_clamp_at_both_ends() {
-        assert_eq!(key_select(0, 6, -1), 0);
-        assert_eq!(key_select(5, 6, 1), 5);
-        assert_eq!(key_select(3, 6, 1), 4);
+    fn placing_starts_the_ring_at_its_swatch_without_travel() {
         let mut r = Ring::new(0);
-        r.set_count(3);
-        assert_eq!((r.key(1), r.key(1), r.key(1)), (1, 2, 2));
-        assert_eq!(r.key(-1), 1);
+        r.place(3);
+        assert_eq!((r.idx(), r.view().x), (3, 3.0 * SWATCH::pitch));
+        assert!(!r.step(DT), "already there");
+        // a later value travels
+        r.set(1);
+        assert!(r.step(DT));
+        assert!(r.view().x > SWATCH::pitch);
     }
 }

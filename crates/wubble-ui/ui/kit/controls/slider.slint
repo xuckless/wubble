@@ -29,6 +29,11 @@ export global SliderKeys {
             : text == Key.DownArrow ? 3 : text == Key.PageUp ? 4 : text == Key.PageDown ? 5
             : text == Key.Home ? 6 : text == Key.End ? 7 : -1;
     }
+    // ArrowLeft -1, ArrowRight +1, else 0 (`Key::dir`): the segmented control's and the
+    // swatches' keys
+    public pure function dir(text: string) -> int {
+        return text == Key.LeftArrow ? -1 : text == Key.RightArrow ? 1 : 0;
+    }
 }
 
 export component ElasticSlider inherits VerticalLayout {
@@ -59,6 +64,12 @@ export component ElasticSlider inherits VerticalLayout {
     out property <float> bubble-fade: bub-op.t;
     out property <float> bubble-rise: bub-tr.t;
     out property <float> label-fade: out-fade.t;
+    // what the bubble and the label draw from those (`.tp-sl-bub b`: scale, rise, blur; the
+    // label's blur), read by the curve tests
+    out property <float> bubble-scale: TouchCss.tp-sl-bub-b--transform-scale + (1 - TouchCss.tp-sl-bub-b--transform-scale) * bub-tr.t;
+    out property <length> bubble-lift: TouchCss.tp-sl-bub-b--transform-translatey * (1 - bub-tr.t);
+    out property <length> bubble-blur: TouchCss.tp-sl-bub-b--filter-blur * (1 - bub-op.t);
+    out property <length> label-blur: TouchCss.tp-sl-wrap-held-tp-sl-label-output--filter-blur * (1 - out-fade.t);
 
     property <int> slot: -1;
     property <ControlView> v: Controls.view(root.slot);
@@ -142,7 +153,7 @@ export component ElasticSlider inherits VerticalLayout {
                 vertical-alignment: center;
             }
             Rectangle {
-                backdrop-blur: TouchCss.tp-sl-wrap-held-tp-sl-label-output--filter-blur * (1 - out-fade.t);
+                backdrop-blur: root.label-blur;
                 visible: out-fade.t > 0 && out-fade.t < 1;
             }
         }
@@ -225,14 +236,14 @@ export component ElasticSlider inherits VerticalLayout {
             transform-rotation: (root.live ? root.v.lean : 0) * 1deg;
             transform-origin: { x: self.width / 2, y: self.height * TouchCss.tp-sl-bub--origin-y };
             b := Rectangle {
-                y: TouchCss.tp-sl-bub-b--transform-translatey * (1 - bub-tr.t);
+                y: root.bubble-lift;
                 width: Math.max(TouchCss.tp-sl-bub-b--min-width, bub-text.preferred-width + TouchCss.tp-sl-bub-b--padding-left + TouchCss.tp-sl-bub-b--padding-right);
                 height: bub-text.preferred-height + TouchCss.tp-sl-bub-b--padding-top + TouchCss.tp-sl-bub-b--padding-bottom;
                 border-radius: TouchCss.tp-sl-bub-b--border-radius;
                 background: TouchCss.tp-sl-bub-b--background;
                 opacity: bub-op.t;
                 transform-origin: { x: self.width / 2, y: self.height * TouchCss.tp-sl-bub-b--origin-y };
-                transform-scale: TouchCss.tp-sl-bub-b--transform-scale + (1 - TouchCss.tp-sl-bub-b--transform-scale) * bub-tr.t;
+                transform-scale: root.bubble-scale;
                 bub-text := KitText {
                     // `<b class="wb-mono">`
                     role: { family: Fonts.mono, size: Role.tp-sl-bub-b.size, weight: Role.tp-sl-bub-b.weight, line-height: Role.tp-sl-bub-b.line-height };
@@ -242,7 +253,7 @@ export component ElasticSlider inherits VerticalLayout {
                     vertical-alignment: center;
                 }
                 Rectangle {
-                    backdrop-blur: TouchCss.tp-sl-bub-b--filter-blur * (1 - bub-op.t);
+                    backdrop-blur: root.bubble-blur;
                     visible: bub-op.t > 0 && bub-op.t < 1;
                 }
             }
@@ -288,9 +299,14 @@ export component ElasticSlider inherits VerticalLayout {
                         keys.focus();
                         Controls.press(root.slot, self.mouse-x);
                     }
-                    // the values were reported while held; the knob springs to the last one
+                    // the values were reported while held; the knob springs to the last one, which
+                    // is reported here too (the `changed shown` of the last frame may run after
+                    // the release, when `held` is already false)
                     if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
-                        Controls.release(root.slot);
+                        let landed = Controls.release(root.slot);
+                        if landed >= 0 && landed != root.value {
+                            root.edited(landed);
+                        }
                     }
                 }
                 moved => {

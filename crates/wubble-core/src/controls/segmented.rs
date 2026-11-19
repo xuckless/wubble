@@ -230,11 +230,13 @@ impl Segmented {
     }
 
     /// The segment it lands on, if it was held: the nearest to the flung indicator after a
-    /// drag, the one under the pointer after a press (none when it missed every segment).
+    /// drag, the one under the pointer after a press (none when it missed every segment). Only
+    /// a candidate: the control is controlled (the TSX's `onChange`), so the indicator goes
+    /// there when the caller's value comes back through [`Segmented::set`].
     pub fn release(&mut self) -> Option<usize> {
         let (s, fx) = transition(self.s, Event::Release);
         self.s = s;
-        let chosen = match fx? {
+        match fx? {
             Effect::Fling => {
                 let centre = self.x.x + self.w.x / 2.0 + self.vel.get().0 * SEG::fling;
                 self.segs
@@ -247,17 +249,12 @@ impl Segmented {
                     .map(|(i, _)| i)
             }
             Effect::Pick { x } => self.segs.iter().position(|s| x >= s.0 && x <= s.0 + s.1),
-        };
-        if let Some(i) = chosen {
-            self.selected = i;
         }
-        chosen
     }
 
-    /// ArrowLeft/Right: the neighbour, which the indicator springs to.
-    pub fn key(&mut self, dir: i32) -> usize {
-        self.selected = key_select(self.selected, self.segs.len(), dir);
-        self.selected
+    /// ArrowLeft/Right: the neighbour to ask for (a candidate, as [`Segmented::release`]).
+    pub fn key(&self, dir: i32) -> usize {
+        key_select(self.selected, self.segs.len(), dir)
     }
 
     pub fn step(&mut self, dt: f64) -> bool {
@@ -390,6 +387,8 @@ mod tests {
         assert_eq!(key_select(0, 0, 1), 0);
         let mut s = seg3();
         assert_eq!(s.key(1), 1);
+        assert_eq!(s.view().selected, 0, "a key only asks");
+        s.set(1);
         s.step(DT);
         let v = s.view();
         assert!(
@@ -408,6 +407,10 @@ mod tests {
         s.press(150.0, 0.0);
         assert_eq!(s.release(), Some(2));
         assert_eq!(s.release(), None, "released once");
+        // controlled: the indicator stays until the value comes back
+        settle(|| s.step(DT));
+        assert_eq!((s.view().left, s.view().selected), (4.0, 0));
+        s.set(2);
         s.step(DT);
         assert!(s.view().left > 4.0 && s.view().left < 124.0);
         settle(|| s.step(DT));

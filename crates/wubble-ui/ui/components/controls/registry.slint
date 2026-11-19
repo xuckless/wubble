@@ -36,7 +36,8 @@ export global Controls {
     callback set-value(int, float);
     // The slider's travel, px.
     callback resize(int, length);
-    // The segmented control's segment `i` laid out at (left, width), px.
+    // The segmented control's segment `i` laid out at (left, width), px; the swatches' chosen
+    // swatch `i` laid out (the ring starts on it).
     callback segment(int, int, length, length);
     // Pointer along the travel, px; `t` the time base the toggle measures its fling with.
     callback press(int, length);
@@ -48,8 +49,8 @@ export global Controls {
     // controls kit B: the slider's value domain (min, max, step), as the TSX props.
     callback configure(int, float, float, float);
     // A key on the control (code: 0 Left, 1 Right, 2 Up, 3 Down, 4 PageUp, 5 PageDown, 6 Home,
-    // 7 End; Shift): the value it now reports (slider: the snapped value; segmented, swatches:
-    // the index chosen; only Left and Right move those).
+    // 7 End; Shift): the value it now reports (slider: the snapped value; segmented: the index
+    // it asks for, which only Left and Right move; the value stays the caller's).
     callback key(int, int, bool) -> float;
 
     public pure function view(slot: int) -> ControlView {

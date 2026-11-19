@@ -159,42 +159,24 @@ impl Controls {
     }
 
     fn configure(&mut self, id: i32, min: f32, max: f32, step: f32) {
-        match self.slot(id) {
-            Some(Slot::Slider(s)) => {
-                s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)))
-            }
-            // the swatches' count is their `max`
-            Some(Slot::Swatches(r)) => r.set_count(max.max(0.0) as usize),
-            _ => {}
+        if let Some(Slot::Slider(s)) = self.slot(id) {
+            s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)));
         }
         self.write(id);
     }
 
-    /// A key on a control: the value it now reports (see `Controls.key`).
+    /// A key on a control: the value it reports (see `Controls.key`): the slider's snapped
+    /// value, the segment a segmented control asks for (its value stays the caller's).
     fn key(&mut self, id: i32, code: i32, shift: bool) -> f32 {
-        let dir = match Key::from_code(code) {
-            Some(Key::Left) => -1,
-            Some(Key::Right) => 1,
-            _ => 0,
-        };
-        let v = match (self.slot(id), Key::from_code(code)) {
-            (Some(Slot::Slider(s)), Some(k)) => {
-                s.key(k, shift);
+        let key = Key::from_code(code);
+        let v = match self.slot(id) {
+            Some(Slot::Slider(s)) => {
+                if let Some(k) = key {
+                    s.key(k, shift);
+                }
                 s.view().value
             }
-            (Some(Slot::Segmented(s)), _) => {
-                if dir != 0 {
-                    s.key(dir);
-                }
-                s.view().selected as f64
-            }
-            (Some(Slot::Swatches(r)), _) => {
-                if dir != 0 {
-                    r.key(dir);
-                }
-                r.idx() as f64
-            }
-            (Some(Slot::Slider(s)), None) => s.view().value,
+            Some(Slot::Segmented(s)) => s.key(key.and_then(Key::dir).unwrap_or(0)) as f64,
             _ => -1.0,
         };
         self.write(id);
@@ -202,8 +184,13 @@ impl Controls {
     }
 
     fn segment(&mut self, id: i32, i: i32, left: f32, width: f32) {
-        if let (Some(Slot::Segmented(s)), Ok(i)) = (self.slot(id), usize::try_from(i)) {
-            s.set_segment(i, f64::from(left), f64::from(width));
+        match (self.slot(id), usize::try_from(i)) {
+            (Some(Slot::Segmented(s)), Ok(i)) => {
+                s.set_segment(i, f64::from(left), f64::from(width))
+            }
+            // the chosen swatch laid out: the ring starts on it
+            (Some(Slot::Swatches(r)), Ok(i)) => r.place(i),
+            _ => {}
         }
         self.write(id);
     }
@@ -382,6 +369,7 @@ pub fn bump(window: &AppWindow) {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use wubble_core::kit_gen::settings::SWATCH;
 
     #[test]
     fn slots_are_reused_after_a_sweep_frees_the_dead() {
@@ -406,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_reach_the_slider_in_its_domain_and_the_swatches_clamp() {
+    fn keys_reach_the_slider_in_its_domain_and_the_segmented_only_asks() {
         let mut c = Controls::new();
         let id = c.acquire(Slot::Slider(Slider::new(110.0, 240.0, Cfg::default())));
         c.configure(id, 50.0, 200.0, 10.0);
@@ -415,12 +403,29 @@ mod tests {
         assert_eq!(c.key(id, 1, true), 200.0, "Shift: ten steps, clamped");
         assert_eq!(c.key(id, 6, false), 50.0, "Home");
         assert_eq!(c.views.row_data(0).unwrap().value, 50.0);
+        let seg = c.acquire(Slot::Segmented(Segmented::new(0)));
+        for i in 0..3 {
+            c.segment(seg, i, i as f32 * 60.0, 60.0);
+        }
+        assert_eq!(c.key(seg, 0, false), 0.0, "clamped at the first");
+        assert_eq!(c.key(seg, 1, false), 1.0, "ArrowRight asks for the next");
+        assert_eq!(
+            c.key(seg, 1, false),
+            1.0,
+            "and the value stays the caller's"
+        );
+        assert_eq!(c.views.row_data(1).unwrap().value, 0.0);
+        c.set_value(seg, 2.0);
+        assert_eq!(c.key(seg, 1, false), 2.0, "clamped at the last");
+        assert_eq!(c.key(seg, 4, false), 2.0, "PageUp moves no segment");
         let sw = c.acquire(Slot::Swatches(Ring::new(0)));
-        c.configure(sw, 0.0, 3.0, 1.0);
-        assert_eq!(c.key(sw, 0, false), 0.0, "clamped at the first");
-        assert_eq!((c.key(sw, 1, false), c.key(sw, 1, false)), (1.0, 2.0));
-        assert_eq!(c.key(sw, 1, false), 2.0, "clamped at the last");
-        assert_eq!(c.key(sw, 4, false), 2.0, "PageUp moves no swatch");
+        c.segment(sw, 2, 0.0, 0.0);
+        let v = c.views.row_data(2).unwrap();
+        assert_eq!(
+            (v.value, v.x),
+            (2.0, (2.0 * SWATCH::pitch) as f32),
+            "placed, not travelling"
+        );
     }
 
     #[test]

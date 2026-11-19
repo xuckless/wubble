@@ -88,6 +88,15 @@ impl Key {
         .get(usize::try_from(code).ok()?)
         .copied()
     }
+    /// ArrowLeft -1, ArrowRight +1: the direction the segmented control and the swatches step
+    /// (they take no other key).
+    pub fn dir(self) -> Option<i32> {
+        match self {
+            Key::Left => Some(-1),
+            Key::Right => Some(1),
+            _ => None,
+        }
+    }
 }
 
 /// The value a key asks for, before the snap: arrows one step (Shift: ten), Page a tenth of the
@@ -406,7 +415,7 @@ impl Slider {
             x: self.x.x,
             scale_x: sx * k,
             scale_y: squash_of(sx) * k,
-            origin: if self.st.dir > 0.0 { 0.7 } else { 0.3 },
+            origin: 1.0 - self.st.origin(),
             bubble_x: self.bx.x,
             lean: clamp(
                 (self.bx.x - clamp(self.x.x, 0.0, self.w)) * SLIDER::lean,
@@ -475,6 +484,10 @@ mod tests {
         assert_eq!(Key::from_code(7), Some(Key::End));
         assert_eq!(Key::from_code(8), None);
         assert_eq!(Key::from_code(-1), None);
+        assert_eq!(
+            (Key::Left.dir(), Key::Right.dir(), Key::Home.dir()),
+            (Some(-1), Some(1), None)
+        );
     }
 
     #[test]

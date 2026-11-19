@@ -12,7 +12,7 @@ use i_slint_backend_testing::{
 };
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize};
-use wubble_ui::{AppWindow, VideoView};
+use wubble_ui::{AppWindow, SidebarMode, VideoView};
 
 fn button(app: &AppWindow, label: &str) -> ElementHandle {
     let mut found: Vec<_> = ElementHandle::find_by_accessible_label(app, label)
@@ -40,6 +40,9 @@ fn the_pip_controls_and_card_name_their_buttons_and_send_intents() {
     // The Pip window: the controls show while the pointer is over the window.
     let pip = AppWindow::new().unwrap();
     pip.set_window_kind(3);
+    // as the host opens one (`WindowFactory::open`: Little, Popup and Pip windows show their
+    // page alone, the sidebar hidden, so no seam lies over the controls)
+    pip.set_sidebar_mode(SidebarMode::Hidden);
     pip.window().set_size(LogicalSize::new(400.0, 225.0));
     assert!(pip.get_pip());
     pip.set_video(VideoView {
