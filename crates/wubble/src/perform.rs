@@ -95,7 +95,12 @@ pub fn plan(action: Action, model: &Model) -> Plan {
     let find = |event| visible.map_or(Plan::Nothing, |_| Plan::Find(event));
     let builtin = |b| visible.map_or(Plan::Nothing, |_| Plan::Builtin(b));
     match action {
-        Action::NewTab => Plan::Model(Command::OpenCommandBar),
+        // the start page (TODO.md Decided "Start page"); its search capsule opens the bar
+        Action::NewTab => Plan::Model(Command::NewTab {
+            url: InternalPage::Start.url().into(),
+            container: None,
+            opener: None,
+        }),
         Action::CloseTab => on_visible(Command::CloseTab),
         Action::ReopenClosedTab => Plan::ReopenClosed,
         Action::FocusAddress => Plan::FocusAddress,
@@ -389,7 +394,11 @@ mod tests {
         }
         assert_eq!(
             plan(Action::NewTab, &m),
-            Plan::Model(Command::OpenCommandBar)
+            Plan::Model(Command::NewTab {
+                url: "wubble://start".into(),
+                container: None,
+                opener: None,
+            })
         );
         assert_eq!(plan(Action::ReopenClosedTab, &m), Plan::ReopenClosed);
         assert_eq!(plan(Action::FocusAddress, &m), Plan::FocusAddress);

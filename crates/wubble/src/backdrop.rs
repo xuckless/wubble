@@ -18,13 +18,20 @@ use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
+use wubble_core::start::living::Living;
+use wubble_core::start::rand::Rng;
+use wubble_core::tab::TabId;
 use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
     Backdrop, Beam, GlassRect, Governor, OverLayer, PageBlur, PagePane, Quality, Rect, Renderer,
-    SceneOptions, Signal, Tier, out_size, view_of,
+    SceneOptions, Signal, StartCard, Tier, out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
-use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassOver, GlassTier};
+use wubble_ui::{
+    AppWindow, GlassItem, GlassKeys, GlassLayer, GlassOver, GlassTier, Radius, StartBridge,
+};
+
+use crate::host::start::{self, StagePointer, StartHost};
 
 /// Set to `slint` to force the Slint-only glass (by hand, to see the fallback).
 pub const GLASS_ENV: &str = "WUBBLE_GLASS";
@@ -107,6 +114,8 @@ pub struct SceneHost {
     run: crate::run_state::Runner,
     /// Wakes the window when the page blur is due later (`PageBlur::After`: the ambience's rate).
     page_wake: slint::Timer,
+    /// The start pages' bubbles (host/start.rs); the scene's living layer while one shows.
+    start: StartHost,
 }
 
 /// Why the scene is off, or the scene. `forced` is the [`GLASS_ENV`] value, `scene` the
@@ -161,6 +170,12 @@ pub fn choose(gpu: &GpuContext, window: &AppWindow, scene: bool) -> Glass {
                 image_error_logged: false,
                 run: Default::default(),
                 page_wake: slint::Timer::default(),
+                // `--frozen-backdrop`: the same bubble on every run
+                start: StartHost::new(if crate::shot::frozen_backdrop() {
+                    0
+                } else {
+                    start_nonce()
+                }),
             }))
         }
         Err(reason) => {
@@ -240,6 +255,14 @@ pub fn to_rect(item: &GlassItem, keys: &Keys) -> GlassRect {
             .find(|l| keys.layers[l.index()] == item.layer),
         alpha: item.alpha,
     }
+}
+
+/// A start page nonce for this run: its bubbles differ from the last run's.
+fn start_nonce() -> u64 {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    u64::from(std::process::id()).rotate_left(32) ^ t.as_nanos() as u64
 }
 
 /// The scene's tier of the Slint mirror (`GlassTier`, model.slint). Exhaustive, and checked
@@ -350,6 +373,8 @@ impl Glass {
             && let Some(t) = tint
         {
             s.renderer.scene.set_palette(dye(t).map(rgb01));
+            // the start page's liquid takes the Space's dye too (pages/start.tsx:29-33)
+            s.renderer.set_start_palette(dye(t).map(rgb01));
             s.tint = tint;
         }
         // the driver owns the beam's lap (wubble_core::beam); the scene draws this frame's shape
@@ -374,6 +399,7 @@ impl Glass {
         };
         let full_rate = steady && s.run.state() == RunState::Running;
         let interval = since.filter(|_| full_rate);
+        s.start_frame(window, since);
         match s.renderer.before_rendering(window.window(), now, pace) {
             // new textures only (first frame, resize, a layer's glass appearing or gone): see
             // `Renderer::before_rendering`
@@ -441,6 +467,50 @@ impl Glass {
         }
     }
 
+    /// Which start tab the window shows (`None`: none) and which tabs still exist
+    /// (`StartHost::sync`); the scene's living layer comes and goes with it.
+    pub fn start_sync(
+        &mut self,
+        window: &AppWindow,
+        shown: Option<TabId>,
+        alive: impl Fn(TabId) -> bool,
+    ) {
+        let Glass::Scene(s) = self else {
+            return;
+        };
+        let was = s.start.shown();
+        s.start.sync(shown, alive);
+        if shown.is_none() {
+            s.renderer.start_end();
+        }
+        if was != shown {
+            s.run.wake_if_still(window);
+            window.window().request_redraw();
+        }
+    }
+
+    /// The start page's stage pointer.
+    pub fn start_pointer(&mut self, window: &AppWindow, p: StagePointer) {
+        if let Glass::Scene(s) = self {
+            let out = s.start.pointer(p, Instant::now());
+            s.apply_start(window, out);
+            s.run.wake_if_still(window);
+        }
+    }
+
+    /// The start page's layer is up with its W field: the bubble is drawn (the start smoke's).
+    pub fn start_ready(&self) -> bool {
+        matches!(self, Glass::Scene(s) if s.renderer.has_wfield() && s.renderer.start_shown())
+    }
+
+    /// The shown start page's bubble (the start smoke's checks).
+    pub fn start_living(&self) -> Option<&Living<Rng>> {
+        match self {
+            Glass::Scene(s) => s.start.living(),
+            Glass::SlintOnly => None,
+        }
+    }
+
     /// The pointer moved, in logical px.
     pub fn pointer_move(&mut self, x: f32, y: f32) {
         if let Glass::Scene(s) = self {
@@ -467,6 +537,51 @@ impl Glass {
 }
 
 impl SceneHost {
+    /// The start page's frame, before the scene renders: the bubble stepped by the frame's time
+    /// (the fixed clock under `--frozen-backdrop`) at the page card's size, its effects applied,
+    /// the W field handed over once it is computed, and the frame to draw.
+    fn start_frame(&mut self, window: &AppWindow, since: Option<Duration>) {
+        if self.start.shown().is_none() {
+            return;
+        }
+        let frozen = crate::shot::frozen_backdrop();
+        let (w, h) = (window.get_content_width(), window.get_content_height());
+        let size = (f64::from(w), f64::from(h));
+        let reduced = wubble_core::motion::reduced();
+        // `--frozen-backdrop`: the web capture's scene time, whatever the frame count
+        let out = if frozen {
+            self.start.frame_frozen(size, reduced, start::FROZEN_AT)
+        } else {
+            self.start
+                .frame(size, reduced, since.map_or(0.0, |d| d.as_secs_f64()))
+        };
+        self.apply_start(window, out);
+        if let Some((rgba, n)) = self.start.take_wfield() {
+            self.renderer.set_wfield(&rgba, n);
+        }
+        let card = StartCard {
+            rect: Rect::new(window.get_content_x(), window.get_content_y(), w, h),
+            radius: if window.get_page_fullscreen() {
+                0.0
+            } else {
+                window.global::<Radius>().get_md()
+            },
+        };
+        if let Some(l) = self.start.living() {
+            self.renderer.start_frame(start::draw_of(l, card, frozen));
+        }
+    }
+
+    /// What the start page did: its liquid's effects, the stage's cursor.
+    fn apply_start(&mut self, window: &AppWindow, out: start::Out) {
+        for fx in out.fx {
+            self.renderer.start_effect(fx);
+        }
+        if let Some(grabbing) = out.grabbing {
+            window.global::<StartBridge>().set_grabbing(grabbing);
+        }
+    }
+
     /// The page blur's verdict now (`PageBlur`): whether the next frame builds it, else arms the
     /// wake-up for when it is due (the ambience's rate). Nothing while a page fills the window.
     fn schedule_pages(&mut self, window: &AppWindow, now: Instant, covered: bool) -> bool {

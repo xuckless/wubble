@@ -61,9 +61,10 @@
 //!   the other frames redraw the glass over them. `before_rendering` does not ask for the
 //!   next frame itself; [`Renderer::animating`] says whether it wants one.
 //!
-//! Left out: the design's start page (bubble, pops, minis, soft body, voice
-//! glow, W field: `bubble.wgsl`, `pop.wgsl`, `wfield.rs`, `softbody.rs`,
-//! `minis.rs`, `voice.rs` in the bucket) and its overlay mode. glass.wgsl is
+//! The start page (`wubble://start`) has its own living layer while it shows (`start.rs`: the
+//! design's liquid at the page card's size, the bubble and pop passes, `bubble.wgsl`,
+//! `pop.wgsl`); its physics (soft body, minis, W field) are `wubble_core::start`'s. Left out:
+//! the voice glow and the overlay mode. glass.wgsl is
 //! the design's with the voice uniforms sent as zero, plus one branch:
 //! `uMaterial` 2, the flat fill of [`Quality::Flat`].
 
@@ -71,6 +72,7 @@ pub mod pages;
 mod quality;
 mod render;
 pub mod run;
+mod start;
 mod state;
 
 pub use pages::{OverLayer, PageBlur, PageBlurIn, PageRect, by_layer, overlaps, page_blur};
@@ -84,6 +86,7 @@ pub use render::{
     AMBIENCE_HZ, AMBIENCE_LEVEL, AMBIENCE_STRENGTH, BLUR_SIGMA, DPR_MAX, Frame, GLASS_PAD,
     PYRAMID_DIV, PagePane, Renderer, ambience_every, out_size, readback_rgba8, view_of,
 };
+pub use start::{BubbleDraw, PopDraw, RING_N, StartCard, StartDraw, StartFx};
 pub use state::{
     Backdrop, Beam, Blob, FluidOptions, GlassRect, GlassSurface, MAX_GLASS, Rect, Rng, STILL_DYE,
     Scene, SceneOptions, Tier, film_level, hex, still_blobs, surface_of,

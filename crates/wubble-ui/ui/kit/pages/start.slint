@@ -2,33 +2,140 @@
 // The start page's front (wubble://start, the new-tab page): the heading, the search capsule and
 // the site tiles over the living bubble. The bubble, its minis and the liquid are the scene's
 // (wubble_core::start::Living drives them, the scene's bubble and pop passes draw them): this
-// page is transparent so they show through, and the `wb-start` ground is the scene's.
+// page is transparent so they show through, and the `wb-start` ground is the scene's. The stage
+// (the web's canvas) is the TouchArea under the front: presses the front's widgets leave reach
+// it, as `.wb-start-front { pointer-events: none }` lets them through to the canvas; its cursor
+// is the canvas's (`pointer`, `grabbing` while the body is held: core/living.ts:29, 58, 64).
 //
-// Slots (marked `SLOT` below), filled by the lanes that own the parts:
-// - SLOT search capsule (L3 SearchCapsule): a GlassPanel + PressableButton stand-in with the
-//   design's geometry; the kit capsule replaces the whole `search` element.
-// - SLOT site tile (L3 Button look): PressableButton's .97 press; the design's icon hover 1.08
-//   (.45 s spring) and active (1.1, .88) squash are not drawn yet.
-// - SLOT entrances (L2 OverlapLayer `delay` + `duration`): OverlapLayer staggers by
-//   `Motion.overlapStagger * index` over 240 ms. The design's delays are 40 / 80 / 120 + 30 i ms
-//   over .4 / .4 / .36 s (wb-in, with a 4 px blur Slint cannot draw). The tiles land exactly
-//   (index = 120 / 30 + i); the heading (30 ms) and search (90 ms) are the nearest steps.
-// - SLOT icon by name (L8): the legacy `Icon` with `IconPaths.search`.
+// Slots, each behind ONE component boundary with the design's geometry, filled by the lanes
+// that own the looks:
+// - SLOT search capsule (L3 SearchCapsule): `StartSearch`, a GlassPanel + PressableButton
+//   stand-in (54 high, radius 27, padding 20, gap 12, min(520, 100%)).
+// - SLOT site tile (L3 Button look): `StartTile`, PressableButton's .97 press; the design's icon
+//   hover 1.08 (.45 s spring) and active (1.1, .88) at .12 s are not drawn yet.
+// Entrances: OverlapLayer with the design's delays and durations (start.css `wb-in`: heading
+// 40 ms / .4 s, search 80 ms / .4 s, tile i 120 + 30 i ms / .36 s), blur included (OverlapLook).
 
-import { Palette, Fonts, Type } from "../gen/tokens.slint";
+import { Palette } from "../gen/tokens.slint";
 import { StartCss } from "../gen/css.slint";
 import { StartGen } from "../gen/literals.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
 import { GlassPanel } from "../material/glass.slint";
 import { PressableButton } from "../controls/button.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
 import { OverlapLayer } from "../motion/overlap.slint";
-import { Icon, IconPaths } from "../../components/icon.slint";
 import { GlassTier } from "../../components/model.slint";
 
-// A site on the start page: the shell's own favourites / top sites (wubble's data and wording).
+// A site on the start page: the shell's own favourites (wubble's data and wording).
 export struct StartSite {
     title: string,
     url: string,
     favicon: image,
+}
+
+// The host's side of the start page (wubble host/start.rs): what it shows, and the stage's
+// pointer and the front's intents back. One page shows at a time, so one bridge per window.
+export global StartBridge {
+    in property <[StartSite]> sites;
+    in property <string> shortcut;
+    // the body is held: the stage's cursor
+    in property <bool> grabbing;
+    // the search capsule's centre, window coordinates (where the start smoke clicks)
+    in-out property <length> search-x;
+    in-out property <length> search-y;
+    callback search-clicked(length, length);
+    callback site-activated(string);
+    // page-local logical px
+    callback stage-down(length, length);
+    callback stage-move(length, length);
+    callback stage-up();
+    callback stage-leave();
+}
+
+// SLOT search capsule (L3 SearchCapsule): the `wb-start-search` button.
+component StartSearch inherits PressableButton {
+    in property <string> placeholder;
+    in property <string> shortcut;
+    // `width: min(520px, 100%)`: the button's own layout would shrink it to its content
+    in property <length> capsule-width;
+    padding-x: 0px;
+    border-radius: StartCss.wb-start-search--border-radius;
+    background: transparent;
+    label: root.placeholder;
+    Rectangle {
+        min-width: root.capsule-width;
+        GlassPanel {
+            tier: GlassTier.thin;
+            radius: StartCss.wb-start-search--border-radius;
+            hover: root.hovered;
+            pressed: root.pressed;
+            focused: root.keyboard-focused;
+        }
+        HorizontalLayout {
+            padding-left: StartCss.wb-start-search--padding-left;
+            padding-right: StartCss.wb-start-search--padding-right;
+            spacing: StartCss.wb-start-search--gap;
+            Icon {
+                y: (parent.height - self.height) / 2;
+                path: Glyph.search;
+                size: StartGen.search-icon;
+                tint: root.hovered ? StartCss.wb-start-search-hover--color : StartCss.wb-start-search--color;
+            }
+            KitText {
+                role: Role.wb-start-search;
+                horizontal-stretch: StartCss.wb-start-search-span--flex;
+                vertical-alignment: center;
+                text: root.placeholder;
+                color: root.hovered ? StartCss.wb-start-search-hover--color : StartCss.wb-start-search--color;
+            }
+            // `<kbd class="wb-mono">`
+            KitText {
+                role: Role.wb-mono;
+                font-size: StartCss.wb-start-search-kbd--font-size;
+                vertical-alignment: center;
+                text: root.shortcut;
+                color: StartCss.wb-start-search-kbd--color;
+            }
+        }
+    }
+}
+
+// SLOT site tile (L3 Button look): one `wb-start-site` button, its icon and its name.
+component StartTile inherits PressableButton {
+    in property <StartSite> site;
+    padding-x: 0px;
+    background: transparent;
+    label: root.site.title;
+    VerticalLayout {
+        spacing: StartCss.wb-start-site--gap;
+        alignment: start;
+        HorizontalLayout {
+            alignment: center;
+            GlassPanel {
+                width: StartCss.wb-start-site-icon--width;
+                height: StartCss.wb-start-site-icon--height;
+                tier: GlassTier.thin;
+                radius: self.width * StartCss.wb-start-site-icon--border-radius;
+                hover: root.hovered;
+                pressed: root.pressed;
+                Image {
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    width: StartGen.favicon;
+                    height: StartGen.favicon;
+                    source: root.site.favicon;
+                }
+            }
+        }
+        KitText {
+            role: Role.wb-start-site;
+            text: root.site.title;
+            horizontal-alignment: center;
+            overflow: elide;
+            color: root.hovered ? StartCss.wb-start-site-hover--color : StartCss.wb-start-site--color;
+        }
+    }
 }
 
 export component StartPage inherits Rectangle {
@@ -40,9 +147,18 @@ export component StartPage inherits Rectangle {
     in property <string> shortcut;
     // false while the page is covered: the parts leave, and enter again staggered
     in property <bool> shown: true;
+    // the body is held (the stage's cursor)
+    in property <bool> grabbing;
     // the capsule's centre in window coordinates (the command bar grows from it)
     callback search-clicked(length, length);
-    callback site-activated(int);
+    callback site-activated(string);
+    out property <length> search-x: search.absolute-position.x + search.width / 2;
+    out property <length> search-y: search.absolute-position.y + search.height / 2;
+    // the stage's pointer, page-local logical px
+    callback stage-down(length, length);
+    callback stage-move(length, length);
+    callback stage-up();
+    callback stage-leave();
 
     // @media (max-height: 560px): higher up, tighter, no tiles
     property <bool> compact: root.height <= StartGen.compact-max;
@@ -54,9 +170,29 @@ export component StartPage inherits Rectangle {
     property <length> tile: StartCss.wb-start-site--width;
     property <length> col-gap: StartCss.wb-start-sites--gap-column;
     property <int> per-row: max(1, floor((root.inner + root.col-gap) / (root.tile + root.col-gap)));
-    property <length> tile-height: StartCss.wb-start-site-icon--height + StartCss.wb-start-site--gap + Type.label.size * Type.label.line-height;
+    property <length> tile-height: StartCss.wb-start-site-icon--height + StartCss.wb-start-site--gap + Role.wb-start-site.size * Role.wb-start-site.line-height;
 
     background: transparent;
+
+    // the stage: the web's canvas under the front (`.wb-start-stage`, inset 0)
+    stage := TouchArea {
+        mouse-cursor: root.grabbing ? MouseCursor.grabbing : MouseCursor.pointer;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down && e.button == PointerEventButton.left {
+                root.stage-down(self.mouse-x, self.mouse-y);
+            } else if e.kind == PointerEventKind.move {
+                root.stage-move(self.mouse-x, self.mouse-y);
+            } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) || e.kind == PointerEventKind.cancel {
+                // `pointerup` and `pointercancel` (living.ts onUp)
+                root.stage-up();
+            }
+        }
+        changed has-hover => {
+            if !self.has-hover {
+                root.stage-leave();
+            }
+        }
+    }
 
     front := VerticalLayout {
         x: root.pad-x;
@@ -68,71 +204,35 @@ export component StartPage inherits Rectangle {
 
         OverlapLayer {
             shown: root.shown;
-            index: 1;
+            delay: StartCss.wb-start-h1--animation-delay;
+            duration: StartCss.wb-start-h1--animation-duration;
             height: h1.preferred-height;
-            h1 := Text {
+            // `<h1 class="wb-display">`
+            h1 := KitText {
+                role: Role.display;
                 width: parent.width;
                 text: root.heading;
                 horizontal-alignment: center;
                 color: Palette.ink;
-                font-family: Fonts.display;
-                font-weight: Type.display.weight;
                 // clamp(30px, 4vw, 44px)
                 font-size: clamp(root.width * StartGen.heading-vw / 100, StartCss.wb-start-h1--font-size-min, StartCss.wb-start-h1--font-size-max);
             }
         }
 
-        // SLOT search capsule (L3)
         OverlapLayer {
             shown: root.shown;
-            index: 3;
+            delay: StartCss.wb-start-search--animation-delay;
+            duration: StartCss.wb-start-search--animation-duration;
             height: StartCss.wb-start-search--height;
-            search := PressableButton {
+            search := StartSearch {
                 x: (parent.width - root.search-width) / 2;
                 width: root.search-width;
+                capsule-width: root.search-width;
                 height: parent.height;
-                padding-x: 0px;
-                border-radius: StartCss.wb-start-search--border-radius;
-                background: transparent;
-                label: root.placeholder;
+                placeholder: root.placeholder;
+                shortcut: root.shortcut;
                 clicked => {
-                    root.search-clicked(self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height / 2);
-                }
-                Rectangle {
-                    min-width: root.search-width;
-                    GlassPanel {
-                        tier: GlassTier.thin;
-                        radius: StartCss.wb-start-search--border-radius;
-                        hover: search.hovered;
-                        pressed: search.pressed;
-                        focused: search.keyboard-focused;
-                    }
-                    HorizontalLayout {
-                        padding-left: StartCss.wb-start-search--padding-left;
-                        padding-right: StartCss.wb-start-search--padding-right;
-                        spacing: StartCss.wb-start-search--gap;
-                        Icon {
-                            y: (parent.height - self.height) / 2;
-                            path: IconPaths.search;
-                            size: StartGen.search-icon;
-                            tint: search.hovered ? StartCss.wb-start-search-hover--color : StartCss.wb-start-search--color;
-                        }
-                        Text {
-                            horizontal-stretch: StartCss.wb-start-search-span--flex;
-                            vertical-alignment: center;
-                            text: root.placeholder;
-                            color: search.hovered ? StartCss.wb-start-search-hover--color : StartCss.wb-start-search--color;
-                            font-family: Fonts.ui;
-                            font-size: StartCss.wb-start-search--font-size;
-                        }
-                        Text {
-                            vertical-alignment: center;
-                            text: root.shortcut;
-                            color: StartCss.wb-start-search-kbd--color;
-                            font-family: Fonts.mono;
-                            font-size: StartCss.wb-start-search-kbd--font-size;
-                        }
-                    }
+                    root.search-clicked(root.search-x, root.search-y);
                 }
             }
         }
@@ -147,49 +247,17 @@ export component StartPage inherits Rectangle {
                 property <int> in-row: min(root.per-row, root.sites.length - self.at-row * root.per-row);
                 property <length> row-width: self.in-row * root.tile + (self.in-row - 1) * root.col-gap;
                 shown: root.shown;
-                // the tiles' delay is 120 + 30 i ms: OverlapLayer's 30 ms steps land on it exactly
-                index: round(StartGen.site-delay / StartGen.site-stagger) + i;
+                // `animationDelay: 120 + i * 30 ms` over start.css's .36 s
+                delay: StartGen.site-delay + StartGen.site-stagger * i;
+                duration: StartCss.wb-start-site--animation-duration;
                 x: (sites.width - self.row-width) / 2 + self.at-col * (root.tile + root.col-gap);
                 y: StartCss.wb-start-sites--margin-top + self.at-row * (root.tile-height + StartCss.wb-start-sites--gap-row);
                 width: root.tile;
                 height: root.tile-height;
-                // SLOT site tile (L3)
-                tile := PressableButton {
-                    padding-x: 0px;
-                    background: transparent;
-                    label: site.title;
+                StartTile {
+                    site: site;
                     clicked => {
-                        root.site-activated(i);
-                    }
-                    VerticalLayout {
-                        spacing: StartCss.wb-start-site--gap;
-                        alignment: start;
-                        HorizontalLayout {
-                            alignment: center;
-                            GlassPanel {
-                                width: StartCss.wb-start-site-icon--width;
-                                height: StartCss.wb-start-site-icon--height;
-                                tier: GlassTier.thin;
-                                radius: self.width * StartCss.wb-start-site-icon--border-radius;
-                                hover: tile.hovered;
-                                pressed: tile.pressed;
-                                Image {
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    width: StartGen.favicon;
-                                    height: StartGen.favicon;
-                                    source: site.favicon;
-                                }
-                            }
-                        }
-                        Text {
-                            text: site.title;
-                            horizontal-alignment: center;
-                            overflow: elide;
-                            color: tile.hovered ? StartCss.wb-start-site-hover--color : StartCss.wb-start-site--color;
-                            font-family: Fonts.ui;
-                            font-size: StartCss.wb-start-site--font-size;
-                        }
+                        root.site-activated(site.url);
                     }
                 }
             }
