@@ -201,7 +201,6 @@ components/status-bubble.slint	text	Text	2
 components/status-bubble.slint	token	Fonts	2
 components/status-bubble.slint	token	Motion	3
 components/status-bubble.slint	token	Palette	4
-components/swipe-chip.slint	token	Palette	2
 components/toast.slint	animate	animate	2
 components/toast.slint	font	font-family	1
 components/toast.slint	font	font-size	1
