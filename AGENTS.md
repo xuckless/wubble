@@ -87,8 +87,8 @@ worktree without `target/` and `.git`; clippy needs `rustup component add clippy
 
 Window smokes need a GUI session: over ssh they hang creating the window, so always
 wrap them in `timeout`. Console smoke loop: log in at the Mac console as `pixlbot`
-(fast user switching; the toolchain and `~/wubble-b6` are that user's), open Terminal,
-`cd ~/wubble-b6 && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
+(fast user switching; the toolchain and `~/wubble-main` are that user's), open Terminal,
+`cd ~/wubble-main && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
 (above), then:
 
     for s in boot nav tabs session frames=120 split page settings pages autofill windows media video boost builtins quit block parity; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s > /tmp/wubble-$s.log 2>&1; echo "exit $?"; grep -E '^smoke|panicked|^wubble:' /tmp/wubble-$s.log; done; pgrep -fl MacOS/wubble
