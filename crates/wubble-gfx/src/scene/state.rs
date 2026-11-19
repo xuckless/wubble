@@ -6,8 +6,8 @@
 //! `GlassSurface`, `Beam`, `FluidOptions`, `SceneOptions`, `wave_uniforms`),
 //! `softbody.rs` (`Wave`, `push_wave`, `age_waves`), `minis.rs` (`Rng`) and
 //! `browser/chrome.tsx` (the address bar's loading beam curve). Owner's code.
-//! Left out: bubbles, pops, `stir`, the voice glow and overlay mode (the
-//! deferred start page and web overlay layer).
+//! Left out: `stir`, the voice glow and overlay mode. The bubbles and pops are drawn from the
+//! start page's frame (`start.rs`), not kept here; `pop_push` is `Scene.pop`'s liquid half.
 
 use super::pages::OverLayer;
 
@@ -753,7 +753,8 @@ impl Scene {
     }
 
     /// `Scene.ripple`: a wave ring through the backdrop and an outward push in the liquid.
-    fn ripple(&mut self, x: f32, y: f32, reach: f32, strength: f32) {
+    /// wubble: also the start page's (`start::apply`).
+    pub(super) fn ripple(&mut self, x: f32, y: f32, reach: f32, strength: f32) {
         self.ripples.push(Ripple {
             x,
             y,
@@ -770,6 +771,19 @@ impl Scene {
                 y: 1.0 - y / self.h,
                 strength: 1100.0 * strength,
                 radius: 0.01,
+            });
+        }
+    }
+
+    /// `Scene.pop`'s push in the liquid for a pop of radius `r` at (x, y), logical px (the pop
+    /// itself is drawn from the start page's frame). wubble: the start page's (`start::apply`).
+    pub(super) fn pop_push(&mut self, x: f32, y: f32, r: f32) {
+        if self.w > 0.0 && !self.still() {
+            self.push_op(FluidOp::Ripple {
+                x: x / self.w,
+                y: 1.0 - y / self.h,
+                strength: super::start::POP_PUSH,
+                radius: (r / self.w * super::start::POP_PUSH_K).max(super::start::POP_PUSH_MIN),
             });
         }
     }
