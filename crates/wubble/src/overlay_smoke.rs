@@ -93,6 +93,10 @@ pub struct Seen {
     pub gutter: [f32; 3],
     /// Inside the checked panel's glass, when the step checks one and it is there.
     pub panel: Option<[f32; 3]>,
+    /// The scene's image of the checked panel's layer is on screen (`over-*` in app.slint): the
+    /// panel's own fill is transparent while the scene draws its glass, so without the image
+    /// the sharp page shows through with the page's hue as well.
+    pub layer_image: bool,
     /// The page blur's build count.
     pub builds: u64,
 }
@@ -154,6 +158,11 @@ pub fn check(step: &Step, seen: &Seen, notes: Notes) -> Result<Notes, String> {
         }
         Check::Hue(panel, want) => {
             let rgb = seen.panel.ok_or(format!("no {panel:?} glass on screen"))?;
+            if !seen.layer_image {
+                return Err(format!(
+                    "the scene's glass of the {panel:?}'s layer is not on screen"
+                ));
+            }
             let (hue, chroma) = hue_of(rgb);
             if chroma >= MIN_CHROMA && hue_close(hue, want, HUE_TOLERANCE) {
                 Ok(notes)
@@ -212,6 +221,7 @@ mod tests {
         let seen = |gutter, panel| Seen {
             gutter,
             panel,
+            layer_image: true,
             builds: 3,
         };
         let base = check(&STEPS[0], &seen([60.0, 60.0, 80.0], None), Notes::default()).unwrap();
@@ -225,6 +235,12 @@ mod tests {
         assert!(check(menu, &seen([0.0; 3], Some([90.0, 100.0, 140.0])), base).is_err());
         assert!(check(menu, &seen([0.0; 3], Some([128.0, 128.0, 130.0])), base).is_err());
         assert!(check(menu, &seen([0.0; 3], None), base).is_err());
+        // the page's red through a panel with no scene glass under it
+        let bare = Seen {
+            layer_image: false,
+            ..seen([0.0; 3], Some([224.0, 24.0, 24.0]))
+        };
+        assert!(check(menu, &bare, base).is_err());
         let bar = &STEPS[3];
         assert!(check(bar, &seen([0.0; 3], Some([120.0, 210.0, 130.0])), base).is_ok());
         // the build count holds or fails

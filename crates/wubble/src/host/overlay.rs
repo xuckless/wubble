@@ -7,7 +7,7 @@ use std::time::Duration;
 use slint::ComponentHandle;
 use wubble_core::seam::SidebarMode;
 use wubble_gfx::scene::AMBIENCE_STRENGTH;
-use wubble_ui::{AppWindow, GlassKeys};
+use wubble_ui::{AppWindow, GlassKeys, GlassLayer};
 
 use super::{Host, snapshot};
 use crate::menu::{self, Menu};
@@ -184,8 +184,16 @@ impl Host {
         );
         // the window's glass between the sidebar and the page, beside the page's red part
         let gutter = pixels::mean_rgb(&shot, region(cx - 6.0, cy + ch * 0.55, 4.0, ch * 0.3))?;
+        let mut layer_image = false;
         let panel = match step.check {
             overlay_smoke::Check::Hue(panel, _) => {
+                // the scene's image of the panel's layer, as app.slint shows it
+                let image = match panel {
+                    Panel::Menu => window.get_over_top(),
+                    Panel::Bar => window.get_over_card(),
+                    Panel::Peek => window.get_over_peek(),
+                };
+                layer_image = window.global::<GlassLayer>().get_over_on() && image.size().width > 0;
                 let keys = window.global::<GlassKeys>();
                 let key = match panel {
                     Panel::Menu => keys.get_menu(),
@@ -213,6 +221,7 @@ impl Host {
         Ok(Seen {
             gutter,
             panel,
+            layer_image,
             builds: self.w.glass.borrow().pages_built().unwrap_or(0),
         })
     }

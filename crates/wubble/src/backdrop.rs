@@ -24,7 +24,7 @@ use wubble_gfx::scene::{
     SceneOptions, Signal, Tier, out_size, view_of,
 };
 use wubble_gfx::{GfxError, GpuContext};
-use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassTier};
+use wubble_ui::{AppWindow, GlassItem, GlassKeys, GlassLayer, GlassOver, GlassTier};
 
 /// Set to `slint` to force the Slint-only glass (by hand, to see the fallback).
 pub const GLASS_ENV: &str = "WUBBLE_GLASS";
@@ -180,6 +180,9 @@ pub struct Keys {
     pub favourites: i32,
     /// The first overlay's key: every overlay's is at least this.
     pub overlays: i32,
+    /// `GlassItem.layer` of each [`OverLayer`], by [`OverLayer::index`] (`GlassOver`): Slint
+    /// holds the numbers.
+    pub layers: [i32; 3],
 }
 
 impl Keys {
@@ -190,6 +193,14 @@ impl Keys {
             address: k.get_address(),
             favourites: k.get_favourites(),
             overlays: k.get_overlays(),
+            layers: {
+                let o = window.global::<GlassOver>();
+                OverLayer::ALL.map(|l| match l {
+                    OverLayer::Card => o.get_card(),
+                    OverLayer::Peek => o.get_peek(),
+                    OverLayer::Top => o.get_top(),
+                })
+            },
         }
     }
 
@@ -224,7 +235,9 @@ pub fn to_rect(item: &GlassItem, keys: &Keys) -> GlassRect {
         shadow: keys.shadow(item.key),
         // the beam runs round the address pill's glass
         beam: item.key == keys.address,
-        layer: OverLayer::from_index(item.layer),
+        layer: OverLayer::ALL
+            .into_iter()
+            .find(|l| keys.layers[l.index()] == item.layer),
         alpha: item.alpha,
     }
 }
@@ -583,6 +596,7 @@ mod tests {
         address: 1,
         favourites: 100,
         overlays: 1_000_000,
+        layers: [1, 2, 3],
     };
 
     #[test]

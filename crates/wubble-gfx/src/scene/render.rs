@@ -1121,9 +1121,9 @@ impl Renderer {
             page.bg.tex.as_image_copy(),
             py.bg.tex.size(),
         );
-        let binds: Vec<wgpu::BindGroup> = self
-            .pages
-            .clone()
+        // moved out while `self` binds, put back below
+        let pages = std::mem::take(&mut self.pages);
+        let binds: Vec<wgpu::BindGroup> = pages
             .iter()
             .map(|p| {
                 let (tw, th) = (p.texture.width().max(1), p.texture.height().max(1));
@@ -1143,6 +1143,7 @@ impl Renderer {
                 self.bind(&self.p.page, &[Res::U(u.0, u.1), Res::Tex(2, &view)])
             })
             .collect();
+        self.pages = pages;
         {
             let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("wubble scene pages"),

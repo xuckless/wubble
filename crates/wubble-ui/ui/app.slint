@@ -1210,6 +1210,18 @@ export component AppWindow inherits Window {
             width: Chrome.inset + sidebar.width;
             height: parent.height;
 
+            // The scene's glass of the peek (GlassOver.peek), over the page, under the peek
+            // panel's glow ring (the panel has no fill of its own then) and the sidebar's content:
+            // window-sized, so placed back at the window's origin.
+            if root.over-on && root.over-peek.width > 0: Image {
+                x: -zone.x;
+                y: -zone.y;
+                width: root.width;
+                height: root.height;
+                source: root.over-peek;
+                image-fit: fill;
+            }
+
             // the peek's own glass (.wb-side-peek: thick, radius 20)
             GlassPanel {
                 x: sidebar.x;
@@ -1227,17 +1239,6 @@ export component AppWindow inherits Window {
                     radius: Radius.lg;
                     strength: root.peek-glow;
                 }
-            }
-
-            // The scene's glass of the peek (GlassOver.peek), over the page, under the sidebar's
-            // content: window-sized, so placed back at the window's origin.
-            if root.over-on && root.over-peek.width > 0: Image {
-                x: -zone.x;
-                y: -zone.y;
-                width: root.width;
-                height: root.height;
-                source: root.over-peek;
-                image-fit: fill;
             }
 
             sidebar := Sidebar {

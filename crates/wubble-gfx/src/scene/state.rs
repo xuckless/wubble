@@ -411,6 +411,31 @@ pub(super) enum FluidOp {
 
 /// Most glass surfaces drawn (each takes a 256-byte uniform slice).
 pub const MAX_GLASS: usize = 64;
+
+/// wubble: the panels [`Scene::set_glass`] keeps, in order: all of them up to [`MAX_GLASS`];
+/// past it every overlay's first (an overlay has no Slint fill of its own while the scene draws
+/// its glass), then the ones under the page back to front (the window's glass leads them).
+fn kept(rects: &[GlassRect]) -> Vec<&GlassRect> {
+    let mut over = rects
+        .iter()
+        .filter(|g| g.layer.is_some())
+        .count()
+        .min(MAX_GLASS);
+    let mut under = MAX_GLASS - over;
+    rects
+        .iter()
+        .filter(|g| {
+            let left = if g.layer.is_some() {
+                &mut over
+            } else {
+                &mut under
+            };
+            let keep = *left > 0;
+            *left = left.saturating_sub(1);
+            keep
+        })
+        .collect()
+}
 /// Most queued fluid ops kept while the backdrop is not rendered (Cached or
 /// Flat quality); the oldest go first.
 const MAX_OPS: usize = 64;
@@ -535,10 +560,10 @@ impl Scene {
     pub fn set_glass(&mut self, rects: &[GlassRect]) {
         let mut old = std::mem::take(&mut self.glass).into_iter();
         self.touched.clear();
-        self.beam_at = rects.iter().take(MAX_GLASS).position(|g| g.beam);
-        self.glass = rects
-            .iter()
-            .take(MAX_GLASS)
+        let kept = kept(rects);
+        self.beam_at = kept.iter().position(|g| g.beam);
+        self.glass = kept
+            .into_iter()
             .map(|g| {
                 let new = surface_of(g);
                 self.touched.push(new.film > 0.0);
@@ -1026,6 +1051,16 @@ mod tests {
         let many = vec![rect(0.0, 0.0, 10.0, 10.0); MAX_GLASS + 5];
         s.set_glass(&many);
         assert_eq!(s.glass.len(), MAX_GLASS);
+        // full of favourites: an overlay past the cap is kept, the last ones under the page go
+        let mut crowded = many.clone();
+        crowded.push(GlassRect {
+            layer: Some(OverLayer::Top),
+            ..rect(1.0, 2.0, 30.0, 40.0)
+        });
+        s.set_glass(&crowded);
+        assert_eq!(s.glass.len(), MAX_GLASS);
+        assert_eq!(s.glass[MAX_GLASS - 1].layer, Some(OverLayer::Top));
+        assert!(s.glass[..MAX_GLASS - 1].iter().all(|g| g.layer.is_none()));
     }
 
     #[test]

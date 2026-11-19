@@ -27,16 +27,6 @@ pub enum OverLayer {
 impl OverLayer {
     pub const ALL: [OverLayer; 3] = [OverLayer::Card, OverLayer::Peek, OverLayer::Top];
 
-    /// The Slint `GlassItem.layer` value (`GlassOver`, model.slint): 0 is under the page.
-    pub fn from_index(i: i32) -> Option<OverLayer> {
-        match i {
-            1 => Some(OverLayer::Card),
-            2 => Some(OverLayer::Peek),
-            3 => Some(OverLayer::Top),
-            _ => None,
-        }
-    }
-
     pub const fn index(self) -> usize {
         match self {
             OverLayer::Card => 0,
@@ -180,16 +170,6 @@ mod tests {
             [vec![0usize, 2], vec![3], vec![5], vec![1, 4]]
         );
         assert!(by_layer(&[]).iter().all(Vec::is_empty));
-    }
-
-    #[test]
-    fn the_slint_layer_index_maps_both_ways() {
-        assert_eq!(OverLayer::from_index(0), None);
-        assert_eq!(OverLayer::from_index(4), None);
-        for (n, l) in OverLayer::ALL.into_iter().enumerate() {
-            assert_eq!(OverLayer::from_index(n as i32 + 1), Some(l));
-            assert_eq!(l.index(), n);
-        }
     }
 
     const MS: fn(u64) -> Duration = Duration::from_millis;
