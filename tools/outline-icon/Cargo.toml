@@ -1,0 +1,16 @@
+# One-off tool, not a workspace member: writes the Linux symbolic icon
+# (`assets/icons/linux/hicolor/symbolic/apps/wubble-symbolic.svg`) from the mark's strokes,
+# outlined into single-colour fills (GTK recolours fills only).
+#   ~/Dev/wubble-wt/cargo.sh run --manifest-path tools/outline-icon/Cargo.toml
+[package]
+name = "outline-icon"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Stroke outlining (`kurbo::stroke`); MIT OR Apache-2.0.
+kurbo = "0.13"
