@@ -1,16 +1,12 @@
-import { GlassKeys, GlassOver } from "model.slint";
 import { AErrorPanel } from "../kit/overlay/a/a-error-panel.slint";
 
-// The error panel over the page: a failed load ("This site can't be reached", Reload), a refused
-// certificate ("Your connection is not private", Go back, and Proceed only where allowed) or a
-// crashed page (Reload). Fills its parent (the content area) on thick glass, so the page under it
-// gets no input; a centred column like Chromium's error and interstitial pages. Derived from the
-// kit (notes/fidelity/wubble-only.md; the design has no error page): the Error page
-// (kit/overlay/a/a-error-panel.slint), the settings page's roles, kit Buttons, the detail in a
-// Fold. Enter is the primary button (Go back on a certificate panel: proceeding is never the
-// default). Its interface is the kit body's: `error`, `primary()`, `secondary()`, `take-focus()`.
-export component ErrorPanel inherits AErrorPanel {
-    // the scene draws its glass above the page (GlassPanel `over-layer`)
-    key: GlassKeys.error;
-    layer: GlassOver.card;
-}
+// The error page in place of the page: a failed load ("This site can't be reached", Reload), a
+// refused certificate ("Your connection is not private", Go back, and Proceed only where allowed)
+// or a crashed page (Reload). Fills its parent (the content area) on the settings page's opaque
+// ground, so the page under it is hidden and gets no input; a centred column like Chromium's
+// error and interstitial pages. Derived from the kit (notes/fidelity/wubble-only.md; the design
+// has no error page): the Error page (kit/overlay/a/a-error-panel.slint), the settings page's
+// ground and roles, kit Buttons, the detail in a Fold. Enter is the primary button (Go back on a
+// certificate panel: proceeding is never the default). Its interface is the kit body's: `error`,
+// `primary()`, `secondary()`, `take-focus()`.
+export component ErrorPanel inherits AErrorPanel { }

@@ -1,37 +1,36 @@
-// derived: GlassPanel thick, OverlapLayer, KitText title/body/st-path-wb-mono, Fold (motion/fold.slint), Button pri/ghost, Icon
-// The error page over the page (wubble-only.md: error and certificate-error pages): the content
-// area on thick glass (so the page under it gets no input), a centred column in the settings
-// page's roles: the design's globe in mist (a refused certificate: the lock in coral), the title
-// in the title role, the summary in the body role, mist; the technical detail in the mono role,
-// haze, folded away under a ghost "Details" button on its own line (kit Fold; a certificate panel
-// opens with it unfolded); then a kit Button row: the primary (Reload, Go back) and a ghost secondary. The
-// glass fades in with the sheets' 220 ms; the column arrives by Overlap. Enter is the primary
+// derived: the settings page's ground (kit/settings/page.slint, Palette.web), OverlapLayer, KitText title/body/st-path-wb-mono, Fold (motion/fold.slint), Button pri/ghost, Icon
+// The error page in place of the page (wubble-only.md: error and certificate-error pages): the
+// content area on the settings page's opaque ground (the page under it is hidden and gets no
+// input; no glass), a centred column in the settings page's roles and inks: the design's globe in
+// mist (a refused certificate: the lock in coral), the title in the title role (the row title's
+// ink), the summary in the body role (the row note's mist); the technical detail in the mono role
+// and the path's ink, folded away under a ghost "Details" button on its own line (kit Fold; a
+// certificate panel opens with it unfolded); then a kit Button row: the primary (Reload, Go
+// back) and a ghost secondary. The ground fades in with the sheets' 220 ms; the column arrives
+// by Overlap. Enter is the primary
 // (Go back on a certificate panel: proceeding is never the default).
 // derived (notes/fidelity/derived-review.md "Error page"): the column (440 wide, a third down,
 // gap 12), the 40 px icon, the Details fold.
 
 import { Palette, Space, Motion } from "../../gen/tokens.slint";
+import { SettingsCss } from "../../gen/css.slint";
 import { Role } from "../../gen/text.slint";
 import { Shell } from "../../derived.slint";
 import { KitText } from "../../text.slint";
-import { GlassPanel } from "../../material/glass.slint";
 import { Tween } from "../../motion/tween.slint";
 import { Fold } from "../../motion/fold.slint";
 import { OverlapLayer } from "../../motion/overlap.slint";
 import { Icon, Glyph } from "../../controls/icon.slint";
 import { Button, ButtonKind } from "../../controls/button.slint";
-import { ErrorView, GlassTier, GlassOver } from "../../../components/model.slint";
+import { ErrorView } from "../../../components/model.slint";
 
 export component AErrorPanel inherits Rectangle {
     in property <ErrorView> error;
-    in property <int> key: -1;
-    in property <int> layer: GlassOver.card;
     callback primary();
     callback secondary();
     out property <bool> open: root.error.open;
     out property <bool> details-open;
     out property <float> progress: tw.t;
-    out property <bool> glass-present: glass.item.present;
 
     // each error opens with its detail folded, a certificate's unfolded
     changed error => {
@@ -52,7 +51,7 @@ export component AErrorPanel inherits Rectangle {
         out-easing: Motion.ease-in-out;
     }
 
-    // The exit is seen: drawn until the glass has faded; only the open panel answers.
+    // The exit is seen: drawn until the ground has faded; only the open panel answers.
     visible: root.open || tw.t > 0;
 
     TouchArea {
@@ -74,13 +73,9 @@ export component AErrorPanel inherits Rectangle {
         }
     }
 
-    glass := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
-        key: root.key;
-        over-layer: root.layer;
-        tier: GlassTier.thick;
-        radius: 0px;
-        over-content: true;
+    // `.st-page`'s ground: the page under it is replaced, not frosted
+    Rectangle {
+        background: Palette.web;
         opacity: tw.t;
 
         OverlapLayer {
@@ -99,13 +94,13 @@ export component AErrorPanel inherits Rectangle {
                 KitText {
                     role: Role.title;
                     text: root.error.title;
-                    color: Palette.ink;
+                    color: SettingsCss.st-row-title--color;
                     wrap: word-wrap;
                 }
                 KitText {
                     role: Role.body;
                     text: root.error.summary;
-                    color: Palette.mist;
+                    color: SettingsCss.st-row-note--color;
                     wrap: word-wrap;
                 }
                 // the fold's toggle on its own line: the row below keeps at most two buttons
@@ -127,7 +122,7 @@ export component AErrorPanel inherits Rectangle {
                         width: parent.width;
                         role: Role.st-path-wb-mono;
                         text: root.error.detail;
-                        color: Palette.haze;
+                        color: SettingsCss.st-path-wb-mono--color;
                         wrap: word-wrap;
                     }
                 }
