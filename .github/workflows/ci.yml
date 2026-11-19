@@ -87,17 +87,6 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ninja -y --no-progress
 
-      # Windows has no rpath: test binaries run from target/debug/deps (or, with
-      # cargo 1.100's build-dir layout, target/debug/build/<pkg>/<hash>/out) and
-      # need libcef.dll, which cef-dll-sys copies three levels above its OUT_DIR:
-      # target/debug under the old layout, target/debug/build under the new one
-      # (see .cargo/config.toml for the Linux rpath doing the same).
-      - name: Put libcef.dll on PATH (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cygpath -w "$PWD/target/debug/build" >> "$GITHUB_PATH"
-          cygpath -w "$PWD/target/debug" >> "$GITHUB_PATH"
-
       # Restore and save are split so the download is stored even when a later
       # step fails (actions/cache alone saves only on success).
       - name: Restore prebuilt CEF
@@ -114,10 +103,31 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # Test binaries load libcef at run time. The copy cef-dll-sys makes beside
+      # the target (target/debug/build under cargo 1.100's layout, where the
+      # rpath in .cargo/config.toml points) is a loose file that rust-cache
+      # prunes when it saves, and the build script is not rerun on a cache hit,
+      # so a warm run has none. Load CEF from where the build script unpacked it
+      # instead: CEF_PATH/<version>/cef_<os>_<arch>, which Clippy has filled by
+      # now even on a cold CEF cache. macOS tests do not load the framework.
+      - name: Put CEF on the loader path
+        if: runner.os != 'macOS'
+        run: |
+          lib=$(find "$CEF_PATH" \( -name libcef.so -o -name libcef.dll \) -print -quit)
+          if [ -z "$lib" ]; then echo "no libcef under $CEF_PATH"; exit 1; fi
+          dir=$(dirname "$lib")
+          echo "CEF at $dir"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cygpath -w "$dir" >> "$GITHUB_PATH"
+          else
+            echo "LD_LIBRARY_PATH=$dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          fi
+
       # Headless GPU tests skip themselves when the runner has no adapter. No
       # step here opens a window or measures speed: smoke modes are run by hand.
+      # Every crate's tests run, so one failing crate does not hide the rest.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       - name: Build
         run: cargo build --workspace

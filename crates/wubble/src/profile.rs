@@ -61,9 +61,11 @@ mod tests {
     #[test]
     fn the_cli_profile_wins() {
         let default = || -> Option<PathBuf> { panic!("not looked up") };
+        // absolute on every OS (`/p` is not on Windows, where it gains the current drive)
+        let dir = std::env::temp_dir().join("p");
         assert_eq!(
-            choose(Some("/p".into()), default),
-            Some(Profile { dir: "/p".into() })
+            choose(Some(dir.clone()), default),
+            Some(Profile { dir })
         );
         assert_eq!(
             choose(None, || Some("/data/wubble".into())),
@@ -84,7 +86,8 @@ mod tests {
     #[test]
     fn the_cli_downloads_folder_wins() {
         let default = || -> Option<PathBuf> { panic!("not looked up") };
-        assert_eq!(choose_dir(Some("/dl".into()), default), Some("/dl".into()));
+        let dl = std::env::temp_dir().join("dl");
+        assert_eq!(choose_dir(Some(dl.clone()), default), Some(dl));
         assert_eq!(
             choose_dir(None, || Some("/home/u/Downloads".into())),
             Some("/home/u/Downloads".into())
