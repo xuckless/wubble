@@ -625,9 +625,9 @@ impl Scene {
     // @source slint-render-emitters (render.rs `advance`, split in two)
     /// The per-frame CPU part of `Scene.frame` that runs whether or not the
     /// backdrop is rendered: time, glass waves, palette crossfade, light lag,
-    /// and ripple ageing.
-    pub(super) fn advance(&mut self, dt: f32) {
-        self.time += dt;
+    /// and ripple ageing. `pace` (0 to 1, `run::pace`) slows only the scene's clock.
+    pub(super) fn advance(&mut self, dt: f32, pace: f32) {
+        self.time += dt * pace;
         for g in &mut self.glass {
             age_waves(&mut g.waves, dt.into());
         }
@@ -785,10 +785,10 @@ mod tests {
         let mut s = sized();
         let target = [hex(0xFFFFFF); 3];
         s.set_palette(target);
-        s.advance(0.1);
+        s.advance(0.1, 1.0);
         assert!(s.palette[0][0] < 0.9, "no jump");
         for _ in 0..12 {
-            s.advance(1.0 / 20.0);
+            s.advance(1.0 / 20.0, 1.0);
         }
         // 0.7 s at rate 5: within 3% of the target
         for c in s.palette {
@@ -799,6 +799,19 @@ mod tests {
     }
 
     #[test]
+    fn pace_scales_the_clock_and_nothing_else() {
+        let mut s = sized();
+        s.tap(1.0, 1.0);
+        s.advance(0.5, 0.0);
+        // a frozen liquid: the clock stands, the tap wave still ages at the real rate
+        assert_eq!(s.time, 0.0);
+        assert!((s.ripples[0].age - 0.5).abs() < 1e-6);
+        s.advance(0.5, 0.5);
+        assert!((s.time - 0.25).abs() < 1e-6, "{}", s.time);
+        assert!(s.ripples.is_empty() || (s.ripples[0].age - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn ripples_cap_at_eight_and_age_out() {
         let mut s = sized();
         for i in 0..10 {
@@ -806,7 +819,7 @@ mod tests {
         }
         assert_eq!(s.ripples.len(), 8);
         assert_eq!(s.ripples[0].x, 2.0);
-        s.advance(1.2);
+        s.advance(1.2, 1.0);
         assert!(s.ripples.is_empty());
     }
 
@@ -860,9 +873,9 @@ mod tests {
         // wubble: the film rim eases in from where it was (200 ms) instead of snapping
         assert_eq!(s.glass[1].film, 0.0);
         assert!(s.animating());
-        s.advance(0.1);
+        s.advance(0.1, 1.0);
         assert!((s.glass[1].film - 0.5).abs() < 1e-6);
-        s.advance(0.2);
+        s.advance(0.2, 1.0);
         assert_eq!(s.glass[1].film, 1.0);
         assert!(
             s.ripples.is_empty(),
@@ -944,7 +957,7 @@ mod tests {
         assert_eq!(s.ops.len(), 9);
         for _ in 0..100 {
             s.tap(1.0, 1.0);
-            s.advance(1.0 / 60.0);
+            s.advance(1.0 / 60.0, 1.0);
         }
         assert_eq!(s.ops.len(), MAX_OPS);
         // queued ops first, then 5 emitters; no pointer yet
@@ -968,7 +981,7 @@ mod tests {
         s.pointer_leave();
         assert_eq!(s.fluid_ops(0.0).len(), 5);
         // the light follows with a lag
-        s.advance(1.0 / 60.0);
+        s.advance(1.0 / 60.0, 1.0);
         assert!(s.light[0] > 0.0 && s.light[0] < 130.0);
     }
 }

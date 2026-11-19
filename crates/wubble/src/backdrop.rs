@@ -259,18 +259,25 @@ impl Glass {
             .renderer
             .output()
             .is_none_or(|t| (t.width(), t.height()) != (size.width, size.height));
+        // the scene's own motion starting (a beam lap, a Space's palette) wakes a liquid that
+        // has come to a stop, as input does; a page's frames do not
+        let tint = active_tint(window);
+        if window.get_address_beam().strength > 0.0 || (tint.is_some() && tint != s.tint) {
+            s.run.wake_if_dozing(window);
+        }
+        let since = s
+            .renderer
+            .last_frame()
+            .map(|t| now.saturating_duration_since(t));
         if !scene_due(
             s.run.state(),
             window.get_page_fullscreen(),
             glass.is_some() || resized,
-            s.renderer
-                .last_frame()
-                .map(|t| now.saturating_duration_since(t)),
+            since,
         ) {
             return false;
         }
         crate::measure::count(crate::measure::Count::SceneRender);
-        let tint = active_tint(window);
         if tint != s.tint
             && let Some(t) = tint
         {
@@ -291,15 +298,11 @@ impl Glass {
         // Idle frames are slow on purpose, and the first frame after a change of run state
         // follows a gap (an idle tick, a pause): neither says anything about the frame's load.
         let steady = !s.run.take_changed();
-        let full_rate = steady && s.run.state() == RunState::Running;
-        let interval = s
-            .renderer
-            .last_frame()
-            .map(|t| now.saturating_duration_since(t))
-            .filter(|_| full_rate);
+        let full_rate = steady && matches!(s.run.state(), RunState::Running { .. });
+        let interval = since.filter(|_| full_rate);
         match s
             .renderer
-            .before_rendering(window.window(), now, s.run.max_dt())
+            .before_rendering(window.window(), now, s.run.max_dt(), s.run.pace())
         {
             // a new texture only (first frame, resize): see `Renderer::before_rendering`
             Ok(Some(image)) => window.set_scene(image),
@@ -312,7 +315,9 @@ impl Glass {
         }
         s.govern(window, interval);
         let animating = s.renderer.animating();
-        s.run.frame_done(window, now, animating, glass.is_some());
+        // a changed window size is a change like a changed glass list: it wakes a still liquid
+        s.run
+            .frame_done(window, now, since, animating, glass.is_some() || resized);
         true
     }
 

@@ -560,6 +560,7 @@ impl Renderer {
         window: &slint::Window,
         now: Instant,
         max_dt: f32,
+        pace: f32,
     ) -> Result<Option<slint::Image>, GfxError> {
         let dpr = window.scale_factor();
         let size = window.size().to_logical(dpr);
@@ -567,7 +568,7 @@ impl Renderer {
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        let tex = self.render_under_ui(size.width, size.height, dpr, dt.min(max_dt));
+        let tex = self.render_paced(size.width, size.height, dpr, dt.min(max_dt), pace);
         tex.map(|t| slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string())))
             .transpose()
     }
@@ -576,8 +577,23 @@ impl Renderer {
     /// `dt` seconds and render it into the output texture. Returns the output
     /// texture when it is new (hand it to Slint with `slint::Image::try_from`).
     pub fn render_under_ui(&mut self, w: f32, h: f32, dpr: f32, dt: f32) -> Option<wgpu::Texture> {
+        self.render_paced(w, h, dpr, dt, 1.0)
+    }
+
+    /// [`Renderer::render_under_ui`] with the liquid running at `pace` (0 to 1, `run::pace`) of
+    /// its speed: its clock, its ambient emitters and its fluid step get `dt * pace`, while the
+    /// rest (glass waves, ripples, the palette crossfade, the light) gets the whole `dt`, so a
+    /// tap right after a wake does not play in slow motion.
+    pub fn render_paced(
+        &mut self,
+        w: f32,
+        h: f32,
+        dpr: f32,
+        dt: f32,
+        pace: f32,
+    ) -> Option<wgpu::Texture> {
         let tex = self.resize(w, h, dpr);
-        self.frame(dt);
+        self.frame(dt, pace.clamp(0.0, 1.0));
         tex
     }
 
@@ -680,7 +696,7 @@ impl Renderer {
 
     // @source slint-render-frame
     /// Advance the scene by `dt` seconds and render into `out`.
-    fn frame(&mut self, dt: f32) {
+    fn frame(&mut self, dt: f32, pace: f32) {
         let Some(mut sz) = self.sized.take() else {
             return;
         };
@@ -689,7 +705,7 @@ impl Renderer {
             return;
         }
         self.arena.cpu.clear();
-        self.scene.advance(dt);
+        self.scene.advance(dt, pace);
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -701,7 +717,7 @@ impl Renderer {
             .map(|p| p.begin_query("wubble scene", &mut enc));
         let (vw, vh, t) = (self.scene.w, self.scene.h, self.scene.time);
 
-        if let Some(dt) = self.clock.tick(self.quality, dt, !sz.pyramid.drawn) {
+        if let Some(dt) = self.clock.tick(self.quality, dt * pace, !sz.pyramid.drawn) {
             let f = &mut sz.fluid;
             // 0. splats (queued taps first, then emitters and the pointer: the TS order)
             for op in self.scene.fluid_ops(dt) {
