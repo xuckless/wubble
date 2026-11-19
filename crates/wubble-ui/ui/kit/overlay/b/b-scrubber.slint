@@ -25,31 +25,40 @@ export component BScrubber inherits Rectangle {
     // the slider's track inside it: the slider's height less the track is the label row above
     property <length> track-top: slider.preferred-height - TouchCss.tp-sl--height;
 
-    clip: true;
-    // as high as the strip makes it: the slider's taller box is clipped, never asked for
+    // as high as the strip makes it: the slider's taller box is clipped, never asked for; the
+    // settings row's slider width when the strip has room, less when it has not
     min-height: 0px;
     preferred-height: 0px;
-    // the settings row's slider width when the strip has room, less when it has not
     min-width: 0px;
     preferred-width: SettingsCss.st-slider-tp-sl-wrap--width;
-    for mark in root.marks: Rectangle {
-        x: mark.from * root.width;
-        width: max(TouchCss.tp-sl-rail--height / 4, (mark.to - mark.from) * root.width);
-        y: (root.height - self.height) / 2;
-        height: TouchCss.tp-sl-rail--height;
-        background: mark.colour;
-    }
-    slider := ElasticSlider {
-        compact: true;
-        label: root.label;
-        min: 0;
-        max: root.scale;
-        step: 1;
-        value: root.progress * root.scale;
-        width: root.width;
-        y: (root.height - TouchCss.tp-sl--height) / 2 - root.track-top;
-        edited(v) => {
-            root.seek(v / root.scale);
+
+    // the knob's half reaches past both ends (the slider's own travel): the clip is the strip's
+    // height only
+    property <length> overhang: TouchCss.tp-sl-knob--width / 2;
+    Rectangle {
+        x: -root.overhang;
+        width: root.width + 2 * root.overhang;
+        clip: true;
+        for mark in root.marks: Rectangle {
+            x: root.overhang + mark.from * root.width;
+            width: max(TouchCss.tp-sl-rail--height / 4, (mark.to - mark.from) * root.width);
+            y: (root.height - self.height) / 2;
+            height: TouchCss.tp-sl-rail--height;
+            background: mark.colour;
+        }
+        slider := ElasticSlider {
+            compact: true;
+            label: root.label;
+            min: 0;
+            max: root.scale;
+            step: 1;
+            value: root.progress * root.scale;
+            x: root.overhang;
+            width: root.width;
+            y: (root.height - TouchCss.tp-sl--height) / 2 - root.track-top;
+            edited(v) => {
+                root.seek(v / root.scale);
+            }
         }
     }
 }

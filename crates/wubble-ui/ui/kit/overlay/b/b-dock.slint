@@ -55,7 +55,7 @@ export component BDock inherits Rectangle {
 
     // its row's height: the 30 px tiles, or taller controls a strip holds (the reader's)
     height: max(2 * TouchCss.tp-dock--padding + Shell.icon-button, row.preferred-height);
-    visible: root.reachable-hidden || tw.t > 0;
+    visible: root.reachable-hidden || root.shown || tw.t > 0;
 
     tw := Tween {
         on: root.shown;
@@ -95,7 +95,7 @@ export component BDockTab inherits Rectangle {
     out property <bool> hovered: tab-area.has-hover;
     out property <float> progress: tw.t;
 
-    visible: tw.t > 0;
+    visible: root.shown || tw.t > 0;
 
     tw := Tween {
         on: root.shown;

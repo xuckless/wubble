@@ -32,7 +32,7 @@ export component BSidePanel inherits Rectangle {
     callback closed();
     out property <float> progress: tw.t;
 
-    visible: tw.t > 0;
+    visible: root.shown || tw.t > 0;
 
     tw := Tween {
         on: root.shown;

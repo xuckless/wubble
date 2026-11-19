@@ -172,9 +172,18 @@ fn draw_overlays_b() {
         })
     };
 
-    // the video strip, then its speed menu, then collapsed to its tab
+    // the video strip (the pointer on its frame button), then its speed menu, then collapsed
+    // to its tab
     app.set_video(video());
     step(600);
+    if let Some(frame) =
+        i_slint_backend_testing::ElementHandle::find_by_element_id(&app, "VideoControls::frame")
+            .next()
+    {
+        let (p, size) = (frame.absolute_position(), frame.size());
+        pointer(p.x + size.width / 2.0, p.y + size.height / 2.0);
+    }
+    step(400);
     shoot(&app, &dir, "01-video-strip");
     app.set_video(VideoView {
         speeds: true,

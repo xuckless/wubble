@@ -22,7 +22,7 @@ export component BMenuPanel inherits Rectangle {
     out property <float> progress: tw.t;
 
     width: TouchCss.tp-menu--width;
-    visible: tw.t > 0;
+    visible: root.shown || tw.t > 0;
 
     tw := Tween {
         on: root.shown;
