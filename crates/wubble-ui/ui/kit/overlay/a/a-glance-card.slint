@@ -14,7 +14,7 @@ import { Role } from "../../gen/text.slint";
 import { Shell } from "../../derived.slint";
 import { KitText } from "../../text.slint";
 import { GlassPanel } from "../../material/glass.slint";
-import { Tween } from "../../motion/tween.slint";
+import { ADropTween } from "a-motion.slint";
 import { Button, ButtonKind } from "../../controls/button.slint";
 import { IconButton } from "../../controls/icon-button.slint";
 import { Glyph } from "../../controls/icon.slint";
@@ -47,12 +47,8 @@ export component AGlanceCard inherits Rectangle {
     }
     property <GlanceView> g: root.open ? root.glance : root.held;
 
-    tw := Tween {
+    tw := ADropTween {
         on: root.open;
-        in-ms: Motion.dropdown-in;
-        out-ms: Motion.dropdown-out;
-        in-easing: Motion.ease-out;
-        out-easing: Motion.ease-in-out;
     }
     visible: root.open || tw.t > 0;
 

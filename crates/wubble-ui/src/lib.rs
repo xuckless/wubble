@@ -326,6 +326,7 @@ mod tests {
             open: true,
             query: "".into(),
             counter: "".into(),
+            none: false,
             focus_serial: 1,
         });
         settle();

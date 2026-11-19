@@ -30,8 +30,8 @@ export component FindBar inherits Rectangle {
         layer: GlassOver.card;
         query: root.find.query;
         counter: root.find.counter;
-        // the host's counter for a query with no match (`surface.rs`)
-        none: root.find.counter == "0 of 0";
+        // the host says when a finished search found nothing (`FindBar::none`)
+        none: root.find.none;
         placeholder: "Find in page";
         edited(q) => {
             root.edited(q);

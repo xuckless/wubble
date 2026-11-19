@@ -9,12 +9,12 @@
 // from the pane's edges, at most a third of the pane wide; no scene key (the Slint frost).
 
 import { Motion } from "../../gen/tokens.slint";
-import { TouchCss, BrowserCss } from "../../gen/css.slint";
+import { BrowserCss } from "../../gen/css.slint";
 import { Role } from "../../gen/text.slint";
 import { Shell } from "../../derived.slint";
 import { KitText } from "../../text.slint";
 import { GlassPanel } from "../../material/glass.slint";
-import { Tween } from "../../motion/tween.slint";
+import { ATipMotion } from "a-motion.slint";
 import { Calm } from "../../motion/calm.slint";
 import { GlassTier } from "../../../components/model.slint";
 
@@ -26,21 +26,10 @@ export component AStatusBubble inherits Rectangle {
     // The pane it sits in.
     in property <length> pane-width;
     in property <length> pane-height;
-    out property <float> progress: fade.t;
+    out property <float> progress: tip.fade;
 
-    fade := Tween {
-        on: root.shown;
-        in-ms: TouchCss.tp-tip-show--transition-opacity-duration;
-        out-ms: TouchCss.tp-tip--transition-opacity-duration;
-        in-easing: TouchCss.tp-tip-show--transition-opacity-easing;
-        out-easing: TouchCss.tp-tip--transition-opacity-easing;
-    }
-    move := Tween {
-        on: root.shown;
-        in-ms: TouchCss.tp-tip-show--transition-transform-duration;
-        out-ms: TouchCss.tp-tip--transition-transform-duration;
-        in-easing: TouchCss.tp-tip-show--transition-transform-easing;
-        out-easing: TouchCss.tp-tip--transition-transform-easing;
+    tip := ATipMotion {
+        shown: root.shown;
     }
 
     width: min(row.preferred-width, root.pane-width / 3 + 2 * Shell.status-pad);
@@ -51,15 +40,15 @@ export component AStatusBubble inherits Rectangle {
         duration: Calm.ms(Shell.status-move);
         easing: Motion.ease-in-out;
     }
-    visible: fade.t > 0;
-    opacity: fade.t;
+    visible: tip.fade > 0;
+    opacity: tip.fade;
 
     GlassPanel {
-        y: TouchCss.tp-tip--transform-translatey * (1 - move.t);
+        y: tip.shift;
         tier: GlassTier.thin;
         radius: self.height / 2;
         transform-origin: { x: self.width / 2, y: self.height };
-        scale: 1 - (1 - TouchCss.tp-tip--transform-scale) * (1 - move.t);
+        scale: tip.scale;
         row := HorizontalLayout {
             padding-left: Shell.status-pad;
             padding-right: Shell.status-pad;

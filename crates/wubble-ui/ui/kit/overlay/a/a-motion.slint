@@ -1,0 +1,41 @@
+// derived: Tween (motion/tween.slint) with the touch kit's tooltip (.tp-tip / .tp-tip-show) and the menu's dropdown (Motion.dropdown) curves
+// The two entrances the overlays share, timed once (notes/fidelity/derived-review.md):
+// `ATipMotion`, the tooltip's (opacity .16 s / .13 s; from 4 px down at .95 over .2 s / .16 s),
+// for the status bubble and the preview card; `ADropTween`, the menu body's (220 ms ease-out in,
+// 176 ms ease-in-out out), for the popover and the glance card.
+
+import { Motion } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { Tween } from "../../motion/tween.slint";
+
+export component ADropTween inherits Tween {
+    in-ms: Motion.dropdown-in;
+    out-ms: Motion.dropdown-out;
+    in-easing: Motion.ease-out;
+    out-easing: Motion.ease-in-out;
+}
+
+export component ATipMotion {
+    in property <bool> shown;
+    // the opacity
+    out property <float> fade: fade.t;
+    // the offset and scale the body arrives from, now
+    out property <length> shift: TouchCss.tp-tip--transform-translatey * (1 - move.t);
+    out property <float> scale: 1 - (1 - TouchCss.tp-tip--transform-scale) * (1 - move.t);
+    width: 0px;
+    height: 0px;
+    fade := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-tip-show--transition-opacity-duration;
+        out-ms: TouchCss.tp-tip--transition-opacity-duration;
+        in-easing: TouchCss.tp-tip-show--transition-opacity-easing;
+        out-easing: TouchCss.tp-tip--transition-opacity-easing;
+    }
+    move := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-tip-show--transition-transform-duration;
+        out-ms: TouchCss.tp-tip--transition-transform-duration;
+        in-easing: TouchCss.tp-tip-show--transition-transform-easing;
+        out-easing: TouchCss.tp-tip--transition-transform-easing;
+    }
+}

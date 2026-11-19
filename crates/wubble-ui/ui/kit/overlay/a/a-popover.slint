@@ -11,7 +11,7 @@
 import { Motion } from "../../gen/tokens.slint";
 import { TouchCss } from "../../gen/css.slint";
 import { GlassPanel } from "../../material/glass.slint";
-import { Tween } from "../../motion/tween.slint";
+import { ADropTween } from "a-motion.slint";
 import { OverlapLook } from "../../motion/overlap.slint";
 import { GlassTier, GlassOver } from "../../../components/model.slint";
 
@@ -32,12 +32,8 @@ export component APopover inherits Rectangle {
     // the body's look (curve tests)
     out property <float> zoom: look.zoom;
     out property <bool> glass-present: panel.item.present;
-    tween := Tween {
+    tween := ADropTween {
         on: root.open;
-        in-ms: Motion.dropdown-in;
-        out-ms: Motion.dropdown-out;
-        in-easing: Motion.ease-out;
-        out-easing: Motion.ease-in-out;
     }
     look := OverlapLook {
         e: tween.t;

@@ -58,6 +58,7 @@ fn find_bar(app: &AppWindow) {
         open: true,
         query: "wubble".into(),
         counter: "0 of 0".into(),
+        none: true,
         focus_serial: 1,
     });
     settle();
@@ -219,6 +220,23 @@ fn error_page(app: &AppWindow) {
         cert: false,
     });
     settle();
+    // the Details toggle has its own line above the button row, so the row (two buttons) fits
+    // the column at any width
+    let at = |label: &str| {
+        let e = ElementHandle::find_by_accessible_label(app, label)
+            .find(|e| e.computed_opacity() > 0.0)
+            .unwrap_or_else(|| panic!("no visible {label}"));
+        (e.absolute_position(), e.size())
+    };
+    let (details, _) = at("Details");
+    let (reload, _) = at("Reload");
+    let (back, back_size) = at("Go back");
+    assert!(details.y < reload.y, "Details sits above the row");
+    assert_eq!(back.y, reload.y, "the row keeps its two buttons");
+    assert!(
+        back.x + back_size.width <= reload.x + 440.0,
+        "the row fits the column"
+    );
     click(app, "Reload");
     click(app, "Go back");
     // the detail folds under Details (closed for a load error)

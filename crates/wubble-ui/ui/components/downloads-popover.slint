@@ -63,6 +63,9 @@ export component DownloadsPopover inherits Rectangle {
         height: root.list-height + 2 * Shell.menu-pad;
         x: max(Space.s2, min(root.anchor-x, root.width - self.width - Space.s2));
         y: max(Space.s2, min(root.anchor-y, root.height - self.height - Space.s2));
+        // it grows from the anchor, wherever the fit above put the panel
+        origin-x: max(0px, min(root.anchor-x - self.x, self.width));
+        origin-y: max(0px, min(root.anchor-y - self.y, self.height));
 
         Flickable {
             x: Shell.menu-pad;

@@ -9,12 +9,11 @@
 // 12 (frame 8), title 13 px, address 11.5 px.
 
 import { Palette } from "../../gen/tokens.slint";
-import { TouchCss } from "../../gen/css.slint";
 import { Role, TextRole } from "../../gen/text.slint";
 import { Shell } from "../../derived.slint";
 import { KitText } from "../../text.slint";
 import { GlassPanel } from "../../material/glass.slint";
-import { Tween } from "../../motion/tween.slint";
+import { ATipMotion } from "a-motion.slint";
 import { GlassTier, GlassOver } from "../../../components/model.slint";
 
 export component APreviewCard inherits Rectangle {
@@ -25,21 +24,10 @@ export component APreviewCard inherits Rectangle {
     in property <image> thumb;
     in property <int> key: -1;
     in property <int> layer: GlassOver.card;
-    out property <float> progress: fade.t;
+    out property <float> progress: tip.fade;
 
-    fade := Tween {
-        on: root.shown;
-        in-ms: TouchCss.tp-tip-show--transition-opacity-duration;
-        out-ms: TouchCss.tp-tip--transition-opacity-duration;
-        in-easing: TouchCss.tp-tip-show--transition-opacity-easing;
-        out-easing: TouchCss.tp-tip--transition-opacity-easing;
-    }
-    move := Tween {
-        on: root.shown;
-        in-ms: TouchCss.tp-tip-show--transition-transform-duration;
-        out-ms: TouchCss.tp-tip--transition-transform-duration;
-        in-easing: TouchCss.tp-tip-show--transition-transform-easing;
-        out-easing: TouchCss.tp-tip--transition-transform-easing;
+    tip := ATipMotion {
+        shown: root.shown;
     }
     property <TextRole> title-role: {
         family: Role.st-row-title.family,
@@ -56,7 +44,7 @@ export component APreviewCard inherits Rectangle {
 
     width: Shell.preview-width;
     height: column.preferred-height + 2 * Shell.preview-pad;
-    visible: fade.t > 0;
+    visible: tip.fade > 0;
 
     panel := GlassPanel {
         // the scene draws its glass above the page (GlassPanel `over-layer`)
@@ -65,10 +53,10 @@ export component APreviewCard inherits Rectangle {
         tier: GlassTier.thick;
         radius: Shell.preview-radius;
         over-content: true;
-        y: TouchCss.tp-tip--transform-translatey * (1 - move.t);
+        y: tip.shift;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        scale: 1 - (1 - TouchCss.tp-tip--transform-scale) * (1 - move.t);
-        opacity: fade.t;
+        scale: tip.scale;
+        opacity: tip.fade;
         VerticalLayout {
             padding: Shell.preview-pad;
             column := VerticalLayout {
