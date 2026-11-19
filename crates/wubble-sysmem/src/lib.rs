@@ -13,12 +13,15 @@
 //! - [`Meter`]: RSS and CPU of wubble's own process tree, through `sysinfo` (MIT).
 //! - [`memory`]: the tree with PSS/USS (Linux), footprint (macOS) and GPU memory (NVIDIA), for
 //!   `--measure memory`.
+//! - [`lower_current_thread`]: bulk worker threads yield to the UI and Chromium's threads.
 
 mod detail;
 mod meter;
+mod thread;
 
 pub use detail::{footprint, gpu_by_pid, memory, namespace_pid, rollup};
 pub use meter::{Meter, Proc, descendants, label};
+pub use thread::lower_current_thread;
 use wubble_core::pressure::Reading;
 
 /// Where memory pressure readings come from. Read on the lifecycle tick (every few seconds).

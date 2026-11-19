@@ -200,6 +200,7 @@ impl Settings {
             renderer_limit: count(&defs::PROCESS_RENDERER_LIMIT),
             spare_renderer: on(&defs::PROCESS_SPARE_RENDERER),
             remote_debugging_port: defs::remote_port(count(&defs::DEVTOOLS_REMOTE_PORT)),
+            hw_video_decode: wubble_engine::app::hardware_video_decode_found(),
         }
     }
 

@@ -15,7 +15,7 @@ use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use wubble_core::apply::GlassSetting;
 use wubble_core::space::{Rgb, dye};
-use wubble_gfx::scene::run::{RunEvent, RunState};
+use wubble_gfx::scene::run::{RunEvent, RunState, scene_due};
 use wubble_gfx::scene::{
     Beam, BeamRect, GlassRect, Governor, Quality, Rect, Renderer, SceneOptions, Signal, Tier,
 };
@@ -243,18 +243,31 @@ impl Glass {
     }
 
     /// One rendered frame, after the shell driver's step. `glass` is the panels' new list
-    /// when it changed.
-    pub fn frame(&mut self, window: &AppWindow, now: Instant, glass: Option<&[GlassItem]>) {
+    /// when it changed. Steps and renders the scene only when it is due (`run::scene_due`: a
+    /// page's frame alone does not make it due); returns whether it did.
+    pub fn frame(&mut self, window: &AppWindow, now: Instant, glass: Option<&[GlassItem]>) -> bool {
         let Glass::Scene(s) = self else {
-            return;
+            return false;
         };
         // even while paused: the registry reports a changed list once, and the scene must have
         // the latest one when it resumes (cheap, no GPU work)
         if let Some(items) = glass {
             s.set_items(window, items);
         }
-        if s.run.state() == RunState::Paused {
-            return;
+        let size = window.window().size();
+        let resized = s
+            .renderer
+            .output()
+            .is_none_or(|t| (t.width(), t.height()) != (size.width, size.height));
+        if !scene_due(
+            s.run.state(),
+            window.get_page_fullscreen(),
+            glass.is_some() || resized,
+            s.renderer
+                .last_frame()
+                .map(|t| now.saturating_duration_since(t)),
+        ) {
+            return false;
         }
         crate::measure::count(crate::measure::Count::SceneRender);
         let tint = active_tint(window);
@@ -300,6 +313,7 @@ impl Glass {
         s.govern(window, interval);
         let animating = s.renderer.animating();
         s.run.frame_done(window, now, animating, glass.is_some());
+        true
     }
 
     /// A window event that changes when the scene draws (`run_state::event_of`).

@@ -263,6 +263,7 @@ impl Writer {
         let thread = std::thread::Builder::new()
             .name("wubble-media-writer".into())
             .spawn(move || {
+                wubble_sysmem::lower_current_thread();
                 let mut files = Files::default();
                 for cmd in rx {
                     if let Some(event) = files.apply(cmd) {

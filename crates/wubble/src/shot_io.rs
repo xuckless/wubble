@@ -55,6 +55,7 @@ impl Saver {
         let spawned = std::thread::Builder::new()
             .name("wubble-shots".into())
             .spawn(move || {
+                wubble_sysmem::lower_current_thread();
                 let mut clipboard = None;
                 for (job, done) in rx {
                     done(run(job, &mut clipboard));

@@ -639,8 +639,10 @@ export component AppWindow inherits Window {
     ];
 
     // The bottom layer: the scene (the design's demo.slint `Image { source: root.scene }`, first
-    // child), rounded with the window; without the scene the plain ground.
-    if GlassLayer.scene-active: Rectangle {
+    // child), rounded with the window; without the scene the plain ground. A fullscreen page
+    // covers the window, so it is not drawn then (the host stops rendering it too: run.rs
+    // `scene_due`).
+    if GlassLayer.scene-active && !root.page-fullscreen: Rectangle {
         clip: true;
         border-radius: root.window-radius;
         Image {
@@ -651,7 +653,7 @@ export component AppWindow inherits Window {
         }
     }
     ground := Rectangle {
-        visible: !GlassLayer.scene-active;
+        visible: !GlassLayer.scene-active || root.page-fullscreen;
         background: Palette.abyss;
         border-radius: root.window-radius;
     }

@@ -312,6 +312,7 @@ impl Blocking {
         let spawned = std::thread::Builder::new()
             .name("wubble-blocker-rebuild".into())
             .spawn(move || {
+                wubble_sysmem::lower_current_thread();
                 this.rebuild(generation);
                 this.end_rebuild();
             });
@@ -365,6 +366,7 @@ impl Blocking {
         let spawned = std::thread::Builder::new()
             .name("wubble-blocker-update".into())
             .spawn(move || {
+                wubble_sysmem::lower_current_thread();
                 let (written, asked) = this.update_once(fetch, Due::All);
                 this.updating.store(false, Ordering::SeqCst);
                 this.notify();

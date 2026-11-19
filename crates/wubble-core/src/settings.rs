@@ -497,7 +497,6 @@ pub const PROCESS_SPARE_RENDERER: SettingDef = SettingDef {
     section: Section::Performance,
     restart: true,
 };
-
 /// Chromium's remote debugging endpoint (`remote-debugging-port`), on 127.0.0.1 only. Off by
 /// default: with a port set, any program on this computer can read and drive every open tab.
 /// Docked DevTools is the frontend page served by that endpoint, so it needs the port; without

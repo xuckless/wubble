@@ -37,6 +37,7 @@ pub mod pump;
 pub mod reader;
 pub mod region;
 pub mod routing;
+pub mod scope;
 pub mod scroller;
 pub mod seam;
 pub mod secret;

@@ -24,6 +24,7 @@ mod memory;
 mod menu;
 mod nav_smoke;
 mod os_motion;
+mod os_scope;
 mod page_drag;
 mod page_error;
 mod page_smoke;
@@ -145,6 +146,8 @@ fn main() -> ExitCode {
         }
         Err(e) => e.exit(),
     };
+    // Still one thread: the scope must hold every process CEF starts later.
+    os_scope::own_scope(matches!(command, Command::Run { .. }));
     match command {
         Command::Run {
             url,
@@ -308,8 +311,9 @@ fn install_shell_driver(
             measure::render_began(now);
             if let Ok(mut glass) = glass.try_borrow_mut() {
                 let at = Instant::now();
-                glass.frame(window, now, items);
-                measure::stage(measure::Metric::Scene, at);
+                if glass.frame(window, now, items) {
+                    measure::stage(measure::Metric::Scene, at);
+                }
             }
             // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
             // Inside rendering the host may be busy (a pump renders); then this frame skips
