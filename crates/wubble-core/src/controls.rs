@@ -5,10 +5,13 @@
 //! Source: the owner's design repo (xuckless/the-wallpaper-project @ 6c840da),
 //! `src/wubble/pages/touch.tsx` (`SLIDER`, `TOGGLE`; @source touch-slider, touch-toggle). The
 //! bucket has these only as TSX: the loops are ported here onto the springs of [`crate::motion`], the constants copied verbatim.
-//! Check boxes and menus are CSS transitions in the design and stay Slint tweens.
+//! Check boxes are CSS transitions in the design and stay Slint tweens; the menu's lifecycle,
+//! highlight and keys are [`menu`] (its curves stay Slint tweens).
 //!
 //! Pointer positions are px along the control's own axis; time is `dt` in seconds or `now` in ms
 //! passed in, never read.
+
+pub mod menu;
 
 use crate::motion::{
     Spring, Stretch, Velocity, band_clamp, clamp, spring, squash_at, squash_of, step_k,
