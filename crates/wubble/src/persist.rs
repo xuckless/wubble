@@ -200,6 +200,8 @@ impl Settings {
             renderer_limit: count(&defs::PROCESS_RENDERER_LIMIT),
             spare_renderer: on(&defs::PROCESS_SPARE_RENDERER),
             remote_debugging_port: defs::remote_port(count(&defs::DEVTOOLS_REMOTE_PORT)),
+            hw_video_decode: value(&defs::VIDEO_HARDWARE_DECODE) == "auto"
+                && wubble_engine::app::hardware_video_decode_found(),
         }
     }
 
@@ -1124,6 +1126,20 @@ mod tests {
 
     fn state(changes: u32, quiet: bool) -> SaveState {
         SaveState { changes, quiet }
+    }
+
+    #[test]
+    fn hardware_decode_off_never_asks_for_it() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            settings.page_features().hw_video_decode,
+            wubble_engine::app::hardware_video_decode_found()
+        );
+        settings.stored.insert(
+            wubble_core::settings::VIDEO_HARDWARE_DECODE.key.into(),
+            "off".into(),
+        );
+        assert!(!settings.page_features().hw_video_decode);
     }
 
     #[test]

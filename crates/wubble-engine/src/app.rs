@@ -122,6 +122,10 @@ pub struct PageFeatures {
     /// `settings::DEVTOOLS_REMOTE_PORT` through `settings::remote_port`: Chromium's remote
     /// debugging endpoint, on 127.0.0.1. `None`: no socket is opened.
     pub remote_debugging_port: Option<u16>,
+    /// Hardware video decode through VA-API on NVIDIA (`VaapiOnNvidiaGPUs`): on only when
+    /// `settings::VIDEO_HARDWARE_DECODE` is `auto` and [`hardware_video_decode_found`] says the
+    /// driver is there. Chromium keeps VA-API off on NVIDIA by default (crbug.com/1492880).
+    pub hw_video_decode: bool,
 }
 
 pub use wubble_core::settings::BackForwardCache;
@@ -137,6 +141,7 @@ impl Default for PageFeatures {
             renderer_limit: 0,
             spare_renderer: true,
             remote_debugging_port: None,
+            hw_video_decode: false,
         }
     }
 }
@@ -231,6 +236,12 @@ impl PageFeatures {
                         .map(|p| format!("http://127.0.0.1:{p}")),
                 ),
                 "the docked frontend's WebSocket carries the endpoint's own origin (Chromium 111+ refuses others); never *",
+            ),
+            (
+                self.hw_video_decode,
+                Enable("VaapiOnNvidiaGPUs"),
+                "NVDEC through libva-nvidia-driver (crbug.com/1492880 keeps it off by default): \
+                 4K60 VP9 measured 130 to 190 % of a core in software, 14 % on NVDEC",
             ),
         ]
     }
@@ -398,8 +409,14 @@ pub(crate) trait Platform {
     const TURNS_PER_SECOND: u32 = 250_000;
 
     /// Process-wide setup before anything else touches the OS's application
-    /// object (winit, `cef::initialize`). Nothing by default.
+    /// object (winit, `cef::initialize`), while the process has one thread. Nothing by default.
     fn prepare_process() {}
+
+    /// Whether this machine has a hardware video decoder Chromium uses only when asked
+    /// ([`PageFeatures::hw_video_decode`]). None by default.
+    fn hardware_video_decode_found() -> bool {
+        false
+    }
 
     /// The character a named key's CEF event carries when it types none (`windows_key_code`
     /// is a Windows `VK_*`): none by default.
@@ -409,9 +426,50 @@ pub(crate) trait Platform {
 }
 
 /// Process-wide setup that must come first in `main`, before the window
-/// system and CEF: on macOS, the CEF-aware application class.
+/// system and CEF: on macOS, the CEF-aware application class; on Linux with the NVIDIA VA-API
+/// driver, its environment ([`NVIDIA_VAAPI_ENV`]).
 pub fn prepare_process() {
     Current::prepare_process()
+}
+
+/// Whether hardware video decode is there to be asked for (Linux: [`nvidia_vaapi`]). Read once
+/// per process, so the environment `prepare_process` set and the switch agree.
+pub fn hardware_video_decode_found() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(Current::hardware_video_decode_found)
+}
+
+/// What libva needs to pick libva-nvidia-driver (its README): every process inherits it, the
+/// GPU process is the one that reads it. A value the user set already is kept.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const NVIDIA_VAAPI_ENV: [(&str, &str); 2] =
+    [("LIBVA_DRIVER_NAME", "nvidia"), ("NVD_BACKEND", "direct")];
+
+/// Where libva looks for drivers when `LIBVA_DRIVERS_PATH` is unset: Fedora's, Debian's and
+/// Arch's directories.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+const LIBVA_DRIVER_DIRS: [&str; 3] = [
+    "/usr/lib64/dri",
+    "/usr/lib/x86_64-linux-gnu/dri",
+    "/usr/lib/dri",
+];
+
+/// Whether VA-API decode on NVIDIA can work here (through `env` and `exists`, so the rule is
+/// testable): the proprietary kernel driver is loaded (`/proc/driver/nvidia/version`) and
+/// libva-nvidia-driver (`nvidia_drv_video.so`, the system package `libva-nvidia-driver` on
+/// Fedora, `nvidia-vaapi-driver` on Debian and Arch) is in `LIBVA_DRIVERS_PATH` (a `:` list),
+/// else in libva's default directories. Without the package Chromium 156 has no hardware decode
+/// on NVIDIA at all: it has no Vulkan video decoder (TODO.md "Decided", video decode on Linux).
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn nvidia_vaapi(env: &dyn Fn(&str) -> Option<OsString>, exists: &dyn Fn(&Path) -> bool) -> bool {
+    if !exists(Path::new("/proc/driver/nvidia/version")) {
+        return false;
+    }
+    let dirs: Vec<PathBuf> = match env("LIBVA_DRIVERS_PATH").filter(|v| !v.is_empty()) {
+        Some(list) => std::env::split_paths(&list).collect(),
+        None => LIBVA_DRIVER_DIRS.iter().map(PathBuf::from).collect(),
+    };
+    dirs.iter().any(|d| exists(&d.join("nvidia_drv_video.so")))
 }
 
 /// Chromium switches every wubble process gets on every OS. One entry per
@@ -437,12 +495,36 @@ impl Platform for Linux {
     /// copy is not). Without the pool the frames are uploaded as textures by the
     /// compositor's video resource updater (hdr_probe, CEF 156, NVIDIA; frame_smoke's
     /// 10-bit check). It applies to all video: 8-bit streams look the same but take that
-    /// upload path too, at a cost not yet measured (TODO.md Performance pass).
+    /// upload path too. Measured (b9, 4K60 VP9 in software, 3 alternating runs, total CPU of
+    /// browser, GPU and renderer): 128 to 187 % of a core with it, 202 to 273 % without, so it
+    /// is the cheaper setting (without it the renderer copies each frame into a pool buffer);
+    /// at 1080p within noise; on the VA-API path it does not matter (the decoder hands over its
+    /// own dmabufs). CEF 156 has no 10-bit-only knob to narrow it to.
     const CHROMIUM_SWITCHES: &[(&str, Option<&str>)] =
         &[("disable-gpu-memory-buffer-video-frames", None)];
 
     fn user_data_dir(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
         xdg_data_dir(env)
+    }
+
+    fn hardware_video_decode_found() -> bool {
+        nvidia_vaapi(&|key| std::env::var_os(key), &|path| path.exists())
+    }
+
+    /// With the NVIDIA VA-API driver, its environment. Set whatever the setting says (the
+    /// settings load later, on the store thread); without `VaapiOnNvidiaGPUs` Chromium refuses
+    /// VA-API on NVIDIA anyway.
+    #[cfg(target_os = "linux")]
+    fn prepare_process() {
+        if !hardware_video_decode_found() {
+            return;
+        }
+        for (key, value) in NVIDIA_VAAPI_ENV {
+            if std::env::var_os(key).is_none() {
+                // SAFETY: `prepare_process` runs first in `main`, before any other thread.
+                unsafe { std::env::set_var(key, value) };
+            }
+        }
     }
 }
 
@@ -1361,6 +1443,67 @@ mod tests {
         assert!(
             linux_sandbox_warning(&knobs(&[("/proc/sys/user/max_user_namespaces", "0")])).is_some()
         );
+    }
+
+    #[test]
+    fn the_nvidia_vaapi_driver_is_found_where_libva_looks() {
+        let nvidia = "/proc/driver/nvidia/version";
+        let fedora = "/usr/lib64/dri/nvidia_drv_video.so";
+        let check = |files: &[&str], drivers_path: Option<&str>| {
+            let env = |key: &str| {
+                (key == "LIBVA_DRIVERS_PATH")
+                    .then_some(drivers_path)
+                    .flatten()
+                    .map(OsString::from)
+            };
+            nvidia_vaapi(&env, &|p: &Path| files.iter().any(|f| Path::new(f) == p))
+        };
+        let cases: &[(&[&str], Option<&str>, bool)] = &[
+            (&[nvidia, fedora], None, true),
+            (
+                &[nvidia, "/usr/lib/x86_64-linux-gnu/dri/nvidia_drv_video.so"],
+                None,
+                true,
+            ),
+            (&[nvidia, "/usr/lib/dri/nvidia_drv_video.so"], None, true),
+            // the package is missing: no hardware decode on NVIDIA in Chromium 156
+            (&[nvidia], None, false),
+            // the driver without the NVIDIA kernel driver (Mesa machine, nouveau)
+            (&[fedora], None, false),
+            // `LIBVA_DRIVERS_PATH` replaces the default directories
+            (
+                &[nvidia, "/opt/va/nvidia_drv_video.so"],
+                Some("/x:/opt/va"),
+                true,
+            ),
+            (&[nvidia, fedora], Some("/opt/va"), false),
+            // set but empty: the defaults
+            (&[nvidia, fedora], Some(""), true),
+        ];
+        for (files, path, found) in cases {
+            assert_eq!(check(files, *path), *found, "{files:?} {path:?}");
+        }
+        assert!(NVIDIA_VAAPI_ENV.contains(&("LIBVA_DRIVER_NAME", "nvidia")));
+    }
+
+    #[test]
+    fn hardware_decode_joins_the_one_enable_features() {
+        let s = |name: &str, value: Option<&str>| (name.to_string(), value.map(str::to_string));
+        let on = PageFeatures {
+            hw_video_decode: true,
+            ..PageFeatures::default()
+        };
+        assert_eq!(
+            on.switches(),
+            [
+                s(
+                    "enable-features",
+                    Some("OverlayScrollbar,MiddleClickAutoscroll,VaapiOnNvidiaGPUs")
+                ),
+                s("enable-blink-features", Some("MiddleClickAutoscroll")),
+            ]
+        );
+        assert!(!PageFeatures::default().hw_video_decode);
     }
 
     #[test]
