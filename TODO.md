@@ -433,6 +433,7 @@ pass upgrades them. Source: the design repo and `~/Dev/wubble-wt/notes/motion-au
 
 ## Shelved ideas (owner; research only until picked up)
 
+- [ ] Translate this page (owner, 2026-11-18): Chromium's own translate calls Google's servers, so it does not fit the nothing-phones-home rule; the fit is on-device translation with language packs the user asks for. Shelved; research note: `~/Dev/wubble-wt/notes/translate-research.md`
 - [ ] Live text in images (owner, 2026-11-18, Safari style): select and copy text inside pictures on a page with an on-device OCR model. Shelved; research note on candidate models and how it would fit: `~/Dev/wubble-wt/notes/ocr-research.md`. Nothing leaves the machine.
 
 ## M6 — Own engine: ungoogled Chromium + CEF
