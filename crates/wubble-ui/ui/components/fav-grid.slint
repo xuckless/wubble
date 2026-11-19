@@ -5,12 +5,13 @@
 // 6 apart. The icon grows to 1.1 on hover on the spring ease. The active tab's tile takes the
 // selected fill.
 
-import { Palette, Chrome, Spacing, Glass, Motion } from "../tokens.slint";
+import { Palette, Chrome, Space, Glass, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, GlassKeys, TabItem } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
-import { Wobble } from "wobble.slint";
+import { Wobble } from "../kit/motion/wobble.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 export component FavGrid inherits Rectangle {
     in property <[TabItem]> tabs;
@@ -24,7 +25,7 @@ export component FavGrid inherits Rectangle {
     callback activated(int);
 
     property <int> cols: root.compact ? 1 : Shell.fav-columns;
-    property <length> gap: root.compact ? Shell.rail-gap : Spacing.s2;
+    property <length> gap: root.compact ? Shell.rail-gap : Space.s2;
     property <length> tile-w: root.compact ? Shell.rail-item : (root.width - (root.cols - 1) * root.gap) / root.cols;
     property <length> tile-h: root.compact ? Shell.rail-item : Chrome.favourite;
     property <int> rows: ceil(root.tabs.length / root.cols);
@@ -54,14 +55,10 @@ export component FavGrid inherits Rectangle {
         hover: ta.has-hover;
         pressed: ta.pressed;
         background: tab.id == root.active-tab-id ? Shell.selected-fill : root.over-wgpu ? transparent : Glass.thin.fill;
-        animate background {
-            duration: Motion.pressRelease;
-            easing: Motion.easeOut;
-        }
-        scale: ta.pressed ? Motion.pressScale : 1;
+        scale: ta.pressed ? Motion.press-scale : 1;
         animate scale {
-            duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-            easing: Motion.easeOut;
+            duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
+            easing: Motion.ease-out;
         }
 
         ta := TouchArea {
@@ -79,8 +76,8 @@ export component FavGrid inherits Rectangle {
             transform-origin: { x: self.width / 2, y: self.height / 2 };
             transform-scale: ta.has-hover ? Shell.fav-hover-scale : 1;
             animate transform-scale {
-                duration: Shell.fav-hover-ms;
-                easing: Motion.easeSpring;
+                duration: Calm.ms(Shell.fav-hover-ms);
+                easing: Motion.ease-spring;
             }
             Wobble {
                 hit: tile.hit;

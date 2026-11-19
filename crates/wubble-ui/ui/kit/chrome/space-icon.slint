@@ -2,7 +2,9 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Motion } from "../../tokens.slint";
+import { Palette, Motion } from "../gen/tokens.slint";
+import { Calm } from "../motion/calm.slint";
+import { BrowserCss } from "../gen/css.slint";
 
 // @source slint-space-icons
 // The three Space icons: 24×24 stroke icons, 1.7 stroke, round caps and joins. The same path
@@ -30,5 +32,5 @@ export component SpaceIcon inherits Path {
     // Slint strokes in logical px, not viewbox units: keep the icon at 24px (or scale this too).
     stroke-width: 1.7px;
     stroke-line-cap: round;
-    animate stroke { duration: 150ms; easing: Motion.easeOut; }
+    animate stroke { duration: Calm.ms(BrowserCss.wb-space--transition-color-duration); easing: ease; }
 }

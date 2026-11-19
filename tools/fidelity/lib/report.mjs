@@ -35,7 +35,8 @@ const same = (a, b) => {
 
 /** `name: value;` of a Slint global in ui/tokens.slint. */
 function slintTokens(REPO) {
-  const text = readFileSync(resolve(REPO, 'crates/wubble-ui/ui/tokens.slint'), 'utf8');
+  let text;
+  try { text = readFileSync(resolve(REPO, 'crates/wubble-ui/ui/tokens.slint'), 'utf8'); } catch { return null; }
   const out = new Map();
   let g = null;
   for (const ln of text.split('\n')) {
@@ -51,7 +52,7 @@ export function report({ tokens, physics, css, files, REPO, commit, genTables, s
     'Written by `node tools/fidelity/extract.mjs --report`. Each row is a value the later lanes must',
     'switch to the generated one (or record as a wubble change). Call sites were not switched in L0.', ''];
   // Slint tokens.slint (the port copy) vs generated tokens
-  const st = slintTokens(REPO);
+  const st = slintTokens(REPO) ?? new Map();
   const rows = [];
   const hex = c => c.toUpperCase();
   for (const [k, v] of Object.entries(tokens.color)) if (st.has(`Palette.${k}`) && hex(st.get(`Palette.${k}`)) !== hex(v)) rows.push([`Palette.${k}`, st.get(`Palette.${k}`), v]);
@@ -76,8 +77,10 @@ export function report({ tokens, physics, css, files, REPO, commit, genTables, s
     const ck = st.get(`Motion.${name}K`), cc = st.get(`Motion.${name}C`);
     if (num(ck) !== k || num(cc) !== c) rows.push([`Motion.${name}K/C`, `${ck}/${cc}`, `${k}/${c}`]);
   }
-  lines.push('## ui/tokens.slint (the port copy) vs gen/tokens.slint', '', '| Token | wubble | design |', '|---|---|---|');
-  for (const r of rows) lines.push(`| ${r.join(' | ')} |`);
+  if (st.size) {
+    lines.push('## ui/tokens.slint (the port copy) vs gen/tokens.slint', '', '| Token | wubble | design |', '|---|---|---|');
+    for (const r of rows) lines.push(`| ${r.join(' | ')} |`);
+  } else lines.push('## ui/tokens.slint', '', 'Deleted (L2): every Slint token comes from gen/tokens.slint.');
   // Rust constants
   const rc = rustConsts(REPO);
   const gen = new Map();

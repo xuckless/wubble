@@ -15,13 +15,27 @@ clone's own `npm install` provides vite).
     node tools/fidelity/extract.mjs --coverage ~/Dev/wubble-wt/notes/fidelity/inventory.md
 
 Writes `crates/wubble-ui/ui/kit/gen/tokens.slint` (palette, Spaces, radius, space, chrome, glass
-tiers, fonts, type roles, motion), `gen/css.slint` (every typed declaration of the design's
+tiers, fonts, type roles, motion, the CSS ease-out table, keyframe tables), `gen/text.slint` (the
+text roles: the type scale and every font rule of the shell's stylesheets, for KitText), `gen/css.slint` (every typed declaration of the design's
 stylesheets, `<selector>--<property>[-part]`, one global per file, the unread ones listed),
 `gen/icons.slint` (browser and kit icon tables, Space and settings icons, every inline path, the
 mark, app-icon plates) and `crates/wubble-core/src/kit_gen.rs` (the motion constant tables).
 Each starts with the design commit and an FNV-1a hash of its body; the kit lock fails on a hand
 edit. When the clone moves: `git -C <clone> pull`, run the generator, commit the result with the
 lanes' call-site changes.
+
+    node tools/fidelity/shell-map.mjs [--accepted]   propose the generated value for each Shell literal
+    node tools/fidelity/curves.mjs                   sample the web's fixed-curve motion
+
+`shell-map.mjs` ranks, for each literal left in `kit/derived.slint`, the generated properties of
+equal value by the CSS rule its comment cites and the property kind; it prints, never writes (an
+alias is a reviewed hand edit). `curves.mjs` loads `core/wubble.css` with its token variables in
+headless Chromium, pauses every animation and transition, steps them on the fixed 1/120 s clock
+and writes `tools/fidelity/curves/<motion>.json` (opacity, translate y, scale x/y, rotation,
+blur, box-shadow spread and alpha, a fold's height
+per frame): the truth `crates/wubble-ui/tests/motion_curves.rs` and wubble-core's motion
+tests compare the kit with (>= 0.90 per property, mock time, no wall clock). Rerun it when the
+clone moves and commit the JSON.
 
 ## Harness
 
@@ -74,8 +88,8 @@ scene there (data over host state), then the web scene here.
 - The 2x window must fit the screen the gallery runs on, so 2x uses `viewportByDpr` (a smaller
   window) on both sides.
 - Nothing here runs in `cargo test` or CI. `node --test tools/fidelity/test/*.test.mjs` covers
-  the pure parts (geometry, metrics, PNG, CSS reading, the still dye's mapping). Scores are
-  reported, not asserted.
+  the pure parts (geometry, metrics, PNG, CSS reading, the still dye's mapping, the ease table,
+  text roles). Scores are reported, not asserted.
 
 ## Kit lock
 

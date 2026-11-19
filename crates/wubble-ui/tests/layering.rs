@@ -10,17 +10,14 @@ fn at(needle: &str) -> usize {
 }
 
 #[test]
-fn the_peek_glass_is_under_the_peek_glow_ring() {
-    // the peek panel (its key) and its glow ring, the first ring after it
+fn the_peek_glass_is_under_the_peek_panel_and_the_sidebar() {
+    // the peek panel (its key) and the sidebar's content after it
     let panel = at("key: GlassKeys.peek;");
-    let ring = panel
-        + APP[panel..]
-            .find("GlowRing {")
-            .expect("the peek panel's glow ring");
+    let sidebar = at("sidebar := Sidebar {");
     let glass = at("source: root.over-peek;");
-    // the scene's glass of the peek is opaque inside the panel: drawn after the ring, it hides it
+    // the scene's glass of the peek is opaque inside the panel: drawn after them, it hides them
     assert!(
-        glass < ring,
-        "the over-peek image is drawn over the peek's glow ring"
+        glass < panel && glass < sidebar,
+        "the over-peek image is drawn over the peek panel or the sidebar"
     );
 }

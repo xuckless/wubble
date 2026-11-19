@@ -20,6 +20,8 @@ import { pathToFileURL } from 'node:url';
 import { REPO, designRoot, designSrc, designCommit } from './lib/design.mjs';
 import { parseCss } from './lib/css.mjs';
 import { makeReader, readDecl } from './lib/values.mjs';
+import { CSS_EASE_OUT, easeTable } from './lib/ease.mjs';
+import { fontOf } from './lib/text.mjs';
 
 const args = process.argv.slice(2);
 const flag = n => args.includes(n);
@@ -129,6 +131,13 @@ function cssTables() {
         base = (rule.at ? `${slug(rule.at.replace(/^@\w+/, ''))}-` : '') + slug(first);
       }
       if (!/^[a-z]/.test(base)) base = `r-${base}`;
+      // a width query's breakpoint, once per query, so the kit switches where the design does
+      const q = /^@(?:container|media)\b.*\(max-width:\s*([\d.]+)px\)/.exec(rule.at);
+      const qid = q && `${slug(rule.at.replace(/^@\w+/, ''))}--query-max-width`;
+      if (q && rule.decls.length && !seen.has(qid)) {
+        seen.add(qid);
+        props.push({ id: qid, t: 'length', v: Number(q[1]), line: rule.decls[0].line, src: `${rule.at} (its breakpoint)` });
+      }
       for (const d of rule.decls) {
         if (d.prop.startsWith('--') || d.prop.startsWith('-webkit-') && d.prop !== '-webkit-backdrop-filter') continue;
         if (d.prop === '-webkit-backdrop-filter') continue; // the same as backdrop-filter
@@ -219,7 +228,7 @@ function tokensSlint(css) {
   out.push('}', '');
   out.push('/// A glass tier: tokens.ts `glass` (backdrop blur, saturate, brightness, fill, shadow) and the');
   out.push('/// tier rule in wubble.css (the shadow colour, the inset rim all round and the top light line).');
-  out.push('export struct GlassTier { blur: length, saturate: float, brightness: float, fill: color, shadow-y: length, shadow-blur: length, shadow-color: color, rim-all: color, rim-top: color }');
+  out.push('export struct GlassTierStyle { blur: length, saturate: float, brightness: float, fill: color, shadow-y: length, shadow-blur: length, shadow-color: color, rim-all: color, rim-top: color }');
   out.push('export global Glass {');
   for (const [k, g] of Object.entries(t.glass)) {
     const sel = `wb-${k}--box-shadow`;
@@ -228,7 +237,7 @@ function tokensSlint(css) {
       `fill: ${slintValue(color(g.fill))}`, `shadow-y: ${slintValue(L(g.shadow[0]))}`, `shadow-blur: ${slintValue(L(g.shadow[1]))}`,
       `shadow-color: ${slintValue(W(`${sel}-shadow-3-color`))}`, `rim-all: ${slintValue(W(`${sel}-shadow-1-color`))}`, `rim-top: ${slintValue(W(`${sel}-shadow-2-color`))}`,
     ];
-    out.push(`    out property <GlassTier> ${k}: { ${fields.join(', ')} }; // ${cite('core/tokens.ts', tl(`  ${k}: {`))}, core/wubble.css:${W(`${sel}-shadow-3-color`).line}`);
+    out.push(`    out property <GlassTierStyle> ${k}: { ${fields.join(', ')} }; // ${cite('core/tokens.ts', tl(`  ${k}: {`))}, core/wubble.css:${W(`${sel}-shadow-3-color`).line}`);
   }
   out.push(prop('over-content', color(t.thickOverContent), cite('core/tokens.ts', tl('thickOverContent ='))));
   const top = W('wb-glass-after--background-stop-1-color');
@@ -272,6 +281,24 @@ function tokensSlint(css) {
   }
   const bl = lineOf('core/physics.ts', 'export const BAND_K');
   for (const [k, v] of Object.entries(physics.BAND_K)) out.push(prop(`band-${k}`, L(v), cite('core/physics.ts', bl)));
+  // CSS `ease-out` per keyframe interval (wobble): Slint has no per-key easing, so the kit
+  // interpolates this table (x = i / 32) over each interval's progress.
+  const easeOut = easeTable(CSS_EASE_OUT, 32).map(v => fmtNum(Number(v.toFixed(6))));
+  out.push(`    // CSS ease-out, cubic-bezier(${CSS_EASE_OUT.join(', ')}), sampled at x = i / 32 (the curve keyframe intervals take)`);
+  out.push(`    out property <[float]> ease-out-css: [${easeOut.join(', ')}];`);
+  out.push('}', '');
+  out.push('/// A keyframe: progress `t` (0..1), scale x/y and rotation (deg); 0 and 1 are at rest.');
+  out.push('export struct KeyStep { t: float, sx: float, sy: float, rot: float }');
+  out.push('export global Keyframes {');
+  for (const [n, file, kf, dur] of [['wobble', 'core/wubble.css', 'wb-wob-a', 'wb-wob-a-gt-svg--animation-duration'], ['squash', 'core/wubble.css', 'wb-sq-a', null], ['button-squash', 'pages/touch.css', 'tp-bq-a', null]]) {
+    const k = keyframes(css, file, kf);
+    const p = css.find(c => c.file === file).props.find(p => p.id.startsWith(`${kf}-k-`));
+    out.push(`    out property <[KeyStep]> ${n}: [${k.map(([t, sx, sy, r]) => `{ t: ${fmtNum(t)}, sx: ${fmtNum(sx)}, sy: ${fmtNum(sy)}, rot: ${fmtNum(r)} }`).join(', ')}]; // ${file}:${p.line} @keyframes ${kf}`);
+    if (dur) {
+      const d = css.find(c => c.file === file).props.find(p => p.id === dur);
+      out.push(prop(`${n}-ms`, d, `${file}:${d.line}`));
+    }
+  }
   out.push('}');
   return out.join('\n');
 }
@@ -508,6 +535,71 @@ function rustGen(css) {
   return out.join('\n');
 }
 
+// ── Text roles ─────────────────────────────────────────────────────────────────────────────
+// Every rule of the shell's stylesheets that sets a font (family, size, weight or the `font`
+// shorthand) as one role: family, size, weight and line height, each taken from the rule or
+// inherited from `.wb` (core/wubble.css: the ui face, 14 px, 400, 1.45). Plus the type scale of
+// tokens.ts, and the roles the markup composes from two rules (an element with a class), cited.
+const TEXT_CSS = ['core/wubble.css', 'browser/browser.css', 'pages/settings.css', 'pages/touch.css', 'pages/start.css'];
+// [role, file:line of the markup, [file, selector] composed in order]
+const TEXT_COMPOSED = [
+  ['st-title', 'pages/settings.tsx:557', [['pages/settings.css', '.st-pin h1'], ['core/wubble.css', '.wb-display']]],
+  ['st-title-narrow', 'pages/settings.tsx:557', [['pages/settings.css', '.st-pin h1'], ['pages/settings.css', '@container (max-width: 759px) .st-pin h1'], ['core/wubble.css', '.wb-display']]],
+];
+function textSlint() {
+  const rules = new Map();
+  for (const file of TEXT_CSS) for (const r of parseCss(read(file))) {
+    if (r.at && !r.at.startsWith('@media') && !r.at.startsWith('@container')) continue;
+    rules.set(`${file} ${r.at ? `${r.at} ` : ''}${r.selector}`, r);
+  }
+  const wb = rules.get('core/wubble.css .wb');
+  const base = fontOf(wb.decls, { family: 'ui', size: 14, weight: 400, lh: 1.45 });
+  const out = [
+    '// The design\'s text roles: the type scale of core/tokens.ts and every rule of the shell\'s',
+    '// stylesheets that sets a font, with what it inherits from `.wb` (core/wubble.css). KitText',
+    '// (kit/text.slint) draws a role; nothing else names a font.',
+    '',
+    'import { Fonts } from "tokens.slint";',
+    '',
+    '/// family, size, weight and line height (a factor of the size; Slint text has none, so it is',
+    '/// the role\'s box height for layout).',
+    'export struct TextRole { family: string, size: length, weight: int, line-height: float }',
+    'export global Role {',
+  ];
+  const role = (id, f, cite) => out.push(`    out property <TextRole> ${id}: { family: Fonts.${f.family}, size: ${fmtNum(f.size)}px, weight: ${f.weight}, line-height: ${fmtNum(f.lh)} }; // ${cite}`);
+  const tl = lineOf('core/tokens.ts', 'export const type') + 1;
+  for (const [k, [sz, w, lh]] of Object.entries(tokens.type)) role(k, { family: k === 'display' ? 'display' : 'ui', size: sz, weight: w, lh }, `core/tokens.ts:${tl}`);
+  const seen = new Set(Object.keys(tokens.type));
+  // an element that also carries `.wb-mono` / `.wb-display` (the selector's last part names it)
+  const classed = (sel, f) => {
+    const last = sel.trim().split(/\s+/).pop();
+    for (const c of ['wb-mono', 'wb-display']) if (last.includes(`.${c}`)) f = fontOf(rules.get(`core/wubble.css .${c}`).decls, f);
+    return f;
+  };
+  for (const [key, r] of rules) {
+    const file = key.slice(0, key.indexOf(' '));
+    const fonts = r.decls.filter(d => /^font(-family|-size|-weight)?$/.test(d.prop) && d.value.trim() !== 'inherit');
+    if (!fonts.length || r.selector === '.wb') continue;
+    const first = r.selector.split(',')[0].trim();
+    let id = (r.at ? `${slug(r.at.replace(/^@\w+/, ''))}-` : '') + slug(first);
+    if (!/^[a-z]/.test(id)) id = `r-${id}`;
+    if (seen.has(id)) continue;
+    // a media/container rule restyles the element its plain rule styles
+    const plain = r.at ? rules.get(`${file} ${r.selector}`) : null;
+    const f = fontOf(r.decls, classed(first, plain ? fontOf(plain.decls, base) : base));
+    seen.add(id);
+    use(file, fonts[0].line);
+    role(id, f, `${file.split('/').pop()}:${fonts[0].line}`);
+  }
+  for (const [id, markup, parts] of TEXT_COMPOSED) {
+    let f = base;
+    for (const [file, sel] of parts) f = fontOf(rules.get(`${file} ${sel}`).decls, f);
+    role(id, f, `${markup} (${parts.map(([file, sel]) => `${file.split('/').pop()} ${sel}`).join(' + ')})`);
+  }
+  out.push('}');
+  return out.join('\n');
+}
+
 // ── Headers, hashes, writing ───────────────────────────────────────────────────────────────
 /** FNV-1a 64 of a string's UTF-8 bytes, as 16 hex digits (the lock test recomputes it). */
 export function fnv1a64(text) {
@@ -528,6 +620,7 @@ const files = {
   'crates/wubble-ui/ui/kit/gen/tokens.slint': withHeader(tokensSlint(css)),
   'crates/wubble-ui/ui/kit/gen/css.slint': withHeader(cssSlint(css)),
   'crates/wubble-ui/ui/kit/gen/icons.slint': withHeader(iconsSlint()),
+  'crates/wubble-ui/ui/kit/gen/text.slint': withHeader(textSlint()),
   'crates/wubble-core/src/kit_gen.rs': withHeader(rustGen(css)),
   'tools/fidelity/glsl-snapshot/COMMIT': `${commit}\n`,
   ...Object.fromEntries(GL.map(f => [`tools/fidelity/glsl-snapshot/${f}`, read(f)])),

@@ -1,0 +1,28 @@
+// design: core/wubble.css:59-69 @598f814
+// The icon wobble on a hit (`wb-wob-a` / `wb-wob-b`, .55 s ease-out): 25 % rotate(-14deg)
+// scale(.9, 1.12), 50 % rotate(9deg) scale(1.06, .95), 75 % rotate(-4deg); each flip of `hit`
+// plays it from the start (keys.slint).
+
+import { Keyframes } from "../gen/tokens.slint";
+import { Keys } from "keys.slint";
+
+export component Wobble inherits Rectangle {
+    // Flip to play the wobble.
+    in property <bool> hit: false;
+    keys := Keys {
+        hit: root.hit;
+        keys: Keyframes.wobble;
+        length: Keyframes.wobble-ms;
+    }
+    out property <angle> rotation: keys.rotation;
+    out property <float> scale-x: keys.sx;
+    out property <float> scale-y: keys.sy;
+    // a component's root takes no transform (Slint), so the children turn inside it
+    Rectangle {
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-rotation: root.rotation;
+        transform-scale-x: root.scale-x;
+        transform-scale-y: root.scale-y;
+        @children
+    }
+}

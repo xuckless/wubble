@@ -1,0 +1,44 @@
+// design: core/wubble.css:59-69, pages/touch.css:127-131 @598f814
+// A CSS keyframe animation of scale and rotation on `ease-out`, replayed from the start on every
+// flip of `hit` (the design's two names per animation, `-a` / `-b`, so a repeat restarts): the
+// wobble (`wb-wob-a`, .55 s), the squash (`wb-sq-a`, .5 s) and the chrome buttons' release squash
+// (`tp-bq-a`, .5 s, the token at a third). Slint has no keyframes, so one linear Replay runs
+// 0 → 1 and the generated keys (`Keyframes.*`) are interpolated from it, each interval on CSS
+// `ease-out`, as CSS applies the timing function per keyframe interval (the generated
+// `Motion.ease-out-css` table). Not a wrapper: callers put `sx` / `sy` / `rotation` into their own
+// transform, so a press and the keys never fight over one property. Cut under reduced motion.
+
+import { Motion, Keyframes, KeyStep } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { Calm } from "calm.slint";
+import { Replay } from "tween.slint";
+
+export component Keys {
+    // Flip to play the keys once more.
+    in property <bool> hit: false;
+    // the check box's squash by default (touch.css `.tp-ck-box.sq-a`)
+    in property <[KeyStep]> keys: Keyframes.squash;
+    in property <duration> length: TouchCss.tp-ck-box-sq-a--animation-duration;
+    rp := Replay {
+        on: root.hit;
+        in-ms: root.length;
+    }
+    width: 0px;
+    height: 0px;
+    // How far along the keys: 1 (at rest) until the first flip.
+    property <float> t: rp.run;
+    property <[KeyStep]> k: root.keys;
+    property <int> seg: root.t >= root.k[3].t ? 3 : root.t >= root.k[2].t ? 2 : root.t >= root.k[1].t ? 1 : 0;
+    property <float> u: (root.t - root.k[root.seg].t) / (root.k[root.seg + 1].t - root.k[root.seg].t);
+    // CSS ease-out at u, from the 33-entry table (linear between entries)
+    property <float> ux: clamp(root.u, 0, 1) * 32;
+    property <int> i: min(31, floor(root.ux));
+    property <float> e: Motion.ease-out-css[root.i] + (Motion.ease-out-css[root.i + 1] - Motion.ease-out-css[root.i]) * (root.ux - root.i);
+    pure function lerp(a: float, b: float) -> float {
+        return Calm.reduced ? b : a + (b - a) * root.e;
+    }
+
+    out property <angle> rotation: root.lerp(root.k[root.seg].rot, root.k[root.seg + 1].rot) * 1deg;
+    out property <float> sx: root.lerp(root.k[root.seg].sx, root.k[root.seg + 1].sx);
+    out property <float> sy: root.lerp(root.k[root.seg].sy, root.k[root.seg + 1].sy);
+}

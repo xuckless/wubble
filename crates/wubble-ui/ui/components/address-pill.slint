@@ -4,13 +4,14 @@
 // Thin glass, radius 12, no shadow, the film rim on hover; host in Ink and the rest in Haze,
 // Geist Mono 13. On the rail it is a search button (.wb-rail-addr, an icon button).
 
-import { Palette, Chrome, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Chrome, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { IconButton } from "nav-buttons.slint";
 import { GlassTier, GlassKeys, BeamShape } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { BorderBeam } from "border-beam.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 export component AddressPill inherits Rectangle {
     in property <string> host;
@@ -74,8 +75,8 @@ export component AddressPill inherits Rectangle {
         drop-shadow-color: transparent;
         scale: ta.pressed ? Shell.address-press : 1;
         animate scale {
-            duration: Shell.address-press-ms;
-            easing: Motion.easeOut;
+            duration: Calm.ms(Shell.address-press-ms);
+            easing: Motion.ease-out;
         }
 
         accessible-role: AccessibleRole.button;
@@ -98,7 +99,7 @@ export component AddressPill inherits Rectangle {
         HorizontalLayout {
             padding-left: Shell.side-grid;
             padding-right: Shell.side-grid;
-            spacing: Spacing.s2;
+            spacing: Space.s2;
             Rectangle {
                 width: Shell.address-icon;
                 bubble := Icon {
@@ -142,7 +143,7 @@ export component AddressPill inherits Rectangle {
                     root.popups-requested(popups.absolute-position.x, popups.absolute-position.y + popups.height);
                 }
                 popups-row := HorizontalLayout {
-                    spacing: Spacing.s1;
+                    spacing: Space.s1;
                     Icon {
                         y: (parent.height - self.height) / 2;
                         path: IconPaths.expand;
@@ -192,7 +193,7 @@ export component AddressPill inherits Rectangle {
                     root.blocker-requested(badge.absolute-position.x, badge.absolute-position.y + badge.height);
                 }
                 badge-row := HorizontalLayout {
-                    spacing: Spacing.s1;
+                    spacing: Space.s1;
                     Icon {
                         y: (parent.height - self.height) / 2;
                         path: IconPaths.shield;

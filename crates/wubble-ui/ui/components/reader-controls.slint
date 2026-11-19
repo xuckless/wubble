@@ -1,4 +1,4 @@
-import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, GlassKeys, GlassOver } from "model.slint";
@@ -38,9 +38,9 @@ export component ReaderControls inherits Rectangle {
         height: row.preferred-height;
         TouchArea { }
         row := HorizontalLayout {
-            padding: Spacing.s1;
-            padding-left: Spacing.s2;
-            spacing: Spacing.s2;
+            padding: Space.s1;
+            padding-left: Space.s2;
+            spacing: Space.s2;
             alignment: center;
             IconButton {
                 icon-path: IconPaths.minus;

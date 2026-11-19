@@ -2,7 +2,9 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Motion } from "../../tokens.slint";
+import { Palette, Motion } from "../gen/tokens.slint";
+import { Calm } from "../motion/calm.slint";
+import { BrowserCss } from "../gen/css.slint";
 
 // @source slint-scroller
 // A scroll view on Wubble physics (scroller.rs) instead of Flickable's: wheel, keys and touch go
@@ -54,7 +56,7 @@ export component WubbleScroller inherits Rectangle {
         border-radius: 2px;
         background: Palette.mist;
         opacity: root.thumb-visible ? 0.55 : 0;
-        animate opacity { duration: root.thumb-visible ? 150ms : 300ms; easing: Motion.easeOut; }
+        animate opacity { duration: Calm.ms(root.thumb-visible ? BrowserCss.wb-thumb-on--transition-opacity-duration : BrowserCss.wb-thumb--transition-opacity-duration); easing: root.thumb-visible ? ease-out : ease-in; }
         TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) { root.thumb-down(self.absolute-position.y + self.mouse-y); }

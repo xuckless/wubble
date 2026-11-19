@@ -1,4 +1,4 @@
-import { Palette, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, GlassKeys, GlassOver } from "model.slint";
@@ -91,7 +91,7 @@ export component ShotOverlay inherits Rectangle {
         }
         Text {
             x: root.x0;
-            y: root.y1 + Spacing.s1;
+            y: root.y1 + Space.s1;
             text: round((root.x1 - root.x0) / Shell.px) + " × " + round((root.y1 - root.y0) / Shell.px);
             color: Palette.ink;
             font-family: Fonts.mono;
@@ -124,12 +124,12 @@ export component ShotOverlay inherits Rectangle {
         width: row.preferred-width;
         height: Shell.find-height;
         x: root.pane-x + (root.pane-width - self.width) / 2;
-        y: root.height - self.height - Spacing.s4;
+        y: root.height - self.height - Space.s4;
         TouchArea { }
         row := HorizontalLayout {
-            padding-left: Spacing.s3;
-            padding-right: Spacing.s1;
-            spacing: Spacing.s1;
+            padding-left: Space.s3;
+            padding-right: Space.s1;
+            spacing: Space.s1;
             Text {
                 text: "Drag to capture a region";
                 vertical-alignment: center;

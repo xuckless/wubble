@@ -1,8 +1,9 @@
-import { Palette, Motion, Spacing, Fonts } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { SheetButton } from "sheet-button.slint";
 import { GlassTier } from "model.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The chrome every sheet shares (JS dialog, sign-in, and the pages' clear / bookmark / password
 // sheets): a scrim that blocks the page under it, thick glass anchored to the top of the content
@@ -47,8 +48,8 @@ export component SheetFrame inherits Rectangle {
         background: Shell.scrim;
         opacity: root.open ? 1 : 0;
         animate opacity {
-            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Shell.sheet-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
     }
 
@@ -86,8 +87,8 @@ export component SheetFrame inherits Rectangle {
         transform-scale: root.open ? 1 : Shell.sheet-from;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Shell.sheet-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
         TouchArea {
             enabled: root.open;
@@ -95,7 +96,7 @@ export component SheetFrame inherits Rectangle {
 
         body := VerticalLayout {
             padding: Shell.sheet-pad;
-            spacing: Spacing.s2;
+            spacing: Space.s2;
             Text {
                 text: root.title;
                 color: Palette.ink;
@@ -115,11 +116,11 @@ export component SheetFrame inherits Rectangle {
             @children
             // .ur-o-dialog p: 22 below the message.
             Rectangle {
-                height: Spacing.s3;
+                height: Space.s3;
             }
             HorizontalLayout {
                 alignment: end;
-                spacing: Spacing.s2;
+                spacing: Space.s2;
                 if root.cancel-text != "": SheetButton {
                     text: root.cancel-text;
                     clicked => {

@@ -1,10 +1,11 @@
-import { Palette, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, VideoView, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
 import { Icon, IconPaths } from "icon.slint";
 import { TextButton } from "settings.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // Video controls over the page's main video (wubble_core::video): play, a progress bar with the
 // SponsorBlock segments on it, speed, loop, picture-in-picture, a frame screenshot, mute and the
@@ -57,14 +58,14 @@ export component VideoControls inherits Rectangle {
         tier: GlassTier.thick;
         radius: Shell.menu-radius;
         over-content: true;
-        width: max(0px, min(Shell.video-strip-width, root.width - 2 * Spacing.s2));
-        x: root.width - self.width - Spacing.s2;
-        height: Shell.icon-button + 2 * Spacing.s1;
-        y: Spacing.s2 - (root.video.open ? 0px : Shell.toast-rise);
+        width: max(0px, min(Shell.video-strip-width, root.width - 2 * Space.s2));
+        x: root.width - self.width - Space.s2;
+        height: Shell.icon-button + 2 * Space.s1;
+        y: Space.s2 - (root.video.open ? 0px : Shell.toast-rise);
         opacity: root.video.open ? 1 : 0;
         animate opacity, y {
-            duration: root.video.open ? Motion.overlapIn : Motion.overlapOut;
-            easing: root.video.open ? Motion.easeOut : Motion.easeIn;
+            duration: Calm.ms(root.video.open ? Motion.overlap-in : Motion.overlap-out);
+            easing: root.video.open ? Motion.ease-out : Motion.ease-in;
         }
         // The strip's controls inside its touch area: a pointer on a button is still on the
         // strip (a sibling under the buttons lost its hover to each of them, and the strip went
@@ -72,8 +73,8 @@ export component VideoControls inherits Rectangle {
         hover := TouchArea {
             enabled: root.video.open;
             if root.video.open: HorizontalLayout {
-                padding: Spacing.s1;
-                spacing: Spacing.s1;
+                padding: Space.s1;
+                spacing: Space.s1;
                 play := IconButton {
                     icon-path: root.video.paused ? IconPaths.play : IconPaths.pause;
                     label: root.video.paused ? "Play" : "Pause";
@@ -195,12 +196,12 @@ export component VideoControls inherits Rectangle {
         width: Shell.video-tab-width;
         height: strip.height;
         x: root.video.pane-right - root.x - self.width + (root.video.collapsed ? 0px : self.width);
-        y: Spacing.s2;
+        y: Space.s2;
         opacity: root.video.collapsed ? 1 : 0;
         visible: root.video.collapsed || self.opacity > 0;
         animate opacity, x {
-            duration: root.video.collapsed ? Motion.overlapIn : Motion.overlapOut;
-            easing: root.video.collapsed ? Motion.easeOut : Motion.easeIn;
+            duration: Calm.ms(root.video.collapsed ? Motion.overlap-in : Motion.overlap-out);
+            easing: root.video.collapsed ? Motion.ease-out : Motion.ease-in;
         }
         tab-hover := TouchArea {
             enabled: root.video.collapsed;
@@ -233,9 +234,9 @@ export component VideoControls inherits Rectangle {
         radius: Shell.menu-radius;
         over-content: true;
         x: strip.x + strip.width - self.width;
-        y: strip.y + strip.height + Spacing.s1;
+        y: strip.y + strip.height + Space.s1;
         width: list.preferred-width;
-        height: max(0px, min(list.preferred-height, root.video.pane-bottom - root.y - self.y - Spacing.s1));
+        height: max(0px, min(list.preferred-height, root.video.pane-bottom - root.y - self.y - Space.s1));
         clip: true;
         // Around the rows, as the strip's: a row under the pointer is still the menu.
         TouchArea {
@@ -243,7 +244,7 @@ export component VideoControls inherits Rectangle {
                 root.menu-over = self.has-hover;
             }
             list := VerticalLayout {
-                padding: Spacing.s1;
+                padding: Space.s1;
                 for rate[i] in root.rates: speed := TextButton {
                     text: (i == root.video.rate-index ? "\u{2713} " : "    ") + rate;
                     clicked => {

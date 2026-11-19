@@ -2,7 +2,8 @@
 // xuckless/the-wallpaper-project @ 6c840da): the sidebar at the inset, the web view beside it
 // once the sidebar has width, the seam over both. Peek is from chrome.tsx (the port has none).
 
-import { Palette, Radius, Chrome, Fonts, Type, Motion, Spacing, Calm } from "tokens.slint";
+import { Palette, Radius, Chrome, Fonts, Type, Motion, Space } from "kit/gen/tokens.slint";
+import { Calm } from "kit/motion/calm.slint";
 import { Shell } from "kit/derived.slint";
 import { Seam } from "kit/controls/seam.slint";
 import { GlassPanel } from "kit/material/glass.slint";
@@ -40,10 +41,9 @@ import { PipControls } from "components/pip-controls.slint";
 import { PipCard } from "components/pip-card.slint";
 import { PageAx } from "components/page-ax.slint";
 import { Sidebar } from "components/sidebar.slint";
-import { GlowRing } from "components/glow-ring.slint";
 import { AutoscrollCursor } from "components/autoscroll-cursor.slint";
 import { WindowEdges, MoveArea } from "components/window-frame.slint";
-import { Entering } from "components/entering.slint";
+import { Entering } from "kit/motion/overlap.slint";
 import { PageScroll } from "components/page-scroll.slint";
 
 import "fonts/Fredoka-Variable.ttf";
@@ -59,8 +59,8 @@ export component AppWindow inherits Window {
     icon: @image-url("../../../assets/icons/linux/hicolor/128x128/apps/wubble.png");
     preferred-width: root.pip ? Shell.pip-width : Shell.window-width;
     preferred-height: root.pip ? Shell.pip-height : Shell.window-height;
-    min-width: root.pip ? Shell.pip-min-width : Chrome.windowMinW;
-    min-height: root.pip ? Shell.pip-min-height : Chrome.windowMinH;
+    min-width: root.pip ? Shell.pip-min-width : Chrome.windowMin-w;
+    min-height: root.pip ? Shell.pip-min-height : Chrome.windowMin-h;
     // wubble draws its own window (TODO Decided: frameless). The ground below is the window's
     // colour, rounded where the platform can show transparent corners. macOS keeps AppKit's frame
     // under a hidden title bar for native resize and corners (window.rs `NATIVE_FRAME`).
@@ -641,12 +641,6 @@ export component AppWindow inherits Window {
     // off it for a while. Presentation only: `peek` never outlives the hidden mode.
     in-out property <bool> peek: false;
     out property <bool> peeking: root.peek && root.sidebar-mode == SidebarMode.hidden;
-    // The peek panel's glowing border (GlowRing, as the address pill's): steady while peeking.
-    out property <float> peek-glow: root.peeking ? 1 : 0;
-    animate peek-glow {
-        duration: Shell.peek-slide;
-        easing: Motion.easeOut;
-    }
     out property <SideEdges> side-edges <=> sidebar.edges;
     changed sidebar-mode => {
         if (root.sidebar-mode != SidebarMode.hidden) {
@@ -660,8 +654,8 @@ export component AppWindow inherits Window {
     property <length> peek-offset: root.peeking ? 0px : -(root.sidebar-saved + Shell.peek-travel + Chrome.inset);
     property <float> peek-alpha: root.peeking ? 1 : Shell.peek-from;
     animate peek-offset, peek-alpha {
-        duration: Shell.peek-slide;
-        easing: Motion.easeOut;
+        duration: Calm.ms(Shell.peek-slide);
+        easing: Motion.ease-out;
     }
 
     // The engine's `Cursor` (wubble-engine nav.rs), in its order; anything
@@ -1008,8 +1002,8 @@ export component AppWindow inherits Window {
                 }
             }
             find-ui := FindBar {
-                x: parent.width - self.width - Spacing.s3;
-                y: Spacing.s3;
+                x: parent.width - self.width - Space.s3;
+                y: Space.s3;
                 find: root.find;
                 edited(q) => {
                     root.find-edited(q);
@@ -1023,8 +1017,8 @@ export component AppWindow inherits Window {
             }
             // Beside the sidebar at the hovered row, kept inside the content area.
             PreviewCard {
-                x: Spacing.s3;
-                y: max(Spacing.s3, min(root.preview.y - parent.absolute-position.y, parent.height - self.height - Spacing.s3));
+                x: Space.s3;
+                y: max(Space.s3, min(root.preview.y - parent.absolute-position.y, parent.height - self.height - Space.s3));
                 shown: root.preview.shown;
                 title: root.preview.title;
                 address: root.preview.address;
@@ -1032,7 +1026,7 @@ export component AppWindow inherits Window {
             }
             ReaderControls {
                 x: root.shot-pane-x + (root.shot-pane-width - self.width) / 2;
-                y: parent.height - self.height - Spacing.s4;
+                y: parent.height - self.height - Space.s4;
                 open: root.reader-on;
                 size: root.reader-size;
                 column: root.reader-width;
@@ -1060,9 +1054,9 @@ export component AppWindow inherits Window {
                 }
             }
             BoostPanel {
-                x: parent.width - self.width - Spacing.s3;
-                y: Spacing.s3;
-                height: parent.height - 2 * Spacing.s3;
+                x: parent.width - self.width - Space.s3;
+                y: Space.s3;
+                height: parent.height - 2 * Space.s3;
                 view: root.boost;
                 text-edited(field, text) => {
                     root.boost-text(field, text);
@@ -1079,8 +1073,8 @@ export component AppWindow inherits Window {
             }
             Toast {
                 x: (parent.width - self.width) / 2;
-                y: Spacing.s4;
-                widest: min(Shell.toast-max-width, parent.width - 2 * Spacing.s4);
+                y: Space.s4;
+                widest: min(Shell.toast-max-width, parent.width - 2 * Space.s4);
                 text: root.toast-text;
                 serial: root.toast-serial;
                 action: root.toast-action;
@@ -1210,9 +1204,9 @@ export component AppWindow inherits Window {
             width: Chrome.inset + sidebar.width;
             height: parent.height;
 
-            // The scene's glass of the peek (GlassOver.peek), over the page, under the peek
-            // panel's glow ring (the panel has no fill of its own then) and the sidebar's content:
-            // window-sized, so placed back at the window's origin.
+            // The scene's glass of the peek (GlassOver.peek), over the page, under the peek panel
+            // (no fill of its own then) and the sidebar's content: window-sized, so placed back at
+            // the window's origin.
             if root.over-on && root.over-peek.width > 0: Image {
                 x: -zone.x;
                 y: -zone.y;
@@ -1235,10 +1229,6 @@ export component AppWindow inherits Window {
                 over-layer: GlassOver.peek;
                 visible: root.hidden-at-rest;
                 opacity: root.peek-alpha;
-                GlowRing {
-                    radius: Radius.lg;
-                    strength: root.peek-glow;
-                }
             }
 
             sidebar := Sidebar {
@@ -1359,8 +1349,8 @@ export component AppWindow inherits Window {
     // page's top left. Not modal: no scrim.
     property <bool> pill-shown: !root.page-fullscreen && (root.peeking || (!root.hidden-at-rest && root.sidebar-width > Shell.sidebar-open));
     permission-ui := PermissionPrompt {
-        x: root.pill-shown ? sidebar.address-below.x : content.x + Spacing.s3;
-        y: root.pill-shown ? sidebar.address-below.y + Shell.prompt-gap : content.y + Spacing.s3;
+        x: root.pill-shown ? sidebar.address-below.x : content.x + Space.s3;
+        y: root.pill-shown ? sidebar.address-below.y + Shell.prompt-gap : content.y + Space.s3;
         prompt: root.permission;
         answered(allow, remember) => {
             root.permission-answered(allow, remember);
@@ -1404,17 +1394,17 @@ export component AppWindow inherits Window {
         border-color: Palette.ink.with-alpha(0.35);
     }
     if root.drag-ghost != "": Rectangle {
-        x: root.drag-x + Spacing.s3;
-        y: root.drag-y + Spacing.s3;
-        width: min(ghost-text.preferred-width + 2 * Spacing.s3, Shell.drag-ghost-max);
+        x: root.drag-x + Space.s3;
+        y: root.drag-y + Space.s3;
+        width: min(ghost-text.preferred-width + 2 * Space.s3, Shell.drag-ghost-max);
         height: Shell.row;
         border-radius: Radius.sm;
         background: Palette.shell;
         drop-shadow-blur: Shell.drag-ghost-blur;
         drop-shadow-color: Shell.drag-ghost-shadow;
         ghost-text := Text {
-            x: Spacing.s3;
-            width: parent.width - 2 * Spacing.s3;
+            x: Space.s3;
+            width: parent.width - 2 * Space.s3;
             text: root.drag-ghost;
             color: Palette.ink;
             vertical-alignment: center;

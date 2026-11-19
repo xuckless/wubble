@@ -10,7 +10,7 @@
 //! y / stretch / origin into the Sidebar's `indicator-*` properties (driver.rs).
 
 use crate::motion::{
-    K, OVERLAP_IN, Spring, Stretch, bezier, clamp, ease, overlap_in, spring, squash_of, step,
+    K, OVERLAP_IN, Spring, Stretch, clamp, ease, overlap_in, spring, squash_of, step, tween,
 };
 
 // @source slint-tabs
@@ -78,7 +78,7 @@ pub struct Leaving {
 impl Leaving {
     /// How far it has gone, 0..1, on the in-out curve.
     pub fn progress(&self) -> f64 {
-        bezier(ease::inOut, self.t / (TABS::exitMs / 1000.0))
+        tween(ease::inOut, self.t, TABS::exitMs / 1000.0)
     }
 }
 

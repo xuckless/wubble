@@ -1,0 +1,58 @@
+// derived: Calm(motion/calm.slint) + Motion(gen/tokens.slint)
+// The kit's one fixed-curve animator: `t` runs to 1 while `on` and back to 0, over the design's
+// in and out durations and easings (a CSS transition between two states), cut to the design's
+// 1 ms under reduced motion by `Calm.ms`. The motion primitives (Overlap, Press, Film, Fold,
+// Pulse, Crossfade) are views of one `t`; nothing else in the kit times a fixed curve.
+
+import { Motion } from "../gen/tokens.slint";
+import { Calm } from "calm.slint";
+
+export component Tween {
+    in property <bool> on;
+    in property <duration> in-ms: Motion.overlap-in;
+    in property <duration> out-ms: Motion.overlap-out;
+    in property <easing> in-easing: Motion.ease-out;
+    in property <easing> out-easing: Motion.ease-out;
+    // CSS keeps animation delays under reduced motion; so does this.
+    in property <duration> delay: 0ms;
+    out property <float> t: root.on ? 1 : 0;
+    width: 0px;
+    height: 0px;
+    animate t {
+        duration: Calm.ms(root.on ? root.in-ms : root.out-ms);
+        delay: root.delay;
+        easing: root.on ? root.in-easing : root.out-easing;
+    }
+}
+
+// A CSS keyframe animation's restart (`wb-in` / `wb-out`, the wobble's and squash's two names):
+// every flip of `on` plays its run from the start, where Tween (a transition) turns back from
+// where it is. `run` is the run's eased progress, 0 → 1 (1 at rest before the first flip). One
+// phase per value of `on`: the one `on` turns to runs 0 → 1, the other snaps back to 0 (a 0 ms
+// animation) ready for the next flip.
+export component Replay {
+    in property <bool> on;
+    in property <duration> in-ms;
+    in property <duration> out-ms: root.in-ms;
+    in property <easing> in-easing: linear;
+    in property <easing> out-easing: root.in-easing;
+    // before a run that `on` turns to true
+    in property <duration> delay: 0ms;
+    property <float> a: root.on ? 1 : 0;
+    animate a {
+        duration: root.on ? Calm.ms(root.in-ms) : 0ms;
+        delay: root.on ? root.delay : 0ms;
+        easing: root.in-easing;
+    }
+    property <float> b: root.on ? 0 : 1;
+    animate b {
+        duration: root.on ? 0ms : Calm.ms(root.out-ms);
+        easing: root.out-easing;
+    }
+    // Both phases are read on every evaluation (each is at least 0, so `min` with 1 + the other
+    // is the one): Slint evaluates lazily, and a phase not read while `on` points away would
+    // never snap back, so the next run would start from its end.
+    out property <float> run: root.on ? min(root.a, 1 + root.b) : min(root.b, 1 + root.a);
+    width: 0px;
+    height: 0px;
+}

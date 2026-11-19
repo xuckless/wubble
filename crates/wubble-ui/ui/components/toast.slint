@@ -1,10 +1,11 @@
-import { Palette, Motion, Fonts, Spacing } from "../tokens.slint";
+import { Palette, Motion, Fonts, Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "nav-buttons.slint";
 import { IconPaths } from "icon.slint";
 import { TextButton } from "settings.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // A brief notice: the zoom level after Ctrl +/-/0, "Press Esc to exit full screen". One
 // component for both. Written from scratch: the design repo has no toast. Look and motion are
@@ -62,25 +63,25 @@ export component Toast inherits Rectangle {
         over-content: true;
         y: root.shown ? 0px : Shell.toast-rise;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: root.shown ? 1 : Motion.dropdownFrom;
+        transform-scale: root.shown ? 1 : Motion.dropdown-from;
         opacity: root.shown ? 1 : 0;
         animate y, transform-scale {
-            duration: root.shown ? Shell.toast-in : Shell.toast-out;
-            easing: root.shown ? Motion.easeSpring : Motion.easeIn;
+            duration: Calm.ms(root.shown ? Shell.toast-in : Shell.toast-out);
+            easing: root.shown ? Motion.ease-spring : Motion.ease-in;
         }
         animate opacity {
-            duration: root.shown ? Motion.dropdownIn : Shell.toast-out;
-            easing: root.shown ? Motion.easeOut : Motion.easeIn;
+            duration: Calm.ms(root.shown ? Motion.dropdown-in : Shell.toast-out);
+            easing: root.shown ? Motion.ease-out : Motion.ease-in;
         }
         // Only a notice with a button takes the pointer.
         if root.shown && root.action != "": TouchArea { }
         row := HorizontalLayout {
             // a wrapped text's lines clear the glass's top and bottom
-            padding-top: Spacing.s3;
-            padding-bottom: Spacing.s3;
+            padding-top: Space.s3;
+            padding-bottom: Space.s3;
             padding-left: Shell.toast-pad;
-            padding-right: root.action == "" ? Shell.toast-pad : Spacing.s2;
-            spacing: Spacing.s2;
+            padding-right: root.action == "" ? Shell.toast-pad : Space.s2;
+            spacing: Space.s2;
             alignment: center;
             // One label per text, made anew for each: Slint 1.19 drops its text measurements
             // on a new surface or scale factor (`TextLayoutCache::clear_all`, which drops their

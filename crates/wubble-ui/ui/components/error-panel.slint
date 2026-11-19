@@ -1,9 +1,10 @@
-import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { SheetButton } from "sheet-button.slint";
 import { ErrorView, GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The error panel over the page: a failed load ("This site can't be reached", Reload), a refused
 // certificate ("Your connection is not private", Go back, and Proceed only where allowed) or a
@@ -54,16 +55,16 @@ export component ErrorPanel inherits Rectangle {
         over-content: true;
         opacity: root.open ? 1 : 0;
         animate opacity {
-            duration: root.open ? Shell.sheet-in : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Shell.sheet-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
 
         column := VerticalLayout {
             x: (parent.width - self.width) / 2;
-            y: max(Spacing.s6, (parent.height - self.preferred-height) / 3);
+            y: max(Space.s6, (parent.height - self.preferred-height) / 3);
             width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
             height: self.preferred-height;
-            spacing: Spacing.s3;
+            spacing: Space.s3;
             Icon {
                 path: root.error.cert ? IconPaths.lock : IconPaths.globe;
                 size: Shell.error-icon;
@@ -93,11 +94,11 @@ export component ErrorPanel inherits Rectangle {
                 wrap: word-wrap;
             }
             Rectangle {
-                height: Spacing.s3;
+                height: Space.s3;
             }
             HorizontalLayout {
                 alignment: start;
-                spacing: Spacing.s2;
+                spacing: Space.s2;
                 SheetButton {
                     text: root.error.primary;
                     primary: true;

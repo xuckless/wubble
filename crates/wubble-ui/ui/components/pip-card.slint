@@ -1,4 +1,4 @@
-import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { SheetButton } from "sheet-button.slint";
 import { Icon, IconPaths } from "icon.slint";
@@ -24,10 +24,10 @@ export component PipCard inherits Rectangle {
 
     VerticalLayout {
         x: (parent.width - self.width) / 2;
-        y: max(Spacing.s6, (parent.height - self.preferred-height) / 3);
+        y: max(Space.s6, (parent.height - self.preferred-height) / 3);
         width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
         height: self.preferred-height;
-        spacing: Spacing.s3;
+        spacing: Space.s3;
         Icon {
             path: IconPaths.pip;
             size: Shell.error-icon;
@@ -50,7 +50,7 @@ export component PipCard inherits Rectangle {
             wrap: word-wrap;
         }
         Rectangle {
-            height: Spacing.s3;
+            height: Space.s3;
         }
         HorizontalLayout {
             alignment: start;

@@ -1,6 +1,7 @@
-import { Palette, Motion, Spacing, Fonts, Type, Radius } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type, Radius } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { Squash } from "squash.slint";
+import { Keys } from "../kit/motion/keys.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // A check box and its label, one target. Mint when checked, the tick drawn over it. Its motion
 // is the design's checkbox (pages/touch.tsx `Checks`, touch.css `.tp-ck`, the owner's design
@@ -11,14 +12,14 @@ export component CheckBox inherits Rectangle {
     in property <string> text;
     in-out property <bool> checked;
 
-    height: Spacing.s4 + Spacing.s2;
+    height: Space.s4 + Space.s2;
 
     ta := TouchArea {
         clicked => {
             root.checked = !root.checked;
         }
     }
-    sq := Squash {}
+    sq := Keys {}
     changed checked => {
         if root.checked {
             sq.hit = !sq.hit;
@@ -26,23 +27,19 @@ export component CheckBox inherits Rectangle {
     }
     Rectangle {
         x: 0px;
-        width: Spacing.s4;
-        height: Spacing.s4;
+        width: Space.s4;
+        height: Space.s4;
         border-radius: Radius.xs / 2;
         border-width: Shell.check-rim;
         border-color: root.checked ? Palette.mint : Palette.haze;
-        animate border-color {
-            duration: Shell.menu-hover-ms;
-            easing: Motion.easeOut;
-        }
         clip: true;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        // pressing squeezes; filling squashes (the squash token, squash.slint)
+        // pressing squeezes; filling squashes (the squash token, keys.slint)
         property <float> px: ta.pressed ? 1.12 : 1;
         property <float> py: ta.pressed ? 0.9 : 1;
         animate px, py {
-            duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-            easing: Motion.easeOut;
+            duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
+            easing: Motion.ease-out;
         }
         transform-scale-x: self.px * sq.sx;
         transform-scale-y: self.py * sq.sy;
@@ -50,8 +47,8 @@ export component CheckBox inherits Rectangle {
         Rectangle {
             property <length> d: root.checked ? parent.width * 1.5 : 0px;
             animate d {
-                duration: root.checked ? Motion.overlapIn : Motion.overlapOut;
-                easing: root.checked ? Motion.easeOut : Motion.easeInOut;
+                duration: Calm.ms(root.checked ? Motion.overlap-in : Motion.overlap-out);
+                easing: root.checked ? Motion.ease-out : Motion.ease-in-out;
             }
             x: (parent.width - self.d) / 2;
             y: (parent.height - self.d) / 2;
@@ -64,8 +61,8 @@ export component CheckBox inherits Rectangle {
             opacity: root.checked ? 1 : 0;
             animate opacity {
                 delay: root.checked ? Shell.check-tick-delay : 0ms;
-                duration: root.checked ? Motion.overlapIn : Shell.check-tick-out;
-                easing: Motion.easeOut;
+                duration: Calm.ms(root.checked ? Motion.overlap-in : Shell.check-tick-out);
+                easing: Motion.ease-out;
             }
             width: 100%;
             height: 100%;
@@ -80,7 +77,7 @@ export component CheckBox inherits Rectangle {
         }
     }
     Text {
-        x: Spacing.s4 + Spacing.s2;
+        x: Space.s4 + Space.s2;
         width: parent.width - self.x;
         text: root.text;
         color: Palette.mist;

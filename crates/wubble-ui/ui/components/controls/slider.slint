@@ -7,10 +7,10 @@
 // settings page's .st-slider shows it (`pages/settings.css`, @ 21838b8). Same API (`value` in
 // `min`..`max`, `set` on release).
 
-import { Palette, Fonts } from "../../tokens.slint";
+import { Palette, Fonts } from "../../kit/gen/tokens.slint";
 import { Shell } from "../../kit/derived.slint";
 import { Controls, ControlView } from "registry.slint";
-import { FilmRim } from "../glow-ring.slint";
+
 import { Raised } from "../raised.slint";
 
 export component Slider inherits VerticalLayout {
@@ -92,10 +92,6 @@ export component Slider inherits VerticalLayout {
             transform-origin: { x: self.width * root.v.origin, y: self.height / 2 };
             transform-scale-x: root.v.scale-x;
             transform-scale-y: root.v.scale-y;
-            FilmRim {
-                radius: parent.border-radius;
-                touched: ta.has-hover || ta.pressed;
-            }
         }
         ta := TouchArea {
             mouse-cursor: self.pressed ? grabbing : grab;

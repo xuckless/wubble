@@ -1,10 +1,11 @@
-import { Palette, Radius, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Radius, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { GlanceView, GlassTier, GlassKeys, GlassOver } from "model.slint";
 import { SheetButton } from "sheet-button.slint";
 import { IconButton } from "nav-buttons.slint";
 import { IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The peek (Shift+click on a link): the page in a card on thick glass over the page it was
 // opened from, a scrim under it; a header with its title, "Open as tab", "Open in split" and
@@ -42,8 +43,8 @@ export component GlanceCard inherits Rectangle {
         background: Shell.scrim;
         opacity: root.open ? 1 : 0;
         animate opacity {
-            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
         TouchArea {
             enabled: root.open;
@@ -60,30 +61,30 @@ export component GlanceCard inherits Rectangle {
         // the scene draws its glass above the page (GlassPanel `over-layer`)
         key: GlassKeys.glance;
         over-layer: GlassOver.card;
-        x: root.g.x - Spacing.s2;
+        x: root.g.x - Space.s2;
         y: root.g.card-y;
-        width: root.g.width + 2 * Spacing.s2;
-        height: root.g.y + root.g.height + Spacing.s2 - root.g.card-y;
+        width: root.g.width + 2 * Space.s2;
+        height: root.g.y + root.g.height + Space.s2 - root.g.card-y;
         tier: GlassTier.thick;
         radius: Radius.lg;
         over-content: true;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        transform-scale: root.open ? 1 : Motion.dropdown-from;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
         TouchArea {
             enabled: root.open;
         }
 
         HorizontalLayout {
-            x: Spacing.s2;
+            x: Space.s2;
             y: 0px;
             width: root.g.width;
             height: root.g.y - root.g.card-y;
-            spacing: Spacing.s2;
+            spacing: Space.s2;
             alignment: stretch;
             Text {
                 horizontal-stretch: 1;
@@ -132,7 +133,7 @@ export component GlanceCard inherits Rectangle {
         }
 
         page := Rectangle {
-            x: Spacing.s2;
+            x: Space.s2;
             y: root.g.y - root.g.card-y;
             width: root.g.width;
             height: root.g.height;

@@ -1,4 +1,4 @@
-import { Palette, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { SheetFrame } from "sheet-frame.slint";
 import { PrintSheetView } from "model.slint";
@@ -8,7 +8,7 @@ import { CheckBox } from "check-box.slint";
 // One labelled control of the print sheet: the label left, the control right.
 component PrintLine inherits HorizontalLayout {
     in property <string> label;
-    spacing: Spacing.s3;
+    spacing: Space.s3;
     Text {
         text: root.label;
         horizontal-stretch: 1;
@@ -68,7 +68,7 @@ export component PrintSheet inherits SheetFrame {
 
     // Destinations: Save as PDF first, then each printer.
     VerticalLayout {
-        spacing: Spacing.s1;
+        spacing: Space.s1;
         for name[i] in root.sheet.destinations: Rectangle {
             height: Shell.icon-button;
             border-radius: Shell.sheet-button-radius;
@@ -80,8 +80,8 @@ export component PrintSheet inherits SheetFrame {
                 }
             }
             Text {
-                x: Spacing.s3;
-                width: parent.width - 2 * Spacing.s3;
+                x: Space.s3;
+                width: parent.width - 2 * Space.s3;
                 text: name;
                 color: Palette.ink;
                 font-family: Fonts.ui;

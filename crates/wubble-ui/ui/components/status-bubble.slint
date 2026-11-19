@@ -1,5 +1,6 @@
-import { Palette, Motion, Fonts } from "../tokens.slint";
+import { Palette, Motion, Fonts } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The hovered link's URL at the page pane's bottom-left (Chromium's status bubble), one per
 // pane. Written from scratch: the design repo has no status bubble. Its timing and shape are
@@ -26,11 +27,11 @@ export component StatusBubble inherits Rectangle {
     height: Shell.status-height;
     x: root.mirrored ? root.pane-width - self.width - Shell.status-margin : Shell.status-margin;
     y: root.pane-height - self.height - Shell.status-margin;
-    animate x { duration: Shell.status-move; easing: Motion.easeInOut; }
+    animate x { duration: Calm.ms(Shell.status-move); easing: Motion.ease-in-out; }
     opacity: root.shown ? 1 : 0;
     animate opacity {
-        duration: root.shown ? Shell.status-in : Shell.status-out;
-        easing: root.shown ? Motion.easeOut : Motion.easeIn;
+        duration: Calm.ms(root.shown ? Shell.status-in : Shell.status-out);
+        easing: root.shown ? Motion.ease-out : Motion.ease-in;
     }
     visible: self.opacity > 0;
     border-radius: self.height / 2;

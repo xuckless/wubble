@@ -15,7 +15,7 @@
 // the list editor and the chord recorder row. Reused: the port's PressableButton, SpaceIcon and
 // WubbleScroller, wubble's IconButton, Icon and Raised.
 
-import { Palette, Motion, Spacing, Fonts, Type, Radius, Glass } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type, Radius, Glass, Keyframes } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { PressableButton } from "../kit/controls/button.slint";
 import { SpaceIcon } from "../kit/chrome/space-icon.slint";
@@ -28,7 +28,11 @@ import { Raised, Chip } from "raised.slint";
 import { Toggle } from "controls/toggle.slint";
 import { Slider } from "controls/slider.slint";
 import { Controls, ControlView } from "controls/registry.slint";
-import { Squash } from "squash.slint";
+import { Keys } from "../kit/motion/keys.slint";
+import { TouchCss, SettingsCss } from "../kit/gen/css.slint";
+import { Calm } from "../kit/motion/calm.slint";
+import { KitText } from "../kit/text.slint";
+import { Role } from "../kit/gen/text.slint";
 
 // .tp-seg in .st-seg: a chip with one segment per word, each as wide as its label; the chosen
 // one is the ink indicator with the dark label. The indicator is the design's liquid one
@@ -107,8 +111,8 @@ export component Segmented inherits Rectangle {
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     animate color {
-                        duration: Shell.seg-label-ms;
-                        easing: Motion.easeOut;
+                        duration: Calm.ms(Shell.seg-label-ms);
+                        easing: Motion.ease-out;
                     }
                 }
             }
@@ -188,10 +192,10 @@ export component Field inherits Rectangle {
         radius: root.capsule ? root.height / 2 : Radius.sm;
     }
 
-    property <length> start: root.capsule ? Shell.search-pad-start : Spacing.s3;
-    property <length> end: root.capsule ? Shell.search-pad-end : Spacing.s3;
-    property <length> lead: root.icon-path == "" ? root.start : root.start + Shell.icon + Spacing.s2;
-    property <length> trail: root.capsule && input.text != "" ? Shell.search-clear + Spacing.s2 : 0px;
+    property <length> start: root.capsule ? Shell.search-pad-start : Space.s3;
+    property <length> end: root.capsule ? Shell.search-pad-end : Space.s3;
+    property <length> lead: root.icon-path == "" ? root.start : root.start + Shell.icon + Space.s2;
+    property <length> trail: root.capsule && input.text != "" ? Shell.search-clear + Space.s2 : 0px;
     property <length> font: root.capsule ? Shell.search-font : Type.body.size;
     if root.icon-path != "": Icon {
         x: root.start;
@@ -279,7 +283,7 @@ export component Stepper inherits HorizontalLayout {
     in property <float> step: 1;
     callback set(float);
 
-    spacing: Spacing.s1;
+    spacing: Space.s1;
     alignment: end;
     IconButton {
         icon-path: IconPaths.minus;
@@ -326,19 +330,20 @@ export component TextButton inherits Rectangle {
     background: ta.has-hover && root.enabled ? Shell.reset-hover : transparent;
     opacity: root.enabled ? 1 : Shell.icon-button-disabled;
     animate background {
-        duration: Shell.icon-button-ms;
-        easing: Motion.easeOut;
+        duration: Calm.ms(Shell.icon-button-ms);
+        easing: Motion.ease-out;
     }
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    property <float> press: ta.pressed ? Motion.pressScale : 1;
+    property <float> press: ta.pressed ? Motion.press-scale : 1;
     animate press {
-        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-        easing: Motion.easeOut;
+        duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
+        easing: Motion.ease-out;
     }
     transform-scale-x: root.press * sq.sx;
     transform-scale-y: root.press * sq.sy;
-    sq := Squash {
-        amp: Shell.squash-chrome;
+    sq := Keys {
+        keys: Keyframes.button-squash;
+        length: TouchCss.tp-btn-body-sq-a--animation-duration;
     }
     property <bool> down: ta.pressed;
     changed down => {
@@ -377,7 +382,7 @@ export component EntryList inherits VerticalLayout {
     callback removed(string);
     callback added(string);
 
-    spacing: Spacing.s1;
+    spacing: Space.s1;
     if root.entries.length == 0 && !root.can-add: Text {
         text: root.empty;
         color: Palette.haze;
@@ -385,7 +390,7 @@ export component EntryList inherits VerticalLayout {
         font-size: Shell.row-note;
     }
     for entry in root.entries: HorizontalLayout {
-        spacing: Spacing.s2;
+        spacing: Space.s2;
         Text {
             horizontal-stretch: 1;
             text: entry.label;
@@ -415,11 +420,9 @@ export component EntryList inherits VerticalLayout {
 }
 
 // .st-sec-head h2: a section's title, in the display face.
-export component SectionHeader inherits Text {
+export component SectionHeader inherits KitText {
+    role: Role.st-sec-head-h2;
     color: Palette.ink;
-    font-family: Fonts.display;
-    font-size: Shell.section-title;
-    font-weight: 600;
     vertical-alignment: center;
 }
 
@@ -470,7 +473,7 @@ export component Line inherits HorizontalLayout {
         // each line at the page's line height (wubble.css body: 1.45), as the CSS lays it out
         Text {
             text: root.label;
-            min-height: Shell.row-title * Type.body.lineHeight;
+            min-height: Shell.row-title * Type.body.line-height;
             color: Palette.ink;
             font-family: Fonts.ui;
             font-size: Shell.row-title;
@@ -480,7 +483,7 @@ export component Line inherits HorizontalLayout {
         }
         if root.note != "": Text {
             text: root.note;
-            min-height: Shell.row-note * Type.body.lineHeight;
+            min-height: Shell.row-note * Type.body.line-height;
             color: root.note-color;
             font-family: Fonts.ui;
             font-size: Shell.row-note;
@@ -490,7 +493,7 @@ export component Line inherits HorizontalLayout {
     }
     HorizontalLayout {
         alignment: end;
-        spacing: Spacing.s3;
+        spacing: Space.s3;
         @children
     }
 }
@@ -510,8 +513,8 @@ export component SettingRow inherits Rectangle {
     border-radius: Radius.md;
     background: root.tap && row-ta.has-hover ? Shell.row-tap-hover : transparent;
     animate background {
-        duration: Shell.icon-button-ms;
-        easing: Motion.easeOut;
+        duration: Calm.ms(Shell.icon-button-ms);
+        easing: Motion.ease-out;
     }
     row-ta := TouchArea {
         enabled: root.tap;
@@ -730,8 +733,8 @@ component Swatches inherits HorizontalLayout {
             transform-origin: { x: self.width / 2, y: self.height / 2 };
             transform-scale: sw-ta.has-hover ? Shell.swatch-hover : 1;
             animate transform-scale {
-                duration: Shell.control-ms;
-                easing: Motion.easeOut;
+                duration: Calm.ms(Shell.control-ms);
+                easing: Motion.ease-out;
             }
         }
     }
@@ -749,10 +752,10 @@ component NavRow inherits Rectangle {
     height: Shell.nav-row;
     opacity: root.enabled ? 1 : Shell.nav-disabled;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
-    transform-scale: ta.pressed ? Motion.pressScale : 1;
+    transform-scale: ta.pressed ? Motion.press-scale : 1;
     animate transform-scale {
-        duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-        easing: Motion.easeOut;
+        duration: Calm.ms(ta.pressed ? Motion.press-in : Motion.press-out);
+        easing: Motion.ease-out;
     }
     accessible-role: AccessibleRole.tab;
     accessible-label: root.title;
@@ -777,8 +780,8 @@ component NavRow inherits Rectangle {
                 path: root.icon-path;
                 tint: root.on ? root.accent : root.on || ta.has-hover ? Palette.ink : Palette.mist;
                 animate tint {
-                    duration: Shell.control-ms;
-                    easing: Motion.easeOut;
+                    duration: Calm.ms(Shell.control-ms);
+                    easing: Motion.ease-out;
                 }
             }
         }
@@ -790,8 +793,8 @@ component NavRow inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
             animate color {
-                duration: Shell.icon-button-ms;
-                easing: Motion.easeOut;
+                duration: Calm.ms(Shell.icon-button-ms);
+                easing: Motion.ease-out;
             }
         }
     }
@@ -892,12 +895,12 @@ component PageScroller inherits Rectangle {
     }
 }
 
-// The page's title in the display face (.st-pin h1).
-component PageTitle inherits Text {
+// The page's title in the display face (.st-pin h1); smaller when the page (the design's
+// `.tp-page` container) is `narrow`, at most the settings.css query's 759 px wide.
+component PageTitle inherits KitText {
+    in property <bool> narrow;
+    role: root.narrow ? Role.st-title-narrow : Role.st-title;
     color: Palette.ink;
-    font-family: Fonts.display;
-    font-size: Shell.settings-title;
-    font-weight: 600;
     vertical-alignment: center;
 }
 
@@ -933,10 +936,11 @@ export component PageFrame inherits Rectangle {
                 spacing: 0px;
 
                 HorizontalLayout {
-                    spacing: Spacing.s6;
+                    spacing: Space.s6;
                     padding-bottom: Shell.settings-title-below;
                     PageTitle {
                         text: root.title;
+                        narrow: root.width <= SettingsCss.max-width-759px--query-max-width;
                     }
                     search := Field {
                         horizontal-stretch: 1;
@@ -1225,7 +1229,7 @@ export component SettingsPage inherits Rectangle {
                                 TextInput {
                                     text: space.name;
                                     accessible-label: "Space name";
-                                    min-height: Shell.row-title * Type.body.lineHeight;
+                                    min-height: Shell.row-title * Type.body.line-height;
                                     vertical-alignment: center;
                                     color: Palette.ink;
                                     font-family: Fonts.ui;
@@ -1238,7 +1242,7 @@ export component SettingsPage inherits Rectangle {
                                 }
                                 Text {
                                     text: "Its colour tints the window's glass and the backdrop.";
-                                    min-height: Shell.row-note * Type.body.lineHeight;
+                                    min-height: Shell.row-note * Type.body.line-height;
                                     vertical-alignment: center;
                                     color: Palette.mist;
                                     font-family: Fonts.ui;
@@ -1455,6 +1459,7 @@ export component SettingsPage inherits Rectangle {
                 padding-bottom: Shell.settings-title-below;
                 PageTitle {
                     text: "Settings";
+                    narrow: root.width <= SettingsCss.max-width-759px--query-max-width;
                 }
             }
             search := Field {
@@ -1493,8 +1498,8 @@ export component SettingsPage inherits Rectangle {
                     fill: Shell.nav-fill;
                     highlight: Shell.nav-highlight;
                     animate y {
-                        duration: Shell.control-ms;
-                        easing: Motion.easeOut;
+                        duration: Calm.ms(Shell.control-ms);
+                        easing: Motion.ease-out;
                     }
                 }
                 VerticalLayout {

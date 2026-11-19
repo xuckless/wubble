@@ -1,9 +1,10 @@
-import { Palette, Motion, Spacing, Fonts, Type } from "../tokens.slint";
+import { Palette, Motion, Space, Fonts, Type } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { GlassPanel } from "../kit/material/glass.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { GlassTier, MenuEntry, GlassKeys, GlassOver } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 // The page's context menu; fills its parent (the window) so a click anywhere outside the panel
 // dismisses it (and is consumed, as Chromium's menu consumes it). Written from scratch: the
@@ -65,8 +66,8 @@ export component ContextMenu inherits Rectangle {
     // Opens to the right of and below the pointer; flips where it would leave the parent, then
     // clamps into it (8 px from the edges).
     pure function place(anchor: length, size: length, limit: length) -> length {
-        let flipped = anchor + size > limit - Spacing.s2 ? anchor - size : anchor;
-        return max(Spacing.s2, min(flipped, limit - size - Spacing.s2));
+        let flipped = anchor + size > limit - Space.s2 ? anchor - size : anchor;
+        return max(Space.s2, min(flipped, limit - size - Space.s2));
     }
 
     // The exit is seen (Overlap: the old state shares the screen while it leaves): drawn until
@@ -127,11 +128,11 @@ export component ContextMenu inherits Rectangle {
             x: max(0px, min(self.width, root.at-x - self.x)),
             y: max(0px, min(self.height, root.at-y - self.y)),
         };
-        transform-scale: root.open ? 1 : Motion.dropdownFrom;
+        transform-scale: root.open ? 1 : Motion.dropdown-from;
         opacity: root.open ? 1 : 0;
         animate transform-scale, opacity {
-            duration: root.open ? Motion.dropdownIn : Motion.dropdownOut;
-            easing: root.open ? Motion.easeOut : Motion.easeInOut;
+            duration: Calm.ms(root.open ? Motion.dropdown-in : Motion.dropdown-out);
+            easing: root.open ? Motion.ease-out : Motion.ease-in-out;
         }
         // Swallow clicks between rows so they do not reach the scrim.
         TouchArea { }
@@ -156,7 +157,7 @@ export component ContextMenu inherits Rectangle {
                     // Icon, label, shortcut; a danger row in coral with a coral highlight
                     // (the design's `.tp-mrow.danger`, `.tp-menu-hl.danger`: coral at .12).
                     property <bool> lit: entry.enabled && (row-touch.has-hover || i == root.current);
-                    property <length> lead: entry.icon != "" ? Shell.menu-row-pad + Shell.icon + Spacing.s2 : Shell.menu-row-pad;
+                    property <length> lead: entry.icon != "" ? Shell.menu-row-pad + Shell.icon + Space.s2 : Shell.menu-row-pad;
                     accessible-role: AccessibleRole.list-item;
                     accessible-label: entry.label;
                     accessible-enabled: entry.enabled;
@@ -171,8 +172,8 @@ export component ContextMenu inherits Rectangle {
                     border-radius: Shell.menu-row-radius;
                     background: !self.lit ? transparent : entry.danger ? Palette.coral.with-alpha(0.12) : Shell.command-selected;
                     animate background {
-                        duration: Shell.menu-hover-ms;
-                        easing: Motion.easeOut;
+                        duration: Calm.ms(Shell.menu-hover-ms);
+                        easing: Motion.ease-out;
                     }
                     row-touch := TouchArea {
                         enabled: entry.enabled && root.open;
@@ -197,7 +198,7 @@ export component ContextMenu inherits Rectangle {
                     }
                     Text {
                         x: parent.lead;
-                        width: shortcut.x - parent.lead - (entry.shortcut != "" ? Spacing.s2 : 0px);
+                        width: shortcut.x - parent.lead - (entry.shortcut != "" ? Space.s2 : 0px);
                         height: parent.height;
                         text: entry.label;
                         vertical-alignment: center;

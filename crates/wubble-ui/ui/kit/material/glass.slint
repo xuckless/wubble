@@ -1,19 +1,18 @@
 // design: core/wubble.css:15-44, browser/layer.ts:1-47 @598f814
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
-// @ 6c840da, with the marked `wubble change`s), unchanged.
+// @ 6c840da, with the marked `wubble change`s); the fallback material is 598f814's frost.
 
-import { Palette, Radius, Glass, GlassTierStyle, Motion } from "../../tokens.slint";
+import { Radius, Glass, GlassTierStyle } from "../gen/tokens.slint";
+import { Film } from "../motion/film.slint";
 import { GlassTier, GlassItem, GlassLayer } from "../../components/model.slint";
 import { Shell } from "../derived.slint";
 
 // @source slint-glass-panel
-// Glass approximated in Slint: tier fill + drop shadow + 1px inner rim (7% all round, 22% on
-// top) + the specular band (white 10% → 0 over the top 42%). Slint has no backdrop-filter, so
-// there is no blur or refraction here: put the wgpu glass quad (render.rs, same rect, radius
-// and tier) underneath and this panel's fill is skipped with `over-wgpu: true`.
-// The film rim (touch only) fades in over 200 ms and out over 150 ms like wubble.css; Slint has
-// no conic gradient, so the rim is a linear film-colour sweep. The swirling version is the wgpu
-// film rim (uFilm).
+// Glass approximated in Slint (the Flat quality tier, and wherever the scene glass is not under
+// the item): the frost tier's fill, shadow, rims and top light. Slint has no backdrop-filter here,
+// so there is no blur or refraction: put the wgpu glass quad (render.rs, same rect, radius and
+// tier) underneath and this panel's fill is skipped with `over-wgpu: true`.
+// The film rim (touch only) is the kit's Film (motion/film.slint).
 // wubble change: with `over-wgpu` the panel reports its rectangle, radius, tier and touch state
 // as data (`item`, through GlassLayer.report), which the host hands to the scene's `set_glass`
 // each frame it changed; nothing calls into the scene per widget.
@@ -30,7 +29,7 @@ export component GlassPanel inherits Rectangle {
     // (GlassOver; 0 under the page). An overlay is on the scene whenever the scene draws overlays.
     in property <int> over-layer: 0;
     in property <bool> over-wgpu: root.over-layer > 0 && GlassLayer.over-on;     // the wgpu glass pass draws the material underneath
-    in property <bool> over-content: false;  // over live web content: thick uses Glass.thickOverContent
+    in property <bool> over-content: false;  // over live web content: thick uses Shell.thick-unblurred-fill
     // wubble change: the scene's glass, as data. `key` orders the scene's list (GlassKeys);
     // `present` is the panel's own say whether it shows.
     in property <int> key: -1;
@@ -73,13 +72,18 @@ export component GlassPanel inherits Rectangle {
     }
 
     property <GlassTierStyle> t: root.tier == GlassTier.thin ? Glass.thin : root.tier == GlassTier.regular ? Glass.regular : Glass.thick;
-    property <float> shadow-alpha: root.tier == GlassTier.thin ? 0.35 : root.tier == GlassTier.regular ? 0.45 : 0.55;
 
+    // The fallback material, 598f814's coloured frost without the backdrop filter (the scene's
+    // glass pass draws that): `.wb-thin/.wb-regular/.wb-thick` fill and outer shadow, the two
+    // inset rims (`inset 0 0 0 1px` all round, `inset 0 1px 0` on top) and `.wb-glass::after`'s
+    // top light (white 3.5 % to 0 at half height).
+    // Slint limit (kit-plan section 6, L2-2): Slint scales a drop shadow by its own fill's alpha,
+    // so this outer shadow is fainter than the CSS one over a translucent fill.
     border-radius: root.radius;
-    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;   // wubble change: Shell, not Glass.thickOverContent (.72): without the blur, text needs more body
-    drop-shadow-offset-y: root.over-wgpu ? 0px : root.t.shadowY;
-    drop-shadow-blur: root.over-wgpu ? 0px : root.t.shadowBlur;
-    drop-shadow-color: root.over-wgpu ? transparent : rgba(0, 0, 0, root.shadow-alpha);
+    background: root.over-wgpu ? transparent : root.over-content && root.tier == GlassTier.thick ? Shell.thick-unblurred-fill : root.t.fill;   // wubble change: Shell.thick-unblurred-fill over content until the scene blurs the page (owner decision 3)
+    drop-shadow-offset-y: root.over-wgpu ? 0px : root.t.shadow-y;
+    drop-shadow-blur: root.over-wgpu ? 0px : root.t.shadow-blur;
+    drop-shadow-color: root.over-wgpu ? transparent : root.t.shadow-color;
 
     // tint at 10%
     Rectangle {
@@ -88,41 +92,36 @@ export component GlassPanel inherits Rectangle {
         visible: !root.over-wgpu && root.tint.alpha > 0;
     }
 
-    // specular band
+    // top light (.wb-glass::after)
     Rectangle {
         y: 0;
-        height: parent.height * Glass.specularStop;
+        height: parent.height * Glass.top-light-stop;
         border-top-left-radius: root.radius;
         border-top-right-radius: root.radius;
-        background: @linear-gradient(180deg, Glass.specular 0%, transparent 100%);
+        background: @linear-gradient(180deg, Glass.top-light 0%, transparent 100%);
         visible: !root.over-wgpu;
     }
 
-    // 1px inner rim, 7% all round
+    // inset 0 0 0 1px rim-all
     Rectangle {
         border-radius: root.radius;
-        border-width: 1px;
-        border-color: Glass.rimAll;
+        inner-shadow-spread: Shell.px;
+        inner-shadow-color: root.t.rim-all;
         visible: !root.over-wgpu;
     }
-    // ... and 22% along the top edge (inset 0 1px 0)
+    // inset 0 1px 0 rim-top
     Rectangle {
-        x: root.radius;
-        y: 0;
-        width: max(0px, parent.width - root.radius * 2);
-        height: 1px;
-        background: Glass.rimTop;
+        border-radius: root.radius;
+        inner-shadow-offset-y: Shell.px;
+        inner-shadow-color: root.t.rim-top;
         visible: !root.over-wgpu;
     }
 
     // film rim, only on touch. wubble change: the scene draws its own (uFilm) over wgpu.
-    Rectangle {
-        border-radius: root.radius;
-        border-width: 1.5px;
-        border-color: @linear-gradient(120deg, Palette.sky 0%, Palette.lilac 33%, Palette.blush 66%, Palette.mint 100%);
+    Film {
+        radius: root.radius;
+        on: root.film;
         visible: !root.over-wgpu;
-        opacity: root.film ? 0.8 : 0;
-        animate opacity { duration: root.film ? 200ms : 150ms; easing: Motion.easeOut; }
     }
 
     @children

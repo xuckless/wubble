@@ -2,7 +2,9 @@
 // Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
 // @ 6c840da, with the marked `wubble change`s), unchanged.
 
-import { Palette, Motion } from "../../tokens.slint";
+import { Palette, Motion } from "../gen/tokens.slint";
+import { Calm } from "../motion/calm.slint";
+import { BrowserCss } from "../gen/css.slint";
 
 // @source slint-seam
 // The rubber-string seam (seam.rs). The hit strip sits on the sidebar's edge; grab/drag/release
@@ -37,7 +39,7 @@ export component Seam inherits Rectangle {
         background: Palette.sky;
         visible: !root.bowed;
         opacity: touch.has-hover || touch.pressed ? 0.6 : 0;
-        animate opacity { duration: touch.has-hover ? 200ms : 150ms; easing: Motion.easeOut; }
+        animate opacity { duration: Calm.ms(BrowserCss.wb-seam-path--transition-stroke-duration); easing: ease; }
     }
     // the bowed string while held or twanging
     Path {

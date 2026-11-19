@@ -4,11 +4,12 @@
 // label, the hint in Haze. The selection fill is the bar's one sliding highlight; the row only tints its icon. Rows enter through the
 // port's OverlapLayer, 30 ms apart.
 
-import { Palette, Spacing, Fonts, Type, Motion } from "../tokens.slint";
+import { Palette, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { CommandKind, CommandResult } from "model.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Calm } from "../kit/motion/calm.slint";
 
 export component CommandRow inherits Rectangle {
     in property <CommandResult> item;
@@ -55,12 +56,6 @@ export component CommandRow inherits Rectangle {
             width: root.width;
             height: root.height;
             border-radius: Shell.control-radius;
-            transform-origin: { x: self.width / 2, y: self.height / 2 };
-            transform-scale: ta.pressed ? Motion.pressScale : 1;
-            animate transform-scale {
-                duration: ta.pressed ? Motion.pressMs : Motion.pressRelease;
-                easing: Motion.easeOut;
-            }
 
             ta := TouchArea {
                 clicked => {
@@ -69,9 +64,9 @@ export component CommandRow inherits Rectangle {
             }
 
             HorizontalLayout {
-                padding-left: Spacing.s3;
-                padding-right: Spacing.s3;
-                spacing: Spacing.s3;
+                padding-left: Space.s3;
+                padding-right: Space.s3;
+                spacing: Space.s3;
 
                 Rectangle {
                     width: Shell.command-icon;

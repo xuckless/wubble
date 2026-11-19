@@ -6,7 +6,7 @@
 // is cut to below the tile, where CSS shows it (a box-shadow never shows through its element's
 // own translucent fill). A card drawn in slices (a row each) rounds only its ends.
 
-import { Radius, Glass } from "../tokens.slint";
+import { Radius, Glass } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
 
 export component Raised inherits Rectangle {
@@ -72,9 +72,9 @@ export component Raised inherits Rectangle {
 // the segmented track)
 export component Chip inherits Raised {
     fill: Glass.thin.fill;
-    highlight: Glass.rimTop;
-    rim: Glass.rimAll;
-    shadow-y: Glass.thin.shadowY;
-    shadow-blur: Glass.thin.shadowBlur;
+    highlight: Glass.thin.rim-top;
+    rim: Glass.thin.rim-all;
+    shadow-y: Glass.thin.shadow-y;
+    shadow-blur: Glass.thin.shadow-blur;
     shadow: Shell.thin-shadow;
 }
