@@ -49,8 +49,11 @@ impl Meter {
                 .with_cmd(UpdateKind::OnlyIfNotSet),
         );
         let processes = self.system.processes();
+        // Linux lists each thread as a task of its process, with the process as its parent and
+        // the process's memory: counted, every thread would add its process's RSS again.
         let table: Vec<(u32, Option<u32>)> = processes
             .iter()
+            .filter(|(_, p)| p.thread_kind().is_none())
             .map(|(pid, p)| (pid.as_u32(), p.parent().map(Pid::as_u32)))
             .collect();
         descendants(self.root, &table)
@@ -233,6 +236,13 @@ mod tests {
         let tree = m.sample();
         assert_eq!(tree.first().map(|p| p.pid), Some(std::process::id()));
         assert_eq!(tree[0].label, "Browser");
+        // Threads are not processes of the tree: with one more running, it is still this
+        // process alone (no test here starts a child process).
+        let (stop, wait) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || wait.recv());
+        assert_eq!(m.sample().len(), 1);
+        drop(stop);
+        let _ = thread.join();
         // Never ends itself.
         assert!(!m.end(std::process::id()));
     }
