@@ -1,9 +1,13 @@
 //! Drops from other apps: which of the offered MIME types to take, and what
-//! a `text/uri-list` holds.
+//! a `text/uri-list` holds. Drags out to other apps: which types to offer, and
+//! the file a dragged picture lands as.
 //!
 //! The order is Firefox's and Chromium's on Linux (files and URLs first, then
 //! HTML, then plain text); the uri-list rules are RFC 2483 section 5 (one URI
-//! per line, CRLF, `#` comment lines). Written new, no code copied.
+//! per line, CRLF, `#` comment lines). Written new, no code copied. The
+//! picture's file name follows Chromium's `DropData::GetSafeFilenameForImageFileContents`
+//! (`content/public/common/drop_data.cc`, BSD-3-Clause: the page's name with the
+//! extension forced to the picture's type).
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +30,9 @@ const TEXT: &[&str] = &[
     "STRING",
     "TEXT",
 ];
+
+/// The text types a drag out offers: the UTF-8 ones of [`TEXT`].
+const OFFERED_TEXT: &[&str] = TEXT.split_at(3).0;
 
 /// The kinds to read for a drop offering `mimes`, each with the type to ask
 /// for, best first (the first is what the drop is accepted as). Empty: the
@@ -112,6 +119,164 @@ fn percent_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// What a drag out offers under a type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    /// `text/uri-list`: the picture's file, else the files and the link.
+    UriList,
+    /// The picture's bytes.
+    Picture,
+    Html,
+    /// The text, else the link's URL.
+    Text,
+}
+
+/// What a drag out of the window carries, for [`offers`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Outgoing {
+    /// Files, a link or a picture's file.
+    pub uris: bool,
+    /// The picture's MIME type, when it has bytes of a known type.
+    pub picture: Option<&'static str>,
+    pub html: bool,
+    pub text: bool,
+}
+
+/// The types a drag out offers, best first: files and links, the picture
+/// itself, HTML, then text.
+pub fn offers(out: &Outgoing) -> Vec<(&'static str, Part)> {
+    let uris = out.uris.then_some(("text/uri-list", Part::UriList));
+    let picture = out.picture.map(|mime| (mime, Part::Picture));
+    let html = out.html.then_some(("text/html", Part::Html));
+    let text = OFFERED_TEXT
+        .iter()
+        .filter(|_| out.text)
+        .map(|mime| (*mime, Part::Text));
+    uris.into_iter()
+        .chain(picture)
+        .chain(html)
+        .chain(text)
+        .collect()
+}
+
+/// Picture types: MIME type, file extension, other extensions it goes by.
+const PICTURES: &[(&str, &str, &[&str])] = &[
+    ("image/png", "png", &[]),
+    ("image/jpeg", "jpg", &["jpeg", "jpe", "jfif"]),
+    ("image/gif", "gif", &[]),
+    ("image/webp", "webp", &[]),
+    ("image/avif", "avif", &[]),
+    ("image/bmp", "bmp", &[]),
+    ("image/tiff", "tif", &["tiff"]),
+    ("image/x-icon", "ico", &[]),
+    ("image/svg+xml", "svg", &[]),
+];
+
+/// The picture type of `bytes` from their first bytes (the WHATWG MIME
+/// sniffing standard's image patterns, plus AVIF's `ftyp` brand and SVG's
+/// opening tag); `None` when they are no picture known here.
+pub fn sniff_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    let at = |offset: usize, magic: &[u8]| bytes.get(offset..offset + magic.len()) == Some(magic);
+    Some(if at(0, b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if at(0, &[0xff, 0xd8, 0xff]) {
+        "image/jpeg"
+    } else if at(0, b"GIF87a") || at(0, b"GIF89a") {
+        "image/gif"
+    } else if at(0, b"RIFF") && at(8, b"WEBPVP") {
+        "image/webp"
+    } else if at(4, b"ftypavif") || at(4, b"ftypavis") {
+        "image/avif"
+    } else if at(0, b"BM") {
+        "image/bmp"
+    } else if at(0, b"II*\0") || at(0, b"MM\0*") {
+        "image/tiff"
+    } else if at(0, &[0, 0, 1, 0]) {
+        "image/x-icon"
+    } else if is_svg(bytes) {
+        "image/svg+xml"
+    } else {
+        return None;
+    })
+}
+
+/// An SVG document: its first KiB opens with `<svg`, or is XML with an `<svg`.
+fn is_svg(bytes: &[u8]) -> bool {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(1024)]);
+    let head = head.trim_start_matches('\u{feff}').trim_start();
+    head.starts_with("<svg") || (head.starts_with("<?xml") && head.contains("<svg"))
+}
+
+/// The file extension of a picture type; `None` for another type.
+pub fn image_extension(mime: &str) -> Option<&'static str> {
+    PICTURES
+        .iter()
+        .find(|(m, ..)| m.eq_ignore_ascii_case(mime))
+        .map(|(_, ext, _)| *ext)
+}
+
+/// Whether `html` is what Blink writes for a dragged picture
+/// (`DataTransfer::DeclareAndWriteDragImage`: the `<img>` element's markup),
+/// so a drag image without the picture's bytes may stand in for it.
+pub fn is_picture_markup(html: &str) -> bool {
+    let html = html.trim_start();
+    html.get(..4)
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("<img"))
+}
+
+/// The longest a dragged picture's file name gets, in bytes.
+const NAME_MAX: usize = 100;
+
+/// The file a dragged picture lands as: the page's name for it (`name`, from
+/// Chromium) made safe as one path component, its extension that of `mime`
+/// when the type is known; `image` when nothing of the name is left.
+pub fn drag_file_name(name: Option<&str>, mime: Option<&str>) -> String {
+    let base = name.unwrap_or("").rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = base
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    let clean = clean.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    let (stem, ext) = match clean.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem.trim_end_matches(['.', ' ']), ext),
+        _ => (clean, ""),
+    };
+    let ext = match mime.and_then(|m| PICTURES.iter().find(|(p, ..)| p.eq_ignore_ascii_case(m))) {
+        Some((_, own, others)) => {
+            let fits =
+                ext.eq_ignore_ascii_case(own) || others.iter().any(|o| ext.eq_ignore_ascii_case(o));
+            if fits { ext } else { own }
+        }
+        None => ext,
+    };
+    let stem = if stem.is_empty() { "image" } else { stem };
+    let room = NAME_MAX.saturating_sub(ext.len() + 1).max(1);
+    let mut cut = stem.len().min(room);
+    while !stem.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let stem = &stem[..cut];
+    if ext.is_empty() {
+        stem.to_owned()
+    } else {
+        format!("{stem}.{ext}")
+    }
+}
+
+/// The per-drag folders (named by their drag's number) to remove when a new
+/// picture drag starts: all but the `keep` newest. Other names are not ours.
+pub fn stale_drag_dirs<S: AsRef<str>>(names: &[S], keep: usize) -> Vec<String> {
+    let mut ours: Vec<(u64, &str)> = names
+        .iter()
+        .filter_map(|n| Some((n.as_ref().parse().ok()?, n.as_ref())))
+        .collect();
+    ours.sort_unstable_by_key(|&(n, _)| std::cmp::Reverse(n));
+    ours.into_iter()
+        .skip(keep)
+        .map(|(_, n)| n.to_owned())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +348,107 @@ mod tests {
         );
         assert_eq!(parse_uri_list("# only a comment\n\n"), None);
         assert_eq!(parse_uri_list(""), None);
+    }
+
+    #[test]
+    fn pictures_are_known_by_their_first_bytes() {
+        let cases: &[(&[u8], Option<&str>)] = &[
+            (b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR", Some("image/png")),
+            (&[0xff, 0xd8, 0xff, 0xe0, 0, 0x10], Some("image/jpeg")),
+            (b"GIF89a\x01\0", Some("image/gif")),
+            (b"RIFF\x24\0\0\0WEBPVP8 ", Some("image/webp")),
+            (b"\0\0\0\x1cftypavif\0\0", Some("image/avif")),
+            (b"BM\x36\0\0\0", Some("image/bmp")),
+            (b"II*\0\x08\0", Some("image/tiff")),
+            (&[0, 0, 1, 0, 1, 0], Some("image/x-icon")),
+            (b"\xef\xbb\xbf  <svg xmlns='x'/>", Some("image/svg+xml")),
+            (b"<?xml version='1.0'?>\n<svg/>", Some("image/svg+xml")),
+            (b"<?xml version='1.0'?><feed/>", None),
+            (b"RIFF\x24\0\0\0WAVEfmt ", None),
+            (b"<html>", None),
+            (b"", None),
+        ];
+        for (bytes, mime) in cases {
+            assert_eq!(sniff_image_mime(bytes), *mime, "{bytes:?}");
+        }
+        assert_eq!(image_extension("image/JPEG"), Some("jpg"));
+        assert!(is_picture_markup(" <IMG src=\"a.png\">"));
+        assert!(!is_picture_markup("<b>x</b><img src=a>"));
+        assert!(!is_picture_markup("<i"));
+        assert_eq!(image_extension("text/html"), None);
+    }
+
+    #[test]
+    fn a_picture_file_name_is_one_safe_path_component() {
+        let png = Some("image/png");
+        let jpeg = Some("image/jpeg");
+        assert_eq!(drag_file_name(Some("cat.png"), png), "cat.png");
+        assert_eq!(drag_file_name(Some("../../etc/passwd"), png), "passwd.png");
+        assert_eq!(drag_file_name(Some("a\\b\\..\\c.png"), png), "c.png");
+        assert_eq!(drag_file_name(Some(".."), png), "image.png");
+        assert_eq!(drag_file_name(Some(".hidden.png"), png), "hidden.png");
+        assert_eq!(drag_file_name(Some("a\nb\u{7}c:*?.png"), png), "abc.png");
+        assert_eq!(drag_file_name(Some("  photo . "), jpeg), "photo.jpg");
+        // The type wins over the name; its other extensions are kept.
+        assert_eq!(drag_file_name(Some("cat.png"), jpeg), "cat.jpg");
+        assert_eq!(drag_file_name(Some("cat.JPEG"), jpeg), "cat.JPEG");
+        assert_eq!(drag_file_name(Some("cat"), Some("image/webp")), "cat.webp");
+        // Unknown type: the name as it is.
+        assert_eq!(drag_file_name(Some("cat.heic"), None), "cat.heic");
+        assert_eq!(drag_file_name(None, None), "image");
+        assert_eq!(drag_file_name(Some(""), png), "image.png");
+        assert_eq!(
+            drag_file_name(Some("кот 猫.gif"), Some("image/gif")),
+            "кот 猫.gif"
+        );
+        // A long name is cut on a character, keeping its extension.
+        let long = "猫".repeat(100) + ".png";
+        let name = drag_file_name(Some(&long), png);
+        assert!(name.len() <= NAME_MAX && name.ends_with(".png"), "{name}");
+        assert!(name.starts_with("猫猫"));
+    }
+
+    #[test]
+    fn a_drag_out_offers_files_the_picture_html_then_text() {
+        let all = Outgoing {
+            uris: true,
+            picture: Some("image/png"),
+            html: true,
+            text: true,
+        };
+        assert_eq!(
+            offers(&all),
+            [
+                ("text/uri-list", Part::UriList),
+                ("image/png", Part::Picture),
+                ("text/html", Part::Html),
+                ("text/plain;charset=utf-8", Part::Text),
+                ("UTF8_STRING", Part::Text),
+                ("text/plain", Part::Text),
+            ]
+        );
+        let jpeg = Outgoing {
+            picture: Some("image/jpeg"),
+            ..all
+        };
+        let types: Vec<_> = offers(&jpeg).into_iter().map(|(m, _)| m).collect();
+        assert_eq!(types[1], "image/jpeg");
+        assert!(!types.contains(&"image/png"));
+        let link = Outgoing {
+            uris: true,
+            text: true,
+            ..Outgoing::default()
+        };
+        assert_eq!(offers(&link).len(), 4);
+        assert!(offers(&Outgoing::default()).is_empty());
+    }
+
+    #[test]
+    fn only_the_newest_drag_folders_are_kept() {
+        let names = ["3", "10", "notes", "1", "2", "x-4"];
+        assert_eq!(stale_drag_dirs(&names, 2), ["2", "1"]);
+        assert!(stale_drag_dirs(&names, 8).is_empty());
+        assert_eq!(stale_drag_dirs(&names, 0), ["10", "3", "2", "1"]);
+        assert!(stale_drag_dirs::<&str>(&[], 2).is_empty());
     }
 }

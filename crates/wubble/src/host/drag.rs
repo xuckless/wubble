@@ -83,6 +83,20 @@ impl Host {
         self.page_drag == PageDrag::Idle
     }
 
+    /// The running page drag's picture (`--smoke parity`): the type its bytes are, its
+    /// file name from Chromium, and whether a drag image came with it.
+    pub(super) fn drag_picture(&self) -> Option<(Option<&'static str>, Option<String>, bool)> {
+        let PageDrag::Dragging { data, .. } = &self.page_drag else {
+            return None;
+        };
+        let contents = data.file_contents.as_ref()?;
+        Some((
+            wubble_core::dnd::sniff_image_mime(&contents.bytes),
+            contents.name.clone(),
+            data.image.is_some(),
+        ))
+    }
+
     /// Pointer input during a page drag goes to the drag, not to the page as
     /// mouse input; false when no drag runs.
     pub(super) fn drag_pointer(&mut self, point: Point, released: bool) -> bool {

@@ -6,7 +6,9 @@
 //! - a `wl_data_device` drop target: drags from other apps (files, links,
 //!   HTML, text) reach the page under the pointer;
 //! - a `wl_data_source` drag source: a page drag that leaves its window
-//!   becomes an OS drag (text, a link as `text/uri-list`, HTML);
+//!   becomes an OS drag (text, a link as `text/uri-list`, HTML, a picture as
+//!   its bytes and as a file, `drag_file.rs`), with the page's drag image as
+//!   its icon;
 //! - `zwp_pointer_gestures_v1` pinch and swipe, and the touchpad's two-finger
 //!   sideways scroll (`wl_pointer` axis frames from a finger) as the history swipe;
 //! - the lock keys from the worker's `wl_keyboard`'s `modifiers` event.
@@ -20,10 +22,15 @@
 //! `src/worker.rs` `worker_impl`), and the selection's seat, focus, serial,
 //! store and load handling (`src/state.rs`, `src/mime.rs` `normalize_to_lf`).
 //! The protocol objects are smithay-client-toolkit 0.20's (MIT), the gesture
-//! objects wayland-protocols' (MIT).
+//! objects wayland-protocols' (MIT). The drag icon follows sctk 0.20's
+//! `examples/data_device.rs` (MIT: an shm buffer on a surface of its own,
+//! committed before `start_drag`) and Chromium's
+//! `ui/ozone/platform/wayland/host/wayland_data_drag_controller.cc`
+//! (BSD-3-Clause: buffer scale, offset by minus the hotspot).
 
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -40,13 +47,15 @@ use sctk::reexports::calloop::channel::{self, Channel, Sender};
 use sctk::reexports::calloop_wayland_source::WaylandSource;
 use sctk::reexports::client::backend::{Backend, ObjectId};
 use sctk::reexports::client::globals::{GlobalList, registry_queue_init};
+use sctk::reexports::client::protocol::wl_compositor::WlCompositor;
 use sctk::reexports::client::protocol::wl_data_device::WlDataDevice;
 use sctk::reexports::client::protocol::wl_data_device_manager::DndAction;
 use sctk::reexports::client::protocol::wl_data_source::WlDataSource;
 use sctk::reexports::client::protocol::wl_keyboard::{self, WlKeyboard};
 use sctk::reexports::client::protocol::wl_pointer::{AxisSource, WlPointer};
 use sctk::reexports::client::protocol::wl_seat::WlSeat;
-use sctk::reexports::client::protocol::wl_surface::WlSurface;
+use sctk::reexports::client::protocol::wl_shm;
+use sctk::reexports::client::protocol::wl_surface::{self, WlSurface};
 use sctk::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
 use sctk::reexports::protocols::wp::pointer_gestures::zv1::client::{
     zwp_pointer_gesture_pinch_v1::{self, ZwpPointerGesturePinchV1},
@@ -60,20 +69,23 @@ use sctk::reexports::protocols::wp::primary_selection::zv1::client::{
 use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::pointer::{AxisScroll, PointerEvent, PointerEventKind, PointerHandler};
 use sctk::seat::{Capability, SeatHandler, SeatState};
+use sctk::shm::slot::{Buffer as ShmBuffer, SlotPool};
+use sctk::shm::{Shm, ShmHandler};
 use sctk::{
     delegate_data_device, delegate_pointer, delegate_primary_selection, delegate_registry,
-    delegate_seat, registry_handlers,
+    delegate_seat, delegate_shm, registry_handlers,
 };
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
-use wubble_core::dnd::{self, Kind, UriList};
+use wubble_core::dnd::{self, Kind, Part, UriList};
 use wubble_core::gesture::{PinchInput, SwipeInput};
 use wubble_core::window::WindowId;
 use wubble_engine::input::Locks;
-use wubble_engine::page::{DragData, DragOps};
+use wubble_engine::page::{DragData, DragImage, DragOps};
 
+use super::drag_file::{Folders, LazyFile};
 use super::{Aux, AuxEvent, deliver};
 use crate::clipboard::Buffer;
 
@@ -125,7 +137,8 @@ pub struct Worker {
 
 impl Worker {
     /// The worker on `window`'s Wayland connection; none when it is not a Wayland window.
-    pub fn open(window: &slint::Window) -> Option<Self> {
+    /// Pictures dragged out are written under `drag_dir` (`drag_file.rs`).
+    pub fn open(window: &slint::Window, drag_dir: PathBuf) -> Option<Self> {
         let display = window
             .with_winit_window(|w| match w.display_handle().ok()?.as_raw() {
                 RawDisplayHandle::Wayland(h) => Some(h.display.as_ptr()),
@@ -142,7 +155,7 @@ impl Worker {
         let worker_connection = connection.clone();
         let thread = std::thread::Builder::new()
             .name("wubble-wayland".into())
-            .spawn(move || run(worker_connection, rx, worker_tx, load_tx))
+            .spawn(move || run(worker_connection, rx, worker_tx, load_tx, drag_dir))
             .inspect_err(|e| eprintln!("wubble: wayland worker: {e}"))
             .ok()?;
         Some(Self {
@@ -233,6 +246,7 @@ fn run(
     rx: Channel<Command>,
     tx: Sender<Command>,
     loads: mpsc::Sender<(u64, Option<String>)>,
+    drag_dir: PathBuf,
 ) {
     let Ok((globals, queue)) = registry_queue_init::<State>(&connection) else {
         return;
@@ -241,7 +255,10 @@ fn run(
     let Ok(mut event_loop) = EventLoop::<State>::try_new() else {
         return;
     };
-    let mut state = State::new(&globals, &qh, tx, loads);
+    let folders = Folders::new(drag_dir);
+    // A crashed run's files.
+    folders.clear();
+    let mut state = State::new(&globals, &qh, tx, loads, folders);
     let inserted = event_loop.handle().insert_source(rx, |event, _, state| {
         if let channel::Event::Msg(command) = event {
             state.command(command);
@@ -336,6 +353,9 @@ struct State {
     manager: Option<DataDeviceManagerState>,
     primary_manager: Option<PrimarySelectionManagerState>,
     gestures: Option<ZwpPointerGesturesV1>,
+    /// For the drag icon's surface and buffer.
+    compositor: Option<WlCompositor>,
+    shm: Option<Shm>,
     qh: QueueHandle<State>,
     tx: Sender<Command>,
     loads: mpsc::Sender<(u64, Option<String>)>,
@@ -365,8 +385,10 @@ struct State {
 
     drop: Incoming<DragOffer>,
     generation: u64,
-    /// The OS drag a page drag became: its window, what it carries, the action chosen.
-    source: Option<(WindowId, DragSource, Arc<Offered>, DndAction)>,
+    /// The OS drag a page drag became.
+    source: Option<DragOut>,
+    /// The pictures' files dragged out.
+    folders: Folders,
     /// The selections stored, while offered. The old one is destroyed before a new one is
     /// set: the compositor (mutter, weston) ignores a `set_selection` whose serial is not newer
     /// than the current selection's, and the serial stays the same between input events.
@@ -374,8 +396,39 @@ struct State {
     primary: Option<(PrimarySelectionSource, Arc<[u8]>)>,
 }
 
+/// An OS drag a page drag became: its window, what it carries, the action
+/// chosen, its icon (kept until it ends).
+struct DragOut {
+    window: WindowId,
+    source: DragSource,
+    offered: Arc<Offered>,
+    action: DndAction,
+    _icon: Option<Icon>,
+}
+
 /// What a drag out of the window offers, by MIME type.
-struct Offered(Vec<(&'static str, Vec<u8>)>);
+struct Offered(Vec<(&'static str, Body)>);
+
+/// What a drag out sends for a type: bytes, or the list naming a picture's
+/// file, which is written when first asked for.
+#[derive(Clone)]
+enum Body {
+    Bytes(Arc<[u8]>),
+    File(Arc<LazyFile>),
+}
+
+/// A drag's thumbnail under the pointer: a surface of its own with an shm buffer.
+struct Icon {
+    surface: WlSurface,
+    _buffer: ShmBuffer,
+    _pool: SlotPool,
+}
+
+impl Drop for Icon {
+    fn drop(&mut self) {
+        self.surface.destroy();
+    }
+}
 
 impl State {
     fn new(
@@ -383,6 +436,7 @@ impl State {
         qh: &QueueHandle<Self>,
         tx: Sender<Command>,
         loads: mpsc::Sender<(u64, Option<String>)>,
+        folders: Folders,
     ) -> Self {
         let gestures = globals
             .bind::<ZwpPointerGesturesV1, _, _>(qh, 1..=3, ())
@@ -396,6 +450,9 @@ impl State {
             manager: DataDeviceManagerState::bind(globals, qh).ok(),
             primary_manager: PrimarySelectionManagerState::bind(globals, qh).ok(),
             gestures,
+            // Up to 4: an attach with an offset is an error from version 5.
+            compositor: globals.bind::<WlCompositor, _, _>(qh, 1..=4, ()).ok(),
+            shm: Shm::bind(globals, qh).ok(),
             qh: qh.clone(),
             tx,
             loads,
@@ -417,6 +474,7 @@ impl State {
             drop: Incoming::None,
             generation: 0,
             source: None,
+            folders,
             clipboard: None,
             primary: None,
         }
@@ -437,7 +495,10 @@ impl State {
 
     fn command(&mut self, command: Command) {
         match command {
-            Command::Exit => self.exit = true,
+            Command::Exit => {
+                self.exit = true;
+                self.folders.clear();
+            }
             Command::AddWindow(id, surface) => {
                 self.windows.retain(|(w, _)| *w != id);
                 if self.focus.as_ref().is_some_and(|f| f.id() == surface.id()) {
@@ -497,7 +558,7 @@ impl State {
     }
 
     fn start_drag(&mut self, window: WindowId, data: DragData, allowed: DragOps) {
-        let offered = Arc::new(Offered(offered(&data)));
+        let offered = Arc::new(Offered(offered(&data, || self.folders.next())));
         let ready = (
             &self.manager,
             &self.device,
@@ -515,22 +576,64 @@ impl State {
             offered.0.iter().map(|(mime, _)| *mime),
             dnd_action(allowed),
         );
-        source.start_drag(device, surface, None, serial);
-        self.source = Some((window, source, offered, DndAction::empty()));
+        // The icon's buffer is committed before the drag starts: mutter and weston need it.
+        let icon = data.image.as_ref().and_then(|image| self.icon(image));
+        source.start_drag(device, surface, icon.as_ref().map(|i| &i.surface), serial);
+        self.source = Some(DragOut {
+            window,
+            source,
+            offered,
+            action: DndAction::empty(),
+            _icon: icon,
+        });
+    }
+
+    /// The drag image on a surface of its own, its hotspot under the pointer.
+    fn icon(&self, image: &DragImage) -> Option<Icon> {
+        let (compositor, shm) = (self.compositor.as_ref()?, self.shm.as_ref()?);
+        let (width, height, argb) = argb(&image.png)?;
+        let (scale, (x, y)) = icon_geometry(width, image, compositor.version() >= 3);
+        // A buffer's size must be a multiple of its scale (wlroots ends the connection).
+        let (width, height, argb) = pad(width, height, argb, scale as u32);
+        let mut pool = SlotPool::new(argb.len(), shm).ok()?;
+        let stride = width as i32 * 4;
+        let (buffer, canvas) = pool
+            .create_buffer(
+                width as i32,
+                height as i32,
+                stride,
+                wl_shm::Format::Argb8888,
+            )
+            .ok()?;
+        canvas.copy_from_slice(&argb);
+        let surface = compositor.create_surface(&self.qh, ());
+        if scale > 1 {
+            surface.set_buffer_scale(scale);
+        }
+        buffer.attach_to(&surface).ok()?;
+        // Again, offset: the surface's top left goes from the pointer by minus the hotspot.
+        surface.attach(Some(buffer.wl_buffer()), x, y);
+        surface.damage(0, 0, i32::MAX, i32::MAX);
+        surface.commit();
+        Some(Icon {
+            surface,
+            _buffer: buffer,
+            _pool: pool,
+        })
     }
 
     /// The OS drag ended: the page drag ends with the action done.
     fn source_ended(&mut self, source: &WlDataSource, finished: bool) {
-        let Some((window, ours, _, action)) = &self.source else {
+        let Some(out) = &self.source else {
             return;
         };
-        if ours.inner() != source {
+        if out.source.inner() != source {
             return;
         }
         let (window, op) = (
-            *window,
+            out.window,
             if finished {
-                drag_ops(*action)
+                drag_ops(out.action)
             } else {
                 DragOps::NONE
             },
@@ -612,7 +715,9 @@ impl State {
         if !TEXT_TYPES.contains(&mime) {
             return;
         }
-        write_on_thread(&pipe, bytes.to_vec());
+        send_on_thread(&pipe, move |file| {
+            let _ = file.write_all(&bytes);
+        });
     }
 }
 
@@ -630,28 +735,120 @@ fn normalize_to_lf(text: String) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// The drag-out's types: text, a link as `text/uri-list` (and its URL as
-/// text when there is no text), HTML, files as `text/uri-list`.
-fn offered(data: &DragData) -> Vec<(&'static str, Vec<u8>)> {
-    let mut out = vec![];
+/// A dragged picture: its type when known, its bytes, its file's name.
+struct Picture {
+    mime: Option<&'static str>,
+    bytes: Arc<[u8]>,
+    name: String,
+}
+
+/// The picture a drag carries: the page's own bytes, else (a picture whose
+/// bytes CEF did not give) the drag image as PNG. Nothing is fetched.
+fn picture(data: &DragData) -> Option<Picture> {
+    if let Some(contents) = &data.file_contents {
+        let mime = dnd::sniff_image_mime(&contents.bytes);
+        return Some(Picture {
+            mime,
+            bytes: contents.bytes.clone(),
+            name: dnd::drag_file_name(contents.name.as_deref(), mime),
+        });
+    }
+    let image = data.image.as_ref()?;
+    data.html.as_deref().filter(|h| dnd::is_picture_markup(h))?;
+    let mime = Some("image/png");
+    Some(Picture {
+        mime,
+        bytes: image.png.clone(),
+        name: dnd::drag_file_name(None, mime),
+    })
+}
+
+/// The drag-out's types (`dnd::offers`): a picture's file as `text/uri-list`
+/// in a new folder from `folder` (else files and a link), the picture's
+/// bytes, HTML, the text (else the link's URL).
+fn offered(data: &DragData, folder: impl FnOnce() -> PathBuf) -> Vec<(&'static str, Body)> {
+    let picture = picture(data);
+    let file = picture
+        .as_ref()
+        .map(|p| Arc::new(LazyFile::new(folder(), &p.name, p.bytes.clone())));
     let uris: Vec<String> = data
         .files
         .iter()
         .map(|p| dnd::file_uri(p))
         .chain(data.link_url.clone())
         .collect();
-    if !uris.is_empty() {
-        out.push(("text/uri-list", (uris.join("\r\n") + "\r\n").into_bytes()));
+    let text = data.text.as_ref().or(data.link_url.as_ref());
+    let out = dnd::Outgoing {
+        uris: file.is_some() || !uris.is_empty(),
+        picture: picture.as_ref().and_then(|p| p.mime),
+        html: data.html.is_some(),
+        text: text.is_some(),
+    };
+    let bytes = |text: &str| Body::Bytes(Arc::from(text.as_bytes()));
+    dnd::offers(&out)
+        .into_iter()
+        .filter_map(|(mime, part)| {
+            let body = match part {
+                Part::UriList => match &file {
+                    Some(file) => Body::File(file.clone()),
+                    None => bytes(&(uris.join("\r\n") + "\r\n")),
+                },
+                Part::Picture => Body::Bytes(picture.as_ref()?.bytes.clone()),
+                Part::Html => bytes(data.html.as_ref()?),
+                Part::Text => bytes(text?),
+            };
+            Some((mime, body))
+        })
+        .collect()
+}
+
+/// The drag image as premultiplied ARGB8888 (little endian: B, G, R, A), what `wl_shm` takes.
+fn argb(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let (width, height, rgba) = crate::shot_io::rgba(png).ok()?;
+    let premultiply = |c: u8, a: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+    let argb = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| [premultiply(b, a), premultiply(g, a), premultiply(r, a), a])
+        .collect();
+    Some((width, height, argb))
+}
+
+/// The pixels grown with transparent ones to the next multiple of `scale` on each side.
+fn pad(width: u32, height: u32, argb: Vec<u8>, scale: u32) -> (u32, u32, Vec<u8>) {
+    let grow = |n: u32| n.div_ceil(scale.max(1)) * scale.max(1);
+    let (w, h) = (grow(width), grow(height));
+    if (w, h) == (width, height) {
+        return (width, height, argb);
     }
-    if let Some(html) = &data.html {
-        out.push(("text/html", html.clone().into_bytes()));
+    let mut out = vec![0; (w * h * 4) as usize];
+    let row = (width * 4) as usize;
+    for (y, line) in argb.chunks_exact(row).enumerate() {
+        let at = y * (w * 4) as usize;
+        out[at..at + row].copy_from_slice(line);
     }
-    if let Some(text) = data.text.as_ref().or(data.link_url.as_ref()) {
-        for mime in TEXT_TYPES {
-            out.push((mime, text.clone().into_bytes()));
-        }
-    }
-    out
+    (w, h, out)
+}
+
+/// The icon's buffer scale and its top left from the pointer, in surface units, for a PNG
+/// `width` pixels wide. The scale is the PNG's over its DIP size, whole (Wayland's buffer
+/// scale is an integer; 1 when the compositor `scales` no buffers).
+fn icon_geometry(width: u32, image: &DragImage, scales: bool) -> (i32, (i32, i32)) {
+    let png_scale = match image.size.0 {
+        dip if dip > 0 => width as f32 / dip as f32,
+        _ => 1.0,
+    };
+    let scale = if scales {
+        png_scale.round().max(1.0) as i32
+    } else {
+        1
+    };
+    let to_surface = |v: i32| -(v as f32 * png_scale / scale as f32).round() as i32;
+    (
+        scale,
+        (to_surface(image.hotspot.0), to_surface(image.hotspot.1)),
+    )
 }
 
 /// Wayland has copy, move and ask; a link is a copy.
@@ -686,17 +883,16 @@ fn own(fd: BorrowedFd<'_>) -> Option<std::fs::File> {
     fd.try_clone_to_owned().ok().map(std::fs::File::from)
 }
 
-/// Writes `bytes` to the pipe on a thread of its own (the reader may be slow, or us).
-fn write_on_thread(pipe: &WritePipe, bytes: Vec<u8>) {
+/// Runs `send` with the pipe on a thread of its own (the reader may be slow, or us; a
+/// picture's file is written there).
+fn send_on_thread(pipe: &WritePipe, send: impl FnOnce(&mut std::fs::File) + Send + 'static) {
     // Safety: the pipe is open while `pipe` lives; the clone outlives it.
     let Some(mut file) = own(unsafe { BorrowedFd::borrow_raw(pipe.as_raw_fd()) }) else {
         return;
     };
     let _ = std::thread::Builder::new()
         .name("wubble-send".into())
-        .spawn(move || {
-            let _ = file.write_all(&bytes);
-        });
+        .spawn(move || send(&mut file));
 }
 
 /// Reads a drop's types on a thread and hands the data back to the worker.
@@ -847,11 +1043,22 @@ impl DataSourceHandler for State {
         mime: String,
         pipe: WritePipe,
     ) {
-        if let Some((_, drag, offered, _)) = &self.source
-            && drag.inner() == source
+        if let Some(out) = &self.source
+            && out.source.inner() == source
         {
-            if let Some((_, bytes)) = offered.0.iter().find(|(m, _)| *m == mime) {
-                write_on_thread(&pipe, bytes.clone());
+            if let Some((_, body)) = out.offered.0.iter().find(|(m, _)| *m == mime) {
+                let body = body.clone();
+                send_on_thread(&pipe, move |pipe| match body {
+                    Body::Bytes(bytes) => {
+                        let _ = pipe.write_all(&bytes);
+                    }
+                    // Nothing is sent for a file that could not be written.
+                    Body::File(file) => {
+                        if file.ensure_written() {
+                            let _ = pipe.write_all(&file.uri_list());
+                        }
+                    }
+                });
             }
             return;
         }
@@ -887,10 +1094,10 @@ impl DataSourceHandler for State {
         source: &WlDataSource,
         action: DndAction,
     ) {
-        if let Some((_, ours, _, chosen)) = &mut self.source
-            && ours.inner() == source
+        if let Some(out) = &mut self.source
+            && out.source.inner() == source
         {
-            *chosen = action;
+            out.action = action;
         }
     }
 }
@@ -1214,6 +1421,39 @@ impl Dispatch<ZwpPointerGestureSwipeV1, ()> for State {
     }
 }
 
+impl Dispatch<WlCompositor, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WlCompositor,
+        _: <WlCompositor as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+/// The drag icon's surface: its enter, leave and preferred scale are of no use.
+impl Dispatch<WlSurface, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WlSurface,
+        _: wl_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl ShmHandler for State {
+    fn shm_state(&mut self) -> &mut Shm {
+        self.shm
+            .as_mut()
+            .expect("wl_shm events come only from the bound wl_shm")
+    }
+}
+
 impl ProvidesRegistryState for State {
     registry_handlers![SeatState];
 
@@ -1227,18 +1467,31 @@ delegate_seat!(State);
 delegate_pointer!(State);
 delegate_data_device!(State);
 delegate_primary_selection!(State);
+delegate_shm!(State);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The types offered, with the bytes of each (a file's URI list).
+    fn sent(data: &DragData, folder: &std::path::Path) -> Vec<(&'static str, Vec<u8>)> {
+        offered(data, || folder.to_path_buf())
+            .into_iter()
+            .map(|(mime, body)| match body {
+                Body::Bytes(bytes) => (mime, bytes.to_vec()),
+                Body::File(file) => (mime, file.uri_list()),
+            })
+            .collect()
+    }
+
     #[test]
     fn a_drag_out_offers_text_links_and_html() {
+        let none = std::path::Path::new("/nowhere");
         let link = DragData {
             link_url: Some("https://a.test/".into()),
             ..DragData::default()
         };
-        let types: Vec<_> = offered(&link).into_iter().map(|(m, _)| m).collect();
+        let types: Vec<_> = sent(&link, none).into_iter().map(|(m, _)| m).collect();
         assert_eq!(
             types,
             [
@@ -1253,13 +1506,122 @@ mod tests {
             html: Some("<b>x</b>".into()),
             ..DragData::default()
         };
-        let out = offered(&file);
+        let out = sent(&file, none);
         assert_eq!(
             out[0],
             ("text/uri-list", b"file:///tmp/a%20b.txt\r\n".to_vec())
         );
         assert_eq!(out[1].0, "text/html");
-        assert!(offered(&DragData::default()).is_empty());
+        assert!(sent(&DragData::default(), none).is_empty());
+    }
+
+    fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        let mut out = vec![];
+        let mut e = png::Encoder::new(&mut out, width, height);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        e.write_header().unwrap().write_image_data(rgba).unwrap();
+        out
+    }
+
+    fn picture_drag(contents: Option<(&str, &[u8])>) -> DragData {
+        DragData {
+            link_url: Some("https://a.test/cat.jpg".into()),
+            html: Some("<img src=\"https://a.test/cat.jpg\">".into()),
+            file_contents: contents.map(|(name, bytes)| {
+                Box::new(wubble_engine::page::DragFileContents {
+                    name: Some(name.into()),
+                    bytes: Arc::from(bytes),
+                })
+            }),
+            image: Some(Box::new(DragImage {
+                png: Arc::from(png(1, 1, &[1, 2, 3, 255])),
+                size: (1, 1),
+                hotspot: (0, 0),
+            })),
+            ..DragData::default()
+        }
+    }
+
+    #[test]
+    fn a_picture_drag_offers_its_file_bytes_html_and_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jpeg: &[u8] = b"\xff\xd8\xff\xe0jfif";
+        let out = sent(&picture_drag(Some(("cat.png", jpeg))), tmp.path());
+        let types: Vec<_> = out.iter().map(|(m, _)| *m).collect();
+        assert_eq!(
+            types,
+            [
+                "text/uri-list",
+                "image/jpeg",
+                "text/html",
+                "text/plain;charset=utf-8",
+                "UTF8_STRING",
+                "text/plain"
+            ]
+        );
+        // The file has the bytes' own extension, and is not written by offering it.
+        let path = tmp.path().join("cat.jpg");
+        assert_eq!(out[0].1, (dnd::file_uri(&path) + "\r\n").into_bytes());
+        assert!(!path.exists());
+        assert_eq!(out[1].1, jpeg);
+        assert_eq!(out[5].1, b"https://a.test/cat.jpg");
+        // Without the page's bytes the drag image stands in, as a PNG.
+        let thumb = picture_drag(None);
+        let out = sent(&thumb, tmp.path());
+        assert_eq!(out[1], ("image/png", thumb.image.unwrap().png.to_vec()));
+        assert!(String::from_utf8_lossy(&out[0].1).ends_with("/image.png\r\n"));
+        // A text drag's image is no picture.
+        let text = DragData {
+            text: Some("words".into()),
+            html: Some("<b>words</b>".into()),
+            ..picture_drag(None)
+        };
+        let types: Vec<_> = sent(&text, tmp.path())
+            .into_iter()
+            .map(|(m, _)| m)
+            .collect();
+        assert_eq!(types[0], "text/uri-list");
+        assert!(!types.contains(&"image/png"));
+    }
+
+    #[test]
+    fn the_drag_icon_is_premultiplied_argb_at_the_pngs_scale() {
+        let (w, h, argb) = argb(&png(2, 1, &[255, 0, 0, 255, 255, 255, 255, 128])).unwrap();
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(argb, [0, 0, 255, 255, 128, 128, 128, 128]);
+        assert!(super::argb(b"not a png").is_none());
+        // Padded to the scale: a 3 x 1 image at scale 2 is 4 x 2, the new pixels clear.
+        let px = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let (w, h, padded) = pad(3, 1, px.to_vec(), 2);
+        assert_eq!((w, h), (4, 2));
+        assert_eq!(&padded[..12], &px);
+        assert!(padded[12..].iter().all(|&b| b == 0));
+        assert_eq!(pad(4, 2, vec![7; 32], 2), (4, 2, vec![7; 32]));
+        let image = |size: (i32, i32), hotspot| DragImage {
+            png: Arc::from(&[][..]),
+            size,
+            hotspot,
+        };
+        // A 2x image: scale 2, the hotspot in surface units is its DIP.
+        assert_eq!(
+            icon_geometry(200, &image((100, 50), (10, 20)), true),
+            (2, (-10, -20))
+        );
+        // 1.5x rounds to 2: the surface is 0.75 of the DIP size, and so is the offset.
+        assert_eq!(
+            icon_geometry(150, &image((100, 50), (10, 20)), true),
+            (2, (-8, -15))
+        );
+        // No buffer scale: the pixels are the surface's.
+        assert_eq!(
+            icon_geometry(200, &image((100, 50), (10, 20)), false),
+            (1, (-20, -40))
+        );
+        assert_eq!(
+            icon_geometry(10, &image((0, 0), (3, 4)), true),
+            (1, (-3, -4))
+        );
     }
 
     #[test]

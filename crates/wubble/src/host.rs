@@ -551,6 +551,7 @@ impl Host {
         let dock_port = settings.page_features().remote_debugging_port;
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
+        let clipboard = crate::clipboard::Clipboard::new(engine.cache_dir());
         engine.set_request_mode(RequestMode::AskHost);
         let begin_frames = checks.begin_frames;
         let videos = match checks.sponsor_endpoint.clone() {
@@ -660,7 +661,7 @@ impl Host {
                 state: BeginFrames::Off,
                 timer: slint::Timer::default(),
             }),
-            clipboard: Default::default(),
+            clipboard,
             archive_after: ArchiveAfter::Off,
             archiving: HashMap::new(),
             routing_rules: vec![],

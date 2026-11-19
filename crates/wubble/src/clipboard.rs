@@ -30,7 +30,11 @@ pub fn bridge_needed(wayland_display: Option<&std::ffi::OsStr>) -> bool {
 }
 
 /// The host side of the pages' clipboard. One impl per OS, chosen by cfg into [`Clipboard`].
-pub trait Bridge: Default {
+pub trait Bridge {
+    /// The clipboard of a run whose CEF cache is `cache_dir` (where a picture dragged out to
+    /// another app is written, `crate::wl`).
+    fn new(cache_dir: &std::path::Path) -> Self;
+
     /// Opens the clipboard now, before the window takes keyboard focus: the compositor
     /// offers the selection to a client when focus enters, so a clipboard opened later has
     /// nothing to paste until the selection changes.
@@ -98,6 +102,10 @@ impl Arboard {
 
 #[cfg(not(target_os = "linux"))]
 impl Bridge for Arboard {
+    fn new(_cache_dir: &std::path::Path) -> Self {
+        Self::default()
+    }
+
     fn open(&mut self, _window: &slint::Window) {
         self.get();
     }
@@ -119,22 +127,30 @@ mod wayland {
     /// The window's Wayland clipboard; none under X11, where Chromium's own works. The
     /// worker also serves drops, drags out, gestures and lock keys (`crate::wl`): one data
     /// device for the process.
-    #[derive(Default)]
     pub struct Wayland {
         /// Opened on first use: the window's Wayland connection exists by then.
         worker: Option<Worker>,
+        /// Where pictures dragged out are written (`crate::wl::drag_file`).
+        drag_dir: std::path::PathBuf,
     }
 
     impl Wayland {
         fn get(&mut self, window: &slint::Window) -> Option<&Worker> {
             if self.worker.is_none() {
-                self.worker = Worker::open(window);
+                self.worker = Worker::open(window, self.drag_dir.clone());
             }
             self.worker.as_ref()
         }
     }
 
     impl Bridge for Wayland {
+        fn new(cache_dir: &std::path::Path) -> Self {
+            Self {
+                worker: None,
+                drag_dir: crate::wl::drag_file::base_dir(cache_dir),
+            }
+        }
+
         fn open(&mut self, window: &slint::Window) {
             self.get(window);
         }
