@@ -91,30 +91,32 @@ fn sync_rows<T: Clone + PartialEq + 'static>(
     }
 }
 
-/// Whether two panes show the same: their frames (wgpu textures) compared by texture, as Slint
-/// 1.19 never finds two such images equal ([`wubble_ui::same_image`]); rewriting an unchanged
-/// row every frame asked for the next frame, so the shell rendered at the display rate forever.
+/// Whether two rows show the same: their `images` (wgpu textures) compared by texture, as Slint
+/// 1.19 never finds two such images equal ([`wubble_ui::same_image`]), the rest by `==`;
+/// rewriting an unchanged row every frame asked for the next frame, so the shell rendered at the
+/// display rate forever.
+fn same_row<T: Clone + PartialEq, const N: usize>(
+    a: &T,
+    b: &T,
+    images: fn(&mut T) -> [&mut slint::Image; N],
+) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    let a_images = images(&mut a).map(std::mem::take);
+    let b_images = images(&mut b).map(std::mem::take);
+    a_images
+        .iter()
+        .zip(&b_images)
+        .all(|(x, y)| wubble_ui::same_image(x, y))
+        && a == b
+}
+
 fn same_pane(a: &SplitPane, b: &SplitPane) -> bool {
-    let bare = |p: &SplitPane| SplitPane {
-        frame: slint::Image::default(),
-        edge: slint::Image::default(),
-        prev: slint::Image::default(),
-        ..p.clone()
-    };
-    use wubble_ui::same_image as same;
-    same(&a.frame, &b.frame)
-        && same(&a.edge, &b.edge)
-        && same(&a.prev, &b.prev)
-        && bare(a) == bare(b)
+    same_row(a, b, |p| [&mut p.frame, &mut p.edge, &mut p.prev])
 }
 
 /// [`same_pane`] for the peek's card.
 fn same_glance(a: &GlanceView, b: &GlanceView) -> bool {
-    let bare = |g: &GlanceView| GlanceView {
-        frame: slint::Image::default(),
-        ..g.clone()
-    };
-    wubble_ui::same_image(&a.frame, &b.frame) && bare(a) == bare(b)
+    same_row(a, b, |g| [&mut g.frame])
 }
 
 /// The tabs whose last frame is kept: those the model shows, and a fullscreen page. A split's

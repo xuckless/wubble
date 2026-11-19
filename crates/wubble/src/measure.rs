@@ -967,15 +967,22 @@ struct Session {
     scenario: Scenario,
     seconds: u32,
     recorder: Recorder,
-    /// The first frame; recording starts [`WARMUP`] later.
+    /// The first frame; recording starts at the first tick [`Scenario::warmup`] later.
     first_frame: Option<Instant>,
+    /// When recording started and whether it has ended: every count and the CPU times cover
+    /// this one window, which the rates divide by.
+    started: Option<Instant>,
+    ended: bool,
     ticks: u32,
     /// The window's logical size when `resize` started.
     base: Option<(f32, f32)>,
     /// The display's refresh and the window, read when recording starts.
     refresh_mhz: Option<u32>,
     window: String,
-    /// The process tree's CPU times when recording started and ended.
+    /// The process tree, found by a thread from the first frame on (a walk of every process
+    /// on the system, kept off the UI thread), then the CPU times when recording started and
+    /// ended (only the tree's own processes: [`wubble_sysmem::Meter::resample`]).
+    finding: Option<std::thread::JoinHandle<wubble_sysmem::Meter>>,
     meter: Option<wubble_sysmem::Meter>,
     cpu_start: Option<CpuSnapshot>,
     cpu_end: Option<CpuSnapshot>,
@@ -985,42 +992,91 @@ struct Session {
 }
 
 impl Session {
-    fn recording(&self, now: Instant) -> bool {
+    fn new(scenario: Scenario, seconds: u32) -> Self {
+        Self {
+            scenario,
+            seconds,
+            recorder: Recorder::default(),
+            first_frame: None,
+            started: None,
+            ended: false,
+            ticks: 0,
+            base: None,
+            refresh_mhz: None,
+            window: "n/a".into(),
+            finding: None,
+            meter: None,
+            cpu_start: None,
+            cpu_end: None,
+            gpu: None,
+            gpu_text: None,
+        }
+    }
+
+    /// The warm-up after the first frame is over: recording may start.
+    fn warm(&self, now: Instant) -> bool {
         self.first_frame
             .is_some_and(|t| now >= t + self.scenario.warmup())
     }
 
-    fn finished(&self, now: Instant) -> bool {
-        self.first_frame.is_some_and(|t| {
-            now >= t + self.scenario.warmup() + Duration::from_secs(self.seconds.into())
-        })
+    fn recording(&self, now: Instant) -> bool {
+        !self.ended && self.started.is_some_and(|t| now >= t)
     }
 
-    /// The tree's processes, then the browser process's threads (Linux).
-    fn cpu_times(&mut self) -> (Vec<CpuTime>, Vec<CpuTime>) {
-        let meter = self.meter.get_or_insert_with(wubble_sysmem::Meter::default);
+    fn finished(&self, now: Instant) -> bool {
+        self.started
+            .is_some_and(|t| now >= t + Duration::from_secs(self.seconds.into()))
+    }
+
+    /// The first frame arrived at `now`: the tree is looked for from here, on a thread.
+    fn frame_arrived(&mut self, now: Instant) {
+        if self.first_frame.is_some() {
+            return;
+        }
+        self.first_frame = Some(now);
+        if self.scenario != Scenario::Startup {
+            self.finding = std::thread::Builder::new()
+                .name("wubble-measure".into())
+                .spawn(|| {
+                    let mut meter = wubble_sysmem::Meter::default();
+                    meter.sample();
+                    meter
+                })
+                .ok();
+        }
+    }
+
+    /// The tree's processes, then the browser process's threads (Linux); `None` without a
+    /// meter.
+    fn cpu_times(&mut self) -> Option<(Vec<CpuTime>, Vec<CpuTime>)> {
+        let meter = self.meter.as_mut()?;
         let procs = meter
-            .sample()
+            .resample()
             .into_iter()
             .map(|p| (p.pid, p.label, p.cpu_ms))
             .collect();
-        (procs, meter.threads())
+        Some((procs, meter.threads()))
     }
 
-    /// Recording starts: the CPU times and, where there is one, the GPU sampler.
-    fn start_samples(&mut self) {
-        let times = self.cpu_times();
-        self.cpu_start = Some((Instant::now(), times));
+    /// Recording starts at `now`: the CPU times and, where there is one, the GPU sampler.
+    fn start(&mut self, now: Instant) {
+        self.started = Some(now);
+        if self.scenario == Scenario::Startup {
+            return;
+        }
+        // Long done: the warm-up is seconds, the walk tens of milliseconds.
+        self.meter = self.finding.take().and_then(|t| t.join().ok());
+        self.cpu_start = self.cpu_times().map(|times| (Instant::now(), times));
         self.gpu = gpu_sampler();
     }
 
     /// Recording ends (once).
     fn end_samples(&mut self) {
-        if self.cpu_start.is_none() || self.cpu_end.is_some() {
+        if self.started.is_none() || self.ended {
             return;
         }
-        let times = self.cpu_times();
-        self.cpu_end = Some((Instant::now(), times));
+        self.ended = true;
+        self.cpu_end = self.cpu_times().map(|times| (Instant::now(), times));
         if let Some(mut child) = self.gpu.take() {
             let _ = child.kill();
             self.gpu_text = child
@@ -1060,21 +1116,7 @@ fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
 
 /// Starts recording `scenario` for `seconds` once the first frame arrives.
 pub fn begin(scenario: Scenario, seconds: u32) {
-    SESSION.set(Some(Session {
-        scenario,
-        seconds,
-        recorder: Recorder::default(),
-        first_frame: None,
-        ticks: 0,
-        base: None,
-        refresh_mhz: None,
-        window: "n/a".into(),
-        meter: None,
-        cpu_start: None,
-        cpu_end: None,
-        gpu: None,
-        gpu_text: None,
-    }));
+    SESSION.set(Some(Session::new(scenario, seconds)));
     STARTUP.store(scenario == Scenario::Startup, Ordering::Relaxed);
 }
 
@@ -1094,7 +1136,7 @@ pub fn taken(frame: Frame, probe: impl FnOnce() -> Option<[u8; 4]>) {
     mark(Stage::FirstCefFrame);
     let Some(probes) = with_session(|s| {
         let now = Instant::now();
-        s.first_frame.get_or_insert(now);
+        s.frame_arrived(now);
         s.recording(now).then_some(s.scenario.probes())
     })
     .flatten() else {
@@ -1176,7 +1218,7 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
             }
             return None;
         }
-        if !s.recording(now) {
+        if !s.warm(now) {
             s.ticks = 0;
             return None;
         }
@@ -1189,9 +1231,7 @@ pub fn tick(host: &mut Host, window: &AppWindow) {
                 .with_winit_window(crate::display_refresh_mhz)
                 .flatten();
             s.window = format!("{}x{}@{scale}", size.width, size.height);
-            if s.scenario != Scenario::Startup {
-                s.start_samples();
-            }
+            s.start(now);
         }
         let size = size.to_logical(scale);
         let base = *s.base.get_or_insert((size.width, size.height));
@@ -1709,6 +1749,25 @@ mod tests {
         begin(Scenario::Scroll, 1);
         with_session(|s| s.first_frame = Some(Instant::now()));
         assert!(finish("test").is_some());
+    }
+
+    #[test]
+    fn counts_and_cpu_times_cover_one_window() {
+        // Startup takes no CPU samples (no thread, no meter): the window logic alone.
+        let mut s = Session::new(Scenario::Startup, 10);
+        let t0 = Instant::now();
+        s.frame_arrived(t0);
+        let warm = t0 + Scenario::Startup.warmup();
+        // Warm, but the tick that starts recording (and samples the CPU) has not run yet.
+        assert!(s.warm(warm) && !s.recording(warm) && !s.finished(warm));
+        let tick = warm + IDLE_TICK;
+        s.start(tick);
+        assert!(!s.recording(warm) && s.recording(tick));
+        // The run is as long as asked from the start, not from the warm-up's end.
+        let secs = Duration::from_secs;
+        assert!(!s.finished(tick + secs(9)) && s.finished(tick + secs(10)));
+        s.end_samples();
+        assert!(!s.recording(tick + secs(1)));
     }
 
     #[test]
