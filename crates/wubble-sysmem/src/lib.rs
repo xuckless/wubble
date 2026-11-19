@@ -11,10 +11,13 @@
 //!   our tick instead of a dispatch source). Windows reads the low-memory resource notification
 //!   and `GlobalMemoryStatusEx`.
 //! - [`Meter`]: RSS and CPU of wubble's own process tree, through `sysinfo` (MIT).
+//! - [`lower_current_thread`]: bulk worker threads yield to the UI and Chromium's threads.
 
 mod meter;
+mod thread;
 
 pub use meter::{Meter, Proc, descendants, label};
+pub use thread::lower_current_thread;
 use wubble_core::pressure::Reading;
 
 /// Where memory pressure readings come from. Read on the lifecycle tick (every few seconds).

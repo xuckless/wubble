@@ -73,6 +73,7 @@ fn spawn_worker(fetcher: impl Fetcher, deliver: Deliver) -> mpsc::Sender<(u64, S
     let _ = std::thread::Builder::new()
         .name("wubble-suggest".into())
         .spawn(move || {
+            wubble_sysmem::lower_current_thread();
             for (seq, url) in rx {
                 let body = fetcher.get(&url).ok();
                 deliver(FetchEvent::Reply { seq, body });

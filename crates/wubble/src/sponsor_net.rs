@@ -37,6 +37,7 @@ impl SponsorNet {
         let started = std::thread::Builder::new()
             .name("wubble-sponsor".into())
             .spawn(move || {
+                wubble_sysmem::lower_current_thread();
                 while let Ok(job) = rx.recv() {
                     let segments = fetch(&job.endpoint, &job.video)
                         .map(|body| sponsor::parse(&body, &job.video));

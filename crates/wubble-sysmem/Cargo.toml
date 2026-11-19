@@ -1,6 +1,6 @@
 [package]
 name = "wubble-sysmem"
-description = "OS readers for memory pressure and per-process memory and CPU (Linux, macOS, Windows)."
+description = "OS readers for memory pressure and per-process memory and CPU, and worker thread priority (Linux, macOS, Windows)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,8 @@ wubble-core.workspace = true
 # Per-process RSS, CPU, parent and command line on every OS; process data only.
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+# macOS: the pressure sysctl and the thread QoS class; Linux: setpriority on a thread.
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
@@ -20,4 +21,5 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
+    "Win32_System_Threading",
 ] }
