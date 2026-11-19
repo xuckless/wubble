@@ -56,3 +56,31 @@ export component Replay {
     width: 0px;
     height: 0px;
 }
+
+// A CSS transition of a length (the dock tooltip's `.tp-tip-pos` glide of its place and width,
+// pages/touch.css:100-102): `at` follows `to` over `ms` on `easing`, or at once while `jump`
+// (`.tp-tip-pos.jump { transition: none }`). Cut to the design's 1 ms under reduced motion.
+export component Glide {
+    in property <length> to;
+    in property <bool> jump;
+    in property <duration> ms;
+    in property <easing> easing: Motion.ease-in-out;
+    out property <length> at: root.to;
+    width: 0px;
+    height: 0px;
+    animate at {
+        duration: root.jump ? 0ms : Calm.ms(root.ms);
+        easing: root.easing;
+    }
+}
+
+// A CSS animation that runs forever while `running` (the busy spinner's `st-spin`, .8 s linear
+// infinite, pages/settings.css:114-115): `turn` is how far round, 0..1, from the window's
+// animation clock. Stopped, it rests at 0 and asks for no frames.
+export component Spin {
+    in property <bool> running;
+    in property <duration> ms;
+    out property <float> turn: root.running ? mod(animation-tick() / Calm.ms(root.ms), 1) : 0;
+    width: 0px;
+    height: 0px;
+}

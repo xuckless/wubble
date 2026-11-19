@@ -1,0 +1,128 @@
+// design: pages/settings.tsx:354-373, pages/settings.css:110-115 @598f814
+// A glass button that confirms in place (`ConfirmButton`: `.tp-btn-body.glass .st-confirm`, at
+// least 168 wide, centred). A click while idle runs it; with a busy label and time it shows a
+// spinner (`.st-spin`: 14 px ring, 2 px white .18 with the accent on top, .8 s a turn) and that
+// label for the time; then the done label in mint (`.st-ok`, a 15 px check, 7 apart) with one
+// pulse, back to idle after 2.6 s. Labels crossfade (`Swap k={st}`). Clicks are ignored unless
+// idle. Timers: `wubble_core::controls::confirm`, through the `Controls` registry (kind 4).
+// `aria-live="polite"`: a polite live region whose label is the label shown. The design's
+// slint/ port has none: written from the TSX and CSS.
+
+import { Tsx } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Pulse } from "../motion/pulse.slint";
+import { SwapItem } from "../motion/crossfade.slint";
+import { Spin } from "../motion/tween.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+import { KitText } from "../text.slint";
+import { Icon, Glyph } from "icon.slint";
+import { Button, ButtonKind } from "button.slint";
+
+export component ConfirmButton inherits Button {
+    in property <string> idle-text;
+    in property <string> busy-text;
+    in property <string> done-text;
+    // how long the busy label shows, ms (`ms`; 0, or no busy label: straight to done)
+    in property <int> busy-ms: 0;
+    // the action, at the click
+    callback run();
+
+    property <int> slot: -1;
+    out property <ControlView> v: Controls.view(root.slot);
+    property <int> gen: Controls.generation;
+    init => {
+        root.slot = Controls.acquire(4, root.busy-text != "" ? root.busy-ms : 0);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+    // 0 idle, 1 busy, 2 done
+    out property <int> phase: root.v.phase;
+    property <int> hit: root.v.hit;
+    changed hit => {
+        pulse.hit = !pulse.hit;
+    }
+    clicked => {
+        if root.phase == 0 {
+            root.run();
+        }
+        Controls.press(root.slot, 0);
+    }
+
+    kind: ButtonKind.glass;
+    min-width: SettingsCss.st-confirm--min-width;
+    label: root.phase == 1 ? root.busy-text : root.phase == 2 ? root.done-text : root.idle-text;
+    accessible-live-region: AccessibleLiveness.polite;
+
+    // the labels' cell, centred in the button's row
+    Rectangle {
+        min-width: max(idle.preferred-width, max(busy.preferred-width, done.preferred-width));
+        // `.tp-pulse` (inset 0 of the button), from the cell's place
+        pulse := Pulse {
+            x: -parent.x;
+            y: -parent.y;
+            width: root.width;
+            height: root.height;
+            radius: root.border-radius;
+        }
+        spin := Spin {
+            running: root.phase == 1;
+            ms: SettingsCss.st-spin--animation-duration;
+        }
+        SwapItem {
+            shown: root.phase == 0;
+            idle := KitText {
+                role: Role.wb-tp-btn-body;
+                text: root.idle-text;
+                color: root.ink;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+        // `.st-busy`: the spinner and the busy label
+        SwapItem {
+            shown: root.phase == 1;
+            busy := HorizontalLayout {
+                alignment: center;
+                spacing: SettingsCss.st-hold-done--gap;
+                Rectangle {
+                    width: SettingsCss.st-spin--width;
+                    height: SettingsCss.st-spin--height;
+                    border-radius: SettingsCss.st-spin--border-radius;
+                    border-width: SettingsCss.st-spin--border-width;
+                    // `border-top-color: var(--tp-accent)`: on a circle the top border is the
+                    // quarter between the corner diagonals, -45deg to 45deg
+                    border-color: @conic-gradient(root.accent 0deg, root.accent 45deg, SettingsCss.st-spin--border-color 45deg, SettingsCss.st-spin--border-color 315deg, root.accent 315deg, root.accent 360deg);
+                    transform-origin: { x: self.width / 2, y: self.height / 2 };
+                    transform-rotation: spin.turn * SettingsCss.st-spin-k-to--transform-rotate * 1deg;
+                }
+                KitText {
+                    role: Role.wb-tp-btn-body;
+                    text: root.busy-text;
+                    color: root.ink;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        // `.st-ok`: mint, a 15 px check and the done label
+        SwapItem {
+            shown: root.phase == 2;
+            done := HorizontalLayout {
+                alignment: center;
+                spacing: SettingsCss.st-hold-done--gap;
+                Icon {
+                    size: Tsx.confirm-done-icon;
+                    path: Glyph.check;
+                    tint: SettingsCss.st-ok--color;
+                }
+                KitText {
+                    role: Role.wb-tp-btn-body;
+                    text: root.done-text;
+                    color: SettingsCss.st-ok--color;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

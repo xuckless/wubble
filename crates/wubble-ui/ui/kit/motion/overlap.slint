@@ -25,6 +25,8 @@ export component OverlapLook inherits Rectangle {
     in property <float> scale-from: WubbleCss.wb-in-k-from--transform-scale;
     // the opacity part alone (wubble): a list entering as one fades as one layer, its rows only move
     in property <float> fade: root.e;
+    // the shift runs across instead of down (the Swap's `.tp-sw-x`, pages/touch.css:31-32)
+    in property <bool> along-x: false;
     opacity: root.fade;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     property <length> shift: root.entering ? root.shift-in : root.shift-out;
@@ -34,7 +36,8 @@ export component OverlapLook inherits Rectangle {
     out property <length> blur: Motion.overlap-blur * (1 - root.e);
     transform-scale: root.zoom;
     Rectangle {
-        y: root.offset;
+        x: root.along-x ? root.offset : 0px;
+        y: root.along-x ? 0px : root.offset;
         @children
     }
     Rectangle {

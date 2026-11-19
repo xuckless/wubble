@@ -1,0 +1,48 @@
+// design: browser/browser.css:34-38, core/wubble.css:46-49 @598f814
+// `.wb-ib`: the icon-only button, 30 square, radius 9; white .07 under it on hover
+// (`:hover:not(:disabled)`, which outranks `.wb-ib-on`), white .1 while on (`.wb-ib-on`), at .35
+// when disabled; colour and background transition .15 s; pressed by `.wb-press` at every call
+// site. Its icon renders in ink at rest: the design's `.wb button { color: inherit }` outranks
+// `.wb-ib`'s mist (notes/ref-settings.png). A view of the button base (button.slint).
+
+import { Palette } from "../gen/tokens.slint";
+import { BrowserCss } from "../gen/css.slint";
+import { PressableButton } from "button.slint";
+import { Icon } from "icon.slint";
+import { Tips } from "tooltip.slint";
+
+export component IconButton inherits PressableButton {
+    in property <string> icon-path;
+    // `.wb-ib-on`: the button's panel or mode is on
+    in property <bool> on;
+    // wubble: the `Action` id the button runs, for its tooltip (name and shortcut, from the
+    // host); empty: no tooltip.
+    in property <string> tip-action;
+    changed hovered => {
+        if root.tip-action != "" {
+            Tips.hover(root.tip-action, self.absolute-position.x + self.width / 2,
+                self.absolute-position.y, self.absolute-position.y + self.height,
+                self.hovered && root.enabled);
+        }
+    }
+    width: BrowserCss.wb-ib--width;
+    height: BrowserCss.wb-ib--height;
+    padding-x: 0px;
+    border-radius: BrowserCss.wb-ib--border-radius;
+    fill: root.on ? BrowserCss.wb-ib-on--background : BrowserCss.wb-ib--background;
+    hover-fill: BrowserCss.wb-ib-hover-not-disabled--background;
+    rest-ink: root.on ? BrowserCss.wb-ib-on--color : Palette.ink;
+    hover-ink: BrowserCss.wb-ib-hover-not-disabled--color;
+    // The icon's centre, in window coordinates (the alignment the tests pin).
+    out property <length> glyph-x: icon.absolute-position.x + icon.width / 2;
+    out property <length> glyph-y: icon.absolute-position.y + icon.height / 2;
+    // A plain cell that fills the button, so the fixed-size icon sits at its exact centre.
+    Rectangle {
+        icon := Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            path: root.icon-path;
+            tint: root.ink;
+        }
+    }
+}

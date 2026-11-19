@@ -1,0 +1,42 @@
+// design: pages/settings.css:95-98 @598f814
+// A key combination (`.st-combo`): one cap per key (`.st-page kbd`), 4 apart. A cap is 26 high
+// and at least 26 wide, 0 7 padding, radius 7, white .07 with a dark lip below (inset 0 -1px 0
+// black .35) and a light one on top (inset 0 1px 0 white .08), ink 12 px at 500. Slint has no
+// string split, so the keys come as a list ("Ctrl", "K").
+
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+
+export component KbdCap inherits Rectangle {
+    in property <string> text;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    width: max(SettingsCss.st-page-kbd--min-width, cap.preferred-width + SettingsCss.st-page-kbd--padding-left + SettingsCss.st-page-kbd--padding-right);
+    height: SettingsCss.st-page-kbd--height;
+    border-radius: SettingsCss.st-page-kbd--border-radius;
+    background: SettingsCss.st-page-kbd--background;
+    // the two inset lips (a rectangle takes one inner shadow, so the second is a layer)
+    inner-shadow-offset-y: SettingsCss.st-page-kbd--box-shadow-shadow-1-y;
+    inner-shadow-color: SettingsCss.st-page-kbd--box-shadow-shadow-1-color;
+    Rectangle {
+        border-radius: parent.border-radius;
+        inner-shadow-offset-y: SettingsCss.st-page-kbd--box-shadow-shadow-2-y;
+        inner-shadow-color: SettingsCss.st-page-kbd--box-shadow-shadow-2-color;
+    }
+    cap := KitText {
+        role: Role.st-page-kbd;
+        text: root.text;
+        color: SettingsCss.st-page-kbd--color;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component Kbd inherits HorizontalLayout {
+    in property <[string]> keys;
+    spacing: SettingsCss.st-combo--gap;
+    for k in root.keys: KbdCap {
+        text: k;
+    }
+}

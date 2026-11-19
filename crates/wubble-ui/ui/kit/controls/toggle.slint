@@ -1,0 +1,147 @@
+// design: pages/touch.tsx:139-224, pages/touch.css:62-71 @598f814
+// The touch kit's toggle (`Toggle`, `.tp-tg`), lg (92 x 52, pad 5, knob 42) or sm (the settings
+// row's 50 x 30, pad 3, knob 24). The body is `.wb-thin .wb-press` (thin glass, pressed .97; no
+// film); the accent fill blooms out of the knob's centre (the TSX's `inset(v r v l round R)`
+// clip); the knob is mist, ink when on (.25 s ease-out), with its drop shadow and the inset top
+// light. The knob's motion is two scalings with different origins, as the TSX composes them:
+// stretch and hold about one side (the outer rectangle), the wall squash about the wall it hit
+// (the inner one). Physics: `wubble_core::controls::toggle` (real px for both sizes), through
+// the `Controls` registry (kind 0). Keyboard: Space / Enter flips it (a `role=switch` button's
+// click with `detail === 0`). The design's slint/ port has no toggle: written from the TSX.
+
+import { Palette } from "../gen/tokens.slint";
+import { Shell } from "../derived.slint";
+import { TouchCss } from "../gen/css.slint";
+import { GlassTier } from "../../components/model.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Press } from "../motion/press.slint";
+import { Tween } from "../motion/tween.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+
+// `TOGGLE_SIZE`
+export enum ToggleSize { lg, sm }
+
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    // `--tp-accent`
+    in property <color> accent: Palette.sky;
+    // `aria-label`
+    in property <string> label;
+    in property <ToggleSize> size: ToggleSize.lg;
+    callback toggled();
+
+    property <bool> lg: root.size == ToggleSize.lg;
+    property <length> pad: root.lg ? TouchCss.tp-tg-knob--left : TouchCss.tp-tg-sm-tp-tg-knob--left;
+    property <length> knob: root.lg ? TouchCss.tp-tg-knob--width : TouchCss.tp-tg-sm-tp-tg-knob--width;
+    // T = w - 2 * pad - knob (lg 40, sm 20)
+    property <length> travel: self.width - 2 * root.pad - root.knob;
+
+    property <int> slot: -1;
+    out property <ControlView> v: Controls.view(root.slot);
+    property <int> gen: Controls.generation;
+    init => {
+        root.slot = Controls.acquire(0, root.on ? 1 : 0);
+        Controls.resize(root.slot, root.travel);
+    }
+    changed on => {
+        Controls.set-value(root.slot, root.on ? 1 : 0);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    width: root.lg ? TouchCss.wb-tp-tg--width : TouchCss.wb-tp-tg-sm--width;
+    height: root.lg ? TouchCss.wb-tp-tg--height : TouchCss.wb-tp-tg-sm--height;
+    accessible-role: AccessibleRole.switch;
+    accessible-checked: root.on;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    press := Press {
+        pressed: ta.pressed;
+    }
+    knob-ink := Tween {
+        on: root.on;
+        in-ms: TouchCss.tp-tg-knob--transition-background-color-duration;
+        out-ms: TouchCss.tp-tg-knob--transition-background-color-duration;
+        in-easing: TouchCss.tp-tg-knob--transition-background-color-easing;
+        out-easing: TouchCss.tp-tg-knob--transition-background-color-easing;
+    }
+    // the knob's left, px (also read by the tests)
+    out property <length> knob-x: root.pad + root.v.x * Shell.px;
+
+    // `.wb-press`: the whole control, about its centre
+    Rectangle {
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: press.scale;
+        GlassPanel {
+            tier: GlassTier.thin;
+            radius: root.lg ? TouchCss.wb-tp-tg--border-radius : TouchCss.wb-tp-tg-sm--border-radius;
+            film: false;
+        }
+        // `.tp-tg-fill`, clipped to inset(v r v l round R) around c, the knob's centre
+        property <length> c: root.knob-x + root.knob / 2;
+        Rectangle {
+            x: parent.c * (1 - root.v.fill);
+            y: root.height / 2 * (1 - root.v.fill);
+            width: root.width * root.v.fill;
+            height: root.height * root.v.fill;
+            border-radius: self.height / 2;
+            background: root.accent;
+            visible: root.v.fill > 0;
+        }
+        // `.tp-tg-knob`: translateX(x), then scale(k, squashOf(k)) about the hold / trailing
+        // side, then the wall squash about the wall
+        Rectangle {
+            x: root.knob-x;
+            y: root.pad;
+            width: root.knob;
+            height: root.knob;
+            transform-origin: { x: self.width * root.v.origin, y: self.height / 2 };
+            transform-scale-x: root.v.scale-x;
+            transform-scale-y: root.v.scale-y;
+            Rectangle {
+                transform-origin: { x: self.width * root.v.origin2, y: self.height / 2 };
+                transform-scale-x: root.v.squash-x;
+                transform-scale-y: root.v.squash-y;
+                border-radius: self.width / 2;
+                background: TouchCss.tp-tg-on-tp-tg-knob--background.mix(TouchCss.tp-tg-knob--background, knob-ink.t);
+                drop-shadow-offset-y: root.lg ? TouchCss.tp-tg-knob--box-shadow-shadow-1-y : TouchCss.tp-tg-sm-tp-tg-knob--box-shadow-shadow-1-y;
+                drop-shadow-blur: root.lg ? TouchCss.tp-tg-knob--box-shadow-shadow-1-blur : TouchCss.tp-tg-sm-tp-tg-knob--box-shadow-shadow-1-blur;
+                drop-shadow-color: root.lg ? TouchCss.tp-tg-knob--box-shadow-shadow-1-color : TouchCss.tp-tg-sm-tp-tg-knob--box-shadow-shadow-1-color;
+                inner-shadow-offset-y: root.lg ? TouchCss.tp-tg-knob--box-shadow-shadow-2-y : TouchCss.tp-tg-sm-tp-tg-knob--box-shadow-shadow-2-y;
+                inner-shadow-color: root.lg ? TouchCss.tp-tg-knob--box-shadow-shadow-2-color : TouchCss.tp-tg-sm-tp-tg-knob--box-shadow-shadow-2-color;
+            }
+        }
+    }
+    keys := FocusKeys {
+        activate => {
+            root.toggled();
+        }
+    }
+    ta := TouchArea {
+        pointer-event(e) => {
+            if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                Controls.press(root.slot, self.mouse-x);
+            }
+            if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                let landed = Controls.release(root.slot);
+                if landed >= 0 && (landed > 0.5) != root.on {
+                    root.toggled();
+                }
+            }
+        }
+        moved => {
+            if self.pressed {
+                Controls.drag(root.slot, self.mouse-x);
+            }
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.height / 2;
+    }
+}

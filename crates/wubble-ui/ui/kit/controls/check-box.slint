@@ -1,0 +1,176 @@
+// design: pages/touch.tsx:547-575, pages/touch.css:162-174 @598f814
+// The touch kit's check box (`Checks`, `.tp-ck`): a row (gap 12, 7 8 padding, radius 8, white
+// .06 on hover over .15 s, ink 14 px) around a 22 box (radius 7, white .08, inset 0 1px 0 white
+// .2 and inset 0 0 0 1px white .1). Checked, the accent fills it as a circle growing out of its
+// centre to 75 % (.24 s ease-out; back over .19 s in-out) and the box squashes once (the squash
+// token, kit Keys); the abyss tick (14 px, stroke 3) draws 70 ms behind over .3 s ease-out and
+// undraws first (.1 s ease-in). Pressing squeezes the box to 1.12 x .9 (.12 s; back .2 s
+// ease-out). The card's pulse when all are ticked is the caller's (kit Pulse). The design's
+// slint/ port has no check box: written from the TSX and CSS.
+// The tick draws by an x reveal: `m5 12 4 4L19 6` is two segments of slope 1, so the length
+// drawn grows linearly with x and a clip at x is the dash at that length (the head is cut
+// flat where the SVG's dash ends round: notes/fidelity/deviations.md).
+
+import { Palette, Keyframes, Tsx } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { IconStroke } from "../gen/icons.slint";
+import { Role } from "../gen/text.slint";
+import { Keys } from "../motion/keys.slint";
+import { Tween } from "../motion/tween.slint";
+import { FocusRing, FocusKeys } from "../../components/focus-ring.slint";
+import { KitText } from "../text.slint";
+import { Icon, Glyph } from "icon.slint";
+
+export component CheckBox inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    // `--tp-accent`
+    in property <color> accent: Palette.sky;
+    // after a click or Space / Enter flipped it
+    callback toggled(bool);
+    accessible-role: AccessibleRole.checkbox;
+    accessible-checked: root.checked;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.flip();
+    }
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
+    border-radius: TouchCss.wb-tp-ck--border-radius;
+    background: TouchCss.tp-ck-hover--background.with-alpha(TouchCss.tp-ck-hover--background.alpha * hov.t);
+    hov := Tween {
+        on: ta.has-hover;
+        in-ms: TouchCss.wb-tp-ck--transition-background-color-duration;
+        out-ms: TouchCss.wb-tp-ck--transition-background-color-duration;
+        in-easing: ease;
+        out-easing: ease;
+    }
+
+    // the motion, also read by the curve tests
+    fill-tw := Tween {
+        on: root.checked;
+        in-ms: TouchCss.tp-ck-on-tp-ck-fill--transition-clip-path-duration;
+        out-ms: TouchCss.tp-ck-fill--transition-clip-path-duration;
+        in-easing: TouchCss.tp-ck-on-tp-ck-fill--transition-clip-path-easing;
+        out-easing: TouchCss.tp-ck-fill--transition-clip-path-easing;
+    }
+    tick-tw := Tween {
+        on: root.checked;
+        in-ms: TouchCss.tp-ck-on-tp-ck-box-path--transition-stroke-dashoffset-duration;
+        out-ms: TouchCss.tp-ck-box-path--transition-stroke-dashoffset-duration;
+        in-easing: TouchCss.tp-ck-on-tp-ck-box-path--transition-stroke-dashoffset-easing;
+        out-easing: TouchCss.tp-ck-box-path--transition-stroke-dashoffset-easing;
+        delay: root.checked ? Tsx.check-tick-delay : 0ms;
+    }
+    press-tw := Tween {
+        on: ta.pressed;
+        in-ms: TouchCss.tp-ck-active-tp-ck-box--transition-duration;
+        out-ms: TouchCss.tp-ck-box--transition-scale-duration;
+        in-easing: TouchCss.tp-ck-box--transition-scale-easing;
+        out-easing: TouchCss.tp-ck-box--transition-scale-easing;
+    }
+    sq := Keys {
+        keys: Keyframes.squash;
+        length: TouchCss.tp-ck-box-sq-a--animation-duration;
+    }
+    changed checked => {
+        if root.checked {
+            sq.hit = !sq.hit;
+        }
+    }
+    // the fill's radius over the box's width (circle(0 -> 75%) of a square box)
+    out property <float> fill: Tsx.check-fill-radius * fill-tw.t;
+    // the dash drawn, 0..1 (stroke-dashoffset 20 -> 0 of pathLength 20)
+    out property <float> tick: tick-tw.t;
+    out property <float> box-scale-x: (1 + (TouchCss.tp-ck-active-tp-ck-box--scale-x - 1) * press-tw.t) * sq.sx;
+    out property <float> box-scale-y: (1 + (TouchCss.tp-ck-active-tp-ck-box--scale-y - 1) * press-tw.t) * sq.sy;
+
+    min-height: TouchCss.tp-ck-box--height + TouchCss.wb-tp-ck--padding-top + TouchCss.wb-tp-ck--padding-bottom;
+    HorizontalLayout {
+        padding-left: TouchCss.wb-tp-ck--padding-left;
+        padding-right: TouchCss.wb-tp-ck--padding-right;
+        padding-top: TouchCss.wb-tp-ck--padding-top;
+        padding-bottom: TouchCss.wb-tp-ck--padding-bottom;
+        spacing: TouchCss.wb-tp-ck--gap;
+        alignment: start;
+        Rectangle {
+            width: TouchCss.tp-ck-box--width;
+            box := Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: TouchCss.tp-ck-box--width;
+                height: TouchCss.tp-ck-box--height;
+                border-radius: TouchCss.tp-ck-box--border-radius;
+                background: TouchCss.tp-ck-box--background;
+                clip: true;
+                transform-origin: { x: self.width / 2, y: self.height / 2 };
+                transform-scale-x: root.box-scale-x;
+                transform-scale-y: root.box-scale-y;
+                // inset 0 1px 0 white .2, inset 0 0 0 1px white .1
+                inner-shadow-offset-y: TouchCss.tp-ck-box--box-shadow-shadow-1-y;
+                inner-shadow-color: TouchCss.tp-ck-box--box-shadow-shadow-1-color;
+                Rectangle {
+                    border-radius: parent.border-radius;
+                    inner-shadow-spread: TouchCss.tp-ck-box--box-shadow-shadow-2-spread;
+                    inner-shadow-color: TouchCss.tp-ck-box--box-shadow-shadow-2-color;
+                }
+                // `.tp-ck-fill`: circle(r at 50% 50%)
+                Rectangle {
+                    property <length> d: 2 * root.fill * parent.width;
+                    x: (parent.width - self.d) / 2;
+                    y: (parent.height - self.d) / 2;
+                    width: self.d;
+                    height: self.d;
+                    border-radius: self.d / 2;
+                    background: root.accent;
+                    visible: root.fill > 0;
+                }
+                // the tick, revealed along x from its start cap to its end cap
+                property <length> unit: Tsx.check-tick-size / IconStroke.grid;
+                property <float> cap: Tsx.check-tick-stroke / 2;
+                property <float> from: Tsx.check-tick-x0 - self.cap;
+                property <float> span: Tsx.check-tick-x1 - Tsx.check-tick-x0 + 2 * self.cap;
+                Rectangle {
+                    x: (parent.width - Tsx.check-tick-size) / 2;
+                    y: (parent.height - Tsx.check-tick-size) / 2;
+                    width: (parent.from + parent.span * root.tick) * parent.unit;
+                    height: Tsx.check-tick-size;
+                    clip: true;
+                    visible: root.tick > 0;
+                    Icon {
+                        x: 0px;
+                        y: 0px;
+                        size: Tsx.check-tick-size;
+                        weight: Tsx.check-tick-stroke;
+                        path: Glyph.check;
+                        tint: TouchCss.tp-ck-box--color;
+                    }
+                }
+            }
+        }
+        KitText {
+            role: Role.wb-tp-ck;
+            text: root.text;
+            color: TouchCss.wb-tp-ck--color;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.flip();
+        }
+    }
+    keys := FocusKeys {
+        activate => {
+            root.flip();
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: root.border-radius;
+    }
+}

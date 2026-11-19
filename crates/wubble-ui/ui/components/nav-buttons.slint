@@ -1,51 +1,14 @@
 // The sidebar header's navigation: sidebar, back, forward, reload. From the design repo's
 // src/wubble/browser/chrome.tsx (`.wb-nav` in `wb-side-top`) and browser.css `.wb-nav`, `.wb-ib`
-// (owner's own code, xuckless/the-wallpaper-project @ 6c840da), built on the port's
-// PressableButton (the 0.97 press). Intents only: each button names a wubble `Action` by its id,
-// which the host runs through `perform`.
+// (owner's own code, xuckless/the-wallpaper-project @ 6c840da), kit IconButtons. Intents
+// only: each button names a wubble `Action` by its id, which the host runs through `perform`.
 
-import { Palette, Motion } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { PressableButton } from "../kit/controls/button.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { Tips } from "tooltip.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { IconButton } from "../kit/controls/icon-button.slint";
 
-// .wb-ib: an icon-only PressableButton
-export component IconButton inherits PressableButton {
-    in property <string> icon-path;
-    // wubble: the `Action` id the button runs, for its tooltip (name and shortcut, from the
-    // host); empty: no tooltip.
-    in property <string> tip-action;
-    changed hovered => {
-        if root.tip-action != "" {
-            Tips.hover(root.tip-action, self.absolute-position.x + self.width / 2,
-                self.absolute-position.y, self.absolute-position.y + self.height,
-                self.hovered && root.enabled);
-        }
-    }
-    width: Shell.icon-button;
-    height: Shell.icon-button;
-    padding-x: 0px;
-    border-radius: Shell.icon-button-radius;
-    background: self.hovered && self.enabled ? Shell.icon-button-hover : transparent;
-    opacity: self.enabled ? 1 : Shell.icon-button-disabled;
-    // The icon's centre, in window coordinates (the alignment the tests pin).
-    out property <length> glyph-x: icon.absolute-position.x + icon.width / 2;
-    out property <length> glyph-y: icon.absolute-position.y + icon.height / 2;
-    // A plain cell that fills the button, so the fixed-size icon sits at its exact centre:
-    // placed straight into PressableButton's layout the icon went to the cell's top edge and
-    // the hover fill looked off-centre around it.
-    Rectangle {
-        icon := Icon {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            path: root.icon-path;
-            // ink at rest: the design's `.wb button { color: inherit }` outranks `.wb-ib`'s mist,
-            // so its buttons render in the page's ink (notes/ref-settings.png)
-            tint: Palette.ink;
-        }
-    }
-}
+// .wb-ib: the kit IconButton (kit/controls/icon-button.slint)
+export { IconButton }
 
 export component NavButtons inherits HorizontalLayout {
     in property <bool> can-go-back: false;
