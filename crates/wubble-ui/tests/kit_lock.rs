@@ -537,3 +537,33 @@ fn no_letter_tiles() {
         violations.join("\n")
     );
 }
+
+/// `derived.slint`'s wubble values sit in one `// derived:` block, each line naming the design
+/// rule it derives from (`// derived from ...`), so the owner reviews them in one place
+/// (notes/fidelity/derived-review.md). Outside the block a literal is a design value not yet
+/// named by its generated property (counted by the ratchet above).
+#[test]
+fn derived_values_cite_their_rule() {
+    let text = fs::read_to_string(ui_dir().join("kit/derived.slint")).expect("read derived.slint");
+    let start = text
+        .find("\n    // derived:")
+        .expect("a `// derived:` block in derived.slint");
+    let end = text[start..]
+        .find("\n    // end derived")
+        .map(|e| start + e)
+        .expect("the block ends with `// end derived`");
+    let mut bare = Vec::new();
+    for line in text[start..end]
+        .lines()
+        .filter(|l| l.contains("out property"))
+    {
+        if !line.contains("// derived from ") {
+            bare.push(line.trim().to_string());
+        }
+    }
+    assert!(
+        bare.is_empty(),
+        "derived values without their rule:\n{}",
+        bare.join("\n")
+    );
+}
