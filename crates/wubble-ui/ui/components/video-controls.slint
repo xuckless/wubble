@@ -5,7 +5,8 @@ import { IconButton } from "../kit/controls/icon-button.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { BDock, BDockTab, BDockText } from "../kit/overlay/b/b-dock.slint";
 import { BScrubber } from "../kit/overlay/b/b-scrubber.slint";
-import { BMenuPanel } from "../kit/overlay/b/b-popover.slint";
+import { APopover } from "../kit/overlay/a/a-popover.slint";
+import { TouchCss } from "../kit/gen/css.slint";
 import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 
 // Video controls over the page's main video (wubble_core::video): play, a scrubber with the
@@ -13,7 +14,7 @@ import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 // media downloader's save. The design has no media controls (wubble-only.md §27): the strip is
 // the touch Dock (kit/overlay/b/b-dock.slint: thin glass, kit IconButtons, `on` for loop and
 // mute), the scrubber the kit ElasticSlider (b-scrubber.slint), the speed a value button whose
-// menu is the kit Menu's body with the Select's checked rows (b-popover.slint).
+// menu is the overlays' popover (kit/overlay/a/a-popover.slint) holding the Select's checked rows.
 // Only the strip and the speed menu take the pointer; the rest of the video stays the page's.
 // The strip is a compact one in the video's top right corner, never across the bottom, where
 // pages keep their own controls (YouTube's bar, `<video controls>`).
@@ -33,7 +34,7 @@ export component VideoControls inherits Rectangle {
     callback hovered(bool);
     // The pointer is on the strip, the tab or the speed menu: one answer for all three, so one
     // going away as another appears under the pointer does not read as leaving.
-    property <bool> any-hover: dock.hovered || tab.hovered || speeds.hovered;
+    property <bool> any-hover: dock.hovered || tab.hovered || speeds-area.has-hover;
     // the strip's controls are built while it shows, and kept while it leaves
     property <bool> built: root.video.open || dock.progress > 0;
     changed any-hover => {
@@ -160,25 +161,34 @@ export component VideoControls inherits Rectangle {
     // The speed menu, under the strip's right end, grown from the speed button; it may reach
     // below a short video, down to the pane's bottom (cut to the video, a small one's fastest
     // rows were out of reach).
-    speeds := BMenuPanel {
+    speeds := APopover {
         key: GlassKeys.video-speeds;
         layer: GlassOver.card;
-        shown: root.video.open && root.video.speeds;
+        open: root.video.open && root.video.speeds;
+        width: TouchCss.tp-menu--width;
         x: strip.x + strip.width - self.width;
         y: strip.y + strip.height + Space.s1;
         height: max(0px, min(list.preferred-height, root.video.pane-bottom - root.y - self.y - Space.s1));
         origin-x: self.width;
         origin-y: 0px;
-        list := BChoiceList {
-            card: false;
-            for rate[i] in root.rates: speed := BChoiceRow {
-                label: rate;
-                checked: i == root.video.rate-index;
-                hovered(on) => {
-                    list.hover(i, on);
-                }
-                picked => {
-                    root.command("rate", i);
+        // cut to the panel's corners; its area keeps the hover over all its rows
+        Rectangle {
+            border-radius: TouchCss.tp-menu--border-radius;
+            clip: true;
+            speeds-area := TouchArea {
+                enabled: root.video.open && root.video.speeds;
+                list := BChoiceList {
+                    card: false;
+                    for rate[i] in root.rates: speed := BChoiceRow {
+                        label: rate;
+                        checked: i == root.video.rate-index;
+                        hovered(on) => {
+                            list.hover(i, on);
+                        }
+                        picked => {
+                            root.command("rate", i);
+                        }
+                    }
                 }
             }
         }
