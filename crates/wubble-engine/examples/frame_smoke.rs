@@ -41,6 +41,10 @@ const VIDEO_PAGE: &str = "<!doctype html><body style='margin:0;background:#000'>
 const DEADLINE: Duration = Duration::from_secs(60);
 
 fn main() -> ExitCode {
+    // The browser's own order: the VA-API environment (set when libva-nvidia-driver is
+    // installed) is in place with hardware decode off, and the sandbox check below must
+    // still find the GPU process under seccomp.
+    wubble_engine::app::prepare_process();
     let dir = std::env::temp_dir().join(format!("wubble-frame-smoke-{}", std::process::id()));
     let result = run(&dir);
     let _ = std::fs::remove_dir_all(&dir);
