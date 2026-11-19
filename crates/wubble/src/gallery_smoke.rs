@@ -149,8 +149,8 @@ pub const SCENES: &[Scene] = &[
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
 /// (`--parity`: four favourites, the Space name, five tabs), logical px.
-const TAB_ROW: (u16, u16) = (130, 196);
-const NEW_TAB_ROW: (u16, u16) = (130, 356);
+const TAB_ROW: (u16, u16) = (130, 248);
+const NEW_TAB_ROW: (u16, u16) = (130, 408);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
 

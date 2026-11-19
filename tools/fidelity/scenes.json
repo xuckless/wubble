@@ -1,0 +1,121 @@
+{
+  "about": "Scenes of the design-fidelity harness (tools/fidelity/README.md). A scene is a web page state (url, steps on the fixed clock) shot at `frame`; `wubble` names the gallery scene (gallery_smoke.rs SCENES) it is scored against. Each crop is a rect relative to the frame: `web` is a selector measured on the web side; a `direct` crop uses the same rect on wubble's window (geometry parity is the point), a `derived` crop names wubble's own rect (`wubble`: [x, y, w, h], logical px at the web window's size) and is compared top-left aligned at the common size (a wubble-only surface against the design part it derives from); a scene without `wubble` is a web-only reference (kit specimens) shot for the lanes and the owner.",
+  "viewport": [1360, 880],
+  "viewportByDpr": { "2": [1280, 760] },
+  "frame": ".wb-window",
+  "settle": 2000,
+  "after": 600,
+  "frozen": true,
+  "scenes": [
+    {
+      "name": "sidebar-extended", "url": "/wubble/", "wubble": "sidebar-extended",
+      "crops": [
+        { "name": "window" },
+        { "name": "sidebar", "web": ".wb-side" },
+        { "name": "side-top", "web": ".wb-side-top" },
+        { "name": "address", "web": ".wb-address" },
+        { "name": "favs", "web": ".wb-favs" },
+        { "name": "space-name", "web": ".wb-space-name" },
+        { "name": "tab-selected", "web": ".wb-tab-on" },
+        { "name": "new-tab", "web": ".wb-newtab" },
+        { "name": "side-bottom", "web": ".wb-side-bottom" }
+      ]
+    },
+    {
+      "name": "sidebar-rail", "url": "/wubble/", "wubble": "sidebar-rail",
+      "steps": [{ "drag": { "from": ".wb-grab", "by": [-200, 0] } }, { "advance": 1500 }],
+      "crops": [{ "name": "window" }, { "name": "sidebar", "web": ".wb-side" }]
+    },
+    {
+      "name": "sidebar-hidden", "url": "/wubble/", "wubble": "sidebar-hidden",
+      "steps": [{ "key": "s", "ctrl": true }, { "advance": 1500 }],
+      "crops": [{ "name": "window" }]
+    },
+    {
+      "name": "tab-row-hover", "url": "/wubble/", "wubble": "tab-row-hover",
+      "steps": [{ "hover": ".wb-tab ~ .wb-tab" }],
+      "crops": [{ "name": "tab-row", "web": ".wb-tab ~ .wb-tab" }, { "name": "sidebar", "web": ".wb-side" }]
+    },
+    {
+      "name": "new-tab-hover", "url": "/wubble/", "wubble": "new-tab-hover",
+      "steps": [{ "hover": ".wb-newtab" }],
+      "crops": [{ "name": "new-tab", "web": ".wb-newtab" }]
+    },
+    {
+      "name": "command-bar-open", "url": "/wubble/", "wubble": "command-bar-open", "frames": 48,
+      "steps": [{ "key": "t", "ctrl": true }],
+      "crops": [{ "name": "window" }]
+    },
+    {
+      "name": "command-bar", "url": "/wubble/", "wubble": "command-bar",
+      "steps": [{ "key": "t", "ctrl": true }],
+      "crops": [{ "name": "window" }, { "name": "command-bar", "web": ".wb-cmd" }]
+    },
+    {
+      "name": "command-bar-results", "url": "/wubble/", "wubble": "command-bar-results",
+      "steps": [{ "key": "t", "ctrl": true }, { "advance": 400 }, { "type": "test" }],
+      "crops": [{ "name": "window" }, { "name": "command-bar", "web": ".wb-cmd" }]
+    },
+    {
+      "name": "settings", "url": "/wubble/", "wubble": "settings",
+      "steps": [{ "key": ",", "ctrl": true }, { "wait": 1500 }, { "advance": 1500 }],
+      "crops": [{ "name": "window" }, { "name": "page", "web": ".wb-main" }, { "name": "nav", "web": ".st-nav" }]
+    },
+    {
+      "name": "settings-2", "url": "/wubble/", "wubble": "settings-2",
+      "steps": [{ "key": ",", "ctrl": true }, { "wait": 1500 }, { "advance": 1500 }, { "wheel": { "over": ".wb-main", "y": 700 } }, { "advance": 1500 }],
+      "crops": [{ "name": "page", "web": ".wb-main" }]
+    },
+    {
+      "name": "settings-3", "url": "/wubble/", "wubble": "settings-3",
+      "steps": [{ "key": ",", "ctrl": true }, { "wait": 1500 }, { "advance": 1500 }, { "wheel": { "over": ".wb-main", "y": 1400 } }, { "advance": 1500 }],
+      "crops": [{ "name": "page", "web": ".wb-main" }]
+    },
+    {
+      "name": "settings-4", "url": "/wubble/", "wubble": "settings-4",
+      "steps": [{ "key": ",", "ctrl": true }, { "wait": 1500 }, { "advance": 1500 }, { "wheel": { "over": ".wb-main", "y": 2100 } }, { "advance": 1500 }],
+      "crops": [{ "name": "page", "web": ".wb-main" }]
+    },
+    {
+      "name": "menu-for-tab-row-menu", "url": "/wubble/pages/_harness.html?page=touch", "frame": ".tp-menu-wrap", "viewport": [1360, 3600], "ready": ".tp-menu-trig", "frozen": false,
+      "wubble": "tab-row-menu",
+      "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }],
+      "crops": [{ "name": "menu", "web": ".tp-menu", "wubble": [120, 8, 220, 718] }]
+    },
+    {
+      "name": "menu-for-site-menu", "url": "/wubble/pages/_harness.html?page=touch", "frame": ".tp-menu-wrap", "viewport": [1360, 3600], "ready": ".tp-menu-trig", "frozen": false,
+      "wubble": "site-menu",
+      "steps": [{ "click": ".tp-menu-trig" }, { "advance": 800 }],
+      "crops": [{ "name": "menu", "web": ".tp-menu", "wubble": [560, 96, 220, 301] }]
+    },
+    {
+      "name": "touch-kit", "url": "/wubble/pages/_harness.html?page=touch", "frame": ".tp-grid", "viewport": [1360, 3600], "ready": ".tp-grid", "frozen": false,
+      "crops": [
+        { "name": "slider", "web": ".tp-sl-wrap" },
+        { "name": "toggle", "web": ".tp-tg-demo" },
+        { "name": "dock", "web": ".tp-dock" },
+        { "name": "segmented", "web": ".tp-seg" },
+        { "name": "buttons", "web": ".tp-btns" },
+        { "name": "menu-trigger", "web": ".tp-menu-wrap" },
+        { "name": "checkboxes", "web": ".tp-ck" }
+      ]
+    },
+    {
+      "name": "settings-kit", "url": "/wubble/", "viewport": [1360, 880],
+      "steps": [{ "key": ",", "ctrl": true }, { "wait": 1500 }, { "advance": 1500 }],
+      "crops": [
+        { "name": "search", "web": ".st-search" },
+        { "name": "nav", "web": ".st-nav" },
+        { "name": "card", "web": ".st-card" },
+        { "name": "row", "web": ".st-row" },
+        { "name": "segmented", "web": ".st-seg" },
+        { "name": "swatches", "web": ".st-swatches" },
+        { "name": "toggle", "web": ".tp-tg-sm" }
+      ]
+    },
+    {
+      "name": "foundations", "url": "/wubble/pages/_found.html", "frame": "body", "viewport": [1360, 7000], "ready": "h1", "frozen": false,
+      "crops": [{ "name": "page" }]
+    }
+  ]
+}
