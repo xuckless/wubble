@@ -738,7 +738,7 @@ mod tests {
             ),
         ];
         for (ours, cef) in pairs {
-            assert_eq!(ours, cef.0, "{cef:?}");
+            assert_eq!(ours, crate::cef_flags(cef.0), "{cef:?}");
         }
     }
 
