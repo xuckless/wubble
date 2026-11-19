@@ -7,7 +7,9 @@ import { Motion } from "../tokens.slint";
 
 export component Entering inherits Rectangle {
     in property <float> e: 1;
-    opacity: root.e;
+    // the opacity part alone (wubble): a list entering as one fades as one layer, its rows only move
+    in property <float> fade: root.e;
+    opacity: root.fade;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
     transform-scale: 0.98 + 0.02 * root.e;
     Rectangle {
