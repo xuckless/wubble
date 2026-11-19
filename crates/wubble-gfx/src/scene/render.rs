@@ -546,13 +546,15 @@ impl Renderer {
     /// since the last call (capped at `max_dt`: `MAX_DT`, or `run::max_dt` of the run
     /// state) and renders it. wubble change: it no longer asks for the next frame; the host
     /// does, by the run state (`run.rs`, [`Renderer::animating`]). Returns the image to show at
-    /// the back of the window, a new one every frame (`Ok(None)` only before
-    /// the first): set it every frame, even when the output texture is the same.
-    /// wubble change: Slint caches what a rounded clip draws (the window's
-    /// corners) as a layer, redrawn only when a property under it changes; a
-    /// texture rendered into in place is not one, so the scene showed a frozen
-    /// frame, its glass at a stale layout (owner: "the glass doesn't grow past a
-    /// certain size", the extended pill's glass in rail mode).
+    /// the back of the window when the output texture is new (first frame, resize);
+    /// `Ok(None)` means the image already set is still the one, as in the design.
+    /// Setting a property during rendering asks Slint for another frame, so an image set every
+    /// frame kept the window rendering at the display rate even while the run state was Idle.
+    /// (An earlier wubble change set it every frame: femtovg cached the window's rounded clip
+    /// as a layer and showed a frozen scene. Slint's Skia renderer draws the whole window on
+    /// every render while a rendering notifier is set (`partial_rendering_state` is `None`
+    /// then) and caches no layer for a clip, so the texture drawn in place shows; `--smoke
+    /// frames` still checks the window shows the scene's current frame.)
     pub fn before_rendering(
         &mut self,
         window: &slint::Window,
@@ -565,9 +567,8 @@ impl Renderer {
             .last_frame
             .replace(now)
             .map_or(0.0, |t| now.saturating_duration_since(t).as_secs_f32());
-        self.render_under_ui(size.width, size.height, dpr, dt.min(max_dt));
-        self.output()
-            .map(|t| slint::Image::try_from(t.clone()).map_err(|e| GfxError::Image(e.to_string())))
+        let tex = self.render_under_ui(size.width, size.height, dpr, dt.min(max_dt));
+        tex.map(|t| slint::Image::try_from(t).map_err(|e| GfxError::Image(e.to_string())))
             .transpose()
     }
 

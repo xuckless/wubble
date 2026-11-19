@@ -288,7 +288,7 @@ impl Glass {
             .renderer
             .before_rendering(window.window(), now, s.run.max_dt())
         {
-            // every frame: see `Renderer::before_rendering`
+            // a new texture only (first frame, resize): see `Renderer::before_rendering`
             Ok(Some(image)) => window.set_scene(image),
             Ok(None) => {}
             Err(e) => {
