@@ -49,7 +49,7 @@ Pieces can run alone: `node tools/fidelity/capture.mjs --out D --only command-ba
 ### Scenes
 
 `scenes.json` is data: `url`, `steps` (`key`/`ctrl`, `type`, `hover`, `click`, `drag`, `wheel`,
-`advance` ms on the fixed clock, `wait` ms of real time for lazy pages, `eval`), `frame` (what is
+`advance` ms on the fixed clock, `wait` ms of real time, `until` a selector exists (real-time turns, for lazily loaded pages), `eval`), `frame` (what is
 shot, `.wb-window` by default), `crops` (selectors on the web side). A crop with no `wubble` rect
 is **direct**: the same logical rect is cut from wubble's window, since geometry parity is the
 point. A **derived** crop (`"wubble": [x, y, w, h]`) scores a wubble-only surface against the

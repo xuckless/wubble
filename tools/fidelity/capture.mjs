@@ -87,6 +87,14 @@ async function run(page, scene, dpr) {
       await page.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: p[0], y: p[1], deltaX: 0, deltaY: step.wheel.y });
     } else if (step.advance) await advance(step.advance);
     else if (step.wait) await sleep(step.wait);
+    else if (step.until) {
+      // real-time turns (a throwaway paint, a clock frame) until the element exists, up to 5 s
+      for (let i = 0; i < 25 && !(await page.evaluate(`!!document.querySelector(${JSON.stringify(step.until)})`)); i++) {
+        await page.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } });
+        await sleep(200);
+        await advance(DT);
+      }
+    }
     else if (step.eval) await page.evaluate(step.eval);
     else throw new Error(`${scene.name}: unknown step ${JSON.stringify(step)}`);
   }
@@ -113,6 +121,17 @@ async function run(page, scene, dpr) {
     writeFileSync(path, Buffer.from(r.data, 'base64'));
   };
   if (!scene.frames) await advance(scene.after ?? spec.after);
+  // Lazily loaded pages (settings) render on a real-time turn: wait, in real time, until every
+  // crop's element exists (up to 5 s), stepping the clock a frame each turn.
+  const wanted = JSON.stringify((scene.crops ?? []).filter(c => c.web).map(c => c.web));
+  let waited = false;
+  for (let i = 0; i < 25 && !(await page.evaluate(`${wanted}.every(s => document.querySelector(s))`)); i++) {
+    await page.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } });
+    await sleep(200);
+    await advance(DT);
+    waited = true;
+  }
+  if (waited && !scene.frames) await advance(scene.after ?? spec.after);
   const meta = await rects();
   if (!meta) throw new Error(`${scene.name}: no ${frame}`);
   writeFileSync(resolve(dir, `${scene.name}.json`), JSON.stringify({ ...meta, dpr, clock: await page.evaluate('window.__wb.now()') }, null, 1));
