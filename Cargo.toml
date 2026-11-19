@@ -52,7 +52,17 @@ clap = { version = "4.6", features = ["derive"] }
 opt-level = 1
 debug = "line-tables-only"
 
+# Daily release builds: thin LTO, one codegen unit (TODO.md Decided "Release profile").
 [profile.release]
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+# What ships: fat LTO and no symbol table: wubble 64 MB against release's 78 MB (67 MB stripped
+# alone), the same frame cost and start-up as `release` within the noise, and a rebuild after a
+# change in `wubble` about 2.3 times as slow (241 s against 104 s on the Linux box), so it is
+# not the daily profile. `cargo build --profile dist`; the binaries land in target/dist.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+strip = "symbols"
