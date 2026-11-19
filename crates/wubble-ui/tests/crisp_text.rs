@@ -100,7 +100,7 @@ impl WindowAdapter for OffscreenWindow {
     }
 }
 
-/// The offscreen platform, or `false` when there is no wgpu adapter.
+/// The offscreen platform, or `false` when there is no wgpu adapter Skia can draw on.
 fn init() -> bool {
     let instance =
         wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -109,6 +109,11 @@ fn init() -> bool {
     else {
         return false;
     };
+    // Slint's Skia renderer draws on Vulkan, Metal or D3D12 only (a GL-only adapter, as on a
+    // CI runner without a GPU, is refused).
+    if adapter.get_info().backend == wgpu::Backend::Gl {
+        return false;
+    }
     let Some(Ok((device, queue))) =
         poll_once(adapter.request_device(&wgpu::DeviceDescriptor::default()))
     else {
@@ -164,7 +169,7 @@ fn stems(shot: &slint::SharedPixelBuffer<slint::Rgba8Pixel>, top: usize) -> Vec<
 #[test]
 fn centred_text_keeps_every_glyph_whole() {
     if !init() {
-        eprintln!("crisp_text: no wgpu adapter, skipped");
+        eprintln!("crisp_text: no wgpu adapter for Skia, skipped");
         return;
     }
     let window = Crisp::new().unwrap();

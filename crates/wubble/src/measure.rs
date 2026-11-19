@@ -851,6 +851,7 @@ pub fn startup_text(rows: &[(&str, f64, f64)]) -> (String, String) {
 /// it holds cargo's run too, so run the binary itself, or through a runner that forks) and
 /// `/proc/uptime`, milliseconds. The command name (field 2) may hold spaces and parentheses,
 /// so the fields are counted after its last `)`.
+#[cfg(any(target_os = "linux", test))]
 pub fn since_exec_ms(stat: &str, uptime: &str, ticks_per_s: f64) -> Option<f64> {
     let after_name = &stat[stat.rfind(')')? + 1..];
     // Field 3 is the first after the name: field 22 is the 20th from there.
