@@ -15,6 +15,7 @@ its "Decided" table before proposing architecture.
 | `wubble-gfx` | Native texture handle → `wgpu::Texture` → `slint::Image` | wgpu, welding, slint |
 | `wubble-engine` | The only crate that names CEF types | core, gfx, cef |
 | `wubble-ui` | Slint shell (`ui/*.slint`) | slint |
+| `wubble-ax` | A page's accessibility tree (CEF's values) mapped to AccessKit. Pure | accesskit |
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 | `wubble-sysmem` | OS readers: memory pressure, per-process memory and CPU | core, sysinfo (and the OS APIs) |

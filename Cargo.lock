@@ -8536,6 +8536,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wubble-ax"
+version = "0.0.0"
+dependencies = [
+ "accesskit",
+ "serde_json",
+]
+
+[[package]]
 name = "wubble-blocker"
 version = "0.0.0"
 dependencies = [
