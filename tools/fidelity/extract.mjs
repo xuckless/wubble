@@ -332,7 +332,8 @@ function tokensSlint(css) {
     use(file, l);
     out.push(prop(id, id === 'chevron-stroke' ? F(Number(m[1])) : L(Number(m[1])), `${file}:${l}`));
   }
-  out.push('}');
+  out.push('}', '');
+  out.push(...tsxSlint());
   return out.join('\n');
 }
 
@@ -521,6 +522,50 @@ function keyframes(css, file, name) {
   }
   return [...steps.values()].sort((a, b) => a[0] - b[0]);
 }
+/**
+ * Values the controls take from TSX markup and timers rather than a constant table: an `<svg>`
+ * or `<Icon size>` attribute, a `setTimeout` length. Each is found by its line's text and read
+ * by a regex; a design change that moves or drops one fails here instead of going stale.
+ */
+function tsxValue(file, needle, re) {
+  const line = lineOf(file, needle);
+  if (!line) throw new Error(`${file}: no line with ${needle}`);
+  const m = re.exec(read(file).split('\n')[line - 1]);
+  if (!m) throw new Error(`${file}:${line}: ${re} does not match`);
+  use(file, line);
+  return { v: Number(m[1]), at: `${file}:${line}` };
+}
+const TSX = () => {
+  const checks = table('pages/touch.tsx', 'CHECKS');
+  const dock = table('pages/touch.tsx', 'DOCK');
+  const tick = 'pathLength={20}';
+  return {
+    // the check box's tick (touch.tsx Checks; settings.tsx's row check box is the same markup)
+    'check-tick-delay': { t: 'duration', v: checks.value.tickDelay, at: `pages/touch.tsx:${checks.first} CHECKS.tickDelay` },
+    'check-tick-size': { t: 'length', ...tsxValue('pages/touch.tsx', tick, /<svg width="([\d.]+)"/) },
+    'check-tick-stroke': { t: 'float', ...tsxValue('pages/touch.tsx', tick, /stroke-width="([\d.]+)"/) },
+    'check-tick-length': { t: 'float', ...tsxValue('pages/touch.tsx', tick, /pathLength=\{([\d.]+)\}/) },
+    // the tick's path (`PATH.check`, two segments of slope 1, so its length grows linearly with
+    // x): where it starts and ends across, in grid units
+    'check-tick-x0': { t: 'float', ...tsxValue('pages/touch-kit.tsx', '  check: ', /check: 'm([\d.]+) /) },
+    'check-tick-x1': { t: 'float', ...tsxValue('pages/touch-kit.tsx', '  check: ', /L([\d.]+) [\d.]+'/) },
+    // the fill's `clip-path: circle(75%)` (not read by the CSS reader): its radius over the box
+    'check-fill-radius': { t: 'float', ...tsxValue('pages/touch.css', '.tp-ck.on .tp-ck-fill', /circle\(([\d.]+)%/), scale: 0.01 },
+    // the dock tooltip's glide (`--tp-glide`)
+    'tip-glide': { t: 'duration', v: dock.value.glideMs, at: `pages/touch.tsx:${dock.first}-${dock.last} DOCK.glideMs` },
+    // HoldButton's done label icon, ConfirmButton's done icon and how long it shows
+    'hold-done-icon': { t: 'length', ...tsxValue('pages/settings.tsx', 'class="st-hold-done"', /size=\{([\d.]+)\}/) },
+    'confirm-done-icon': { t: 'length', ...tsxValue('pages/settings.tsx', 'class="st-ok"><Icon name="check"', /size=\{([\d.]+)\}/) },
+    'confirm-done-ms': { t: 'duration', ...tsxValue('pages/settings.tsx', "setSt('idle')", /setSt\('idle'\), (\d+)\)/) },
+  };
+};
+function tsxSlint() {
+  const out = ['/// Control values the tables above do not hold: TSX markup and timers, and a CSS value the', '/// reader leaves unread (each line cites where).', 'export global Tsx {'];
+  for (const [k, { t, v, at, scale = 1 }] of Object.entries(TSX())) out.push(prop(k, { t, v: v * scale }, at));
+  out.push('}');
+  return out;
+}
+
 const genTables = {};
 function rustGen(css) {
   const out = [
@@ -541,6 +586,11 @@ function rustGen(css) {
       const m = /max = ([\d.]+), full = (\d+)/.exec(read(file).split('\n')[ln - 1]);
       use(file, ln);
       out.push(`    /// Stretch.update's defaults (${file}:${ln})`, '    pub mod STRETCH {', `        pub const max: f64 = ${rnum(Number(m[1]))};`, `        pub const full: f64 = ${rnum(Number(m[2]))};`, '    }');
+    }
+    if (mod === 'settings') {
+      // ConfirmButton has no table: its done label shows for a setTimeout's length
+      const done = TSX()['confirm-done-ms'];
+      out.push(`    /// ConfirmButton (${done.at})`, '    pub mod CONFIRM {', `        pub const doneMs: f64 = ${rnum(done.v)};`, '    }');
     }
     out.push('}', '');
   }
@@ -675,6 +725,65 @@ const withHeader = body => {
 };
 
 const css = cssTables();
+controlsBExtras(css);
+
+// ── Controls kit B extras (lane ui2b-slide) ────────────────────────────────────────────────
+// Declarations the CSS reader cannot type (a `calc`, a percentage origin, a `min()`, a shadow
+// with a `var()` colour) but the slider needs: each is read from its rule's text and the run
+// throws when the rule changed, so a design edit cannot leave a stale value behind. They join
+// TouchCss (and leave its "not read" list).
+function controlsBExtras(css) {
+  const file = 'pages/touch.css', touch = css.find(c => c.file === file);
+  const lines = read(file).split('\n');
+  const pick = (sel, prop, re) => {
+    // the rule's line, or a continuation line of it, that sets `prop`
+    const start = lines.findIndex(l => l.startsWith(`${sel} {`));
+    let i = -1;
+    for (let k = start; start >= 0 && k < lines.length; k++) {
+      if (new RegExp(`(^|[\\s;{])${prop}:`).test(lines[k])) { i = k; break; }
+      if (lines[k].includes('}')) break;
+    }
+    if (i < 0) throw new Error(`extract: controls B: ${file} has no ${sel} { ${prop} }`);
+    const m = re.exec(lines[i].slice(lines[i].indexOf(`${prop}:`)));
+    if (!m) throw new Error(`extract: controls B: ${file}:${i + 1} ${sel} { ${prop} } changed`);
+    use(file, i + 1);
+    touch.unparsed = touch.unparsed.filter(u => !(u.line === i + 1 && u.prop === prop));
+    return { v: Number(m[1]), line: i + 1, src: `${sel} { ${m[0]} }` };
+  };
+  const add = (id, t, scale, p) => touch.props.push({ id, t, v: p.v * scale, line: p.line, src: p.src });
+  // the keyboard focus ring round the knob: `0 0 0 3px var(--tp-accent)`
+  add('tp-sl-knob-focus--ring', 'length', 1, pick('.tp-sl:focus-visible .tp-sl-knob', 'box-shadow', /^box-shadow:\s*0 0 0 ([\d.]+)px var\(--tp-accent\)/));
+  // the bubble sits `calc(50% + 21px)` above the track's foot, leaning about 50% 130%
+  add('tp-sl-bub--bottom-offset', 'length', 1, pick('.tp-sl-bub', 'bottom', /^bottom:\s*calc\(50% \+ ([\d.]+)px\)/));
+  add('tp-sl-bub--origin-y', 'float', 0.01, pick('.tp-sl-bub', 'transform-origin', /^transform-origin:\s*50% ([\d.]+)%/));
+  // its label grows from 50% 140%
+  add('tp-sl-bub-b--origin-y', 'float', 0.01, pick('.tp-sl-bub b', 'transform-origin', /^transform-origin:\s*50% ([\d.]+)%/));
+  // `width: min(300px, 100%)`
+  add('tp-sl-wrap--max-width', 'length', 1, pick('.tp-sl-wrap', 'width', /^width:\s*min\(([\d.]+)px, 100%\)/));
+}
+/** Literals inside the TSX loops (not in a constant table) the controls B machines need. */
+function controlsBRust() {
+  const lit = (file, needle, re, what) => {
+    const ln = lineOf(file, needle);
+    const m = ln && re.exec(read(file).split('\n')[ln - 1]);
+    if (!m) throw new Error(`extract: controls B: ${file} no longer has ${what}`);
+    use(file, ln);
+    return [Number(m[1]), `${file}:${ln}`];
+  };
+  const [slop, slopAt] = lit('pages/touch-kit.tsx', 'Math.abs(x - s.x0) > ', /Math\.abs\(x - s\.x0\) > ([\d.]+)/, 'the Segmented drag slop');
+  const keyNeedle = 'seam.saved = clamp(seam.saved + dir * ';
+  const [step, stepAt] = lit('browser/chrome.tsx', keyNeedle, /seam\.saved \+ dir \* ([\d.]+)/, 'the sidebar seam key step');
+  const [kick] = lit('browser/chrome.tsx', keyNeedle, /seam\.bend\.v \+= dir \* ([\d.]+)/, 'the sidebar seam key kick');
+  return [
+    '/// Literals of the controls\' loops and key handlers (not in a table): controls kit B.',
+    '#[rustfmt::skip]',
+    'pub mod controls_b {',
+    `    pub const SEG_SLOP: f64 = ${rnum(slop)}; // ${slopAt}`,
+    `    pub const SEAM_KEY_STEP: f64 = ${rnum(step)}; // ${stepAt}`,
+    `    pub const SEAM_KEY_KICK: f64 = ${rnum(kick)}; // ${stepAt}`,
+    '}',
+  ].join('\n');
+}
 // The web GL sources, verbatim (same line numbers as the clone), for the shader-constants test
 // (crates/wubble-gfx/tests/shader_constants.rs), which must run without the clone.
 const GL = ['core/gl/scene.ts', 'core/gl/glsl.ts', 'core/gl/fluid.ts', 'core/gl/util.ts'];
@@ -684,7 +793,7 @@ const files = {
   'crates/wubble-ui/ui/kit/gen/icons.slint': withHeader(iconsSlint()),
   'crates/wubble-ui/ui/kit/gen/text.slint': withHeader(textSlint()),
   'crates/wubble-ui/ui/kit/gen/literals.slint': withHeader(literalsSlint()),
-  'crates/wubble-core/src/kit_gen.rs': withHeader(rustGen(css)),
+  'crates/wubble-core/src/kit_gen.rs': withHeader(`${rustGen(css)}\n\n${controlsBRust()}`),
   'tools/fidelity/glsl-snapshot/COMMIT': `${commit}\n`,
   ...Object.fromEntries(GL.map(f => [`tools/fidelity/glsl-snapshot/${f}`, read(f)])),
 };

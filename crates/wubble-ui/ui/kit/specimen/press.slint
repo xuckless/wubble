@@ -1,0 +1,200 @@
+// design: pages/touch.css:5-17, pages/touch.tsx:440-575, pages/settings.tsx:300-373 @598f814
+// The press lane's specimen: every control of kit A on the touch page's ground (`.tp-page` web
+// ground, `.tp-stage` cards 280 high, radius 22, deep, content centred with 24 padding; 40 / 28
+// apart), as the touch page lays its stages out, so the gallery can shoot it and the scorer
+// crop each cell against the web's. Every cell has an element id (`PressSpecimen::<id>`) for
+// the geometry check. States a pointer makes (hover, press, a hold half way) are driven by the
+// tests through pointer events, not by properties of the controls.
+
+import { Palette } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { GlassTier } from "../../components/model.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { Button, ButtonKind } from "../controls/button.slint";
+import { IconButton } from "../controls/icon-button.slint";
+import { Toggle, ToggleSize } from "../controls/toggle.slint";
+import { CheckBox } from "../controls/check-box.slint";
+import { Kbd } from "../controls/kbd.slint";
+import { Tooltip } from "../controls/tooltip.slint";
+import { HoldButton } from "../controls/hold-button.slint";
+import { ConfirmButton } from "../controls/confirm-button.slint";
+import { Glyph } from "../controls/icon.slint";
+
+// `.tp-stage` + `.tp-stage-in`: a card with its content centred
+component Stage inherits Rectangle {
+    height: TouchCss.tp-stage--height;
+    border-radius: TouchCss.tp-stage--border-radius;
+    background: TouchCss.tp-stage--background;
+    clip: true;
+    horizontal-stretch: 1;
+    VerticalLayout {
+        padding: TouchCss.tp-stage-in--padding;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+export component PressSpecimen inherits Rectangle {
+    // `--tp-accent`
+    in property <color> accent: Palette.sky;
+    background: TouchCss.tp-page--background;
+    VerticalLayout {
+        padding: TouchCss.tp-grid--gap-column;
+        spacing: TouchCss.tp-grid--gap-row;
+        HorizontalLayout {
+            spacing: TouchCss.tp-grid--gap-column;
+            // touch.tsx Buttons: `.tp-btns`, 8 apart
+            buttons := Stage {
+                HorizontalLayout {
+                    spacing: TouchCss.tp-btns--gap;
+                    button-pri := Button {
+                        kind: ButtonKind.pri;
+                        accent: root.accent;
+                        text: "Open in Space";
+                    }
+                    button-glass := Button {
+                        kind: ButtonKind.glass;
+                        text: "Split view";
+                    }
+                    button-ghost := Button {
+                        kind: ButtonKind.ghost;
+                        text: "Cancel";
+                    }
+                }
+            }
+            // browser.css `.wb-ib`: at rest, on, disabled
+            icon-buttons := Stage {
+                HorizontalLayout {
+                    spacing: TouchCss.tp-btns--gap;
+                    icon-rest := IconButton {
+                        icon-path: Glyph.sidebar;
+                        label: "Toggle sidebar";
+                    }
+                    icon-on := IconButton {
+                        icon-path: Glyph.split;
+                        label: "Split view";
+                        on: true;
+                    }
+                    icon-disabled := IconButton {
+                        icon-path: Glyph.forward;
+                        label: "Forward";
+                        enabled: false;
+                    }
+                }
+            }
+            // touch.tsx ToggleDemo (lg) and the settings row's sm, off and on
+            toggles := Stage {
+                HorizontalLayout {
+                    spacing: TouchCss.tp-tg-demo--gap;
+                    toggle-lg-on := Toggle {
+                        size: ToggleSize.lg;
+                        on: true;
+                        accent: root.accent;
+                        label: "Block trackers";
+                    }
+                    toggle-lg-off := Toggle {
+                        size: ToggleSize.lg;
+                        accent: root.accent;
+                        label: "Block trackers";
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: TouchCss.tp-tg-demo--gap;
+                        toggle-sm-on := Toggle {
+                            size: ToggleSize.sm;
+                            on: true;
+                            accent: root.accent;
+                            label: "Sync Spaces";
+                        }
+                        toggle-sm-off := Toggle {
+                            size: ToggleSize.sm;
+                            accent: root.accent;
+                            label: "Sync Spaces";
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: TouchCss.tp-grid--gap-column;
+            // touch.tsx Checks: `.tp-checks.wb-regular`, the design's three rows
+            checks := Stage {
+                GlassPanel {
+                    tier: GlassTier.regular;
+                    radius: TouchCss.tp-checks--border-radius;
+                    VerticalLayout {
+                        padding: TouchCss.tp-checks--padding;
+                        spacing: TouchCss.tp-checks--gap;
+                        check-on := CheckBox {
+                            text: "Block trackers";
+                            checked: true;
+                            accent: root.accent;
+                        }
+                        check-off := CheckBox {
+                            text: "Open links in a peek";
+                            accent: root.accent;
+                        }
+                        check-on-2 := CheckBox {
+                            text: "Sync Spaces";
+                            checked: true;
+                            accent: root.accent;
+                        }
+                    }
+                }
+            }
+            // settings.css `.st-combo`
+            kbd := Stage {
+                kbd-combo := Kbd {
+                    keys: ["Ctrl", "Shift", "K"];
+                }
+            }
+            // touch.tsx Dock: the tooltip shown above a sample
+            tip := Stage {
+                Rectangle {
+                    tooltip := Tooltip {
+                        shown: true;
+                        jump: true;
+                        text: "Back";
+                        centered: true;
+                        anchor-x: parent.width / 2;
+                        anchor-y: parent.height / 2;
+                        anchor-top: parent.height / 2;
+                        bounds-width: parent.width;
+                        bounds-height: parent.height;
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: TouchCss.tp-grid--gap-column;
+            // settings.tsx HoldButton: idle and disabled
+            holds := Stage {
+                HorizontalLayout {
+                    spacing: TouchCss.tp-btns--gap;
+                    hold := HoldButton {
+                        text: "Hold to clear";
+                        done-text: "Cleared";
+                    }
+                    hold-disabled := HoldButton {
+                        text: "Hold to clear";
+                        done-text: "Cleared";
+                        enabled: false;
+                    }
+                }
+            }
+            // settings.tsx ConfirmButton
+            confirms := Stage {
+                confirm := ConfirmButton {
+                    accent: root.accent;
+                    idle-text: "Check for updates";
+                    busy-text: "Checking";
+                    done-text: "Up to date";
+                    busy-ms: 1400;
+                }
+            }
+        }
+    }
+}

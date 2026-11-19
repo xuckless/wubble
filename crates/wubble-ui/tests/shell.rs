@@ -624,8 +624,7 @@ fn split_panes(app: &AppWindow, driver: &Shared) {
     app.set_panes(ModelRc::from(panes.as_slice()));
     let seams = [third, 2.0 * third].map(|x| SplitSeam {
         x,
-        path: Default::default(),
-        held: false,
+        ..Default::default()
     });
     app.set_seams(ModelRc::from(seams.as_slice()));
     pump(1);
@@ -692,8 +691,7 @@ fn split_seam_drag(app: &AppWindow) {
             .iter()
             .map(|&(x, _, _)| SplitSeam {
                 x: x as f32,
-                path: Default::default(),
-                held: false,
+                ..Default::default()
             })
             .collect();
         drop(s);

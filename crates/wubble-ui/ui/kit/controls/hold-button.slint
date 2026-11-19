@@ -1,0 +1,185 @@
+// design: pages/settings.tsx:300-352, pages/settings.css:104-111 @598f814
+// Hold to confirm (`HoldButton`, `.st-hold`): 40 high, at least 156 wide, 0 18 padding, radius
+// 12, coral at .14 with coral 14 px / 600 text. Held (left button, or Space / Enter down), the
+// coral fills from the left in real time over 1.1 s and the button stretches with it (volume
+// kept); let go early and the fill drains on a spring while the stretch springs back. Full, it
+// strikes, the label crossfades to a check and the done label, the button pulses once and
+// `done` runs; it resets after 2.4 s. The label is two layers, the abyss one clipped to the
+// fill (`inset(0 (1-p) 0 0 round 12px)`), so the colour turns exactly at the fill's edge.
+// Disabled: .4. Physics and timers: `wubble_core::controls::hold`, through the `Controls`
+// registry (kind 4). The design's slint/ port has none: written from the TSX and CSS.
+
+import { Tsx } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Pulse } from "../motion/pulse.slint";
+import { SwapItem } from "../motion/crossfade.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+import { FocusRing } from "../../components/focus-ring.slint";
+import { KitText } from "../text.slint";
+import { Icon, Glyph } from "icon.slint";
+
+// The label, crossfading to the done label (`Swap k={done ? 'd' : 'i'}`), in one ink.
+component HoldLabel inherits Rectangle {
+    in property <bool> done;
+    in property <string> text;
+    in property <string> done-text;
+    in property <color> ink;
+    SwapItem {
+        shown: !root.done;
+        KitText {
+            role: Role.wb-st-hold;
+            text: root.text;
+            color: root.ink;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    // `.st-hold-done`: a 16 px check and the label, 7 apart
+    SwapItem {
+        shown: root.done;
+        HorizontalLayout {
+            alignment: center;
+            spacing: SettingsCss.st-hold-done--gap;
+            Icon {
+                size: Tsx.hold-done-icon;
+                path: Glyph.check;
+                tint: root.ink;
+            }
+            KitText {
+                role: Role.wb-st-hold;
+                text: root.done-text;
+                color: root.ink;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component HoldButton inherits Rectangle {
+    in property <string> text;
+    in property <string> done-text;
+    in property <bool> enabled: true;
+    // the hold completed
+    callback done();
+
+    property <int> slot: -1;
+    out property <ControlView> v: Controls.view(root.slot);
+    property <int> gen: Controls.generation;
+    init => {
+        root.slot = Controls.acquire(4, root.enabled ? 0 : 1);
+    }
+    changed enabled => {
+        Controls.set-value(root.slot, root.enabled ? 0 : 1);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+    out property <bool> is-done: root.v.phase == 2;
+    property <int> hit: root.v.hit;
+    changed hit => {
+        pulse.hit = !pulse.hit;
+    }
+    // the machine's `Effect::Done`, counted in its view
+    property <int> dones: root.v.dones;
+    changed dones => {
+        root.done();
+    }
+
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.is-done ? root.done-text : root.text;
+    accessible-enabled: root.enabled;
+
+    meas := KitText {
+        visible: false;
+        role: Role.wb-st-hold;
+        text: root.is-done ? root.done-text : root.text;
+    }
+    height: SettingsCss.wb-st-hold--height;
+    min-width: SettingsCss.wb-st-hold--min-width;
+    preferred-width: max(SettingsCss.wb-st-hold--min-width, meas.preferred-width + (root.is-done ? Tsx.hold-done-icon + SettingsCss.st-hold-done--gap : 0px) + SettingsCss.wb-st-hold--padding-left + SettingsCss.wb-st-hold--padding-right);
+    opacity: root.enabled ? 1 : SettingsCss.wb-st-hold-disabled--opacity;
+
+    // scale(k, squashOf(k)) about the centre
+    Rectangle {
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: root.v.scale-x;
+        transform-scale-y: root.v.scale-y;
+        border-radius: SettingsCss.wb-st-hold--border-radius;
+        background: SettingsCss.wb-st-hold--background;
+        pulse := Pulse {
+            radius: SettingsCss.wb-st-hold--border-radius;
+        }
+        // `.st-hold-fill`
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.v.value;
+            border-radius: min(SettingsCss.wb-st-hold--border-radius, self.width / 2);
+            clip: true;
+            Rectangle {
+                x: 0px;
+                width: root.width;
+                background: SettingsCss.st-hold-fill--background;
+            }
+        }
+        HoldLabel {
+            done: root.is-done;
+            text: root.text;
+            done-text: root.done-text;
+            ink: SettingsCss.wb-st-hold--color;
+        }
+        // `.st-hold-top`: the dark label, clipped to the fill
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.v.value;
+            border-radius: min(SettingsCss.wb-st-hold--border-radius, self.width / 2);
+            clip: true;
+            HoldLabel {
+                x: 0px;
+                width: root.width;
+                done: root.is-done;
+                text: root.text;
+                done-text: root.done-text;
+                ink: SettingsCss.st-hold-top--color;
+            }
+        }
+    }
+
+    // Space / Enter down starts (not a repeat), up ends (`onKeyDown` / `onKeyUp`)
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == " " || e.text == Key.Return) {
+                if !e.repeat {
+                    Controls.press(root.slot, 0);
+                }
+                return accept;
+            }
+            return reject;
+        }
+        key-released(e) => {
+            if e.text == " " || e.text == Key.Return {
+                Controls.release(root.slot);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        pointer-event(e) => {
+            if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                Controls.press(root.slot, 0);
+            }
+            // the left button's up only: a chorded button's up is not the web's `pointerup`
+            if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up) || e.kind == PointerEventKind.cancel {
+                Controls.release(root.slot);
+            }
+        }
+    }
+    FocusRing {
+        shown: keys.has-focus;
+        radius: SettingsCss.wb-st-hold--border-radius;
+    }
+}

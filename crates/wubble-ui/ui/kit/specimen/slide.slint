@@ -1,0 +1,206 @@
+// derived: ElasticSlider(kit/controls/slider.slint) + Segmented(kit/controls/segmented.slint) + Swatches(kit/controls/swatches.slint) + Thumb(kit/controls/scroller.slint) + SeamStrip(kit/controls/seam.slint)
+// The controls kit B specimen: every control of the lane in every state, on the design's ground
+// (the abyss), each with an element id: the `wubble://touch` stage for these controls. The states
+// a test cannot reach by pointer (held, hover, keyboard focus) are forced through the controls'
+// `preview-*` inputs; not shown by the shell; tests/controls_b.rs instantiates it.
+
+import { Palette, Space, Chrome } from "../gen/tokens.slint";
+import { Shell } from "../derived.slint";
+import { TouchCss } from "../gen/css.slint";
+import { ElasticSlider } from "../controls/slider.slint";
+import { Segmented, SegItem } from "../controls/segmented.slint";
+import { Swatches } from "../controls/swatches.slint";
+import { Thumb } from "../controls/scroller.slint";
+import { SeamStrip, Pill, PillState, PillStates } from "../controls/seam.slint";
+import { Glyph } from "../controls/icon.slint";
+
+export { PillState }
+
+export component SlideSpecimen inherits Window {
+    background: Palette.abyss;
+    // the slider values the specimen's sliders report (a test reads them)
+    out property <float> rest-value: 64;
+    out property <int> seg-chosen: 1;
+    out property <color> swatch: Palette.mint;
+    out property <int> nudged;
+    // the pill's state for every (hover, held, keyboard focus), index hover + 2 held + 4 focus
+    out property <[PillState]> pill-states: [
+        PillStates.of(false, false, false), PillStates.of(true, false, false),
+        PillStates.of(false, true, false), PillStates.of(true, true, false),
+        PillStates.of(false, false, true), PillStates.of(true, false, true),
+        PillStates.of(false, true, true), PillStates.of(true, true, true),
+    ];
+    // the volume slider's focus ring (`sl-rest.keyboard-focused`)
+    out property <bool> slider-focus-ring;
+    // the controls take their registry slots when created: a host that wires the `Controls`
+    // registry after building the specimen stages it again
+    in property <bool> staged: true;
+
+    if root.staged: HorizontalLayout {
+        padding: Space.s8;
+        spacing: Space.s12;
+        VerticalLayout {
+            spacing: Space.s8;
+            alignment: start;
+            sl-rest := ElasticSlider {
+                label: "Tab volume";
+                icon: Glyph.speaker;
+                value: root.rest-value;
+                changed keyboard-focused => {
+                    root.slider-focus-ring = self.keyboard-focused;
+                }
+                edited(v) => {
+                    root.rest-value = v;
+                }
+            }
+            sl-held := ElasticSlider {
+                label: "Held";
+                value: 30;
+                preview-held: true;
+            }
+            sl-focus := ElasticSlider {
+                label: "Focused";
+                value: 80;
+                preview-focus: true;
+            }
+            sl-compact := ElasticSlider {
+                label: "Zoom";
+                compact: true;
+                min: 50;
+                max: 200;
+                step: 10;
+                unit: "%";
+                value: 110;
+            }
+            sl-disabled := ElasticSlider {
+                label: "Disabled";
+                value: 40;
+                enabled: false;
+            }
+        }
+        VerticalLayout {
+            spacing: Space.s8;
+            alignment: start;
+            seg-rest := Segmented {
+                label: "Space";
+                items: [{ label: "Home" }, { label: "Work" }, { label: "Play" }];
+                selected: root.seg-chosen;
+                chosen(i) => {
+                    root.seg-chosen = i;
+                }
+            }
+            seg-icons := Segmented {
+                label: "Spaces";
+                items: [
+                    { label: "Home", icon: Glyph.globe, accent: Palette.sky },
+                    { label: "Work", icon: Glyph.code, accent: Palette.lilac },
+                    { label: "Play", icon: Glyph.play, accent: Palette.blush },
+                ];
+                selected: 2;
+            }
+            seg-narrow := Segmented {
+                label: "Narrow";
+                narrow: true;
+                items: [{ label: "Home", icon: Glyph.globe }, { label: "Work", icon: Glyph.code }, { label: "Play", icon: Glyph.play }];
+                selected: 0;
+            }
+            seg-compact := Segmented {
+                label: "Theme";
+                compact: true;
+                labels: ["Dark", "Light", "Sepia"];
+                selected: 0;
+            }
+            seg-focus := Segmented {
+                label: "Focused";
+                compact: true;
+                labels: ["One", "Two"];
+                selected: 1;
+                preview-focus: true;
+            }
+            sw-rest := Swatches {
+                label: "Accent colour";
+                colours: [Palette.sky, Palette.lilac, Palette.blush, Palette.mint, Palette.coral, Palette.amber];
+                names: ["Sky", "Lilac", "Blush", "Mint", "Coral", "Amber"];
+                value: root.swatch;
+                chosen(c) => {
+                    root.swatch = c;
+                }
+            }
+            sw-hover := Swatches {
+                label: "Hovered";
+                colours: [Palette.sky, Palette.lilac, Palette.blush];
+                value: Palette.sky;
+                preview-hover: 1;
+            }
+            sw-focus := Swatches {
+                label: "Focused";
+                colours: [Palette.sky, Palette.lilac, Palette.blush];
+                value: Palette.lilac;
+                preview-focus: true;
+            }
+        }
+        // thumbs and seams, each on a stage of its own
+        HorizontalLayout {
+            spacing: Space.s6;
+            alignment: start;
+            th-rest := Thumb {
+                width: Space.s6;
+                height: TouchCss.tp-sl--height * 6;
+                top: Space.s4;
+                length: TouchCss.tp-sl--height * 2;
+                shown: false;
+            }
+            th-on := Thumb {
+                width: Space.s6;
+                height: TouchCss.tp-sl--height * 6;
+                top: Space.s4;
+                length: TouchCss.tp-sl--height * 2;
+                shown: true;
+            }
+            th-hover := Thumb {
+                width: Space.s6;
+                height: TouchCss.tp-sl--height * 6;
+                top: Space.s4;
+                length: TouchCss.tp-sl--height * 2;
+                shown: true;
+                preview-hover: true;
+            }
+            seam-rest := SeamStrip {
+                width: Space.s12;
+                height: TouchCss.tp-sl--height * 6;
+                seam-x: self.width / 2;
+                label: "Resize sidebar. Narrow it to collapse to icons.";
+                value-min: Chrome.sidebarMin / Shell.px;
+                value-max: Chrome.sidebarMax / Shell.px;
+                value-now: Chrome.sidebarDefault / Shell.px;
+                nudge(d) => {
+                    root.nudged += d;
+                }
+            }
+            seam-hover := SeamStrip {
+                width: Space.s12;
+                height: TouchCss.tp-sl--height * 6;
+                seam-x: self.width / 2;
+                preview-hover: true;
+            }
+            seam-held := SeamStrip {
+                width: Space.s12;
+                height: TouchCss.tp-sl--height * 6;
+                seam-x: self.width / 2;
+                held: true;
+            }
+            seam-focus := SeamStrip {
+                width: Space.s12;
+                height: TouchCss.tp-sl--height * 6;
+                seam-x: self.width / 2;
+                preview-focus: true;
+            }
+            seam-hidden := SeamStrip {
+                width: Space.s12;
+                height: TouchCss.tp-sl--height * 6;
+                seam-x: self.width / 2;
+                hidden: true;
+            }
+        }
+    }
+}

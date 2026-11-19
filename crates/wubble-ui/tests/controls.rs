@@ -46,17 +46,20 @@ fn toggle_and_slider_draw_their_springs() {
     let wired = driver::wire(&app, wubble_core::seam::Seam::new());
     app.set_page(InternalPageKind::Settings);
     let defs: Vec<&SettingDef> = DEFS.iter().collect();
-    app.set_settings_rows(ModelRc::from(Rc::new(VecModel::from(setting_items(
-        &settings_page_from(&defs, &HashMap::new()),
-    )))));
+    let rows = Rc::new(VecModel::from(setting_items(&settings_page_from(
+        &defs,
+        &HashMap::new(),
+    ))));
+    app.set_settings_rows(ModelRc::from(rows.clone()));
     mock_elapsed_time(Duration::from_millis(100));
 
     let views = app.global::<Controls>().get_views();
     assert!(views.row_count() >= 2, "toggle and slider took slots");
     let on_toggle = views.iter().find(|v| v.value == 1.0 && v.fill == 1.0);
+    // the settings row's toggle is the design's sm size: travel 50 - 2 * 3 - 24 = 20 px
     assert!(
-        on_toggle.is_some_and(|v| v.x == 40.0),
-        "an on toggle rests at the far end"
+        on_toggle.as_ref().is_some_and(|v| v.x == 20.0),
+        "an on toggle rests at the far end: {on_toggle:?}"
     );
 
     let changed = Rc::new(RefCell::new(vec![]));
@@ -125,6 +128,16 @@ fn toggle_and_slider_draw_their_springs() {
         changed.borrow().last().cloned(),
         Some(("t.choice".to_string(), "three".to_string()))
     );
+    // the control is controlled (the design's `onChange`): the indicator goes where the
+    // setting goes, so write it back as the host does
+    let stored: HashMap<String, String> = changed.borrow().iter().cloned().collect();
+    for (i, row) in setting_items(&settings_page_from(&defs, &stored))
+        .into_iter()
+        .enumerate()
+    {
+        rows.set_row_data(i, row);
+    }
+    mock_elapsed_time(Duration::from_millis(16));
     let mut frames = 0;
     while wired.frame(&app, now).0 && frames < 4000 {
         now += Duration::from_millis(8);

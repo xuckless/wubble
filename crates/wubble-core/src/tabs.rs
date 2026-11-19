@@ -375,7 +375,7 @@ impl TabRows {
             y: self.ind_y.x,
             stretch: sx,
             squash: squash_of(sx),
-            origin: if self.stretch.dir > 0.0 { 0.3 } else { 0.7 }, // the trailing edge leads the stretch
+            origin: self.stretch.origin(), // the trailing edge leads the stretch
         }
     }
 }
@@ -421,7 +421,7 @@ impl SpaceSwitcher {
             y: self.pos.x * Self::PITCH,
             stretch: s,
             squash: squash_of(s),
-            origin: if self.stretch.dir > 0.0 { 0.3 } else { 0.7 },
+            origin: self.stretch.origin(),
         }
     }
 }

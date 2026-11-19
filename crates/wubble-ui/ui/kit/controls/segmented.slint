@@ -1,0 +1,283 @@
+// design: pages/touch-kit.tsx:185-305, pages/touch.css:110-118, pages/settings.css:66-69 @598f814
+// Segmented (`touch-kit.tsx` Segmented, `.tp-seg*`): a thin-glass chip of segments with a liquid
+// indicator. The indicator follows on the follow spring and stretches along its travel from its
+// trailing side; grab it and it follows 1:1, rubber-banding past both ends; released, it picks
+// the nearest segment along the fling. A press elsewhere selects on release. The labels turn dark
+// exactly where the indicator covers them: a second, dark label layer clipped to the indicator.
+// The indicator takes the chosen item's accent (`--tp-seg-on`, ink without one) over .24 s.
+// ArrowLeft/Right choose the neighbour. `compact` is the settings row's `.st-seg`; `narrow` the
+// `@container (max-width: 340px)` sizes (the caller knows its container's width).
+// The physics is Rust's (`wubble_core::controls::segmented`, the `Controls` registry, kind 2).
+// Slint limits (notes/fidelity/deviations.md): one FocusScope for the tab list stands in for the
+// buttons' roving tabindex (the ring is drawn round the chosen segment after a Tab).
+
+import { Palette } from "../gen/tokens.slint";
+import { TouchCss, SettingsCss, BrowserCss } from "../gen/css.slint";
+import { Role, TextRole } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Icon } from "icon.slint";
+import { Calm } from "../motion/calm.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { GlassTier } from "../../components/model.slint";
+import { FocusRing } from "../../components/focus-ring.slint";
+import { SliderKeys } from "slider.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+
+// One segment: its label, an optional icon path (Glyph) and accent (transparent: ink).
+export struct SegItem {
+    label: string,
+    icon: string,
+    accent: color,
+}
+
+// One row of labels, laid out as the buttons are (the dark layer repeats it under the clip).
+component SegRow inherits HorizontalLayout {
+    in property <[SegItem]> items;
+    in property <[string]> labels;
+    in property <length> seg-width;
+    in property <length> seg-height;
+    in property <length> seg-pad;
+    in property <length> gap;
+    in property <TextRole> role;
+    in property <bool> icons;
+    in property <color> ink;
+    // the pointer, for the hover colour (-1: none); the dark layer has none
+    in property <length> hover-x: -1px;
+    in property <bool> measure;
+    in property <int> slot: -1;
+    // `items`, or plain `labels` when there are none
+    for n[i] in Math.max(root.items.length, root.labels.length): seg := Rectangle {
+        property <SegItem> item: root.items.length > 0 ? root.items[i] : { label: root.labels[i] };
+        property <bool> hot: root.hover-x >= self.x && root.hover-x < self.x + self.width;
+        width: root.seg-width > 0 ? root.seg-width : self.preferred-width;
+        height: root.seg-height;
+        init => {
+            if root.measure {
+                Controls.segment(root.slot, i, self.x, self.width);
+            }
+        }
+        changed x => {
+            if root.measure {
+                Controls.segment(root.slot, i, self.x, self.width);
+            }
+        }
+        changed width => {
+            if root.measure {
+                Controls.segment(root.slot, i, self.x, self.width);
+            }
+        }
+        HorizontalLayout {
+            padding-left: root.seg-pad;
+            padding-right: root.seg-pad;
+            spacing: root.gap;
+            alignment: center;
+            if root.icons && seg.item.icon != "": Icon {
+                path: seg.item.icon;
+                tint: label.color;
+                y: (parent.height - self.height) / 2;
+            }
+            label := KitText {
+                role: root.role;
+                text: seg.item.label;
+                color: seg.hot ? TouchCss.button-tp-seg-btn-hover--color : root.ink;
+                vertical-alignment: center;
+                animate color {
+                    duration: Calm.ms(root.measure ? TouchCss.wb-tp-seg-btn--transition-color-duration : 0ms);
+                    easing: ease;
+                }
+            }
+        }
+    }
+}
+
+export component Segmented inherits Rectangle {
+    in property <[SegItem]> items;
+    // plain labels, for a caller without icons or accents (`items` wins)
+    in property <[string]> labels;
+    in property <int> selected: -1;
+    // what the tab list is (aria-label)
+    in property <string> label;
+    in property <bool> compact;
+    in property <bool> narrow;
+    in property <bool> enabled: true;
+    // the specimen's forced keyboard focus (kit/specimen/slide.slint)
+    in property <bool> preview-focus;
+    callback chosen(int);
+    out property <bool> keyboard-focused: (keys.has-focus && root.tab-focus) || root.preview-focus;
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <bool> live: root.slot >= 0 && root.slot < Controls.views.length;
+    property <int> gen: Controls.generation;
+    property <bool> tab-focus;
+
+    property <length> pad: root.compact ? SettingsCss.st-seg--padding : TouchCss.tp-seg--padding;
+    property <length> seg-height: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--height : TouchCss.wb-tp-seg-btn--height;
+    property <length> seg-width: root.compact ? 0px : root.narrow ? TouchCss.max-width-340px-tp-seg-btn--width : TouchCss.wb-tp-seg-btn--width;
+    property <length> seg-pad: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--padding-left : 0px;
+    property <length> gap: root.narrow ? TouchCss.max-width-340px-tp-seg-btn--gap : TouchCss.wb-tp-seg-btn--gap;
+    property <length> ind-radius: root.compact ? SettingsCss.st-seg-tp-seg-ind--border-radius : TouchCss.tp-seg-ind--border-radius;
+    // `.tp-seg-btn` is 14 / 500; the size alone changes in `.st-seg` and the narrow container
+    property <TextRole> role: {
+        family: Role.wb-tp-seg-btn.family,
+        size: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--font-size : root.narrow ? TouchCss.max-width-340px-tp-seg-btn--font-size : Role.wb-tp-seg-btn.size,
+        weight: Role.wb-tp-seg-btn.weight,
+        line-height: Role.wb-tp-seg-btn.line-height,
+    };
+    property <bool> icons: !root.narrow;
+    // the indicator's rectangle, already stretched about its trailing side by the machine
+    property <bool> shown: root.selected >= 0 && root.live && root.v.w > 0;
+    property <length> ind-h: root.seg-height * root.v.scale-y;
+    property <length> ind-y: root.pad + (root.seg-height - root.ind-h) / 2;
+    property <length> ind-r: root.ind-radius * Math.min(root.v.scale-x, root.v.scale-y);
+    property <int> count: Math.max(root.items.length, root.labels.length);
+    property <color> accent: root.selected >= 0 && root.selected < root.items.length ? root.items[root.selected].accent : transparent;
+    property <color> on: root.accent == transparent ? Palette.ink : root.accent;
+
+    init => {
+        root.slot = Controls.acquire(2, Math.max(0, root.selected));
+    }
+    changed selected => {
+        Controls.set-value(root.slot, Math.max(0, root.selected));
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+
+    width: row.preferred-width;
+    height: root.seg-height + 2 * root.pad;
+    opacity: root.enabled ? 1 : BrowserCss.wb-ib-disabled--opacity;
+
+    GlassPanel {
+        tier: GlassTier.thin;
+        radius: root.compact ? SettingsCss.st-seg--border-radius : TouchCss.tp-seg--border-radius;
+    }
+    // .tp-seg-ind
+    if root.shown: Rectangle {
+        x: root.v.x * Shell.px;
+        y: root.ind-y;
+        width: root.v.w * Shell.px;
+        height: root.ind-h;
+        border-radius: root.ind-r;
+        background: root.on;
+        drop-shadow-offset-y: TouchCss.tp-seg-ind--box-shadow-shadow-1-y;
+        drop-shadow-blur: TouchCss.tp-seg-ind--box-shadow-shadow-1-blur;
+        drop-shadow-color: TouchCss.tp-seg-ind--box-shadow-shadow-1-color;
+        animate background {
+            duration: Calm.ms(TouchCss.tp-seg-ind--transition-background-color-duration);
+            easing: TouchCss.tp-seg-ind--transition-background-color-easing;
+        }
+    }
+    row := SegRow {
+        padding: root.pad;
+        items: root.items;
+        labels: root.labels;
+        seg-width: root.seg-width;
+        seg-height: root.seg-height;
+        seg-pad: root.seg-pad;
+        gap: root.gap;
+        role: root.role;
+        icons: root.icons;
+        ink: TouchCss.wb-tp-seg-btn--color;
+        hover-x: ta.has-hover ? ta.mouse-x : -1px;
+        measure: true;
+        slot: root.slot;
+    }
+    // .tp-seg-top: the dark labels, clipped to the indicator
+    if root.shown: Rectangle {
+        x: root.v.x * Shell.px;
+        y: root.ind-y;
+        width: root.v.w * Shell.px;
+        height: root.ind-h;
+        border-radius: root.ind-r;
+        clip: true;
+        SegRow {
+            x: -parent.x;
+            y: -parent.y;
+            width: root.width;
+            height: root.height;
+            padding: root.pad;
+            items: root.items;
+            labels: root.labels;
+            seg-width: root.seg-width;
+            seg-height: root.seg-height;
+            seg-pad: root.seg-pad;
+            gap: root.gap;
+            role: root.role;
+            icons: root.icons;
+            ink: Palette.abyss;
+        }
+    }
+    // the chosen segment's ring (`.wb :focus-visible` on the tab button)
+    if root.keyboard-focused && root.shown: FocusRing {
+        x: root.v.x * Shell.px;
+        y: root.pad;
+        width: root.v.w * Shell.px;
+        height: root.seg-height;
+        radius: root.ind-radius;
+        shown: true;
+    }
+
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            root.tab-focus = reason == FocusReason.tab-navigation;
+        }
+        focus-lost => {
+            root.tab-focus = false;
+        }
+        key-pressed(e) => {
+            let code = SliderKeys.code(e.text);
+            if code != 0 && code != 1 {
+                return reject;
+            }
+            let i = Controls.key(root.slot, code, false);
+            if i >= 0 && round(i) != root.selected {
+                root.chosen(round(i));
+            }
+            accept
+        }
+        accessible-role: tab-list;
+        accessible-label: root.label;
+        accessible-enabled: root.enabled;
+        // the buttons' roles (`role="tab"`, aria-selected); the segments are drawn by the rows
+        for n[i] in root.count: Rectangle {
+            width: 0px;
+            height: 0px;
+            accessible-role: tab;
+            accessible-label: root.items.length > 0 ? root.items[i].label : root.labels[i];
+            accessible-item-selectable: true;
+            accessible-item-selected: i == root.selected;
+            accessible-item-index: i;
+            accessible-item-count: root.count;
+            accessible-action-default => {
+                if i != root.selected {
+                    root.chosen(i);
+                }
+            }
+        }
+        ta := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: pointer;
+            pointer-event(e) => {
+                if e.button == PointerEventButton.left && e.kind == PointerEventKind.down {
+                    keys.focus();
+                    Controls.press(root.slot, self.mouse-x);
+                }
+                if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+                    let landed = Controls.release(root.slot);
+                    if landed >= 0 && round(landed) != root.selected {
+                        root.chosen(round(landed));
+                    }
+                }
+            }
+            moved => {
+                if self.pressed {
+                    Controls.drag(root.slot, self.mouse-x);
+                }
+            }
+        }
+    }
+}

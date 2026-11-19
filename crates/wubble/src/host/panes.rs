@@ -588,6 +588,8 @@ impl Host {
                     x: x as f32,
                     path: path.into(),
                     held,
+                    // the pill's bend and height: mid height until wired (controls kit B)
+                    ..Default::default()
                 })
                 .collect()
         };

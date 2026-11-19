@@ -59,9 +59,6 @@ export global Shell {
     out property <length> light-glyph: 8px;
     // the ring's width: GlassPanel's film rim (1.5)
     out property <length> glow-width: Glass.film-width;
-    // the checkbox's tick lands this long behind its fill (touch.tsx CHECKS.tickDelay)
-    // …and leaves first, faster (touch.css `.tp-ck-box path`: .1 s)
-    out property <duration> check-tick-out: 100ms;
     // .wb-tab-x: a 22 px tile, radius 7, white 10% while hovered
     out property <length> tab-close-radius: BrowserCss.wb-tab-x--border-radius;
     // a closed row shrinks to 0.94 as it leaves (browser.css `wb-tab-out`)
@@ -206,9 +203,7 @@ export global Shell {
     out property <length> sheet-pad: 26px;
     out property <length> sheet-radius: 20px;
     out property <length> sheet-title: 19px;
-    out property <length> sheet-button: 42px;
     out property <length> sheet-button-radius: 11px;
-    out property <length> sheet-button-pad: 16px;
     out property <length> sheet-input: 40px;
     out property <duration> sheet-in: Motion.dropdown-in;
     out property <float> sheet-from: Motion.dropdown-from;
@@ -224,20 +219,10 @@ export global Shell {
     out property <duration> status-move: 160ms;
     out property <length> status-dodge: 20px;
     out property <length> status-border: 1px;
-    // The tooltip (tooltip.slint): the design's dock tooltip (touch.css `.tp-tip`, touch.tsx
-    // `DOCK.glideMs`), 8 px from what it labels, kept 4 px inside the window.
-    out property <length> tip-height: 30px;
-    out property <length> tip-pad: 11px;
-    out property <length> tip-radius: TouchCss.tp-tip--border-radius;
-    out property <length> tip-text: TouchCss.tp-tip--font-size;
-    out property <length> tip-rise: TouchCss.tp-tip--transform-translatey;
+    // The tooltip (kit/controls/tooltip.slint): 8 px from what it labels (touch.css
+    // `.tp-tip-pos { bottom: calc(100% + 8px) }`), kept 4 px inside the window (wubble).
     out property <length> tip-gap: 8px;
     out property <length> tip-edge: 4px;
-    // .tp-tip / .tp-tip.show: opacity in .16 s, rise in .2 s (ease-out); out .13 s / .16 s.
-    out property <duration> tip-fade-in: TouchCss.tp-tip-show--transition-opacity-duration;
-    out property <duration> tip-fade-out: TouchCss.tp-tip--transition-opacity-duration;
-    out property <duration> tip-rise-in: TouchCss.tp-tip-show--transition-transform-duration;
-    out property <duration> tip-rise-out: TouchCss.tp-tip--transition-transform-duration;
     // .ur-o-toast: 46 high, padding 0 12, radius 14, 14 / 540; rises 14 px from .95 over a
     // 400 ms spring. Shown for 1.5 s (Chromium's zoom bubble closes after 1.5 s).
     out property <length> toast-height: 46px;
@@ -296,8 +281,6 @@ export global Shell {
     out property <int> download-max-rows: 6;
     out property <length> error-width: 440px;
     out property <length> error-icon: 40px;
-    // The prompt's "remember" check box: a 1 px rim, a 1.6 px tick.
-    out property <length> check-rim: 1px;
 
     // The settings page (wubble://settings), from the design repo's `pages/settings.css` and the
     // touch kit's `pages/touch.css` (xuckless/the-wallpaper-project @ 21838b8), by rule.
@@ -373,23 +356,11 @@ export global Shell {
     out property <length> reset-font: SettingsCss.wb-st-reset--font-size;
     out property <color> reset-hover: rgba(255, 255, 255, 0.07);
     // The springy controls (components/controls/, `wubble_core::controls`): the film rim fades
-    // in 200 ms and out 150 ms (.wb-film, as GlassPanel's rim); the toggle's travel in the
-    // design (track 92 − 2 × inset 5 − knob 42), the unit the Rust machine counts in; one px of
-    // those units as a length.
+    // in 200 ms and out 150 ms (.wb-film, as GlassPanel's rim); one px of the Rust machines'
+    // units (px of the control) as a length.
     out property <duration> film-in: Glass.film-in;
     out property <duration> film-out: Glass.film-out;
-    out property <length> toggle-design-travel: 40px;
     out property <length> control-unit: 1px;
-    // .tp-tg-sm: 50 x 30, padding 3, knob 24 (mist, ink when on), shadow 0 2px 5px / .4 and
-    // inset 0 1px 0 white 40 %; the body is .wb-thin; the accent fill fades in when on
-    out property <length> toggle-width: TouchCss.wb-tp-tg-sm--width;
-    out property <length> toggle-height: TouchCss.wb-tp-tg-sm--height;
-    out property <length> toggle-knob: 24px;
-    out property <length> toggle-inset: 3px;
-    out property <length> toggle-shadow-blur: 5px;
-    out property <length> toggle-shadow-y: 2px;
-    out property <color> toggle-shadow: rgba(0, 0, 0, 0.4);
-    out property <color> knob-highlight: rgba(255, 255, 255, 0.4);
     // .st-seg: padding 3, radius 12 on .wb-thin; segments 30 high, padding 0 13, radius 9, 13;
     // .tp-seg-ind ink, shadow 0 4px 12px / .35, its label abyss
     out property <length> seg-pad: SettingsCss.st-seg--padding;
@@ -463,7 +434,6 @@ export global Shell {
     // derived: values with no design equal (notes/fidelity/derived-review.md, for the owner).
     // Each line names the design rule it derives from; an expression of design tokens where one fits.
     out property <color> selection-fill: Palette.sky.transparentize(0.65); // derived from the Space accent sky (core/tokens.ts color.sky) at .35: selected text in a field; the design styles no ::selection
-    out property <duration> check-tick-delay: 70ms; // derived from pages/touch.tsx:554 CHECKS.tickDelay (generated in kit_gen.rs touch::CHECKS, not in gen/*.slint)
     out property <float> tab-exit-shrink: 1 - BrowserCss.wb-tab-out-k-to--scale; // derived from browser/browser.css:72 @keyframes wb-tab-out to scale(.94)
     out property <int> beam-segments: 10; // derived from wubble-only: the Slint border beam stand-in (GLASS beam is scene-drawn in the design); strokes in its tail
     out property <float> beam-bloom-alpha: 0.3; // derived from wubble-only: the stand-in beam's bloom stroke (the design blurs it in the shader)
@@ -479,14 +449,12 @@ export global Shell {
     out property <length> command-bar-width: 600px; // derived from browser/browser.css:166 .wb-cmd width: min(600px, calc(100% - 32px)) (not read by the generator)
     out property <int> sheet-title-weight: Role.st-sec-head-h2.weight; // derived from wubble-only sheet title, 19 px like .st-sec-head h2 (settings.css:36): its weight 600 (was 560)
     out property <length> sheet-body: Role.body.size; // derived from wubble-only sheet body text: the type scale body (core/tokens.ts type.body 14; was 14.5)
-    out property <duration> tip-glide: 260ms; // derived from pages/touch.css:101 .tp-tip-pos transition var(--tp-glide) = touch.tsx DOCK.glideMs (kit_gen.rs touch::DOCK)
     out property <int> toast-weight: Role.st-row-title.weight; // derived from wubble-only toast text, 14 px like .st-row-title (settings.css:45): its weight 500 (was 540)
     out property <duration> toast-shown: 1500ms; // derived from wubble-only: how long a toast stays; no design counterpart
     out property <length> boost-code-height: 150px; // derived from wubble-only: the Boost editor's code area (a missing primitive, wubble-only.md)
     out property <length> pip-width: 400px; // derived from wubble-only: picture-in-picture window, 16:9
     out property <length> pip-height: 225px; // derived from wubble-only: as pip-width
     out property <length> pip-min-height: 135px; // derived from wubble-only: as pip-width (pip-min-width 240 at 16:9)
-    out property <length> check-tick: px * 3 * 14 / 24; // derived from pages/touch.tsx:570 the tick: stroke 3 of a 24 viewBox drawn at 14 px (was 1.6)
     out property <float> settings-pad-share: 0.04; // derived from pages/settings.css:6 .st-grid padding clamp(16px, 4cqi, 48px) (not read by the generator)
     out property <length> settings-spy: 140px; // derived from pages/settings.tsx:468 the scroll spy line (t <= y + 140)
     out property <length> settings-width: 720px; // derived from wubble-only: the list pages' column (pages.slint); settings itself is .st-grid (1120, settings-max)

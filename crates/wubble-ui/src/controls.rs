@@ -17,7 +17,8 @@ use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use wubble_core::controls::menu::{self, Effect, Event, Key, MenuState, Phase, RowKind};
-use wubble_core::controls::{Segmented, Slider, Toggle};
+use wubble_core::controls::slider::{Cfg, Key as SliderKey};
+use wubble_core::controls::{Ring, Segmented, Slider, Toggle, ToggleSize, confirm, hold};
 
 use crate::{AppWindow, ControlView, Controls as Global, MenuEffect, MenuEntry};
 
@@ -31,6 +32,9 @@ enum Slot {
     Slider(Slider),
     Segmented(Segmented),
     Menu(MenuState),
+    Hold(hold::State),
+    Confirm(confirm::State),
+    Swatches(Ring),
 }
 
 impl Slot {
@@ -47,34 +51,81 @@ impl Slot {
                 }
                 was
             }
+            // the effects are counted in the state, so the view carries them (`dones`, `pulses`)
+            Slot::Hold(s) => {
+                *s = hold::transition(*s, hold::Event::Tick(dt)).0;
+                s.moving()
+            }
+            Slot::Confirm(s) => {
+                *s = confirm::transition(*s, confirm::Event::Tick(dt)).0;
+                s.moving()
+            }
+            Slot::Swatches(r) => r.step(dt),
         }
     }
 
     fn view(&self) -> ControlView {
-        if let Slot::Menu(m) = self {
-            return menu_view(m);
-        }
-        // (x, w, scale x, scale y, origin, fill, value, held): one mapping for every control
-        let (x, w, sx, sy, origin, fill, value, held) = match self {
-            Slot::Menu(_) => unreachable!("handled above"),
+        let rest = rest();
+        match self {
+            Slot::Menu(m) => return menu_view(m),
             Slot::Toggle(t) => {
                 let v = t.view();
-                let on = if v.on { 1.0 } else { 0.0 };
-                (v.x, 0.0, v.scale_x, v.scale_y, v.origin, v.fill, on, false)
+                return ControlView {
+                    x: v.x as f32,
+                    scale_x: v.scale_x as f32,
+                    scale_y: v.scale_y as f32,
+                    origin: v.origin as f32,
+                    fill: v.fill as f32,
+                    value: if v.on { 1.0 } else { 0.0 },
+                    held: v.held,
+                    squash_x: v.squash_x as f32,
+                    squash_y: v.squash_y as f32,
+                    origin2: v.squash_origin as f32,
+                    ..rest
+                };
             }
+            Slot::Hold(s) => {
+                let v = s.view();
+                return ControlView {
+                    scale_x: v.scale_x as f32,
+                    scale_y: v.scale_y as f32,
+                    value: v.p as f32,
+                    held: v.held,
+                    phase: if v.done { 2 } else { i32::from(v.held) },
+                    hit: v.pulses,
+                    dones: v.dones,
+                    ..rest
+                };
+            }
+            Slot::Confirm(s) => {
+                return ControlView {
+                    phase: s.phase.index(),
+                    hit: s.pulses,
+                    ..rest
+                };
+            }
+            _ => {}
+        }
+        // (x, w, scale x, scale y, origin, value, held): the slider's, segmented control's and
+        // swatches' ring; the slider's bubble too
+        let (mut bubble_x, mut lean) = (0.0, 0.0);
+        let (x, w, sx, sy, origin, value, held) = match self {
             Slot::Slider(s) => {
                 let v = s.view();
-                (
-                    v.x, 0.0, v.scale_x, v.scale_y, v.origin, 0.0, v.value, v.held,
-                )
+                (bubble_x, lean) = (v.bubble_x, v.lean);
+                (v.x, 0.0, v.scale_x, v.scale_y, v.origin, v.value, v.held)
             }
             Slot::Segmented(s) => {
                 let v = s.view();
                 let selected = v.selected as f64;
-                (
-                    v.left, v.width, v.scale_x, v.scale_y, 0.5, 0.0, selected, v.held,
-                )
+                (v.left, v.width, v.scale_x, v.scale_y, 0.5, selected, v.held)
             }
+            Slot::Swatches(r) => {
+                let v = r.view();
+                let idx = r.idx() as f64;
+                (v.x, 0.0, v.scale_x, v.scale_y, v.origin, idx, false)
+            }
+            _ => unreachable!("matched above"),
         };
         ControlView {
             x: x as f32,
@@ -82,20 +133,25 @@ impl Slot {
             scale_x: sx as f32,
             scale_y: sy as f32,
             origin: origin as f32,
-            fill: fill as f32,
             value: value as f32,
             held,
-            ..rest()
+            bubble_x: bubble_x as f32,
+            lean: lean as f32,
+            ..rest
         }
     }
 }
 
-/// The fields only the menu uses, at rest.
+/// Every control's view at rest: unit scales and centred origins (the toggle's squash too),
+/// and the menu's rows at none.
 fn rest() -> ControlView {
     ControlView {
         scale_x: 1.0,
         scale_y: 1.0,
         origin: 0.5,
+        squash_x: 1.0,
+        squash_y: 1.0,
+        origin2: 0.5,
         hl: -1,
         jump: true,
         focus: -1,
@@ -252,32 +308,87 @@ impl Controls {
             Some(Slot::Toggle(t)) => t.set(value > 0.5),
             Some(Slot::Slider(s)) => s.set(f64::from(value)),
             Some(Slot::Segmented(s)) => s.set(value.max(0.0) as usize),
-            Some(Slot::Menu(_)) | None => {}
+            Some(Slot::Swatches(r)) => r.set(value.max(0.0) as usize),
+            Some(Slot::Hold(s)) => *s = hold::transition(*s, hold::Event::Disable(value > 0.5)).0,
+            Some(Slot::Menu(_) | Slot::Confirm(..)) | None => {}
         }
     }
 
+    fn configure(&mut self, id: i32, min: f32, max: f32, step: f32) {
+        if let Some(Slot::Slider(s)) = self.slot(id) {
+            s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)));
+        }
+        self.write(id);
+    }
+
+    /// A key on a control: the value it reports (see `Controls.key`): the slider's snapped
+    /// value, the segment a segmented control asks for (its value stays the caller's).
+    fn key(&mut self, id: i32, code: i32, shift: bool) -> f32 {
+        let key = SliderKey::from_code(code);
+        let v = match self.slot(id) {
+            Some(Slot::Slider(s)) => {
+                if let Some(k) = key {
+                    s.key(k, shift);
+                }
+                s.view().value
+            }
+            Some(Slot::Segmented(s)) => s.key(key.and_then(SliderKey::dir).unwrap_or(0)) as f64,
+            _ => -1.0,
+        };
+        self.write(id);
+        v as f32
+    }
+
     fn segment(&mut self, id: i32, i: i32, left: f32, width: f32) {
-        if let (Some(Slot::Segmented(s)), Ok(i)) = (self.slot(id), usize::try_from(i)) {
-            s.set_segment(i, f64::from(left), f64::from(width));
+        match (self.slot(id), usize::try_from(i)) {
+            (Some(Slot::Segmented(s)), Ok(i)) => {
+                s.set_segment(i, f64::from(left), f64::from(width))
+            }
+            // the chosen swatch laid out: the ring starts on it
+            (Some(Slot::Swatches(r)), Ok(i)) => r.place(i),
+            _ => {}
         }
         self.write(id);
     }
 
     fn resize(&mut self, id: i32, travel: f32) {
-        if let Some(Slot::Slider(s)) = self.slot(id) {
-            s.set_width(f64::from(travel));
+        match self.slot(id) {
+            Some(Slot::Slider(s)) => s.set_width(f64::from(travel)),
+            Some(Slot::Toggle(t)) => t.resize(f64::from(travel)),
+            _ => {}
         }
         self.write(id);
     }
 
-    fn press(&mut self, id: i32, px: f32) {
+    /// Returns whether the press asks the control to run its action (confirm: `Effect::Run`).
+    fn press(&mut self, id: i32, px: f32) -> bool {
         let t = self.ms();
-        match self.slot(id) {
-            Some(Slot::Toggle(tg)) => tg.press(f64::from(px), t),
-            Some(Slot::Slider(s)) => s.press(f64::from(px)),
-            Some(Slot::Segmented(s)) => s.press(f64::from(px), t),
-            Some(Slot::Menu(_)) | None => {}
-        }
+        let run = match self.slot(id) {
+            Some(Slot::Toggle(tg)) => {
+                tg.press(f64::from(px), t);
+                false
+            }
+            Some(Slot::Slider(s)) => {
+                s.press(f64::from(px));
+                false
+            }
+            Some(Slot::Segmented(s)) => {
+                s.press(f64::from(px), t);
+                false
+            }
+            Some(Slot::Hold(s)) => {
+                *s = hold::transition(*s, hold::Event::Start).0;
+                false
+            }
+            Some(Slot::Confirm(s)) => {
+                let (n, fx) = confirm::transition(*s, confirm::Event::Click);
+                *s = n;
+                fx.contains(&confirm::Effect::Run)
+            }
+            Some(Slot::Menu(_) | Slot::Swatches(..)) | None => false,
+        };
+        self.write(id);
+        run
     }
 
     fn drag(&mut self, id: i32, px: f32) {
@@ -286,17 +397,24 @@ impl Controls {
             Some(Slot::Toggle(tg)) => tg.drag(f64::from(px), t),
             Some(Slot::Slider(s)) => s.drag(f64::from(px)),
             Some(Slot::Segmented(s)) => s.drag(f64::from(px), t),
-            Some(Slot::Menu(_)) | None => {}
+            Some(Slot::Menu(_) | Slot::Swatches(..) | Slot::Hold(..) | Slot::Confirm(..))
+            | None => {}
         }
     }
 
     fn release(&mut self, id: i32) -> f32 {
-        match self.slot(id) {
+        let v = match self.slot(id) {
             Some(Slot::Toggle(t)) => t.release().map_or(-1.0, |on| if on { 1.0 } else { 0.0 }),
             Some(Slot::Slider(s)) => s.release().map_or(-1.0, |v| v as f32),
             Some(Slot::Segmented(s)) => s.release().map_or(-1.0, |i| i as f32),
-            Some(Slot::Menu(_)) | None => -1.0,
-        }
+            Some(Slot::Hold(s)) => {
+                *s = hold::transition(*s, hold::Event::End).0;
+                -1.0
+            }
+            Some(Slot::Menu(_) | Slot::Swatches(..) | Slot::Confirm(..)) | None => -1.0,
+        };
+        self.write(id);
+        v
     }
 
     /// One menu event: the rows, then the event, through the pure transition; the view is
@@ -348,11 +466,13 @@ impl Controls {
             .min(wubble_core::motion::DT_CAP);
         let mut moving = false;
         for (i, slot) in self.slots.iter_mut().enumerate() {
-            if let Some(s) = slot
-                && s.step(dt)
-            {
-                moving = true;
-                self.views.set_row_data(i, s.view());
+            if let Some(s) = slot {
+                moving |= s.step(dt);
+                // the step that comes to rest (or ends a countdown) still changes the view
+                let v = s.view();
+                if self.views.row_data(i).as_ref() != Some(&v) {
+                    self.views.set_row_data(i, v);
+                }
             }
         }
         if !moving {
@@ -383,10 +503,19 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     let r = Rc::clone(&reg);
     g.on_acquire(move |kind, value| {
         let slot = match kind {
-            0 => Slot::Toggle(Toggle::new(value > 0.5)),
+            0 => Slot::Toggle(Toggle::new(value > 0.5, ToggleSize::Lg)),
             2 => Slot::Segmented(Segmented::new(value.max(0.0) as usize)),
             3 => Slot::Menu(MenuState::default()),
-            _ => Slot::Slider(Slider::new(f64::from(value), DEFAULT_TRAVEL)),
+            4 => Slot::Hold(
+                hold::transition(hold::State::new(), hold::Event::Disable(value > 0.5)).0,
+            ),
+            5 => Slot::Confirm(confirm::State::new(f64::from(value.max(0.0)))),
+            6 => Slot::Swatches(Ring::new(value.max(0.0) as usize)),
+            _ => Slot::Slider(Slider::new(
+                f64::from(value),
+                DEFAULT_TRAVEL,
+                Cfg::default(),
+            )),
         };
         r.borrow_mut().acquire(slot)
     });
@@ -401,8 +530,9 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     g.on_segment(move |id, i, left, width| r.borrow_mut().segment(id, i, left, width));
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_press(move |id, px| {
-        r.borrow_mut().press(id, px);
+        let run = r.borrow_mut().press(id, px);
         w();
+        run
     });
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_drag(move |id, px| {
@@ -412,6 +542,17 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_release(move |id| {
         let v = r.borrow_mut().release(id);
+        w();
+        v
+    });
+    let (r, w) = (Rc::clone(&reg), wake.clone());
+    g.on_configure(move |id, min, max, step| {
+        r.borrow_mut().configure(id, min, max, step);
+        w();
+    });
+    let (r, w) = (Rc::clone(&reg), wake.clone());
+    g.on_key(move |id, code, shift| {
+        let v = r.borrow_mut().key(id, code, shift);
         w();
         v
     });
@@ -444,12 +585,13 @@ pub fn bump(window: &AppWindow) {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use wubble_core::kit_gen::settings::SWATCH;
 
     #[test]
     fn slots_are_reused_after_a_sweep_frees_the_dead() {
         let mut c = Controls::new();
         let ids: Vec<i32> = (0..SWEEP_AFTER)
-            .map(|_| c.acquire(Slot::Toggle(Toggle::new(false))))
+            .map(|_| c.acquire(Slot::Toggle(Toggle::new(false, ToggleSize::Lg))))
             .collect();
         assert_eq!(ids[3], 3);
         let t0 = Instant::now();
@@ -460,7 +602,7 @@ mod tests {
         c.frame(t0 + Duration::from_millis(16));
         assert_eq!(c.live(), 1);
         assert_eq!(
-            c.acquire(Slot::Toggle(Toggle::new(true))),
+            c.acquire(Slot::Toggle(Toggle::new(true, ToggleSize::Lg))),
             0,
             "a freed slot is reused"
         );
@@ -468,9 +610,44 @@ mod tests {
     }
 
     #[test]
+    fn keys_reach_the_slider_in_its_domain_and_the_segmented_only_asks() {
+        let mut c = Controls::new();
+        let id = c.acquire(Slot::Slider(Slider::new(110.0, 240.0, Cfg::default())));
+        c.configure(id, 50.0, 200.0, 10.0);
+        c.set_value(id, 110.0);
+        assert_eq!(c.key(id, 1, false), 120.0, "ArrowRight: one step");
+        assert_eq!(c.key(id, 1, true), 200.0, "Shift: ten steps, clamped");
+        assert_eq!(c.key(id, 6, false), 50.0, "Home");
+        assert_eq!(c.views.row_data(0).unwrap().value, 50.0);
+        let seg = c.acquire(Slot::Segmented(Segmented::new(0)));
+        for i in 0..3 {
+            c.segment(seg, i, i as f32 * 60.0, 60.0);
+        }
+        assert_eq!(c.key(seg, 0, false), 0.0, "clamped at the first");
+        assert_eq!(c.key(seg, 1, false), 1.0, "ArrowRight asks for the next");
+        assert_eq!(
+            c.key(seg, 1, false),
+            1.0,
+            "and the value stays the caller's"
+        );
+        assert_eq!(c.views.row_data(1).unwrap().value, 0.0);
+        c.set_value(seg, 2.0);
+        assert_eq!(c.key(seg, 1, false), 2.0, "clamped at the last");
+        assert_eq!(c.key(seg, 4, false), 2.0, "PageUp moves no segment");
+        let sw = c.acquire(Slot::Swatches(Ring::new(0)));
+        c.segment(sw, 2, 0.0, 0.0);
+        let v = c.views.row_data(2).unwrap();
+        assert_eq!(
+            (v.value, v.x),
+            (2.0, (2.0 * SWATCH::pitch) as f32),
+            "placed, not travelling"
+        );
+    }
+
+    #[test]
     fn a_toggle_tap_flips_and_settles() {
         let mut c = Controls::new();
-        let id = c.acquire(Slot::Toggle(Toggle::new(false)));
+        let id = c.acquire(Slot::Toggle(Toggle::new(false, ToggleSize::Lg)));
         c.press(id, 5.0);
         assert_eq!(c.release(id), 1.0);
         assert_eq!(c.release(id), -1.0, "released once");
@@ -512,5 +689,52 @@ mod tests {
         let v = c.views.row_data(0).unwrap();
         assert_eq!((v.phase, v.done), (0, 2), "closed; still confirming");
         assert!(menu_event(9, 0).is_none());
+    }
+
+    /// Runs frames 8 ms apart until nothing moves; returns how many.
+    fn settle(c: &mut Controls) -> usize {
+        let mut t = Instant::now();
+        let mut n = 0;
+        while c.frame(t).0 {
+            t += Duration::from_millis(8);
+            n += 1;
+            assert!(n < 10_000);
+        }
+        n
+    }
+
+    #[test]
+    fn a_hold_slot_fills_completes_once_and_resets() {
+        let mut c = Controls::new();
+        let id = c.acquire(Slot::Hold(hold::State::new()));
+        assert!(!c.press(id, 0.0), "a hold runs at the end, not the press");
+        settle(&mut c);
+        let v = c.views.row_data(0).unwrap();
+        assert_eq!(
+            (v.dones, v.hit, v.phase, v.value),
+            (1, 1, 0, 0.0),
+            "done once, pulsed once, back to idle"
+        );
+        // disabled: a press does nothing
+        c.set_value(id, 1.0);
+        c.press(id, 0.0);
+        assert_eq!(settle(&mut c), 0);
+        assert_eq!(c.views.row_data(0).unwrap().phase, 0);
+    }
+
+    #[test]
+    fn a_confirm_slot_runs_busy_then_done() {
+        let mut c = Controls::new();
+        let id = c.acquire(Slot::Confirm(confirm::State::new(400.0)));
+        assert!(c.press(id, 0.0), "the idle click runs the action");
+        assert_eq!(c.views.row_data(0).unwrap().phase, 1, "busy at once");
+        assert!(!c.press(id, 0.0), "a click while busy does not run it");
+        settle(&mut c);
+        let v = c.views.row_data(0).unwrap();
+        assert_eq!(
+            (v.phase, v.hit),
+            (0, 1),
+            "one pulse; the click while busy was ignored"
+        );
     }
 }

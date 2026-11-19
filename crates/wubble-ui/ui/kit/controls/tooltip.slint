@@ -1,0 +1,135 @@
+// design: pages/touch.tsx:368-436, pages/touch.css:100-107 @598f814
+// The dock tooltip (`DOCK`, `.tp-tip-pos`, `.tp-tip`): ink on abyss, 30 high, 0 11 padding,
+// radius 10, 12.5 px at 600. Shown, it rises 4 px from .95 about its bottom centre (opacity
+// .16 s, transform .2 s, ease-out); hidden, the reverse (.13 s / .16 s, ease-in). While warm the
+// next one glides and resizes to its new place over `--tp-glide` (260 ms, in-out); the first
+// appears in place (`.jump`). Its width is the new label's measured width (`.tp-tip-meas`) and
+// the label crossfades across (`Swap dir="x"`, kit Crossfade). The behaviour is wubble's adopted
+// one: one tooltip for the window (the shell's icon buttons, with their shortcut, and a page's
+// `title` near the pointer), kept inside the window and flipped above without room below, as
+// Chromium's; when it shows is the host's (`wubble_core::hovercard::TOOLTIP`: the dock's 280 ms
+// intent and 520 ms warm). Pointer events pass through.
+// Slint limit (notes/fidelity/deviations.md): no `filter: blur(2px)` on the tooltip as it comes
+// and goes (the label's crossfade blurs through the kit's Overlap).
+
+import { Palette, Tsx } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { Tween, Glide } from "../motion/tween.slint";
+import { CrossfadeText } from "../motion/crossfade.slint";
+import { KitText } from "../text.slint";
+
+// The shell's buttons report their hover here: (Action id, where the tooltip hangs in window
+// px: the button's centre x, top y and bottom y, on). One global, so any button reaches the host
+// without a callback through every parent.
+export global Tips {
+    callback hover(string, length, length, length, bool);
+}
+
+export component Tooltip inherits Rectangle {
+    in property <bool> shown;
+    in property <string> text;
+    // A shell button's shortcut, drawn dimmer after the name; empty for a page's tooltip.
+    in property <string> shortcut;
+    // Window px: where it hangs from. `centered`: `anchor-x` is its centre and `anchor-y` the
+    // bottom of a button, which it hangs `tip-gap` below; else its top left (by the pointer).
+    // Without room below it sits `tip-gap` above `anchor-top` (the button's top, the pointer),
+    // as Chromium's tooltips flip.
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <length> anchor-top;
+    in property <bool> centered;
+    in property <bool> jump;
+    // The window's size, to keep it inside.
+    in property <length> bounds-width;
+    in property <length> bounds-height;
+
+    // `.tp-tip-meas`: the new label's width, which the tooltip glides to
+    meas := KitText {
+        visible: false;
+        role: Role.tp-tip-meas;
+        text: root.text;
+    }
+    keys := KitText {
+        visible: false;
+        role: Role.tp-tip;
+        text: root.shortcut;
+    }
+    property <length> pad: TouchCss.tp-tip--padding-left;
+    // wubble: the shortcut after the name
+    property <length> gap: root.shortcut != "" ? root.pad / 1.5 + keys.preferred-width : 0px;
+    property <length> want-width: meas.preferred-width + 2 * root.pad + root.gap;
+    property <length> want-x: root.centered ? root.anchor-x - root.want-width / 2 : root.anchor-x;
+    property <length> below-y: root.anchor-y + (root.centered ? Shell.tip-gap : 0px);
+    property <length> above-y: root.anchor-top - Shell.tip-gap - self.height;
+    property <bool> fits-below: root.below-y + self.height + Shell.tip-edge <= root.bounds-height;
+    gx := Glide {
+        to: max(Shell.tip-edge, min(root.want-x, root.bounds-width - root.want-width - Shell.tip-edge));
+        jump: root.jump;
+        ms: Tsx.tip-glide;
+    }
+    gy := Glide {
+        to: root.fits-below ? root.below-y : max(Shell.tip-edge, root.above-y);
+        jump: root.jump;
+        ms: Tsx.tip-glide;
+    }
+    gw := Glide {
+        to: root.want-width;
+        jump: root.jump;
+        ms: Tsx.tip-glide;
+    }
+    width: gw.at;
+    height: TouchCss.tp-tip-pos--height;
+    x: gx.at;
+    y: gy.at;
+
+    fade := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-tip-show--transition-opacity-duration;
+        out-ms: TouchCss.tp-tip--transition-opacity-duration;
+        in-easing: TouchCss.tp-tip-show--transition-opacity-easing;
+        out-easing: TouchCss.tp-tip--transition-opacity-easing;
+    }
+    rise := Tween {
+        on: root.shown;
+        in-ms: TouchCss.tp-tip-show--transition-transform-duration;
+        out-ms: TouchCss.tp-tip--transition-transform-duration;
+        in-easing: TouchCss.tp-tip-show--transition-transform-easing;
+        out-easing: TouchCss.tp-tip--transition-transform-easing;
+    }
+    // the look now, also read by the curve tests
+    out property <float> shown-opacity: fade.t;
+    out property <length> rise-y: TouchCss.tp-tip--transform-translatey * (1 - rise.t);
+    out property <float> rise-scale: 1 - (1 - TouchCss.tp-tip--transform-scale) * (1 - rise.t);
+
+    tip := Rectangle {
+        border-radius: TouchCss.tp-tip--border-radius;
+        background: TouchCss.tp-tip--background;
+        clip: true;
+        opacity: root.shown-opacity;
+        transform-origin: { x: self.width / 2, y: self.height };
+        transform-scale: root.rise-scale;
+        y: root.rise-y;
+        HorizontalLayout {
+            padding-left: root.pad;
+            padding-right: root.pad;
+            spacing: root.pad / 1.5;
+            alignment: center;
+            CrossfadeText {
+                width: meas.preferred-width;
+                text: root.text;
+                role: Role.tp-tip;
+                ink: TouchCss.tp-tip--color;
+                align: center;
+                along-x: true;
+            }
+            if root.shortcut != "": KitText {
+                role: Role.tp-tip;
+                text: root.shortcut;
+                color: Palette.haze;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

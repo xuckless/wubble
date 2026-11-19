@@ -61,27 +61,39 @@ impl SidebarMode {
     }
 }
 
-/// `SEAM` in seam.ts.
-#[allow(non_snake_case, non_upper_case_globals)]
-pub mod SEAM {
-    use crate::motion::K;
-    pub const min: f64 = 200.0; // chrome.sidebarMin
-    pub const max: f64 = 340.0; // chrome.sidebarMax
-    pub const rail: f64 = 56.0; // chrome.rail
-    /// width rubber band past min/max
-    pub const bandK: f64 = 34.0;
-    /// the string's bow saturates at 70 px
-    pub const bendK: f64 = 70.0;
-    /// releasing narrower than this snaps to the rail
-    pub const toRail: f64 = 128.0;
-    /// …and narrower than this hides the sidebar
-    pub const toHidden: f64 = 22.0;
-    /// pulling a rail wider than this snaps back to extended (held and released)
-    pub const fromRail: f64 = 150.0;
-    pub const held: [f64; 2] = K::seamHeld;
-    pub const release: [f64; 2] = K::seamRelease;
-    pub const bendSpring: [f64; 2] = K::seamBend;
-    pub const contents: [f64; 2] = K::contents;
+/// `SEAM` in seam.ts (generated): min/max/rail (chrome tokens), bandK (width rubber band past
+/// min/max), bendK (the string's bow saturates there), toRail/toHidden (release snap points),
+/// fromRail (a pulled rail snaps back to extended past it), and the springs.
+pub use crate::kit_gen::seam::SEAM;
+
+/// What an arrow key on the sidebar's grab does (`gKey`, browser/chrome.tsx:240-248).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum KeyAction {
+    /// Change the mode (the store's `sidebar`): the mode's own spring and twang follow.
+    Mode(SidebarMode),
+    /// Resize the extended sidebar to `saved` and kick the string's bend by `kick` px/s.
+    Resize { saved: f64, kick: f64 },
+    /// No grab to key (the hidden sidebar has none).
+    Stay,
+}
+
+/// The arrow key `dir` (+1 Right, -1 Left) on the grab of a sidebar in `mode` at `saved` wide:
+/// a rail widens to extended; an extended sidebar at its minimum narrows to the rail; otherwise
+/// the width steps by `SEAM_KEY_STEP` within `SEAM::min..=max` and the string twangs. Pure.
+pub fn key(mode: SidebarMode, saved: f64, dir: f64) -> KeyAction {
+    use crate::kit_gen::controls_b::{SEAM_KEY_KICK, SEAM_KEY_STEP};
+    let dir = dir.signum();
+    match mode {
+        SidebarMode::Hidden => KeyAction::Stay,
+        SidebarMode::Rail if dir > 0.0 => KeyAction::Mode(SidebarMode::Extended),
+        SidebarMode::Extended if dir < 0.0 && saved <= SEAM::min => {
+            KeyAction::Mode(SidebarMode::Rail)
+        }
+        _ => KeyAction::Resize {
+            saved: clamp(saved + dir * SEAM_KEY_STEP, SEAM::min, SEAM::max),
+            kick: dir * SEAM_KEY_KICK,
+        },
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +175,19 @@ impl Seam {
             }) * 260.0;
         }
         self.mode = mode;
+    }
+
+    /// An arrow key on the grab (`dir` +1 Right, -1 Left; `h` the window's inner height): a
+    /// resize is applied here (width, twang, the pill to mid height); a mode change is returned
+    /// for the caller's store, as the web's `gKey` writes `d.sidebar`.
+    pub fn key(&mut self, dir: f64, h: f64) -> KeyAction {
+        let action = key(self.mode, self.saved, dir);
+        if let KeyAction::Resize { saved, kick } = action {
+            self.saved = saved;
+            self.bend.v += kick;
+            self.gy = h / 2.0;
+        }
+        action
     }
 
     /// `px, py`: pointer in window px. `h`: window inner height.
@@ -314,6 +339,48 @@ fn js_num(x: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arrow_keys_resize_and_change_modes() {
+        use crate::kit_gen::controls_b::{SEAM_KEY_KICK, SEAM_KEY_STEP};
+        assert_eq!(
+            key(SidebarMode::Rail, 260.0, 1.0),
+            KeyAction::Mode(SidebarMode::Extended)
+        );
+        assert_eq!(
+            key(SidebarMode::Extended, SEAM::min, -1.0),
+            KeyAction::Mode(SidebarMode::Rail)
+        );
+        assert_eq!(key(SidebarMode::Hidden, 260.0, 1.0), KeyAction::Stay);
+        assert_eq!(
+            key(SidebarMode::Extended, 260.0, -1.0),
+            KeyAction::Resize {
+                saved: 260.0 - SEAM_KEY_STEP,
+                kick: -SEAM_KEY_KICK
+            }
+        );
+        // clamped at both ends; a rail keyed left stays a rail and only twangs
+        assert_eq!(
+            key(SidebarMode::Extended, SEAM::max - 1.0, 1.0),
+            KeyAction::Resize {
+                saved: SEAM::max,
+                kick: SEAM_KEY_KICK
+            }
+        );
+        assert_eq!(
+            key(SidebarMode::Extended, SEAM::min + 1.0, -1.0),
+            KeyAction::Resize {
+                saved: SEAM::min,
+                kick: -SEAM_KEY_KICK
+            }
+        );
+        let mut s = Seam::new();
+        let a = s.key(1.0, 800.0);
+        assert_eq!(s.saved, SIDEBAR_DEFAULT + SEAM_KEY_STEP);
+        assert_eq!((s.bend.v, s.gy), (SEAM_KEY_KICK, 400.0));
+        assert!(matches!(a, KeyAction::Resize { .. }));
+        assert!(s.step(1.0 / 120.0, 800.0), "the twang moves");
+    }
 
     /// wubble: the edge table is the string `clip` draws, in window coordinates: displaced by
     /// the bend at the grab height and not at all at the ends.

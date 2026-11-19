@@ -17,28 +17,11 @@
 use crate::motion::{Spring, Velocity, band, clamp, spring, step};
 
 // @source slint-scroll
-#[allow(non_snake_case, non_upper_case_globals)]
-pub mod SCROLL {
-    /// wheel/keys: ζ ≈ 1, no overshoot inside the page
-    pub const follow: [f64; 2] = [520.0, 46.0];
-    /// back from overscroll: ζ ≈ 0.93, home in ~350 ms
-    pub const release: [f64; 2] = [420.0, 38.0];
-    /// wubble change (scroller.tsx @ 21838b8): `to()`, a programmatic jump (a settings section),
-    /// ζ = 1, so long trips read as a move, not a cut
-    pub const glide: [f64; 2] = [170.0, 26.0];
-    /// rubber band past the ends
-    pub const bandK: f64 = 34.0;
-    /// wheel quiet for this long → clamp the target
-    pub const idleMs: f64 = 90.0;
-    /// past an end, outward wheel input counts only this long; after that it's trackpad momentum
-    /// (macOS keeps sending it for seconds) and is ignored, so the page comes home at once
-    pub const outBudgetMs: f64 = 160.0;
-    /// a wheel gap this long starts a new gesture (and a new budget)
-    pub const newGestureMs: f64 = 260.0;
-    /// touch fling: v *= e^(−3.2 t)
-    pub const flingDecay: f64 = 3.2;
-    pub const thumbFade: f64 = 900.0;
-}
+// The constants (`SCROLL` in browser/scroller.tsx) are the generated ones: follow (wheel/keys,
+// ζ ≈ 1), release (back from overscroll), glide (`to()`), bandK, idleMs (wheel quiet → clamp the
+// target), outBudgetMs (outward input past an end counts this long; after it, momentum is
+// ignored), newGestureMs, flingDecay (touch fling v *= e^(−3.2 t)), thumbFade.
+pub use crate::kit_gen::scroller::SCROLL;
 
 /// `WheelEvent.deltaMode`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
