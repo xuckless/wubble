@@ -1,45 +1,137 @@
-// design: browser/seam.ts:1-101, browser/browser.css:139-146 @598f814
-// Moved from components.slint (a copy of the design repo's `src/wubble/slint/components.slint`
-// @ 6c840da, with the marked `wubble change`s), unchanged.
+// design: browser/seam.ts:1-101, browser/browser.css:138-148, browser/chrome.tsx:189-248, browser/chrome.tsx:312-335 @598f814
+// The seam (`browser/seam.ts`; owner decision 10: this, not the Room page's seam): the string
+// between the sidebar (or a split pane, or the DevTools panel) and the page. The string is
+// always drawn: white .1 at 1.25 at rest, sky 1.6 while held, transparent when the sidebar is
+// hidden; only its colour moves (.2 s). A 20 px grab strip is centred on it (`.wb-grab`, 8 px
+// short of the window's top and bottom; `.wb-split-grab` full height), with the separator's
+// keys: ArrowLeft/Right resize (`nudge`). The pill (`.wb-pill`, 6 x 40) rides the string at the
+// grab height: hidden at rest, .8 / .75 under the pointer, sky 1 / 1 held or keyboard-focused.
+// The physics (width, bend, the bowed string's path) is Rust's: `wubble_core::seam` (the
+// sidebar; its keys `seam::key`), `split` (split and DevTools seams), written back as `x` and
+// `path`. Slint limits (notes/fidelity/deviations.md): no `separator` role (Slider stands in, it
+// carries the value range); no `:focus-visible` (a Tab focus only shows the held pill); no
+// `:has()` (one pure function picks the pill's state, and each animation takes the timing of
+// the state it goes to, as CSS takes the destination rule's transition).
 
-import { Palette, Motion } from "../gen/tokens.slint";
-import { Calm } from "../motion/calm.slint";
+import { Radius, Chrome } from "../gen/tokens.slint";
 import { BrowserCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { Calm } from "../motion/calm.slint";
 
-// @source slint-seam
-// The rubber-string seam (seam.rs). The hit strip sits on the sidebar's edge; grab/drag/release
-// go to Rust with window coordinates, and Rust writes back `seam-x` and `seam-path` (the bowed
-// string from Seam::clip, in this element's coordinates). Pulling past the minimum snaps to the
-// rail, and further to hidden: one gesture for resize and all three modes.
-export component Seam inherits Rectangle {
+export enum PillState { rest, hover, held }
+
+export global PillStates {
+    // `.wb-pill i`'s rules: held (or the grab keyboard-focused) wins over the grab's hover.
+    public pure function of(hover: bool, held: bool, key-focus: bool) -> PillState {
+        return held || key-focus ? PillState.held : hover ? PillState.hover : PillState.rest;
+    }
+}
+
+// `.wb-pill`: centred on (`cx`, `cy`) in its parent.
+export component Pill inherits Rectangle {
+    in property <PillState> state;
+    in property <length> cx;
+    in property <length> cy;
+    x: root.cx - self.width / 2;
+    y: root.cy - self.height / 2;
+    width: BrowserCss.wb-pill--width;
+    height: BrowserCss.wb-pill--height;
+    property <bool> rest: root.state == PillState.rest;
+    property <bool> held: root.state == PillState.held;
+    property <float> scale: root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--scale
+        : root.rest ? BrowserCss.wb-pill-i--scale : BrowserCss.wb-pill-has-plus-wb-grab-hover-i--scale;
+    animate scale {
+        duration: Calm.ms(root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--transition-scale-duration
+            : root.rest ? BrowserCss.wb-pill-i--transition-scale-duration : BrowserCss.wb-pill-has-plus-wb-grab-hover-i--transition-scale-duration);
+        easing: root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--transition-scale-easing
+            : root.rest ? BrowserCss.wb-pill-i--transition-scale-easing : BrowserCss.wb-pill-has-plus-wb-grab-hover-i--transition-scale-easing;
+    }
+    property <float> fade: root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--opacity
+        : root.rest ? 0 : BrowserCss.wb-pill-has-plus-wb-grab-hover-i--opacity;
+    animate fade {
+        duration: Calm.ms(root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--transition-opacity-duration
+            : root.rest ? BrowserCss.wb-pill-i--transition-opacity-duration : BrowserCss.wb-pill-has-plus-wb-grab-hover-i--transition-opacity-duration);
+        easing: root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--transition-opacity-easing
+            : root.rest ? BrowserCss.wb-pill-i--transition-opacity-easing : BrowserCss.wb-pill-has-plus-wb-grab-hover-i--transition-opacity-easing;
+    }
+    // only the rest rule transitions the colour (the hover and held rules' lists omit it)
+    property <color> ink: root.held ? BrowserCss.wb-held-gt-wb-pill-not-wb-src-pill-i--background : BrowserCss.wb-pill-i--background;
+    animate ink {
+        duration: Calm.ms(root.rest ? BrowserCss.wb-pill-i--transition-background-color-duration : 0ms);
+        easing: ease;
+    }
+    // what the curve tests read
+    out property <float> shown-opacity: root.fade;
+    out property <float> shown-scale: root.scale;
+    out property <color> shown-colour: root.ink;
+    // `.wb-pill i`
+    Rectangle {
+        border-radius: BrowserCss.wb-pill-i--border-radius;
+        background: root.ink;
+        opacity: root.fade;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale: root.scale;
+    }
+}
+
+// One seam: the string, its grab strip and its pill, in its parent's coordinates (fill the
+// parent). The sidebar's `Seam`, each split seam and the DevTools seam are instances.
+export component SeamStrip inherits Rectangle {
+    // the string's x
     in property <length> seam-x;
-    in property <string> seam-path;      // "M… C… C…": empty while the string is straight
-    in property <bool> bowed: false;
-    callback grab(length, length);       // window px
+    // the bowed string (Seam::clip / split::string_line, this element's coordinates); "" straight
+    in property <string> path;
+    // held by the host's machine (the grab here counts as held while pressed)
+    in property <bool> held;
+    // the sidebar is hidden: the string goes transparent and the grab away
+    in property <bool> hidden;
+    // the pill rides the string's bend at the grab height (negative: mid height)
+    in property <length> bend;
+    in property <length> grab-y: -1px;
+    // where the straight string ends: the page's frame, inset and rounded
+    in property <length> string-top: Chrome.inset + Radius.md;
+    in property <length> string-bottom: root.height - Chrome.inset - Radius.md;
+    // `.wb-grab` (top/bottom 8) or `.wb-split-grab` (full height)
+    in property <length> grab-top: BrowserCss.wb-grab--top;
+    in property <length> grab-bottom: BrowserCss.wb-grab--bottom;
+    // the separator's name and value range (aria-label, aria-valuemin/max/now)
+    in property <string> label;
+    in property <float> value-min;
+    in property <float> value-max;
+    in property <float> value-now;
+    // the specimen's forced states (kit/specimen/slide.slint)
+    in property <bool> preview-hover;
+    in property <bool> preview-focus;
+    callback grab(length, length);       // this element's px
     callback drag(length, length);
     callback release();
-    // wubble change: double-click flips rail and extended (chrome.tsx `onDblClick`)
     callback double-clicked();
-
-    touch := TouchArea {
-        x: root.seam-x - 4px;
-        width: 8px;
-        mouse-cursor: col-resize;
-        pointer-event(e) => {
-            if (e.kind == PointerEventKind.down) { root.grab(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
-            if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
-        }
-        moved => { if (self.pressed) { root.drag(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); } }
-        double-clicked => { root.double-clicked(); }
+    // ArrowLeft (-1) / ArrowRight (+1) on the grab
+    callback nudge(int);
+    out property <bool> pressed: touch.pressed;
+    out property <bool> hovered: touch.has-hover || root.preview-hover;
+    out property <bool> keyboard-focused: (keys.has-focus && root.tab-focus) || root.preview-focus;
+    out property <PillState> pill-state: root.hidden ? PillState.rest : PillStates.of(root.hovered, root.taut, root.keyboard-focused);
+    property <bool> tab-focus;
+    property <bool> taut: root.held || touch.pressed;
+    property <color> ink: root.hidden ? BrowserCss.wb-hidden-wb-seam-path--stroke
+        : root.taut ? BrowserCss.wb-held-wb-seam-path--stroke : BrowserCss.wb-seam-path--stroke;
+    animate ink {
+        duration: Calm.ms(BrowserCss.wb-seam-path--transition-stroke-duration);
+        easing: ease;
     }
-    // the straight hairline at rest
+    property <length> stroke: (root.taut ? BrowserCss.wb-held-wb-seam-path--stroke-width : BrowserCss.wb-seam-path--stroke-width) * Shell.px;
+    out property <color> string-colour: root.ink;
+    out property <length> string-width: root.stroke;
+
+    // `.wb-seam path`: the straight string
     Rectangle {
-        x: root.seam-x - 0.5px;
-        width: 1px;
-        background: Palette.sky;
-        visible: !root.bowed;
-        opacity: touch.has-hover || touch.pressed ? 0.6 : 0;
-        animate opacity { duration: Calm.ms(BrowserCss.wb-seam-path--transition-stroke-duration); easing: ease; }
+        x: root.seam-x - root.stroke / 2;
+        y: root.string-top;
+        width: root.stroke;
+        height: Math.max(0px, root.string-bottom - root.string-top);
+        background: root.ink;
+        visible: root.path == "";
     }
     // the bowed string while held or twanging
     Path {
@@ -47,13 +139,113 @@ export component Seam inherits Rectangle {
         height: root.height;
         viewbox-x: 0;
         viewbox-y: 0;
-        viewbox-width: root.width / 1px;
-        viewbox-height: root.height / 1px;
-        commands: root.seam-path;
-        visible: root.bowed && root.seam-path != "";
+        viewbox-width: root.width / Shell.px;
+        viewbox-height: root.height / Shell.px;
+        commands: root.path;
+        visible: root.path != "";
         fill: transparent;
-        stroke: Palette.sky;
-        stroke-width: 1px;
-        opacity: 0.6;
+        stroke: root.ink;
+        stroke-width: root.stroke;
+    }
+    Pill {
+        state: root.pill-state;
+        cx: root.seam-x + root.bend;
+        cy: root.grab-y < 0 ? root.height / 2 : root.grab-y;
+    }
+    // `.wb-grab`: the 20 px strip centred on the string
+    keys := FocusScope {
+        x: root.seam-x - BrowserCss.wb-grab--width / 2;
+        y: root.grab-top;
+        width: BrowserCss.wb-grab--width;
+        height: Math.max(0px, root.height - root.grab-top - root.grab-bottom);
+        enabled: !root.hidden;
+        focus-on-click: false;
+        focus-gained(reason) => {
+            root.tab-focus = reason == FocusReason.tab-navigation;
+        }
+        focus-lost => {
+            root.tab-focus = false;
+        }
+        key-pressed(e) => {
+            if e.text == Key.LeftArrow {
+                root.nudge(-1);
+                return accept;
+            }
+            if e.text == Key.RightArrow {
+                root.nudge(1);
+                return accept;
+            }
+            reject
+        }
+        accessible-role: slider;
+        accessible-label: root.label;
+        accessible-value: round(root.value-now);
+        accessible-value-minimum: root.value-min;
+        accessible-value-maximum: root.value-max;
+        accessible-action-increment => {
+            root.nudge(1);
+        }
+        accessible-action-decrement => {
+            root.nudge(-1);
+        }
+        touch := TouchArea {
+            enabled: !root.hidden;
+            mouse-cursor: col-resize;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    keys.focus();
+                    root.grab(keys.x + self.mouse-x, keys.y + self.mouse-y);
+                }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) { root.release(); }
+            }
+            moved => { if (self.pressed) { root.drag(keys.x + self.mouse-x, keys.y + self.mouse-y); } }
+            double-clicked => { root.double-clicked(); }
+        }
+    }
+}
+
+// @source slint-seam
+// The sidebar's seam (the API app.slint binds), on the page's frame (inset): grab/drag/release in
+// window coordinates; Rust writes back `seam-x` and `seam-path`. Pulling past the minimum snaps
+// to the rail, and further to hidden: one gesture for resize and all three modes. `held`,
+// `hidden`, `grab-y`, `bend`, `width-now` and `nudge` default to a straight string with its pill
+// at mid height until the host passes them.
+export component Seam inherits Rectangle {
+    in property <length> seam-x;
+    in property <string> seam-path;      // "M… C… C…": empty while the string is straight
+    in property <bool> bowed: false;
+    in property <bool> held: false;
+    in property <bool> hidden: false;
+    in property <length> grab-y: -1px;   // this element's px (the seam's gy less the inset)
+    in property <length> bend;
+    in property <float> width-now;       // the sidebar's width, the separator's value
+    callback grab(length, length);       // window px
+    callback drag(length, length);
+    callback release();
+    // wubble change: double-click flips rail and extended (chrome.tsx `onDblClick`)
+    callback double-clicked();
+    callback nudge(int);
+
+    SeamStrip {
+        seam-x: root.seam-x;
+        path: root.bowed ? root.seam-path : "";
+        held: root.held;
+        hidden: root.hidden;
+        bend: root.bend;
+        grab-y: root.grab-y;
+        // this element is the page's frame: the string ends one radius in, the grab at its edges
+        string-top: Radius.md;
+        string-bottom: root.height - Radius.md;
+        grab-top: BrowserCss.wb-grab--top - Chrome.inset;
+        grab-bottom: BrowserCss.wb-grab--bottom - Chrome.inset;
+        label: "Resize sidebar. Narrow it to collapse to icons.";
+        value-min: Chrome.sidebarMin / Shell.px;
+        value-max: Chrome.sidebarMax / Shell.px;
+        value-now: root.width-now;
+        grab(x, y) => { root.grab(root.absolute-position.x + x, root.absolute-position.y + y); }
+        drag(x, y) => { root.drag(root.absolute-position.x + x, root.absolute-position.y + y); }
+        release => { root.release(); }
+        double-clicked => { root.double-clicked(); }
+        nudge(d) => { root.nudge(d); }
     }
 }

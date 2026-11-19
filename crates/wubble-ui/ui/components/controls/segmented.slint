@@ -1,0 +1,9 @@
+// The settings row's segmented control (`.st-seg`): the kit's Segmented (kit/controls/
+// segmented.slint) with its API here (`labels`, `selected`, `chosen`). settings.slint still
+// defines its own `Segmented` until the composition lane switches it to this one.
+
+import { Segmented as KitSegmented } from "../../kit/controls/segmented.slint";
+
+export component Segmented inherits KitSegmented {
+    compact: true;
+}

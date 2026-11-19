@@ -586,6 +586,8 @@ impl Host {
                 .map(|(x, path)| SplitSeam {
                     x: x as f32,
                     path: path.into(),
+                    // the pill's bend, height and hold: mid height until wired (controls kit B)
+                    ..Default::default()
                 })
                 .collect()
         };

@@ -1276,7 +1276,7 @@ export component AppWindow inherits Window {
             y: Chrome.inset;
             width: parent.width - Chrome.inset * 2;
             height: parent.height - Chrome.inset * 2;
-            visible: root.sidebar-mode != SidebarMode.hidden && !root.page-fullscreen;
+            visible: root.sidebar-mode != SidebarMode.hidden && !root.page-fullscreen && !root.pip;
             seam-x: root.sidebar-width + Chrome.inset / 2;
             seam-path: root.seam-path;
             bowed: root.seam-bowed;

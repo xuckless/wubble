@@ -17,7 +17,8 @@ use std::time::Instant;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use wubble_core::controls::menu::{self, Effect, Event, Key, MenuState, Phase, RowKind};
-use wubble_core::controls::{Segmented, Slider, Toggle, ToggleSize, confirm, hold};
+use wubble_core::controls::slider::{Cfg, Key as SliderKey};
+use wubble_core::controls::{Ring, Segmented, Slider, Toggle, ToggleSize, confirm, hold};
 
 use crate::{AppWindow, ControlView, Controls as Global, MenuEffect, MenuEntry};
 
@@ -33,6 +34,7 @@ enum Slot {
     Menu(MenuState),
     Hold(hold::State),
     Confirm(confirm::State),
+    Swatches(Ring),
 }
 
 impl Slot {
@@ -58,6 +60,7 @@ impl Slot {
                 *s = confirm::transition(*s, confirm::Event::Tick(dt)).0;
                 s.moving()
             }
+            Slot::Swatches(r) => r.step(dt),
         }
     }
 
@@ -103,16 +106,24 @@ impl Slot {
             }
             _ => {}
         }
-        // (x, w, scale x, scale y, origin, value, held): the slider's and segmented control's
+        // (x, w, scale x, scale y, origin, value, held): the slider's, segmented control's and
+        // swatches' ring; the slider's bubble too
+        let (mut bubble_x, mut lean) = (0.0, 0.0);
         let (x, w, sx, sy, origin, value, held) = match self {
             Slot::Slider(s) => {
                 let v = s.view();
+                (bubble_x, lean) = (v.bubble_x, v.lean);
                 (v.x, 0.0, v.scale_x, v.scale_y, v.origin, v.value, v.held)
             }
             Slot::Segmented(s) => {
                 let v = s.view();
                 let selected = v.selected as f64;
                 (v.left, v.width, v.scale_x, v.scale_y, 0.5, selected, v.held)
+            }
+            Slot::Swatches(r) => {
+                let v = r.view();
+                let idx = r.idx() as f64;
+                (v.x, 0.0, v.scale_x, v.scale_y, v.origin, idx, false)
             }
             _ => unreachable!("matched above"),
         };
@@ -124,6 +135,8 @@ impl Slot {
             origin: origin as f32,
             value: value as f32,
             held,
+            bubble_x: bubble_x as f32,
+            lean: lean as f32,
             ..rest
         }
     }
@@ -295,14 +308,45 @@ impl Controls {
             Some(Slot::Toggle(t)) => t.set(value > 0.5),
             Some(Slot::Slider(s)) => s.set(f64::from(value)),
             Some(Slot::Segmented(s)) => s.set(value.max(0.0) as usize),
+            Some(Slot::Swatches(r)) => r.set(value.max(0.0) as usize),
             Some(Slot::Hold(s)) => *s = hold::transition(*s, hold::Event::Disable(value > 0.5)).0,
             Some(Slot::Menu(_) | Slot::Confirm(..)) | None => {}
         }
     }
 
+    fn configure(&mut self, id: i32, min: f32, max: f32, step: f32) {
+        if let Some(Slot::Slider(s)) = self.slot(id) {
+            s.configure(Cfg::new(f64::from(min), f64::from(max), f64::from(step)));
+        }
+        self.write(id);
+    }
+
+    /// A key on a control: the value it reports (see `Controls.key`): the slider's snapped
+    /// value, the segment a segmented control asks for (its value stays the caller's).
+    fn key(&mut self, id: i32, code: i32, shift: bool) -> f32 {
+        let key = SliderKey::from_code(code);
+        let v = match self.slot(id) {
+            Some(Slot::Slider(s)) => {
+                if let Some(k) = key {
+                    s.key(k, shift);
+                }
+                s.view().value
+            }
+            Some(Slot::Segmented(s)) => s.key(key.and_then(SliderKey::dir).unwrap_or(0)) as f64,
+            _ => -1.0,
+        };
+        self.write(id);
+        v as f32
+    }
+
     fn segment(&mut self, id: i32, i: i32, left: f32, width: f32) {
-        if let (Some(Slot::Segmented(s)), Ok(i)) = (self.slot(id), usize::try_from(i)) {
-            s.set_segment(i, f64::from(left), f64::from(width));
+        match (self.slot(id), usize::try_from(i)) {
+            (Some(Slot::Segmented(s)), Ok(i)) => {
+                s.set_segment(i, f64::from(left), f64::from(width))
+            }
+            // the chosen swatch laid out: the ring starts on it
+            (Some(Slot::Swatches(r)), Ok(i)) => r.place(i),
+            _ => {}
         }
         self.write(id);
     }
@@ -341,7 +385,7 @@ impl Controls {
                 *s = n;
                 fx.contains(&confirm::Effect::Run)
             }
-            Some(Slot::Menu(_)) | None => false,
+            Some(Slot::Menu(_) | Slot::Swatches(..)) | None => false,
         };
         self.write(id);
         run
@@ -353,12 +397,13 @@ impl Controls {
             Some(Slot::Toggle(tg)) => tg.drag(f64::from(px), t),
             Some(Slot::Slider(s)) => s.drag(f64::from(px)),
             Some(Slot::Segmented(s)) => s.drag(f64::from(px), t),
-            Some(Slot::Menu(_) | Slot::Hold(..) | Slot::Confirm(..)) | None => {}
+            Some(Slot::Menu(_) | Slot::Swatches(..) | Slot::Hold(..) | Slot::Confirm(..))
+            | None => {}
         }
     }
 
     fn release(&mut self, id: i32) -> f32 {
-        match self.slot(id) {
+        let v = match self.slot(id) {
             Some(Slot::Toggle(t)) => t.release().map_or(-1.0, |on| if on { 1.0 } else { 0.0 }),
             Some(Slot::Slider(s)) => s.release().map_or(-1.0, |v| v as f32),
             Some(Slot::Segmented(s)) => s.release().map_or(-1.0, |i| i as f32),
@@ -366,8 +411,10 @@ impl Controls {
                 *s = hold::transition(*s, hold::Event::End).0;
                 -1.0
             }
-            Some(Slot::Menu(_) | Slot::Confirm(..)) | None => -1.0,
-        }
+            Some(Slot::Menu(_) | Slot::Swatches(..) | Slot::Confirm(..)) | None => -1.0,
+        };
+        self.write(id);
+        v
     }
 
     /// One menu event: the rows, then the event, through the pure transition; the view is
@@ -463,7 +510,12 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
                 hold::transition(hold::State::new(), hold::Event::Disable(value > 0.5)).0,
             ),
             5 => Slot::Confirm(confirm::State::new(f64::from(value.max(0.0)))),
-            _ => Slot::Slider(Slider::new(f64::from(value), DEFAULT_TRAVEL)),
+            6 => Slot::Swatches(Ring::new(value.max(0.0) as usize)),
+            _ => Slot::Slider(Slider::new(
+                f64::from(value),
+                DEFAULT_TRAVEL,
+                Cfg::default(),
+            )),
         };
         r.borrow_mut().acquire(slot)
     });
@@ -490,6 +542,17 @@ pub fn wire(window: &AppWindow) -> Rc<RefCell<Controls>> {
     let (r, w) = (Rc::clone(&reg), wake.clone());
     g.on_release(move |id| {
         let v = r.borrow_mut().release(id);
+        w();
+        v
+    });
+    let (r, w) = (Rc::clone(&reg), wake.clone());
+    g.on_configure(move |id, min, max, step| {
+        r.borrow_mut().configure(id, min, max, step);
+        w();
+    });
+    let (r, w) = (Rc::clone(&reg), wake.clone());
+    g.on_key(move |id, code, shift| {
+        let v = r.borrow_mut().key(id, code, shift);
         w();
         v
     });
@@ -522,6 +585,7 @@ pub fn bump(window: &AppWindow) {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use wubble_core::kit_gen::settings::SWATCH;
 
     #[test]
     fn slots_are_reused_after_a_sweep_frees_the_dead() {
@@ -543,6 +607,41 @@ mod tests {
             "a freed slot is reused"
         );
         assert_eq!(c.views.row_count(), SWEEP_AFTER);
+    }
+
+    #[test]
+    fn keys_reach_the_slider_in_its_domain_and_the_segmented_only_asks() {
+        let mut c = Controls::new();
+        let id = c.acquire(Slot::Slider(Slider::new(110.0, 240.0, Cfg::default())));
+        c.configure(id, 50.0, 200.0, 10.0);
+        c.set_value(id, 110.0);
+        assert_eq!(c.key(id, 1, false), 120.0, "ArrowRight: one step");
+        assert_eq!(c.key(id, 1, true), 200.0, "Shift: ten steps, clamped");
+        assert_eq!(c.key(id, 6, false), 50.0, "Home");
+        assert_eq!(c.views.row_data(0).unwrap().value, 50.0);
+        let seg = c.acquire(Slot::Segmented(Segmented::new(0)));
+        for i in 0..3 {
+            c.segment(seg, i, i as f32 * 60.0, 60.0);
+        }
+        assert_eq!(c.key(seg, 0, false), 0.0, "clamped at the first");
+        assert_eq!(c.key(seg, 1, false), 1.0, "ArrowRight asks for the next");
+        assert_eq!(
+            c.key(seg, 1, false),
+            1.0,
+            "and the value stays the caller's"
+        );
+        assert_eq!(c.views.row_data(1).unwrap().value, 0.0);
+        c.set_value(seg, 2.0);
+        assert_eq!(c.key(seg, 1, false), 2.0, "clamped at the last");
+        assert_eq!(c.key(seg, 4, false), 2.0, "PageUp moves no segment");
+        let sw = c.acquire(Slot::Swatches(Ring::new(0)));
+        c.segment(sw, 2, 0.0, 0.0);
+        let v = c.views.row_data(2).unwrap();
+        assert_eq!(
+            (v.value, v.x),
+            (2.0, (2.0 * SWATCH::pitch) as f32),
+            "placed, not travelling"
+        );
     }
 
     #[test]
