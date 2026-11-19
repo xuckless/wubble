@@ -13,6 +13,8 @@ mod host;
 mod ime;
 mod input;
 mod instance;
+mod load_run;
+mod load_server;
 mod measure;
 mod media_keys;
 mod media_smoke;
@@ -53,6 +55,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use backdrop::Glass;
@@ -188,12 +191,53 @@ fn main() -> ExitCode {
             println!("{}", blocking::measure());
             ExitCode::SUCCESS
         }
+        Command::Measure(m) if m.load.serve_only.is_some() => {
+            let port = m.load.serve_only.unwrap_or_default();
+            match load_server::LoadServer::start(port, true) {
+                Ok(server) => {
+                    println!("serving http://127.0.0.1:{}", server.port);
+                    // Until killed; the pages post their timings, printed as they arrive.
+                    loop {
+                        std::thread::park();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("wubble: cannot serve: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Measure(m) => {
             measure::begin(m.scenario, m.seconds.get());
+            let load = (m.scenario == measure::Scenario::Load)
+                .then(|| load_server::LoadServer::start(0, false).map(|s| (s, m.load.variant)))
+                .transpose();
+            let load = match load {
+                Ok(load) => load,
+                Err(e) => {
+                    eprintln!("wubble: cannot serve the load pages: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if let Some((server, variant)) = &load {
+                let pages = if m.load.pages.is_empty() {
+                    load_server::PAGES.map(String::from).to_vec()
+                } else {
+                    m.load.pages.clone()
+                };
+                load_run::begin(
+                    server.clone(),
+                    variant.name(),
+                    &pages,
+                    m.load.runs.get() as usize,
+                    m.load.back,
+                );
+            }
             let mode = Mode::Measure {
                 scenario: m.scenario,
                 begin_frames: m.begin_frames,
                 out: m.out,
+                load,
             };
             with_smoke_dir(|config, dir| report_run(mode, config, dir))
         }
@@ -522,6 +566,8 @@ enum Mode {
         scenario: measure::Scenario,
         begin_frames: bool,
         out: Option<PathBuf>,
+        /// `--measure load`: the pages' server and what the engine hooks requests with.
+        load: Option<(Arc<load_server::LoadServer>, load_run::Variant)>,
     },
 }
 
@@ -1279,6 +1325,7 @@ fn run(
             begin_frames,
             ..
         } => (
+            // `--measure load` navigates from here to its own pages.
             Some(page_url(scenario.page())),
             Checks {
                 begin_frames: *begin_frames,
@@ -1311,10 +1358,32 @@ fn run(
         let _ = slint::invoke_from_event_loop(|| with_host(Host::filter_lists_changed));
     });
     let media_observer = host::MediaObserver::new();
+    // `--measure load --load-variant`: which hooks the engine is given, to price them.
+    let (filter, observer, blocks) = match &mode {
+        Mode::Measure {
+            load: Some((_, variant)),
+            ..
+        } => {
+            let (filter, observer) = variant.hooks();
+            (filter, observer, variant.blocks())
+        }
+        _ => (true, true, true),
+    };
+    if !blocks {
+        // Both: the blocker starts from the first, the host applies every stored setting (the
+        // second) once it is up.
+        loaded.settings.blocker.enabled = false;
+        loaded.settings.stored.insert(
+            wubble_core::settings::BLOCKER_ENABLED.key.into(),
+            "0".into(),
+        );
+    }
     let mut engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
-        content_filter: Some(blocking.clone()),
-        response_observer: Some(media_observer.clone()),
+        content_filter: filter
+            .then(|| blocking.clone() as Arc<dyn wubble_engine::filter::ContentFilter>),
+        response_observer: observer
+            .then(|| media_observer.clone() as Arc<dyn wubble_engine::filter::ResponseObserver>),
         features: loaded.settings.page_features(),
         clipboard_bridge: clipboard::bridge_needed(std::env::var_os("WAYLAND_DISPLAY").as_deref()),
         containers: loaded.model.containers.iter().map(|c| c.id).collect(),

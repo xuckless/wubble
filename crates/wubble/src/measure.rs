@@ -97,6 +97,9 @@ pub enum Scenario {
     Idle,
     /// Process start to the first render showing page pixels, by stage.
     Startup,
+    /// Loopback pages loaded cold and warm: the page's own timings and the first frame shown
+    /// (`load_run`).
+    Load,
 }
 
 impl Scenario {
@@ -109,6 +112,7 @@ impl Scenario {
             Self::Blocker => "blocker",
             Self::Idle => "idle",
             Self::Startup => "startup",
+            Self::Load => "load",
         }
     }
 
@@ -118,7 +122,7 @@ impl Scenario {
             Self::Video => include_str!("../assets/measure-video.html"),
             Self::Resize => include_str!("../assets/measure-resize.html"),
             Self::Typing => include_str!("../assets/measure-typing.html"),
-            Self::Idle | Self::Startup => include_str!("../assets/measure-idle.html"),
+            Self::Idle | Self::Startup | Self::Load => include_str!("../assets/measure-idle.html"),
             // Windowless: `main` runs `blocking::measure` instead of a page.
             Self::Blocker => "",
         }
@@ -876,6 +880,9 @@ pub fn process_started() {
 
 /// Stamps `stage` the first time it is reached, while `--measure startup` runs. Any thread.
 pub fn mark(stage: Stage) {
+    if stage == Stage::BlockerReady {
+        crate::load_run::blocker_ready();
+    }
     if !STARTUP.load(Ordering::Relaxed) {
         return;
     }
@@ -1133,6 +1140,7 @@ pub fn count(count: Count) {
 /// and runs only when the scenario probes. Nothing happens when not
 /// measuring.
 pub fn taken(frame: Frame, probe: impl FnOnce() -> Option<[u8; 4]>) {
+    crate::load_run::frame_taken();
     mark(Stage::FirstCefFrame);
     let Some(probes) = with_session(|s| {
         let now = Instant::now();
@@ -1150,6 +1158,7 @@ pub fn taken(frame: Frame, probe: impl FnOnce() -> Option<[u8; 4]>) {
 /// Rendering-notifier hook: Slint finished a render. `startup` ends at the first one after
 /// the first page frame.
 pub fn rendered() {
+    crate::load_run::rendered();
     mark(Stage::FirstRender);
     if marked(Stage::FirstCefFrame) && !marked(Stage::FirstPixels) {
         mark(Stage::FirstPixels);
@@ -1202,6 +1211,9 @@ pub fn shell(shell: Shell) {
 /// Timer hook, every [`TICK`] while measuring: injects input (`typing`) or
 /// resizes the window (`resize`), and quits once the run is over.
 pub fn tick(host: &mut Host, window: &AppWindow) {
+    if crate::load_run::active() {
+        return crate::load_run::tick(host);
+    }
     count(Count::MeasureTick);
     let now = Instant::now();
     let Some((scenario, step, base)) = with_session(|s| {
@@ -1305,6 +1317,9 @@ fn inject(host: &mut Host, kind: InputKind, n: u32) {
 /// `adapter` names the GPU for the header.
 /// A run in which no frame arrived recorded nothing and is `None` too.
 pub fn finish(adapter: &str) -> Option<(String, String)> {
+    if let Some(load) = crate::load_run::finish() {
+        return Some(load);
+    }
     let mut session = SESSION.take().filter(|s| s.first_frame.is_some())?;
     if session.scenario == Scenario::Startup {
         return Some(finish_startup(adapter));

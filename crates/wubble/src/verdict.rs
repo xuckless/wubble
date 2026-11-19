@@ -249,6 +249,7 @@ mod tests {
             scenario: crate::measure::Scenario::Scroll,
             begin_frames: false,
             out: None,
+            load: None,
         };
         let measured = Outcome {
             measured: Some(Ok(())),

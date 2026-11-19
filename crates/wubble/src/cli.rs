@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 
+pub use crate::load_run::Variant;
 pub use crate::measure::Scenario;
 
 /// `--measure`'s run time unless `--seconds` says otherwise.
@@ -42,6 +43,23 @@ struct Cli {
     /// render, instead of CEF's own timer.
     #[arg(long, requires = "measure")]
     begin_frames: bool,
+    /// `--measure load`: what the engine hooks requests with (default: as shipped).
+    #[arg(long, value_name = "VARIANT", value_enum, requires = "measure")]
+    load_variant: Option<Variant>,
+    /// `--measure load`: warm loads of each page after its cold one (default 5).
+    #[arg(long, value_name = "N", requires = "measure")]
+    runs: Option<NonZeroU32>,
+    /// `--measure load`: load this path of the loopback server instead of the standard pages
+    /// (repeatable; `/spec` is the speculation page).
+    #[arg(long, value_name = "PATH", requires = "measure")]
+    load_page: Vec<String>,
+    /// `--measure load`: after the last page, go to another and back by history.
+    #[arg(long, requires = "measure")]
+    load_back: bool,
+    /// `--measure load`: serve the pages on this loopback port (0: any) and print each timing a
+    /// page posts, for `scripts/measure-load-chromium.sh`; no window.
+    #[arg(long, value_name = "PORT", requires = "measure")]
+    serve_only: Option<u16>,
     /// Also write `--measure`'s samples as CSV to this file.
     #[arg(long, value_name = "PATH", requires = "measure")]
     out: Option<PathBuf>,
@@ -211,6 +229,31 @@ pub struct Measure {
     pub seconds: NonZeroU32,
     pub out: Option<PathBuf>,
     pub begin_frames: bool,
+    pub load: LoadArgs,
+}
+
+/// `--measure load`'s own options.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadArgs {
+    pub variant: Variant,
+    pub runs: NonZeroU32,
+    /// Empty: the standard pages.
+    pub pages: Vec<String>,
+    pub serve_only: Option<u16>,
+    /// Go back to the last page by history once, after its warm loads.
+    pub back: bool,
+}
+
+impl Default for LoadArgs {
+    fn default() -> Self {
+        Self {
+            variant: Variant::default(),
+            runs: NonZeroU32::new(5).unwrap_or(NonZeroU32::MIN),
+            pages: vec![],
+            serve_only: None,
+            back: false,
+        }
+    }
 }
 
 impl TryFrom<Cli> for Command {
@@ -220,11 +263,30 @@ impl TryFrom<Cli> for Command {
         let conflict = |msg| Err(Cli::command().error(ErrorKind::ArgumentConflict, msg));
         if let Some(scenario) = cli.measure {
             // clap rejects a URL, `--smoke` and `--profile` next to it.
+            if scenario != Scenario::Load
+                && (cli.load_variant.is_some()
+                    || cli.runs.is_some()
+                    || !cli.load_page.is_empty()
+                    || cli.serve_only.is_some()
+                    || cli.load_back)
+            {
+                return conflict(
+                    "--load-variant, --runs, --load-page, --load-back and --serve-only need --measure load",
+                );
+            }
+            let defaults = LoadArgs::default();
             return Ok(Command::Measure(Measure {
                 scenario,
                 seconds: cli.seconds,
                 out: cli.out,
                 begin_frames: cli.begin_frames,
+                load: LoadArgs {
+                    variant: cli.load_variant.unwrap_or(defaults.variant),
+                    runs: cli.runs.unwrap_or(defaults.runs),
+                    pages: cli.load_page,
+                    serve_only: cli.serve_only,
+                    back: cli.load_back,
+                },
             }));
         }
         if cli.shot_dir.is_some() != matches!(cli.smoke, Some(SmokeArg::Gallery)) {
@@ -579,6 +641,7 @@ mod tests {
             seconds: NonZeroU32::new(seconds).expect("test uses seconds > 0"),
             out: out.map(PathBuf::from),
             begin_frames: false,
+            load: LoadArgs::default(),
         }))
     }
 
@@ -592,6 +655,7 @@ mod tests {
             ("blocker", Scenario::Blocker),
             ("idle", Scenario::Idle),
             ("startup", Scenario::Startup),
+            ("load", Scenario::Load),
         ] {
             assert_eq!(
                 parse(["wubble", "--measure", arg]).ok(),
@@ -619,8 +683,49 @@ mod tests {
                 seconds: DEFAULT_SECONDS,
                 out: None,
                 begin_frames: true,
+                load: LoadArgs::default(),
             }))
         );
+    }
+
+    #[test]
+    fn load_options_need_the_load_scenario() {
+        let Some(Command::Measure(m)) = parse([
+            "wubble",
+            "--measure",
+            "load",
+            "--load-variant",
+            "no-hook",
+            "--runs",
+            "3",
+            "--load-page",
+            "/spec",
+            "--serve-only",
+            "0",
+            "--load-back",
+        ])
+        .ok() else {
+            panic!("--measure load with its options parses");
+        };
+        assert_eq!(m.load.variant, Variant::NoHook);
+        assert_eq!(m.load.runs.get(), 3);
+        assert_eq!(m.load.pages, ["/spec"]);
+        assert_eq!(m.load.serve_only, Some(0));
+        assert!(m.load.back);
+        for bad in [
+            &["--measure", "scroll", "--load-variant", "no-hook"][..],
+            &["--measure", "scroll", "--runs", "3"],
+            &["--measure", "idle", "--load-page", "/spec"],
+            &["--measure", "idle", "--serve-only", "0"],
+            &["--measure", "idle", "--load-back"],
+            &["--measure", "load", "--runs", "0"],
+            &["--measure", "load", "--load-variant", "nope"],
+            &["--load-variant", "no-hook"],
+            &["--runs", "3"],
+        ] {
+            let args = std::iter::once("wubble").chain(bad.iter().copied());
+            assert!(parse(args).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

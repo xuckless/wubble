@@ -1423,6 +1423,7 @@ impl Host {
         if tab == PANEL_TAB {
             return self.on_panel_event(event);
         }
+        crate::load_run::web_event(&event);
         self.smoke_step(SmokeInput::Event(&event));
         self.page_smoke_step(page_smoke::Input::Web(&event));
         self.block_smoke_step(block_smoke::Input::Web(&event));

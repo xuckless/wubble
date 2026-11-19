@@ -555,22 +555,78 @@ fn is_web(url: &str) -> bool {
         })
 }
 
+/// `VmRSS` or `VmHWM` (kB) from the text of `/proc/self/status`.
+pub fn status_kb(status: &str, key: &str) -> Option<u64> {
+    status
+        .lines()
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// The process's resident and peak resident memory in MB (Linux; `None` elsewhere).
+fn rss_mb() -> Option<(f64, f64)> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let mb = |key| status_kb(&status, key).map(|kb| kb as f64 / 1024.0);
+    Some((mb("VmRSS")?, mb("VmHWM")?))
+}
+
+fn rss_text() -> String {
+    rss_mb().map_or_else(
+        || "n/a".into(),
+        |(now, peak)| format!("{now:.0} MB (peak {peak:.0} MB)"),
+    )
+}
+
+/// Time spent in `Blocker::decide` inside [`Blocking::check`], while `--measure load` runs:
+/// nanoseconds and calls. One relaxed load per request when off.
+static DECIDE_TIMING: AtomicBool = AtomicBool::new(false);
+static DECIDE_NS: AtomicU64 = AtomicU64::new(0);
+static DECIDE_CALLS: AtomicU64 = AtomicU64::new(0);
+static DECIDE_STOPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Starts timing `decide` calls (`--measure load`).
+pub fn time_decisions() {
+    DECIDE_TIMING.store(true, Ordering::Relaxed);
+}
+
+/// Mean microseconds per `decide` call, the number of calls since [`time_decisions`] and how
+/// many of them did not allow the request.
+pub fn decision_cost() -> (f64, u64, u64) {
+    let calls = DECIDE_CALLS.load(Ordering::Relaxed);
+    let ns = DECIDE_NS.load(Ordering::Relaxed);
+    (
+        ns as f64 / 1e3 / calls.max(1) as f64,
+        calls,
+        DECIDE_STOPPED.load(Ordering::Relaxed),
+    )
+}
+
 /// `--measure blocker`: the bundled default lists' cold compile, cache
-/// size, load from the cache and mean cost of one request decision over a
-/// fixed set of URLs. Printed for a person to read; nothing asserts on it.
+/// size, load from the cache, memory before and after each, how many of the
+/// load pages' requests the lists block, and the cost of one request decision
+/// (one thread, then several sharing the blocker). Printed for a person to
+/// read; nothing asserts on it.
 pub fn measure() -> String {
     use std::time::Instant;
+    let before = rss_text();
     let sources = wubble_blocker::bundled_sources(&Selection::default());
     let start = Instant::now();
     let blocker = Blocker::from_sources(&sources);
     let compile = start.elapsed();
+    let compiled = rss_text();
     let bytes = blocker.to_bytes();
+    drop(blocker);
+    let freed = rss_text();
     let start = Instant::now();
     let loaded = Blocker::from_bytes(&bytes).map(Blocker::with_bundled_resources);
     let load = start.elapsed();
     let Ok(loaded) = loaded else {
         return "measure: blocker cache did not load".into();
     };
+    let cache_load = rss_text();
     const HOSTS: [&str; 8] = [
         "news.example",
         "cdn.news.example",
@@ -597,21 +653,69 @@ pub fn measure() -> String {
             )
         })
         .collect();
-    let mut blocked = 0usize;
+    let run = |urls: &[(String, ResourceType)]| {
+        urls.iter()
+            .filter(|(url, kind)| {
+                let req = NetRequest {
+                    url,
+                    source_url: "https://news.example/article",
+                    resource_type: *kind,
+                };
+                loaded.decide(req, Shields::On) != Decision::Allow
+            })
+            .count()
+    };
     let start = Instant::now();
-    for (url, kind) in &urls {
-        let req = NetRequest {
-            url,
-            source_url: "https://news.example/article",
-            resource_type: *kind,
-        };
-        if loaded.decide(req, Shields::On) != Decision::Allow {
-            blocked += 1;
-        }
-    }
+    let blocked = run(&urls);
     let decide = start.elapsed();
+    // The same work on several threads sharing the one blocker: per-thread cost that rises with
+    // the thread count would mean a shared lock or cache line is hot.
+    let threaded: Vec<String> = [1usize, 4, 16]
+        .into_iter()
+        .map(|threads| {
+            let start = Instant::now();
+            std::thread::scope(|scope| {
+                for _ in 0..threads {
+                    scope.spawn(|| {
+                        for _ in 0..10 {
+                            run(&urls);
+                        }
+                    });
+                }
+            });
+            format!(
+                "{threads} thread(s) {:.2} us per request per thread",
+                start.elapsed().as_secs_f64() * 1e6 / (10 * urls.len()) as f64
+            )
+        })
+        .collect();
+    // The load harness's blockable page, as the lists judge it on a first-party loopback host.
+    let page = "http://127.0.0.1:8080/blockable";
+    let count = |kind, path: fn(usize) -> String, n| {
+        (0..n)
+            .filter(|&i| {
+                let url = format!("http://127.0.0.1:8080{}", path(i));
+                let req = NetRequest {
+                    url: &url,
+                    source_url: page,
+                    resource_type: kind,
+                };
+                loaded.decide(req, Shields::On) != Decision::Allow
+            })
+            .count()
+    };
+    let scripts = count(
+        ResourceType::Script,
+        crate::load_server::blockable_script,
+        crate::load_server::BLOCKABLE_SCRIPTS,
+    );
+    let images = count(
+        ResourceType::Image,
+        crate::load_server::blockable_image,
+        crate::load_server::BLOCKABLE_IMAGES,
+    );
     format!(
-        "measure blocker ({} build): {} bundled lists\n  cold compile {:.0} ms\n  cache {:.1} MB, load {:.1} ms with resources\n  decide {:.2} us per request (mean of {}, {blocked} not allowed)",
+        "measure blocker ({} build): {} bundled lists\n  cold compile {:.0} ms\n  cache {:.1} MB, load {:.1} ms with resources\n  memory: start {before}, after compile {compiled}, compiled engine dropped {freed}, after cache load {cache_load}\n  decide {:.2} us per request (mean of {}, {blocked} not allowed)\n  shared by threads, x10 passes: {}\n  load page /blockable: {scripts} of {} scripts and {images} of {} images blocked",
         if cfg!(debug_assertions) {
             "dev, opt-level 1"
         } else {
@@ -623,6 +727,9 @@ pub fn measure() -> String {
         load.as_secs_f64() * 1e3,
         decide.as_secs_f64() * 1e6 / urls.len() as f64,
         urls.len(),
+        threaded.join("; "),
+        crate::load_server::BLOCKABLE_SCRIPTS,
+        crate::load_server::BLOCKABLE_IMAGES,
     )
 }
 
@@ -650,7 +757,18 @@ impl ContentFilter for Blocking {
             source_url: top,
             resource_type: resource_type(request.kind),
         };
-        let action = match self.current().decide(net, self.shields_for(top)) {
+        let timed = DECIDE_TIMING
+            .load(Ordering::Relaxed)
+            .then(std::time::Instant::now);
+        let decision = self.current().decide(net, self.shields_for(top));
+        if let Some(at) = timed {
+            DECIDE_NS.fetch_add(at.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            DECIDE_CALLS.fetch_add(1, Ordering::Relaxed);
+            if decision != Decision::Allow {
+                DECIDE_STOPPED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let action = match decision {
             Decision::Allow => return RequestAction::Allow,
             Decision::Rewrite { url } => return RequestAction::Redirect(url),
             // A `$redirect` stub (uBO's `noop.js`, `googletagmanager_gtm.js`,
@@ -747,6 +865,15 @@ fn paths(profile: &Path) -> (PathBuf, PathBuf) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn status_lines_give_kilobytes() {
+        let text = "Name:\twubble\nVmHWM:\t  204800 kB\nVmRSS:\t  102400 kB\nThreads:\t4\n";
+        assert_eq!(super::status_kb(text, "VmRSS"), Some(102_400));
+        assert_eq!(super::status_kb(text, "VmHWM"), Some(204_800));
+        assert_eq!(super::status_kb(text, "VmSwap"), None);
+        assert_eq!(super::status_kb("VmRSS: x kB", "VmRSS"), None);
+    }
+
     use super::*;
 
     /// A small list for the request-path tests.
