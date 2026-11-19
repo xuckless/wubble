@@ -145,12 +145,18 @@ pub const SCENES: &[Scene] = &[
     },
     on("archive", InternalPage::Archive),
     on("task-manager", InternalPage::Tasks),
+    Scene {
+        pointer: Some(HISTORY_ROW),
+        ..on("history-hover", InternalPage::History)
+    },
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
 /// (`--parity`: four favourites, the Space name, five tabs), logical px.
 const TAB_ROW: (u16, u16) = (130, 248);
 const NEW_TAB_ROW: (u16, u16) = (130, 408);
+/// The first visit's row on the history page (its actions show on hover), logical px.
+const HISTORY_ROW: (u16, u16) = (800, 304);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
 
