@@ -1,0 +1,112 @@
+// derived: GlassPanel thin (material/glass.slint) + Film (motion/film.slint) as SearchCapsule (controls/search-capsule.slint), KitText, Role.st-group
+// The sheets' text field (wubble-only.md §6 "plain field", §13 "Fields"): the search capsule's
+// body without its icon or clear button: thin glass (`.wb-thin`), 40 high, the film ring on
+// while it has the focus (`.st-search` `wb-on`), the 14 px input in ink and its placeholder in
+// haze, 14 px in from both ends. A sheet field is not a capsule: its corner is the button's
+// (`.tp-btn-body`, 12), so a field and the buttons under it share one radius. Escape calls
+// `escaped()` and is consumed (the sheet's own key scope is not the field's parent); Return
+// calls `accepted(text)`. `secret` masks it (a password), `numeric` takes a number (right
+// aligned, as a settings value). Same API as the settings page's old Field, so call sites swap.
+// derived (notes/fidelity/derived-review.md "Overlays B"): the radius, the end padding and the
+// missing icon and clear button.
+
+import { SettingsCss, TouchCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { GlassPanel } from "../../material/glass.slint";
+import { GlassTier } from "../../../components/model.slint";
+
+export component BField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    // what a screen reader calls it (the placeholder when empty)
+    in property <string> label;
+    in property <bool> secret;
+    in property <bool> numeric;
+    callback edited(string);
+    callback accepted(string);
+    callback escaped();
+    out property <bool> focused: input.has-focus;
+    // the film ring (`wb-on`): on while focused
+    out property <bool> ring: input.has-focus;
+
+    public function take-focus() {
+        input.focus();
+    }
+    public function select-all() {
+        input.select-all();
+    }
+
+    height: SettingsCss.st-search--height;
+
+    GlassPanel {
+        tier: GlassTier.thin;
+        radius: TouchCss.wb-tp-btn-body--border-radius;
+        film: root.ring;
+        // `cursor: text`: a press anywhere on the field focuses the input
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+        KitText {
+            x: SettingsCss.st-search--padding-left;
+            width: parent.width - 2 * SettingsCss.st-search--padding-left;
+            height: parent.height;
+            role: Role.st-search-input;
+            text: root.placeholder;
+            visible: input.text == "";
+            color: SettingsCss.st-search-input-placeholder--color;
+            vertical-alignment: center;
+            horizontal-alignment: root.numeric ? right : left;
+            overflow: elide;
+        }
+        input := TextInput {
+            x: SettingsCss.st-search--padding-left;
+            width: parent.width - 2 * SettingsCss.st-search--padding-left;
+            height: parent.height;
+            font-family: Role.st-search-input.family;
+            font-size: Role.st-search-input.size;
+            font-weight: Role.st-search-input.weight;
+            color: SettingsCss.st-search-input--color;
+            selection-background-color: Shell.selection-fill;
+            selection-foreground-color: Shell.selection-ink;
+            vertical-alignment: center;
+            horizontal-alignment: root.numeric ? right : left;
+            single-line: true;
+            input-type: root.secret ? InputType.password : root.numeric ? InputType.decimal : InputType.text;
+            accessible-label: root.label != "" ? root.label : root.placeholder;
+            edited => {
+                root.edited(self.text);
+            }
+            accepted => {
+                root.accepted(self.text);
+            }
+            key-pressed(event) => {
+                if event.text == Key.Escape {
+                    root.escaped();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+    }
+}
+
+// A labelled group in a sheet (`.st-group` above its control: 13 / 500 mist, 8 in from the
+// start, 8 above the control). The label is the control's caption, not a heading.
+export component BGroup inherits VerticalLayout {
+    in property <string> label;
+    spacing: SettingsCss.st-group--margin-bottom;
+    if root.label != "": HorizontalLayout {
+        padding-left: SettingsCss.st-group--margin-left;
+        KitText {
+            role: Role.st-group;
+            text: root.label;
+            color: SettingsCss.st-group--color;
+        }
+    }
+    @children
+}

@@ -88,14 +88,6 @@ components/command-row.slint	token	Fonts	3
 components/command-row.slint	token	Palette	5
 components/command-row.slint	token	Type	4
 components/controls/registry.slint	paint	fill	1
-components/dialog-sheet.slint	font	font-family	4
-components/dialog-sheet.slint	font	font-size	4
-components/dialog-sheet.slint	font	font-weight	2
-components/dialog-sheet.slint	paint	background	2
-components/dialog-sheet.slint	text	Text	2
-components/dialog-sheet.slint	token	Fonts	4
-components/dialog-sheet.slint	token	Palette	6
-components/dialog-sheet.slint	token	Type	6
 components/download-row.slint	animate	animate	1
 components/download-row.slint	font	font-family	2
 components/download-row.slint	font	font-size	2
