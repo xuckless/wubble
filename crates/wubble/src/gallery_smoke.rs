@@ -160,6 +160,10 @@ pub const SCENES: &[Scene] = &[
     // the new-tab page: under `--frozen-backdrop` its liquid holds and its bubble steps on the
     // harness's fixed clock (backdrop.rs), so it is shot at rest the same way every run
     on("start", InternalPage::Start),
+    Scene {
+        pointer: Some(HISTORY_ROW),
+        ..on("history-hover", InternalPage::History)
+    },
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
@@ -171,6 +175,8 @@ const NEW_TAB_ROW: (u16, u16) = (130, 408);
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);
 const PERMISSION_BLOCK: (u16, u16) = (204, 298);
 const AUTOFILL_ROW: (u16, u16) = (120, 162);
+/// The first visit's row on the history page (its actions show on hover), logical px.
+const HISTORY_ROW: (u16, u16) = (800, 304);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
 

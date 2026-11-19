@@ -1,0 +1,49 @@
+// derived: KitText(text.slint) roles st-group / st-path-wb-mono, pages/settings.css:39,101 @598f814
+// The task manager's columns (wubble-only.md "new primitives" 7, data columns): a head line of
+// column names in `.st-group` (13 / 500 mist) and the cells under it, numbers in `.st-path
+// .wb-mono` (13 mono mist), right-aligned so the digits line up; a slot holds a control at its
+// column's middle. Column widths are the caller's (`Shell.task-*`).
+
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+
+// One column's name.
+export component TableHead inherits KitText {
+    in property <bool> numeric: true;
+    role: Role.st-group;
+    color: SettingsCss.st-group--color;
+    horizontal-alignment: root.numeric ? right : left;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// One number.
+export component TableCell inherits KitText {
+    role: Role.st-path-wb-mono;
+    color: SettingsCss.st-path-wb-mono--color;
+    horizontal-alignment: right;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+// A control's column: the control keeps its own size, on the column's middle.
+export component TableSlot inherits Rectangle {
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+// The column names' line over a card of rows: at the rows' own insets (`.st-card` padding plus
+// `.st-row` padding), the columns `.st-row-ctl` apart.
+export component TableHeadLine inherits HorizontalLayout {
+    padding-left: SettingsCss.st-card--padding + SettingsCss.st-row--padding-left;
+    padding-right: SettingsCss.st-card--padding + SettingsCss.st-row--padding-right;
+    padding-bottom: SettingsCss.st-group--margin-bottom;
+    spacing: SettingsCss.st-row-ctl--gap;
+    @children
+}

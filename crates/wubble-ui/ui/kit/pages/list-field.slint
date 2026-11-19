@@ -1,0 +1,82 @@
+// derived: SearchCapsule(controls/search-capsule.slint) without its icon and clear button, pages/settings.css:12-14 @598f814
+// A plain one-line field for the list pages' sheets (the add-password sheet's site, username and
+// password): wubble-only (wubble-only.md 6 and 13, the plain field the design lacks), so the
+// search capsule's body (`.st-search`: thin glass, 40 high, radius 20, the film ring while it has
+// the focus or text, padding 0 14, the 14 px input in ink, the placeholder haze) with no icon and
+// no clear button; `secret` masks it. Escape is `escaped()` (the sheet round it cancels).
+// A second copy of the capsule's body: it goes when SearchCapsule takes a bare (no icon, no
+// clear) and secret mode (kit gap, controls/search-capsule.slint is not this lane's); until then
+// a fix to the capsule's ring, padding or placeholder is made here too.
+
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { GlassPanel } from "../material/glass.slint";
+import { GlassTier } from "../../components/model.slint";
+
+export component ListField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder;
+    in property <bool> secret;
+    callback edited(string);
+    callback accepted(string);
+    callback escaped();
+    out property <bool> focused: input.has-focus;
+    public function take-focus() {
+        input.focus();
+    }
+
+    height: SettingsCss.st-search--height;
+
+    GlassPanel {
+        tier: GlassTier.thin;
+        radius: SettingsCss.st-search--border-radius;
+        film: input.has-focus || root.text != "";
+        TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => {
+                input.focus();
+            }
+        }
+        HorizontalLayout {
+            padding-left: SettingsCss.st-search--padding-left;
+            padding-right: SettingsCss.st-search--padding-left;
+            Rectangle {
+                KitText {
+                    role: Role.st-search-input;
+                    text: root.placeholder;
+                    visible: input.text == "";
+                    color: SettingsCss.st-search-input-placeholder--color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                input := TextInput {
+                    font-family: Role.st-search-input.family;
+                    font-size: Role.st-search-input.size;
+                    font-weight: Role.st-search-input.weight;
+                    color: SettingsCss.st-search-input--color;
+                    selection-background-color: Shell.selection-fill;
+                    selection-foreground-color: Shell.selection-ink;
+                    vertical-alignment: center;
+                    single-line: true;
+                    input-type: root.secret ? InputType.password : InputType.text;
+                    accessible-label: root.placeholder;
+                    edited => {
+                        root.edited(self.text);
+                    }
+                    accepted => {
+                        root.accepted(self.text);
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            root.escaped();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+        }
+    }
+}

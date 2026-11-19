@@ -110,20 +110,20 @@ fn page_scenarios() {
         visit("B", "https://b.test/"),
     ]));
     pump();
-    assert_eq!(count(&app, "OpenRow::ta"), 2);
+    assert_eq!(count(&app, "HistoryPage::visit"), 2);
     let opened = Rc::new(RefCell::new(vec![]));
     let (o1, o2) = (opened.clone(), opened.clone());
     app.on_page_opened(move |u| o1.borrow_mut().push(format!("here {u}")));
     app.on_page_opened_new_tab(move |u| o2.borrow_mut().push(format!("tab {u}")));
-    click(&app, "OpenRow::ta", PointerEventButton::Left);
-    click(&app, "OpenRow::ta", PointerEventButton::Middle);
+    click(&app, "ListRow::ta", PointerEventButton::Left);
+    click(&app, "ListRow::ta", PointerEventButton::Middle);
     assert_eq!(
         *opened.borrow(),
         ["here https://a.test/", "tab https://a.test/"]
     );
     app.set_history_lines(model(vec![]));
     pump();
-    assert_eq!(count(&app, "OpenRow::ta"), 0);
+    assert_eq!(count(&app, "HistoryPage::visit"), 0);
 
     // Bookmarks: a folder's click toggles it, a link's click opens it.
     app.set_page(InternalPageKind::Bookmarks);
@@ -136,7 +136,7 @@ fn page_scenarios() {
     let toggled = Rc::new(RefCell::new(vec![]));
     let t = toggled.clone();
     app.on_bookmark_toggled(move |id| t.borrow_mut().push(id));
-    click(&app, "OpenRow::ta", PointerEventButton::Left);
+    click(&app, "ListRow::ta", PointerEventButton::Left);
     assert_eq!(*toggled.borrow(), [1]);
 
     // Downloads: one row per item of the shared model, the popover's row.

@@ -1,0 +1,160 @@
+// derived: WubbleScroller(controls/scroller.slint) + SearchCapsule(controls/search-capsule.slint) + KitText(text.slint) roles st-title / st-count, settings layout pages/settings.css:6-21 @598f814
+// The frame the list pages share (history, archive, bookmarks, downloads, passwords, tasks):
+// wubble-only (notes/fidelity/wubble-only.md section 32), so derived from the settings page's
+// pinned column stacked into one: the page colour, the design's scroller, a centred column
+// `Shell.settings-width` wide with the title (`.st-pin h1`, 40, 4 in and 20 above the search;
+// 34 when narrow), the search capsule (`.st-search`) under it, the count line (`.st-count`:
+// 18 high, 8 0 12 14, 12.5 mist) when there is one, and the page's own parts (`@children`).
+// `open` shows it; `query-changed` is the search.
+
+import { Palette } from "../gen/tokens.slint";
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { WubbleScroller } from "../controls/scroller.slint";
+import { SearchCapsule } from "../controls/search-capsule.slint";
+import { PageScroll } from "../../components/page-scroll.slint";
+
+// The scroller every list page shares: the page's colour on the design's scroll physics (the
+// PageScroll global, stepped by the driver). A copy of settings.slint's private PageScroller
+// (lane L5a owns that file): the one copy goes when settings.slint imports this one.
+export component PageScroller inherits Rectangle {
+    in property <bool> open;
+    // where the content is (rubber-banded past the ends), and how far it can go
+    out property <length> scroll: root.open ? PageScroll.y : 0px;
+    out property <length> room: max(0px, scroller.content-height - scroller.viewport-height);
+    callback wheeled();
+    background: Palette.web;
+    public function wheel(d: length) {
+        PageScroll.wheel(d);
+        root.wheeled();
+    }
+    // glide to `y` (scroller.tsx `to`)
+    public function to(y: length) {
+        PageScroll.to(y);
+    }
+    // back to the top at once
+    public function reset() {
+        PageScroll.reset();
+    }
+    changed open => {
+        if root.open {
+            PageScroll.reset();
+            root.report();
+        }
+    }
+    function report() {
+        if root.open {
+            PageScroll.viewport = scroller.viewport-height;
+            PageScroll.content = scroller.content-height;
+        }
+    }
+    scroller := WubbleScroller {
+        content-y: root.scroll;
+        thumb-visible: root.open && PageScroll.thumb-visible;
+        thumb-height: PageScroll.thumb-height;
+        thumb-top: PageScroll.thumb-top;
+        changed viewport-height => {
+            root.report();
+        }
+        changed content-height => {
+            root.report();
+        }
+        wheel(d) => {
+            root.wheel(d);
+        }
+        touch-down(y) => {
+            PageScroll.touch-down(y);
+            root.wheeled();
+        }
+        touch-move(y) => {
+            PageScroll.touch-move(y);
+        }
+        touch-up => {
+            PageScroll.touch-up();
+        }
+        thumb-down(y) => {
+            PageScroll.thumb-down(y);
+            root.wheeled();
+        }
+        thumb-move(y) => {
+            PageScroll.thumb-move(y);
+        }
+        thumb-up => {
+            PageScroll.thumb-up();
+        }
+        @children
+    }
+}
+
+export component PageFrame inherits Rectangle {
+    in property <bool> open;
+    in property <string> title;
+    in property <string> placeholder: "Search";
+    // Without a search box (the downloads page, the task manager).
+    in property <bool> searchable: true;
+    // The `.st-count` line under the search ("N results", the task manager's total); empty: none.
+    in property <string> count;
+    // The column's width: `Shell.settings-width`; a table (the task manager) takes the settings
+    // grid's (`.st-grid` max-width 1120).
+    in property <length> column: Shell.settings-width;
+    callback query-changed(string);
+
+    public function take-focus() {
+        search.take-focus();
+    }
+    // Back to the top: a new query or a page switch starts there.
+    public function scroll-to-top() {
+        page.reset();
+    }
+
+    visible: root.open;
+
+    page := PageScroller {
+        open: root.open;
+        HorizontalLayout {
+            alignment: center;
+            padding-top: Shell.settings-top;
+            padding-bottom: Shell.settings-bottom;
+            VerticalLayout {
+                width: min(root.column, root.width - 2 * Shell.settings-pad-max);
+                // .st-pin h1: margin 0 0 20px 4px, line-height 1
+                HorizontalLayout {
+                    padding-left: Shell.settings-title-in;
+                    padding-bottom: Shell.settings-title-below;
+                    KitText {
+                        role: root.width <= SettingsCss.max-width-759px--query-max-width ? Role.st-title-narrow : Role.st-title;
+                        height: self.role.size;
+                        text: root.title;
+                        color: Palette.ink;
+                        vertical-alignment: center;
+                    }
+                }
+                search := SearchCapsule {
+                    visible: root.searchable;
+                    height: root.searchable ? SettingsCss.st-search--height : 0px;
+                    placeholder: root.placeholder;
+                    edited(q) => {
+                        page.reset();
+                        root.query-changed(q);
+                    }
+                }
+                if root.count != "": HorizontalLayout {
+                    height: SettingsCss.st-count--height + SettingsCss.st-count--margin-top + SettingsCss.st-count--margin-bottom;
+                    padding-top: SettingsCss.st-count--margin-top;
+                    padding-bottom: SettingsCss.st-count--margin-bottom;
+                    padding-left: SettingsCss.st-count--margin-left;
+                    KitText {
+                        role: Role.st-count;
+                        text: root.count;
+                        color: SettingsCss.st-count--color;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                @children
+            }
+        }
+    }
+}

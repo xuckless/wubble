@@ -1,0 +1,50 @@
+// derived: HoldButton(controls/hold-button.slint) + ConfirmButton(controls/confirm-button.slint)
+// The list rows' stateful buttons, bound to the row they act on. A list's rows are reused by
+// index: when the host rewrites a row in place (a task sample, a deleted login), the same Slint
+// instance shows another item, and a hold or "Copied" it was in would carry over to that item,
+// or a hold would finish on it. `key` names the item; when it changes the button is made anew
+// (a fresh machine, idle), so a hold ends only on the item it started on. A one-row model over
+// `epoch`, bumped by `changed key` (which fires only on a real change): an array model is new
+// each evaluation, so the repeater drops its instance; a rewrite with the same key keeps it.
+// Nothing drawn here: the kit buttons are the look.
+
+import { HoldButton } from "../controls/hold-button.slint";
+import { ConfirmButton } from "../controls/confirm-button.slint";
+
+export component KeyedHoldButton inherits VerticalLayout {
+    in property <string> key;
+    in property <string> text;
+    in property <string> done-text;
+    callback done();
+    property <int> epoch;
+    changed key => {
+        root.epoch += 1;
+    }
+    alignment: center;
+    for e in [root.epoch]: HoldButton {
+        text: root.text;
+        done-text: root.done-text;
+        done => {
+            root.done();
+        }
+    }
+}
+
+export component KeyedConfirmButton inherits VerticalLayout {
+    in property <string> key;
+    in property <string> idle-text;
+    in property <string> done-text;
+    callback run();
+    property <int> epoch;
+    changed key => {
+        root.epoch += 1;
+    }
+    alignment: center;
+    for e in [root.epoch]: ConfirmButton {
+        idle-text: root.idle-text;
+        done-text: root.done-text;
+        run => {
+            root.run();
+        }
+    }
+}
