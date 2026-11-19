@@ -103,6 +103,15 @@ impl Model {
         })
     }
 
+    /// Whether `tab` can be shown in a Pip window: a known tab that is not a peek, not a Little
+    /// or Popup window's and not a split pane (its pane would leave a hole in the split).
+    pub fn can_pip(&self, tab: TabId) -> bool {
+        self.tabs.contains_key(&tab)
+            && !self.is_glance(tab)
+            && self.windowed(tab).is_none()
+            && self.split_of(tab).is_none()
+    }
+
     /// The Pip window, if one is open.
     pub fn pip_window(&self) -> Option<WindowId> {
         self.windows
@@ -362,14 +371,10 @@ impl Model {
     }
 
     /// A Pip window for `tab`, unfocused (picture-in-picture takes no keys from the window the
-    /// user is in), at the geometry the last one had. Refused for an unknown tab, a peek, a
-    /// Little or Popup window's tab, and while a Pip window is open.
+    /// user is in), at the geometry the last one had. Refused for what [`Model::can_pip`]
+    /// refuses, and while a Pip window is open.
     pub(super) fn open_pip(&mut self, tab: TabId) -> Vec<Effect> {
-        if !self.tabs.contains_key(&tab)
-            || self.is_glance(tab)
-            || self.windowed(tab).is_some()
-            || self.pip_window().is_some()
-        {
+        if !self.can_pip(tab) || self.pip_window().is_some() {
             return vec![];
         }
         let id = WindowId(self.next_window);
@@ -452,10 +457,7 @@ impl Model {
                     {
                         return Err("two Pip windows".into());
                     }
-                    if !self.tabs.contains_key(&t)
-                        || self.is_glance(t)
-                        || self.windowed(t).is_some()
-                    {
+                    if !self.can_pip(t) {
                         return Err(format!("Pip window {:?} shows {t:?}", w.id));
                     }
                 }

@@ -1386,6 +1386,7 @@ impl Model {
             || self.is_internal(tab)
             || self.is_internal(focused)
             || self.windowed(tab).is_some()
+            || self.pip_tab().is_some_and(|p| p == tab || p == focused)
         {
             return vec![];
         }

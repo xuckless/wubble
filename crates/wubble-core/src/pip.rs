@@ -3,8 +3,9 @@
 //! element fullscreen (the page shows only the video, letterboxed) and the tab's own frames are
 //! shown in a small window of their own (`Shown::Pip`, owned by the model). [`Pip`] is which
 //! tab's fullscreen belongs to picture-in-picture, its one owner, and [`transition`] the only way
-//! it changes. The window opens with the request, before the page answers, so the tab is on
-//! screen (and its view visible) when it is asked: a tab switch has hidden it by then.
+//! it changes. The window opens with the request, before the page is asked, so the tab is on
+//! screen (and its view visible) when it is asked: a tab switch has hidden it by then. The page
+//! is asked only once the model has opened the window (`WindowOpened`): it refuses some tabs.
 //!
 //! Design reference for behaviour only (no code): Firefox `PictureInPictureChild.sys.mjs`
 //! (MPL-2.0, the largest playing video wins) and Chromium's auto picture-in-picture on tab
@@ -16,7 +17,8 @@ use crate::tab::TabId;
 pub enum Pip {
     #[default]
     Off,
-    /// The window is open and the tab's video was asked to go fullscreen; waiting for the answer.
+    /// The window was asked for (`WindowOpened` says whether the model opened it), then the
+    /// tab's video was asked to go fullscreen; waiting for the answer.
     Entering { tab: TabId },
     /// The tab's frames show in the picture-in-picture window.
     On { tab: TabId },
@@ -35,6 +37,9 @@ impl Pip {
 pub enum PipInput {
     /// The overlay's button, or the action: pop `tab`'s video out (again: back in).
     Request(TabId),
+    /// Whether the model opened the window `OpenWindow` asked for (it refuses a Little or Popup
+    /// window's tab, a peek, a split pane).
+    WindowOpened(bool),
     /// The page's answer to going fullscreen (the error's text if it refused).
     Fullscreen(Result<(), String>),
     /// The page left fullscreen (Escape, its own button, a navigation).
@@ -77,15 +82,14 @@ pub fn transition(state: Pip, input: PipInput) -> (Pip, Vec<PipEffect>) {
                 auto: true,
                 playing: true,
             },
-        ) => (
-            Pip::Entering { tab },
-            vec![OpenWindow(tab), EnterFullscreen(tab)],
-        ),
+        ) => (Pip::Entering { tab }, vec![OpenWindow(tab)]),
+        (Pip::Entering { tab }, WindowOpened(true)) => (state, vec![EnterFullscreen(tab)]),
+        (Pip::Entering { .. }, WindowOpened(false)) => (Pip::Off, vec![]),
         // Asked again for the tab that is out, or back on it: back in.
-        (Pip::On { tab }, Request(t) | TabActivated(t)) if t == tab => {
-            (Pip::Off, vec![ExitFullscreen(tab), CloseWindow(tab)])
-        }
-        (Pip::Entering { tab }, TabActivated(t)) if t == tab => {
+        (Pip::On { tab }, Request(t) | TabActivated(t))
+        | (Pip::Entering { tab }, TabActivated(t))
+            if t == tab =>
+        {
             (Pip::Off, vec![ExitFullscreen(tab), CloseWindow(tab)])
         }
         // One window at a time; a second request waits for the first to end.
@@ -124,13 +128,9 @@ mod tests {
     #[test]
     fn a_request_opens_the_window_and_goes_fullscreen() {
         let (s, e) = transition(Pip::Off, Request(A));
-        assert_eq!(
-            (s, e),
-            (
-                Pip::Entering { tab: A },
-                vec![OpenWindow(A), EnterFullscreen(A)]
-            )
-        );
+        assert_eq!((s, e), (Pip::Entering { tab: A }, vec![OpenWindow(A)]));
+        let (s, e) = transition(s, WindowOpened(true));
+        assert_eq!((s, e), (Pip::Entering { tab: A }, vec![EnterFullscreen(A)]));
         let (s, e) = transition(s, Fullscreen(Ok(())));
         assert_eq!((s, e), (on(), vec![]));
         assert_eq!(s.tab(), Some(A));
@@ -149,6 +149,25 @@ mod tests {
         assert!(matches!(&e[..], [CloseWindow(A), Toast(_)]));
         // A late answer after it ended changes nothing.
         assert_eq!(transition(Pip::Off, Fullscreen(Ok(()))), (Pip::Off, vec![]));
+    }
+
+    #[test]
+    fn a_window_the_model_refuses_ends_it_before_the_page_is_asked() {
+        let (s, _) = transition(Pip::Off, Request(A));
+        let (s, e) = transition(s, WindowOpened(false));
+        assert_eq!(
+            (s, e),
+            (Pip::Off, vec![]),
+            "no fullscreen, nothing to close"
+        );
+        // The next request is taken.
+        assert_eq!(
+            transition(s, Request(B)),
+            (Pip::Entering { tab: B }, vec![OpenWindow(B)])
+        );
+        // Only while entering.
+        assert_eq!(transition(on(), WindowOpened(false)), (on(), vec![]));
+        assert_eq!(transition(Pip::Off, WindowOpened(true)), (Pip::Off, vec![]));
     }
 
     #[test]
@@ -192,10 +211,7 @@ mod tests {
         };
         assert_eq!(
             transition(Pip::Off, input),
-            (
-                Pip::Entering { tab: A },
-                vec![OpenWindow(A), EnterFullscreen(A)]
-            )
+            (Pip::Entering { tab: A }, vec![OpenWindow(A)])
         );
         // Coming back closes it.
         assert_eq!(

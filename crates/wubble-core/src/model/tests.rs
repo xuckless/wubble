@@ -3183,18 +3183,31 @@ fn the_pip_window_goes_with_its_tab_and_remembers_its_place() {
 }
 
 #[test]
-fn a_pip_pane_leaves_its_split_on_screen() {
+fn a_split_pane_never_goes_to_pip_and_the_pip_tab_never_splits() {
     let (m, t) = with_tabs(3);
     let main = m.focused();
     let (m, _) = run(m, Command::SplitWith(t[1]));
     assert_eq!(m.window_tabs(main).len(), 2);
-    let (m, _) = pip(m, t[1]);
-    assert_eq!(
-        m.window_tabs(main),
-        [t[2]],
-        "the other pane fills the window"
-    );
-    shown_once(&m);
+    // A pane, focused or not: its half of the split would be a hole.
+    for pane in [t[1], t[2]] {
+        assert!(!m.can_pip(pane));
+        let before = m.clone();
+        let (m2, fx) = run(m.clone(), Command::OpenPip { tab: pane });
+        assert!(fx.is_empty());
+        assert_eq!(m2, before);
+    }
+    assert!(m.can_pip(t[0]), "not in the split");
+    // The tab in picture-in-picture is not split with, nor split beside.
+    let (m, t) = with_tabs(3);
+    let (m, _) = pip(m, t[2]);
+    for (focus, with) in [(t[2], t[1]), (t[1], t[2])] {
+        let (m, _) = run(m.clone(), Command::ActivateTab(focus));
+        let before = m.clone();
+        let (m, fx) = run(m, Command::SplitWith(with));
+        assert!(fx.is_empty());
+        assert_eq!(m, before);
+        assert_eq!(m.split_of(t[2]), None);
+    }
 }
 
 #[test]
@@ -3213,6 +3226,13 @@ fn check_holds_one_pip_window_of_a_placed_tab() {
     );
     two.next_window = 10;
     assert!(two.check().is_err(), "two Pip windows");
+    let mut split = m.clone();
+    split.spaces[0].split = Some(SplitGroup {
+        tabs: vec![t[0], t[1]],
+        stops: even(2),
+    });
+    let err = split.check().expect_err("a split pane");
+    assert!(err.contains("Pip window"), "{err}");
     m.windows[0].shown = Shown::Pip(TabId(99));
     assert!(m.check().is_err(), "an unknown tab");
 }

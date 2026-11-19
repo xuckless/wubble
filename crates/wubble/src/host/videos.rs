@@ -735,7 +735,7 @@ impl Host {
                             .position(|&r| r == nearest)
                             .map_or(-1, |i| i as i32),
                         speeds: o.speeds_open(),
-                        can_pip: true,
+                        can_pip: self.model.can_pip(tab),
                         can_save: self.videos.save.is_some(),
                         marks: slint::ModelRc::new(slint::VecModel::from(marks)),
                     })
@@ -972,7 +972,10 @@ impl Host {
                         view.exit_fullscreen();
                     }
                 }
-                PipEffect::OpenWindow(tab) => self.dispatch(Command::OpenPip { tab }),
+                PipEffect::OpenWindow(tab) => {
+                    self.dispatch(Command::OpenPip { tab });
+                    self.pip_event(PipInput::WindowOpened(self.model.pip_tab() == Some(tab)));
+                }
                 // the model has pruned it already when the tab went
                 PipEffect::CloseWindow(tab) if self.model.pip_tab() == Some(tab) => {
                     self.dispatch(Command::ClosePip);
