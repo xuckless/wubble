@@ -230,8 +230,15 @@ pub fn step(seen: &Seen) -> Vec<Action> {
 /// `renderers` are the pids the tabs' frames report: on Linux a renderer's command line is the
 /// zygote's it was forked from, so only this tells it apart, and a sandboxed renderer reports
 /// its id in the sandbox's PID namespace.
-/// `window` is the window's physical size and scale.
-pub fn sample(state: &str, ready_ms: u128, seen: &Seen, renderers: &BTreeSet<u32>, window: &str) {
+/// `window` is the window's physical size and scale, `wgpu` the GPU allocator's bytes.
+pub fn sample(
+    state: &str,
+    ready_ms: u128,
+    seen: &Seen,
+    renderers: &BTreeSet<u32>,
+    window: &str,
+    wgpu: Option<(u64, u64)>,
+) {
     RUN.with_borrow_mut(|r| {
         let Some(r) = r.as_mut() else {
             return;
@@ -269,6 +276,14 @@ pub fn sample(state: &str, ready_ms: u128, seen: &Seen, renderers: &BTreeSet<u32
             for (name, bytes) in memreport::smaps_by_mapping(&smaps, TOP_MAPPINGS) {
                 let _ = writeln!(r.report, "  {} MiB {name}", memreport::mib(bytes));
             }
+        }
+        if let Some((allocated, reserved)) = wgpu {
+            let _ = writeln!(
+                r.report,
+                "wgpu allocator: allocated {} MiB, reserved {} MiB",
+                memreport::mib(allocated),
+                memreport::mib(reserved)
+            );
         }
         if let Some(line) = crate::alloc_count::line() {
             let _ = writeln!(r.report, "{line}");

@@ -50,7 +50,9 @@ impl Host {
                     });
                     let window = window.unwrap_or_default();
                     let ready_ms = crate::measure::TICK.as_millis() * u128::from(ready_after);
-                    memory::sample(state, ready_ms, &seen, &self.tasks.renderer_pids(), &window);
+                    let wgpu = self.factory.gpu.allocator_bytes();
+                    let renderers = self.tasks.renderer_pids();
+                    memory::sample(state, ready_ms, &seen, &renderers, &window, wgpu);
                 }
                 // The policy's own transitions at its own delays; the pressure stays out of it.
                 Action::Tick(sleep) => {
