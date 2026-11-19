@@ -1074,6 +1074,23 @@ impl CefSurfaceProducer for MacosCefProducer {
         self.events.poll()
     }
 
+    // wubble change 43: a script in one frame (a context menu's), the main
+    // frame when that one is gone.
+    fn execute_script_in_frame(
+        &mut self,
+        frame_id: &str,
+        script: &str,
+        source_url: &str,
+    ) -> Result<(), WeldError> {
+        #[cfg(feature = "cef-runtime")]
+        return crate::handlers::run_in_frame(&self.browser, frame_id, script, source_url);
+        #[cfg(not(feature = "cef-runtime"))]
+        {
+            let _ = frame_id;
+            self.execute_script(script, source_url)
+        }
+    }
+
     fn execute_script(&mut self, script: &str, source_url: &str) -> Result<(), WeldError> {
         #[cfg(feature = "cef-runtime")]
         if let Some(frame) = self.browser.main_frame() {

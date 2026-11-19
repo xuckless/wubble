@@ -186,6 +186,11 @@ export struct PermissionView {
     open: bool,
     title: string,
     lines: [string],
+    // The remember toggle's words and the two buttons' (an external link's prompt says
+    // "Always for <site> and <scheme> links", Cancel and Open).
+    remember: string,
+    allow: string,
+    block: string,
     serial: int,
 }
 
@@ -388,6 +393,19 @@ export struct PreviewView {
     address: string,
     thumb: image,
     y: length,
+}
+
+// The window's one tooltip (tooltip.slint): a page's `title` or a shell button's name and
+// shortcut, hung from (anchor-x, anchor-y) in window px; `centered`: anchor-x is its centre.
+// `jump`: the first one appears in place, later ones glide.
+export struct TipView {
+    shown: bool,
+    text: string,
+    shortcut: string,
+    anchor-x: length,
+    anchor-y: length,
+    centered: bool,
+    jump: bool,
 }
 
 // One row of the Task manager (wubble_core::tasks::TaskRow): a tab (`tab` >= 0) or another

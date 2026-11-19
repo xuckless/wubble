@@ -22,6 +22,9 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
+mod external;
+mod gpu;
+mod hover;
 mod media;
 mod pages;
 mod panes;
@@ -29,10 +32,12 @@ mod parity;
 mod preview;
 mod settings;
 mod snapshots;
+mod status;
 mod surfaces;
 mod swipe;
 mod tab_drag;
 mod tasks;
+mod tooltip;
 mod videos;
 mod window;
 pub use media::MediaObserver;
@@ -432,6 +437,16 @@ pub struct Host {
     tidy_undo: Option<(SpaceId, Vec<Item>)>,
     /// The tab hover preview and the thumbnails it shows.
     preview: preview::Preview,
+    /// The link status bubble (`host/status.rs`).
+    status: status::Status,
+    /// The window's tooltip (`host/tooltip.rs`).
+    tips: tooltip::Tips,
+    /// How links to other apps are opened (`host/external.rs`).
+    pub(crate) external_opener: external::Opener,
+    /// External-link prompts asked so far (their ids).
+    external_asks: u32,
+    /// The GPU process's id, watched on the lifecycle tick (`host/gpu.rs`).
+    gpu: gpu::GpuWatch,
     /// Probed busy reasons per frame (`host/busy.rs`).
     busy: busy::BusyFrames,
     /// The memory pressure source and its gauge, read on the lifecycle tick.
@@ -501,6 +516,13 @@ impl Host {
                 videos::Videos::for_smoke(endpoint, crate::video_smoke::SMOKE_VIDEO.into())
             }
             None => videos::Videos::default(),
+        };
+        // `--smoke parity` records the links it would hand to the OS (and saves without the save
+        // dialog, below).
+        let external_opener: external::Opener = if checks.parity.is_some() {
+            parity::record_opened
+        } else {
+            external::open_with_os
         };
         let mut host = Self {
             engine,
@@ -593,6 +615,11 @@ impl Host {
             routing_rules: vec![],
             tidy_undo: None,
             preview: preview::Preview::new(),
+            status: status::Status::new(),
+            tips: tooltip::Tips::new(),
+            external_opener,
+            external_asks: 0,
+            gpu: gpu::GpuWatch::default(),
             busy: busy::BusyFrames::default(),
             pressure: busy::PressureGauge::system(),
             snapshots: snapshots::Snapshots::default(),
@@ -604,6 +631,8 @@ impl Host {
             video_passed: None,
         };
         host.replay_settings();
+        // `--smoke parity` drives Save As without an OS dialog.
+        host.downloads.never_ask = host.checks.parity.is_some();
         if host.checks.check_pixels {
             // The glass check is a correctness check of the scene's full rendering: the governor
             // would otherwise pick the level from how fast this machine runs (and at `Flat` the
@@ -1936,6 +1965,7 @@ impl Host {
         }
         self.save_download_progress();
         self.passwords_tick(now);
+        self.gpu_check();
     }
 
     // ----- smokes
@@ -2839,6 +2869,9 @@ impl Host {
         if let Some(view) = self.pane_view(pane) {
             view.mouse_move(point, &modifiers, now);
         }
+        if let Some(tab) = crate::shell::tab_id(pane) {
+            self.tip_pointer(tab, point.x, point.y);
+        }
         self.media_pointer(pane, Some(point));
     }
 
@@ -2868,6 +2901,9 @@ impl Host {
         }
         if pressed && let Some(window) = self.w.window.upgrade() {
             self.autoscroll_input(&window, wubble_core::autoscroll::Input::Pressed);
+        }
+        if pressed {
+            self.tip_dismiss();
         }
         if pressed && let Some(tab) = crate::shell::tab_id(pane) {
             // keys follow the pane that was pressed: the DevTools panel or a page

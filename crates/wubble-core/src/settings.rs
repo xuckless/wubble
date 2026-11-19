@@ -379,6 +379,15 @@ pub const MEDIA_SAVE_DIR: SettingDef = SettingDef {
     section: Section::General,
     restart: false,
 };
+/// Every download asks where to save it (the Save ... As rows always ask).
+pub const DOWNLOADS_ASK_WHERE: SettingDef = SettingDef {
+    key: "downloads.ask_where",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Always ask where to save",
+    section: Section::General,
+    restart: false,
+};
 /// The glyph opens the menu of qualities; off, it saves the default quality at once.
 pub const MEDIA_ASK_EACH_TIME: SettingDef = SettingDef {
     key: "media.ask_each_time",
@@ -723,6 +732,7 @@ pub const ALL: &[&SettingDef] = &[
     &MEDIA_ASK_EACH_TIME,
     &MEDIA_CONCURRENCY,
     &MEDIA_MIN_BYTES,
+    &DOWNLOADS_ASK_WHERE,
     &PAGE_THEME,
     &PAGE_THEME_SITES,
     &READER_DETECT,

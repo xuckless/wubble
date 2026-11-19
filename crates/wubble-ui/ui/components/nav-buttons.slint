@@ -8,10 +8,20 @@ import { Palette, Motion } from "../tokens.slint";
 import { Shell } from "../app-tokens.slint";
 import { PressableButton } from "../components.slint";
 import { Icon, IconPaths } from "icon.slint";
+import { Tips } from "tooltip.slint";
 
 // .wb-ib: an icon-only PressableButton
 export component IconButton inherits PressableButton {
     in property <string> icon-path;
+    // wubble: the `Action` id the button runs, for its tooltip (name and shortcut, from the
+    // host); empty: no tooltip.
+    in property <string> tip-action;
+    changed hovered => {
+        if root.tip-action != "" {
+            Tips.hover(root.tip-action, self.absolute-position.x + self.width / 2,
+                self.absolute-position.y + self.height, self.hovered && root.enabled);
+        }
+    }
     width: Shell.icon-button;
     height: Shell.icon-button;
     padding-x: 0px;
@@ -51,6 +61,7 @@ export component NavButtons inherits HorizontalLayout {
     ];
     for b in root.buttons: IconButton {
         icon-path: b.icon;
+        tip-action: b.id;
         enabled: b.enabled;
         clicked => {
             root.action(b.id);

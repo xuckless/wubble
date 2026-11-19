@@ -121,6 +121,7 @@ impl Host {
             Applied::PageThemes { default, sites } => self.set_page_themes(default, sites),
             Applied::Reader(prefs) => self.set_reader_prefs(prefs),
             Applied::ScreenshotOutput(output) => self.set_shot_output(output),
+            Applied::AskWhereToSave(on) => self.downloads.ask_where = on,
             Applied::HintsAlphabet(letters) => self.set_hint_alphabet(letters),
             Applied::Video {
                 controls,

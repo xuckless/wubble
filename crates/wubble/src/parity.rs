@@ -131,6 +131,8 @@ pub enum HostOp {
     /// Back to the parity page's tab, closing every other tab.
     OnlyFirstTab,
     ZoomReset,
+    /// Answers the visible page's permission prompt: allow (true) or block, not remembered.
+    AnswerPrompt(bool),
     /// Undoes what input left: the page's menu, the command and find bars dismissed, a
     /// held button released, then a left click at [`at::NEUTRAL_A`] and one at
     /// [`at::NEUTRAL`]. The first ends a middle-click autoscroll (Chromium takes that
@@ -193,8 +195,12 @@ pub enum HostCheck {
     Visible(usize),
     /// Downloads and prints this item started, at least.
     Downloads(usize),
+    /// The window's tooltip shows a page's `title` with this text.
     Tooltip(&'static str),
+    /// The link status bubble shows this URL.
     Status(&'static str),
+    /// The visible page's permission prompt is open (true) or not.
+    Prompt(bool),
     /// The web content's cursor, by `wubble_engine::nav::Cursor` index.
     Cursor(i32),
     /// The last link handed to the OS starts with this.
@@ -262,7 +268,8 @@ macro_rules! item {
     ($($t:tt)*) => { item!(@gap false, $($t)*) };
 }
 
-/// An item for a known gap: see [`Item::gap`].
+/// An item for a known gap: see [`Item::gap`]. None is known today.
+#[allow(unused_macros)]
 macro_rules! gap {
     ($($t:tt)*) => { item!(@gap true, $($t)*) };
 }
@@ -556,7 +563,7 @@ pub const ITEMS: &[Item] = &[
         ],
         [H(C::Clipboard("https://example.invalid/linked"))]
     ),
-    gap!(
+    item!(
         "B.copy-image",
         [
             Host(HostOp::SetClipboard("stale")),
@@ -608,7 +615,7 @@ pub const ITEMS: &[Item] = &[
         ],
         []
     ),
-    gap!(
+    item!(
         "C.menu-image",
         [
             Click(Right, NONE, at::IMG),
@@ -838,12 +845,12 @@ pub const ITEMS: &[Item] = &[
         [MoveTo(at::BLANK), MoveTo(at::LINK)],
         [H(C::Cursor(2))]
     ),
-    gap!(
+    item!(
         "E.link-status",
         [MoveTo(at::BLANK), MoveTo(at::LINK)],
         [H(C::Status("https://example.invalid/linked"))]
     ),
-    gap!(
+    item!(
         "E.title-tooltip",
         [MoveTo(at::BLANK), MoveTo(at::TIP), Settle(30)],
         [H(C::Tooltip("tip text"))]
@@ -853,6 +860,22 @@ pub const ITEMS: &[Item] = &[
         "F.a-download",
         [Click(Left, NONE, at::DOWNLOAD), Settle(20)],
         [H(C::Downloads(1))]
+    ),
+    // Before the items that open tabs: after F.window-open the next click has landed 11 px
+    // above its point (seen 2026-11-18, cause not found).
+    item!(
+        "F.mailto-to-os",
+        [
+            Click(Left, NONE, at::MAIL),
+            // the click landed on the link (the page records every press)
+            Until(J(
+                "(seen.down || '').startsWith('mail') || ('down ' + seen.down)"
+            )),
+            Until(H(C::Prompt(true))),
+            Host(HostOp::AnswerPrompt(true)),
+            Settle(5)
+        ],
+        [H(C::External("mailto:nobody@example.invalid"))]
     ),
     item!(
         "F.target-blank",
@@ -867,15 +890,6 @@ pub const ITEMS: &[Item] = &[
             Settle(20)
         ],
         [H(C::Tabs(2))]
-    ),
-    gap!(
-        "F.mailto-to-os",
-        [
-            Host(HostOp::OnlyFirstTab),
-            Click(Left, NONE, at::MAIL),
-            Settle(20)
-        ],
-        [H(C::External("mailto:nobody@example.invalid"))]
     ),
 ];
 
@@ -1806,16 +1820,7 @@ mod tests {
     #[test]
     fn the_known_gaps_are_the_listed_ones() {
         let gaps: Vec<_> = ITEMS.iter().filter(|i| i.gap).map(|i| i.name).collect();
-        assert_eq!(
-            gaps,
-            [
-                "B.copy-image",
-                "C.menu-image",
-                "E.link-status",
-                "E.title-tooltip",
-                "F.mailto-to-os"
-            ]
-        );
+        assert!(gaps.is_empty(), "{gaps:?}");
     }
 
     #[test]

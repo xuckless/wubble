@@ -736,7 +736,13 @@ pub fn sites_view(
         permissions: permissions
             .iter()
             .map(|(o, k, d)| Entry {
-                label: format!("{o}: {} ({d:?})", k.ask_text()),
+                label: match crate::external::parse_key(o) {
+                    // links to other apps are kept per site and scheme
+                    Some((scheme, site)) if k == crate::site::Permission::ExternalLinks => {
+                        format!("{site}: Open {scheme} links in another app ({d:?})")
+                    }
+                    _ => format!("{o}: {} ({d:?})", k.ask_text()),
+                },
                 key: permission_key(o, k),
             })
             .collect(),
@@ -1290,6 +1296,22 @@ mod tests {
                 ("https://a.test", Permission::Microphone),
                 ("https://b.test", Permission::Camera)
             ]
+        );
+        // A link to another app is named by its site and scheme.
+        perms.set(
+            "mailto:https://a.test",
+            Permission::ExternalLinks,
+            Decision::Allow,
+        );
+        let v = sites_view(&Default::default(), &perms);
+        let row = v.permissions.last().unwrap();
+        assert_eq!(
+            row.label,
+            "https://a.test: Open mailto links in another app (Allow)"
+        );
+        assert_eq!(
+            parse_permission_key(&row.key),
+            Some(("mailto:https://a.test", Permission::ExternalLinks))
         );
     }
 }

@@ -180,6 +180,9 @@ pub struct ContextMenu {
     pub has_image: bool,
     pub page_url: String,
     pub frame_url: String,
+    /// CEF's id of the frame clicked in, for `View::run_script_in`; empty
+    /// when CEF named none.
+    pub frame: String,
     pub selection_text: String,
     pub editable: bool,
     pub edit: EditFlags,
@@ -456,6 +459,9 @@ pub enum PageEvent {
         id: RequestId,
         download: DownloadId,
         url: String,
+        /// The URL the download was started for (before redirects): what
+        /// `View::start_download` was given.
+        original_url: String,
         suggested_name: String,
         total: Option<u64>,
     },
@@ -567,6 +573,23 @@ pub enum PageEvent {
         id: crate::cdp::EvalId,
         result: Result<String, String>,
     },
+    /// The hovered link's URL for the status bubble; empty hides it.
+    LinkStatus(String),
+    /// A `title` tooltip to show near the pointer; empty hides it.
+    Tooltip(String),
+    /// The page went to a scheme Chromium cannot handle (`mailto:`, `tel:`,
+    /// an app's scheme). Nothing was opened: the host asks and hands it to
+    /// the OS. `gesture` is whether a user gesture started it, when CEF said.
+    ExternalProtocol {
+        url: String,
+        gesture: Option<bool>,
+    },
+    /// `View::download_image` finished: the image's pixels as RGBA, or why
+    /// there are none.
+    ImageDownloaded {
+        url: String,
+        image: Result<crate::favicon::Rgba, String>,
+    },
 }
 
 impl PageEvent {
@@ -596,6 +619,8 @@ impl PageEvent {
                 | Self::FindResult { done: false, .. }
                 | Self::ImeBounds { .. }
                 | Self::PopupMoved(_)
+                | Self::LinkStatus(_)
+                | Self::Tooltip(_)
         )
     }
 
@@ -609,7 +634,9 @@ impl PageEvent {
             ) => a == b,
             (Self::FindResult { .. }, Self::FindResult { .. })
             | (Self::ImeBounds { .. }, Self::ImeBounds { .. })
-            | (Self::PopupMoved(_), Self::PopupMoved(_)) => true,
+            | (Self::PopupMoved(_), Self::PopupMoved(_))
+            | (Self::LinkStatus(_), Self::LinkStatus(_))
+            | (Self::Tooltip(_), Self::Tooltip(_)) => true,
             _ => false,
         }
     }
@@ -745,6 +772,22 @@ mod tests {
     }
 
     #[test]
+    fn status_and_tooltip_texts_coalesce() {
+        let mut q = PageQueue::default();
+        q.push(1, PageEvent::LinkStatus("a".into()));
+        q.push(1, PageEvent::LinkStatus(String::new()));
+        q.push(1, PageEvent::Tooltip("t".into()));
+        q.push(1, PageEvent::Tooltip("u".into()));
+        assert_eq!(
+            q.take(),
+            vec![
+                (1, PageEvent::LinkStatus(String::new())),
+                (1, PageEvent::Tooltip("u".into()))
+            ]
+        );
+    }
+
+    #[test]
     fn find_results_coalesce() {
         let mut q = PageQueue::default();
         for n in 0..5 {
@@ -848,6 +891,7 @@ mod tests {
                 id: RequestId(3),
                 download: DownloadId(9),
                 url: String::new(),
+                original_url: String::new(),
                 suggested_name: String::new(),
                 total: None
             }

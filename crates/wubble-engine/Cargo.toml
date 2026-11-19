@@ -20,6 +20,8 @@ serde_json.workspace = true
 winit = "0.30"
 
 [dev-dependencies]
+# The GPU process's id, for the gpu_crash_smoke example.
+wubble-sysmem.workspace = true
 # Seals the test segment the writer decrypts (wubble-core's own AES-128 crates).
 aes = "0.9.4"
 cbc = { version = "0.2.1", features = ["alloc"] }

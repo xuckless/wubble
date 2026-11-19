@@ -128,6 +128,21 @@ mod tests {
     }
 
     #[test]
+    fn an_external_link_choice_round_trips_under_its_site_and_scheme() {
+        pollster::block_on(async {
+            let mut s = Store::open_in_memory().await.unwrap();
+            let key = wubble_core::external::key("mailto", "https://a.test");
+            s.set_site_permission(&key, ExternalLinks, Decision::Allow, 1)
+                .await
+                .unwrap();
+            assert_eq!(
+                s.site_permissions().await.unwrap(),
+                vec![(key, ExternalLinks, Decision::Allow)]
+            );
+        });
+    }
+
+    #[test]
     fn never_save_passwords_round_trips() {
         pollster::block_on(async {
             let mut s = Store::open_in_memory().await.unwrap();

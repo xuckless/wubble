@@ -11,6 +11,7 @@
 
 use std::collections::VecDeque;
 
+use wubble_core::external;
 use wubble_core::site::{self, Decision, Permission, SitePermissions, Verdict};
 use wubble_engine::page::{PermissionKind, RequestId};
 
@@ -48,17 +49,27 @@ pub struct PermissionRequest {
     pub origin: String,
     /// The engine's kinds, answered back unchanged.
     pub kinds: Vec<PermissionKind>,
+    /// A link to open in another app (`wubble_core::external`) instead of engine kinds: the
+    /// host's own question, never answered to the engine; `origin` is the page's URL.
+    pub external: Option<String>,
 }
 
 impl PermissionRequest {
-    /// The key decisions are remembered under; `None` for opaque origins.
+    /// The key decisions are remembered under; `None` for opaque origins. An external link's
+    /// is per site and scheme.
     pub fn site(&self) -> Option<String> {
-        site::origin_of(&self.origin)
+        match &self.external {
+            Some(url) => external::key_for(url, &self.origin),
+            None => site::origin_of(&self.origin),
+        }
     }
 
     /// The kinds as the prompt knows them; `None` if any is never prompted
     /// for.
     pub fn asked(&self) -> Option<Vec<Permission>> {
+        if self.external.is_some() {
+            return Some(vec![Permission::ExternalLinks]);
+        }
         let mut asked: Vec<Permission> = self
             .kinds
             .iter()
@@ -112,6 +123,9 @@ pub struct PermissionAnswer {
     pub granted: Vec<PermissionKind>,
     /// A decision to remember: (site, kinds, decision).
     pub remember: Option<(String, Vec<Permission>, Decision)>,
+    /// An external link's answer, for the host (the engine is not answered): the URL and
+    /// whether to open it.
+    pub external: Option<(String, bool)>,
 }
 
 impl PermissionAnswer {
@@ -120,6 +134,7 @@ impl PermissionAnswer {
             id: request.id,
             granted: if grant { request.kinds.clone() } else { vec![] },
             remember: None,
+            external: request.external.clone().map(|url| (url, grant)),
         }
     }
 }
@@ -192,21 +207,59 @@ fn next_prompt(
     (PermissionPrompt::None, answers)
 }
 
-/// What the prompt says: the site, and one line per kind.
-pub fn permission_text(r: &PermissionRequest) -> (String, Vec<&'static str>) {
+/// What the prompt says and its controls are called.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptText {
+    pub title: String,
+    pub lines: Vec<String>,
+    /// The "remember" toggle.
+    pub remember: String,
+    pub allow: &'static str,
+    pub block: &'static str,
+}
+
+/// The longest link an external-link prompt shows whole.
+const LINK_CHARS: usize = 80;
+
+/// What the prompt says: the site, and one line per kind; for a link to another app,
+/// Chromium's "Open <app>?" with the scheme for the app (wubble does not look the app up), the
+/// link, and "Always for <site> and <scheme> links".
+pub fn permission_text(r: &PermissionRequest) -> PromptText {
     let site = wubble_core::url::address_parts(&r.origin).0;
-    let site = if site.is_empty() || site.ends_with(':') {
-        "This page".to_string()
-    } else {
-        site.to_string()
-    };
+    let named = !(site.is_empty() || site.ends_with(':'));
+    if let Some(url) = &r.external {
+        let scheme = external::scheme(url).unwrap_or_default();
+        return PromptText {
+            title: format!("Open {scheme} link?"),
+            lines: vec![
+                format!(
+                    "{} wants to open this link in another app:",
+                    if named { site } else { "This page" }
+                ),
+                wubble_core::url::elide_middle(url, LINK_CHARS).into_owned(),
+            ],
+            remember: if named {
+                format!("Always for {site} and {scheme} links")
+            } else {
+                format!("Always for {scheme} links on this page")
+            },
+            allow: "Open",
+            block: "Cancel",
+        };
+    }
     let lines = r
         .asked()
         .unwrap_or_default()
         .into_iter()
-        .map(Permission::ask_text)
+        .map(|p| p.ask_text().to_string())
         .collect();
-    (format!("{site} wants to"), lines)
+    PromptText {
+        title: format!("{} wants to", if named { site } else { "This page" }),
+        lines,
+        remember: "Remember for this site".into(),
+        allow: "Allow",
+        block: "Block",
+    }
 }
 
 // ------------------------------------------------------------------- auth
@@ -292,6 +345,7 @@ mod tests {
             id: RequestId(id),
             origin: "https://a.test/".into(),
             kinds: kinds.to_vec(),
+            external: None,
         }
     }
 
@@ -304,6 +358,7 @@ mod tests {
             id: RequestId(id),
             granted: kinds.to_vec(),
             remember: None,
+            external: None,
         }
     }
 
@@ -323,10 +378,16 @@ mod tests {
             StorageAccess,
         ];
         let mapped: Vec<Permission> = prompted.iter().filter_map(|&k| permission_of(k)).collect();
-        // Every kind but the save-password and popup decisions, which no prompt asks for.
+        // Every kind but the save-password and popup decisions, which no prompt asks for, and
+        // external links, which the host asks about itself.
         let asked = Permission::ALL
             .iter()
-            .filter(|&&p| !matches!(p, Permission::SavePasswords | Permission::Popups))
+            .filter(|&&p| {
+                !matches!(
+                    p,
+                    Permission::SavePasswords | Permission::Popups | Permission::ExternalLinks
+                )
+            })
             .count();
         assert_eq!(mapped.len(), asked);
         for never in [
@@ -535,9 +596,76 @@ mod tests {
 
     #[test]
     fn prompt_text() {
-        let (title, lines) = permission_text(&request(1, &[MicStream, CameraStream]));
-        assert_eq!(title, "a.test wants to");
-        assert_eq!(lines, ["Use your camera", "Use your microphone"]);
+        let t = permission_text(&request(1, &[MicStream, CameraStream]));
+        assert_eq!(t.title, "a.test wants to");
+        assert_eq!(t.lines, ["Use your camera", "Use your microphone"]);
+        assert_eq!((t.allow, t.block), ("Allow", "Block"));
+    }
+
+    fn mailto(id: u32) -> PermissionRequest {
+        PermissionRequest {
+            external: Some("mailto:x@y.test".into()),
+            ..request(id, &[])
+        }
+    }
+
+    #[test]
+    fn an_external_link_is_asked_about_and_remembered_per_site_and_scheme() {
+        let t = permission_text(&mailto(1));
+        assert_eq!(t.title, "Open mailto link?");
+        assert_eq!(
+            t.lines,
+            [
+                "a.test wants to open this link in another app:",
+                "mailto:x@y.test"
+            ]
+        );
+        assert_eq!(t.remember, "Always for a.test and mailto links");
+        assert_eq!((t.allow, t.block), ("Open", "Cancel"));
+
+        let table = SitePermissions::default();
+        let (s, a) = permission(
+            PermissionPrompt::None,
+            PermissionEvent::Requested(mailto(1)),
+            &table,
+        );
+        assert!(a.is_empty() && matches!(s, PermissionPrompt::Open { .. }));
+        let (s, a) = permission(
+            s,
+            PermissionEvent::Answer {
+                allow: true,
+                remember: true,
+            },
+            &table,
+        );
+        assert_eq!(s, PermissionPrompt::None);
+        assert_eq!(
+            a,
+            vec![PermissionAnswer {
+                id: RequestId(1),
+                granted: vec![],
+                remember: Some((
+                    "mailto:https://a.test".into(),
+                    vec![Permission::ExternalLinks],
+                    Decision::Allow
+                )),
+                external: Some(("mailto:x@y.test".into(), true)),
+            }]
+        );
+        // Remembered: the next one opens without a prompt.
+        let mut table = table;
+        table.set(
+            "mailto:https://a.test",
+            Permission::ExternalLinks,
+            Decision::Allow,
+        );
+        let (s, a) = permission(
+            PermissionPrompt::None,
+            PermissionEvent::Requested(mailto(2)),
+            &table,
+        );
+        assert_eq!(s, PermissionPrompt::None);
+        assert_eq!(a[0].external, Some(("mailto:x@y.test".into(), true)));
     }
 
     fn challenge(id: u32) -> AuthEvent {

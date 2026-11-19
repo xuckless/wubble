@@ -1,5 +1,6 @@
 //! A screenshot's bytes to their places, off the Slint thread: the PNG Chromium returned
-//! (base64) to a file in the downloads folder and/or, decoded to RGBA, onto the clipboard.
+//! (base64) to a file in the downloads folder and/or, decoded to RGBA, onto the clipboard; and
+//! Copy Image's pixels onto the clipboard.
 //!
 //! One worker thread owns the clipboard for the app's life: on X11 and Wayland the copying
 //! program serves the image until something else is copied, so its owner must outlive the copy.
@@ -10,11 +11,22 @@ use std::sync::mpsc;
 
 use base64::Engine as _;
 
-/// What to do with one screenshot.
+/// The image of one job.
+pub enum Picture {
+    /// A PNG, base64 (`Page.captureScreenshot`'s `data`).
+    PngBase64(String),
+    /// Straight RGBA rows (Copy Image's `View::download_image`).
+    Rgba {
+        width: u32,
+        height: u32,
+        bytes: Vec<u8>,
+    },
+}
+
+/// What to do with one screenshot or copied image.
 pub struct Job {
-    /// The PNG, base64 (`Page.captureScreenshot`'s `data`).
-    pub png_base64: String,
-    /// Write it here.
+    pub picture: Picture,
+    /// Write it here (a PNG only).
     pub path: Option<PathBuf>,
     /// Put it on the clipboard.
     pub clipboard: bool,
@@ -62,20 +74,36 @@ impl Saver {
 }
 
 fn run(job: Job, clipboard: &mut Option<arboard::Clipboard>) -> Saved {
-    let Ok(png) = base64::engine::general_purpose::STANDARD.decode(job.png_base64.trim()) else {
-        eprintln!("wubble: screenshot: the image is not base64");
-        return Saved::default();
-    };
-    let file = job.path.map(|path| match std::fs::write(&path, &png) {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("wubble: screenshot {}: {e}", path.display());
-            false
+    let (png, size) = match job.picture {
+        Picture::PngBase64(text) => {
+            let Ok(png) = base64::engine::general_purpose::STANDARD.decode(text.trim()) else {
+                eprintln!("wubble: screenshot: the image is not base64");
+                return Saved::default();
+            };
+            let size = png_size(&png);
+            (Ok(png), size)
         }
+        Picture::Rgba {
+            width,
+            height,
+            bytes,
+        } => (Err((width, height, bytes)), Some((width, height))),
+    };
+    let file = job.path.map(|path| {
+        let written = match &png {
+            Ok(png) => std::fs::write(&path, png).map_err(|e| e.to_string()),
+            Err(_) => Err("raw pixels are not written to files".into()),
+        };
+        written
+            .map_err(|e| eprintln!("wubble: screenshot {}: {e}", path.display()))
+            .is_ok()
     });
-    let size = png_size(&png);
     let copied = job.clipboard.then(|| {
-        let (width, height, bytes) = match rgba(&png) {
+        let decoded = match png {
+            Ok(png) => rgba(&png),
+            Err(raw) => Ok(raw),
+        };
+        let (width, height, bytes) = match decoded {
             Ok(image) => image,
             Err(e) => {
                 eprintln!("wubble: screenshot: {e}");
@@ -96,7 +124,7 @@ fn run(job: Job, clipboard: &mut Option<arboard::Clipboard>) -> Saved {
             }),
         };
         result
-            .map_err(|e| eprintln!("wubble: screenshot to the clipboard: {e}"))
+            .map_err(|e| eprintln!("wubble: image to the clipboard: {e}"))
             .is_ok()
     });
     Saved {
@@ -179,7 +207,7 @@ mod tests {
         let path = dir.path().join("shot.png");
         let png = tiny_png();
         let job = Job {
-            png_base64: base64::engine::general_purpose::STANDARD.encode(&png),
+            picture: Picture::PngBase64(base64::engine::general_purpose::STANDARD.encode(&png)),
             path: Some(path.clone()),
             clipboard: false,
         };
@@ -194,10 +222,28 @@ mod tests {
         );
         assert_eq!(std::fs::read(path).unwrap(), png);
         let bad = Job {
-            png_base64: "***".into(),
+            picture: Picture::PngBase64("***".into()),
             path: None,
             clipboard: false,
         };
         assert_eq!(run(bad, &mut None), Saved::default());
+    }
+
+    #[test]
+    fn raw_pixels_are_never_written_as_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copy.png");
+        let job = Job {
+            picture: Picture::Rgba {
+                width: 1,
+                height: 1,
+                bytes: vec![0, 0, 0, 255],
+            },
+            path: Some(path.clone()),
+            clipboard: false,
+        };
+        let saved = run(job, &mut None);
+        assert_eq!((saved.file, saved.size), (Some(false), Some((1, 1))));
+        assert!(!path.exists());
     }
 }

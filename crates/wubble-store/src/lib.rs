@@ -38,16 +38,17 @@ pub use migrate::MIGRATIONS;
 pub use settings::{
     ArchiveAfterSetting, BlockerCookieBanners, BlockerCustomLists, BlockerEnabled,
     BlockerExceptions, BlockerLists, BlockerListsAutoUpdate, BlockerStripParams, BoostsEnabled,
-    DevtoolsRemotePort, GlassQuality, GlassScene, HintsAlphabet, HistoryRetentionDays,
-    KeybindingOverrides, LiveSuggestions, MediaAskEachTime, MediaConcurrency, MediaEnabled,
-    MediaKeys, MediaMinBytes, MediaQuality, MediaSaveDir, MediaYoutube, MemoryBackForwardCache,
-    MemoryMaxDecodedImageMb, MiddleClickAutoscroll, OverlayScrollbars, PageThemeDefault,
-    PageThemeSites, PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch, ProcessRendererLimit,
-    ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect, ReaderFontSetting, ReaderSize,
-    ReaderThemeSetting, ReaderWidthSetting, RoutingRules, ScreenshotOutput, SearchEngineChoice,
-    Setting, SidebarModeSetting, SidebarWidth, SiteZoom, SleepDiscardAfter, SleepFreezeAfter,
-    SleepKeepPinned, SleepNeverSites, SponsorActions, SponsorAsked, SponsorEnabled, VideoCollapsed,
-    VideoControls, VideoHiddenSites, VideoRates, ZoomDefault, text_of,
+    DevtoolsRemotePort, DownloadsAskWhere, GlassQuality, GlassScene, HintsAlphabet,
+    HistoryRetentionDays, KeybindingOverrides, LiveSuggestions, MediaAskEachTime, MediaConcurrency,
+    MediaEnabled, MediaKeys, MediaMinBytes, MediaQuality, MediaSaveDir, MediaYoutube,
+    MemoryBackForwardCache, MemoryMaxDecodedImageMb, MiddleClickAutoscroll, OverlayScrollbars,
+    PageThemeDefault, PageThemeSites, PasswordsAutofill, PasswordsOfferToSave, PipOnTabSwitch,
+    ProcessRendererLimit, ProcessSiteIsolation, ProcessSpareRenderer, ReaderDetect,
+    ReaderFontSetting, ReaderSize, ReaderThemeSetting, ReaderWidthSetting, RoutingRules,
+    ScreenshotOutput, SearchEngineChoice, Setting, SidebarModeSetting, SidebarWidth, SiteZoom,
+    SleepDiscardAfter, SleepFreezeAfter, SleepKeepPinned, SleepNeverSites, SponsorActions,
+    SponsorAsked, SponsorEnabled, VideoCollapsed, VideoControls, VideoHiddenSites, VideoRates,
+    ZoomDefault, text_of,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -40,6 +40,8 @@ pub enum DownloadInput {
     Offered {
         request: RequestId,
         url: String,
+        /// The URL the download was started for, before redirects.
+        original_url: String,
         suggested_name: String,
         total: Option<u64>,
     },
@@ -94,6 +96,7 @@ pub fn transition(
             In::Offered {
                 request,
                 url,
+                original_url,
                 suggested_name,
                 total,
             },
@@ -103,6 +106,7 @@ pub fn transition(
                 id: request,
                 download: id,
                 url,
+                original_url,
                 suggested_name,
                 total,
             })],
@@ -215,6 +219,7 @@ mod tests {
         In::Offered {
             request: REQ,
             url: "https://x/f.zip".into(),
+            original_url: "https://x/f.zip".into(),
             suggested_name: "f.zip".into(),
             total: Some(100),
         }

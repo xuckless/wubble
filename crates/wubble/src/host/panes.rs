@@ -159,12 +159,22 @@ impl Host {
 
     /// The focused page's top left in the window, logical pixels: its menu, popup and IME
     /// candidates are placed from there.
-    pub(super) fn focus_origin(&self, window: &AppWindow) -> (f32, f32) {
+    /// Where `tab`'s pane starts in the window (logical px); the content area's corner when
+    /// it is not on screen.
+    pub(super) fn pane_origin(&self, window: &AppWindow, tab: TabId) -> (f32, f32) {
         let x = self
-            .shown()
-            .and_then(|t| self.pane_rects(window).into_iter().find(|r| r.tab == t))
+            .pane_rects(window)
+            .into_iter()
+            .find(|r| r.tab == tab)
             .map_or(0.0, |r| r.x as f32);
         (window.get_content_x() + x, window.get_content_y())
+    }
+
+    pub(super) fn focus_origin(&self, window: &AppWindow) -> (f32, f32) {
+        match self.shown() {
+            Some(tab) => self.pane_origin(window, tab),
+            None => (window.get_content_x(), window.get_content_y()),
+        }
     }
 
     /// One frame of `dt` seconds of the split's strings. What they settled is dispatched later,
@@ -393,7 +403,7 @@ impl Host {
 
     /// Writes the panes, seams and ring, row by row where they changed (a row's own state, a
     /// seam's grab mid-drag, survives).
-    fn render_panes(&mut self, window: &AppWindow) {
+    pub(super) fn render_panes(&mut self, window: &AppWindow) {
         let (_, height) = content_size(window);
         let focused = self.shown();
         let rects = self.pane_rects(window);
@@ -407,6 +417,9 @@ impl Host {
                 let (sx, sy) = frame.map_or((1.0, 1.0), |f| f.springs.scale(f.view));
                 let prev = frame.and_then(PaneFrame::fading);
                 let masked = frame.and_then(|f| f.masked.clone());
+                let (status_shown, status_host, status_rest) = self
+                    .status
+                    .view(r.tab, super::status::status_chars(r.width));
                 SplitPane {
                     id: crate::shell::pane_id(r.tab),
                     x0: r.x as f32,
@@ -430,6 +443,9 @@ impl Host {
                     prev_clip_width: prev.map_or(0, |p| slint_int(p.1.width)),
                     prev_clip_height: prev.map_or(0, |p| slint_int(p.1.height)),
                     prev: prev.map(|p| p.0.clone()).unwrap_or_default(),
+                    status_shown,
+                    status_host: status_host.into(),
+                    status_rest: status_rest.into(),
                 }
             })
             .collect();

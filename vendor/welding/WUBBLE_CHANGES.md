@@ -381,6 +381,36 @@ Tests for the above: `runtime.rs` (`pump_scheduler_tests`), `surface.rs`
    created but never got its first `configure`, so it never appeared.
    cefclient's Linux external pump runs the same context as its loop.
 
+39. **Status text and tooltips reach the host.** `surface.rs`:
+   `NavigationEvent::StatusChanged { text }` and `Tooltip { text }`. The
+   display handler of each platform (`linux_cef`, `macos_cef`,
+   `windows_cef` `cef_backed.rs`) implements `on_status_message` and
+   `on_tooltip` and queues them; under windowless rendering the host draws
+   both (CEF's header says so for tooltips).
+40. **Unknown schemes go to the host, never to the OS or an error page.**
+   `handlers.rs`: `on_before_browse` cancels a navigation whose scheme
+   Chromium does not load itself (`chromium_handles`: the web, local, data
+   and Chromium page schemes) and queues `NavigationEvent::ProtocolExecution
+   { url, user_gesture }` with its gesture bit; without the cancel, CEF
+   fails it with `ERR_UNKNOWN_URL_SCHEME` and commits an error page in place
+   of the page the link was on. Every other navigation's gesture is kept
+   (`Gestures`, the last 8) for `on_protocol_execution`, which the
+   resource-request handler now implements as a backstop (IO thread): it
+   answers `allow_os_execution = 0` and queues the same event. The
+   resource-request handler is therefore returned for every request (it
+   changes nothing else without a filter or observer).
+41. **A download request names its original URL.** `DownloadRequested` gains
+   `original_url` (`CefDownloadItem::GetOriginalUrl`): the URL
+   `start_download` was given, before redirects, so a host can tell its own
+   Save As downloads apart.
+42. **A context menu names its frame.** `ContextMenuRequested` gains
+   `frame_id` (`CefFrame::GetIdentifier` of the frame clicked in; empty when
+   CEF gave none).
+43. **Scripts in one frame.** `CefSurfaceProducer::execute_script_in_frame`
+   (default: the main frame), implemented by the three producers through
+   one shared `handlers::run_in_frame`, which falls back to the main frame
+   when the id is empty or the frame is gone.
+
 ## Not changed, on purpose
 
 - **No `Browser` accessor.** wubble already reaches the browser host through

@@ -35,6 +35,13 @@ const RESERVED: &[&str] = &[
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
+/// Whether a download asks where to save it: always with the "Always ask where to save"
+/// setting, and for a Save ... As the user chose from a menu. Otherwise it goes to the downloads
+/// folder at once.
+pub fn asks_where(always_ask: bool, save_as: bool) -> bool {
+    always_ask || save_as
+}
+
 /// A file name safe on every platform from what the page suggested.
 pub fn sanitize_file_name(suggested: &str) -> String {
     let last = suggested
@@ -342,6 +349,14 @@ pub fn format_bytes(bytes: u64) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_download_asks_with_the_setting_or_for_save_as() {
+        assert!(!asks_where(false, false));
+        assert!(asks_where(false, true));
+        assert!(asks_where(true, false));
+        assert!(asks_where(true, true));
+    }
 
     #[test]
     fn sanitizing() {

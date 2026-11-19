@@ -250,6 +250,9 @@ mod tests {
             lines: ModelRc::new(slint::VecModel::from(vec![SharedString::from(
                 "Use your camera",
             )])),
+            remember: "Remember for this site".into(),
+            allow: "Allow".into(),
+            block: "Block".into(),
             serial: 4,
         });
         settle();

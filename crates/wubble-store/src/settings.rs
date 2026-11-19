@@ -237,6 +237,7 @@ settings! {
     MediaAskEachTime: bool = defs::MEDIA_ASK_EACH_TIME;
     MediaConcurrency: u32 = defs::MEDIA_CONCURRENCY;
     MediaMinBytes: u32 = defs::MEDIA_MIN_BYTES;
+    DownloadsAskWhere: bool = defs::DOWNLOADS_ASK_WHERE;
     PageThemeDefault: PageTheme = defs::PAGE_THEME;
     /// Per-site page themes (`wubble_core::pagetheme`): hosts at the default are absent.
     PageThemeSites: ZoomTable = defs::PAGE_THEME_SITES;

@@ -605,15 +605,15 @@ impl Host {
         let name = shot::file_name(&title, chrono::Local::now().naive_local());
         let path = output.file().then(|| self.download_path(&name)).flatten();
         let job = shot_io::Job {
-            png_base64: png,
+            picture: shot_io::Picture::PngBase64(png),
             path: path.clone(),
             clipboard: output.clipboard(),
         };
         if let Some(path) = &path {
             self.downloads.reserve(path);
         }
-        let saver = self.builtins.saver.get_or_insert_with(Saver::spawn);
         let file_wanted = output.file();
+        let saver = self.saver();
         saver.save(job, move |mut saved| {
             if file_wanted && saved.file.is_none() {
                 // No downloads folder to write to.
@@ -621,6 +621,47 @@ impl Host {
             }
             let _ = slint::invoke_from_event_loop(move || {
                 crate::with_host(|host| host.shot_saved(tab, path, saved, frame));
+            });
+        });
+    }
+
+    /// The worker that owns the clipboard's images (screenshots, Copy Image).
+    fn saver(&mut self) -> &Saver {
+        self.builtins.saver.get_or_insert_with(Saver::spawn)
+    }
+
+    /// Copy Image's pixels arrived (`View::download_image`): onto the clipboard, on the worker
+    /// that owns the clipboard's images; the toast says how it went.
+    pub(super) fn copy_image_done(
+        &mut self,
+        window: &AppWindow,
+        image: Result<wubble_engine::favicon::Rgba, String>,
+    ) {
+        let image = match image {
+            Ok(image) => image,
+            Err(e) => {
+                eprintln!("wubble: copy image: {e}");
+                return self.toast(window, "Could not copy the image");
+            }
+        };
+        let job = shot_io::Job {
+            picture: shot_io::Picture::Rgba {
+                width: image.width,
+                height: image.height,
+                bytes: image.rgba,
+            },
+            path: None,
+            clipboard: true,
+        };
+        self.saver().save(job, |saved| {
+            let _ = slint::invoke_from_event_loop(move || {
+                crate::with_host(|host| {
+                    if saved.clipboard != Some(true)
+                        && let Some(window) = host.w.window.upgrade()
+                    {
+                        host.toast(&window, "Could not copy the image");
+                    }
+                });
             });
         });
     }

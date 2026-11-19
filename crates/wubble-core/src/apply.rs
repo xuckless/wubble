@@ -156,6 +156,8 @@ pub enum Applied {
         acts: crate::sponsor::ActTable,
     },
     BoostsEnabled(bool),
+    /// Every download asks where to save it (`settings::DOWNLOADS_ASK_WHERE`).
+    AskWhereToSave(bool),
     /// Read only when the app starts: the page says a restart is needed.
     RestartOnly,
 }
@@ -274,6 +276,7 @@ pub fn effect_of(key: &str, stored: &HashMap<String, String>) -> Option<Applied>
             }
         }
         k if k == s::BOOSTS_ENABLED.key => Applied::BoostsEnabled(flag(def, stored)),
+        k if k == s::DOWNLOADS_ASK_WHERE.key => Applied::AskWhereToSave(flag(def, stored)),
         k if k.starts_with("media.") => Applied::Media(MediaSettings::from_stored(stored)),
         _ => return None,
     })

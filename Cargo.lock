@@ -8584,6 +8584,7 @@ dependencies = [
  "winit",
  "wubble-core",
  "wubble-gfx",
+ "wubble-sysmem",
 ]
 
 [[package]]

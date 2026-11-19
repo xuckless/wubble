@@ -6,9 +6,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use slint::ComponentHandle;
 use wubble_core::download::{self, DownloadEffect, DownloadEntry, DownloadEvent, DownloadState};
 use wubble_core::tab::TabId;
-use wubble_engine::page::{DownloadId, PageEvent};
+use wubble_engine::page::{DownloadId, FileChooserMode, PageEvent, RequestId};
 use wubble_ui::{AppWindow, DownloadAction, DownloadItem, DownloadStatus};
 
 use super::{Host, now_ms};
@@ -42,6 +43,14 @@ pub(super) struct Downloads {
     printed: usize,
     /// Entries whose progress is not yet stored (written on the tick).
     unsaved: BTreeSet<i64>,
+    /// "Always ask where to save" (`settings::DOWNLOADS_ASK_WHERE`).
+    pub(super) ask_where: bool,
+    /// No save dialog: a download that would ask goes to the downloads folder (`--smoke
+    /// parity`, where an OS dialog would wait for a person).
+    pub(super) never_ask: bool,
+    /// Save ... As downloads started from a menu and not yet offered: (tab, URL). Each asks
+    /// where to save it.
+    save_as: Vec<(TabId, String)>,
 }
 
 impl Downloads {
@@ -61,6 +70,16 @@ impl Downloads {
         download::unique_name(dir, suggested, |p: &Path| {
             p.exists() || self.reserved.contains(p) || self.inflight.values().any(|f| f.path == p)
         })
+    }
+
+    /// The download of `url` (or, after redirects, `original`) in `tab` is a Save ... As: taken
+    /// off the list.
+    fn take_save_as(&mut self, tab: TabId, url: &str, original: &str) -> bool {
+        let at = self
+            .save_as
+            .iter()
+            .position(|(t, u)| *t == tab && (u == url || u == original));
+        at.map(|i| self.save_as.remove(i)).is_some()
     }
 
     /// Holds `path` for a file wubble is about to write.
@@ -124,9 +143,15 @@ impl Host {
             PageEvent::DownloadRequested {
                 id,
                 download,
+                url,
+                original_url,
                 suggested_name,
                 ..
             } => {
+                let save_as = self.downloads.take_save_as(tab, &url, &original_url);
+                if download::asks_where(self.downloads.ask_where, save_as) {
+                    return self.ask_download_path(window, tab, id, download, &suggested_name);
+                }
                 let path = self.download_path(&suggested_name);
                 if path.is_none() {
                     self.toast(window, "Cannot download: no downloads folder");
@@ -245,6 +270,69 @@ impl Host {
     }
 
     /// A unique path in the downloads directory, created if needed.
+    /// Save ... As from a menu: downloads `url` with the page's cookies, asking where.
+    pub(super) fn save_as(&mut self, tab: TabId, url: String) {
+        if let Some(view) = self.tab_view(tab) {
+            view.start_download(&url);
+            self.downloads.save_as.push((tab, url));
+        }
+    }
+
+    /// Opens the save dialog for a download (the file chooser's), proposing the downloads
+    /// folder and the page's name; the download waits for the answer, and a cancelled dialog
+    /// cancels it.
+    fn ask_download_path(
+        &mut self,
+        window: &AppWindow,
+        tab: TabId,
+        id: RequestId,
+        download: DownloadId,
+        suggested: &str,
+    ) {
+        if self.downloads.never_ask {
+            let path = self.download_path(suggested);
+            return self.download_path_chosen(tab, id, download, path);
+        }
+        let name = download::sanitize_file_name(suggested);
+        let proposed = self
+            .downloads
+            .dir
+            .as_deref()
+            .map_or_else(|| PathBuf::from(&name), |d| d.join(&name));
+        let spec = crate::chooser::dialog_spec(FileChooserMode::Save, "Save as", &proposed, &[]);
+        let dialog = crate::chooser::dialog(&spec, Some(window.window()));
+        let task = slint::spawn_local(async move {
+            let picked = crate::chooser::pick(spec, dialog).await;
+            let path = picked.and_then(|p| p.into_iter().next());
+            crate::with_host(|host| host.download_path_chosen(tab, id, download, path));
+        });
+        if let Err(e) = task {
+            eprintln!("wubble: cannot show the save dialog: {e}");
+            self.download_path_chosen(tab, id, download, None);
+        }
+    }
+
+    /// The save dialog's answer: the download goes there, or is cancelled.
+    fn download_path_chosen(
+        &mut self,
+        tab: TabId,
+        id: RequestId,
+        download: DownloadId,
+        path: Option<PathBuf>,
+    ) {
+        if let Some(path) = &path {
+            let reserved = Inflight {
+                tab,
+                path: path.clone(),
+                entry: None,
+            };
+            self.downloads.inflight.insert(download, reserved);
+        }
+        if let Some(view) = self.tab_view(tab) {
+            view.answer_download_path(id, path.as_deref());
+        }
+    }
+
     pub(super) fn download_path(&self, suggested: &str) -> Option<PathBuf> {
         let dir = self.downloads.dir.as_deref()?;
         if let Err(e) = std::fs::create_dir_all(dir) {

@@ -49,6 +49,7 @@ from scratch only when the bucket has nothing for it (then say so in your report
     cargo run -p wubble -- --smoke settings   # window opens wubble://settings, flips a setting through its toggle, reads the store back, exits; run by hand only
     cargo run -p wubble -- --smoke autofill   # loopback sign-in page, fake keyring: fill from the key menu, submit, save prompt, vault row; exits; run by hand only
     cargo run -p wubble-engine --example block_smoke   # windowless: the request-filter hook cancels a script and runs the commit script (a stand-in filter, not wubble-blocker), exits; run by hand only
+    cargo run -p wubble-engine --example gpu_crash_smoke   # windowless: kills the GPU process (chrome://gpucrash), frames must resume; run by hand only
     cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
     cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
