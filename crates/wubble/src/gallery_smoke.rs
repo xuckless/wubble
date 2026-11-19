@@ -44,6 +44,8 @@ pub enum Overlay {
     AutofillSave,
     /// The passwords page after Unlock.
     Unlock,
+    /// The notice a saved video frame or screenshot brings up.
+    Toast,
 }
 
 const fn scene(name: &'static str) -> Scene {
@@ -92,6 +94,7 @@ pub const SCENES: &[Scene] = &[
     over("autofill-menu", Overlay::AutofillMenu),
     over("autofill-save", Overlay::AutofillSave),
     over("dialog-sheet", Overlay::Dialog),
+    over("toast", Overlay::Toast),
     over("error-page", Overlay::LoadError),
     over("cert-error-page", Overlay::CertError),
     on("settings", InternalPage::Settings),

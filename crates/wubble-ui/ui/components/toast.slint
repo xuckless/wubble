@@ -47,10 +47,13 @@ export component Toast inherits Rectangle {
         }
     }
 
-    width: row.preferred-width;
-    height: Shell.toast-height;
+    // Sized to the text, up to the widest a notice grows (and the room it is given): a longer
+    // text wraps onto more lines and the glass grows down to hold them.
+    in property <length> widest: Shell.toast-max-width;
+    width: min(root.widest, row.preferred-width);
+    height: max(Shell.toast-height, row.preferred-height);
 
-    GlassPanel {
+    pill := GlassPanel {
         tier: GlassTier.thick;
         radius: Shell.toast-radius;
         over-content: true;
@@ -69,14 +72,24 @@ export component Toast inherits Rectangle {
         // Only a notice with a button takes the pointer.
         if root.shown && root.action != "": TouchArea { }
         row := HorizontalLayout {
+            // a wrapped text's lines clear the glass's top and bottom
+            padding-top: Spacing.s3;
+            padding-bottom: Spacing.s3;
             padding-left: Shell.toast-pad;
             padding-right: root.action == "" ? Shell.toast-pad : Spacing.s2;
             spacing: Spacing.s2;
             alignment: center;
-            Text {
-                text: root.text;
+            // One label per text, made anew for each: Slint 1.19 drops its text measurements
+            // on a new surface or scale factor (`TextLayoutCache::clear_all`, which drops their
+            // dependency trackers without marking what depended on them dirty), and a layout
+            // measured before that no longer hears of its text changing. The toast's row was measured empty at start-up, so every
+            // later notice kept the empty pill and its text ran out of it. A new label is a new
+            // measurement the row depends on.
+            for text in [root.text]: label := Text {
+                text: text;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                wrap: word-wrap;
                 color: Palette.ink;
                 font-family: Fonts.ui;
                 font-size: Shell.toast-font;

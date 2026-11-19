@@ -183,6 +183,13 @@ impl Host {
                     prompt: Some((SaveKind::New, "alice".into(), origin)),
                 }
             }
+            // Shown for longer than a scene settles, gone before the next one is shot.
+            Overlay::Toast => {
+                self.toast(
+                    window,
+                    wubble_core::shot::saved_text(Some(true), Some(true)),
+                );
+            }
             Overlay::None | Overlay::CommandBar(_) | Overlay::Downloads | Overlay::Unlock => {}
         }
         if let Some(tab) = shown {
