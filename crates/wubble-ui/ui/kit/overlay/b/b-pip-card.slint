@@ -1,0 +1,112 @@
+// derived: the error page's column (wubble-only.md §20, §21) of KitText roles, OverlapLayer rows (motion/overlap.slint), Wobble (motion/wobble.slint), Icon, Button pri
+// What a Main window shows for its tab while the tab plays in the picture-in-picture window: on
+// the page's ground (`--wb-web`), a column a third of the way down (440 at most, the error
+// page's): the picture-in-picture glyph in mist (40), the line in the type scale's title (24 /
+// 600 ink), the tab's title in body mist and a `pri` Button. The rows come in as Overlap,
+// 30 ms apart (`wb-in` with its stagger), and the glyph wobbles once as the card arrives.
+// derived (notes/fidelity/derived-review.md "Overlays B"): the column, its roles and the wobble.
+
+import { Palette, Space } from "../../gen/tokens.slint";
+import { Role } from "../../gen/text.slint";
+import { Shell } from "../../derived.slint";
+import { KitText } from "../../text.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { Button, ButtonKind } from "../../controls/button.slint";
+import { OverlapLayer } from "../../motion/overlap.slint";
+import { Wobble } from "../../motion/wobble.slint";
+
+export component BPipCard inherits Rectangle {
+    in property <bool> open;
+    in property <string> line;
+    in property <string> title;
+    in property <string> action;
+    callback acted();
+
+    visible: root.open;
+    background: Palette.web;
+
+    // the page under it takes nothing
+    TouchArea {
+        scroll-event(e) => {
+            accept
+        }
+    }
+
+    // a flip plays the wobble: once, as the card opens; the rows come in once it is built (a
+    // card built open would otherwise rest in place)
+    property <bool> hit;
+    property <bool> arrived;
+    property <bool> shown: root.open && root.arrived;
+    init => {
+        root.arrived = true;
+        root.hit = !root.hit;
+    }
+    changed open => {
+        if root.open {
+            root.hit = !root.hit;
+        }
+    }
+
+    VerticalLayout {
+        x: (parent.width - self.width) / 2;
+        y: max(Space.s6, (parent.height - self.preferred-height) / 3);
+        width: min(Shell.error-width, parent.width - 2 * Shell.sheet-margin);
+        height: self.preferred-height;
+        spacing: Space.s3;
+        OverlapLayer {
+            shown: root.shown;
+            index: 0;
+            height: Shell.error-icon;
+            Wobble {
+                hit: root.hit;
+                width: Shell.error-icon;
+                height: Shell.error-icon;
+                x: 0px;
+                Icon {
+                    path: Glyph.pip;
+                    size: Shell.error-icon;
+                    tint: Palette.mist;
+                }
+            }
+        }
+        OverlapLayer {
+            shown: root.shown;
+            index: 1;
+            height: line.preferred-height;
+            line := KitText {
+                width: parent.width;
+                role: Role.title;
+                text: root.line;
+                color: Palette.ink;
+                wrap: word-wrap;
+            }
+        }
+        if root.title != "": OverlapLayer {
+            shown: root.shown;
+            index: 2;
+            height: sub.preferred-height;
+            sub := KitText {
+                width: parent.width;
+                role: Role.body;
+                text: root.title;
+                color: Palette.mist;
+                wrap: word-wrap;
+            }
+        }
+        OverlapLayer {
+            shown: root.shown;
+            index: 3;
+            height: button.height + Space.s3;
+            button := Button {
+                y: Space.s3;
+                x: 0px;
+                width: self.preferred-width;
+                kind: ButtonKind.pri;
+                text: root.action;
+                clicked => {
+                    root.acted();
+                }
+            }
+        }
+    }
+}

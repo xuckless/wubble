@@ -155,14 +155,6 @@ components/permission-prompt.slint	token	Fonts	2
 components/permission-prompt.slint	token	Motion	5
 components/permission-prompt.slint	token	Palette	2
 components/permission-prompt.slint	token	Type	3
-components/pip-card.slint	font	font-family	2
-components/pip-card.slint	font	font-size	2
-components/pip-card.slint	font	font-weight	1
-components/pip-card.slint	paint	background	1
-components/pip-card.slint	text	Text	2
-components/pip-card.slint	token	Fonts	2
-components/pip-card.slint	token	Palette	4
-components/pip-card.slint	token	Type	2
 components/preview-card.slint	animate	animate	1
 components/preview-card.slint	font	font-family	2
 components/preview-card.slint	font	font-size	2
