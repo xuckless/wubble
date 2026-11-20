@@ -8524,6 +8524,8 @@ dependencies = [
  "dirs",
  "dispatch2",
  "i-slint-backend-testing",
+ "i-slint-backend-winit",
+ "i-slint-core",
  "interprocess",
  "log",
  "objc2-app-kit 0.3.2",

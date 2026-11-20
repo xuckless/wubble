@@ -58,6 +58,28 @@ pub type Clipboard = wayland::Wayland;
 #[cfg(not(target_os = "linux"))]
 pub type Clipboard = Arboard;
 
+// Slint's own text fields (the shell's: the command bar, the start page's capsule, the find bar,
+// every kit field) copy and paste through Slint's platform (`crate::slint_backend`), which asks
+// these first. The compositor offers the selection to one `wl_data_device` per client, the
+// worker's, never to the one Slint's winit backend opens for itself, so Slint's own clipboard
+// pastes nothing on Wayland; the host's is the only one that works there.
+#[cfg(target_os = "linux")]
+pub use wayland::{field_load, field_store};
+
+/// Puts `text` on `buffer` for a Slint text field; false when the host has no clipboard of its
+/// own here, and Slint's serves.
+#[cfg(not(target_os = "linux"))]
+pub fn field_store(_buffer: Buffer, _text: &str) -> bool {
+    false
+}
+
+/// The text on `buffer` for a Slint text field's paste; `None` when the host has no clipboard
+/// of its own here, and Slint's serves.
+#[cfg(not(target_os = "linux"))]
+pub fn field_load(_buffer: Buffer) -> Option<Option<String>> {
+    None
+}
+
 /// macOS and Windows: the system clipboard through arboard (MIT OR Apache-2.0). Chromium's own
 /// clipboard serves the pages there, so this carries only the shell's own copies and the parity
 /// smoke's reads. They have no primary selection.
@@ -121,15 +143,39 @@ impl Bridge for Arboard {
 
 #[cfg(target_os = "linux")]
 mod wayland {
+    use std::cell::RefCell;
+    use std::rc::{Rc, Weak};
+
     use super::{Bridge, Buffer};
     use crate::wl::wayland::Worker;
+
+    thread_local! {
+        /// The host's open worker, for Slint's text fields (`super::field_load`). The host
+        /// owns it: it closes with the host's clipboard.
+        static OPEN: RefCell<Weak<Worker>> = const { RefCell::new(Weak::new()) };
+    }
+
+    /// Puts `text` on `buffer` for a Slint text field; false before the host opened its
+    /// clipboard (or under X11, where it has none), and Slint's serves.
+    pub fn field_store(buffer: Buffer, text: &str) -> bool {
+        OPEN.with_borrow(Weak::upgrade)
+            .map(|worker| worker.store(buffer, text))
+            .is_some()
+    }
+
+    /// The text on `buffer` for a Slint text field's paste; `None` when the host has no
+    /// clipboard open, and Slint's serves.
+    pub fn field_load(buffer: Buffer) -> Option<Option<String>> {
+        OPEN.with_borrow(Weak::upgrade)
+            .map(|worker| worker.load(buffer))
+    }
 
     /// The window's Wayland clipboard; none under X11, where Chromium's own works. The
     /// worker also serves drops, drags out, gestures and lock keys (`crate::wl`): one data
     /// device for the process.
     pub struct Wayland {
         /// Opened on first use: the window's Wayland connection exists by then.
-        worker: Option<Worker>,
+        worker: Option<Rc<Worker>>,
         /// Where pictures dragged out are written (`crate::wl::drag_file`).
         drag_dir: std::path::PathBuf,
     }
@@ -137,9 +183,12 @@ mod wayland {
     impl Wayland {
         fn get(&mut self, window: &slint::Window) -> Option<&Worker> {
             if self.worker.is_none() {
-                self.worker = Worker::open(window, self.drag_dir.clone());
+                self.worker = Worker::open(window, self.drag_dir.clone()).map(Rc::new);
+                if let Some(worker) = &self.worker {
+                    OPEN.set(Rc::downgrade(worker));
+                }
             }
-            self.worker.as_ref()
+            self.worker.as_deref()
         }
     }
 
@@ -168,7 +217,7 @@ mod wayland {
         }
 
         fn extras(&self) -> Option<&dyn crate::wl::Aux> {
-            self.worker.as_ref().map(|w| w as &dyn crate::wl::Aux)
+            self.worker.as_deref().map(|w| w as &dyn crate::wl::Aux)
         }
     }
 }

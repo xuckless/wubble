@@ -679,6 +679,52 @@ impl Host {
                     .is_some_and(|s| s.permission != crate::prompt::PermissionPrompt::None);
                 is(open == want, format!("permission prompt open: {open}"))
             }
+            HostCheck::BarQuery(want) => {
+                let got = window.get_command_query();
+                is(got == want, format!("command bar holds {got:?}"))
+            }
+            HostCheck::CapsuleFocused => {
+                let focused = window
+                    .global::<wubble_ui::StartBridge>()
+                    .get_search_focused();
+                is(focused, "the capsule does not hold the keys".into())
+            }
+            HostCheck::FindQuery(want) => {
+                let got = self
+                    .model
+                    .visible_tab()
+                    .and_then(|t| self.surfaces.get(&t))
+                    .and_then(|s| match &s.find {
+                        crate::surface::FindBar::Open { query, .. } => Some(query.clone()),
+                        crate::surface::FindBar::Closed { .. } => None,
+                    });
+                is(
+                    got.as_deref() == Some(want),
+                    format!("find bar holds {got:?}"),
+                )
+            }
+            HostCheck::SettingsShown => {
+                let page = window.get_page();
+                is(
+                    page == wubble_ui::InternalPageKind::Settings,
+                    format!("page {page:?}"),
+                )
+            }
+            HostCheck::SettingsQuery(want) => {
+                let got = self.settings_query_text();
+                is(got == want, format!("settings search holds {got:?}"))
+            }
+            HostCheck::BookmarkSheet(want) => {
+                let open = self.bookmark_sheet_open();
+                is(open == want, format!("bookmark sheet open: {open}"))
+            }
+            HostCheck::Bookmark(want) => {
+                let names = self.bookmark_names();
+                is(
+                    names.iter().any(|n| n == want),
+                    format!("bookmarks {names:?}"),
+                )
+            }
             HostCheck::External(want) => {
                 let got = opened().last().cloned();
                 is(

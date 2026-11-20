@@ -823,6 +823,21 @@ impl Host {
         });
     }
 
+    /// Whether the bookmark sheet is open (`--smoke parity`).
+    pub(super) fn bookmark_sheet_open(&self) -> bool {
+        self.pages.bookmarks.sheet.is_some()
+    }
+
+    /// Every bookmark's and folder's name, as the store last said (`--smoke parity`).
+    pub(super) fn bookmark_names(&self) -> Vec<String> {
+        self.pages
+            .bookmarks
+            .rows
+            .iter()
+            .map(|r| r.title.clone())
+            .collect()
+    }
+
     pub(crate) fn bookmark_sheet_answered(
         &mut self,
         accept: bool,

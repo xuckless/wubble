@@ -13,6 +13,12 @@ wubble-core.workspace = true
 # carry them); the release the `slint` pin pulls in (GPL-3.0-only, as Slint; already in Cargo.lock
 # through wubble-ui's tests).
 i-slint-backend-testing = { version = "=1.19.0", default-features = false }
+# Slint's platform (`slint_backend.rs`): the winit backend the selector builds, wrapped so that the
+# shell's text fields use the host's clipboard; the core crate names the platform trait's hidden
+# arguments. The releases the `slint` pin pulls in (GPL-3.0-only, as Slint; in Cargo.lock), with
+# the features `slint` turns on.
+i-slint-backend-winit = { version = "=1.19.0", default-features = false }
+i-slint-core = { version = "=1.19.0", default-features = false }
 # Pages for screen readers (`host/ax.rs`).
 wubble-ax.workspace = true
 wubble-engine.workspace = true

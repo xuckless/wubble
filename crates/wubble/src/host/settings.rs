@@ -263,6 +263,11 @@ impl Host {
         }
     }
 
+    /// The search box's text (`--smoke parity`).
+    pub(super) fn settings_query_text(&self) -> &str {
+        &self.settings.query
+    }
+
     pub(crate) fn settings_query(&mut self, query: &str) {
         query.clone_into(&mut self.settings.query);
         self.render_settings();
