@@ -385,8 +385,13 @@ impl Host {
         if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
             glass.start_sync(window, shown, start);
         }
-        if shown.is_none() {
+        let Some(tab) = shown else {
             return;
+        };
+        // The bar in the page is the start tab's: a start page shown (one start tab after
+        // another, or after the overlay bar elsewhere) starts its capsule afresh, empty, for it.
+        if self.bar.mode != BarMode::Navigate(tab) {
+            self.open_bar(window, BarMode::Navigate(tab), String::new());
         }
         let bridge = window.global::<StartBridge>();
         let pinned: Vec<TabItem> = window.get_pinned_tabs().iter().collect();
@@ -412,15 +417,6 @@ impl Host {
         if let Ok(mut glass) = self.w.glass.try_borrow_mut() {
             glass.start_pointer(&window, p);
         }
-    }
-
-    /// The search capsule: the bar (already opening from the capsule, app.slint) goes to the
-    /// start tab itself, on an empty query.
-    pub(crate) fn start_search(&mut self) {
-        let (Some(window), Some(tab)) = (self.w.window.upgrade(), self.shown()) else {
-            return;
-        };
-        self.open_bar(&window, BarMode::Navigate(tab), String::new());
     }
 }
 
@@ -449,7 +445,13 @@ impl Host {
             ready: self.frame_rate.is_some(),
             pinned: window.get_pinned_tabs().row_count() > 0,
             sites: window.global::<StartBridge>().get_sites().row_count(),
-            bar_open: window.get_command_bar_state() != wubble_ui::CommandBarState::Closed,
+            search_focused: window.global::<StartBridge>().get_search_focused(),
+            in_page: window.get_command_bar_state() == wubble_ui::CommandBarState::Open
+                && window.get_command_placement() == wubble_ui::CommandPlacement::InPage,
+            overlay: window.get_command_bar_state() != wubble_ui::CommandBarState::Closed
+                && window.get_command_placement() == wubble_ui::CommandPlacement::Overlay,
+            query: window.get_command_query().into(),
+            rows: window.get_command_results().row_count(),
             navigated: !on_start
                 && !url.is_empty()
                 && state.stage == start_smoke::Stage::Navigating,
@@ -485,7 +487,7 @@ impl Host {
                 Do::OpenStart => self.perform(Action::NewTab),
                 Do::Shoot(name) => {
                     if crate::shot::has_dir() {
-                        let i = ["rest", "poke", "pop", "bar"]
+                        let i = ["rest", "poke", "pop", "results"]
                             .iter()
                             .position(|n| *n == name)
                             .unwrap_or(9);
@@ -498,21 +500,22 @@ impl Host {
                 Do::Click(x, y) => {
                     self.start_click((origin.0 + x) as f32, (origin.1 + y) as f32);
                 }
-                Do::Search => {
-                    let bridge = window.global::<StartBridge>();
-                    self.start_click(bridge.get_search_x(), bridge.get_search_y());
-                }
-                // Esc on the bar, then the tile's own callback as its click sends it: later,
-                // outside the host, which both call back into
-                Do::Tile => {
-                    let _ = self.w.window.upgrade_in_event_loop(|window| {
-                        window.invoke_dismiss_command_bar();
-                        let bridge = window.global::<StartBridge>();
-                        if let Some(site) = bridge.get_sites().row_data(0) {
-                            bridge.invoke_site_activated(site.url);
-                        }
-                    });
-                }
+                Do::Keys(spec) => self.smoke_keys(
+                    crate::parity::chords(spec)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(crate::parity::key_inputs)
+                        .flatten()
+                        .collect(),
+                ),
+                Do::Type(text) => self.smoke_keys(
+                    crate::parity::typed(text)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(crate::parity::key_inputs)
+                        .flatten()
+                        .collect(),
+                ),
                 Do::Pass => {
                     self.start_passed = true;
                     crate::quit();

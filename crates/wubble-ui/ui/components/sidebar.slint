@@ -146,7 +146,8 @@ export component Sidebar inherits Rectangle {
         new-tab: new-tab.absolute-position.x,
         new-tab-end: new-tab.absolute-position.x + new-tab.width,
         spaces: switcher.spaces-x,
-        spaces-end: switcher.spaces-x + switcher.spaces-w,
+        // the Spaces and their "+"
+        spaces-end: switcher.spaces-x + switcher.switcher-w,
         downloads: switcher.downloads-x,
         downloads-end: switcher.downloads-x + switcher.downloads-w,
         downloads-y: switcher.downloads-y,
@@ -560,6 +561,9 @@ export component Sidebar inherits Rectangle {
             has-downloads: root.has-downloads;
             space-picked(id) => {
                 root.space-switched(id);
+            }
+            new-space-requested => {
+                root.action("new-space");
             }
             downloads-requested => {
                 root.downloads-requested();

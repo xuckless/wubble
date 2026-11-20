@@ -14,7 +14,7 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -56,7 +56,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -315,6 +315,10 @@ export component AppWindow inherits Window {
     }
     changed active-tab-id => {
         root.shell-model-changed();
+        // another start tab: its capsule takes the keys as a new start page's does
+        if root.page == InternalPageKind.start {
+            root.settle-focus();
+        }
     }
     changed spaces => {
         root.shell-model-changed();
@@ -339,8 +343,15 @@ export component AppWindow inherits Window {
     // A row was dragged to a new slot: (tab id, its new index in `tabs`).
     callback tab-moved(int, int);
     // The command bar's life: wubble_core::chrome::CommandBar, run by the driver from the cues
-    // below; its state, mode and origin are written back here.
-    in property <CommandBarState> command-bar-state <=> bar.state;
+    // below; its state, mode, origin and placement are written back here. In the page
+    // (`command-placement`), the start page's capsule is its field and the overlay stays shut.
+    in property <CommandBarState> command-bar-state;
+    in property <CommandPlacement> command-placement;
+    // The OS window has the keyboard (the host, from winit, before Slint sees the change): a
+    // text field loses its focus while the window is inactive, which is not leaving it.
+    in property <bool> window-active: true;
+    property <CommandBarState> overlay-state: root.command-placement == CommandPlacement.overlay ? root.command-bar-state : CommandBarState.closed;
+    property <CommandBarState> in-page-state: root.command-placement == CommandPlacement.in-page ? root.command-bar-state : CommandBarState.closed;
     in property <CommandMode> command-mode <=> bar.mode;
     // Where the bar grows from (window coordinates).
     in property <Origin> command-origin <=> bar.origin;
@@ -349,12 +360,20 @@ export component AppWindow inherits Window {
     out property <duration> command-exit: bar.exit;
     callback command-close();
     callback command-pick();
-    // the driver's effects (CommandEffect::FocusInput, RestoreFocus)
+    // the driver's effects (CommandEffect::FocusInput, RestoreFocus), to the field in use
     public function command-focus-input() {
-        bar.focus-input();
+        if root.command-placement == CommandPlacement.in-page {
+            StartBridge.focus-serial += 1;
+        } else {
+            bar.focus-input();
+        }
     }
     public function command-release-keys() {
-        bar.release-keys();
+        if root.command-placement == CommandPlacement.in-page {
+            StartBridge.release-serial += 1;
+        } else {
+            bar.release-keys();
+        }
     }
     in property <[CommandResult]> command-results <=> bar.results;
     in-out property <string> command-query <=> bar.query;
@@ -621,6 +640,9 @@ export component AppWindow inherits Window {
             passwords-ui.take-focus();
         } else if root.page == InternalPageKind.tasks {
             tasks-ui.take-focus();
+        } else if root.page == InternalPageKind.start {
+            // the start page's capsule is the address field: it holds the keys
+            StartBridge.focus-serial += 1;
         } else {
             web-focus.focus();
         }
@@ -635,6 +657,10 @@ export component AppWindow inherits Window {
         root.settle-focus();
     }
     changed page => {
+        // the bar in the start page goes with the page
+        if root.page != InternalPageKind.start && root.in-page-state == CommandBarState.open {
+            root.command-close();
+        }
         root.settle-focus();
     }
     changed bookmark-open => {
@@ -881,10 +907,30 @@ export component AppWindow inherits Window {
                 sites: StartBridge.sites;
                 shortcut: StartBridge.shortcut;
                 grabbing: StartBridge.grabbing;
-                // the command bar grows from the capsule (E-179); the host gives it the tab
-                search-clicked(x, y) => {
-                    root.command-open(CommandMode.here, { x: x, y: y });
-                    StartBridge.search-clicked(x, y);
+                // the command bar in the page: the capsule is its field (the host gives it the tab)
+                state: root.in-page-state;
+                query <=> root.command-query;
+                results: root.command-results;
+                focus-serial: StartBridge.focus-serial;
+                release-serial: StartBridge.release-serial;
+                query-changed(q) => {
+                    root.command-query-changed(q);
+                }
+                result-chosen(i) => {
+                    root.command-result-chosen(i);
+                    root.command-pick();
+                }
+                // the capsule taking the keys opens the bar in it; losing them closes it
+                focus-changed(on) => {
+                    if on || root.window-active {
+                        StartBridge.search-focused = on;
+                    }
+                    if on && root.in-page-state != CommandBarState.open {
+                        root.request-address-focus();
+                    } else if !on && root.window-active && root.in-page-state == CommandBarState.open {
+                        root.command-dismissed();
+                        root.command-close();
+                    }
                 }
                 site-activated(url) => {
                     StartBridge.site-activated(url);
@@ -902,6 +948,8 @@ export component AppWindow inherits Window {
                     StartBridge.stage-leave();
                 }
                 init => {
+                    // a start page shown: its capsule takes the keys
+                    StartBridge.focus-serial += 1;
                     StartBridge.search-x = self.search-x;
                     StartBridge.search-y = self.search-y;
                 }
@@ -1242,6 +1290,7 @@ export component AppWindow inherits Window {
                 }
             }
             bar := CommandBar {
+                state: root.overlay-state;
                 // `here` shows the open site's host (chrome.tsx: a site, not wubble's own pages)
                 here-host: root.address-host == "wubble" || root.address-host == "data" ? "" : root.address-host;
                 result-chosen(i) => {
@@ -1475,6 +1524,7 @@ export component AppWindow inherits Window {
         anchor-x: root.menu.x;
         anchor-y: root.menu.y;
         entries: root.menu.entries;
+        icon-column: root.menu.icons;
         chosen(i) => {
             root.menu-chosen(i);
         }

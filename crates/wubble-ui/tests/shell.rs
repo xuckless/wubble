@@ -405,18 +405,16 @@ fn header_and_footer(app: &AppWindow, driver: &Shared) {
         );
         assert_eq!(e.settings_end, e.end - SIDE_PAD, "at {raw}");
         assert_eq!(e.settings_end - e.settings, 36.0, "at {raw}");
-        // the dev tools button (the design's Source) between them, all three side by side;
-        // at the minimum there is no room for it beside downloads, and it gives way
-        let tools = if raw == SIDEBAR_DEFAULT as f32 {
-            36.0
-        } else {
-            0.0
-        };
+        // the dev tools button (the design's Source) between them, all three side by side,
+        // when the row has room for them after the Spaces and their "+" (`spaces_end`); else
+        // it gives way (at the minimum, or with three Spaces at the default width)
+        let room = e.settings_end - e.spaces_end >= 3.0 * 36.0;
+        let tools = if room { 36.0 } else { 0.0 };
         assert_eq!(e.downloads_end, e.settings - tools, "at {raw}");
         assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
         assert!(
             e.spaces_end < e.downloads,
-            "at {raw}: tiles under downloads"
+            "at {raw}: the tiles and their \"+\" clear of downloads"
         );
     }
 }

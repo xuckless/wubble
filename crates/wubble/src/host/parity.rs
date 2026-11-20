@@ -281,7 +281,9 @@ impl Host {
         });
     }
 
-    fn parity_keys(&self, keys: Vec<KeyInput>) {
+    /// Keys as winit hands them over, through the host's key path, then on to Slint as winit
+    /// would (later, outside the host). `--smoke start` types with it too.
+    pub(super) fn smoke_keys(&self, keys: Vec<KeyInput>) {
         let weak = self.w.window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(window) = weak.upgrade() else { return };
@@ -367,7 +369,7 @@ impl Host {
                     .filter_map(parity::key_inputs)
                     .flatten()
                     .collect();
-                self.parity_keys(keys);
+                self.smoke_keys(keys);
             }
             Step::Type(text) => {
                 let keys = parity::typed(text)
@@ -376,7 +378,7 @@ impl Host {
                     .filter_map(parity::key_inputs)
                     .flatten()
                     .collect();
-                self.parity_keys(keys);
+                self.smoke_keys(keys);
             }
             Step::Wheel(mods, p, dx, dy) => {
                 let p = at(p);

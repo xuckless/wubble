@@ -74,6 +74,9 @@ export component MenuRow inherits Rectangle {
     in property <bool> danger;
     in property <bool> enabled: true;
     in property <bool> check-column;
+    // wubble: another row of the menu has an icon: this one keeps the icon's column empty, so
+    // every label starts at the same place (the web's rows all have one, `.tp-mrow svg`)
+    in property <bool> icon-column;
     in property <bool> checked;
     in property <color> accent: Palette.sky;
     height: TouchCss.wb-tp-mrow--height;
@@ -87,6 +90,8 @@ export component MenuRow inherits Rectangle {
     }
     // the look, also read by the curve tests
     out property <float> e: tw.t;
+    // where the label starts in the row (the icon column's test)
+    out property <length> label-x: label-text.x;
     out property <length> offset: TouchCss.wb-tp-mrow--transform-translatey * (1 - tw.t);
     property <color> ink: !root.enabled ? Palette.haze : root.danger ? TouchCss.tp-mrow-danger--color : TouchCss.wb-tp-mrow--color;
     property <TextRole> kbd-role: {
@@ -112,6 +117,9 @@ export component MenuRow inherits Rectangle {
                     visible: root.checked;
                 }
             }
+            if root.icon == "" && root.icon-column: Rectangle {
+                width: TouchMenu.row-icon;
+            }
             if root.icon != "": VerticalLayout {
                 alignment: center;
                 Icon {
@@ -120,7 +128,7 @@ export component MenuRow inherits Rectangle {
                     tint: !root.enabled ? Palette.haze : root.danger ? TouchCss.tp-mrow-danger--color : TouchCss.tp-mrow-svg--color;
                 }
             }
-            KitText {
+            label-text := KitText {
                 role: Role.wb-tp-mrow;
                 text: root.label;
                 color: root.ink;
@@ -184,6 +192,8 @@ export component Menu inherits Rectangle {
     in property <string> label: "Menu";
     // the Select: a check column, the row checked, the accent
     in property <bool> checks;
+    // some entry has an icon (MenuRow `icon-column`)
+    in property <bool> icon-column;
     in property <int> checked: -1;
     in property <color> accent: Palette.sky;
     in property <length> panel-x;
@@ -365,6 +375,7 @@ export component Menu inherits Rectangle {
                             danger: entry.danger;
                             enabled: entry.enabled;
                             check-column: root.checks;
+                            icon-column: root.icon-column;
                             checked: i == root.checked;
                             accent: root.accent;
                             accessible-role: AccessibleRole.list-item;
@@ -409,12 +420,15 @@ export component PointMenu inherits Rectangle {
     in property <length> anchor-x;
     in property <length> anchor-y;
     in property <[MenuEntry]> entries;
+    // some entry has an icon (MenuRow `icon-column`)
+    in property <bool> icon-column;
     callback chosen(int);
     callback dismissed();
     // the panel's left edge, after flipping and clamping
     out property <length> panel-x: menu.panel-x;
 
     property <[MenuEntry]> rows;
+    property <bool> rows-icons;
     property <length> at-x;
     property <length> at-y;
     changed open => {
@@ -426,6 +440,7 @@ export component PointMenu inherits Rectangle {
     function latch() {
         if root.open {
             root.rows = root.entries;
+            root.rows-icons = root.icon-column;
             root.at-x = root.anchor-x;
             root.at-y = root.anchor-y;
         }
@@ -449,6 +464,7 @@ export component PointMenu inherits Rectangle {
         height: root.height;
         open: root.open;
         entries: root.rows;
+        icon-column: root.rows-icons;
         panel-x: root.place(root.at-x, self.menu-width, root.width);
         panel-y: root.place(root.at-y, self.panel-height, root.height);
         origin-x: max(0px, min(self.menu-width, root.at-x - self.panel-x));

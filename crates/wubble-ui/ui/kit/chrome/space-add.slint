@@ -1,0 +1,53 @@
+// derived: space-switcher.slint (`.wb-space`: a 36 x 36 tile, its 17 px glyph in ink, the colour moving over .2 s, a click's wobble), icon-button.slint (the tooltip named from the action), icons.tsx `plus`
+// The Space switcher's "+" (owner, 2026-11-19: "I didn't see any way to create new spaces"):
+// one more switcher tile after the Spaces, the plus glyph in the tile's look; it runs the
+// new-space action (its tooltip: "New Space" and its shortcut). No capsule: it is never the
+// active Space. Recorded in notes/fidelity/derived-review.md.
+
+import { BrowserCss } from "../gen/css.slint";
+import { Shell } from "../derived.slint";
+import { Icon, Glyph } from "../controls/icon.slint";
+import { Tips } from "../controls/tooltip.slint";
+import { Wobble } from "../motion/wobble.slint";
+import { Calm } from "../motion/calm.slint";
+import { SpaceTint } from "space-switcher.slint";
+
+export component SpaceAdd inherits Rectangle {
+    callback clicked();
+    out property <bool> hovered: ta.has-hover;
+    // tabs.tsx SpaceSwitcher: each click wobbles the tile once more
+    property <bool> hit: false;
+    width: BrowserCss.wb-space--width;
+    height: BrowserCss.wb-space--height;
+    accessible-role: AccessibleRole.button;
+    accessible-label: "New Space";
+    accessible-action-default => {
+        root.clicked();
+    }
+    ta := TouchArea {
+        clicked => {
+            root.hit = !root.hit;
+            root.clicked();
+        }
+        changed has-hover => {
+            Tips.hover("new-space", root.absolute-position.x + root.width / 2,
+                root.absolute-position.y, root.absolute-position.y + root.height, self.has-hover);
+        }
+    }
+    Wobble {
+        width: parent.width;
+        height: parent.height;
+        hit: root.hit;
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: Shell.space-glyph;
+            path: Glyph.plus;
+            tint: SpaceTint.of(ta.has-hover, false);
+            animate tint {
+                duration: Calm.ms(BrowserCss.wb-space--transition-color-duration);
+                easing: ease;
+            }
+        }
+    }
+}

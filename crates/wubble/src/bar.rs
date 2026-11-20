@@ -137,10 +137,11 @@ fn omni_row(r: OmniResult, keymap: &Keymap) -> BarRow {
     }
 }
 
-/// The first-run rows: one per engine in `omnibox::ENGINES`.
+/// The first-run rows: one per engine in `omnibox::ENGINES`, each a search row (the search
+/// glyph): choosing one searches the query with it.
 fn engine_rows() -> impl Iterator<Item = BarRow> {
     omnibox::ENGINES.iter().map(|e| BarRow {
-        kind: CommandKind::Action,
+        kind: CommandKind::Search,
         title: format!("Search with {}", e.name),
         subtitle: "Choose the search engine".into(),
         shortcut: String::new(),
@@ -372,7 +373,18 @@ mod tests {
             !targets(&r).contains(&RowTarget::Omni(Target::Search("cats".into()))),
             "{r:?}"
         );
-        assert!(r.iter().all(|r| r.kind != CommandKind::Search));
+        assert!(
+            r.iter()
+                .all(|r| r.kind != CommandKind::Search
+                    || matches!(r.target, RowTarget::PickEngine(_))),
+            "only the engines are search rows"
+        );
+        // the engine rows wear the search glyph
+        assert!(
+            r.iter()
+                .filter(|r| matches!(r.target, RowTarget::PickEngine(_)))
+                .all(|r| r.kind == CommandKind::Search)
+        );
         // An address still opens first.
         let r = rows(None, &[], "example.com");
         assert_eq!(

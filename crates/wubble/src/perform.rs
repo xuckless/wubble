@@ -5,7 +5,7 @@
 use wubble_core::action::Action;
 use wubble_core::model::{Command, Model};
 use wubble_core::pages::InternalPage;
-use wubble_core::space::SpaceId;
+use wubble_core::space::{ContainerId, Rgb, SpaceId};
 use wubble_core::tab::TabId;
 
 use wubble_core::shot::ShotRequest;
@@ -17,13 +17,10 @@ use crate::host::Builtin;
 use crate::surface::FindEvent;
 
 /// Actions with no implementation yet, each with the reason.
-pub const NOT_YET: &[(Action, &str)] = &[
-    (Action::NewSpace, "needs a name and tint prompt"),
-    (
-        Action::ToggleCompactMode,
-        "the shell's one sidebar toggle is ToggleSidebar",
-    ),
-];
+pub const NOT_YET: &[(Action, &str)] = &[(
+    Action::ToggleCompactMode,
+    "the shell's one sidebar toggle is ToggleSidebar",
+)];
 
 /// Engine calls on the visible tab's view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +46,8 @@ pub enum Plan {
     Print,
     /// Open the command bar on the visible tab's address.
     FocusAddress,
+    /// Add this Space (a `Command::NewSpace`), then show it.
+    NewSpace(Command),
     /// F6 / Shift+F6 (`true`: back): keyboard focus to the next region (`wubble_core::region`).
     CycleRegion(bool),
     /// Take the newest entry off the store's recently-closed list and open it.
@@ -213,8 +212,23 @@ pub fn plan(action: Action, model: &Model) -> Plan {
                 to: WindowTarget::New,
             })
         }),
-        Action::NewSpace | Action::ToggleCompactMode => Plan::NotYet,
+        Action::NewSpace => new_space(model),
+        Action::ToggleCompactMode => Plan::NotYet,
     }
+}
+
+/// A new Space, named "Space N" (N: one past the count) in the next of the design's Space
+/// accents (sky, lilac, mint, in turn), in the default container. A stand-in until naming and
+/// tinting land (Settings' Space management).
+fn new_space(model: &Model) -> Plan {
+    use wubble_core::kit_gen::spaces::ACCENT;
+    let n = model.spaces.len();
+    let [r, g, b] = ACCENT[n % ACCENT.len()];
+    Plan::NewSpace(Command::NewSpace {
+        name: format!("Space {}", n + 1),
+        tint: Rgb(r, g, b),
+        container: ContainerId::DEFAULT,
+    })
 }
 
 /// Why `action` is not possible yet, if it is in [`NOT_YET`].
@@ -229,7 +243,6 @@ pub fn not_yet(action: Action) -> Option<&'static str> {
 mod tests {
     use super::*;
     use wubble_core::model::apply;
-    use wubble_core::space::{ContainerId, Rgb, SpaceId};
     use wubble_core::tab::TabId;
 
     fn with_tabs(n: usize) -> Model {
@@ -264,6 +277,33 @@ mod tests {
         listed.sort();
         listed.dedup();
         assert_eq!(listed.len(), n, "NOT_YET lists an action twice");
+    }
+
+    #[test]
+    fn a_new_space_is_named_by_count_in_the_next_accent() {
+        use wubble_core::kit_gen::spaces::ACCENT;
+        let m = Model::new(std::time::Instant::now());
+        let tint = |i: usize| Rgb(ACCENT[i][0], ACCENT[i][1], ACCENT[i][2]);
+        let want = |n: usize, t: usize| {
+            Plan::NewSpace(Command::NewSpace {
+                name: format!("Space {n}"),
+                tint: tint(t),
+                container: ContainerId::DEFAULT,
+            })
+        };
+        assert_eq!(plan(Action::NewSpace, &m), want(2, 1));
+        let Plan::NewSpace(cmd) = plan(Action::NewSpace, &m) else {
+            unreachable!()
+        };
+        let (m, _) = apply(m, cmd);
+        assert_eq!(m.spaces.len(), 2);
+        assert_eq!(plan(Action::NewSpace, &m), want(3, 2));
+        let Plan::NewSpace(cmd) = plan(Action::NewSpace, &m) else {
+            unreachable!()
+        };
+        let (m, _) = apply(m, cmd);
+        // the accents come round again
+        assert_eq!(plan(Action::NewSpace, &m), want(4, 0));
     }
 
     #[test]

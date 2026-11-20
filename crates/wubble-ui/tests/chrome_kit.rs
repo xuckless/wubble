@@ -16,6 +16,8 @@ slint::slint! {
     import { Favs } from "ui/kit/chrome/favs.slint";
     import { SpaceTint, SpaceSwitcher } from "ui/kit/chrome/space-switcher.slint";
     import { CommandBar } from "ui/kit/chrome/command-bar.slint";
+    import { TabRow } from "ui/kit/chrome/tab-row.slint";
+    import { SpaceAdd } from "ui/kit/chrome/space-add.slint";
     import { CommandBarState, CommandMode, CommandResult, TabItem } from "ui/components/model.slint";
     export { CommandBarState, CommandMode, CommandResult, TabItem }
     export component Probe inherits Window {
@@ -53,6 +55,22 @@ slint::slint! {
         out property <bool> bar-empty: bar.empty-shown;
         out property <string> bar-placeholder: bar.placeholder;
         public function bar-focus() { bar.focus-input(); }
+        // a tab on the rail: its close badge on the icon's top-left corner
+        in-out property <int> rail-closes;
+        in-out property <int> rail-presses;
+        rail := TabRow {
+            x: 320px; y: 20px; width: 48px; compact: true;
+            tab: { id: 9, title: "r", url: "https://r.test" };
+            close => { root.rail-closes += 1; }
+            press(y) => { root.rail-presses += 1; }
+        }
+        out property <bool> rail-close-shown: rail.rail-close-shown;
+        out property <length> rail-h: rail.height;
+        // the switcher's "+"
+        in-out property <int> adds;
+        add := SpaceAdd { x: 320px; y: 100px; clicked => { root.adds += 1; } }
+        out property <bool> add-hovered: add.hovered;
+        out property <length> add-w: add.width;
         out property <length> origin-x: pill.origin.x;
         out property <length> origin-y: pill.origin.y;
     }
@@ -218,6 +236,58 @@ fn command_bar(p: &Probe) {
     run_out();
 }
 
+/// The rail's close badge (derived: the close light on the icon's top-left corner): it shows
+/// while the row is hovered, a click on it closes the tab, a click on the rest of the icon picks
+/// it.
+fn rail_close(p: &Probe) {
+    let click = |x: f32, y: f32| {
+        let position = LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        at(p, WindowEvent::PointerMoved { position });
+        at(p, WindowEvent::PointerPressed { position, button });
+        at(p, WindowEvent::PointerReleased { position, button });
+    };
+    let h = p.get_rail_h();
+    // the 18 px icon box, centred in the 48 wide row
+    let (icon_x, icon_y) = (320.0 + (48.0 - 18.0) / 2.0, 20.0 + (h - 18.0) / 2.0);
+    run_out();
+    assert!(!p.get_rail_close_shown(), "hidden at rest");
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(icon_x + 9.0, icon_y + 9.0),
+        },
+    );
+    run_out();
+    assert!(p.get_rail_close_shown(), "the hovered row shows it");
+    // the badge, on the icon's top-left corner
+    click(icon_x, icon_y);
+    run_out();
+    assert_eq!((p.get_rail_closes(), p.get_rail_presses()), (1, 0));
+    assert!(p.get_rail_close_shown(), "still shown under the pointer");
+    // the rest of the icon picks the tab
+    click(icon_x + 12.0, icon_y + 12.0);
+    assert_eq!((p.get_rail_closes(), p.get_rail_presses()), (1, 1));
+    at(p, WindowEvent::PointerExited);
+    run_out();
+    assert!(!p.get_rail_close_shown());
+}
+
+/// The switcher's "+": a `.wb-space` tile (36 square) that reports a click (the new-space
+/// action) and its hover (its tooltip).
+fn space_add(p: &Probe) {
+    assert_eq!(p.get_add_w(), 36.0);
+    let position = LogicalPosition::new(338.0, 118.0);
+    let button = PointerEventButton::Left;
+    at(p, WindowEvent::PointerMoved { position });
+    assert!(p.get_add_hovered());
+    at(p, WindowEvent::PointerPressed { position, button });
+    at(p, WindowEvent::PointerReleased { position, button });
+    assert_eq!(p.get_adds(), 1);
+    at(p, WindowEvent::PointerExited);
+    run_out();
+}
+
 #[test]
 fn chrome_kit_parts_follow_the_design() {
     init_integration_test_with_mock_time();
@@ -228,4 +298,6 @@ fn chrome_kit_parts_follow_the_design() {
     favourites(&p);
     spaces(&p);
     command_bar(&p);
+    rail_close(&p);
+    space_add(&p);
 }

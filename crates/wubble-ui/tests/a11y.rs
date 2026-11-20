@@ -168,6 +168,7 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
     };
     app.set_menu(MenuView {
         open: true,
+        icons: false,
         x: 200.0,
         y: 200.0,
         entries: ModelRc::new(VecModel::from(vec![

@@ -173,12 +173,20 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(HISTORY_ROW),
         ..on("history-hover", InternalPage::History)
     },
+    // the rail with its tab hovered: the close badge on the icon's corner (derived)
+    Scene {
+        sidebar: SidebarMode::Rail,
+        pointer: Some(RAIL_TAB_ROW),
+        ..on("sidebar-rail-hover", InternalPage::Start)
+    },
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
 /// (`--parity`: four favourites, the Space name, five tabs), logical px.
 const TAB_ROW: (u16, u16) = (130, 248);
 const NEW_TAB_ROW: (u16, u16) = (130, 408);
+/// The first tab of the rail on the gallery's own profile (one tab), logical px.
+const RAIL_TAB_ROW: (u16, u16) = (36, 122);
 // Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the
 // autofill menu's first login.
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);

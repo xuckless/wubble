@@ -5,11 +5,13 @@
 // Source and Settings: wubble's Source is the page's developer tools, and wubble adds its
 // downloads list first while there are downloads (derived: notes/fidelity/derived-review.md).
 // Developer tools give way when the row has no room for all three (F12 still opens them).
+// wubble: the switcher's "+" (kit SpaceAdd, derived) follows the Spaces, one tile on.
 
 import { BrowserCss } from "../gen/css.slint";
 import { IconButton } from "../controls/icon-button.slint";
 import { Glyph } from "../controls/icon.slint";
 import { SpaceSwitcher } from "space-switcher.slint";
+import { SpaceAdd } from "space-add.slint";
 import { SpaceItem } from "../../components/model.slint";
 
 export component SideBottom inherits Rectangle {
@@ -21,30 +23,38 @@ export component SideBottom inherits Rectangle {
     in property <float> capsule-origin: 0.3;
     in property <bool> has-downloads: false;
     callback space-picked(int);
+    callback new-space-requested();
     callback downloads-requested();
     callback dev-tools-requested();
     callback settings-requested();
 
     property <length> ib: BrowserCss.wb-side-bottom-gt-wb-ib--width;
     property <length> gap: BrowserCss.wb-side-bottom-rail--gap;
-    property <bool> tools: root.vertical || !root.has-downloads || root.width >= strip.span + 3 * root.ib;
+    // the Spaces and their "+" (one more tile on the switcher's pitch); developer tools give
+    // way first, then the "+" (the command bar and Settings still add a Space)
+    property <length> with-add: strip.span + strip.pitch;
+    property <bool> tools: root.vertical || !root.has-downloads || root.width >= root.with-add + 3 * root.ib;
     property <int> buttons: (root.has-downloads ? 1 : 0) + (root.tools ? 1 : 0) + 1;
+    property <bool> add-shown: root.vertical || root.width >= root.with-add + root.buttons * root.ib;
+    property <length> spaces-end: root.add-shown ? root.with-add : strip.span;
     // the buttons' places, in order: the row from the far end, the column under the Spaces
     function place(k: int) -> length {
-        return root.vertical ? strip.span + root.gap + k * (root.ib + root.gap) : root.width - (root.buttons - k) * root.ib;
+        return root.vertical ? root.spaces-end + root.gap + k * (root.ib + root.gap) : root.width - (root.buttons - k) * root.ib;
     }
     // where the parts fall, in window px (the alignment the tests pin, the drop targets, the
     // downloads popover's anchor)
     out property <length> spaces-x: strip.absolute-position.x;
     out property <length> spaces-y: strip.absolute-position.y;
     out property <length> spaces-w: strip.width;
+    // the Spaces and their "+" when it shows
+    out property <length> switcher-w: root.vertical ? strip.width : root.spaces-end - BrowserCss.wb-spaces--gap * (root.add-shown ? 1 : 0);
     out property <length> pitch: strip.pitch;
     out property <length> downloads-x: downloads.absolute-position.x;
     out property <length> downloads-y: downloads.absolute-position.y;
     out property <length> downloads-w: downloads.width;
     out property <length> settings-x: settings.absolute-position.x;
     out property <length> settings-w: settings.width;
-    height: root.vertical ? strip.span + root.buttons * (root.ib + root.gap) : BrowserCss.wb-space--height;
+    height: root.vertical ? root.spaces-end + root.buttons * (root.ib + root.gap) : BrowserCss.wb-space--height;
 
     strip := SpaceSwitcher {
         x: root.vertical ? (root.width - self.width) / 2 : 0px;
@@ -59,6 +69,17 @@ export component SideBottom inherits Rectangle {
             root.space-picked(id);
         }
     }
+    // wubble: a new Space, one tile after the Spaces
+    add-space := SpaceAdd {
+        visible: root.add-shown;
+        x: root.vertical ? (root.width - self.width) / 2 : strip.span + BrowserCss.wb-spaces--gap;
+        y: root.vertical ? strip.span + BrowserCss.wb-spaces--gap : 0px;
+        clicked => {
+            root.new-space-requested();
+        }
+    }
+    out property <length> add-space-x: add-space.absolute-position.x;
+    out property <length> add-space-y: add-space.absolute-position.y;
     // wubble: the downloads list (the design has no downloads), first of the buttons
     downloads := IconButton {
         visible: root.has-downloads;

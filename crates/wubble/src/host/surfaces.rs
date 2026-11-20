@@ -885,6 +885,7 @@ fn menu_view(menu: &Menu, scale: f32, origin: (f32, f32)) -> MenuView {
     };
     MenuView {
         open: true,
+        icons: entries.iter().any(|e| !e.icon.is_empty()),
         x: origin.0 + at.0 as f32 / scale,
         y: origin.1 + at.1 as f32 / scale,
         entries: model(
