@@ -144,6 +144,8 @@ Open, to build or check:
 - [x] Phase ended: the owner's sign-off on the kit widget work (2026-11-20)
 - [ ] Empty the kit lock baseline (107 rows, mostly `kit/derived.slint` literals); alias the value-equal `Shell` literals
 - [ ] Voice glow shader into the kit (no microphone)
+- [x] Thinking orb in the kit with gallery scenes (xm/orbs); mascots researched, not ported (docs/research/agent-widgets.md)
+- [ ] Wire agent widgets: orb on the agent mark, activity header, approval sheet; mascots as session identity (agent-widgets.md section 5)
 
 ## Performance pass
 - [x] Start-up, page load, input, release profile (cbef727); memory (a01325c); Linux video upload path (5e80397)

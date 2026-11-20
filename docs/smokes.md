@@ -71,7 +71,7 @@ find bar, bookmark sheet, reload tooltip and peeking sidebar, and over its dark 
 bar and find bar (the glass's contrast); Settings at four scroll positions; Settings' list editors (routing rules with a row
 selected, a new rule's draft, Spaces with the second selected, Sites); history, bookmarks, downloads,
 passwords (locked, unlocked), archive, task manager; an agent's approval sheet, an approved agent's marked tabs and Space, the agent activity page; the start page; a history row hovered (its
-actions shown); the rail with its tab hovered (the close badge).
+actions shown); the rail with its tab hovered (the close badge). The agent widgets' specimen: every thinking orb state at 16, 20, 24, 32 and 64 on glass, the library's stage, its paper and the page (white, then dark), at 160, paused, and a burst of the large ones moving (`--frozen-backdrop` holds the orbs' clock at 2 s).
 
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow` properties:
 the host rewrites those). Size and scale come from the environment: `WUBBLE_SHOT_SIZE=900x600`

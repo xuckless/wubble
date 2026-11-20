@@ -28,6 +28,7 @@ pub(crate) mod ext_tabs;
 mod ext_ui;
 mod external;
 mod gallery;
+pub(crate) mod gallery_orbs;
 mod gesture;
 mod gpu;
 mod hover;

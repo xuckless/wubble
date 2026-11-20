@@ -774,6 +774,7 @@ impl WindowFactory {
             self.glass_scene,
         )));
         orbs::install(id, &self.gpu, &window);
+        host::gallery_orbs::measure_one(id, &window);
         connect_input(&window, id);
         connect_shell(&window, id);
         connect_surfaces(&window, id);

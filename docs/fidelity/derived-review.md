@@ -353,3 +353,13 @@ The design has no agent surface. Each piece is composed of kit parts; the owner'
 | Agent mark (`kit/chrome/agent-mark.slint`, in `tab-row.slint` and `SpaceName`) | the tab row's close tile (`.wb-tab-x`: 22, radius 7, white .1 on hover) holding the generated `zap` glyph in the sky, coral on hover where a click stops every agent session (Stop All Agents); a button "Stop all agents" to assistive tech; not shown on the compact rail (icon-only rows; Stop All Agents in the command bar still works); before the speaker on a driven tab's row, at the end of the Space header of the session's Space; no steady glow (a new primitive: waits for the owner) | `.wb-tab-x`, Palette sky / coral | gallery agent-tabs |
 | Activity page (`AgentLogPage`, `wubble://agent`) | the list page's own parts: PageFrame, ListCard, ListRow (a check or close glyph on the lead tile by outcome, the tool and page as title, the session, age and outcome as note, not tappable), the empty note; no search | list pages (section 32) | gallery agent-activity |
 | Page icon (`Glyph.page`) | the generated `zap` glyph for `wubble://agent` (the set has no agent glyph) | `Glyph.page` | gallery agent-activity |
+
+## Agent widgets (xm/orbs)
+
+The design tunes the thinking orb at 64, 32 and 20 and shows it on its library page only (`alive-orbs.tsx`). These pieces are wubble's.
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Orb at 16 and 24 (icon sizes) | the 20 design scaled to the side (dots and strokes scale with it) | ThinkingOrb `tuned: s20` | gallery agent-orbs |
+| Orb at 160 (large) | the 64 design scaled to the side | ThinkingOrb `tuned: s64` | gallery agent-orbs-large |
+| Agent widgets specimen (`kit/specimen/agent-widgets.slint`) | columns on scene glass (GlassPanel thick), the library's stage (`.al` `--al-stage`), its ink as a paper ground, and the bare page; state captions in the label role, `--al-muted` on dark | library.css `.al`, `.al-stage` | gallery agent-orbs, agent-orbs-dark-page |
