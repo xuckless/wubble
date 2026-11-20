@@ -10,7 +10,10 @@
 //! - a context menu over the red part, the command bar over the green top, the peeking sidebar
 //!   over the red part: the glass under each has the page's hue, not the backdrop's;
 //! - with nothing open and no ambience, the page's own repaints (its animated box) build no
-//!   page blur: a count, not a clock.
+//!   page blur: a count, not a clock;
+//! - the overlays' rules (`wubble_core::overlay`): Print over Add bookmark leaves Print alone,
+//!   Escape closes each kind (the topmost first), a tab switch closes the sheet and hides the
+//!   find bar, which shows on its own tab only, and a navigation closes it.
 
 /// What a step puts on the shell before it settles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,7 +30,44 @@ pub enum Setup {
     Quiet,
     /// Nothing new: the page keeps repainting.
     Wait,
+    /// Add bookmark (Mod+D's sheet).
+    Bookmark,
+    /// The print sheet (Mod+P).
+    Print,
+    /// The find bar (Mod+F).
+    Find,
+    /// The screenshot region picker.
+    Region,
+    /// One Escape press, as the keyboard sends it.
+    Escape,
+    /// A second tab on the same page, shown.
+    OtherTab,
+    /// The first tab shown again.
+    FirstTab,
+    /// The shown tab loads its page again (a new document).
+    Navigate,
 }
+
+/// Which overlays the shell shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    pub bookmark: bool,
+    pub print: bool,
+    pub find: bool,
+    pub menu: bool,
+    pub bar: bool,
+    pub region: bool,
+}
+
+const NONE: Shown = Shown {
+    bookmark: false,
+    print: false,
+    find: false,
+    menu: false,
+    bar: false,
+    region: false,
+};
+const FIND: Shown = Shown { find: true, ..NONE };
 
 /// The overlay panels a step checks the glass of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +90,8 @@ pub enum Check {
     Builds,
     /// The build count is the noted one.
     BuildsHeld,
+    /// Exactly these overlays show.
+    Overlays(Shown),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,6 +126,67 @@ pub const STEPS: &[Step] = &[
     step("peek-over-page", Setup::Peek, Check::Hue(Panel::Peek, RED)),
     step("quiet", Setup::Quiet, Check::Builds),
     step("repaints", Setup::Wait, Check::BuildsHeld),
+    step(
+        "add-bookmark",
+        Setup::Bookmark,
+        Check::Overlays(Shown {
+            bookmark: true,
+            ..NONE
+        }),
+    ),
+    step(
+        "print-replaces-bookmark",
+        Setup::Print,
+        Check::Overlays(Shown {
+            print: true,
+            ..NONE
+        }),
+    ),
+    step("escape-print", Setup::Escape, Check::Overlays(NONE)),
+    step("find", Setup::Find, Check::Overlays(FIND)),
+    step(
+        "menu-over-find",
+        Setup::Menu,
+        Check::Overlays(Shown { menu: true, ..FIND }),
+    ),
+    step("escape-menu", Setup::Escape, Check::Overlays(FIND)),
+    step(
+        "bookmark-over-find",
+        Setup::Bookmark,
+        Check::Overlays(Shown {
+            bookmark: true,
+            ..FIND
+        }),
+    ),
+    step("escape-bookmark", Setup::Escape, Check::Overlays(FIND)),
+    step("escape-find", Setup::Escape, Check::Overlays(NONE)),
+    step(
+        "region",
+        Setup::Region,
+        Check::Overlays(Shown {
+            region: true,
+            ..NONE
+        }),
+    ),
+    step("escape-region", Setup::Escape, Check::Overlays(NONE)),
+    step(
+        "bar",
+        Setup::Bar,
+        Check::Overlays(Shown { bar: true, ..NONE }),
+    ),
+    step("escape-bar", Setup::Escape, Check::Overlays(NONE)),
+    step("find-again", Setup::Find, Check::Overlays(FIND)),
+    step(
+        "bookmark-again",
+        Setup::Bookmark,
+        Check::Overlays(Shown {
+            bookmark: true,
+            ..FIND
+        }),
+    ),
+    step("other-tab", Setup::OtherTab, Check::Overlays(NONE)),
+    step("first-tab", Setup::FirstTab, Check::Overlays(FIND)),
+    step("navigate", Setup::Navigate, Check::Overlays(NONE)),
 ];
 
 /// What the host measured of a settled step's snapshot. RGB means, 0-255.
@@ -99,6 +202,7 @@ pub struct Seen {
     pub layer_image: bool,
     /// The page blur's build count.
     pub builds: u64,
+    pub overlays: Shown,
 }
 
 /// What the run has noted so far.
@@ -177,6 +281,16 @@ pub fn check(step: &Step, seen: &Seen, notes: Notes) -> Result<Notes, String> {
             builds: Some(seen.builds),
             ..notes
         }),
+        Check::Overlays(want) => {
+            if seen.overlays == want {
+                Ok(notes)
+            } else {
+                Err(format!(
+                    "the shell shows {:?}, want {want:?}",
+                    seen.overlays
+                ))
+            }
+        }
         Check::BuildsHeld => {
             let noted = notes.builds.ok_or("no build count noted")?;
             if seen.builds == noted {
@@ -223,6 +337,7 @@ mod tests {
             panel,
             layer_image: true,
             builds: 3,
+            overlays: NONE,
         };
         let base = check(&STEPS[0], &seen([60.0, 60.0, 80.0], None), Notes::default()).unwrap();
         assert_eq!(base.gutter, Some(-10.0));
@@ -251,6 +366,23 @@ mod tests {
             ..seen([0.0; 3], None)
         };
         assert!(check(&STEPS[6], &more, noted).is_err());
+        // the overlays: exactly the ones the step names
+        let print = STEPS.iter().find(|s| s.name == "print-replaces-bookmark");
+        let print = print.expect("print step");
+        let only = |overlays| Seen {
+            overlays,
+            ..seen([0.0; 3], None)
+        };
+        let want = Shown {
+            print: true,
+            ..NONE
+        };
+        assert!(check(print, &only(want), base).is_ok());
+        let both = Shown {
+            bookmark: true,
+            ..want
+        };
+        assert!(check(print, &only(both), base).is_err());
     }
 
     #[test]
