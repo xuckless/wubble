@@ -168,6 +168,8 @@ Open, to build or check:
       signing workflow, `docs/release.md` (4ccd853); inert until the public key is set
 - [x] First preview release, Linux: `v0.1.0-preview.1`, built, packed and signed locally, on GitHub Releases with
       `install.sh`; README install section
+- [ ] `docs/release.md` still describes signing in CI: rewrite its steps for local signing (as done for preview.1)
+- [ ] Confirm by hand that an installed build's update check reads the live manifest (Settings → Updates → Check now)
 - [ ] macOS release, on the owner's Mac after the Linux one: `package-macos.sh` (never run), a macOS codec CEF, the
       usage strings added in 4fae73d (never compiled), then `release-sign.yml` again
 - [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
