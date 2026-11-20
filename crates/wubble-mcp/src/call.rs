@@ -30,8 +30,39 @@ pub enum NavTarget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitCondition {
     Text(String),
+    /// No item shows the text any more.
+    TextGone(String),
     Element(ElementRef),
     Load,
+    /// The tab's address contains this.
+    Url(String),
+    /// The tab's address or document is no longer the one it had when the call came.
+    Navigation,
+}
+
+/// A point inside a `<canvas>` the call names by ref, from the canvas's top-left (CSS px):
+/// the only raw coordinates a session can give.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Offset {
+    pub x: u32,
+    pub y: u32,
+}
+
+/// Where a drag ends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DragTo {
+    /// On this element's centre.
+    Element(ElementRef),
+    /// At this point inside the canvas the drag starts in.
+    Offset(Offset),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 /// Every call the v0 tool set can make. `session` is absent only on `StartSession`.
@@ -45,6 +76,13 @@ pub enum AgentCall {
     },
     StopSession {
         session: SessionId,
+        /// Leave the session's tabs to the owner instead of closing them.
+        keep_tabs: bool,
+    },
+    RequestMore {
+        session: SessionId,
+        sites: Vec<String>,
+        secrets: Vec<String>,
     },
     Navigate {
         session: SessionId,
@@ -61,8 +99,36 @@ pub enum AgentCall {
         session: SessionId,
         tab: TabId,
         target: ElementRef,
+        at: Option<Offset>,
         button: ButtonKind,
         count: u32,
+    },
+    Hover {
+        session: SessionId,
+        tab: TabId,
+        target: ElementRef,
+        at: Option<Offset>,
+    },
+    Drag {
+        session: SessionId,
+        tab: TabId,
+        target: ElementRef,
+        at: Option<Offset>,
+        to: DragTo,
+    },
+    Scroll {
+        session: SessionId,
+        tab: TabId,
+        /// Into view, or (with a direction) the scroller under it.
+        target: Option<ElementRef>,
+        direction: Option<Direction>,
+        amount: Option<u32>,
+    },
+    ReadText {
+        session: SessionId,
+        tab: TabId,
+        within: Option<ElementRef>,
+        max_chars: Option<u32>,
     },
     Type {
         session: SessionId,
@@ -80,9 +146,14 @@ pub enum AgentCall {
         session: SessionId,
         tab: TabId,
         crop: Option<ElementRef>,
+        full_page: bool,
     },
     ListTabs {
         session: SessionId,
+    },
+    FocusTab {
+        session: SessionId,
+        tab: TabId,
     },
     OpenTab {
         session: SessionId,
@@ -96,12 +167,15 @@ pub enum AgentCall {
         session: SessionId,
         tab: TabId,
         condition: WaitCondition,
+        /// Text conditions also read form fields' values.
+        in_values: bool,
         timeout_ms: Option<u32>,
     },
     Evaluate {
         session: SessionId,
         tab: TabId,
         script: String,
+        timeout_ms: Option<u32>,
     },
     FillSecret {
         session: SessionId,
@@ -117,6 +191,12 @@ impl AgentCall {
         match self {
             AgentCall::StartSession { .. } => "start_session",
             AgentCall::StopSession { .. } => "stop_session",
+            AgentCall::RequestMore { .. } => "request_more",
+            AgentCall::Hover { .. } => "hover",
+            AgentCall::Drag { .. } => "drag",
+            AgentCall::Scroll { .. } => "scroll",
+            AgentCall::ReadText { .. } => "read_text",
+            AgentCall::FocusTab { .. } => "focus_tab",
             AgentCall::Navigate { .. } => "navigate",
             AgentCall::ReadPage { .. } => "read_page",
             AgentCall::Click { .. } => "click",
@@ -136,7 +216,13 @@ impl AgentCall {
     pub fn session(&self) -> Option<&SessionId> {
         match self {
             AgentCall::StartSession { .. } => None,
-            AgentCall::StopSession { session }
+            AgentCall::StopSession { session, .. }
+            | AgentCall::RequestMore { session, .. }
+            | AgentCall::Hover { session, .. }
+            | AgentCall::Drag { session, .. }
+            | AgentCall::Scroll { session, .. }
+            | AgentCall::ReadText { session, .. }
+            | AgentCall::FocusTab { session, .. }
             | AgentCall::Navigate { session, .. }
             | AgentCall::ReadPage { session, .. }
             | AgentCall::Click { session, .. }
@@ -156,6 +242,11 @@ impl AgentCall {
     pub fn tab(&self) -> Option<&TabId> {
         match self {
             AgentCall::Navigate { tab, .. }
+            | AgentCall::Hover { tab, .. }
+            | AgentCall::Drag { tab, .. }
+            | AgentCall::Scroll { tab, .. }
+            | AgentCall::ReadText { tab, .. }
+            | AgentCall::FocusTab { tab, .. }
             | AgentCall::ReadPage { tab, .. }
             | AgentCall::Click { tab, .. }
             | AgentCall::Type { tab, .. }
@@ -167,6 +258,7 @@ impl AgentCall {
             | AgentCall::FillSecret { tab, .. } => Some(tab),
             AgentCall::StartSession { .. }
             | AgentCall::StopSession { .. }
+            | AgentCall::RequestMore { .. }
             | AgentCall::ListTabs { .. }
             | AgentCall::OpenTab { .. } => None,
         }
@@ -210,6 +302,14 @@ impl Args<'_> {
     }
     pub(crate) fn bool(&self, k: &str) -> bool {
         self.0.get(k).and_then(Value::as_bool).unwrap_or(false)
+    }
+    /// A canvas point given as `x` and `y` (`x_name`, `y_name`): both or neither.
+    pub(crate) fn offset(&self, x_name: &str, y_name: &str) -> Result<Option<Offset>, String> {
+        match (self.int(x_name), self.int(y_name)) {
+            (Some(x), Some(y)) => Ok(Some(Offset { x, y })),
+            (None, None) => Ok(None),
+            _ => Err(format!("`{x_name}` and `{y_name}` go together")),
+        }
     }
     pub(crate) fn list(&self, k: &str) -> Vec<String> {
         self.0

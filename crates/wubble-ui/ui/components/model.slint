@@ -672,6 +672,9 @@ export struct AgentSheetView {
     note: string,
     // The client asks to run without showing its window.
     headless: bool,
+    // A running session asks for more (`request_more`): the lists hold only what is new, and
+    // there is no window choice.
+    more: bool,
 }
 
 // One line of the agent activity log page (`wubble_core::agent::log::Row`).

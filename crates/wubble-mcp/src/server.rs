@@ -290,6 +290,10 @@ mod tests {
             if let Some(first) = t.one_of.first() {
                 args.insert((*first).into(), json!("x"));
             }
+            // an optional ref outside such a group (`scroll` needs a ref or a direction)
+            if t.args.iter().any(|a| a.name == "ref") && !t.one_of.contains(&"ref") {
+                args.insert("ref".into(), json!("e1.1"));
+            }
             match call(t.name, Value::Object(args)) {
                 Incoming::Call { call, .. } => {
                     assert_eq!(call.tool(), t.name);
@@ -345,6 +349,7 @@ mod tests {
                 session: SessionId("s".into()),
                 tab: TabId("t".into()),
                 target: crate::call::ElementRef("e1.4".into()),
+                at: None,
                 button: ButtonKind::Right,
                 count: 2,
             }
@@ -377,6 +382,54 @@ mod tests {
                 headless: false,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn coordinates_come_in_pairs_and_drags_need_an_end() {
+        let base = json!({"session": "s", "tab": "t", "ref": "e1.1"});
+        let with = |extra: Value| {
+            let mut m = base.clone();
+            for (k, v) in extra.as_object().unwrap() {
+                m[k] = v.clone();
+            }
+            m
+        };
+        assert!(matches!(
+            parsed("hover", with(json!({"x": 3, "y": 4}))),
+            AgentCall::Hover {
+                at: Some(crate::call::Offset { x: 3, y: 4 }),
+                ..
+            }
+        ));
+        assert!(!matches!(
+            call("hover", with(json!({"x": 3}))),
+            Incoming::Call { .. }
+        ));
+        assert!(matches!(
+            parsed("drag", with(json!({"to_x": 5, "to_y": 6}))),
+            AgentCall::Drag {
+                to: crate::call::DragTo::Offset(crate::call::Offset { x: 5, y: 6 }),
+                ..
+            }
+        ));
+        for bad in [
+            json!({}),
+            json!({"to_x": 5}),
+            json!({"to_ref": "e1.2", "to_x": 1, "to_y": 1}),
+        ] {
+            assert!(
+                !matches!(call("drag", with(bad.clone())), Incoming::Call { .. }),
+                "{bad}"
+            );
+        }
+        assert!(!matches!(
+            call("scroll", json!({"session": "s", "tab": "t"})),
+            Incoming::Call { .. }
+        ));
+        assert!(!matches!(
+            call("screenshot", with(json!({"full_page": true}))),
+            Incoming::Call { .. }
         ));
     }
 

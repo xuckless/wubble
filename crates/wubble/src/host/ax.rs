@@ -339,6 +339,7 @@ mod tests {
             role: "link".into(),
             name: "docs".into(),
             value: String::new(),
+            url: String::new(),
             level: 0,
             checked: None,
             focused: false,

@@ -19,7 +19,6 @@ In flight, each in its own worktree, not yet on `main`:
 - [~] `xm/tab-marks`: an agent icon for an agent session's Space (footer tile, Spaces popup, header); an agent badge at the bottom right of an agent tab's favicon; in the rail, a sound badge at the favicon's top right that mutes and unmutes (the close badge's circular style)
 - [~] `xm/orbs`: the Thinking orb and the agentic mascots from Ultra Reactivate (`src/ultra-reactivate/vendor/thinking-orbs`, `bot-avatars`; MIT, Libraries.dev) as kit widgets with gallery scenes; no wiring
 Next, in order:
-- [ ] MCP after the first tests: the list under "MCP server" below, started on `xm/sheet-fix` once it lands (same host file)
 - [ ] Wire the mascots (the agent session log's identity) and the thinking orb, after the owner reads the proposal in `docs/research/agent-widgets.md`
 - [ ] The agent glyph: the generated set has none (the lightning bolt stands in); the owner's glyph, then one swap
 - [ ] Extensions: the gaps under M6 (Bitwarden's popup width first: one more patch and an engine rebuild)
@@ -27,19 +26,13 @@ Next, in order:
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 
 ## MCP server
-Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). The basic version is on `main`: 14 tools, sessions in their own Space and container, the approval sheet, off by default.
+Plan: [docs/research/mcp-server.md](docs/research/mcp-server.md) (section 0: build order; section 0.1: after the first tests). The basic version is on `main`: 14 tools (20 after `xm/sheet-fix`), sessions in their own Space and container, the approval sheet, off by default.
 Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo, Wikipedia). In order:
-- [ ] Bug: `screenshot` cropped to a ref ignores the scroll position (right only at scroll 0) and does not scroll an off-screen element into view; no full-page option
-- [ ] Bug: `click` fails on some visible links ("the element stays out of view": GitHub's Overview and Repositories tabs at scroll 0)
-- [ ] Bug: `evaluate` takes one expression only (its description says statements) and returns `{}` for a promise or a DOM node with no error: accept statements, await promises, say when a value cannot be serialised
-- [ ] Waiting: `wait_for` gets a navigation / URL-change condition and a "text gone" one, its text match ignores form field values, `wait_for load` waits through in-page navigation, `type` with `submit` and `open_tab` wait for the load as `navigate` does
-- [ ] Hand-off: `list_tabs` says which tab is active; `focus_tab`; a session can end and keep its tabs (today closing the connection closes them)
-- [ ] New tool (owner approved): `request_more` for sites and secrets mid-session; it raises the approval sheet listing only what is new, every time; nothing is granted without the owner's press
-- [ ] New tool (owner approved): `read_text` for a page's prose (article body), so reading needs no script
-- [ ] New tools (owner approved): `scroll`, `hover`, `drag` by element ref; coordinates only inside a `<canvas>` the agent holds a ref for
-- [ ] Polish: `read_page` gives link targets, does not cut text at about 120 characters, and reports truncation and its default cap; `press_key` says when a chord did nothing (Control+L, Alt+Left, Control+Shift+T do nothing today); a stale ref is an error in `read_page` as in `click`; `list_tabs` returns a URL where its description says origin; scheme matching is case-sensitive (`HTTPS://` refused)
+- [ ] `scroll` with a direction over a nested scroller (an `overflow: auto` pane): the wheel event reaches the pane but in most `--smoke mcp` runs the document takes the scroll; a user's wheel goes the same path (`View::wheel`): check by hand, then fix (the smoke checks the page only)
+- [ ] `wait_for load` does not follow an in-page (history API) navigation's fetches (documented in the tool; `url` and `navigation` cover the address change): network idle would need DevTools' network events through the engine
+- [ ] `drag` drives pointer events only: an HTML `draggable` drag runs in the window's own drag loop (dropped with nothing, the reply says so)
+- [ ] Not yet tested: a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Bind a requested secret name to a vault login on the sheet (a grant holds no secret until then; `fill_secret` is refused cleanly)
-- [ ] Not yet tested: a script or redirect getting past the http(s)-only rule; `stop_session` then the old handle; a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
 - [ ] Guardrails, after use shows the need (plan sections 2 to 7): no script on a page a secret was filled into, redaction of filled values, the airlocks
 

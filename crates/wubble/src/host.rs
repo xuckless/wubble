@@ -1641,6 +1641,11 @@ impl Host {
     /// window, or held back for the address pill).
     fn popup_requested(&mut self, tab: TabId, request: PopupRequest) {
         use wubble_core::popup::{self, Outcome};
+        // An agent session's page opens nothing off the web (wubble would load it as the
+        // browser, which the page itself may not).
+        if self.agent_popup_refused(tab, &request.url) {
+            return;
+        }
         // A `target=_blank` mailto: link opens the app and no tab, as in Chromium.
         if wubble_engine::page::is_external(&request.url) {
             self.external_link(tab, request.url, Some(request.gesture));
@@ -3147,6 +3152,14 @@ impl Host {
             && (self.drag_cancelled() || self.cancel_tab_drag())
         {
             return EventResult::PreventDefault;
+        }
+        // A draft in the agent sheet's list editor takes Escape before anything: it drops the
+        // draft, never the whole sheet (which would deny) nor the page's load.
+        if key.unmodified == Key::Named(NamedKey::Escape)
+            && self.agent_sheet_open()
+            && window.get_agent_sheet_editing()
+        {
+            return EventResult::Propagate;
         }
         // Esc closes the topmost shell overlay first, wherever the keys are (the page, a sheet,
         // a menu): wubble_core::overlay.

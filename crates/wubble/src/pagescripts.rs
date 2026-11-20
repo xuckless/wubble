@@ -52,6 +52,13 @@ pub fn reader_open(vars: &[(&str, String)]) -> String {
     wrap(&[READERABLE, READABILITY, READER], &call)
 }
 
+/// The page's readable text for an agent (`read_text`): `{article, title, byline, text}`,
+/// Readability's article (on a copy: the page is not changed) or, with `article` false, the
+/// page's whole text.
+pub fn reader_text() -> String {
+    wrap(&[READABILITY, READER], "wubbleReader.text()")
+}
+
 /// Leaving the reader: Chromium's scroll restore off for the reload that follows (it would take
 /// the reader's offset); `true`.
 pub fn reader_leave() -> String {
@@ -133,6 +140,7 @@ mod tests {
             "set:",
             "leave:",
             "restore:",
+            "text:",
             "var wubbleReader",
         ] {
             assert!(READER.contains(entry), "reader.js lacks {entry}");
