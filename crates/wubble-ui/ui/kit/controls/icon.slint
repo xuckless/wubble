@@ -33,6 +33,10 @@ export global Glyph {
     out property <string> chevron-right: KitIcons.chevron-right;
     out property <string> duplicate: KitIcons.duplicate;
     out property <string> link: KitIcons.link;
+    // The agent glyph: an agent session's Space tile, its tabs' badge and mark, the activity page.
+    // The design's `sparkle` (touch-kit.tsx:152), its only glyph for an assistant; kept in this one
+    // place so the owner's own glyph is one line (derived-review.md, Agent sessions).
+    out property <string> agent: KitIcons.sparkle;
     out property <string> move: KitIcons.move;
     out property <string> check: KitIcons.check;
     out property <string> book: KitIcons.book;
@@ -60,7 +64,6 @@ export global Glyph {
     out property <string> pip-return: Derived.pip-return;
     out property <string> camera: Derived.camera;
     out property <string> key: Derived.key;
-    out property <string> zap: Derived.zap;
     out property <string> gauge: Derived.gauge;
     out property <string> clock: Derived.clock;
     out property <string> pin: Derived.pin;
@@ -78,14 +81,14 @@ export global Glyph {
         // the design's stacked trays (settings.tsx `spaces`): History keeps the clock (owner)
         if url == "wubble://archive" { return self.stack; }
         if url == "wubble://tasks" { return self.gauge; }
-        // wubble-only (derived-review.md, Agent sessions): the generated set has no agent glyph
-        if url == "wubble://agent" { return self.zap; }
+        if url == "wubble://agent" { return self.agent; }
         return self.globe;
     }
 
-    // A space's glyph by its id ("personal" | "work" | "study", wubble_core::space::SpaceIcon).
+    // A Space tile's glyph by its id ("personal" | "work" | "study", wubble_core::space::SpaceIcon;
+    // "agent" while an agent session owns the Space, wubble_core::space::glyph_id).
     public pure function space(kind: string) -> string {
-        return kind == "work" ? SpaceIcons.work : kind == "study" ? SpaceIcons.study : SpaceIcons.personal;
+        return kind == "agent" ? self.agent : kind == "work" ? SpaceIcons.work : kind == "study" ? SpaceIcons.study : SpaceIcons.personal;
     }
 
     // A glyph by name, for rows that carry their icon as data (MenuEntry.icon); "" for none.

@@ -65,6 +65,7 @@ pub mod stretch;
 pub mod suggest;
 pub mod tab;
 pub mod tabdrag;
+pub mod tabmarks;
 pub mod tabmenu;
 pub mod tabs;
 pub mod tasks;

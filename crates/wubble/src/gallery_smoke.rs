@@ -77,6 +77,13 @@ pub enum Overlay {
     AgentSheet,
     /// An approved agent session in the window: its tab rows and Space header carry the mark.
     AgentTabs,
+    /// The same session, the footer's Spaces popup open over the agent's Space row.
+    AgentSpaces,
+    /// The shown tab plays sound and / or is muted (the sound badge's states).
+    Sound {
+        audible: bool,
+        muted: bool,
+    },
     LoadError,
     CertError,
     AutofillMenu,
@@ -178,6 +185,15 @@ const fn over_on(name: &'static str, overlay: Overlay, ground: Ground) -> Scene 
     }
 }
 
+const PLAYING: Overlay = Overlay::Sound {
+    audible: true,
+    muted: false,
+};
+const MUTED: Overlay = Overlay::Sound {
+    audible: false,
+    muted: true,
+};
+
 /// Every scene, in the order they are shot. Web page scenes first: native pages replace the
 /// visible tab, and nothing here goes back.
 pub const SCENES: &[Scene] = &[
@@ -199,6 +215,39 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(NEW_TAB_ROW),
         ..scene("new-tab-hover")
     },
+    // the rail's sound badge on the tab's favicon (top-right): playing (a press mutes), muted
+    // (a press unmutes; it stays while the page is quiet), the row hovered (the close badge
+    // beside it), the pointer on the badge itself
+    Scene {
+        sidebar: SidebarMode::Rail,
+        ..over("rail-sound-playing", PLAYING)
+    },
+    Scene {
+        sidebar: SidebarMode::Rail,
+        ..over("rail-sound-muted", MUTED)
+    },
+    Scene {
+        sidebar: SidebarMode::Rail,
+        pointer: Some(RAIL_TAB_ROW),
+        ..over("rail-sound-hover", PLAYING)
+    },
+    Scene {
+        sidebar: SidebarMode::Rail,
+        pointer: Some(RAIL_SOUND_BADGE),
+        ..over("rail-sound-badge-hover", PLAYING)
+    },
+    Scene {
+        sidebar: SidebarMode::Rail,
+        pointer: Some(RAIL_SOUND_BADGE),
+        ..over("rail-sound-muted-hover", MUTED)
+    },
+    // an agent session's tabs on the rail (the badge on each favicon) and its Space in the
+    // footer's popup (the agent glyph on its row), before the scenes that pile Spaces up
+    Scene {
+        sidebar: SidebarMode::Rail,
+        ..over("agent-tabs-rail", Overlay::AgentTabs)
+    },
+    over("agent-spaces-popup", Overlay::AgentSpaces),
     Scene {
         frames: BURST,
         ..over("command-bar-open", Overlay::CommandBar(""))
@@ -378,6 +427,8 @@ const NEW_TAB_ROW: (u16, u16) = (130, 408);
 const PEEK_EDGE: (u16, u16) = (3, 300);
 /// The first tab of the rail on the gallery's own profile (one tab), logical px.
 const RAIL_TAB_ROW: (u16, u16) = (36, 122);
+/// The sound badge on the first rail tab's favicon corner (top-right), logical px.
+const RAIL_SOUND_BADGE: (u16, u16) = (45, 113);
 // Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the
 // autofill menu's first login.
 const DOWNLOAD_ROW: (u16, u16) = (330, 835);

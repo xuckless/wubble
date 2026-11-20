@@ -9,7 +9,9 @@
 //! the list (a rule between groups, the rows, the sticky row). Until then there is no Sessions
 //! group at all (owner: hidden until the MCP server is built).
 
-use crate::space::{Rgb, Space, SpaceIcon, SpaceId};
+use std::collections::HashSet;
+
+use crate::space::{Rgb, Space, SpaceIcon, SpaceId, glyph_id};
 use crate::tabdrag::Rect;
 
 /// A group of rows.
@@ -30,8 +32,17 @@ pub struct Row {
     pub name: String,
     pub tint: Rgb,
     pub icon: SpaceIcon,
+    /// An agent session owns the Space: its tile draws the agent glyph ([`Row::glyph`]).
+    pub agent: bool,
     /// The window's own Space (the row the popup marks).
     pub current: bool,
+}
+
+impl Row {
+    /// What the row's tile draws (`space::glyph_id`).
+    pub fn glyph(&self) -> &'static str {
+        glyph_id(self.icon, self.agent)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,8 +87,9 @@ pub struct Geometry {
     pub rule: f64,
 }
 
-/// The popup for a window showing Space `current`, over the model's Spaces in order.
-pub fn popup(spaces: &[Space], current: SpaceId) -> Popup {
+/// The popup for a window showing Space `current`, over the model's Spaces in order; `agents` are
+/// the Spaces agent sessions own.
+pub fn popup(spaces: &[Space], current: SpaceId, agents: &HashSet<SpaceId>) -> Popup {
     let rows: Vec<Row> = spaces
         .iter()
         .map(|s| Row {
@@ -85,6 +97,7 @@ pub fn popup(spaces: &[Space], current: SpaceId) -> Popup {
             name: s.name.clone(),
             tint: s.tint,
             icon: s.icon,
+            agent: agents.contains(&s.id),
             current: s.id == current,
         })
         .collect();
@@ -180,7 +193,7 @@ mod tests {
     #[test]
     fn every_space_in_order_with_the_current_one_marked() {
         let spaces = [space(0, "Home"), space(4, "Work"), space(2, "Study")];
-        let p = popup(&spaces, SpaceId(4));
+        let p = popup(&spaces, SpaceId(4), &HashSet::new());
         assert_eq!(p.sections.len(), 1);
         assert_eq!(p.sections[0].group, Group::Spaces);
         let rows = &p.sections[0].rows;
@@ -194,9 +207,20 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_s_space_row_draws_the_agent_glyph() {
+        let spaces = [space(0, "Home"), space(1, "Session")];
+        let p = popup(&spaces, SpaceId(0), &HashSet::from([SpaceId(1)]));
+        let rows = &p.sections[0].rows;
+        assert_eq!((rows[0].agent, rows[0].glyph()), (false, "personal"));
+        assert_eq!((rows[1].agent, rows[1].glyph()), (true, "agent"));
+        // the stored icon is untouched: only what is drawn changes
+        assert_eq!(rows[1].icon, SpaceIcon::nth(1));
+    }
+
+    #[test]
     fn many_spaces_are_one_group_and_the_sticky_row_stays() {
         let spaces: Vec<_> = (0..12).map(|i| space(i, &format!("Space {i}"))).collect();
-        let p = popup(&spaces, SpaceId(11));
+        let p = popup(&spaces, SpaceId(11), &HashSet::new());
         let lines = p.lines();
         assert_eq!(lines.len(), 12, "no rule inside one group");
         assert!(matches!(lines[11], Line::Row(r) if r.current));
@@ -205,7 +229,7 @@ mod tests {
 
     #[test]
     fn no_spaces_no_group_but_new_space() {
-        let p = popup(&[], SpaceId(0));
+        let p = popup(&[], SpaceId(0), &HashSet::new());
         assert!(p.sections.is_empty());
         assert!(p.lines().is_empty());
         assert_eq!(p.sticky, Sticky::NewSpace);
@@ -214,7 +238,7 @@ mod tests {
     #[test]
     fn drop_rows_are_the_other_spaces_rows_the_list_shows() {
         let spaces: Vec<_> = (0..10).map(|i| space(i, "s")).collect();
-        let p = popup(&spaces, SpaceId(1));
+        let p = popup(&spaces, SpaceId(1), &HashSet::new());
         let g = Geometry {
             x: 20.0,
             w: 224.0,
@@ -252,7 +276,7 @@ mod tests {
     fn a_second_group_is_set_off_by_a_rule() {
         // the Sessions group (MCP plan) will be a second section: the list puts a rule
         // between the two and none at either end
-        let mut p = popup(&[space(0, "Home")], SpaceId(0));
+        let mut p = popup(&[space(0, "Home")], SpaceId(0), &HashSet::new());
         p.sections.push(p.sections[0].clone());
         let lines = p.lines();
         assert_eq!(lines.len(), 3);

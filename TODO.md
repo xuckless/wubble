@@ -18,12 +18,12 @@ own session and has not been run since batch eight; Windows is not green in CI.
 In flight, each in its own worktree, not yet on `main`:
 - [~] `xm/sheet-fix`: the agent approval sheet (owner's review: its Window choice shows no selection and cannot be changed; Secrets and Sites are not editable): the multi-option control as Settings uses it, Secrets and Sites as the kit list editor whose result is the grant, the smoke answering by real pointer presses
 - [~] `xm/sheet-fix`: an agent tab the owner switches to shows a blurred page (suspected: the 384 px tab snapshot is never replaced, since agent views stay visible to CEF and a still page paints no frame)
-- [~] `xm/tab-marks`: an agent icon for an agent session's Space (footer tile, Spaces popup, header); an agent badge at the bottom right of an agent tab's favicon; in the rail, a sound badge at the favicon's top right that mutes and unmutes (the close badge's circular style)
 - [~] `xm/orbs`: the Thinking orb and the agentic mascots from Ultra Reactivate (`src/ultra-reactivate/vendor/thinking-orbs`, `bot-avatars`; MIT, Libraries.dev) as kit widgets with gallery scenes; no wiring
 Next, in order:
 - [ ] MCP after the first tests: the list under "MCP server" below, started on `xm/sheet-fix` once it lands (same host file)
 - [ ] Wire the mascots (the agent session log's identity) and the thinking orb, after the owner reads the proposal in `docs/research/agent-widgets.md`
-- [ ] The agent glyph: the generated set has none (the lightning bolt stands in); the owner's glyph, then one swap
+- [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
+- [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
 - [ ] Extensions: the gaps under M6 (Bitwarden's popup width first: one more patch and an engine rebuild)
 - [ ] The "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
