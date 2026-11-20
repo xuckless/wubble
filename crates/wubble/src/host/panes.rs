@@ -920,6 +920,9 @@ impl Host {
         } else {
             return;
         };
+        if !self.overlay_open(wubble_core::overlay::Kind::Menu, None) {
+            return;
+        }
         self.apply_menu(focused, MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
     }

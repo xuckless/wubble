@@ -10,6 +10,7 @@ use slint::ComponentHandle;
 use slint::platform::PointerEventButton;
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use wubble_core::hints::{self, HintEffect, HintEvent, HintKey, Hints};
+use wubble_core::overlay::Kind;
 use wubble_core::pagetheme::{self, MediaPrefs, PageTheme, Shown, ThemeTable};
 use wubble_core::reader::{self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs};
 use wubble_core::settings as defs;
@@ -95,8 +96,14 @@ impl Host {
         };
         match action {
             Builtin::CyclePageTheme => self.cycle_page_theme(tab),
-            Builtin::LinkHints => self.hint_event(tab, HintEvent::Toggle),
+            // hints and the region picker take the page: overlays first (wubble_core::overlay)
+            Builtin::LinkHints => {
+                if self.hints_tab().is_some() || self.overlay_open(Kind::Hints, Some(tab)) {
+                    self.hint_event(tab, HintEvent::Toggle)
+                }
+            }
             Builtin::ToggleReader => self.reader_event(tab, ReaderEvent::Toggle),
+            Builtin::Shot(ShotRequest::Region) if !self.overlay_open(Kind::Region, Some(tab)) => {}
             Builtin::Shot(request) => self.shot_event(tab, ShotEvent::Request(request)),
             Builtin::NewBoost => self.new_boost(),
             Builtin::ClearData => self.clear_data_menu(tab),
@@ -462,8 +469,15 @@ impl Host {
     // ----- link hints
 
     /// The tab whose page shows hints.
-    fn hints_tab(&self) -> Option<TabId> {
+    pub(super) fn hints_tab(&self) -> Option<TabId> {
         self.builtins.hints.as_ref().map(|(t, _)| *t)
+    }
+
+    /// Hint mode ends wherever it is.
+    pub(super) fn hints_cancel(&mut self) {
+        if let Some(tab) = self.hints_tab() {
+            self.hint_event(tab, HintEvent::Cancel);
+        }
     }
 
     fn hint_event(&mut self, tab: TabId, event: HintEvent) {
@@ -587,6 +601,13 @@ impl Host {
     /// The tab a screenshot is in flight of.
     fn shot_tab(&self) -> Option<TabId> {
         self.builtins.shot.map(|(t, _)| t)
+    }
+
+    /// The tab whose page the region picker is over.
+    pub(super) fn region_tab(&self) -> Option<TabId> {
+        self.builtins
+            .shot
+            .and_then(|(t, s)| (s == Shot::Picking).then_some(t))
     }
 
     fn shot_state(&self) -> Shot {

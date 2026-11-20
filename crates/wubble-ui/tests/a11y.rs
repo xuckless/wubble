@@ -115,7 +115,7 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
     key(&app, " ".into());
     assert_eq!(
         log.borrow_mut().drain(..).collect::<Vec<_>>(),
-        ["tab 2", "close 2", "new tab"]
+        ["tab 2", "close 2", "action new-tab"]
     );
 
     // The tab list: a tab list of tabs, the active one selected; the default action picks one.
@@ -191,7 +191,7 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         "tab 1",
         "action reload",
         "settings",
-        "new tab",
+        "action new-tab",
         "space 10",
         "menu 0",
     ]
@@ -209,7 +209,7 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
     app.invoke_focus_region(FocusRegion::Sidebar);
     pump();
     key(&app, Key::Return.into());
-    assert_eq!(log.borrow().as_slice(), ["new tab"]);
+    assert_eq!(log.borrow().as_slice(), ["action new-tab"]);
     // F6 to the page: the sidebar no longer holds the keys.
     app.invoke_focus_region(FocusRegion::Page);
     pump();

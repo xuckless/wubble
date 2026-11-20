@@ -1196,9 +1196,12 @@ export component AppWindow inherits Window {
                     root.boost-act(name);
                 }
             }
+            // A brief notice at the page's top; one that waits for an answer (SponsorBlock's
+            // question, its Undo) at its bottom, as the reader's controls: a top one sat on the
+            // page's own top bar (a site's search field) for as long as it waited.
             Toast {
                 x: (parent.width - self.width) / 2;
-                y: Space.s4;
+                y: root.toast-action == "" ? Space.s4 : parent.height - self.height - Space.s4;
                 widest: min(Shell.toast-max-width, parent.width - 2 * Space.s4);
                 text: root.toast-text;
                 serial: root.toast-serial;
@@ -1357,9 +1360,6 @@ export component AppWindow inherits Window {
                 }
                 window-maximise-requested => {
                     root.window-toggle-maximise-requested();
-                }
-                new-tab-requested => {
-                    root.request-new-tab();
                 }
                 address-activated => {
                     root.request-address-focus();

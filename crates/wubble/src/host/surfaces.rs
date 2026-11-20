@@ -13,6 +13,7 @@ use wubble_core::action::Action;
 use wubble_core::busy::Reason;
 use wubble_core::devtools::{DockEvent, PANEL_TAB};
 use wubble_core::model::Command;
+use wubble_core::overlay::{Event as OverlayEvent, Kind};
 use wubble_core::site::{Decision, Permission};
 use wubble_core::tab::TabId;
 use wubble_core::zoom;
@@ -87,6 +88,13 @@ impl Host {
         {
             self.dispatch(Command::ActivateTab(tab));
         }
+        // A page's question closes the user's overlays over its tab (wubble_core::overlay).
+        if matches!(
+            routed,
+            Routed::Dialog(DialogEvent::Requested(_)) | Routed::Auth(AuthEvent::Requested(_))
+        ) {
+            self.overlay_open(Kind::Dialog, Some(tab));
+        }
         match routed {
             Routed::Dialog(e) => {
                 self.apply_dialog(tab, e);
@@ -106,6 +114,7 @@ impl Host {
                 let extra = self.model.windowed(tab).map_or_else(Vec::new, |w| {
                     crate::menu::window_page_entries(&self.model, w)
                 });
+                let allowed = self.overlay_open(Kind::Menu, None);
                 self.apply_menu(
                     tab,
                     MenuEvent::Requested {
@@ -115,6 +124,10 @@ impl Host {
                         extra,
                     },
                 );
+                // refused (a page's dialog waits): the request is answered at once
+                if !allowed {
+                    self.apply_menu(tab, MenuEvent::Dismiss);
+                }
             }
             Routed::Menu(e) => {
                 self.apply_menu(tab, e);
@@ -150,6 +163,8 @@ impl Host {
             Routed::TargetId(Ok(id)) => self.dock_event(DockEvent::TargetId(tab, id)),
             Routed::TargetId(Err(())) => self.dock_event(DockEvent::TargetFailed(tab)),
             Routed::Committed => {
+                let shown = self.shown();
+                self.overlay_event(window, shown, OverlayEvent::Navigated(tab));
                 self.apply_permission(tab, PermissionEvent::PageChanged);
                 self.busy_page_started(tab);
             }
@@ -518,16 +533,11 @@ impl Host {
         }
     }
 
-    /// The tab stopped being the visible one: its menu is dismissed (menus
-    /// are transient), its page leaves fullscreen. Dialogs and the find bar
-    /// wait for the tab's return.
-    fn left_visible(&mut self, window: &AppWindow, tab: TabId) {
-        if matches!(
-            self.surfaces.get(&tab).map(|s| &s.menu),
-            Some(Menu::Open { .. } | Menu::Shell { .. })
-        ) {
-            self.apply_menu(tab, MenuEvent::Dismiss);
-        }
+    /// The tab stopped being the visible one: the overlays follow their rules (menus and
+    /// sheets close; dialogs, the find bar and a notice wait for the tab's return,
+    /// wubble_core::overlay), its page leaves fullscreen.
+    fn left_visible(&mut self, window: &AppWindow, tab: TabId, now: Option<TabId>) {
+        self.overlay_event(window, Some(tab), OverlayEvent::Switched(now));
         if matches!(self.screen, Screen::Page { tab: t, .. } if t == tab) {
             if let Some(v) = self.tab_view(tab) {
                 v.exit_fullscreen();
@@ -544,7 +554,7 @@ impl Host {
             && let Some(old) = self.w.drawn.tab
         {
             self.w.drawn.tab = tab;
-            self.left_visible(window, old);
+            self.left_visible(window, old, tab);
         }
         let current = tab
             .and_then(|t| self.surfaces.get(&t))
@@ -685,6 +695,9 @@ impl Host {
 
     pub fn find_event(&mut self, event: FindEvent) {
         if let Some(tab) = self.shown() {
+            if event == FindEvent::Open && !self.overlay_open(Kind::Find, Some(tab)) {
+                return;
+            }
             self.apply_find(tab, event);
             self.redraw_surfaces();
         }
@@ -789,6 +802,14 @@ impl Host {
         self.toast_replaced();
         if let Some(window) = self.w.window.upgrade() {
             self.show_toast(&window, text, action, sticky);
+        }
+    }
+
+    /// Takes whatever notice shows away.
+    pub(super) fn toast_hide(&mut self) {
+        self.toast_serial = self.toast_serial.wrapping_add(1);
+        if let Some(window) = self.w.window.upgrade() {
+            window.set_toast_hide_serial(self.toast_serial);
         }
     }
 

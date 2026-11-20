@@ -33,6 +33,7 @@ pub mod model;
 pub mod motion;
 pub mod neterror;
 pub mod omnibox;
+pub mod overlay;
 pub mod pages;
 pub mod pagetheme;
 pub mod pip;

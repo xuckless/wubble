@@ -418,7 +418,8 @@ pub struct Keymap {
     rows: Vec<(Chord, Action, Route)>,
 }
 
-fn default_rows(platform: Platform) -> impl Iterator<Item = (Chord, Action, Route)> {
+/// The default rows of a platform, parsed, in table order.
+pub fn default_rows(platform: Platform) -> impl Iterator<Item = (Chord, Action, Route)> {
     DEFAULTS
         .iter()
         .filter(move |b| b.platforms.contains(&platform))

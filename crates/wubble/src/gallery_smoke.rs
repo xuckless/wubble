@@ -81,6 +81,8 @@ pub enum Overlay {
     Unlock,
     /// The notice a saved video frame or screenshot brings up.
     Toast,
+    /// A notice waiting for an answer (SponsorBlock's question), at the page's bottom.
+    Question,
     /// The link status bubble on the web page, for this address.
     Status(&'static str),
     /// A page's own right-click menu (back on, forward off: a disabled row).
@@ -187,6 +189,7 @@ pub const SCENES: &[Scene] = &[
     over("bookmark-sheet", Overlay::Bookmark),
     over("print-sheet", Overlay::Print),
     over("toast", Overlay::Toast),
+    over("toast-question", Overlay::Question),
     over(
         "status-bubble",
         Overlay::Status(

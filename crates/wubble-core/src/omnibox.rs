@@ -322,9 +322,10 @@ const TAB_BONUS: u32 = 500_000;
 const MAX_HISTORY_BONUS: u32 = TAB_BONUS - 1;
 const DAY_MS: i64 = 86_400_000;
 
-/// Ranks `cands` against `query`. The first row is always the classified
-/// intent (a URL intent uses `Kind::Search` with `Target::Url`; the UI has no
-/// separate "go" kind). An empty query yields no rows.
+/// Ranks `cands` against `query`. The first row is the classified intent (a URL intent uses
+/// `Kind::Search` with `Target::Url`; the UI has no separate "go" kind), except that an action
+/// whose title the query's words name comes before a search intent. An empty query yields no
+/// rows.
 pub fn rank(
     query: &str,
     engine: SearchEngine,
@@ -420,8 +421,27 @@ pub fn rank(
     // Stable sort: ties keep input order, then kind order.
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.kind.cmp(&b.1.kind)));
     out.extend(scored.into_iter().map(|(_, r)| r));
+    // An action named by the query's words runs on Enter: "new boost" is the action, not a web
+    // search (QA HIGH-07). A URL, or words naming no action, keep the intent row first.
+    if matches!(intent, Intent::Search(_))
+        && let Some(i) = out
+            .iter()
+            .position(|r| r.kind == Kind::Action && names(&terms, &r.title))
+    {
+        let action = out.remove(i);
+        out.insert(0, action);
+    }
     out.truncate(limit);
     out
+}
+
+/// Every term starts a word of `title` (case-insensitive): the query names it.
+fn names(terms: &[String], title: &str) -> bool {
+    let title = title.to_lowercase();
+    !terms.is_empty()
+        && terms
+            .iter()
+            .all(|t| title.split_whitespace().any(|w| w.starts_with(t.as_str())))
 }
 
 fn row(kind: Kind, title: &str, subtitle: &str, target: Target) -> OmniResult {
@@ -758,10 +778,46 @@ mod tests {
     #[test]
     fn actions_match_by_word_prefix() {
         let r = run("new sp", &Candidates::default());
-        assert_eq!(r[1].target, Target::Action(Action::NewSpace));
+        assert_eq!(r[0].target, Target::Action(Action::NewSpace));
+        assert_eq!(r[1].target, Target::Search("new sp".into()));
         assert_eq!(r.len(), 2);
+        // A keyword finds the action, below the search: the query does not name it.
         let r = run("refresh", &Candidates::default());
+        assert_eq!(r[0].target, Target::Search("refresh".into()));
         assert_eq!(r[1].target, Target::Action(Action::Reload));
+    }
+
+    /// QA HIGH-07: the two reported queries.
+    #[test]
+    fn an_action_the_query_names_outranks_the_search() {
+        let r = run("new boost", &Candidates::default());
+        assert_eq!(r[0].target, Target::Action(Action::NewBoost));
+        assert_eq!(r[1].target, Target::Search("new boost".into()));
+        let r = run("New BOO", &Candidates::default());
+        assert_eq!(r[0].target, Target::Action(Action::NewBoost));
+        let r = run("page theme", &Candidates::default());
+        assert!(
+            r.iter()
+                .any(|r| r.target == Target::Action(Action::CyclePageTheme)),
+            "{r:?}"
+        );
+        // A URL, or words that name no action, keep the intent row first.
+        let r = run("newboost.com", &Candidates::default());
+        assert_eq!(r[0].target, Target::Url("https://newboost.com/".into()));
+        let r = run("new york", &Candidates::default());
+        assert_eq!(r[0].target, Target::Search("new york".into()));
+        // The action leads open tabs and history too: Enter runs what the words name.
+        let tabs = [OpenTab {
+            id: TabId(1),
+            title: "Reader mode tips".into(),
+            url: "https://reader.example/".into(),
+        }];
+        let c = Candidates {
+            tabs: &tabs,
+            ..Default::default()
+        };
+        let r = run("reader mode", &c);
+        assert_eq!(r[0].target, Target::Action(Action::ToggleReader));
     }
 
     #[test]
