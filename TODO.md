@@ -58,7 +58,6 @@ Open, to build or check:
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
 - [ ] `controls::bump` reads then writes a property inside the draw (one extra frame; the pattern that looped in glass)
-- [ ] `qa-report/` is untracked: commit it or keep it out (owner)
 
 ## M0: Frame path
 - [x] Workspace, CEF init and pump, helper, Linux dmabuf import, blit into `slint::Image` (c6b168a)
