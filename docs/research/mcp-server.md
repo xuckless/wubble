@@ -7,6 +7,29 @@ Date: 2026-11-19. Plan only, no code. Tags: **[V]** verified from a cited source
 or from background knowledge (check before relying), **[?]** not found. Sources are numbered at the end.
 Spec version throughout: MCP **2026-07-28**, the current revision [1]. "Owner" marks direction the owner has decided.
 
+## 0. Build order (owner, 2026-11-19)
+
+The owner's direction after reading this plan: build a basic version first, then add guardrails where use shows
+they are needed, rather than designing every gate up front. Sections 2 to 7 stay as the catalogue of known holes
+and of the gates that can close them; section 7's phases are reordered as follows.
+
+**Basic version (v0), experimental and off by default:**
+- Secrets as named variables, approved per session, filled only on the origin the login belongs to.
+- Strict containers: a session lives in its own Space and container and reaches nothing outside it.
+- Windowed or headless.
+- Every control the engine offers, script evaluation included; no airlocks, no write gating, no observer/actor split.
+
+**Kept in v0 because they are structure, not guardrails** (cheap now, hard to add later):
+- A local socket with a per-session token, never an open port; no sessions while remote debugging is on.
+- The user approves each session in a native sheet (its secrets, its sites if any, windowed or headless).
+- Every action tagged with its session and written to an activity log: this is how holes get found.
+- A visible indicator on agent-driven tabs and a stop command that works while headless.
+
+**Known hole in v0, accepted for now:** with script evaluation allowed, a secret is hidden from the agent only
+until it is typed: a script can read the field. A session that has secrets is therefore as trusted as its harness.
+First guardrail candidates, in order: no evaluation on a page a secret was filled into; redaction of filled values
+from reads; an optional site allowlist that is enforced; then the airlocks of section 5.
+
 ## 1. Summary and recommendation
 
 Build it, after the first release, as **sessions**. The user asks their harness for something; the agent calls
