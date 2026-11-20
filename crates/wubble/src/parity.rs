@@ -284,6 +284,20 @@ pub enum HostCheck {
     /// The page's entrance after a tab switch has ended: while it runs the pane is drawn
     /// shifted and scaled, and a click lands where it is drawn, not at its point.
     PageEntered,
+    /// The command bar's field holds this text (the start page's capsule is that field too).
+    BarQuery(&'static str),
+    /// The start page's capsule holds the keys.
+    CapsuleFocused,
+    /// The find bar's field holds this text.
+    FindQuery(&'static str),
+    /// Settings shows.
+    SettingsShown,
+    /// Settings' search box holds this text.
+    SettingsQuery(&'static str),
+    /// The bookmark sheet is open (true) or not.
+    BookmarkSheet(bool),
+    /// A bookmark has this name.
+    Bookmark(&'static str),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1152,6 +1166,148 @@ pub const ITEMS: &[Item] = &[
         ],
         [J("eq((seen.down || '').split('/')[0], 'inp@140,34')")]
     ),
+    // G. The shell's own fields (Slint's TextInput in the kit, not the page's): the edit keys
+    // through the host's key path, and the one clipboard they share with the pages and the
+    // system. Ctrl+L puts the command bar's field in front with the page's address selected.
+    item!(
+        "G.bar-paste",
+        [
+            Host(HostOp::SetClipboard("pasted")),
+            Until(H(C::Clipboard("pasted"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Keys("Ctrl+V")
+        ],
+        [H(C::BarQuery("pasted"))]
+    ),
+    item!(
+        "G.bar-copy",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Type("copied"),
+            Until(H(C::BarQuery("copied"))),
+            Keys("Ctrl+A Ctrl+C")
+        ],
+        [H(C::Clipboard("copied")), H(C::BarQuery("copied"))]
+    ),
+    item!(
+        "G.bar-cut",
+        [
+            Host(HostOp::SetClipboard("stale")),
+            Until(H(C::Clipboard("stale"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Type("cutout"),
+            Until(H(C::BarQuery("cutout"))),
+            Keys("Ctrl+A Ctrl+X")
+        ],
+        [H(C::Clipboard("cutout")), H(C::BarQuery(""))]
+    ),
+    item!(
+        "G.bar-undo-redo",
+        [
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Keys("BackSpace"),
+            Type("ab"),
+            Until(H(C::BarQuery("ab"))),
+            Keys("Ctrl+Z"),
+            Until(H(C::BarQuery(""))),
+            Keys("Ctrl+Shift+Z")
+        ],
+        [H(C::BarQuery("ab"))]
+    ),
+    // Both ways between a shell field and a page's.
+    item!(
+        "G.bar-to-page",
+        [
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Type("shell text"),
+            Until(H(C::BarQuery("shell text"))),
+            Keys("Ctrl+A Ctrl+C"),
+            Until(H(C::Clipboard("shell text"))),
+            Host(HostOp::CloseBar),
+            Until(H(C::BarOpen(false))),
+            Js("parity.field('inp', '')"),
+            // the page takes the keys back
+            Click(Left, NONE, at::INP),
+            Keys("Ctrl+V")
+        ],
+        [J("eq($('inp').value, 'shell text')")]
+    ),
+    item!(
+        "G.page-to-bar",
+        [
+            Js("parity.field('inp', 'page text')"),
+            Keys("Ctrl+A Ctrl+C"),
+            Until(H(C::Clipboard("page text"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+L"),
+            Until(H(C::BarOpen(true))),
+            Keys("Ctrl+V")
+        ],
+        [H(C::BarQuery("page text"))]
+    ),
+    // The start page's capsule: a new tab opens with it holding the keys.
+    item!(
+        "G.capsule-paste",
+        [
+            Host(HostOp::SetClipboard("capsule")),
+            Until(H(C::Clipboard("capsule"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+T"),
+            Until(H(C::CapsuleFocused)),
+            Keys("Ctrl+V")
+        ],
+        [H(C::BarQuery("capsule"))]
+    ),
+    item!(
+        "G.find-paste",
+        [
+            Host(HostOp::SetClipboard("needle")),
+            Until(H(C::Clipboard("needle"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+F"),
+            Until(H(C::FindOpen(true))),
+            Keys("Ctrl+V")
+        ],
+        [H(C::FindQuery("needle"))]
+    ),
+    item!(
+        "G.settings-search-paste",
+        [
+            Host(HostOp::SetClipboard("zoom")),
+            Until(H(C::Clipboard("zoom"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+,"),
+            Until(H(C::SettingsShown)),
+            Keys("Ctrl+V")
+        ],
+        [H(C::SettingsQuery("zoom"))]
+    ),
+    // The bookmark sheet's name field (Ctrl+D), selected on open; Enter saves the name.
+    item!(
+        "G.bookmark-sheet-paste",
+        [
+            Host(HostOp::SetClipboard("pasted bookmark")),
+            Until(H(C::Clipboard("pasted bookmark"))),
+            Click(Left, NONE, at::BLANK),
+            Keys("Ctrl+D"),
+            Until(H(C::BookmarkSheet(true))),
+            Keys("Ctrl+A Ctrl+V Enter"),
+            Until(H(C::BookmarkSheet(false)))
+        ],
+        [H(C::Bookmark("pasted bookmark"))]
+    ),
 ];
 
 // ----------------------------------------------------------------- keys
@@ -1425,6 +1581,8 @@ pub const MAC_CHORDS: &[(&str, &str)] = &[
     ("Ctrl+T", "Cmd+T"),
     ("Ctrl+L", "Cmd+L"),
     ("Ctrl+P", "Cmd+P"),
+    ("Ctrl+D", "Cmd+D"),
+    ("Ctrl+,", "Cmd+,"),
     ("Ctrl+=", "Cmd+="),
     ("Ctrl+0", "Cmd+0"),
     ("Ctrl+Left", "Alt+Left"),

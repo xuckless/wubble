@@ -48,6 +48,7 @@ mod settings_smoke;
 mod shell;
 mod shot;
 mod shot_io;
+mod slint_backend;
 mod split_smoke;
 mod sponsor_net;
 mod start_smoke;
@@ -1520,12 +1521,11 @@ fn run(
             .map_err(|_| "the GPU device thread panicked")??;
         measure::mark(measure::Stage::Gpu);
         eprintln!("wubble: GPU {}", gpu.describe());
-        slint::BackendSelector::new()
-            .backend_name("winit".into())
-            .renderer_name("skia-wgpu".into())
-            .require_wgpu_30(gpu.slint_configuration())
-            .with_winit_window_attributes_hook(wubble_ui::window::attributes)
-            .select()?;
+        slint_backend::select(
+            gpu.slint_configuration(),
+            "skia-wgpu",
+            wubble_ui::window::attributes,
+        )?;
         measure::mark(measure::Stage::SlintBackend);
         Ok(gpu)
     })();
