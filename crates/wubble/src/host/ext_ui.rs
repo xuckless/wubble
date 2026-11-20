@@ -794,7 +794,14 @@ fn action_row(
 fn icon_file(dir: &std::path::Path, icon_path: &str) -> Option<std::path::PathBuf> {
     use std::path::Component;
     let path = std::path::Path::new(icon_path);
-    let rel = path.strip_prefix(dir).unwrap_or(path);
+    // The engine's path may name the directory through another spelling (a symlinked profile,
+    // macOS /var vs /private/var), so the canonical form of the directory counts too.
+    let real = dir.canonicalize().ok();
+    let rel = [Some(dir), real.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(|d| path.strip_prefix(d).ok())
+        .unwrap_or(path);
     let rel = std::path::Path::new(rel.to_str()?.trim_start_matches('/'));
     let plain = rel.components().next().is_some()
         && rel.components().all(|c| matches!(c, Component::Normal(_)));
@@ -827,6 +834,21 @@ mod tests {
         assert_eq!(icon_file(dir, ""), None);
         assert_eq!(icon_file(dir, "../x.png"), None);
         assert_eq!(icon_file(dir, "/p/ext/../x.png"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_default_icon_is_found_through_a_symlinked_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().canonicalize().unwrap().join("ext");
+        std::fs::create_dir(&real).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let abs = real.join("images/icon38.png");
+        assert_eq!(
+            icon_file(&link, abs.to_str().unwrap()),
+            Some(link.join("images/icon38.png"))
+        );
     }
 
     #[test]
