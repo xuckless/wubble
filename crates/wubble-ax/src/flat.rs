@@ -1,7 +1,7 @@
 //! The page as a flat list in reading order ([`PageTree::flatten`]): what a bridge that cannot
 //! graft a subtree under the page pane can still show (one shell element per item, in document
 //! order, at the node's bounds). It keeps what a screen reader reads and operates (headings,
-//! links, buttons, fields, check boxes, radio buttons, images with a name, and the text between
+//! links, buttons, fields, check boxes, radio buttons, images with a name, canvases, and the text between
 //! them) and drops the structure (containers, lists, tables, landmarks): an item stands for
 //! its whole subtree, so the static text inside a link or a heading is not read twice.
 
@@ -30,7 +30,8 @@ fn kind_of(role: &str) -> Option<Kind> {
         "textField" | "searchBox" | "textFieldWithComboBox" | "spinButton" => Kind::TextField,
         "checkBox" | "switch" => Kind::CheckBox,
         "radioButton" => Kind::RadioButton,
-        "image" => Kind::Image,
+        // a canvas is a picture; an agent names one by ref to point inside it
+        "image" | "canvas" => Kind::Image,
         "staticText" => Kind::Text,
         _ => return None,
     })
@@ -47,6 +48,8 @@ pub struct AxItem {
     pub role: String,
     pub name: String,
     pub value: String,
+    /// A link's target (Chromium's `url`); empty for anything else.
+    pub url: String,
     /// A heading's level (0: none).
     pub level: i32,
     /// A check box's or radio button's state.
@@ -174,7 +177,11 @@ impl PageTree {
                 continue;
             }
             match kind_of(&node.role).filter(|k| *k != Kind::Text || node.text("name").is_some()) {
-                Some(kind) if kind != Kind::Image || node.text("name").is_some() => {
+                Some(kind)
+                    if kind != Kind::Image
+                        || node.text("name").is_some()
+                        || node.role == "canvas" =>
+                {
                     out.push(self.item(doc, node, kind, origin));
                 }
                 // a nameless image or text, or a container: read through
@@ -200,6 +207,10 @@ impl PageTree {
             role: node.role.clone(),
             name: node.text("name").unwrap_or_default().trim().to_owned(),
             value: node.text("value").unwrap_or_default().to_owned(),
+            url: match kind {
+                Kind::Link => node.text("url").unwrap_or_default().to_owned(),
+                _ => String::new(),
+            },
             level: node.int("hierarchicalLevel").unwrap_or(0),
             checked,
             focused: self.focused() == Some((doc.tree_id.as_str(), node.id)),
