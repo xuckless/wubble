@@ -15,7 +15,7 @@
 //! A call that waits (a load, a condition, a script, a capture) is a [`Pending`] answered from
 //! the page's events, or with an error at its deadline.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
@@ -24,9 +24,7 @@ use slint::{ComponentHandle, Model};
 use wubble_ax::{AxItem, Bounds, PageTree, Reach};
 use wubble_core::agent::log::{Entry, Outcome};
 use wubble_core::agent::refs::RefBook;
-use wubble_core::agent::{
-    self, Effect, Env, Event, Grant, Mode, Request, SessionId, SheetText, State,
-};
+use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
 use wubble_core::agent::{Refusal, StopReason, Token};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
@@ -71,6 +69,8 @@ struct Session {
     space: Option<(SpaceId, ContainerId)>,
     /// Why the session was refused, when not the owner's word.
     note: Option<&'static str>,
+    /// When it began waiting for the sheet (`Agents::fresh`); the sheet takes the lowest.
+    asked: u64,
 }
 
 /// What a call's answer is logged and sent with.
@@ -199,10 +199,8 @@ pub(super) struct Agents {
     pending: Vec<Pending>,
     next: u64,
     timer: slint::Timer,
-    /// Sessions waiting for the approval sheet, the first the one it shows (or will show).
-    asking: VecDeque<SessionId>,
-    /// The window the sheet shows in, while it does.
-    sheet: Option<slint::Weak<AppWindow>>,
+    /// The window the sheet shows in and the session it shows, while it does.
+    sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
     sheets: i32,
 }
@@ -265,7 +263,7 @@ fn inside(b: Bounds, outer: Bounds) -> bool {
 }
 
 /// The sheet's window view of what it shows.
-fn sheet_view(text: &SheetText, serial: i32) -> AgentSheetView {
+fn sheet_view(request: &Request, sites: &[String], serial: i32) -> AgentSheetView {
     let names = |v: &[String]| -> slint::ModelRc<slint::SharedString> {
         let v: Vec<slint::SharedString> = v.iter().map(|s| s.as_str().into()).collect();
         v.as_slice().into()
@@ -273,10 +271,10 @@ fn sheet_view(text: &SheetText, serial: i32) -> AgentSheetView {
     AgentSheetView {
         open: true,
         serial,
-        client: text.client.as_str().into(),
-        secrets: names(&text.secrets),
-        sites: names(&text.sites),
-        headless: text.headless,
+        client: request.client.as_str().into(),
+        secrets: names(&request.wants_secrets),
+        sites: names(sites),
+        headless: request.wants_mode == Mode::Headless,
     }
 }
 
@@ -391,13 +389,19 @@ impl Host {
     fn agent_effect(&mut self, id: &SessionId, effect: Effect) {
         match effect {
             Effect::ShowApprovalSheet(_) => {
-                self.agents.asking.push_back(id.clone());
+                let asked = self.agents.fresh();
+                if let Some(s) = self.agents.sessions.get_mut(id) {
+                    s.asked = asked;
+                }
                 self.agent_sheet_pump();
             }
             Effect::DismissApprovalSheet => {
-                let was_first = self.agents.asking.front() == Some(id);
-                self.agents.asking.retain(|a| a != id);
-                if was_first {
+                if self
+                    .agents
+                    .sheet
+                    .as_ref()
+                    .is_some_and(|(_, shown)| shown == id)
+                {
                     self.agent_sheet_clear();
                 }
                 self.agent_sheet_pump();
@@ -430,20 +434,21 @@ impl Host {
         if self.agents.sheet.is_some() {
             return;
         }
-        let Some(id) = self.agents.asking.front().cloned() else {
+        // the session that has waited longest (the session table is the one owner of who waits)
+        let Some((id, request, sites)) = self
+            .agents
+            .sessions
+            .iter()
+            .filter_map(|(id, s)| match &s.state {
+                State::AwaitingApproval(request) => {
+                    Some((s.asked, id.clone(), request.clone(), s.sites.clone()))
+                }
+                _ => None,
+            })
+            .min_by_key(|(asked, ..)| *asked)
+            .map(|(_, id, request, sites)| (id, request, sites))
+        else {
             return;
-        };
-        let text = match self.agents.sessions.get(&id) {
-            Some(Session {
-                state: State::AwaitingApproval(request),
-                sites,
-                ..
-            }) => SheetText::new(request, sites),
-            // ended since it asked
-            _ => {
-                self.agents.asking.pop_front();
-                return self.agent_sheet_pump();
-            }
         };
         let Some(window) = self.w.window.upgrade() else {
             return;
@@ -452,8 +457,8 @@ impl Host {
             return;
         }
         self.agents.sheets += 1;
-        window.set_agent_sheet_view(sheet_view(&text, self.agents.sheets));
-        self.agents.sheet = Some(window.as_weak());
+        window.set_agent_sheet_view(sheet_view(&request, &sites, self.agents.sheets));
+        self.agents.sheet = Some((window.as_weak(), id));
         self.render_surfaces(&window);
         if self.checks.mcp_smoke {
             let _ = slint::invoke_from_event_loop(|| with_host(Host::mcp_smoke_answer));
@@ -462,7 +467,7 @@ impl Host {
 
     /// The sheet leaves (answered, or its session ended).
     fn agent_sheet_clear(&mut self) {
-        if let Some(window) = self.agents.sheet.take().and_then(|w| w.upgrade()) {
+        if let Some(window) = self.agents.sheet.take().and_then(|(w, _)| w.upgrade()) {
             window.set_agent_sheet_view(AgentSheetView::default());
         }
     }
@@ -470,10 +475,7 @@ impl Host {
     /// The sheet's own answer: Allow or Deny (Escape and a click on Deny), with its window
     /// choice. It answers the session the sheet shows.
     pub(crate) fn agent_sheet_answered(&mut self, allow: bool, headless: bool) {
-        if self.agents.sheet.is_none() {
-            return;
-        }
-        let Some(id) = self.agents.asking.front().cloned() else {
+        let Some((_, id)) = self.agents.sheet.clone() else {
             return;
         };
         let sites = self
@@ -506,6 +508,7 @@ impl Host {
                 start: None,
                 space: None,
                 note: None,
+                asked: 0,
             },
         );
         let request = Request {
@@ -869,6 +872,7 @@ impl Host {
                 start: Some(reply.id),
                 space: None,
                 note: None,
+                asked: 0,
             },
         );
         let request = Request {
@@ -1473,7 +1477,7 @@ impl Host {
     /// answers it through the window's own callback, as its buttons do: Allow, but Deny for the
     /// session that asks for a secret.
     pub(crate) fn mcp_smoke_answer(&mut self) {
-        let Some(window) = self.agents.sheet.as_ref().and_then(|w| w.upgrade()) else {
+        let Some(window) = self.agents.sheet.as_ref().and_then(|(w, _)| w.upgrade()) else {
             return self.fail("the approval sheet is not up".into());
         };
         let view = window.get_agent_sheet_view();

@@ -651,7 +651,7 @@ export struct PrintSheetView {
     copies: int,
 }
 
-// An agent session's approval sheet (`wubble_core::agent::SheetText`): who asks and for what.
+// An agent session's approval sheet (`wubble_core::agent::Request` and the session's sites): who asks and for what.
 export struct AgentSheetView {
     open: bool,
     // Changes with each sheet: the window choice restarts from `headless`.

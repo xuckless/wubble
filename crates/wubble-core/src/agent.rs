@@ -291,28 +291,6 @@ pub fn transition(state: State, event: Event) -> (State, Vec<Effect>) {
     }
 }
 
-/// What the approval sheet shows of a [`Request`], as text: the client by name, the secrets it
-/// asks for by name only, the sites it limits itself to, and which window mode it asks for.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SheetText {
-    pub client: String,
-    pub secrets: Vec<String>,
-    /// Empty: any site.
-    pub sites: Vec<String>,
-    pub headless: bool,
-}
-
-impl SheetText {
-    pub fn new(request: &Request, sites: &[String]) -> SheetText {
-        SheetText {
-            client: request.client.clone(),
-            secrets: request.wants_secrets.clone(),
-            sites: sites.to_vec(),
-            headless: request.wants_mode == Mode::Headless,
-        }
-    }
-}
-
 /// The owner's answer to the sheet as the session's event: Allow grants the sites asked for in
 /// the mode the sheet's choice says. No secret is bound to a vault login here (the sheet has no
 /// login picker yet), so a grant holds none; a grant that cannot be built denies.
@@ -565,20 +543,6 @@ mod tests {
         let some = Grant::new([], &["github.com".to_string()], Mode::Headless).unwrap();
         assert!(some.allows_site("https://gist.github.com/x"));
         assert!(!some.allows_site("https://evil.test/github.com"));
-    }
-
-    #[test]
-    fn the_sheet_shows_the_request_by_name() {
-        let t = SheetText::new(&request(), &["github.com".to_string()]);
-        assert_eq!(t.client, "claude");
-        assert_eq!(t.secrets, ["GITHUB_PASSWORD"]);
-        assert_eq!(t.sites, ["github.com"]);
-        assert!(t.headless);
-        let windowed = Request {
-            wants_mode: Mode::Windowed,
-            ..request()
-        };
-        assert!(!SheetText::new(&windowed, &[]).headless);
     }
 
     #[test]

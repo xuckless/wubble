@@ -3,8 +3,8 @@
 // on each tab row the session drives and on the Space header of its Space. The design has no
 // agent; this is the tab row's close tile in the position of the speaker, the bolt in the sky
 // at rest (the accent every "something is running" mark in the design takes) and in coral on its
-// own hover, where a click stops the session (`stopped`). A button "Stop agent" to assistive
-// tech, so the stop is never mouse-only. The steady glow the research note asks for waits for
+// own hover, where a click stops every agent session (`stopped`: the command is Stop All Agents). A
+// button "Stop all agents" to assistive tech, so the stop is never mouse-only. The steady glow the research note asks for waits for
 // the owner (a new primitive).
 
 import { Palette } from "../gen/tokens.slint";
@@ -18,7 +18,7 @@ export component AgentMark inherits Rectangle {
     // the slot keeps the row's height, the tile in it is the 22 square
     width: Shell.speaker;
     accessible-role: AccessibleRole.button;
-    accessible-label: "Stop agent";
+    accessible-label: "Stop all agents";
     accessible-description: "An agent drives this";
     accessible-action-default => {
         root.stopped();
