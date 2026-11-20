@@ -403,6 +403,34 @@ mod tests {
     }
 
     /// The target is clamped home only once the wheel has been quiet for 90 ms.
+    /// QA MED-06, as the shell's driver feeds a page that just opened: each frame measures
+    /// what the page last reported and steps; the page reports its laid-out size only after the
+    /// first frame. Input measured with the frame's stale size read the gesture's second tick
+    /// as a push past the end, and the rest of the gesture as momentum, dropped.
+    #[test]
+    fn a_gesture_on_a_page_that_just_opened_scrolls_when_input_measures_first() {
+        let gesture = |measure_on_input: bool| {
+            let mut s = Scroller::new();
+            let mut reported = (0.0, 0.0);
+            let mut now = 0.0;
+            for _ in 0..12 {
+                if measure_on_input {
+                    s.measure(reported.0, reported.1);
+                }
+                s.wheel(100.0, DeltaMode::Pixel, now);
+                // the frame: measure, step, then the page reports its size
+                s.measure(reported.0, reported.1);
+                s.step(0.03, now);
+                reported = (600.0, 4000.0);
+                now += 30.0;
+            }
+            s.target
+        };
+        // ticks dropped: well short of the gesture (628 px of 1200 here)
+        assert!(gesture(false) < 900.0, "{}", gesture(false));
+        assert_eq!(gesture(true), 1200.0);
+    }
+
     #[test]
     fn idle_clamps_the_target_after_90_ms() {
         let mut s = Scroller::new();

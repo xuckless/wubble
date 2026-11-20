@@ -2545,6 +2545,7 @@ impl Host {
             views: self.engine.view_count(),
             stored: self.settings_read.clone(),
             blocking: self.blocking.is_enabled(),
+            scroll: window.global::<wubble_ui::PageScroll>().get_y(),
         };
         let (state, action) = settings_smoke::next(state, &seen);
         self.checks.settings_smoke = Some(state);
@@ -2556,7 +2557,12 @@ impl Host {
                         host.borrow().model.clone()
                     });
                 }
-                self.perform(Action::OpenSettings)
+                self.perform(Action::OpenSettings);
+                // from the event loop, outside the host the shell's callbacks call into
+                let window = self.w.window.clone();
+                slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+                    wheel_burst(window, settings_smoke::TICKS)
+                });
             }
             Some(settings_smoke::Action::Flip { key, value }) => {
                 // The toggle's own callback, as a click sends it: later, outside the host,
@@ -3277,6 +3283,28 @@ pub(crate) fn now_ms() -> i64 {
 type Snapshot = slint::SharedPixelBuffer<slint::Rgba8Pixel>;
 
 /// The window as it renders now. Smoke only.
+/// `--smoke settings`: `left` wheel ticks down over the window's content, through the window's
+/// input as the pointer would send them, from where it rests (never moved over what opens
+/// there), a tick apart.
+fn wheel_burst(window: slint::Weak<AppWindow>, left: u32) {
+    let Some(w) = window.upgrade() else {
+        return;
+    };
+    if left == 0 {
+        return;
+    }
+    let size = w.window().size().to_logical(w.window().scale_factor());
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(size.width * 0.6, size.height / 2.0),
+            delta_x: 0.0,
+            delta_y: -settings_smoke::TICK,
+        });
+    slint::Timer::single_shot(settings_smoke::TICK_EVERY, move || {
+        wheel_burst(window, left - 1)
+    });
+}
+
 fn snapshot(window: &AppWindow) -> Result<Snapshot, String> {
     window
         .window()

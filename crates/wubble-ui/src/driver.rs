@@ -375,12 +375,9 @@ impl Driver {
         window.set_thumb_visible(r.thumb_visible);
 
         // the open native page's scroller
-        let page = window.global::<PageScroll>();
-        self.page_scroll.measure(
-            f64::from(page.get_viewport()),
-            f64::from(page.get_content()),
-        );
+        self.measure_page(window);
         moving |= self.page_scroll.step(dt, now);
+        let page = window.global::<PageScroll>();
         let r = self.page_scroll.render(now);
         page.set_y(r.shown as f32);
         if let Some((top, h)) = r.thumb {
@@ -419,6 +416,19 @@ impl Driver {
             window.set_exit_page(slint::Image::default());
         }
         self.page_t < OVERLAP_IN || self.exit_t < PAGE_OUT
+    }
+
+    /// The open page's sizes into its scroller. The page reports them in `changed` handlers,
+    /// which Slint runs after this frame's step, so input measures again before it moves the
+    /// page. On a page that had just opened, the frame's sizes were from before its layout
+    /// (none): a gesture's second tick read as pushing past the end, and the rest of the
+    /// gesture as momentum, dropped; the page barely moved (QA MED-06).
+    fn measure_page(&mut self, window: &AppWindow) {
+        let page = window.global::<PageScroll>();
+        self.page_scroll.measure(
+            f64::from(page.get_viewport()),
+            f64::from(page.get_content()),
+        );
     }
 
     fn step_beam(&mut self, window: &AppWindow, dt: f64) -> bool {
@@ -893,7 +903,8 @@ fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
     let hook = || (Rc::clone(driver), window.as_weak());
     let (d, w) = hook();
     page.on_wheel(move |dy| {
-        run(&d, &w, |s, _| {
+        run(&d, &w, |s, window| {
+            s.measure_page(window);
             let now = s.now_ms();
             s.page_scroll.wheel(f64::from(dy), DeltaMode::Pixel, now);
             None
@@ -901,7 +912,8 @@ fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
     });
     let (d, w) = hook();
     page.on_touch_down(move |y| {
-        run(&d, &w, |s, _| {
+        run(&d, &w, |s, window| {
+            s.measure_page(window);
             let now = s.now_ms();
             s.page_scroll.touch_down(f64::from(y), now);
             None
@@ -924,7 +936,8 @@ fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
     });
     let (d, w) = hook();
     page.on_thumb_down(move |y| {
-        run(&d, &w, |s, _| {
+        run(&d, &w, |s, window| {
+            s.measure_page(window);
             s.page_scroll.thumb_down(f64::from(y));
             None
         })
@@ -946,7 +959,8 @@ fn wire_page_scroll(window: &AppWindow, driver: &Shared) {
     });
     let (d, w) = hook();
     page.on_to(move |y| {
-        run(&d, &w, |s, _| {
+        run(&d, &w, |s, window| {
+            s.measure_page(window);
             let now = s.now_ms();
             s.page_scroll.to(f64::from(y), now);
             None

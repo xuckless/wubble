@@ -1,5 +1,7 @@
 //! `--smoke settings`: open wubble://settings through its action, check the page is shown
-//! (native, no view of its own) with rows from the table, flip one setting through the toggle's
+//! (native, no view of its own) with rows from the table and scrolled by a wheel gesture that
+//! starts as it opens (the pointer still, never moved over it: QA MED-06), flip one setting
+//! through the toggle's
 //! own callback, and read the stored value back through the store thread, queued after the
 //! write. Every wait is "until the host sees X", bounded by a count of CEF work runs.
 
@@ -8,8 +10,15 @@ use crate::nav_smoke::MAX_WORK_RUNS;
 /// The setting the smoke flips: a fresh profile has it on.
 pub const KEY: &str = "blocker.enabled";
 
+/// The wheel gesture: longer than the scroller's 160 ms budget for pushing past an end.
+pub const TICKS: u32 = 12;
+pub const TICK: f32 = 100.0;
+pub const TICK_EVERY: std::time::Duration = std::time::Duration::from_millis(30);
+/// How far the gesture must have scrolled the page: most of it.
+const SCROLLED: f32 = TICK * TICKS as f32 * 0.75;
+
 /// What the host sees.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Seen {
     /// The window can open views (the frame rate is known).
     pub ready: bool,
@@ -25,6 +34,8 @@ pub struct Seen {
     pub stored: Option<String>,
     /// The blocker is on.
     pub blocking: bool,
+    /// The page's scroll position, logical px.
+    pub scroll: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +67,8 @@ impl Default for SettingsSmoke {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    /// Run `Action::OpenSettings`.
+    /// Run `Action::OpenSettings`, and start a wheel gesture down over the page's middle: one
+    /// [`TICK`] px tick every [`TICK_EVERY`], [`TICKS`] of them.
     Open,
     /// Send `value` for `key` through the page's change callback, then read the store back.
     Flip {
@@ -74,7 +86,9 @@ pub fn next(s: SettingsSmoke, seen: &Seen) -> (SettingsSmoke, Option<Action>) {
             Some((Stage::Opening { views: seen.views }, Action::Open))
         }
         // The page is native: opening it adds no view.
-        Stage::Opening { views } if seen.on_settings && seen.page_open && seen.rows > 0 => {
+        Stage::Opening { views }
+            if seen.on_settings && seen.page_open && seen.rows > 0 && seen.scroll >= SCROLLED =>
+        {
             if seen.views != views {
                 Some((
                     Stage::Done,
@@ -149,6 +163,12 @@ mod tests {
             ..ready()
         };
         let (s, a) = next(s, &open);
+        assert_eq!(a, None, "waits for the gesture to scroll the page");
+        let scrolled = Seen {
+            scroll: SCROLLED,
+            ..open.clone()
+        };
+        let (s, a) = next(s, &scrolled);
         assert_eq!(
             a,
             Some(Action::Flip {
@@ -156,7 +176,7 @@ mod tests {
                 value: "0"
             })
         );
-        let (s, a) = next(s, &open);
+        let (s, a) = next(s, &scrolled);
         assert_eq!(a, None, "waits for the store");
         let done = Seen {
             stored: Some("0".into()),
@@ -177,6 +197,7 @@ mod tests {
             page_open: true,
             rows: 3,
             views: 2,
+            scroll: SCROLLED,
             ..ready()
         };
         assert!(matches!(next(s, &with_view).1, Some(Action::Fail(_))));
