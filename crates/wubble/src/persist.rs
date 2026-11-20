@@ -37,6 +37,7 @@ use wubble_core::omnibox::HistoryEntry;
 use wubble_core::pages::{BookmarkEdit, BookmarkRow, HistoryRow, InternalPage};
 use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
@@ -285,6 +286,13 @@ enum Request {
         now_ms: i64,
     },
     PushClosed(ClosedTab),
+    /// One agent session's call for the activity log (`agent_log`).
+    PushAgentLog(wubble_core::agent::log::Entry),
+    /// The newest activity log entries, oldest first (the agent activity page).
+    ListAgentLog {
+        limit: usize,
+        reply: Reply<Vec<wubble_core::agent::log::Entry>>,
+    },
     PopClosed(Reply<Option<ClosedTab>>),
     /// Files a tab in the Archive; replies with its archive id when the store kept it (only then may the tab close).
     PushArchive(ArchivedTab, Reply<Option<i64>>),
@@ -422,10 +430,11 @@ impl StoreClient {
         let _ = self.tx.send(request);
     }
 
-    pub fn save(&self, model: &Model, ui: UiState) {
+    /// `transient`: Spaces a session never keeps (an agent session's), as peeks.
+    pub fn save(&self, model: &Model, transient: &[SpaceId], ui: UiState) {
         self.send(Request::Save {
             // a peek is never part of a session
-            model: Box::new(model.for_session()),
+            model: Box::new(model.for_session(transient)),
             ui,
         });
     }
@@ -478,6 +487,22 @@ impl StoreClient {
 
     pub fn push_closed(&self, tab: ClosedTab) {
         self.send(Request::PushClosed(tab));
+    }
+
+    pub fn push_agent_log(&self, entry: wubble_core::agent::log::Entry) {
+        self.send(Request::PushAgentLog(entry));
+    }
+
+    /// The newest `limit` activity log entries, oldest first; `reply` runs on the store thread.
+    pub fn agent_log(
+        &self,
+        limit: usize,
+        reply: impl FnOnce(Vec<wubble_core::agent::log::Entry>) + Send + 'static,
+    ) {
+        self.send(Request::ListAgentLog {
+            limit,
+            reply: Box::new(reply),
+        });
     }
 
     /// `reply` runs on the store thread.
@@ -974,6 +999,14 @@ async fn handle(store: &mut Store, request: Request) -> wubble_store::Result<()>
             now_ms,
         } => store.put_favicon(&page_url, &icon, now_ms).await?,
         Request::PushClosed(tab) => store.push_closed(&tab).await?,
+        Request::PushAgentLog(entry) => store.push_agent_log(&entry).await?,
+        Request::ListAgentLog { limit, reply } => match store.agent_log(limit).await {
+            Ok(entries) => reply(entries),
+            Err(e) => {
+                reply(vec![]);
+                return Err(e);
+            }
+        },
         Request::PopClosed(reply) => {
             let tab = store.pop_closed().await;
             match tab {
@@ -1323,7 +1356,7 @@ mod tests {
             sidebar_width: 300.0,
             mode: SidebarMode::Rail,
         };
-        client.save(&model, ui);
+        client.save(&model, &[], ui);
         assert!(client.set_setting("search.engine", "google"));
         assert!(client.set_setting("zoom.sites", r#"{"a.test":125}"#));
         assert!(
@@ -1491,6 +1524,7 @@ mod tests {
         assert!(loaded.recv().unwrap().is_err());
         client.save(
             &Model::new(std::time::Instant::now()),
+            &[],
             Settings::default().ui,
         );
         client.shutdown();
@@ -1530,7 +1564,7 @@ mod tests {
         let (client, loaded) = start(&path);
         assert!(loaded.favicons.is_empty());
         let model = model_of(&["https://a.test/page", "https://b.test/", "about:blank"]);
-        client.save(&model, Settings::default().ui);
+        client.save(&model, &[], Settings::default().ui);
         client.put_favicon("https://a.test/other", &icon("https://a.test/i.png", 7), 1);
         client.shutdown();
 

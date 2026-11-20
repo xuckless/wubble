@@ -524,6 +524,17 @@ pub const DEVTOOLS_REMOTE_PORT: SettingDef = SettingDef {
     restart: true,
 };
 
+/// The MCP server for agent sessions (`agent`). Off by default: with it off nothing listens.
+/// A session is also refused while `devtools.remote_port` is set.
+pub const AGENT_MCP_ENABLED: SettingDef = SettingDef {
+    key: "agent.mcp_enabled",
+    kind: SettingKind::Bool,
+    default: "0",
+    label: "Let agents drive wubble over MCP (experimental): each session needs your approval",
+    section: Section::Privacy,
+    restart: true,
+};
+
 /// The port `DEVTOOLS_REMOTE_PORT`'s value asks for: `None` for 0 (off) and for the privileged
 /// ports 1 to 1023, and for anything past 65535.
 pub fn remote_port(raw: u32) -> Option<u16> {
@@ -830,6 +841,7 @@ pub const ALL: &[&SettingDef] = &[
     &PROCESS_SPARE_RENDERER,
     &VIDEO_HARDWARE_DECODE,
     &DEVTOOLS_REMOTE_PORT,
+    &AGENT_MCP_ENABLED,
     &PASSWORDS_OFFER_TO_SAVE,
     &PASSWORDS_AUTOFILL,
     &MEDIA_ENABLED,

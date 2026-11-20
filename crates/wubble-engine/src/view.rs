@@ -489,6 +489,12 @@ impl View {
         self.send(|host| host.send_mouse_move_event(Some(&event), 1));
     }
 
+    /// The next press starts a new click series (count 1), however soon and near it comes: an
+    /// agent's separate clicks are each their own.
+    pub fn forget_clicks(&mut self) {
+        self.clicks = ClickTracker::default();
+    }
+
     /// `modifiers` include the button itself while it is down.
     pub fn mouse_button(
         &mut self,

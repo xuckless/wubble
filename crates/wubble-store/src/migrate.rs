@@ -17,6 +17,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (11, include_str!("../sql/011_windows.sql")),
     (12, include_str!("../sql/012_archive.sql")),
     (13, include_str!("../sql/013_boosts.sql")),
+    (14, include_str!("../sql/014_agent_log.sql")),
 ];
 
 pub fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -96,6 +97,7 @@ mod tests {
                 "windows",
                 "archive",
                 "boosts",
+                "agent_log",
             ] {
                 let mut rows = conn
                     .query(

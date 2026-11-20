@@ -96,6 +96,7 @@ fn expected(page: InternalPage) -> usize {
         InternalPage::Passwords
         | InternalPage::Settings
         | InternalPage::Tasks
+        | InternalPage::AgentLog
         | InternalPage::Start => 0,
     }
 }

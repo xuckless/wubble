@@ -20,6 +20,8 @@ export struct TabItem {
     depth: int,
     count: int,
     collapsed: bool,
+    // wubble: an agent session's tab (an MCP session drives it); the row shows the mark.
+    agent: bool,
 }
 
 // The border beam this frame (wubble_core::beam::Shape): head and tail length as fractions of
@@ -45,6 +47,8 @@ export struct SpaceItem {
     tint: color,
     // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
     icon: string,
+    // wubble: an agent session's Space (`SpaceName` shows the mark).
+    agent: bool,
 }
 
 // One line of the sidebar's Spaces popup (wubble_core::spacemenu: its groups' rows, a rule
@@ -210,6 +214,7 @@ export global GlassKeys {
     out property <int> error: 1000080;
     out property <int> bookmark-sheet: 1000090;
     out property <int> print-sheet: 1000091;
+    out property <int> agent-sheet: 1000092;
     out property <int> glance: 1000100;
     out property <int> dialog: 1000110;
     out property <int> command-bar: 1000120;
@@ -541,6 +546,8 @@ export enum InternalPageKind {
     passwords,
     archive,
     tasks,
+    // wubble://agent: the agent activity log
+    agent-log,
     // the new-tab page (wubble://start)
     start,
 }
@@ -642,6 +649,28 @@ export struct PrintSheetView {
     scale: int,
     background: bool,
     copies: int,
+}
+
+// An agent session's approval sheet (`wubble_core::agent::Request` and the session's sites): who asks and for what.
+export struct AgentSheetView {
+    open: bool,
+    // Changes with each sheet: the window choice restarts from `headless`.
+    serial: int,
+    // The calling program's name.
+    client: string,
+    // The secrets it asks for, by name (never a value).
+    secrets: [string],
+    // The sites it limits itself to; none: any site.
+    sites: [string],
+    // The client asks to run without showing its window.
+    headless: bool,
+}
+
+// One line of the agent activity log page (`wubble_core::agent::log::Row`).
+export struct AgentLogItem {
+    title: string,
+    note: string,
+    failed: bool,
 }
 
 // What the bookmark sheet asks (Ctrl+D, rename, move, new folder).

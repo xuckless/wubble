@@ -18,6 +18,8 @@ mod input;
 mod instance;
 mod load_run;
 mod load_server;
+mod mcp;
+mod mcp_smoke;
 mod measure;
 mod media_keys;
 mod media_smoke;
@@ -173,6 +175,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Mcp { profile } => match mcp_relay(profile) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("wubble mcp: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Smoke(Smoke::Boot) => match with_smoke_dir(|config, _| smoke_boot(config)) {
             Ok(()) => {
                 println!("smoke: cef boot ok {}", app::version());
@@ -310,6 +319,7 @@ fn main() -> ExitCode {
                 Smoke::Video => Mode::Video,
                 Smoke::Boost => Mode::Boost,
                 Smoke::Ax => Mode::Ax,
+                Smoke::Mcp => Mode::Mcp,
                 Smoke::Overlay { dark, dir } => {
                     if let Some(dir) = dir {
                         shot::request_dir(dir);
@@ -447,6 +457,18 @@ fn browse(
     Ok(code)
 }
 
+/// `wubble mcp`: stdio relayed to the MCP socket of the browser on `profile` (`mcp.rs`). It
+/// opens nothing else: no store, GPU or CEF.
+fn mcp_relay(profile: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let profile = Profile::resolve(profile).ok_or(EngineError::CacheDir)?;
+    let socket = instance::path_of(
+        instance::Socket::Mcp,
+        &profile.dir,
+        &instance::runtime_dir(),
+    );
+    Ok(mcp::relay(&socket)?)
+}
+
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
 /// cache inside it, so concurrent smokes (lanes, CI jobs, a smoke next to an
 /// open browser) never share CEF's singleton lock, and it doubles as the
@@ -581,6 +603,8 @@ struct Outcome {
     video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
     ax_passed: Option<usize>,
+    /// `--smoke mcp` passed, with its step count.
+    mcp_passed: Option<usize>,
     /// `--smoke overlay` reached its end.
     overlay_passed: bool,
     /// `--measure`'s report was printed (and its CSV written, if asked) before CEF shut down,
@@ -633,6 +657,8 @@ enum Mode {
     Boost,
     /// `--smoke ax`.
     Ax,
+    /// `--smoke mcp`.
+    Mcp,
     /// `--smoke overlay` (`dark`: the dark page).
     Overlay { dark: bool },
     /// One phase of `--smoke session`.
@@ -1131,6 +1157,9 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
             })
         },
     );
+    window.on_agent_sheet_answered(move |allow, headless| {
+        with_host_in(win, |host| host.agent_sheet_answered(allow, headless))
+    });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
     });
@@ -1215,7 +1244,10 @@ fn run(
             ..
         }
     );
-    let autofill_port = (matches!(mode, Mode::Autofill | Mode::Block | Mode::Parity) || memory_run)
+    let autofill_port = (matches!(
+        mode,
+        Mode::Autofill | Mode::Block | Mode::Parity | Mode::Mcp
+    ) || memory_run)
         .then(autofill_smoke::serve)
         .transpose()?;
     // `--smoke media`'s fixtures, on a loopback port.
@@ -1276,6 +1308,7 @@ fn run(
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
+        mcp_smoke: false,
         overlay_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
@@ -1428,6 +1461,13 @@ fn run(
                 ..none
             },
         ),
+        Mode::Mcp => (
+            Some(bundled()),
+            Checks {
+                mcp_smoke: true,
+                ..none
+            },
+        ),
         Mode::Overlay { dark } => (
             Some(page_url(OVERLAY_PAGE) + if *dark { "#dark" } else { "" }),
             Checks {
@@ -1499,6 +1539,17 @@ fn run(
     // `--smoke page` docks DevTools: the endpoint it needs is off by default, so the smoke's
     // settings turn it on, on a free loopback port.
     let mut loaded = loaded;
+    // `--smoke mcp` runs the MCP server, off by default.
+    if matches!(mode, Mode::Mcp) {
+        loaded.settings.stored.insert(
+            wubble_core::settings::AGENT_MCP_ENABLED.key.into(),
+            "1".into(),
+        );
+    }
+    let mcp_on = wubble_core::apply::value_of(
+        &wubble_core::settings::AGENT_MCP_ENABLED,
+        &loaded.settings.stored,
+    ) == "1";
     if smoke_page {
         loaded.settings.stored.insert(
             wubble_core::settings::DEVTOOLS_REMOTE_PORT.key.into(),
@@ -1620,6 +1671,28 @@ fn run(
             || with_host(Host::updates_healthy),
         );
     }
+    // Agent sessions over MCP (`mcp.rs`): a private socket in the profile, only when on.
+    if mcp_on {
+        let socket = instance::path_of(instance::Socket::Mcp, profile, &instance::runtime_dir());
+        match mcp::bind(&socket) {
+            Ok(mcp) => {
+                mcp::listen(mcp, |event| {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        with_host(|host| host.mcp_event(event))
+                    });
+                });
+                if let Some(port) = autofill_port.filter(|_| matches!(mode, Mode::Mcp)) {
+                    mcp_smoke::start(socket, format!("http://127.0.0.1:{port}/mcp"));
+                }
+            }
+            Err(e) => {
+                eprintln!("wubble: no MCP server: {}: {e}", socket.display());
+                if matches!(mode, Mode::Mcp) {
+                    with_host(|host| host.fail(format!("the MCP socket: {e}")));
+                }
+            }
+        }
+    }
     if let Some(listener) = listener {
         instance::listen(listener, |message| {
             let _ = slint::invoke_from_event_loop(move || {
@@ -1721,6 +1794,7 @@ fn run(
         builtins_passed: host.builtins_passed.take(),
         video_passed: host.video_passed.take(),
         ax_passed: host.ax_passed,
+        mcp_passed: host.mcp_passed,
         overlay_passed: host.overlay_passed,
         measured,
     };

@@ -12,6 +12,7 @@ import { BrowserCss } from "../gen/css.slint";
 import { KitText } from "../text.slint";
 import { Role } from "../gen/text.slint";
 import { RailClose } from "rail-close.slint";
+import { AgentMark } from "agent-mark.slint";
 
 // @source slint-tab-row
 // wubble change: `TabItem` (with an `id`) is in components/model.slint.
@@ -29,6 +30,8 @@ export component TabRow inherits Rectangle {
     callback close();
     // wubble change: the speaker glyph, shown while the page plays sound or is muted.
     callback mute();
+    // wubble change: the mark of a tab an agent session drives; a click stops the session.
+    callback agent-stop();
     // wubble change: a right click, pointer in window px (the tab's context menu).
     callback context(length, length);
     // wubble change: the left button's press in window px (0 down, 3 cancel), for a drag that
@@ -153,6 +156,12 @@ export component TabRow inherits Rectangle {
                 size: Shell.icon - 2px;
                 path: root.tab.muted ? Glyph.speaker-muted : Glyph.speaker;
                 tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
+            }
+        }
+        // wubble change: the agent mark (kit AgentMark, derived), before the speaker.
+        if !root.compact && root.tab.agent: AgentMark {
+            stopped => {
+                root.agent-stop();
             }
         }
         // wubble change: the split glyph of a pane of the Space's split (tabs.tsx `wb-tab-split`:

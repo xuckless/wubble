@@ -16,6 +16,11 @@ macOS is driven only from the owner's own session and has not been run since bat
 ## Now (2026-11-20): extensions, password managers, the MCP server
 - [ ] Extensions on our own Chromium build (M6), far enough that third-party password managers (Bitwarden, 1Password) work as extensions
 - [ ] The MCP server, basic version (M7, [docs/research/mcp-server.md](docs/research/mcp-server.md) section 0)
+  - [x] `wubble-mcp`: the protocol, pure (framing, discover, tools/list, tools/call, v0 tool table, `AgentCall`)
+  - [x] Agent sessions in `wubble-core::agent`: one state machine, named secrets, activity log (`agent_log` table), `agent.mcp_enabled`
+  - [x] Transport and execution: the profile's MCP socket, `wubble mcp` relay, a Space and container per session, the tools through the engine paths, `--smoke mcp` (92a726b)
+  - [x] Shell UI: the approval sheet (one modal, Escape denies), the agent mark on tab rows and the Space header, "Stop All Agents" (command bar, mark), the activity page `wubble://agent` linked from Settings, gallery scenes, `--smoke mcp` drives the real sheet
+  - [ ] Bind a requested secret name to a vault login on the sheet (the sheet shows the names; a grant holds none until then)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 - Then the "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 

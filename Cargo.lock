@@ -8673,6 +8673,7 @@ dependencies = [
  "opener",
  "png",
  "pollster 0.4.0",
+ "rand 0.8.8",
  "rfd",
  "serde_json",
  "sha2 0.11.1",
@@ -8691,6 +8692,7 @@ dependencies = [
  "wubble-core",
  "wubble-engine",
  "wubble-gfx",
+ "wubble-mcp",
  "wubble-release",
  "wubble-store",
  "wubble-sysmem",
@@ -8800,6 +8802,13 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "wubble-core",
+]
+
+[[package]]
+name = "wubble-mcp"
+version = "0.1.0-preview.1"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

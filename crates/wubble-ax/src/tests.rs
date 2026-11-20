@@ -240,7 +240,9 @@ fn the_subtree_id_is_stable_per_document() {
 #[test]
 fn a_new_document_starts_the_mirror_over() {
     let mut tree = PageTree::default();
+    assert_eq!(tree.document(), None);
     first(&mut tree, page());
+    assert_eq!(tree.document(), Some("tree-a"));
     let u = first(
         &mut tree,
         json!({ "ax_tree_id": "tree-b", "updates": [{ "root_id": 1, "nodes": [
@@ -252,6 +254,7 @@ fn a_new_document_starts_the_mirror_over() {
     assert_eq!(tree.trees.len(), 1, "the old document is gone");
     assert_eq!(tree.trees["tree-b"].nodes.len(), 1);
     assert_eq!(tree.tree(), Some(tree_id_of("tree-b")));
+    assert_eq!(tree.document(), Some("tree-b"));
 }
 
 #[test]

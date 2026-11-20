@@ -32,6 +32,8 @@ Numbers from the `--measure` runs: [measurements.md](measurements.md).
     cargo run -p wubble-engine --example local_probe   # windowless: localhost, 127.0.0.1, [::1] and the LAN address load with fetch, cookies, WebSocket and a service worker; exits
     cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
     cargo run -p wubble -- --smoke ax   # a11y.web on: the page's accessible items, a click and a field's value through them, exits; run by hand only
+    cargo run -p wubble -- --smoke mcp   # agent.mcp_enabled on: an MCP client on the profile's socket runs discover, tools/list, a start_session that asks for a secret (denied on the sheet), start_session (headless; the host reads the real approval sheet's view and answers through the window's callback), at once navigate to a loopback page and read_page, the session sees only its own tab, two clicks (each a single click) and type by ref (each followed by wait_for), evaluate, screenshot (a PNG that decodes), open_tab and close_tab, stop_session; a second session is left for the quit, which must close its Space; the user's closed tabs and history must hold nothing of the agent's; one line per step, exits; run by hand only
+    echo '{"jsonrpc":"2.0","id":1,"method":"server/discover"}' | cargo run -p wubble -- mcp --profile DIR   # the stdio relay a harness starts; no browser on DIR: an MCP error saying so
     cargo run -p wubble-engine --example ax_smoke   # windowless: CEF's accessibility tree of a bundled page, mapped and printed (`-- --dump FILE` writes the JSON), exits; run by hand only
     cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
     cargo run -p wubble -- --smoke overlay   # green/red page: menu, command bar and peek glass frost the page, the gutter takes its light, no page blur while nothing is over it; then the overlays' rules (Print replaces Add bookmark, Escape closes each kind topmost first, a tab switch closes the sheet and keeps the find bar on its own tab, a navigation closes it); `overlay=dark`, `--shot-dir DIR` for one PNG a step; exits; run by hand only
@@ -67,7 +69,7 @@ error pages; over a plain white page (`assets/ground.html`) the sidebar, page me
 find bar, bookmark sheet, reload tooltip and peeking sidebar, and over its dark variant the menus, command
 bar and find bar (the glass's contrast); Settings at four scroll positions; Settings' list editors (routing rules with a row
 selected, a new rule's draft, Spaces with the second selected, Sites); history, bookmarks, downloads,
-passwords (locked, unlocked), archive, task manager; the start page; a history row hovered (its
+passwords (locked, unlocked), archive, task manager; an agent's approval sheet, an approved agent's marked tabs and Space, the agent activity page; the start page; a history row hovered (its
 actions shown); the rail with its tab hovered (the close badge).
 
 Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow` properties:

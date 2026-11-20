@@ -233,6 +233,7 @@ fn space_footer(app: &AppWindow, driver: &Shared) {
             name: format!("space {id}").into(),
             tint: Default::default(),
             icon: "personal".into(),
+            ..Default::default()
         })
         .collect();
     app.set_spaces(ModelRc::from(spaces.as_slice()));
