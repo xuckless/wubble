@@ -152,7 +152,9 @@ component ListRow inherits Rectangle {
 }
 
 // The draft: one field per edited column (Enter submits, Escape drops it, typing clears a
-// refusal), the row's other cells as they are, at the columns' places.
+// refusal), the row's other cells as they are, at the columns' places: the row's own layout
+// (padding, gap, lead, equal columns), and each field drawn its text inset (the field's
+// `.st-search` padding) left of its column, so its text starts where the column's text does.
 component DraftRow inherits HorizontalLayout {
     in property <EntryItem> item;
     in property <[string]> columns;
@@ -166,9 +168,11 @@ component DraftRow inherits HorizontalLayout {
     callback commit();
     callback cancel();
     callback typed();
+    property <length> inset: SettingsCss.st-search--padding-left;
+    padding-left: TouchCss.wb-tp-mrow--padding-left;
+    padding-right: TouchCss.wb-tp-mrow--padding-right;
     spacing: TouchCss.wb-tp-mrow--gap;
     if root.leads: VerticalLayout {
-        padding-left: TouchCss.wb-tp-mrow--padding-left;
         alignment: center;
         Icon {
             size: TouchMenu.row-icon;
@@ -176,62 +180,75 @@ component DraftRow inherits HorizontalLayout {
             tint: root.item.tint.alpha > 0 ? root.item.tint : TouchCss.tp-mrow-svg--color;
         }
     }
-    if root.columns.length > 0 && root.fields > 0: Field {
+    if root.columns.length > 0 && root.fields > 0: Rectangle {
         horizontal-stretch: 1;
         preferred-width: 0px;
-        text <=> root.text0;
-        placeholder: root.placeholders.length > 0 ? root.placeholders[0] : root.columns[0];
-        init => {
-            self.take-focus();
-        }
-        accepted => {
-            root.commit();
-        }
-        escaped => {
-            root.cancel();
-        }
-        edited => {
-            root.typed();
+        Field {
+            x: -root.inset;
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            text <=> root.text0;
+            placeholder: root.placeholders.length > 0 ? root.placeholders[0] : root.columns[0];
+            init => {
+                self.take-focus();
+            }
+            accepted => {
+                root.commit();
+            }
+            escaped => {
+                root.cancel();
+            }
+            edited => {
+                root.typed();
+            }
         }
     }
-    if root.columns.length > 1 && root.fields > 1: Field {
+    if root.columns.length > 1 && root.fields > 1: Rectangle {
         horizontal-stretch: 1;
         preferred-width: 0px;
-        text <=> root.text1;
-        placeholder: root.placeholders.length > 1 ? root.placeholders[1] : root.columns[1];
-        accepted => {
-            root.commit();
-        }
-        escaped => {
-            root.cancel();
-        }
-        edited => {
-            root.typed();
+        Field {
+            x: -root.inset;
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            text <=> root.text1;
+            placeholder: root.placeholders.length > 1 ? root.placeholders[1] : root.columns[1];
+            accepted => {
+                root.commit();
+            }
+            escaped => {
+                root.cancel();
+            }
+            edited => {
+                root.typed();
+            }
         }
     }
     if root.columns.length > 1 && root.fields <= 1: Cell {
-        padding-left: TouchCss.wb-tp-mrow--padding-left;
         text: root.item.cells.length > 1 ? root.item.cells[1] : "";
         swatch: root.swatch-column == 1;
         tint: root.item.tint;
     }
-    if root.columns.length > 2 && root.fields > 2: Field {
+    if root.columns.length > 2 && root.fields > 2: Rectangle {
         horizontal-stretch: 1;
         preferred-width: 0px;
-        text <=> root.text2;
-        placeholder: root.placeholders.length > 2 ? root.placeholders[2] : root.columns[2];
-        accepted => {
-            root.commit();
-        }
-        escaped => {
-            root.cancel();
-        }
-        edited => {
-            root.typed();
+        Field {
+            x: -root.inset;
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            text <=> root.text2;
+            placeholder: root.placeholders.length > 2 ? root.placeholders[2] : root.columns[2];
+            accepted => {
+                root.commit();
+            }
+            escaped => {
+                root.cancel();
+            }
+            edited => {
+                root.typed();
+            }
         }
     }
     if root.columns.length > 2 && root.fields <= 2: Cell {
-        padding-left: TouchCss.wb-tp-mrow--padding-left;
         text: root.item.cells.length > 2 ? root.item.cells[2] : "";
         swatch: root.swatch-column == 2;
         tint: root.item.tint;
