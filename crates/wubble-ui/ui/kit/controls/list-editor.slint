@@ -67,9 +67,10 @@ component Cell inherits HorizontalLayout {
     in property <bool> first;
     in property <bool> swatch;
     in property <color> tint;
-    // equal columns whatever their text: the room is shared by stretch alone
+    // equal columns whatever their text or dot: the room is shared by stretch alone
     horizontal-stretch: 1;
     preferred-width: 0px;
+    min-width: 0px;
     spacing: TouchCss.wb-tp-mrow--gap;
     if root.swatch: VerticalLayout {
         alignment: center;
@@ -492,23 +493,16 @@ export component ListEditor inherits Rectangle {
                 if root.leads: Rectangle {
                     width: TouchMenu.row-icon;
                 }
-                for title[c] in root.columns: HorizontalLayout {
+                // each title at its column's left edge (a swatch column's: over the dot)
+                for title in root.columns: KitText {
                     horizontal-stretch: 1;
                     preferred-width: 0px;
-                    spacing: TouchCss.wb-tp-mrow--gap;
-                    // the swatch column's titles sit over its text, past the dot
-                    if c == root.swatch-column: Rectangle {
-                        width: SettingsCss.st-sw-i--width;
-                    }
-                    KitText {
-                        horizontal-stretch: 1;
-                        min-width: 0px;
-                        role: Role.st-group;
-                        text: title;
-                        color: SettingsCss.st-group--color;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
+                    min-width: 0px;
+                    role: Role.st-group;
+                    text: title;
+                    color: SettingsCss.st-group--color;
+                    vertical-alignment: center;
+                    overflow: elide;
                 }
             }
             Hairline {
