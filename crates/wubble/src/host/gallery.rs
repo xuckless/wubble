@@ -182,6 +182,7 @@ impl Host {
         }
         // an agent session of the last scene ends (its sheet, its Space)
         self.agents_stop();
+        self.gallery_sound(scene.overlay);
         if scene.page == Some(wubble_core::pages::InternalPage::AgentLog) {
             self.gallery_agent_log();
         }
@@ -309,7 +310,7 @@ impl Host {
                 }
             }
             Overlay::AgentSheet => self.gallery_agent(false),
-            Overlay::AgentTabs => self.gallery_agent(true),
+            Overlay::AgentTabs | Overlay::AgentSpaces => self.gallery_agent(true),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
@@ -361,6 +362,7 @@ impl Host {
             | Overlay::Downloads
             | Overlay::Spaces(_)
             | Overlay::SpacesDrag
+            | Overlay::Sound { .. }
             | Overlay::SettingsSearch(_)
             | Overlay::Unlock
             | Overlay::Orbs(_)
@@ -395,7 +397,7 @@ impl Host {
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
             window.invoke_dismiss_command_bar();
             window.set_downloads_open(overlay == Overlay::Downloads);
-            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_)));
+            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_) | Overlay::AgentSpaces));
             window.invoke_sidebar_mode_requested(sidebar.into());
             match overlay {
                 Overlay::CommandBar(query) => {
@@ -410,6 +412,29 @@ impl Host {
                 _ => {}
             }
         });
+    }
+
+    /// The shown tab's sound state for a scene: the model's busy set and `audio`, as the real
+    /// probes feed them, set for a [`Overlay::Sound`] scene and cleared for any other.
+    fn gallery_sound(&mut self, overlay: Overlay) {
+        let (audible, muted) = match overlay {
+            Overlay::Sound { audible, muted } => (audible, muted),
+            _ => (false, false),
+        };
+        let Some(tab) = self.shown() else {
+            return;
+        };
+        let changed =
+            self.audio.get(&tab).is_some_and(|a| a.muted) != muted
+                || self.model.tabs.get(&tab).is_some_and(|t| {
+                    t.busy.contains(wubble_core::busy::Reason::Audible) != audible
+                });
+        if !changed {
+            return;
+        }
+        self.set_busy(tab, wubble_core::busy::Reason::Audible, audible);
+        self.audio.entry(tab).or_default().muted = muted;
+        self.after_change();
     }
 
     /// The [`Long`] scenes' state: the active Space's first web tab shown at [`LONG_URL`]

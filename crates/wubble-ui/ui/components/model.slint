@@ -2,14 +2,23 @@
 // The port's `TabItem` (design repo src/wubble/slint/components.slint, @source slint-tab-row)
 // plus `id`. `favicon` is the site's real favicon, never a letter tile; an empty image shows the
 // neutral globe glyph.
+// The sound badge of a tab: none, the page plays sound (a press mutes), the tab is muted (a
+// press unmutes). wubble_core::tabmarks::Sound.
+export enum TabSound {
+    none,
+    playing,
+    muted,
+}
+
 export struct TabItem {
     id: int,
     title: string,
     url: string,
     favicon: image,
-    // wubble: the page plays sound (the engine's audible probe) / the tab is muted.
-    audible: bool,
-    muted: bool,
+    // wubble: the sound badge (wubble_core::tabmarks::Marks), from the page playing sound (the
+    // engine's audible probe) and the tab being muted; `sound-label` is what a press does.
+    sound: TabSound,
+    sound-label: string,
     // wubble: a pane of the Space's split (the design's tab-row split glyph).
     in-split: bool,
     // wubble: requests the blocker stopped on this tab's page.
@@ -20,7 +29,8 @@ export struct TabItem {
     depth: int,
     count: int,
     collapsed: bool,
-    // wubble: an agent session's tab (an MCP session drives it); the row shows the mark.
+    // wubble: an agent session's tab (an MCP session drives it); the row shows the agent badge
+    // on its favicon (it stops the sessions).
     agent: bool,
 }
 
@@ -45,7 +55,8 @@ export struct SpaceItem {
     id: int,
     name: string,
     tint: color,
-    // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
+    // What the Space's tile draws (wubble_core::space::glyph_id): "personal" | "work" | "study",
+    // or "agent" while an agent session owns the Space.
     icon: string,
     // wubble: an agent session's Space (`SpaceName` shows the mark).
     agent: bool,
@@ -58,7 +69,7 @@ export struct SpacesMenuRow {
     id: int,
     name: string,
     tint: color,
-    // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
+    // what the row's tile draws (wubble_core::space::glyph_id): "personal" | "work" | "study" | "agent"
     icon: string,
     current: bool,
 }
@@ -513,8 +524,11 @@ export struct SpaceSetting {
     id: int,
     name: string,
     tint: color,
-    // "personal" | "work" | "study" (SpaceIcon)
+    // "personal" | "work" | "study" (SpaceIcon), the user's choice: the picker cycles it
     icon: string,
+    // what the Space's tile draws (wubble_core::space::glyph_id): `icon`, or "agent" while an
+    // agent session owns the Space
+    tile-icon: string,
     // the colour's swatch name ("Sky"; empty for another colour) and the Space's tab count
     colour: string,
     tabs: int,

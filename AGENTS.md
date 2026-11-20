@@ -84,7 +84,7 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 - Platforms: Linux (lead) and macOS built locally; Windows CI-only.
 - New logic in `wubble-core` comes with unit tests. Run the checks above before handing work back.
 - Nothing phones home by default: any request wubble itself makes needs a flag that is off by default.
-- Keep [TODO.md](TODO.md) current (one line per item, done items with their commit); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
+- Keep [TODO.md](TODO.md) current (one line per item; done items are removed, `git log` has them); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
 - After any change to glass, the driver or a per-frame path: `--measure idle --seconds 4` must report 0 to 2 `slint_renders`.
 - No `pgrep -f` wait loops (they match themselves and never end): run the command under `timeout`, or wait on a file.
 - Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths. Commit only when asked; one logical change per commit.

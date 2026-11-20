@@ -127,6 +127,7 @@ impl Host {
         wubble_core::spacemenu::popup(
             &self.model.spaces,
             crate::shell::window_space(&self.model, self.w.id),
+            &self.agents.spaces().into_iter().collect(),
         )
     }
 

@@ -58,6 +58,17 @@ impl SpaceIcon {
     }
 }
 
+/// What a Space's tile draws (the footer, the Spaces popup, Settings): the Space's own icon,
+/// or the agent glyph while an agent session owns the Space. Derived from that state on every
+/// render and never stored, so it is not a choice of the user's; `agent` is whether a running
+/// session owns the Space. The id is what the shell's `Glyph.space` takes.
+pub fn glyph_id(icon: SpaceIcon, agent: bool) -> &'static str {
+    if agent { AGENT_GLYPH } else { icon.id() }
+}
+
+/// The id of the agent glyph in [`glyph_id`] (`Glyph.space` and `Glyph.agent` in the shell).
+pub const AGENT_GLYPH: &str = "agent";
+
 /// One level of grouping. Holds unpinned tabs only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Folder {
@@ -251,6 +262,16 @@ mod tests {
         assert_eq!(SpaceIcon::from_id("rocket"), None);
         assert_eq!(SpaceIcon::nth(0), SpaceIcon::Personal);
         assert_eq!(SpaceIcon::nth(4), SpaceIcon::Work);
+    }
+
+    #[test]
+    fn an_agent_space_draws_the_agent_glyph_whatever_its_icon() {
+        for icon in SpaceIcon::ALL {
+            assert_eq!(glyph_id(icon, false), icon.id());
+            assert_eq!(glyph_id(icon, true), AGENT_GLYPH);
+        }
+        // the agent glyph is no icon a user can pick or a session file can name
+        assert_eq!(SpaceIcon::from_id(AGENT_GLYPH), None);
     }
 
     #[test]

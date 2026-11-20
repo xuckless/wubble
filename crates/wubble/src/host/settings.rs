@@ -497,6 +497,7 @@ fn render_page(window: &AppWindow, host: &Host) {
         },
     });
 
+    let agent_spaces = host.agents.spaces();
     let spaces = host
         .model
         .spaces
@@ -507,6 +508,8 @@ fn render_page(window: &AppWindow, host: &Host) {
                 name: s.name.as_str().into(),
                 tint: slint::Color::from_rgb_u8(s.tint.0, s.tint.1, s.tint.2),
                 icon: s.icon.id().into(),
+                tile_icon: wubble_core::space::glyph_id(s.icon, agent_spaces.contains(&s.id))
+                    .into(),
                 colour: wubble_core::space::swatch_name(s.tint)
                     .unwrap_or_else(|| "Custom".into())
                     .into(),
