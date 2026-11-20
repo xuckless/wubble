@@ -1956,11 +1956,6 @@ impl Host {
             }
             Plan::Quit => quit(),
             Plan::Nothing => {}
-            Plan::NotYet => eprintln!(
-                "wubble: {} is not available yet: {}",
-                action.id(),
-                perform::not_yet(action).unwrap_or_default()
-            ),
         }
     }
 
