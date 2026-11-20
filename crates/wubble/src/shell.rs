@@ -250,7 +250,8 @@ pub fn folder_of_row(id: i32) -> Option<FolderId> {
         .map(FolderId)
 }
 
-/// What a tab is called: its title, else its host, else "New tab".
+/// What a tab is called: its title, else its host, else the start page's name (a tab with no
+/// address shows the start page).
 pub fn tab_title(tab: &Tab) -> String {
     if let Some(page) = InternalPage::from_url(&tab.url) {
         return page.title().to_owned();
@@ -259,7 +260,7 @@ pub fn tab_title(tab: &Tab) -> String {
     [tab.title.trim(), host]
         .into_iter()
         .find(|s| !s.is_empty())
-        .unwrap_or("New tab")
+        .unwrap_or(InternalPage::Start.title())
         .to_string()
 }
 
@@ -507,7 +508,7 @@ mod tests {
         let (m, _) = new_tab(m, "");
         assert_eq!(
             view_model(&m, m.focused(), &AudioMap::new(), &BlockedMap::new()).tabs[1].title,
-            "New tab"
+            InternalPage::Start.title()
         );
     }
 
