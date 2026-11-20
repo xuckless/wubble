@@ -170,6 +170,10 @@ Open, to build or check:
 - [x] Extensions research ([docs/research/extensions.md](docs/research/extensions.md)); the extension system on only when one is installed; install from a directory or a .crx (no UI yet; `--smoke extensions`) (669c29b)
 - [ ] Extensions: patches P1 (tabs.query, tab events, windows), P2 (extension-opened tabs and windows), P3 (action button and popup), P4 (permission prompts); then the install page with permissions and "restart to apply"
 - [ ] Extensions: `chrome.tabs`/`windows`/actions on wubble's model; action buttons, popups, options, install, Web Store
+- [x] Extensions: P1 to P3 as the patch queue `patches/chromium` (`scripts/build-cef.sh patch`, `cef_wubble_ext_v1`): `chrome.tabs`, `chrome.windows`, `chrome.action` (engine API) and extension-opened tabs on wubble's model; `--smoke extensions` checks them on a patched CEF, Linux (21af397)
+- [ ] Extensions: the action buttons, badge and popup UI on the engine's `action_click`/`action_state`/`ActionChanged` (needs the owner's design)
+- [ ] Extensions: the patch queue on macOS and Windows builds, and in the release's CEF (owner go)
+- [ ] Extensions: `tabs.onReplaced` when a sleeping tab wakes, `onMoved`/`onAttached`/`onDetached`, window bounds; `windows.create` is refused for now
 - [ ] Swap in behind `wubble-engine`, shell unchanged
 - [ ] CEF OSR patch: hide a view's compositor on `Hide()` (frees each hidden tab's backbuffer)
 - [ ] Skia cache hygiene in Slint's renderer (Chromium's cache controller: a limit, deferred cleanup, free when idle)
