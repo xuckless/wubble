@@ -176,6 +176,8 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Blur σ at every quality | Pyramid σ is in texels of the level read, so below Full the blur gets `BLUR_SIGMA × scale`. | 2026-11-19 |
 | Shader constants are checked | Every WGSL file starts `// translates:`; `shader_constants.rs` compares its literals with the cited GLSL both ways. | 2026-11-19 |
 | Review by eye | The capture and scoring tool was removed (187d7a4): review is by screenshots and the owner's eye; supersedes "Fidelity bar", "Fidelity capture" and the harness's shared dye. | 2026-11-19 |
+| Thinking orb road | Engine translated into `wubble_core::orb` (checked against frames the design's engine computed); painted by an instanced WGSL pass in `wubble-gfx` into the orb's own texture; only a running orb asks for frames. | 2026-11-20 |
+| Mascots deferred | Ultra Reactivate's BotAvatar is not ported: its default fabric look needs CPU bakes, per-texel shading and a readback per frame; a flat-only port would not be the design's look ([research/agent-widgets.md](research/agent-widgets.md)). | 2026-11-20 |
 
 ## Privacy and security
 

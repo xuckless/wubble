@@ -14,6 +14,8 @@ const LI = 'core/living.ts';
 const SC = 'core/gl/scene.ts';
 const ST = 'pages/start.tsx';
 const SCSS = 'pages/start.css';
+const ORB_TYPES = '../ultra-reactivate/vendor/thinking-orbs/types.ts';
+const ORB_TSX = '../ultra-reactivate/vendor/thinking-orbs/ThinkingOrb.tsx';
 
 export const LITERALS = [
   // ── core/gl/scene.ts: what the soft body and minis hand the scene ──
@@ -191,4 +193,15 @@ export const LITERALS = [
   ['start', 'favicon', ST, "<Favicon loc={{ kind: 'site', site: s.id }} size={⟦22⟧} />", { slint: ['StartGen', 'favicon', 'length'] }],
   ['start', 'search_max_width', SCSS, 'width: min(⟦520⟧px, 100%)', { slint: ['StartGen', 'search-max-width', 'length'] }],
   ['start', 'compact_max', SCSS, '@media (max-height: ⟦560⟧px)', { slint: ['StartGen', 'compact-max', 'length'] }],
+
+  // ── Ultra Reactivate's thinking orbs: the three tuned sizes (types.ts `OrbSize`) ──
+  ['orb_size', 'size_64', ORB_TYPES, 'export type OrbSize = ⟦64⟧ | 32 | 20;', { type: 'usize', slint: ['OrbGen', 'size-64', 'length'] }],
+  ['orb_size', 'size_32', ORB_TYPES, 'export type OrbSize = 64 | ⟦32⟧ | 20;', { type: 'usize', slint: ['OrbGen', 'size-32', 'length'] }],
+  ['orb_size', 'size_20', ORB_TYPES, 'export type OrbSize = 64 | 32 | ⟦20⟧;', { type: 'usize', slint: ['OrbGen', 'size-20', 'length'] }],
+  // ThinkingOrb.tsx: the floors of the density and dot-size knobs, the reduced-motion frame's
+  // time, the canvas's pixel-ratio cap
+  ['orb_component', 'dots_min', ORB_TSX, 'scaleCounts(presetOpts, Math.max(⟦0.1⟧, dots))'],
+  ['orb_component', 'dot_size_min', ORB_TSX, 'scaleRadii(opts, Math.max(⟦0.1⟧, dotSize))'],
+  ['orb_component', 'still_t', ORB_TSX, '      frame(⟦0.6⟧);'],
+  ['orb_component', 'dpr_max', ORB_TSX, 'const dpr = Math.min(⟦2⟧, (typeof devicePixelRatio'],
 ];

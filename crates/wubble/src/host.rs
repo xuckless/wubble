@@ -28,6 +28,7 @@ pub(crate) mod ext_tabs;
 mod ext_ui;
 mod external;
 mod gallery;
+pub(crate) mod gallery_orbs;
 mod gesture;
 mod gpu;
 mod hover;
@@ -807,6 +808,7 @@ impl Host {
         }
         if let Some(gone) = self.parked.remove(&id) {
             self.aux().remove_window(id);
+            crate::orbs::remove(id);
             let _ = gone.handle.hide();
             // picture-in-picture's window went, whoever closed it
             if gone.kind == WindowKind::Pip {

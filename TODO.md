@@ -18,10 +18,11 @@ own session and has not been run since batch eight; Windows is not green in CI.
 In flight, each in its own worktree, not yet on `main`:
 - [~] `xm/sheet-fix`: the agent approval sheet (owner's review: its Window choice shows no selection and cannot be changed; Secrets and Sites are not editable): the multi-option control as Settings uses it, Secrets and Sites as the kit list editor whose result is the grant, the smoke answering by real pointer presses
 - [~] `xm/sheet-fix`: an agent tab the owner switches to shows a blurred page (suspected: the 384 px tab snapshot is never replaced, since agent views stay visible to CEF and a still page paints no frame)
-- [~] `xm/orbs`: the Thinking orb and the agentic mascots from Ultra Reactivate (`src/ultra-reactivate/vendor/thinking-orbs`, `bot-avatars`; MIT, Libraries.dev) as kit widgets with gallery scenes; no wiring
 Next, in order:
 - [ ] MCP after the first tests: the list under "MCP server" below, started on `xm/sheet-fix` once it lands (same host file)
-- [ ] Wire the mascots (the agent session log's identity) and the thinking orb, after the owner reads the proposal in `docs/research/agent-widgets.md`
+- [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
+- [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
+- [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
 - [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
 - [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
 - [ ] Extensions: the gaps under M6 (Bitwarden's popup width first: one more patch and an engine rebuild)

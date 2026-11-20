@@ -205,6 +205,7 @@ impl Host {
             }
         }
         self.gallery_extensions(scene.overlay);
+        self.gallery_orbs(window, scene.overlay, scene.ground);
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
         let mut autofill = View::default();
@@ -364,6 +365,7 @@ impl Host {
             | Overlay::Sound { .. }
             | Overlay::SettingsSearch(_)
             | Overlay::Unlock
+            | Overlay::Orbs(_)
             | Overlay::Status(_) => {}
         }
         // the link status bubble: shown for its scene, gone for the others

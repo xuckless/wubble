@@ -116,9 +116,22 @@ pub enum Overlay {
     ExtensionsPopover,
     /// The install prompt over an extension that asks for several things.
     ExtensionPrompt,
+    /// The agent widgets' specimen over the window (wubble-only, derived).
+    Orbs(OrbSheet),
     /// The first web tab shown again at a long address, with the blocker's count and the
     /// reader in the pill (wubble's layout cases: QA HIGH-01, CRIT-05, HIGH-03, MED-05).
     Long(Long),
+}
+
+/// Which of the agent widgets' specimens an [`Overlay::Orbs`] scene shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrbSheet {
+    /// Every state at 16, 20, 24 (the 20 design), 32 and 64, moving.
+    Sizes,
+    /// Every state at 160 (the 64 design), moving.
+    Large,
+    /// As `Sizes`, paused: drawn once, then no frames.
+    Paused,
 }
 
 /// What a [`Overlay::Long`] scene opens over the long address.
@@ -412,6 +425,46 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(SPACES_ROW),
         ..over("spaces-popup-many", Overlay::Spaces(12))
     },
+    // the agent widgets (kit/specimen/agent-widgets.slint): every thinking orb state at the
+    // icon, tuned and large sizes, on glass, the library's stage, its paper and the page (white
+    // and dark), moving; the same at rest (paused); a burst of the large ones moving
+    Scene {
+        sidebar: SidebarMode::Hidden,
+        ..over_on("agent-orbs", Overlay::Orbs(OrbSheet::Sizes), Ground::White)
+    },
+    Scene {
+        sidebar: SidebarMode::Hidden,
+        ..over_on(
+            "agent-orbs-dark-page",
+            Overlay::Orbs(OrbSheet::Sizes),
+            Ground::Dark,
+        )
+    },
+    Scene {
+        sidebar: SidebarMode::Hidden,
+        ..over_on(
+            "agent-orbs-large",
+            Overlay::Orbs(OrbSheet::Large),
+            Ground::White,
+        )
+    },
+    Scene {
+        sidebar: SidebarMode::Hidden,
+        ..over_on(
+            "agent-orbs-paused",
+            Overlay::Orbs(OrbSheet::Paused),
+            Ground::White,
+        )
+    },
+    Scene {
+        sidebar: SidebarMode::Hidden,
+        frames: ORB_BURST,
+        ..over_on(
+            "agent-orbs-motion",
+            Overlay::Orbs(OrbSheet::Large),
+            Ground::White,
+        )
+    },
     // last, for an agent session's Space ends with the scene after it: the activity page, the
     // approval sheet, the marks of an approved session's tabs and Space (wubble-only, derived)
     on("agent-activity", InternalPage::AgentLog),
@@ -450,6 +503,8 @@ const SPACES_ROW: (u16, u16) = (130, 646);
 const HISTORY_ROW: (u16, u16) = (800, 304);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
+/// Frames of the orbs' motion burst.
+const ORB_BURST: u32 = 6;
 
 /// What the host reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

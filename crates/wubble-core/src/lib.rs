@@ -35,6 +35,7 @@ pub mod model;
 pub mod motion;
 pub mod neterror;
 pub mod omnibox;
+pub mod orb;
 pub mod overlay;
 pub mod pages;
 pub mod pagetheme;

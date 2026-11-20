@@ -28,6 +28,7 @@ mod media_smoke;
 mod memory;
 mod menu;
 mod nav_smoke;
+mod orbs;
 mod os_motion;
 mod os_scope;
 mod overlay_smoke;
@@ -377,6 +378,10 @@ fn install_shell_driver(
                 if glass.frame(window, now, items) {
                     measure::stage(measure::Metric::Scene, at);
                 }
+            }
+            // The thinking orbs that move (orbs.rs): nothing unless one is on screen and moving.
+            if orbs::frame(id, window, now) {
+                window.window().request_redraw();
             }
             // The panes (split strings, sizes, stretch), stepped with the rest of the shell.
             // Inside rendering the host may be busy (a pump renders); then this frame skips
@@ -768,6 +773,8 @@ impl WindowFactory {
             &window,
             self.glass_scene,
         )));
+        orbs::install(id, &self.gpu, &window);
+        host::gallery_orbs::measure_one(id, &window);
         connect_input(&window, id);
         connect_shell(&window, id);
         connect_surfaces(&window, id);

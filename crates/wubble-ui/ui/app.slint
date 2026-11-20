@@ -54,6 +54,8 @@ import { AutoscrollCursor } from "components/autoscroll-cursor.slint";
 import { WindowEdges, MoveArea } from "components/window-frame.slint";
 import { Entering } from "kit/motion/overlap.slint";
 import { PageScroll } from "components/page-scroll.slint";
+import { AgentSpecimen, AgentWidgets, OrbCell, OrbRow, OrbColumn, OrbGround, OrbTuned } from "kit/specimen/agent-widgets.slint";
+export { AgentWidgets, OrbCell, OrbRow, OrbColumn, OrbGround, OrbTuned }
 
 import "fonts/Fredoka-Variable.ttf";
 import "fonts/Geist-Variable.ttf";
@@ -1731,6 +1733,12 @@ export component AppWindow inherits Window {
         dismissed => {
             root.menu-dismissed();
         }
+    }
+
+    // The gallery's agent widgets specimen (`--smoke gallery`, agent-orbs scenes), over the shell.
+    if AgentWidgets.specimen: AgentSpecimen {
+        width: root.width;
+        height: root.height;
     }
 
     // Over everything, pointer events pass through: the one tooltip.

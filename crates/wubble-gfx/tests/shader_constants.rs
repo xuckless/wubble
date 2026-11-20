@@ -15,7 +15,11 @@ use std::path::{Path, PathBuf};
 
 use wubble_gfx::scene::{BLUR_SIGMA, DPR_MAX, GLASS_PAD, PYRAMID_DIV};
 
-const CHANGE: &str = "// wubble change:";
+#[path = "support/translation.rs"]
+#[allow(dead_code)]
+mod translation;
+use translation::*;
+
 /// The header of a shader that is wubble's own, with no design counterpart.
 const WUBBLE_ONLY: &str = "// translates: wubble-only";
 
@@ -28,112 +32,12 @@ fn snapshot(file: &str) -> String {
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// A number as a set key: its value, to 1e-9 (so `2`, `2.0` and `2.` are one).
-fn key(v: f64) -> i64 {
-    (v * 1e9).round() as i64
-}
-
-/// A line without its comments (`//`, `/* */` within the line, a doc comment's own lines).
-fn code(line: &str) -> String {
-    let t = line.trim_start();
-    if t.starts_with("/*") && t.ends_with("*/") || t.starts_with("* ") || t == "*" {
-        return String::new();
-    }
-    let mut out = line.split("//").next().unwrap_or("").to_owned();
-    while let (Some(a), Some(b)) = (out.find("/*"), out.find("*/")) {
-        if b < a {
-            break;
-        }
-        out.replace_range(a..b + 2, " ");
-    }
-    out
-}
-
-/// The number literals of a line of shader code, unsigned, with comments, attributes
-/// (`@binding(3)`) and identifiers (`vec3`, `f32`, `uB2`) left out.
-fn numbers(line: &str) -> Vec<f64> {
-    let code = code(line);
-    let code = code.as_str();
-    let b = code.as_bytes();
-    let mut out = vec![];
-    let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
-        if c == b'@' || c.is_ascii_alphabetic() || c == b'_' {
-            // an identifier (or an attribute's name): skip it, and an attribute's argument
-            let at = c == b'@';
-            i += 1;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                i += 1;
-            }
-            if at && b.get(i) == Some(&b'(') {
-                while i < b.len() && b[i] != b')' {
-                    i += 1;
-                }
-            }
-        } else if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit))
-        {
-            let start = i;
-            let mut dot = false;
-            while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && !dot)) {
-                dot |= b[i] == b'.';
-                i += 1;
-            }
-            if i < b.len() && (b[i] == b'e' || b[i] == b'E') {
-                i += 1;
-                if i < b.len() && (b[i] == b'-' || b[i] == b'+') {
-                    i += 1;
-                }
-                while i < b.len() && b[i].is_ascii_digit() {
-                    i += 1;
-                }
-            }
-            // a type suffix (`1u`, `2.0f`)
-            let text = &code[start..i];
-            while i < b.len() && b[i].is_ascii_alphabetic() {
-                i += 1;
-            }
-            out.push(
-                text.trim_end_matches('.')
-                    .parse::<f64>()
-                    .unwrap_or_else(|_| panic!("number {text:?} in {line:?}")),
-            );
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
-/// The cited ranges of a WGSL file's header: `(file, first, last)`, 1-based and inclusive.
-fn header(name: &str, wgsl: &str) -> Vec<(String, usize, usize)> {
-    let first = wgsl.lines().next().unwrap_or("");
-    let cites = first
-        .strip_prefix("// translates: ")
-        .unwrap_or_else(|| panic!("{name}: no `// translates:` header"));
-    cites
-        .split(';')
-        .map(|c| {
-            let c = c.trim();
-            let (file, lines) = c
-                .rsplit_once(':')
-                .unwrap_or_else(|| panic!("{name}: cite {c:?}"));
-            let (a, b) = lines.split_once('-').unwrap_or((lines, lines));
-            let n = |s: &str| -> usize {
-                s.parse()
-                    .unwrap_or_else(|_| panic!("{name}: line {s:?} in {c:?}"))
-            };
-            (file.to_owned(), n(a), n(b))
-        })
-        .collect()
-}
-
 /// The numbers of the GLSL lines `ranges` cite, in order, without the `#version`/`precision`
 /// lines and the `${...}` includes (each included chunk is its own WGSL file).
 fn glsl_numbers(name: &str, ranges: &[(String, usize, usize)]) -> Vec<f64> {
     let mut out = vec![];
     for (file, a, b) in ranges {
-        let text = snapshot(file);
+        let text = uncommented(&snapshot(file));
         let lines: Vec<&str> = text.lines().collect();
         assert!(
             *a >= 1 && a <= b && *b <= lines.len(),
@@ -152,85 +56,6 @@ fn glsl_numbers(name: &str, ranges: &[(String, usize, usize)]) -> Vec<f64> {
         }
     }
     out
-}
-
-/// One WGSL number: its value and the (0-based) line it is on, after the header.
-struct WgslNumber {
-    value: f64,
-    line: usize,
-}
-
-/// The WGSL file's numbers in order, and which of its lines are marked `// wubble change:`.
-fn wgsl_numbers(wgsl: &str) -> (Vec<WgslNumber>, Vec<bool>) {
-    let (mut out, mut changed) = (vec![], vec![]);
-    for (line, text) in wgsl.lines().skip(1).enumerate() {
-        changed.push(text.contains(CHANGE));
-        out.extend(
-            numbers(text)
-                .into_iter()
-                .map(|value| WgslNumber { value, line }),
-        );
-    }
-    (out, changed)
-}
-
-/// The differences between the GLSL's numbers and the WGSL's, in order: a longest common
-/// subsequence of the two, then each stretch between two matched numbers (a hunk) that has a
-/// number of one side only. A hunk is excused when a WGSL line it spans is marked
-/// `// wubble change:`; the lines of the matched numbers around it count, so a change that drops
-/// a number in the middle of a line is excused by that line's mark.
-fn differences(glsl: &[f64], wgsl: &[WgslNumber], changed: &[bool]) -> Vec<String> {
-    let (n, m) = (glsl.len(), wgsl.len());
-    let same = |i: usize, j: usize| key(glsl[i]) == key(wgsl[j].value);
-    // lcs[i][j]: the common length of glsl[i..] and wgsl[j..]
-    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i][j] = if same(i, j) {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
-    let mut matched = vec![];
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if same(i, j) {
-            matched.push((i, j));
-            (i, j) = (i + 1, j + 1);
-        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
-    let last_line = changed.len().saturating_sub(1);
-    let mut errors = vec![];
-    let mut from = (0, 0);
-    for &(gi, wj) in matched.iter().chain([(n, m)].iter()) {
-        let (g, w) = (&glsl[from.0..gi], &wgsl[from.1..wj]);
-        if !g.is_empty() || !w.is_empty() {
-            // the WGSL lines from the matched number before the hunk to the one after it
-            let first = from.1.checked_sub(1).map_or(0, |k| wgsl[k].line);
-            let last = wgsl.get(wj).map_or(last_line, |x| x.line);
-            if !changed[first..=last.max(first)].iter().any(|&c| c) {
-                let show = |v: &mut dyn Iterator<Item = f64>| {
-                    v.map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
-                };
-                errors.push(format!(
-                    "WGSL lines {}-{}: GLSL has [{}], WGSL has [{}] (mark the line `{CHANGE}` \
-                     if it differs on purpose)",
-                    first + 2,
-                    last + 2,
-                    show(&mut g.iter().copied()),
-                    show(&mut w.iter().map(|x| x.value)),
-                ));
-            }
-        }
-        from = (gi + 1, wj + 1);
-    }
-    errors
 }
 
 fn shaders() -> Vec<(String, String)> {

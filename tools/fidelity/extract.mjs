@@ -7,6 +7,7 @@
 //   node tools/fidelity/extract.mjs --check         fail (exit 1) when a generated file is stale
 //                                                   against the clone (or its commit moved)
 // Besides the kit files it copies the web GL sources verbatim into tools/fidelity/glsl-snapshot/
+// (and the thinking orbs' geometry into tools/fidelity/ts-snapshot/)
 // (with the commit), which the shader-constants test reads.
 //   node tools/fidelity/extract.mjs --report FILE   also write the differences between the
 //                                                   generated values and the ones wubble uses
@@ -101,7 +102,10 @@ const CSS = [
   ['StartCss', 'pages/start.css'],
   ['RoomCss', 'pages/room.css'],
   ['FoundationsCss', 'pages/foundations.css'],
+  // Ultra Reactivate's library page (src/ultra-reactivate): the thinking orbs' study
+  ['LibraryCss', '../ultra-reactivate/library.css'],
 ];
+const CUSTOM_COLOURS = new Set(['LibraryCss']);
 
 /** A selector (or at-rule step) as a Slint identifier part. */
 function slug(s) {
@@ -147,6 +151,18 @@ function cssTables() {
         props.push({ id: qid, t: 'length', v: Number(q[1]), line: rule.decls[0].line, src: `${rule.at} (its breakpoint)` });
       }
       for (const d of rule.decls) {
+        // Ultra Reactivate's page keeps its colours in custom properties (`.al { --al-stage:
+        // var(--ur-surface, #16181b) }`): a hex colour (or a var() with a hex fallback) is read
+        // as `<rule>--var<name>`; the design's own stylesheets name theirs in tokens.ts
+        if (CUSTOM_COLOURS.has(name) && d.prop.startsWith('--')) {
+          const hex = /^(?:var\(--[\w-]+,\s*)?(#[0-9a-fA-F]{3,8})\)?$/.exec(d.value.trim());
+          const typed = hex && readDecl('color', hex[1], R);
+          if (typed) {
+            use(file, d.line);
+            for (const [suffix, v] of typed) props.push({ id: `${base}--var${d.prop}${suffix}`, ...v, line: d.line, src: `${rule.selector} { ${d.prop}: ${d.value} }` });
+          }
+          continue;
+        }
         if (d.prop.startsWith('--') || d.prop.startsWith('-webkit-') && d.prop !== '-webkit-backdrop-filter') continue;
         if (d.prop === '-webkit-backdrop-filter') continue; // the same as backdrop-filter
         const typed = readDecl(d.prop, d.value, R);
@@ -469,6 +485,8 @@ function iconsSlint() {
 // ── Rust output ────────────────────────────────────────────────────────────────────────────
 // The tables wubble-core's motion needs, as `pub mod NAME { pub const key: T = v; }` (the style
 // of wubble_core::motion), grouped by design file.
+/** Ultra Reactivate's thinking orbs, relative to src/wubble (every citation's root). */
+const ORBS = '../ultra-reactivate/vendor/thinking-orbs';
 const RUST_TABLES = [
   ['physics', 'core/physics.ts', ['BAND_K', 'K', 'DT_CAP', 'REST']],
   ['touch', 'pages/touch.tsx', ['SLIDER', 'TOGGLE_SIZE', 'TOGGLE', 'PIN', 'DL', 'DOCK', 'MENU', 'CHECKS']],
@@ -656,8 +674,40 @@ function rustGen(css) {
   const wob = dur('core/wubble.css', 'wb-wob-a-gt-svg--animation-duration');
   out.push(`    /// ${'core/wubble.css'}:${wob.line}`, `    pub const WOBBLE_MS: f64 = ${rnum(wob.v)};`);
   out.push('}');
+  orbRust(out);
   rustLiterals(out);
   return out.join('\n');
+}
+
+/**
+ * Ultra Reactivate's thinking orbs (the owner's library, src/ultra-reactivate beside src/wubble):
+ * the state → mode map, the tuned presets, the base profiles, the morph's timing and the
+ * labels, as slices of pairs, so wubble_core::orb walks them as the TS walks its objects (a key
+ * the design adds reaches the port without a hand edit).
+ */
+function orbRust(out) {
+  const at = t => `${t.file}:${t.first}${t.last > t.first ? `-${t.last}` : ''}`;
+  const pairs = o => `&[${Object.entries(o).map(([k, v]) => `(${JSON.stringify(k)}, ${rnum(v)})`).join(', ')}]`;
+  const modes = table(`${ORBS}/presets.ts`, 'STATE_TO_MODE');
+  const presets = table(`${ORBS}/presets.ts`, 'PRESETS');
+  const profiles = table(`${ORBS}/engine/profiles.ts`, 'BASE_PROFILES');
+  const hold = table(`${ORBS}/engine/morph.ts`, 'HOLD');
+  const morph = table(`${ORBS}/engine/morph.ts`, 'MORPH');
+  const labels = table(`${ORBS}/ThinkingOrb.tsx`, 'LABELS');
+  out.push('', `/// ${ORBS} (presets.ts, engine/profiles.ts, engine/morph.ts, ThinkingOrb.tsx)`, '#[rustfmt::skip]', 'pub mod orb {');
+  out.push(`    /// ${at(modes)}: (state, mode)`);
+  out.push(`    pub const STATE_TO_MODE: &[(&str, &str)] = &[${Object.entries(modes.value).map(([k, v]) => `(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(', ')}];`);
+  out.push(`    /// ${at(presets)}: (mode, size, speed, count, size multiplier, extra opts)`, '    pub const PRESETS: &[(&str, u32, f64, f64, f64, &[(&str, f64)])] = &[');
+  for (const [mode, sizes] of Object.entries(presets.value))
+    for (const [size, p] of Object.entries(sizes))
+      out.push(`        (${JSON.stringify(mode)}, ${size}, ${rnum(p.speed)}, ${rnum(p.count)}, ${rnum(p.size)}, ${pairs(p.extra ?? {})}),`);
+  out.push('    ];', `    /// ${at(profiles)}: (mode, opts)`, '    pub const BASE_PROFILES: &[(&str, &[(&str, f64)])] = &[');
+  for (const [mode, o] of Object.entries(profiles.value)) out.push(`        (${JSON.stringify(mode)}, ${pairs(o)}),`);
+  out.push('    ];');
+  out.push(`    pub const HOLD: f64 = ${rnum(hold.value)}; // ${at(hold)}`, `    pub const MORPH: f64 = ${rnum(morph.value)}; // ${at(morph)}`);
+  out.push(`    /// ${at(labels)}: (state, accessible label)`);
+  out.push(`    pub const LABELS: &[(&str, &str)] = &[${Object.entries(labels.value).map(([k, v]) => `(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(', ')}];`);
+  out.push('}');
 }
 
 // Inline literals (literals.mjs), one module per manifest module, in manifest order.
@@ -828,6 +878,10 @@ function controlsBRust() {
 // The web GL sources, verbatim (same line numbers as the clone), for the shader-constants test
 // (crates/wubble-gfx/tests/shader_constants.rs), which must run without the clone.
 const GL = ['core/gl/scene.ts', 'core/gl/glsl.ts', 'core/gl/fluid.ts', 'core/gl/util.ts'];
+// The thinking orbs' geometry, verbatim, for wubble-core's translation test
+// (crates/wubble-core/tests/orb_constants.rs), which must run without the clone. Stored under
+// their path below src/ (the `../` of the citation dropped).
+const ORB_ENGINE = [...['core', 'orbits', 'lattice', 'web', 'braid', 'ribbon', 'morph', 'profiles'].map(f => `${ORBS}/engine/${f}.ts`), `${ORBS}/presets.ts`];
 const files = {
   'crates/wubble-ui/ui/kit/gen/tokens.slint': withHeader(tokensSlint(css)),
   'crates/wubble-ui/ui/kit/gen/css.slint': withHeader(cssSlint(css)),
@@ -837,6 +891,8 @@ const files = {
   'crates/wubble-core/src/kit_gen.rs': withHeader(`${rustGen(css)}\n\n${controlsBRust()}`),
   'tools/fidelity/glsl-snapshot/COMMIT': `${commit}\n`,
   ...Object.fromEntries(GL.map(f => [`tools/fidelity/glsl-snapshot/${f}`, read(f)])),
+  'tools/fidelity/ts-snapshot/COMMIT': `${commit}\n`,
+  ...Object.fromEntries(ORB_ENGINE.map(f => [`tools/fidelity/ts-snapshot/${f.replace(/^\.\.\//, '')}`, read(f)])),
 };
 
 if (dirty) console.warn(`extract: warning: the design clone has local changes under src/wubble (${commit}+)`);
