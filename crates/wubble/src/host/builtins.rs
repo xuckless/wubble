@@ -11,7 +11,9 @@ use slint::platform::PointerEventButton;
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use wubble_core::hints::{self, HintEffect, HintEvent, HintKey, Hints};
 use wubble_core::pagetheme::{self, MediaPrefs, PageTheme, Shown, ThemeTable};
-use wubble_core::reader::{self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs};
+use wubble_core::reader::{
+    self, Reader, ReaderColors, ReaderEffect, ReaderEvent, ReaderPrefs, ScrollAt,
+};
 use wubble_core::settings as defs;
 use wubble_core::shot::{self, Shot, ShotEffect, ShotEvent, ShotOutput, ShotRequest};
 use wubble_core::tab::TabId;
@@ -146,7 +148,7 @@ impl Host {
             .builtins
             .reader
             .iter()
-            .filter(|(_, r)| **r == Reader::On)
+            .filter(|(_, r)| r.is_on())
             .map(|(t, _)| *t)
             .collect();
         let script = self
@@ -285,8 +287,19 @@ impl Host {
                         self.reader_event(tab, ReaderEvent::Probed(id, readerable));
                         return;
                     }
+                    Some(Reader::Leaving {
+                        script: Some(want), ..
+                    }) if want == id => {
+                        if let Err(e) = result {
+                            eprintln!("wubble: reader: {e}");
+                        }
+                        self.reader_event(tab, ReaderEvent::Left(id));
+                        return;
+                    }
                     Some(Reader::Extracting(want)) if want == id => {
-                        let built = text.is_some_and(|t| t.trim_start().starts_with('{'));
+                        let built = text
+                            .and_then(pagescripts::reader_opened)
+                            .map(|(x, y)| ScrollAt { x, y });
                         if let Err(e) = result {
                             eprintln!("wubble: reader: {e}");
                         }
@@ -420,9 +433,25 @@ impl Host {
                         self.reader_event(tab, ReaderEvent::ExtractSent(id.0));
                     }
                 }
+                ReaderEffect::Leave => {
+                    let id = self
+                        .tab_view(tab)
+                        .and_then(|v| v.eval(&pagescripts::reader_leave()));
+                    let event = match id {
+                        Some(id) => ReaderEvent::LeaveSent(id.0),
+                        // no page to leave
+                        None => ReaderEvent::PageStarted,
+                    };
+                    self.reader_event(tab, event);
+                }
                 ReaderEffect::Reload => {
                     if let Some(view) = self.tab_view(tab) {
                         view.reload();
+                    }
+                }
+                ReaderEffect::Restore(at) => {
+                    if let Some(view) = self.tab_view(tab) {
+                        view.eval(&pagescripts::reader_restore(at.x, at.y));
                     }
                 }
                 ReaderEffect::Toast(text) => {
@@ -893,7 +922,7 @@ impl Host {
             .and_then(|t| self.builtins.reader.get(&t).copied())
             .unwrap_or_default();
         window.set_reader_available(reader.available());
-        window.set_reader_on(reader == Reader::On);
+        window.set_reader_on(reader.is_on());
         let p = self.builtins.reader_prefs;
         window.set_reader_size(i32::try_from(p.size).unwrap_or(i32::MAX));
         window.set_reader_width(p.width as i32);

@@ -50,8 +50,12 @@ const READER_CHECK: &str = "({check:'reader',\
     h1:(document.querySelector('main.wb-reader h1')||{}).textContent||'',\
     img:!!document.querySelector('main.wb-reader img')})";
 const PDF_CHECK: &str = "({check:'pdf',type:document.contentType})";
-const RESTORED_CHECK: &str =
-    "({check:'restored',reader:!!document.querySelector('main.wb-reader'),title:document.title})";
+const RESTORED_CHECK: &str = "({check:'restored',reader:!!document.querySelector('main.wb-reader'),\
+    title:document.title,y:Math.round(scrollY)})";
+/// Where the article is scrolled before the reader opens, CSS px: leaving the reader brings it
+/// back there (QA HIGH-11).
+const ARTICLE_AT: i64 = 700;
+const ARTICLE_SCROLL: &str = "scrollTo(0, 700)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -261,9 +265,12 @@ pub fn next(state: BuiltinSmoke, input: Input) -> (BuiltinSmoke, Vec<Action>) {
         }
         (Readerable, Worked(seen)) if seen.reader == (Reader::Off { readerable: true }) => (
             to(ReaderOn),
-            vec![Action::Perform(UserAction::ToggleReader)],
+            vec![
+                Action::Eval(ARTICLE_SCROLL),
+                Action::Perform(UserAction::ToggleReader),
+            ],
         ),
-        (ReaderOn, Worked(seen)) if seen.reader == Reader::On => {
+        (ReaderOn, Worked(seen)) if seen.reader.is_on() => {
             (to(ReaderChecked), vec![Action::Eval(READER_CHECK)])
         }
         (ReaderChecked, Page(event)) if check(event).is_some_and(|v| v["check"] == "reader") => {
@@ -283,10 +290,17 @@ pub fn next(state: BuiltinSmoke, input: Input) -> (BuiltinSmoke, Vec<Action>) {
         }
         (Restored, Page(event)) if check(event).is_some_and(|v| v["check"] == "restored") => {
             let v = check(event).unwrap_or_default();
-            if v["reader"] != false || v["title"] != ARTICLE_TITLE {
+            if v["reader"] != false || v["title"] != ARTICLE_TITLE || v["y"] != ARTICLE_AT {
                 return fail(format!("leaving the reader left {v}"));
             }
-            (to(HintsShown), vec![Action::Perform(UserAction::LinkHints)])
+            // back to the top, where the hinted link is
+            (
+                to(HintsShown),
+                vec![
+                    Action::Eval("scrollTo(0, 0)"),
+                    Action::Perform(UserAction::LinkHints),
+                ],
+            )
         }
         (HintsShown, Worked(seen)) if matches!(seen.hints, Hints::Active { .. }) => {
             match hinted_label(&seen.hints) {
@@ -452,9 +466,17 @@ mod tests {
             ..seen()
         };
         let (s, a) = next(s, Input::Worked(&found));
-        assert_eq!(a, vec![Action::Perform(UserAction::ToggleReader)]);
+        assert_eq!(
+            a,
+            vec![
+                Action::Eval(ARTICLE_SCROLL),
+                Action::Perform(UserAction::ToggleReader)
+            ]
+        );
         let on = Seen {
-            reader: Reader::On,
+            reader: Reader::On {
+                back: wubble_core::reader::ScrollAt { x: 0, y: 700 },
+            },
             ..seen()
         };
         let (s, _) = next(s, Input::Worked(&on));

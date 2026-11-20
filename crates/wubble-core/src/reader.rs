@@ -7,12 +7,23 @@
 //! headings, images, block quotes or code blocks, and the images would need wubble to fetch them
 //! itself, which it must not (nothing phones home; CEF is the only network stack).
 //!
-//! Leaving reader mode reloads the page: the reader replaced the page's document in place.
+//! Leaving reader mode reloads the page: the reader replaced the page's document in place. The
+//! page comes back where it was (QA HIGH-11): the reader answers the page's scroll position as it
+//! opens; leaving, a script turns off Chromium's own restore for the reload (it would take the
+//! reader's offset, the two sharing one history entry), its answer starts the reload, and once
+//! the page has loaded it is scrolled back there.
 
 use std::collections::HashMap;
 
 use crate::apply::value_of;
 use crate::settings;
+
+/// Where a page was scrolled, CSS px.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollAt {
+    pub x: i32,
+    pub y: i32,
+}
 
 /// Reader mode of one tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +34,13 @@ pub enum Reader {
     Probing(u64),
     /// The extraction runs as script `id`.
     Extracting(u64),
-    /// The article shows.
-    On,
+    /// The article shows; the page was at `back` when it opened.
+    On { back: ScrollAt },
+    /// The reader is leaving: the script turning Chromium's scroll restore off runs (as
+    /// `script` once sent); its answer reloads the page.
+    Leaving { back: ScrollAt, script: Option<u64> },
+    /// The page reloads, to be scrolled back to `back` once loaded.
+    Reloading { back: ScrollAt },
 }
 
 impl Default for Reader {
@@ -36,7 +52,11 @@ impl Default for Reader {
 impl Reader {
     /// Whether the pill offers reader mode (or shows it is on).
     pub fn available(self) -> bool {
-        matches!(self, Self::Off { readerable: true } | Self::On)
+        matches!(self, Self::Off { readerable: true } | Self::On { .. })
+    }
+
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On { .. })
     }
 }
 
@@ -54,8 +74,12 @@ pub enum ReaderEvent {
     /// The action, the pill's glyph.
     Toggle,
     ExtractSent(u64),
-    /// Script `id` built the reader (`true`) or found no article (`false`).
-    Extracted(u64, bool),
+    /// Script `id` built the reader, the page having been at the position given, or found no
+    /// article (`None`).
+    Extracted(u64, Option<ScrollAt>),
+    LeaveSent(u64),
+    /// Script `id`, the leaving one, answered.
+    Left(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,8 +88,13 @@ pub enum ReaderEffect {
     Probe,
     /// Run the extraction, then report `ExtractSent`.
     Extract,
-    /// Leave the reader: reload the page.
+    /// Leaving the reader: run the script turning Chromium's scroll restore off for the reload,
+    /// then report `LeaveSent`.
+    Leave,
+    /// Reload the page.
     Reload,
+    /// The page loaded again after the reader: scroll it back to where it was.
+    Restore(ScrollAt),
     Toast(&'static str),
 }
 
@@ -73,6 +102,29 @@ pub fn transition(state: Reader, event: ReaderEvent) -> (Reader, Vec<ReaderEffec
     use ReaderEffect as E;
     use ReaderEvent::*;
     match (state, event) {
+        // the reload that leaves the reader
+        (Reader::Leaving { back, script: None }, LeaveSent(id)) => (
+            Reader::Leaving {
+                back,
+                script: Some(id),
+            },
+            vec![],
+        ),
+        (
+            Reader::Leaving {
+                back,
+                script: Some(want),
+            },
+            Left(id),
+        ) if id == want => (Reader::Reloading { back }, vec![E::Reload]),
+        (Reader::Reloading { .. }, PageStarted) => (state, vec![]),
+        (Reader::Reloading { back }, Loaded { detect }) => {
+            let mut effects = vec![E::Restore(back)];
+            if detect {
+                effects.push(E::Probe);
+            }
+            (Reader::default(), effects)
+        }
         (_, PageStarted) => (Reader::default(), vec![]),
         (Reader::Off { .. }, Loaded { detect: true }) => (state, vec![E::Probe]),
         (Reader::Off { .. }, ProbeSent(id)) => (Reader::Probing(id), vec![]),
@@ -84,12 +136,14 @@ pub fn transition(state: Reader, event: ReaderEvent) -> (Reader, Vec<ReaderEffec
         (Reader::Off { .. } | Reader::Probing(_), ExtractSent(id)) => {
             (Reader::Extracting(id), vec![])
         }
-        (Reader::Extracting(want), Extracted(id, true)) if id == want => (Reader::On, vec![]),
-        (Reader::Extracting(want), Extracted(id, false)) if id == want => (
+        (Reader::Extracting(want), Extracted(id, Some(back))) if id == want => {
+            (Reader::On { back }, vec![])
+        }
+        (Reader::Extracting(want), Extracted(id, None)) if id == want => (
             Reader::Off { readerable: false },
             vec![E::Toast("Nothing to read on this page")],
         ),
-        (Reader::On, Toggle) => (Reader::default(), vec![E::Reload]),
+        (Reader::On { back }, Toggle) => (Reader::Leaving { back, script: None }, vec![E::Leave]),
         // Stale answers, a second toggle while extracting, loads while the reader shows.
         (state, _) => (state, vec![]),
     }
@@ -273,6 +327,10 @@ mod tests {
     use ReaderEffect as E;
     use ReaderEvent::*;
 
+    const ON: Reader = Reader::On {
+        back: ScrollAt { x: 0, y: 0 },
+    };
+
     fn dark() -> ReaderColors {
         ReaderColors::of(["#08090d", "#f4f5f8", "#a0a4b0", "#2a2d36", "#8ec5ff"])
     }
@@ -292,24 +350,60 @@ mod tests {
         assert_eq!(e, vec![E::Extract]);
         let (s, _) = transition(s, ExtractSent(5));
         assert_eq!(s, Reader::Extracting(5));
-        let (s, e) = transition(s, Extracted(5, true));
-        assert_eq!((s, e), (Reader::On, vec![]));
+        let back = ScrollAt { x: 0, y: 1800 };
+        let (s, e) = transition(s, Extracted(5, Some(back)));
+        assert_eq!((s, e), (Reader::On { back }, vec![]));
         let (s, e) = transition(s, Toggle);
-        assert_eq!((s, e), (Reader::default(), vec![E::Reload]));
+        let leaving = Reader::Leaving { back, script: None };
+        assert_eq!((s, e), (leaving, vec![E::Leave]));
+        let (s, _) = transition(s, LeaveSent(6));
+        // another script's answer does not reload
+        assert_eq!(transition(s, Left(5)), (s, vec![]));
+        let (s, e) = transition(s, Left(6));
+        assert_eq!((s, e), (Reader::Reloading { back }, vec![E::Reload]));
+        // the reload starts, then loads: the page goes back to where it was, after its layout
+        let (s, e) = transition(s, PageStarted);
+        assert_eq!((s, e), (Reader::Reloading { back }, vec![]));
+        let (s, e) = transition(s, Loaded { detect: true });
+        assert_eq!(
+            (s, e),
+            (Reader::default(), vec![E::Restore(back), E::Probe])
+        );
+        assert_eq!(
+            transition(Reader::Reloading { back }, Loaded { detect: false }),
+            (Reader::default(), vec![E::Restore(back)])
+        );
+        // the reader's pill is not offered while the page reloads; a navigation away while
+        // the script runs leaves nothing to restore
+        assert!(!leaving.available() && !Reader::Reloading { back }.available());
+        assert_eq!(
+            transition(leaving, PageStarted),
+            (Reader::default(), vec![])
+        );
     }
 
     #[test]
     fn nothing_readable_says_so_and_stale_answers_are_ignored() {
-        let (s, e) = transition(Reader::Extracting(2), Extracted(2, false));
+        let (s, e) = transition(Reader::Extracting(2), Extracted(2, None));
         assert_eq!(s, Reader::Off { readerable: false });
         assert_eq!(e, vec![E::Toast("Nothing to read on this page")]);
         for (state, event) in [
-            (Reader::Extracting(2), Extracted(1, true)),
+            (
+                Reader::Extracting(2),
+                Extracted(1, Some(ScrollAt::default())),
+            ),
             (Reader::Probing(2), Probed(1, true)),
             (Reader::Off { readerable: false }, Probed(1, true)),
-            (Reader::On, Extracted(1, true)),
+            (ON, Extracted(1, Some(ScrollAt::default()))),
             (Reader::Extracting(2), Toggle),
-            (Reader::On, Loaded { detect: true }),
+            (ON, Loaded { detect: true }),
+            (
+                Reader::Leaving {
+                    back: ScrollAt::default(),
+                    script: None,
+                },
+                Toggle,
+            ),
             (Reader::Extracting(2), Loaded { detect: true }),
         ] {
             assert_eq!(
@@ -331,7 +425,7 @@ mod tests {
     #[test]
     fn a_new_page_always_starts_off() {
         for state in [
-            Reader::On,
+            ON,
             Reader::Extracting(1),
             Reader::Probing(1),
             Reader::Off { readerable: true },
@@ -339,7 +433,7 @@ mod tests {
             assert_eq!(transition(state, PageStarted), (Reader::default(), vec![]));
         }
         assert!(!Reader::default().available());
-        assert!(Reader::On.available());
+        assert!(ON.available());
     }
 
     #[test]
