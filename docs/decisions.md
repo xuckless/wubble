@@ -237,6 +237,11 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Release form | Linux: tarball + `install.sh` (curl script); macOS: DMG signed and notarised on the owner's Mac + the same script; first releases are previews. | 2026-11-19 |
 | Update mechanics | Rolling `updates` prerelease holds `preview.json`/`stable.json`; check at most every 6 h; Linux versions under `~/.local/share/wubble/versions/` behind a `current` symlink; 3 failed starts roll back. | 2026-11-20 |
 | Shell clipboard | Shell text fields read and write the clipboard through the host's Wayland worker (a wrapper around Slint's winit platform): GNOME offers the clipboard to one device per client. | 2026-11-19 |
+| Spaces popup | The sidebar footer shows the current Space and a "^" that opens a popup of all Spaces with a pinned New Space (agent sessions later); a tab dragged onto it drops into a Space; no per-Space footer icons. | 2026-11-20 |
+| Footer buttons | DevTools left the sidebar footer (page menu, F12, command bar keep it); the place is kept for an extensions button. | 2026-11-20 |
+| Built-in pages in Settings | Settings links History, Bookmarks, Downloads, Passwords, Archive and Task manager from its nav and its search; nothing is rebuilt inside Settings. | 2026-11-20 |
+| Glass list | The scene's glass list is rebuilt from the panels on screen every rendered frame (not patched by add/remove reports); panels may share a key. | 2026-11-20 |
+| Tab opener | A tab opened from a page returns to its opener when closed, by Chromium's rules (forgotten once the user selects another tab). | 2026-11-20 |
 | MCP server | Planned after the first release: wubble as an MCP server, sessions bound to a Space; plan in [research/mcp-server.md](research/mcp-server.md). | 2026-11-19 |
 | MCP build order | Basic version first (secrets as variables, strict containers, headless, full control incl. script), experimental and off by default; guardrails added where use shows the need. | 2026-11-19 |
 

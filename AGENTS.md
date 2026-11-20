@@ -34,7 +34,8 @@ test with `cargo test -p welding`.
     cargo run -p wubble -- --shot-dir DIR --smoke gallery   # one PNG per shell surface; run by hand
 
 Every other smoke, measurement and example, and the gallery's scenes: [docs/smokes.md](docs/smokes.md).
-Window smokes need a GUI session; wrap them in `timeout`. macOS (app bundle, console loop, job runner):
+Window smokes never open on the desktop: prefix them with `scripts/headless.sh` (an invisible display with focus,
+clipboard and GPU) and wrap them in `timeout`. macOS (app bundle, console loop, job runner):
 [docs/macos.md](docs/macos.md). Releases and the updater: [docs/release.md](docs/release.md). Hand-run numbers: [docs/measurements.md](docs/measurements.md).
 
 ## Design fidelity
@@ -83,6 +84,8 @@ tools: [tools/fidelity/README.md](tools/fidelity/README.md).
 - New logic in `wubble-core` comes with unit tests. Run the checks above before handing work back.
 - Nothing phones home by default: any request wubble itself makes needs a flag that is off by default.
 - Keep [TODO.md](TODO.md) current (one line per item, done items with their commit); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
+- After any change to glass, the driver or a per-frame path: `--measure idle --seconds 4` must report 0 to 2 `slint_renders`.
+- No `pgrep -f` wait loops (they match themselves and never end): run the command under `timeout`, or wait on a file.
 - Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths. Commit only when asked; one logical change per commit.
 
 ## Research
