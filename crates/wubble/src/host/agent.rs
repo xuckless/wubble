@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use rand::RngCore;
 use serde_json::{Value, json};
 use wubble_ax::{AxItem, Bounds, PageTree, Reach};
-use wubble_core::agent::log::{ActivityLog, Entry, Outcome};
+use wubble_core::agent::log::{Entry, Outcome};
 use wubble_core::agent::refs::RefBook;
 use wubble_core::agent::{self, Effect, Env, Event, Grant, Mode, Request, SessionId, State};
 use wubble_core::agent::{Refusal, StopReason, Token};
@@ -80,21 +80,58 @@ struct Reply {
 
 /// A click or text, at an element's centre.
 enum Act {
-    Click { button: MouseButton, count: u32 },
-    Type { text: Secret, submit: bool },
+    Click {
+        button: MouseButton,
+        count: u32,
+    },
+    Type {
+        text: Secret,
+        submit: bool,
+    },
+    /// `fill_secret`'s value for granted variable `name`: typed only once the page confirms
+    /// the click focused the element there, in its own document, still on the login's site.
+    Fill {
+        text: Secret,
+        name: String,
+    },
+}
+
+/// How far the load a `navigate` asked for has come: the end of a load started before it
+/// (a new tab's `about:blank`) is not its end.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Load {
+    Asked,
+    Started,
+    Ended,
+}
+
+/// Asks the page whether the click at `(x, y)` focused the element there, in the top
+/// document (not a frame): its URL if so, else `null`.
+fn focus_script(x: f64, y: f64) -> String {
+    format!(
+        "(()=>{{const e=document.activeElement,h=document.elementFromPoint({x},{y});\
+         return e&&e!==document.body&&!/^I?FRAME$/.test(e.tagName)&&h&&(e===h||e.contains(h))\
+         ?location.href:null}})()"
+    )
 }
 
 /// What a waiting call waits for.
 enum Wait {
-    /// `navigate`: the load to end and the new document's tree (other than `before`).
+    /// `navigate`: its load to end and the new document's tree (other than `before`).
     Navigated {
         tab: TabId,
         before: Option<String>,
-        ended: bool,
+        load: Load,
     },
     /// `wait_for` load: no load running and a tree.
     Loaded {
         tab: TabId,
+    },
+    /// A new tab's first load to end (`about:blank` has no tree) before `start_session` or
+    /// `open_tab` gives its handle, so a `navigate` starts on a settled page.
+    Opened {
+        tab: TabId,
+        answer: String,
     },
     Text {
         tab: TabId,
@@ -129,6 +166,15 @@ enum Wait {
         nonce: u64,
         tab: TabId,
         target: String,
+        name: String,
+    },
+    /// `fill_secret` clicked its element: the page's word on where focus went
+    /// ([`focus_script`]).
+    Focus {
+        id: u64,
+        tab: TabId,
+        text: Secret,
+        name: String,
     },
 }
 
@@ -146,7 +192,6 @@ pub(super) struct Agents {
     /// Each tab's element refs.
     refs: BTreeMap<TabId, RefBook>,
     pending: Vec<Pending>,
-    log: ActivityLog,
     next: u64,
     timer: slint::Timer,
 }
@@ -157,11 +202,12 @@ impl Agents {
         self.next
     }
 
-    /// Whether `space` is a session's.
-    fn owns(&self, space: SpaceId) -> bool {
+    /// The sessions' Spaces: never saved with the session (`Model::for_session`).
+    pub(super) fn spaces(&self) -> Vec<SpaceId> {
         self.sessions
             .values()
-            .any(|s| s.space.is_some_and(|(sp, _)| sp == space))
+            .filter_map(|s| s.space.map(|(sp, _)| sp))
+            .collect()
     }
 }
 
@@ -250,22 +296,19 @@ impl Host {
         }
     }
 
-    /// Whether `tab` is in a session's Space: its view keeps an accessibility tree.
+    /// Whether a session reaches `tab` (in its Space and its container): its view keeps an
+    /// accessibility tree, and the user's closed tabs and history leave it out.
     pub(super) fn agent_drives(&self, tab: TabId) -> bool {
-        self.model
-            .location(tab)
-            .is_some_and(|(space, _)| self.agents.owns(space))
+        self.agents.sessions.values().any(|s| {
+            s.space
+                .is_some_and(|(space, container)| self.model.holds(space, container, tab))
+        })
     }
 
     /// The browser quits: every session ends and its Space closes.
     pub(super) fn agents_quit(&mut self) {
         let all: Vec<SessionId> = self.agents.sessions.keys().cloned().collect();
-        let spaces: Vec<SpaceId> = self
-            .agents
-            .sessions
-            .values()
-            .filter_map(|s| s.space.map(|(sp, _)| sp))
-            .collect();
+        let spaces = self.agents.spaces();
         for id in all {
             self.agent_event(&id, Event::BrowserQuits);
         }
@@ -424,12 +467,7 @@ impl Host {
         let (conn, space) = (s.conn, s.space.map(|(sp, _)| sp));
         let headless =
             matches!(&s.state, State::Running { grant, .. } if grant.mode == Mode::Headless);
-        let tabs: Vec<String> = space
-            .map(|sp| self.model.order(sp))
-            .unwrap_or_default()
-            .iter()
-            .map(|t| t.0.to_string())
-            .collect();
+        let first = space.and_then(|sp| self.model.order(sp).first().copied());
         let reply = Reply {
             conn,
             id: request,
@@ -439,12 +477,21 @@ impl Host {
         };
         let body = json!({
             "session": token.expose(),
-            "tab": tabs.first(),
+            "tab": first.map(|t| t.0.to_string()),
             "headless": headless,
             "secrets": Vec::<String>::new(),
         });
         self.agent_log(id, "session_started", None, Outcome::Done);
-        self.agent_send(reply, ToolResult::text(body.to_string()), Outcome::Done);
+        match first {
+            Some(tab) => self.agent_opened(reply, tab, body.to_string()),
+            None => self.agent_fail(reply, "the session's tab did not open"),
+        }
+    }
+
+    /// `answer` once `tab`'s first load ended.
+    fn agent_opened(&mut self, reply: Reply, tab: TabId, answer: String) {
+        self.agent_wait(reply, Wait::Opened { tab, answer }, WAIT);
+        self.agent_check();
     }
 
     /// A stopped session leaves the table: a `start_session` still waiting hears why, and its
@@ -639,11 +686,11 @@ impl Host {
         self.agent_event(&id, Event::ClientAsks(request, env));
     }
 
-    /// The tab `handle` names, if it is in the session's Space.
+    /// The tab `handle` names, if it is in the session's Space and container.
     fn agent_tab(&self, session: &SessionId, handle: &str) -> Option<TabId> {
-        let (space, _) = self.agents.sessions.get(session)?.space?;
+        let (space, container) = self.agents.sessions.get(session)?.space?;
         let tab = TabId(handle.parse().ok()?);
-        (self.model.location(tab)?.0 == space).then_some(tab)
+        self.model.holds(space, container, tab).then_some(tab)
     }
 
     fn agent_grant(&self, session: &SessionId) -> Option<&Grant> {
@@ -678,7 +725,7 @@ impl Host {
         let wait = Wait::Navigated {
             tab,
             before,
-            ended: false,
+            load: Load::Asked,
         };
         self.agent_wait(reply, wait, WAIT);
     }
@@ -707,10 +754,10 @@ impl Host {
             space,
             url: url.unwrap_or_else(|| BLANK.into()),
         });
-        match self.model.order(space).last() {
+        match self.model.order(space).last().copied() {
             Some(tab) => {
                 let body = json!({ "tab": tab.0.to_string() });
-                self.agent_send(reply, ToolResult::text(body.to_string()), Outcome::Done);
+                self.agent_opened(reply, tab, body.to_string());
             }
             None => self.agent_fail(reply, "the tab did not open"),
         }
@@ -821,8 +868,10 @@ impl Host {
         view.mouse_move(point, &Modifiers::default(), now);
         let (button, count) = match &act {
             Act::Click { button, count } => (*button, *count),
-            Act::Type { .. } => (MouseButton::Left, 1),
+            Act::Type { .. } | Act::Fill { .. } => (MouseButton::Left, 1),
         };
+        // each call's clicks are counted alone, not as the next of the last call's
+        view.forget_clicks();
         for _ in 0..count {
             for pressed in [true, false] {
                 let modifiers = Modifiers {
@@ -842,9 +891,44 @@ impl Host {
                 }
                 "typed"
             }
+            Act::Fill { text, name } => {
+                let Some(id) = view.eval(&focus_script(x, y)) else {
+                    return self.agent_fail(reply, "the page cannot run scripts now");
+                };
+                let wait = Wait::Focus {
+                    id: id.0,
+                    tab,
+                    text,
+                    name,
+                };
+                return self.agent_wait(reply, wait, WAIT);
+            }
         };
         self.pace(wubble_gfx::pacing::PaceEvent::Wake);
         self.agent_send(reply, ToolResult::text(answer), Outcome::Done);
+    }
+
+    /// The page's answer to [`focus_script`]: the secret is typed only into the element that
+    /// was clicked, in the top document, while the page is still on the login's site.
+    fn agent_focused(&mut self, reply: Reply, tab: TabId, text: Secret, name: &str, href: &str) {
+        let granted = reply
+            .session
+            .as_ref()
+            .and_then(|s| self.agent_grant(s))
+            .is_some_and(|g| g.secret_for(name, href, href).is_some());
+        if !granted {
+            return self.agent_refuse(
+                reply,
+                "the field did not take focus in the login site's own page",
+            );
+        }
+        let Some(view) = self.tab_view(tab) else {
+            return self.agent_fail(reply, "the tab has no page");
+        };
+        view.edit(EditCommand::SelectAll);
+        view.ime_commit(text.expose());
+        self.pace(wubble_gfx::pacing::PaceEvent::Wake);
+        self.agent_send(reply, ToolResult::text("filled"), Outcome::Done);
     }
 
     /// A Playwright key name pressed and released on `tab`'s page.
@@ -914,7 +998,13 @@ impl Host {
             None => return self.agent_fail(reply, "stale ref: take a new snapshot"),
         }
         let nonce = self.agents.fresh();
-        self.agent_wait(reply, Wait::Vault { nonce, tab, target }, WAIT);
+        let wait = Wait::Vault {
+            nonce,
+            tab,
+            target,
+            name: name.to_owned(),
+        };
+        self.agent_wait(reply, wait, WAIT);
         self.store.vault(move |vault| {
             let value = vault
                 .reveal(&RecordId(login.0))
@@ -936,17 +1026,14 @@ impl Host {
             return;
         };
         let p = self.agents.pending.remove(i);
-        let Wait::Vault { tab, target, .. } = p.wait else {
+        let Wait::Vault {
+            tab, target, name, ..
+        } = p.wait
+        else {
             return;
         };
         match value {
-            Some(text) => {
-                let act = Act::Type {
-                    text,
-                    submit: false,
-                };
-                self.agent_act(p.reply, tab, &target, act);
-            }
+            Some(text) => self.agent_act(p.reply, tab, &target, Act::Fill { text, name }),
             None => self.agent_fail(p.reply, "the vault has no such login"),
         }
     }
@@ -976,15 +1063,18 @@ impl Host {
             });
     }
 
-    /// A web event of `tab`: a load that ended lets `navigate` go on.
+    /// A web event of `tab`: the start, then the end, of a load lets `navigate` go on.
     pub(super) fn agent_web(&mut self, tab: TabId, event: &WebEvent) {
-        if let WebEvent::LoadingChanged { loading: false, .. } = event {
-            for p in &mut self.agents.pending {
-                if let Wait::Navigated { tab: t, ended, .. } = &mut p.wait
-                    && *t == tab
-                {
-                    *ended = true;
-                }
+        let step = |load: Load| match (load, event) {
+            (Load::Asked, WebEvent::LoadStarted) => Load::Started,
+            (Load::Started, WebEvent::LoadingChanged { loading: false, .. }) => Load::Ended,
+            (load, _) => load,
+        };
+        for p in &mut self.agents.pending {
+            if let Wait::Navigated { tab: t, load, .. } = &mut p.wait
+                && *t == tab
+            {
+                *load = step(*load);
             }
         }
     }
@@ -997,7 +1087,10 @@ impl Host {
             _ => return false,
         };
         let Some(i) = self.agents.pending.iter().position(|p| match p.wait {
-            Wait::Eval { id: w } | Wait::Shot { id: w, .. } | Wait::Scroll { id: w, .. } => w == id,
+            Wait::Eval { id: w }
+            | Wait::Shot { id: w, .. }
+            | Wait::Scroll { id: w, .. }
+            | Wait::Focus { id: w, .. } => w == id,
             _ => false,
         }) else {
             return false;
@@ -1032,23 +1125,26 @@ impl Host {
                     ..
                 },
                 PageEvent::EvalResult { result, .. },
+            ) => match super::ax::reach_after(bounds, viewport, result) {
+                Some(Reach::At { x, y }) => self.agent_input(p.reply, tab, x, y, act),
+                Some(Reach::ScrollBy { .. }) => {
+                    self.agent_fail(p.reply, "the element stays out of view")
+                }
+                None => self.agent_fail(p.reply, "the page did not scroll"),
+            },
+            (
+                Wait::Focus {
+                    tab, text, name, ..
+                },
+                PageEvent::EvalResult { result, .. },
             ) => {
-                let moved = result
+                let href = result
                     .as_deref()
                     .ok()
-                    .and_then(|t| serde_json::from_str::<[f64; 2]>(t).ok());
-                let now = moved.map(|[dx, dy]| Bounds {
-                    x: bounds.x - dx,
-                    y: bounds.y - dy,
-                    ..bounds
-                });
-                match now.map(|b| wubble_ax::reach(b, viewport)) {
-                    Some(Reach::At { x, y }) => self.agent_input(p.reply, tab, x, y, act),
-                    Some(Reach::ScrollBy { .. }) => {
-                        self.agent_fail(p.reply, "the element stays out of view")
-                    }
-                    None => self.agent_fail(p.reply, "the page did not scroll"),
-                }
+                    .and_then(|t| serde_json::from_str::<Option<String>>(t).ok())
+                    .flatten()
+                    .unwrap_or_default();
+                self.agent_focused(p.reply, tab, text, &name, &href);
             }
             (_, _) => self.agent_fail(p.reply, "an unexpected answer"),
         }
@@ -1080,6 +1176,7 @@ impl Host {
         let tab = match &p.wait {
             Wait::Navigated { tab, .. }
             | Wait::Loaded { tab }
+            | Wait::Opened { tab, .. }
             | Wait::Text { tab, .. }
             | Wait::Element { tab, .. }
             | Wait::Tree { tab, .. } => *tab,
@@ -1094,21 +1191,22 @@ impl Host {
             self.agent_fail(p.reply, "the tab closed");
             return None;
         }
-        let loading = self
-            .tab_view(tab)
-            .is_some_and(|v| matches!(v.nav().phase, Phase::Loading { .. }));
+        let phase = self.tab_view(tab).map(|v| v.nav().phase);
+        let loading = matches!(phase, Some(Phase::Loading { .. }));
         let page = self.ax_tree(tab).filter(|t| t.viewport().is_some());
         let document = page.and_then(PageTree::document).map(str::to_owned);
         let done: Option<String> = match &p.wait {
-            Wait::Navigated { before, ended, .. } => {
+            Wait::Navigated { before, load, .. } => {
+                let ended = *load == Load::Ended;
                 let fresh = document.is_some() && document != *before;
-                match (*ended && fresh, *ended && late) {
+                match (ended && fresh, ended && late) {
                     (true, _) => Some("loaded".into()),
                     (false, true) => Some("loaded (the page's tree did not change)".into()),
                     _ => None,
                 }
             }
             Wait::Loaded { .. } => (!loading && document.is_some()).then(|| "loaded".into()),
+            Wait::Opened { answer, .. } => (phase == Some(Phase::Loaded)).then(|| answer.clone()),
             Wait::Text { text, .. } => page
                 .map(|t| t.flatten(ALL_ITEMS))
                 .is_some_and(|items| {
@@ -1170,18 +1268,39 @@ impl Host {
             target,
             outcome,
         };
-        self.agents.log.push(entry.clone());
         self.store.push_agent_log(entry);
     }
 
-    /// `--smoke mcp`'s client finished: its step count, or what failed.
+    /// `--smoke mcp`'s client finished: its step count, or what failed. Then the agent's
+    /// closed tab and its loads must be none of the user's (the store answers in order, so
+    /// after what the session's calls filed).
     pub(crate) fn mcp_smoke_done(&mut self, result: Result<usize, String>) {
-        match result {
-            Ok(steps) => {
-                self.mcp_passed = Some(steps);
-                crate::quit();
-            }
-            Err(e) => self.fail(e),
-        }
+        let steps = match result {
+            Ok(steps) => steps,
+            Err(e) => return self.fail(e),
+        };
+        self.store.pop_closed(move |closed| {
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| match closed {
+                    Some(c) => host.fail(format!("the user's closed tabs hold {}", c.url)),
+                    None => host.mcp_smoke_history(steps),
+                })
+            });
+        });
+    }
+
+    fn mcp_smoke_history(&mut self, steps: usize) {
+        self.store.visits("", None, 100, move |page| {
+            let left = page.rows.into_iter().find(|r| r.url.contains("127.0.0.1"));
+            let _ = slint::invoke_from_event_loop(move || {
+                with_host(|host| match left {
+                    Some(r) => host.fail(format!("the user's history holds {}", r.url)),
+                    None => {
+                        host.mcp_passed = Some(steps);
+                        crate::quit();
+                    }
+                })
+            });
+        });
     }
 }

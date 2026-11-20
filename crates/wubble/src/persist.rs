@@ -37,6 +37,7 @@ use wubble_core::omnibox::HistoryEntry;
 use wubble_core::pages::{BookmarkEdit, BookmarkRow, HistoryRow, InternalPage};
 use wubble_core::seam::SidebarMode;
 use wubble_core::site::{Decision, Permission, SitePermissions};
+use wubble_core::space::SpaceId;
 use wubble_core::tab::TabId;
 use wubble_engine::favicon::FaviconImage;
 use wubble_store::{
@@ -424,10 +425,11 @@ impl StoreClient {
         let _ = self.tx.send(request);
     }
 
-    pub fn save(&self, model: &Model, ui: UiState) {
+    /// `transient`: Spaces a session never keeps (an agent session's), as peeks.
+    pub fn save(&self, model: &Model, transient: &[SpaceId], ui: UiState) {
         self.send(Request::Save {
             // a peek is never part of a session
-            model: Box::new(model.for_session()),
+            model: Box::new(model.for_session(transient)),
             ui,
         });
     }
@@ -1330,7 +1332,7 @@ mod tests {
             sidebar_width: 300.0,
             mode: SidebarMode::Rail,
         };
-        client.save(&model, ui);
+        client.save(&model, &[], ui);
         assert!(client.set_setting("search.engine", "google"));
         assert!(client.set_setting("zoom.sites", r#"{"a.test":125}"#));
         assert!(
@@ -1498,6 +1500,7 @@ mod tests {
         assert!(loaded.recv().unwrap().is_err());
         client.save(
             &Model::new(std::time::Instant::now()),
+            &[],
             Settings::default().ui,
         );
         client.shutdown();
@@ -1537,7 +1540,7 @@ mod tests {
         let (client, loaded) = start(&path);
         assert!(loaded.favicons.is_empty());
         let model = model_of(&["https://a.test/page", "https://b.test/", "about:blank"]);
-        client.save(&model, Settings::default().ui);
+        client.save(&model, &[], Settings::default().ui);
         client.put_favicon("https://a.test/other", &icon("https://a.test/i.png", 7), 1);
         client.shutdown();
 

@@ -1,11 +1,14 @@
 //! `--smoke mcp`: an MCP client on the browser's own socket, as a harness's `wubble mcp` would
 //! be. On a throwaway profile with `agent.mcp_enabled` on, a thread connects and runs, one line
 //! per step: discovery, the tool list, `start_session` (headless; the smoke approves it,
-//! `Host::approve_for_smoke`), that the session sees only its own tab, `navigate` to the
-//! bundled page on loopback, `read_page`, a click on its button by ref and a wait for what the
-//! click wrote, typing into its field and a wait for what the input wrote, `evaluate`, a
-//! `screenshot` (a PNG that decodes), `stop_session`, and that the handle is dead afterwards;
-//! last a second session is started and left running: the browser's quit must close its Space.
+//! `Host::approve_for_smoke`), at once `navigate` to the bundled page on loopback and
+//! `read_page` (the new tab's own `about:blank` load must not pass for the page's), that the
+//! session sees only its own tab, two clicks on its button by ref (each its own single click)
+//! and a wait for what the click wrote, typing into its field and a wait for what the input
+//! wrote, `evaluate`, a `screenshot` (a PNG that decodes), a tab opened and closed,
+//! `stop_session`, and that the handle is dead afterwards; last a second session is started and
+//! left running: the browser's quit must close its Space. The host then checks that the user's
+//! recently-closed list and history hold nothing of the agent's.
 //! Every step waits for its answer: the browser bounds each call by its deadline. Run by hand
 //! (it opens a window), under `scripts/headless.sh` and `timeout`.
 
@@ -24,7 +27,7 @@ pub const PAGE: &str = r##"<!doctype html><html lang="en"><head><title>mcp</titl
 <h1>Agent page</h1>
 <label for="name">Name</label>
 <input id="name" oninput="document.getElementById('out').textContent='typed '+this.value">
-<button onclick="document.getElementById('out').textContent='pressed';document.title='pressed'">Press</button>
+<button onclick="window.clicks=(window.clicks||'')+event.detail;document.getElementById('out').textContent='pressed';document.title='pressed'">Press</button>
 <p id="out">idle</p>
 </body></html>"##;
 
@@ -170,6 +173,17 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
     }
     c.step("start_session", format!("tab {tab}, headless"));
 
+    c.ok(
+        "navigate",
+        json!({"session": session, "tab": tab, "url": page}),
+    )?;
+    c.step("navigate", page);
+    let read = c.ok("read_page", json!({"session": session, "tab": tab}))?;
+    let read = text(&read);
+    let button = ref_of(&read, "- button \"Press\"").ok_or(format!("read_page: {read}"))?;
+    let field = ref_of(&read, "- textField \"Name\"").ok_or(format!("read_page: {read}"))?;
+    c.step("read_page", format!("{} items", read.lines().count()));
+
     let tabs = c.ok("list_tabs", json!({"session": session}))?;
     let tabs: Value = serde_json::from_str(&text(&tabs)).map_err(|e| e.to_string())?;
     if tabs.as_array().map(Vec::len) != Some(1) || tabs[0]["tab"] != tab.as_str() {
@@ -188,21 +202,13 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
     }
     c.step("isolation", format!("1 tab; tabs 0..={} refused", own + 1));
 
-    c.ok(
-        "navigate",
-        json!({"session": session, "tab": tab, "url": page}),
-    )?;
-    c.step("navigate", page);
-    let read = c.ok("read_page", json!({"session": session, "tab": tab}))?;
-    let read = text(&read);
-    let button = ref_of(&read, "- button \"Press\"").ok_or(format!("read_page: {read}"))?;
-    let field = ref_of(&read, "- textField \"Name\"").ok_or(format!("read_page: {read}"))?;
-    c.step("read_page", format!("{} items", read.lines().count()));
-
-    c.ok(
-        "click",
-        json!({"session": session, "tab": tab, "ref": button}),
-    )?;
+    // twice, as fast as the calls go: each is a click of its own (`event.detail` 1)
+    for _ in 0..2 {
+        c.ok(
+            "click",
+            json!({"session": session, "tab": tab, "ref": button}),
+        )?;
+    }
     c.ok(
         "wait_for",
         json!({"session": session, "tab": tab, "text": "pressed"}),
@@ -217,13 +223,13 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
         json!({"session": session, "tab": tab, "text": format!("typed {TYPED}")}),
     )?;
     c.step("type", &field);
-    let script = "document.getElementById('name').value + '|' + document.title";
+    let script = "document.getElementById('name').value + '|' + document.title + '|' + clicks";
     let value = c.ok(
         "evaluate",
         json!({"session": session, "tab": tab, "script": script}),
     )?;
     let value = text(&value);
-    if value != format!("\"{TYPED}|pressed\"") {
+    if value != format!("\"{TYPED}|pressed|11\"") {
         return Err(format!("evaluate: {value}"));
     }
     c.step("evaluate", &value);
@@ -237,6 +243,12 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
         return Err(format!("screenshot: {w}x{h}"));
     }
     c.step("screenshot", format!("{w}x{h} PNG, {} bytes", png.len()));
+
+    let opened = c.ok("open_tab", json!({"session": session, "url": page}))?;
+    let opened: Value = serde_json::from_str(&text(&opened)).map_err(|e| e.to_string())?;
+    let second = opened["tab"].as_str().unwrap_or_default().to_owned();
+    c.ok("close_tab", json!({"session": session, "tab": second}))?;
+    c.step("open_tab", format!("tab {second} opened and closed"));
 
     c.ok("stop_session", json!({"session": session}))?;
     if c.tool("list_tabs", json!({"session": session}))?.is_ok() {

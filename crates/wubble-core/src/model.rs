@@ -547,6 +547,16 @@ impl Model {
         self.place_of(tab).map(|(si, p)| (self.spaces[si].id, p))
     }
 
+    /// Whether `tab` is in `space` and lives in `container`: what an agent session reaches (a
+    /// tab moved into its Space keeps its own container, so stays out of reach).
+    pub fn holds(&self, space: SpaceId, container: ContainerId, tab: TabId) -> bool {
+        self.location(tab).is_some_and(|(s, _)| s == space)
+            && self
+                .tabs
+                .get(&tab)
+                .is_some_and(|t| t.container == container)
+    }
+
     /// Visual order of a Space's tabs: pinned, then items with folder tabs inline.
     pub fn order(&self, space: SpaceId) -> Vec<TabId> {
         self.space_idx(space)
@@ -1085,15 +1095,23 @@ impl Model {
         self.glances.iter().any(|g| g.tab == tab)
     }
 
-    /// The model as a session keeps it: without the peeks and their tabs (a restart never
-    /// brings one back).
-    pub fn for_session(&self) -> Model {
+    /// The model as a session keeps it: without the peeks and their tabs, and without the
+    /// `transient` Spaces (an agent session's), their tabs and their own containers (a restart
+    /// never brings one back).
+    pub fn for_session(&self, transient: &[SpaceId]) -> Model {
         let mut m = self.clone();
         let gone: Vec<TabId> = m.glances.drain(..).map(|g| g.tab).collect();
         for &t in &gone {
             m.detach(t);
         }
         m.forget(&gone);
+        for &space in transient {
+            let Some(container) = m.space_idx(space).map(|si| m.spaces[si].container) else {
+                continue;
+            };
+            m = apply(m, Command::DeleteSpace(space)).0;
+            m = apply(m, Command::DeleteContainer(container)).0;
+        }
         m
     }
 

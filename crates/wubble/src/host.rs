@@ -2153,6 +2153,9 @@ impl Host {
         if self.archiving.contains_key(&tab) {
             return; // filed in the Archive instead
         }
+        if self.agent_drives(tab) {
+            return; // an agent session's tab is none of the user's
+        }
         let Some(t) = self.model.tabs.get(&tab) else {
             return;
         };
@@ -2174,7 +2177,8 @@ impl Host {
     fn record_visit(&mut self, tab: TabId, url: &str) {
         let previous = self.committed.insert(tab, url.to_string());
         let typed = self.typed_nav.committed(tab);
-        if persist::visit_to_record(previous.as_deref(), url) {
+        // an agent session's loads are none of the user's history
+        if persist::visit_to_record(previous.as_deref(), url) && !self.agent_drives(tab) {
             let transition = if typed {
                 Transition::Typed
             } else {
@@ -2187,7 +2191,7 @@ impl Host {
     fn save_now(&mut self) {
         self.record_geometry();
         let ui = self.ui_state();
-        self.store.save(&self.model, ui);
+        self.store.save(&self.model, &self.agents.spaces(), ui);
         self.save = SaveState::default();
     }
 
@@ -2198,7 +2202,7 @@ impl Host {
         self.agents_quit();
         self.media_shutdown();
         self.save_download_progress();
-        self.store.save(&self.model, ui);
+        self.store.save(&self.model, &self.agents.spaces(), ui);
         std::mem::replace(&mut self.store, StoreClient::none()).shutdown();
     }
 

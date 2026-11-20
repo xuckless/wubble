@@ -103,6 +103,22 @@ pub(super) fn scroll_script(dx: f64, dy: f64) -> String {
     )
 }
 
+/// Where an item at `bounds` is reached once the page answered [`scroll_script`] with `result`;
+/// `None` when the page did not scroll.
+pub(super) fn reach_after(
+    bounds: Bounds,
+    viewport: Bounds,
+    result: &Result<String, String>,
+) -> Option<Reach> {
+    let [dx, dy] = serde_json::from_str::<[f64; 2]>(result.as_deref().ok()?).ok()?;
+    let now = Bounds {
+        x: bounds.x - dx,
+        y: bounds.y - dy,
+        ..bounds
+    };
+    Some(wubble_ax::reach(now, viewport))
+}
+
 impl Host {
     /// `tab`'s mirrored tree, while one is kept (pages' accessibility on, or an agent's tab).
     pub(super) fn ax_tree(&self, tab: TabId) -> Option<&PageTree> {
@@ -245,22 +261,10 @@ impl Host {
         let Some(w) = self.ax.waiting.take_if(|w| w.eval == id.0) else {
             return false;
         };
-        let moved = result
-            .as_deref()
-            .ok()
-            .and_then(|t| serde_json::from_str::<[f64; 2]>(t).ok());
-        let Some([dx, dy]) = moved else {
-            eprintln!("wubble: ax: the page did not scroll: {result:?}");
-            return true;
-        };
-        let now = Bounds {
-            x: w.bounds.x - dx,
-            y: w.bounds.y - dy,
-            ..w.bounds
-        };
-        match wubble_ax::reach(now, w.viewport) {
-            Reach::At { x, y } => self.ax_act(w.tab, x, y, &w.name, &w.text),
-            Reach::ScrollBy { .. } => eprintln!("wubble: ax: the item stays out of view"),
+        match reach_after(w.bounds, w.viewport, result) {
+            Some(Reach::At { x, y }) => self.ax_act(w.tab, x, y, &w.name, &w.text),
+            Some(Reach::ScrollBy { .. }) => eprintln!("wubble: ax: the item stays out of view"),
+            None => eprintln!("wubble: ax: the page did not scroll: {result:?}"),
         }
         true
     }
@@ -351,5 +355,31 @@ mod tests {
             (3, AxKind::Link, "docs")
         );
         assert_eq!((row.x, row.y, row.w, row.h), (168.0, 80.0, 29.0, 17.0));
+    }
+
+    #[test]
+    fn a_scrolled_item_is_reached_where_it_moved() {
+        let b = |x, y| Bounds {
+            x,
+            y,
+            width: 20.0,
+            height: 10.0,
+        };
+        let viewport = Bounds {
+            width: 800.0,
+            height: 600.0,
+            ..b(0.0, 0.0)
+        };
+        let item = b(90.0, 1395.0);
+        assert!(matches!(
+            reach_after(item, viewport, &Ok("[0,1100]".into())),
+            Some(Reach::At { x, y }) if x == 100.0 && y == 300.0
+        ));
+        assert!(matches!(
+            reach_after(item, viewport, &Ok("[0,0]".into())),
+            Some(Reach::ScrollBy { .. })
+        ));
+        assert!(reach_after(item, viewport, &Err("gone".into())).is_none());
+        assert!(reach_after(item, viewport, &Ok("null".into())).is_none());
     }
 }
