@@ -167,7 +167,7 @@ Open, to build or check:
 - [ ] Build with `enable_widevine` and codecs; ship no CDM; a CDM loader (installed CDM, else opt-in download)
 - [ ] Document DRM limits (Linux L3 around 720p; services that need a VMP-signed browser refuse us)
 - [ ] Build infrastructure: Linux and macOS local; Windows on a runner large enough for Chromium
-- [x] Extensions research ([docs/research/extensions.md](docs/research/extensions.md)); the extension system on only when one is installed; install from a directory or a .crx (no UI yet; `--smoke extensions`) (COMMIT)
+- [x] Extensions research ([docs/research/extensions.md](docs/research/extensions.md)); the extension system on only when one is installed; install from a directory or a .crx (no UI yet; `--smoke extensions`) (669c29b)
 - [ ] Extensions: patches P1 (tabs.query, tab events, windows), P2 (extension-opened tabs and windows), P3 (action button and popup), P4 (permission prompts); then the install page with permissions and "restart to apply"
 - [ ] Extensions: `chrome.tabs`/`windows`/actions on wubble's model; action buttons, popups, options, install, Web Store
 - [ ] Swap in behind `wubble-engine`, shell unchanged
