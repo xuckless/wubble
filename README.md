@@ -44,7 +44,7 @@ It has three modes: extended, a narrow rail, and hidden. When hidden, moving to 
 
 ## What works today
 
-On Linux, checked by the smoke runs in [AGENTS.md](AGENTS.md):
+On Linux, checked by the smoke runs in [docs/smokes.md](docs/smokes.md):
 
 - Pages render through the zero-copy path, with colours checked against known swatches.
 - Tabs that sleep when hidden and restore when opened; sessions, history and settings saved per profile.
@@ -99,7 +99,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p wubble -- --smoke frames=120    # opens a window, checks the pixels, exits
 ```
 
-Working rules and the full command list are in [AGENTS.md](AGENTS.md). Nothing in the tests depends on how fast the machine is.
+Working rules are in [AGENTS.md](AGENTS.md), the full command list in [docs/smokes.md](docs/smokes.md). Nothing in the tests depends on how fast the machine is.
 
 Code adapted from other projects says so in its header; the full list is in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Built on [CEF](https://bitbucket.org/chromiumembedded/cef) through [cef-rs](https://github.com/tauri-apps/cef-rs), [Slint](https://slint.dev), [wgpu](https://wgpu.rs), a fork of [welding](https://crates.io/crates/welding) in `vendor/welding`, [adblock-rust](https://github.com/brave/adblock-rust) and [Turso](https://github.com/tursodatabase/turso).
 

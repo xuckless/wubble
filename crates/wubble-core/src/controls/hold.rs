@@ -124,7 +124,7 @@ pub fn transition(mut s: State, ev: Event) -> (State, Vec<Effect>) {
         Event::Disable(d) => {
             s.disabled = d;
             // wubble: a disabled button lets go (the web's disabled button stops getting the
-            // pointer up; notes/fidelity/derived-review.md)
+            // pointer up; docs/fidelity/derived-review.md)
             if d && s.phase == Phase::Held {
                 s.phase = Phase::Idle;
             }

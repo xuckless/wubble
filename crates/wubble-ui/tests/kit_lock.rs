@@ -540,7 +540,7 @@ fn no_letter_tiles() {
 
 /// `derived.slint`'s wubble values sit in one `// derived:` block, each line naming the design
 /// rule it derives from (`// derived from ...`), so the owner reviews them in one place
-/// (notes/fidelity/derived-review.md). Outside the block a literal is a design value not yet
+/// (docs/fidelity/derived-review.md). Outside the block a literal is a design value not yet
 /// named by its generated property (counted by the ratchet above).
 #[test]
 fn derived_values_cite_their_rule() {

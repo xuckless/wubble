@@ -1,0 +1,243 @@
+# Decisions
+
+Status (2026-11-19): moved out of [TODO.md](../TODO.md) and condensed to one line each; superseded rows are dropped
+and the current row says what it supersedes. The full wording of every row is in git history (`git log -p -- TODO.md`).
+Read this before proposing architecture; add new decisions here, one line each.
+
+## Architecture
+
+| Topic | Decision | Date |
+|---|---|---|
+| Licence | GPL-3.0-only (Slint's GPL option; Chromium and CEF are BSD and compatible). | 2026-11-18 |
+| Platforms | Linux (lead, Wayland) and macOS are daily-drive targets built locally; Windows is CI-only and may trail by a milestone. | 2026-11-18 |
+| Engine, phase 1 | Prebuilt CEF 156 through the `cef` crate (stock Chromium, not ungoogled). | 2026-11-18 |
+| Engine, phase 2 | Our own build: ungoogled-chromium patches plus CEF (M6), swapped in behind `wubble-engine`. | 2026-11-18 |
+| UI | Slint 1.19 on winit with wgpu 30. | 2026-11-18 |
+| Frame path | CEF accelerated OSR → native handle → `wgpu::Texture` → `slint::Image`, modelled on `welding` / `grafting`. | 2026-11-18 |
+| Texture import | `welding` 0.15.0, forked into `vendor/welding` (see "welding fork"). | 2026-11-18 |
+| welding fork | Vendored, outside the workspace, upstream style; each change marked `wubble change` and listed in `vendor/welding/WUBBLE_CHANGES.md`. | 2026-11-18 |
+| CEF version | CEF 156.0.30 (Chromium 156.0.8078.96), moved in the welding fork: the first build with real frames on NVIDIA Wayland; each frame is GPU-copied in the paint callback. | 2026-11-18 |
+| Shell renderer | Slint's Skia renderer on the shared wgpu device (`skia-wgpu`), replacing femtovg and its fork; see [research/renderer-roads.md](research/renderer-roads.md). | 2026-11-18 |
+| Shared GPU device | `wubble-gfx::GpuContext` makes the one dmabuf-capable Vulkan (Metal, D3D12) device and hands it to Slint; page frames and the scene stay zero-copy. | 2026-11-18 |
+| Frame copy | One GPU blit per frame from CEF's BGRA import into a ring of two `Rgba8Unorm` targets Slint accepts; no CPU readback. | 2026-11-18 |
+| Storage | wubble's own Turso database (`turso` 0.9.0-pre, SQLite-compatible) with `user_version` migrations; Chromium keeps only cookies and cache per container. | 2026-11-18 |
+| Persistence in the app | One store thread owns the store; saves after 20 changes, a quiet 5 s tick or shutdown; a database that fails to open is left untouched and the run has no persistence. | 2026-11-18 |
+| Session storage | The core `Model` is saved and loaded directly; restored tabs come back discarded; recently closed is capped at 25; settings are typed through one `settings!` table. | 2026-11-18 |
+| Vault storage and settings table | One `logins` schema owned by the vault on the store thread; `settings::ALL` is the one settings table (key, kind, default, label, section, restart). | 2026-11-18 |
+| Tabs in the host | The binary owns one `Model`; every UI callback and engine event becomes a `Command` for `model::apply`, whose effects run through one pure table into one `execute`. | 2026-11-18 |
+| Windows | Windows are model state (`wubble_core::window`): Main (a Space), Little, Popup and Pip; two Main windows always show two different Spaces. | 2026-11-18 |
+| Containers | Each Space has a default container; a tab can be reopened in another, and Spaces may share one. | 2026-11-18 |
+| Web storage per container | A container is one CEF request context (`container-<id>` under the root cache): one cookie jar, storage, cache and permission store; containers share nothing. | 2026-11-18 |
+| Background work | Never an OS window: work without a pane is a hidden windowless view. | 2026-11-18 |
+| Internal surfaces | Native Slint for everything wubble owns; web pages only for DevTools, error pages, PDF, view-source, Chromium diagnostics and extension pages. | 2026-11-18 |
+| Helper binary | `wubble-helper` is a separate package: `cargo build --workspace` before `cargo run`; the engine refuses to start without it. | 2026-11-18 |
+| Sync | Deferred, no design work yet. | 2026-11-18 |
+| Import | Zen and Arc first (Helium where useful): `wubble-import` reads `places.sqlite`, mozLz4 and `zen-sessions.jsonlz4`; Arc's `StorableSidebar.json`. | 2026-11-18 |
+| Extensions | Not before our own Chromium (M6); Chromium's extension system is off (`disable-extensions`) until then; built-ins cover the common extensions. | 2026-11-18 |
+
+## Engine
+
+| Topic | Decision | Date |
+|---|---|---|
+| CEF message pump | Schedule-driven external pump (a port of cefclient's), at most 33 ms between runs, one single-shot Slint timer. | 2026-11-18 |
+| macOS pump delivery | CEF's pump requests reach the UI thread through the main dispatch queue (`dispatch2`), not Slint's `invoke_from_event_loop`, which starved redraws. | 2026-11-18 |
+| CEF cache directory | Always wubble's own `root_cache_path` per profile, never CEF's shared default; `--smoke boot` uses a fresh temp directory. | 2026-11-18 |
+| Throwaway profiles | Smokes and `--measure` run on throwaway profiles with the platform's extra switches (macOS: mock keychain). | 2026-11-18 |
+| CEF frame rate | `windowless_frame_rate` = the display refresh (capped at 240), re-read on the 5 s tick and set on every view when the monitor changes. | 2026-11-18 |
+| Start-up order | The GPU device is made on a thread while CEF initialises; the store is read before CEF; the first pump is queued once Slint's loop exists. | 2026-11-19 |
+| Shutdown only after every browser closed | `cef::shutdown` runs only on an explicit quit and after every browser CEF made (views, DevTools windows) reported `OnBeforeClose`. | 2026-11-18 |
+| View close | Event-driven: the welding fork pushes `BrowserClosed` from `OnBeforeClose`, reported to the lifecycle like a page closing itself. | 2026-11-18 |
+| Web events | One `WebEvent` enum collected after each run of CEF work; navigation per view is the pure `nav::transition`. | 2026-11-18 |
+| Engine requests | Every page question carries a `RequestId` and is answered once through `View::answer_*`; CEF callbacks are held in the fork's `Held` table. | 2026-11-18 |
+| Page surfaces | A page's own UI (dialogs, menus, find, fullscreen, IME) is native Slint, one pure machine per surface, routed by `surface::route`. | 2026-11-18 |
+| Page prompts, downloads, errors | Same shape: route → one pure machine → effects, exactly one answer per request; the permission prompt is never focused (no keyjacking). | 2026-11-18 |
+| Popups outside the page | The window stands in for the screen (cefclient's screen rects), so popups stay within the window; no global window position needed. | 2026-11-18 |
+| Web input | Keyboard from raw winit events; mouse, wheel and hover from a Slint `TouchArea` over the frame; click count from a ported cefclient tracker. | 2026-11-18 |
+| Key routing | Each binding has a route: `Shell` (Chromium's reserved set plus wubble actions) or `PageFirst` (the shell acts only if the page leaves the key). | 2026-11-18 |
+| Edit commands | Undo, Redo, Cut, Copy, Paste, Select All are page-first actions on Chromium's chords; on macOS they run as actions since Blink leaves Cmd forms to the menu. | 2026-11-18 |
+| macOS key characters | Named keys carry AppKit's characters on macOS (`Platform::named_key_character`), or Backspace, Tab and arrows act twice. | 2026-11-18 |
+| macOS application class | `NSApplication` is wubble's subclass answering Chromium's `CrAppProtocol` family, installed first in `main`. | 2026-11-18 |
+| macOS window restoration | Off: wubble restores its own session, and AppKit's reopen alert blocked the first frame after a crash. | 2026-11-18 |
+| IME | The host takes winit's IME events while the page has focus and maps them through the pure `ime::transition` to CEF composition calls. | 2026-11-18 |
+| Mouse side buttons | Back and Forward buttons run `Action::Back` / `Forward` over page and shell alike and never reach the page. | 2026-11-18 |
+| Touchpad gestures | Pinch is browser zoom in the zoom keys' steps; two-finger sideways swipe is history on Wayland. | 2026-11-18 |
+| Platform extras | What winit leaves out on Wayland (drops, drags out, gestures, lock keys, the page clipboard) comes from one worker on the windows' `wl_display` behind one `Aux` trait. | 2026-11-18 |
+| Page clipboard on Wayland | Windowless Chromium cannot reach the Wayland clipboard, so page copy and paste go through a helper content script and the window's own connection; text only. | 2026-11-18 |
+| What windowless mode cannot do | `--smoke parity` checks every known gap as an expected-fail row; a gap that starts passing fails the smoke. | 2026-11-18 |
+| Overlay scrollbars | `enable-features=OverlayScrollbar` on every OS: the page scrollbar takes no layout width. | 2026-11-18 |
+| Chromium GPU on Linux | One GPU switch, `disable-gpu-memory-buffer-video-frames` (fixes black 10-bit video); any switch added names the bug it works around. | 2026-11-18 |
+| GPU process restarts | The host watches the GPU process id on the lifecycle tick, counts restarts and asks views to repaint; Chromium restarts it itself. | 2026-11-18 |
+| Favicons | Fetched by CEF `DownloadImage` (`is_favicon`, no cookies), once per icon URL per load; no HTTP client in wubble. | 2026-11-18 |
+| External links | Schemes Chromium does not load are cancelled in `OnBeforeBrowse` and handed to the host with the gesture bit; CEF never launches the OS itself. | 2026-11-18 |
+| Save As | "Save … As" rows always ask; `downloads.ask_where` makes every download ask; no engine change. | 2026-11-18 |
+| Copy Image | `View::download_image` gives RGBA, which the screenshot worker puts on the clipboard as PNG. | 2026-11-18 |
+| Printing | wubble's own print sheet over CEF `PrintToPDF`; printers through the CUPS command line, not libcups. | 2026-11-18 |
+| Page fullscreen | Hides sidebar, frame and seam, fills the window (making it full screen if needed), Esc or F11 asks the page to leave. | 2026-11-18 |
+| Per-site zoom | One `zoom.sites` setting owned by `wubble_core::zoom`; every commit sets the stored zoom, CEF's per-host level is only a cache. | 2026-11-18 |
+| Audible | No CEF signal, so a 2 s script probe per live view; misses WebAudio and iframes (a CEF patch in M6). | 2026-11-18 |
+| Native pages | History, bookmarks, downloads, passwords (and settings, start, tasks) are `InternalPage` variants drawn in the content area with no CEF view. | 2026-11-18 |
+| Built-ins, part 1 | Dark mode, reader, screenshots and link hints talk to the page only through `View::cdp` and `View::eval`; each is one core state machine. | 2026-11-18 |
+| DevTools | CEF cannot put DevTools in a windowless browser, so the docked panel is the DevTools frontend loaded as an ordinary view; detached is CEF's window. | 2026-11-18 |
+| Tab sleeping | Freeze after 1 min hidden, discard after 15 min or at once under critical pressure; pinned tabs never discard; busy tabs are left alone. | 2026-11-18 |
+| Busy tabs | One bit set per tab (`busy::Busy`), fed only by `Command::Busy`; any reason protects from freeze and discard. | 2026-11-18 |
+| Tab freezing | CDP `Page.setWebLifecycleState` through welding's DevTools channel. | 2026-11-18 |
+| Tab snapshots | On hide the last frame is copied on the GPU into a 384 px texture (32 MiB budget) and shown until a restoring tab's first frame. | 2026-11-18 |
+| Memory pressure | One `PressureSource` per OS: Linux PSI (else MemAvailable), macOS `kern.memorystatus_vm_pressure_level`, Windows low-memory notification. | 2026-11-18 |
+| Memory and process switches | Process-model knobs (bfcache size, decoded image cap, site isolation, renderer limit) are restart rows in Settings with one merged feature list. | 2026-11-18 |
+| Task manager | `wubble://tasks` joins the model, each tab's renderer pid and per-process samples, sampled only while shown. | 2026-11-18 |
+| Pixel check | `--smoke frames=N` snapshots the window and checks colour variety and the page's swatches to within 2 per channel. | 2026-11-18 |
+| CPU fallback count | CPU (`OnPaint`) frames are counted and logged; whether `cpu_fallback > 0` should fail the smoke is open. | 2026-11-18 |
+| Boot hang | One unreproduced `--smoke boot` hang; `WUBBLE_TRACE=1` prints stage lines to catch the next one. | 2026-11-18 |
+| macOS bundle | CEF on macOS runs only from an app bundle written by `cargo run -p wubble-bundle`; unsigned for now. | 2026-11-18 |
+| macOS frame format | The IOSurface copy target takes the sRGB suffix, so display-encoded bytes read right with no Metal sRGB view. | 2026-11-18 |
+| Windows sandbox | Windows runs unsandboxed until wubble is restructured as a client DLL behind CEF's `bootstrap.exe`. | 2026-11-18 |
+| Typed local addresses | A scheme-less address gets https only for public names without a port; IPs, `localhost`, single labels, `.local` and other ports stay http. | 2026-11-18 |
+| Local Network (macOS) | The bundle carries `NSLocalNetworkUsageDescription`; loopback works in every form on macOS and Linux. | 2026-11-18 |
+| Accessibility | Shell through Slint's AccessKit tree; pages get the accessibility media features; web content's full subtree waits for a Slint graft API (M6). | 2026-11-19 |
+
+## Shell and UI
+
+| Topic | Decision | Date |
+|---|---|---|
+| UX source | The owner's design repo `xuckless/the-wallpaper-project`, `src/wubble`, cloned beside the repo; wubble's UX matches it; `ux/pack/` is superseded. | 2026-11-18 |
+| Theme | Dark only, as the design decides; tokens come from the generated kit files. | 2026-11-18 |
+| Daily-drive features | Vertical tabs, Spaces, command bar, compact mode first; the rest of M2 after. | 2026-11-18 |
+| Layout | No top toolbar: the sidebar follows the design's `chrome.tsx` (address pill, favourites, Space name, tabs, new-tab row, Space switcher), lights and `.wb-nav` on top. | 2026-11-18 |
+| Frameless window | `no-frame` with a transparent background; bare chrome drags the window, edge zones resize it through the compositor; macOS keeps AppKit's frame. | 2026-11-18 |
+| Window platform flags | Per windowing system: client geometry and transparent corners flags, read from the raw window handle; corners round only where transparent. | 2026-11-18 |
+| Minimise | Through winit `set_minimized(true)`, never Slint's `minimized` property (Wayland cannot report it back). | 2026-11-18 |
+| Glass | wubble draws its own glass (blur, saturate, tint, light, rim) so it looks the same on every OS. | 2026-11-18 |
+| Glass backdrop | The design's scene, ported into `wubble_gfx::scene` on the shared device and drawn into one texture behind Slint; supersedes the earlier dual-Kawase page blur. | 2026-11-18 |
+| Glass in the shell | Glass rects are data: every kit `GlassPanel` reports a `GlassItem` to one registry, which the scene reads each frame. | 2026-11-18 |
+| Glass fallback | Scene or Slint-only, chosen once at start and logged; `WUBBLE_GLASS=slint` or the `glass.scene` setting forces the fallback. | 2026-11-18 |
+| Glass under load | One `scene::Quality` enum (Full, HalfRes, Cached, Flat) moved by a pure `Governor::next(cost, budget)` with hysteresis and back-off. | 2026-11-18 |
+| Glass cost | The governor's load is the larger of the scene's GPU time over its 0.5 share and the frame's lateness, against a budget of at least 8.33 ms. | 2026-11-18 |
+| Glass governor without GPU timestamps | On Metal the load is lateness and each step down is a trial kept only if it cuts the load to 75 %. | 2026-11-18 |
+| Window glass | The window is one Regular glass surface tinted with the Space colour; the page card sits on it 8 px in; supersedes "Glass bow". | 2026-11-18 |
+| Page edge mask | While a seam bends a pane's edge the host redraws the pane's last frame cut along the string (`wubble_gfx::mask::EdgeMask`). | 2026-11-18 |
+| Resize feel | During window or seam resize the last page frame stretches elastically to the new rect and settles on a spring; supersedes "Stale frames on resize". | 2026-11-18 |
+| No-blur desktops | Opaque ground with the Space tint where the desktop has no blur (GNOME); in-window glass unaffected. | 2026-11-18 |
+| Frame budget | 120 Hz, 8.33 ms, no dropped frames during animation; springs are physics-stepped per frame and retarget on interruption. | 2026-11-18 |
+| Shell animation | The design's physics ported 1:1 into `wubble_core::{motion, seam, tabs, scroller}`, driven by the one vsynced rendering notifier, redrawing only while something moves. | 2026-11-18 |
+| Reduced motion | One flag, one writer (`host/look.rs`): the `ui.reduce_motion` setting or the OS preference behind one `MotionSource` trait. | 2026-11-18 |
+| Border beam | The design's address-bar beam laps the pill on tab change and page load; one `beam::Beam` enum and one transition. | 2026-11-18 |
+| Motion audit | [research/motion-audit.md](research/motion-audit.md) inventoried every design motion; overlap entrances and dropdown timings follow the design. | 2026-11-18 |
+| Component physics | The design's touch-kit controls' loops live in `wubble_core::controls`; each Slint control takes a slot in the `Controls` registry. | 2026-11-18 |
+| Hover timing | One `hovercard::Hover` machine with per-use timings (tab card 500/300/100, tooltips, status bubble 80/250). | 2026-11-18 |
+| Status bubble | Per pane, keyed by the hovering tab; host kept whole, the rest cut in the middle; moves aside when the pointer nears. | 2026-11-18 |
+| Crisp shell rendering | Shell text and icons sit on whole device pixels; Skia's subpixel glyph positions do the rest. | 2026-11-18 |
+| Command bar state | One `CommandBarState` enum written only by a pure `next()`; closing is a timer equal to the out duration. | 2026-11-18 |
+| Search | First-run choice of Google or DuckDuckGo; suggestions are local; live engine suggestions behind a flag, off by default. | 2026-11-18 |
+| Sidebar mode setting | `ui.sidebar_mode` (extended, rail, hidden) next to `ui.sidebar_width` (252); restored at rest. | 2026-11-18 |
+| Glance | A peek is a tab held in `Model.glances`, never a sidebar row or saved, closed with its opener; Shift+click opens it. | 2026-11-18 |
+| Folder rows | A folder header is a row of the one tab list (negative id) on the same springs. | 2026-11-18 |
+| Slint ids | Slint ids are `int`; the wiring converts core `u64`/`u32` with `try_from`, never truncating. | 2026-11-18 |
+| Tab row menu | One `tabmenu::ROWS` table mapped to entries with icons, shortcuts and danger flags; Move to Space lists Spaces inline. | 2026-11-18 |
+| Deleting a Space | Closes its tabs after a confirm; the last Space cannot be deleted. | 2026-11-18 |
+| New Space | Spaces are created from the sidebar "+", the New Space action, or Settings' Spaces list (named there, no switch). | 2026-11-19 |
+| Auto-archive, routing, tidy, never sleep | Archive lives in the store; `archive::due` is pure; routing rules and never-sleep sites are list settings; `Keep` is derived. | 2026-11-18 |
+| Split view | The design's split: up to 3 pages of one Space side by side, model state changed only through `Model::apply`. | 2026-11-18 |
+| Settings page | `wubble://settings` is a tab drawn as native Slint, generated from `settings::ALL` with one exhaustive control per kind. | 2026-11-18 |
+| List settings | List-type settings (routing rules, Spaces, site lists) use the kit list editor (macOS add/remove list style). | 2026-11-19 |
+| App icons | One icon set from the owner's brand kit, SVG masters in `assets/icons/` rasterised by `scripts/make-icons.py`. | 2026-11-18 |
+| Scene follows the run state | The run machine is Running / Still / Paused; the scene steps only when due, never for page frames or in page fullscreen; supersedes "Scene run state". | 2026-11-19 |
+| Idle redraws | Nothing may set a Slint property every frame unless it changed; frame rows compare images by texture. | 2026-11-19 |
+| Start page | The design's start page (living bubble, search capsule, site tiles) is wubble's new-tab page `wubble://start`; supersedes "New tab" (command bar only). | 2026-11-19 |
+| Start page on screen | Ctrl+T and an empty window open a start tab; its living liquid is a second scene at the page card's size, run only while a start tab shows. | 2026-11-19 |
+| Start page address field | On the start page the centre capsule is the only address field and holds the command bar; other pages keep the top overlay bar. | 2026-11-19 |
+| New-tab page layout | Owner override of the web design: the search capsule's centre sits at 60% of the page, the bubble rises with it, the heading reads "Let's Wubble". | 2026-11-19 |
+| Overlay glass blurs the page | The scene composites the page frame so overlay glass (menus, command bar, peek, sheets) frosts the live page; overturns "glass never blurs web content". | 2026-11-19 |
+| Page in the scene | Slint draws the page sharp once; the scene draws each pane's frame again only into a half-res blurred pyramid that overlay glass reads. | 2026-11-19 |
+| Still sidebar glass | Owner override of the web design: no moving liquid under the sidebar; still frosted glass with page-edge ambience. | 2026-11-19 |
+| Still backdrop in the browser window | The browser window's backdrop is `Backdrop::Still` (a fixed dye table); the living liquid is kept for the start page; supersedes "Liquid comes to a freeze". | 2026-11-19 |
+| Window physics stay native | Window move, throw, stretch, rubber-band resize and minimise-to-bubble stay with the OS compositor; documented exceptions. | 2026-11-19 |
+| No voice yet | No voice feature in this phase: the voice glow shader goes into the kit, no microphone. | 2026-11-19 |
+| Split seam truth | Split and sidebar seams follow the web's `browser/seam.ts` / `.wb-split-line`, not the Room page's seam. | 2026-11-19 |
+
+## Design fidelity
+
+| Topic | Decision | Date |
+|---|---|---|
+| The web design is truth | The web version (`browser/`, `core/`, `pages/`) is truth for look, motion, effects and widgets; its `slint/` port only where line-for-line; wubble owns features and wording. | 2026-11-19 |
+| Locked widget kit | UI is drawn only by kit components under `crates/wubble-ui/ui/kit/`, headed `// design:` or `// derived:`; values generated; `kit_lock.rs` ratchets. See [fidelity/kit-plan.md](fidelity/kit-plan.md). | 2026-11-19 |
+| Coloured-frost glass | The design's `598f814` coloured frost (thin, regular, thick tiers) adopted wholesale, tokens and shader. | 2026-11-19 |
+| Kit motion | Fixed-curve motion runs on `Tween` and `Replay` with generated durations; every duration goes through `Calm.ms`, the one reduced-motion switch. | 2026-11-19 |
+| Touch-kit controls | Menus, buttons and the checkbox take the touch kit's values, not Ultra Reactivate's. | 2026-11-19 |
+| Kit controls: focus and grips | The focus ring shows only for keyboard focus; each control's grip is one enum with one pure transition in `wubble_core::controls`. | 2026-11-19 |
+| Specimen pages are references | Foundations, Room, the Source panel and the touch specimens are not shipped; they are reference only. | 2026-11-19 |
+| Derived pieces | Pieces with no web counterpart are derived from kit rules, then shown to the owner on one review sheet ([fidelity/derived-review.md](fidelity/derived-review.md)). | 2026-11-19 |
+| Blur σ at every quality | Pyramid σ is in texels of the level read, so below Full the blur gets `BLUR_SIGMA × scale`. | 2026-11-19 |
+| Shader constants are checked | Every WGSL file starts `// translates:`; `shader_constants.rs` compares its literals with the cited GLSL both ways. | 2026-11-19 |
+| Review by eye | The capture and scoring tool was removed (187d7a4): review is by screenshots and the owner's eye; supersedes "Fidelity bar", "Fidelity capture" and the harness's shared dye. | 2026-11-19 |
+
+## Privacy and security
+
+| Topic | Decision | Date |
+|---|---|---|
+| Network on its own | No telemetry; crash reports are opt-in and open a GitHub issue (designed at ship time, M7). | 2026-11-18 |
+| Network stack | Chromium's defaults stay; wubble makes no speculative request of its own. | 2026-11-19 |
+| CEF sandbox | On for Linux and macOS through one welding rule shared by engine and helper; `--no-sandbox` is the only off switch, for debugging. | 2026-11-18 |
+| Passwords | Built-in manager (encrypted store keyed from the OS keyring) before extensions. | 2026-11-18 |
+| Password autofill | A content script in every frame, isolated by closure capture; Chromium's form parser ported to `wubble_core::autofill`. | 2026-11-18 |
+| Content blocker | Brave's `adblock-rust` (network and cosmetic, uBO syntax), on by default, per-site toggle. | 2026-11-18 |
+| Blocker build | `adblock` without `default-features` (its `single-thread` makes the engine not `Send`). | 2026-11-18 |
+| Blocker lists | uBO's default set as one data table plus URL tracking protection and cookie-notice lists; licence-permitting lists ship as a snapshot; downloads only on user action or a flag. | 2026-11-18 |
+| Blocker request path | CEF `OnBeforeResourceLoad` through the fork's request filter into CEF-free `filter::ContentFilter`; per-view counts. | 2026-11-18 |
+| Cosmetic channel and list updates | Cosmetic hiding runs on the helper's context script (`cosmetic.js`) over a named channel; the engine answers each frame's `hello`. | 2026-11-18 |
+| Remote debugging | `devtools.remote_port` is off by default; its Settings row carries the warning. | 2026-11-18 |
+| SponsorBlock | Built in on the hash-prefix API; a request of wubble's own, so `sponsor.enabled` starts off and the first video asks once. | 2026-11-18 |
+
+## Media and codecs
+
+| Topic | Decision | Date |
+|---|---|---|
+| Video codecs | Plain builds use prebuilt CEF without H.264, AAC, HEVC or HLS (`--smoke codecs` reports it); own CEF with proprietary codecs via `scripts/build-cef.sh` and `CEF_PATH`. | 2026-11-19 |
+| Video decode on Linux | Software VP9/AV1 by default; NVIDIA hardware decode (`libva-nvidia-driver`) is the opt-in `video.hardware_decode`, off by default (needs an unsandboxed GPU process). | 2026-11-19 |
+| DRM | Not in the shipped binary; Widevine in M6 from an installed CDM or an opt-in download. | 2026-11-18 |
+| Autoplay | Chromium's own policy: muted video autoplays on screen, sound needs a gesture; no per-site sound permission yet. | 2026-11-18 |
+| Colour and HDR | Page colours pass unchanged on the 8-bit path; HDR must show as HDR on capable displays, which needs the own CEF build (M6) plus a Slint patch. | 2026-11-18 |
+| Media detection | By response (MIME, status, size) through the fork's response observer; segments, small files and YouTube's player traffic skipped. | 2026-11-18 |
+| Media downloads | One path: CEF `URLRequest` in the tab's context into part files, ranged and resumable, one job machine, one downloads row. | 2026-11-18 |
+| Media joining | One track renamed into place; video plus audio joined by the system `ffmpeg` if found, else two files. | 2026-11-18 |
+| Media DRM | Protected streams are never fetched or decrypted ("Protected, cannot be saved"); plain HLS AES-128 is decrypted. | 2026-11-18 |
+| YouTube formats | Innertube's player API as yt-dlp's `android_vr` client, a request of wubble's own behind `media.youtube` (off). | 2026-11-18 |
+| Video controls | One overlay per page over the main video, fed by the page kit's snapshot; speed remembered per site. | 2026-11-19 |
+| Picture-in-picture | wubble's own Pip model window showing the tab's element-fullscreen video (no crop); closing it pauses the video. | 2026-11-19 |
+| Media keys | MPRIS, Now Playing and SMTC through `souvlaki`, acting on the audible tab, else Pip, else the visible one. | 2026-11-18 |
+| Boosts | Per-site CSS, script, tint and font stored in the profile, given to the page by `addScriptToEvaluateOnNewDocument` (not subject to CSP). | 2026-11-18 |
+
+## Performance
+
+| Topic | Decision | Date |
+|---|---|---|
+| Frame-path measurement | `wubble --measure scroll\|video\|resize\|typing`, hand run only; nothing in `cargo test` asserts a time. | 2026-11-18 |
+| Idle measurement | `wubble --measure idle` on a still page after a warm-up counts frames, renders, pump runs, timers and process CPU. | 2026-11-19 |
+| Memory measurement | `--measure memory`: 0, 1, 10, 50 tabs of one article on their own sites, then frozen and discarded; hand run. | 2026-11-18 |
+| Page-load harness | `--measure load` on loopback pages, hand run; owed: one shared `serve_http` helper for the six hand-rolled loopback servers. | 2026-11-19 |
+| Host timers at idle | Media poll, video clock and audible probe stay (0.1 % of a core); the GPU watch reads only the known GPU process between full looks. | 2026-11-19 |
+| In-callback copy wait | Kept (p95 under 0.12 ms); macOS copies on its own Metal queue and waits only for that buffer. | 2026-11-18 |
+| Request-hook cost | The request filter stays: a few microseconds a request, under the noise. | 2026-11-19 |
+| Content-script cost | All content scripts stay one bundled context script (~0.5 ms); `kit.js` stays a document script. | 2026-11-19 |
+| Back/forward cache | `BackForwardCache::Default` stays (back is 15 ms against 130 ms without it). | 2026-11-19 |
+| Blocker memory and load | Compiled engine about 34 MB resident, cached on disk, ready before the first CEF frame. | 2026-11-19 |
+| Priority under load | The browser asks systemd for its own scope (`CPUWeight=300`) first in `main`, so CEF's processes start inside it. | 2026-11-19 |
+| GPU memory | Skia keeps opacity-layer targets to its 256 MiB budget, so at most four tab rows animate at once; hidden OSR compositors keep a backbuffer until the M6 CEF patch. | 2026-11-19 |
+| Release profile | `release`: thin LTO, one codegen unit, abort on panic, symbols kept; `dist` (fat LTO, stripped) is what ships. | 2026-11-19 |
+
+## Build and release
+
+| Topic | Decision | Date |
+|---|---|---|
+| Version pins | `slint`, `wgpu`, `welding` and `cef` move together (wgpu 30, CEF 156). | 2026-11-18 |
+| Own CEF build | `scripts/build-cef.sh` builds CEF 156.0.30 with codecs locally; recipe in [research/cef-codec-build.md](research/cef-codec-build.md). | 2026-11-19 |
+| Build runners | Builds stay local for now: no rented runners ([research/build-runners.md](research/build-runners.md)). | 2026-11-19 |
+
+## Process
+
+| Topic | Decision | Date |
+|---|---|---|
+| Sprint mode | Breadth first to spec, each item reviewed for correctness and simplicity; hardening at the end of the build-out. | 2026-11-18 |
+| Copy first | Port proven code (GPL-3.0-compatible licences only) before writing new; each copy carries a source comment and a `THIRD_PARTY_NOTICES.md` entry. | 2026-11-18 |
+| Performance tests | Nothing in `cargo test` or CI asserts timings; performance is measured by hand ([measurements.md](measurements.md)). | 2026-11-18 |
+| Batches | Roadmap items run as parallel lanes; see [orchestration.md](orchestration.md). | 2026-11-18 |
+| macOS access | The Mac is driven only from a session on the Mac; other sessions report macOS as not run ([macos.md](macos.md)). | 2026-11-19 |

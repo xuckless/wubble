@@ -1,7 +1,8 @@
 # UX source
 
 **Source of truth:** the owner's design repo `xuckless/the-wallpaper-project`, directory
-`src/wubble` (private). Clone it to `~/Dev/wubble-wt/ref/the-wallpaper-project`. Read its
+`src/wubble` (private). Clone it beside this repo (the tools find it through `$WUBBLE_DESIGN`, see
+[tools/fidelity/README.md](../tools/fidelity/README.md)). Read its
 `README.md` (philosophy, motion tokens, shaders, structure) and `slint/README.md` (the
 Slint/Rust/WGSL port and what is 1:1). wubble's UX is built to match it; copy from its
 `slint/` port rather than re-deriving. It is the owner's own code (as is Ultra Reactivate,

@@ -1,7 +1,7 @@
 export const meta = {
   name: 'lane-batch',
   description: 'wubble batch: (research) -> implement -> correctness + simplicity review -> refix, per item in lane worktrees, then merge lanes into one integration branch and run the full check round',
-  whenToUse: 'A batch of independent roadmap items. Pass args {batch, integration_branch, base, lanes, items}; see AGENTS.md "Orchestrating a batch".',
+  whenToUse: 'A batch of independent roadmap items. Pass args {batch, integration_branch, base, lanes, items}; see docs/orchestration.md.',
   phases: [
     { title: 'Research', detail: 'copy first: find code to reuse from other browsers/projects, verify APIs, write a plan' },
     { title: 'Implement', detail: 'per lane worktree, items in sequence' },

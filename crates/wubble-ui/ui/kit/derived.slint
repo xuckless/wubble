@@ -415,7 +415,7 @@ export global Shell {
     out property <length> page-indent: 20px;
     out property <length> page-favicon: 16px;
 
-    // derived: values with no design equal (notes/fidelity/derived-review.md, for the owner).
+    // derived: values with no design equal (docs/fidelity/derived-review.md, for the owner).
     // Each line names the design rule it derives from; an expression of design tokens where one fits.
     out property <color> selection-fill: Palette.sky.transparentize(0.65); // derived from the Space accent sky (core/tokens.ts color.sky) at .35: selected text in a field; the design styles no ::selection
     out property <float> tab-exit-shrink: 1 - BrowserCss.wb-tab-out-k-to--scale; // derived from browser/browser.css:72 @keyframes wb-tab-out to scale(.94)
@@ -444,7 +444,7 @@ export global Shell {
 
 // Glyphs wubble needs that the design draws nowhere, derived on the design's rules: viewBox 24,
 // stroke 1.7, round caps and joins, no fill, content inside 3..21, box corners radius 1.5. Each is
-// listed with a rendered sheet in notes/fidelity/derived-review.md for the owner; kit `Glyph` is
+// listed with a rendered sheet in docs/fidelity/derived-review.md for the owner; kit `Glyph` is
 // the one place that names them.
 export global Derived {
     out property <string> chevron-up: "M6 15l6-6 6 6"; // chevron-down (sourcepanel.tsx:85) turned

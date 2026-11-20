@@ -8,7 +8,7 @@
 // grab height: hidden at rest, .8 / .75 under the pointer, sky 1 / 1 held or keyboard-focused.
 // The physics (width, bend, the bowed string's path) is Rust's: `wubble_core::seam` (the
 // sidebar; its keys `seam::key`), `split` (split and DevTools seams), written back as `x` and
-// `path`. Slint limits (notes/fidelity/deviations.md): no `separator` role (Slider stands in, it
+// `path`. Slint limits (docs/fidelity/deviations.md): no `separator` role (Slider stands in, it
 // carries the value range); no `:focus-visible` (a Tab focus only shows the held pill); no
 // `:has()` (one pure function picks the pill's state, and each animation takes the timing of
 // the state it goes to, as CSS takes the destination rule's transition).
