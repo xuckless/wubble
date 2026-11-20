@@ -1,8 +1,9 @@
 // design: browser/chrome.tsx:30-60, browser/chrome.tsx:279-281, browser/browser.css:39-47, core/wubble.css:13 @598f814
 // The address bar (`Address`, `.wb-address`): thin glass, radius 12, no shadow, the film rim on
 // hover; 36 high, padding 0 10, gap 8; the lock (13, stroke 1.9, mint) on a site, the bubble on
-// wubble's own pages; the text one mono 13 line, host in ink and the rest in haze, cut with an
-// ellipsis; pressed to .985 over .2 s ease-out; the keyboard focus ring (`.wb :focus-visible`).
+// wubble's own pages; the text one mono 13 line, host in ink and the rest in haze, cut once with
+// an ellipsis (the host first); pressed to .985 over .2 s ease-out; the keyboard focus ring
+// (`.wb :focus-visible`).
 // A click opens the command bar from `origin`: left + 40 at mid height (`onOpen`). The beam laps
 // it while a page loads (wubble_core::beam; the scene draws it, BorderBeam where it cannot).
 // On the rail it is `.wb-rail-addr`, a 40 x 36 icon button whose command bar grows from its right
@@ -173,12 +174,26 @@ export component AddressPill inherits Rectangle {
                     tint: BrowserCss.wb-address-icon--color;
                 }
             }
-            // host and path run on, one line in two colours (`.wb-address-text span`)
-            HorizontalLayout {
+            // host and path run on, one line in two colours (`.wb-address-text span`), cut once
+            // with an ellipsis (`text-overflow: ellipsis` on the one line): the host takes what it
+            // needs first, the rest gets what is left; a host that does not fit is cut and the
+            // rest not drawn.
+            Rectangle {
                 horizontal-stretch: 1;
                 min-width: BrowserCss.wb-address-text--min-width;
-                spacing: 0px;
+                // the host's own width: a measure, not drawn (placed, so it does not size the row)
+                host-measure := KitText {
+                    x: 0px;
+                    y: 0px;
+                    visible: false;
+                    role: AddressText.role;
+                    text: root.host;
+                }
+                property <length> host-w: min(self.width, host-measure.preferred-width);
                 KitText {
+                    x: 0px;
+                    width: parent.host-w;
+                    height: parent.height;
                     role: AddressText.role;
                     text: root.host;
                     color: BrowserCss.wb-address-text--color;
@@ -186,9 +201,12 @@ export component AddressPill inherits Rectangle {
                     overflow: elide;
                 }
                 KitText {
+                    x: parent.host-w;
+                    width: parent.width - parent.host-w;
+                    height: parent.height;
+                    visible: host-measure.preferred-width < parent.width;
                     role: AddressText.role;
                     text: root.path;
-                    horizontal-stretch: 1;
                     color: BrowserCss.wb-address-text-span--color;
                     vertical-alignment: center;
                     overflow: elide;
