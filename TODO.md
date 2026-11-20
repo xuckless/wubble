@@ -8,13 +8,21 @@ Legend: `[ ]` open · `[~]` in progress · `[x]` done, with the commit that brou
 ## Status (2026-11-20)
 `main` builds, lints and passes 1922 tests; every window smoke passes on the invisible test display
 (`scripts/headless.sh`), and an idle window draws nothing. M0 to M5 and the built-ins work on Linux. The
-design-fidelity phase has every surface on kit components and has been through one outside QA round (26 findings)
-plus the owner's own bug reports; it ends with the owner's sign-off. The auto-updater and the release tooling are
+design-fidelity phase ended with the owner's sign-off on 2026-11-20: every surface is on kit components and the kit
+widget work is done; what reviews raise is fixed as it comes up ("Review findings"). The auto-updater and the release tooling are
 in; the first Linux preview release (`0.1.0-preview.1`, with codecs) follows the last two fixes on `qa4/tabs`.
 macOS is driven only from the owner's own session and has not been run since batch eight; Windows is not green in CI.
 
-## Now: design-fidelity phase
-Done today, after the kit merges listed under "Design fidelity":
+## Now (2026-11-20): extensions, password managers, the MCP server
+- [ ] Extensions on our own Chromium build (M6), far enough that third-party password managers (Bitwarden, 1Password) work as extensions
+- [ ] The MCP server, basic version (M7, [docs/research/mcp-server.md](docs/research/mcp-server.md) section 0)
+- Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
+- Then the "Optimization roadmap". The release follow-ups in M7 wait for the next version.
+
+## Review findings (perpetual)
+The design-fidelity phase is over; this list never closes and gates nothing: findings from reviews, QA rounds and the
+owner's eye land here and are fixed as they come up.
+Done on 2026-11-19 and 2026-11-20, after the kit merges listed under "Design fidelity":
 - [x] New-tab page: capsule at 60%, bubble higher, "Let's Wubble" (4c6633a); docs tidy: lean TODO/AGENTS, `docs/` (fad1969)
 - [x] Page copy buttons: `navigator.clipboard.writeText`/`write` reach the system clipboard, verified on the desktop (4992603)
 - [x] QA: one overlay stack: one modal at a time, Escape closes the topmost, tab-scoped overlays, SponsorBlock banner (4f9fbe0)
@@ -42,7 +50,7 @@ Open, for the owner's eye:
       Passwords/Sites share the lock, Updates/Downloads the arrow
 - [ ] Spaces popup: its alignment (Space tile's left edge), no rename/delete on a row
 - [ ] Video strip button reads "Save video"; a second click mid-download re-enters the downloader
-- [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md)); the sign-off that ends the phase
+- [ ] The derived-pieces review sheet ([docs/fidelity/derived-review.md](docs/fidelity/derived-review.md))
 
 Open, to build or check:
 - [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on a playing YouTube tab (tests pass; not reproduced)
@@ -127,6 +135,7 @@ Open, to build or check:
 - [x] List pages, overlays B, video strip (607ec72); list editor, Spaces in Settings, status bubble (3ee2f9d)
 - [x] New-tab page: capsule at 60% of the page, bubble higher, heading "Let's Wubble" (4c6633a)
 - [x] Scoring tool removed: review by screenshots and the owner's eye (187d7a4)
+- [x] Phase ended: the owner's sign-off on the kit widget work (2026-11-20)
 - [ ] Empty the kit lock baseline (107 rows, mostly `kit/derived.slint` literals); alias the value-equal `Shell` literals
 - [ ] Voice glow shader into the kit (no microphone)
 
@@ -148,7 +157,7 @@ Open, to build or check:
 ## Shelved ideas
 - [ ] Translate pages on-device ([docs/research/translate.md](docs/research/translate.md))
 - [ ] Live text in images, on-device OCR ([docs/research/ocr.md](docs/research/ocr.md))
-- [ ] OS password managers and passkeys ([docs/research/apple-passwords.md](docs/research/apple-passwords.md))
+- [ ] OS password managers and passkey keychains, as a passthrough in a dedicated build after extensions ([docs/research/apple-passwords.md](docs/research/apple-passwords.md))
 
 ## M6: Own engine (ungoogled Chromium + CEF)
 - [x] CEF with proprietary codecs on Linux x64, asserted codec rows (84e5c62)
@@ -168,11 +177,11 @@ Open, to build or check:
       signing workflow, `docs/release.md` (4ccd853); inert until the public key is set
 - [x] First preview release, Linux: `v0.1.0-preview.1`, built, packed and signed locally, on GitHub Releases with
       `install.sh`; README install section
-- [ ] `docs/release.md` still describes signing in CI: rewrite its steps for local signing (as done for preview.1)
-- [ ] Confirm by hand that an installed build's update check reads the live manifest (Settings → Updates → Check now)
+- [ ] At the next version: `docs/release.md` still describes signing in CI: rewrite its steps for local signing (as done for preview.1)
+- [ ] At the next version: confirm by hand that an installed build's update check reads the live manifest (Settings → Updates → Check now)
 - [ ] macOS release, on the owner's Mac after the Linux one: `package-macos.sh` (never run), a macOS codec CEF, the
       usage strings added in 4fae73d (never compiled), then `release-sign.yml` again
-- [ ] Release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
+- [ ] At the next version: release gaps: Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load;
       shellcheck not run on `install.sh`; `install.sh` checks only the sha256 when `minisign` is not installed
 - [x] Video strip save button: enters the media downloader, absent on DRM, progress and saved states (4b4c9f1)
 - [ ] MCP server, after the release: the basic version first (plan section 0), guardrails after: [docs/research/mcp-server.md](docs/research/mcp-server.md)
