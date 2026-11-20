@@ -7,8 +7,8 @@
 // wubble (owner, 2026-11-19): the switcher is the current Space's tile and the "^" that opens
 // the Spaces popup (kit SpaceCurrent, SpacesButton; every Space is switched to through the
 // popup). The Source button is gone: developer tools stay in the page's menu ("Inspect"), their
-// shortcut and the command bar. Its place, before downloads, is where the extensions button
-// will go.
+// shortcut and the command bar. Its place, before downloads, is the extensions button (the
+// puzzle piece, shown once an extension is installed; derived-review.md "Extensions popover").
 
 import { BrowserCss } from "../gen/css.slint";
 import { IconButton } from "../controls/icon-button.slint";
@@ -23,10 +23,15 @@ export component SideBottom inherits Rectangle {
     in property <int> active: -1;
     in property <bool> vertical: false;
     in property <bool> has-downloads: false;
+    // an extension is installed: the extensions button shows, first of the buttons
+    in property <bool> has-extensions: false;
+    // the extensions popover (or an action's popup) is open
+    in property <bool> extensions-open: false;
     // the Spaces popup is open
     in property <bool> spaces-open: false;
     callback spaces-requested();
     callback downloads-requested();
+    callback extensions-requested();
     callback settings-requested();
 
     property <length> ib: BrowserCss.wb-side-bottom-gt-wb-ib--width;
@@ -35,7 +40,7 @@ export component SideBottom inherits Rectangle {
     property <length> pitch: BrowserCss.wb-space--width + BrowserCss.wb-spaces--gap;
     // the switcher: the current Space's tile and the "^"
     property <length> spaces-span: root.pitch + BrowserCss.wb-space--width;
-    property <int> buttons: (root.has-downloads ? 1 : 0) + 1;
+    property <int> buttons: (root.has-extensions ? 1 : 0) + (root.has-downloads ? 1 : 0) + 1;
     // the buttons' places, in order: the row from the far end, the column under the switcher
     function place(k: int) -> length {
         return root.vertical ? root.spaces-span + root.gap + k * (root.ib + root.gap) : root.width - (root.buttons - k) * root.ib;
@@ -48,6 +53,9 @@ export component SideBottom inherits Rectangle {
     out property <length> more-x: more.absolute-position.x;
     out property <length> more-y: more.absolute-position.y;
     out property <length> more-w: more.width;
+    out property <length> extensions-x: extensions.absolute-position.x;
+    out property <length> extensions-y: extensions.absolute-position.y;
+    out property <length> extensions-w: extensions.width;
     out property <length> downloads-x: downloads.absolute-position.x;
     out property <length> downloads-y: downloads.absolute-position.y;
     out property <length> downloads-w: downloads.width;
@@ -74,15 +82,29 @@ export component SideBottom inherits Rectangle {
             root.spaces-requested();
         }
     }
-    // wubble: the extensions button goes here, first of the buttons (owner, 2026-11-19)
+    // wubble: the extensions button, first of the buttons (owner, 2026-11-19)
+    extensions := IconButton {
+        visible: root.has-extensions;
+        width: root.ib;
+        height: BrowserCss.wb-side-bottom-gt-wb-ib--height;
+        border-radius: BrowserCss.wb-side-bottom-gt-wb-ib--border-radius;
+        x: root.vertical ? (root.width - self.width) / 2 : root.place(0);
+        y: root.vertical ? root.place(0) : 0px;
+        icon-path: Glyph.puzzle;
+        label: "Extensions";
+        on: root.extensions-open;
+        clicked => {
+            root.extensions-requested();
+        }
+    }
     // wubble: the downloads list (the design has no downloads)
     downloads := IconButton {
         visible: root.has-downloads;
         width: root.ib;
         height: BrowserCss.wb-side-bottom-gt-wb-ib--height;
         border-radius: BrowserCss.wb-side-bottom-gt-wb-ib--border-radius;
-        x: root.vertical ? (root.width - self.width) / 2 : root.place(0);
-        y: root.vertical ? root.place(0) : 0px;
+        x: root.vertical ? (root.width - self.width) / 2 : root.place(root.has-extensions ? 1 : 0);
+        y: root.vertical ? root.place(root.has-extensions ? 1 : 0) : 0px;
         icon-path: Glyph.download;
         tip-action: "open-downloads";
         label: "Downloads";

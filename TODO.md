@@ -63,7 +63,7 @@ Open, to build or check:
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Downloads page has no search (the host has no filter path)
 - [ ] Gallery: scenes for the hover preview card and the sidebar's empty-area menu; the page menu's position varies by page
-- [ ] Extensions button in the sidebar footer (the free place before Downloads); needs extensions (M6)
+- [x] Extensions button in the sidebar footer (the free place before Downloads): the puzzle button, shown once an extension is installed, opens the popover of enabled extensions' actions
 - [ ] Requests to Google on a fresh profile with or without extensions: component updater, network time, a component diff, the spellcheck dictionary, `www.google.com/async/folae` (net log in [docs/research/extensions.md](docs/research/extensions.md) section 3); "nothing phones home"
 - [ ] Shift+Insert paste in shell fields (Slint has no such shortcut); tests for the list editor draft and middle-click
 - [ ] `--smoke overlay=dark` fails a hue check under the command bar (also before the glass fix)
@@ -172,7 +172,8 @@ Open, to build or check:
 - [ ] Extensions: `chrome.tabs`/`windows`/actions on wubble's model; action buttons, popups, options, install, Web Store
 - [x] Extensions: P1 to P3 as the patch queue `patches/chromium` (`scripts/build-cef.sh patch`, `cef_wubble_ext_v1`): `chrome.tabs`, `chrome.windows`, `chrome.action` (engine API) and extension-opened tabs on wubble's model; `--smoke extensions` checks them on a patched CEF, Linux (21af397)
 - [x] Extensions review fixes: opened tabs in the asking container and the named window's Space, the global profile's opens refused, `tabs.create({})` opens the start page, onActivated for a tab created active, `--smoke extensions` through the host's own request code
-- [ ] Extensions: the action buttons, badge and popup UI on the engine's `action_click`/`action_state`/`ActionChanged` (needs the owner's design)
+- [x] Extensions shell UI (derived from the kit; the design repo has none, so the pieces are on [derived-review.md](docs/fidelity/derived-review.md) "Extensions popover"): Settings section (list, switch, remove, Options, install from file or folder, restart note), the install prompt with permissions through the overlay stack, the footer popover with action icon and badge, the action popup as a windowless view in a card (25x25 to 800x600, Escape or an outside press closes, keys go to it), options page as a tab, gallery scenes; popup and action rows are untested live (need the patched CEF)
+- [ ] Extensions shell: shrink-to-fit popup sizing (today the page's body decides, a body without a width fills 800), a tooltip on the footer button (needs an `Action`), the popup's own pointer origin for `<select>` lists, `chrome.action` popups of the global profile, screenshots by the owner's eye
 - [ ] Extensions: the patch queue on macOS and Windows builds, and in the release's CEF (owner go)
 - [ ] Extensions: `tabs.onReplaced` when a sleeping tab wakes, `onMoved`/`onAttached`/`onDetached`, window bounds; `windows.create` is refused for now
 - [ ] Swap in behind `wubble-engine`, shell unchanged

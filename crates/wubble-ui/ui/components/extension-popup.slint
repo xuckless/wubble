@@ -1,0 +1,12 @@
+import { GlassKeys } from "model.slint";
+import { APopupCard } from "../kit/overlay/a/a-popup-card.slint";
+
+// An extension action's popup: its page, a windowless view, in a card under the footer's button
+// (the kit's popup card, kit/overlay/a/a-popup-card.slint: as big as the page asked, which the
+// host keeps between Chromium's 25 x 25 and 800 x 600). The host hands the page's last frame
+// in `popup`; pointer events go back as the page's own, a press outside the card is
+// `dismissed()`.
+export component ExtensionPopupCard inherits APopupCard {
+    // the scene draws its glass above the page (GlassPanel `over-layer`)
+    key: GlassKeys.extensions;
+}

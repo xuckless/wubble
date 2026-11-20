@@ -198,6 +198,7 @@ impl Host {
                 self.dispatch(command);
             }
         }
+        self.gallery_extensions(scene.overlay);
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
         let mut autofill = View::default();
@@ -345,6 +346,7 @@ impl Host {
                 self.toast_with(text, action, true);
             }
             Overlay::Lists => self.gallery_lists(),
+            Overlay::ExtensionsList | Overlay::ExtensionsPopover | Overlay::ExtensionPrompt => {}
             Overlay::None
             | Overlay::Long(Long::Pill | Long::Crowd)
             | Overlay::CommandBar(_)

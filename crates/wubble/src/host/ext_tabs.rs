@@ -29,6 +29,8 @@ pub(crate) trait ExtHost {
     fn engine(&mut self) -> &mut Engine;
     /// Applies `command` as the host does (`Host::dispatch`), the projection pushed after.
     fn run(&mut self, command: Command);
+    /// An extension's action changed (badge, title, icon, popup): the shell's buttons redraw.
+    fn action_changed(&mut self) {}
 }
 
 impl ExtHost for Host {
@@ -50,6 +52,10 @@ impl ExtHost for Host {
 
     fn run(&mut self, command: Command) {
         self.dispatch(command);
+    }
+
+    fn action_changed(&mut self) {
+        self.ext_action_changed();
     }
 }
 
@@ -116,7 +122,8 @@ pub(crate) fn serve(host: &mut impl ExtHost) {
             ExtRequest::CloseTab(view) => host.tab_of(view).map(Command::CloseTab),
             ExtRequest::ActivateTab(view) => host.tab_of(view).map(Command::ActivateTab),
             ExtRequest::ActionChanged { extension } => {
-                eprintln!("wubble: extension {extension}: its action changed");
+                let _ = extension;
+                host.action_changed();
                 None
             }
         };

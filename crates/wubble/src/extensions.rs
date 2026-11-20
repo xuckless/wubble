@@ -6,27 +6,33 @@
 
 use std::path::Path;
 
-use wubble_core::extensions::{Effect, Event, ExtError, Installed, transition, unused_copies};
+use wubble_core::extensions::{
+    Effect, Event, ExtError, Extension, Installed, transition, unused_copies,
+};
 use wubble_core::settings::EXTENSIONS_INSTALLED;
 use wubble_store::{InstalledExtensions, text_of};
 
 use crate::persist::StoreClient;
 
-/// The list after installing `picked`, a .crx file (unpacked under `root`, wubble's copies) or
-/// an extension's directory (loaded in place), stored through `store`. A copy unpacked for a
-/// refused install is left to [`sweep`].
+/// The extension `picked` holds: a .crx file (unpacked under `root`, wubble's copies) or an
+/// extension's directory (loaded in place). Nothing is installed yet: the list is not touched
+/// (an unpacked copy a refused install leaves is [`sweep`]'s).
+pub fn read(picked: &Path, root: &Path) -> Result<Extension, ExtError> {
+    if picked.is_file() {
+        wubble_engine::extensions::unpack_crx(picked, root)
+    } else {
+        wubble_engine::extensions::read_unpacked(picked)
+    }
+}
+
+/// The list after installing `picked` ([`read`]), stored through `store`.
 pub fn install(
     store: &StoreClient,
     list: Installed,
     picked: &Path,
     root: &Path,
 ) -> Result<Installed, ExtError> {
-    let ext = if picked.is_file() {
-        wubble_engine::extensions::unpack_crx(picked, root)?
-    } else {
-        wubble_engine::extensions::read_unpacked(picked)?
-    };
-    change(store, list, Event::Install(ext))
+    change(store, list, Event::Install(read(picked, root)?))
 }
 
 /// The list after `event`, its effects run.

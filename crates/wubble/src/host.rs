@@ -24,6 +24,7 @@ mod devtools;
 mod downloads;
 mod drag;
 pub(crate) mod ext_tabs;
+mod ext_ui;
 mod external;
 mod gallery;
 mod gesture;
@@ -73,6 +74,7 @@ use wubble_core::action::Action;
 use wubble_core::archive::{self, ArchiveAfter};
 use wubble_core::busy::Reason;
 use wubble_core::devtools::PANEL_TAB;
+use wubble_core::extensions::shell::POPUP_TAB;
 use wubble_core::keys::{Keymap, Platform};
 use wubble_core::lifecycle::Effect as Life;
 use wubble_core::model::{self, Command, Effect, Model};
@@ -515,6 +517,9 @@ pub struct Host {
     look: look::Look,
     /// Shift+click opens a peek (`glance.enabled`).
     glance_enabled: bool,
+    /// The extensions' shell: the list, the footer popover, the popup, the install prompt
+    /// (`host/ext_ui.rs`).
+    ext_ui: ext_ui::ExtUi,
     /// `--smoke video` or `--smoke boost` passed.
     pub video_passed: Option<String>,
     /// `--smoke ax` passed, with the page's item count.
@@ -564,6 +569,7 @@ impl Host {
         let committed = model.tabs.values().map(|t| (t.id, t.url.clone())).collect();
         let (model, restore) = startup(model, open.is_some());
         let dock_port = settings.page_features().remote_debugging_port;
+        let installed = settings.extensions();
         // The shell draws the page's dialogs, menus and prompts.
         let mut engine = engine;
         let clipboard = crate::clipboard::Clipboard::new(engine.cache_dir());
@@ -707,6 +713,7 @@ impl Host {
             overlay_timer: slint::Timer::default(),
             look: look::Look::new(),
             glance_enabled: true,
+            ext_ui: ext_ui::ExtUi::new(installed),
         };
         host.replay_settings();
         // `--smoke parity` drives Save As without an OS dialog.
@@ -1122,6 +1129,7 @@ impl Host {
             nav.as_ref().is_some_and(|n| n.1),
         );
         self.render_pages();
+        self.render_extensions_in(&window);
     }
 
     /// The blocker's count for `tab`, if it has a view.
@@ -1182,6 +1190,9 @@ impl Host {
         if tab == PANEL_TAB {
             return self.panel_view();
         }
+        if tab == POPUP_TAB {
+            return self.popup_view();
+        }
         let id = *self.views.get(&tab)?;
         self.engine.view(id)
     }
@@ -1222,6 +1233,9 @@ impl Host {
         if self.keys_to_panel().is_some() {
             return self.panel_view();
         }
+        if self.keys_to_popup().is_some() {
+            return self.popup_view();
+        }
         self.tab_view(self.key_page()?)
     }
 
@@ -1238,6 +1252,9 @@ impl Host {
     fn tab_of(&self, view: ViewId) -> Option<TabId> {
         if self.devtools.view == Some(view) {
             return Some(PANEL_TAB);
+        }
+        if self.popup_view_is(view) {
+            return Some(POPUP_TAB);
         }
         self.views
             .iter()
@@ -1356,6 +1373,8 @@ impl Host {
             self.devtools.view = None;
             self.panel_closed();
         }
+        // the popup's page closed itself
+        self.popup_view_gone();
     }
 
     /// Presents the new frames of every window's panes; whether any window got one. Ends in
@@ -1509,6 +1528,9 @@ impl Host {
         };
         if tab == PANEL_TAB {
             return self.on_panel_event(event);
+        }
+        if tab == POPUP_TAB {
+            return self.on_popup_web_event(event);
         }
         crate::load_run::web_event(&event);
         self.smoke_step(SmokeInput::Event(&event));
@@ -2930,7 +2952,7 @@ impl Host {
     /// window has focus and the web content is the shell's focused item.
     /// A view that stops being visible loses focus first.
     pub fn sync_focus(&mut self, window: &AppWindow) {
-        let target = if let Some(panel) = self.keys_to_panel() {
+        let target = if let Some(panel) = self.keys_to_panel().or_else(|| self.keys_to_popup()) {
             Some(panel)
         } else {
             self.key_page().and_then(|t| self.views.get(&t)).copied()
@@ -3309,7 +3331,8 @@ impl Host {
         }
         if pressed && let Some(tab) = crate::shell::tab_id(pane) {
             // keys follow the pane that was pressed: the DevTools panel, the peek or a page
-            let to = (tab == PANEL_TAB || self.model.is_glance(tab)).then_some(tab);
+            let to =
+                (tab == PANEL_TAB || tab == POPUP_TAB || self.model.is_glance(tab)).then_some(tab);
             if self.key_pane != to && self.shown_tabs().contains(&tab) {
                 self.key_pane = to;
                 if let Some(window) = self.w.window.upgrade() {

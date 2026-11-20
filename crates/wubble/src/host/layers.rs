@@ -50,6 +50,12 @@ impl Host {
         if window.get_downloads_open() {
             add(Kind::Downloads, None);
         }
+        if self.ext_ui_prompt_open() {
+            add(Kind::ExtensionSheet, None);
+        }
+        if self.ext_ui_panel_open() {
+            add(Kind::Extensions, None);
+        }
         if window.get_spaces_open() {
             add(Kind::Spaces, None);
         }
@@ -159,6 +165,8 @@ impl Host {
             }
             (Kind::Downloads, _) => window.set_downloads_open(false),
             (Kind::Spaces, _) => window.set_spaces_open(false),
+            (Kind::Extensions, _) => self.extensions_dismissed(),
+            (Kind::ExtensionSheet, _) => self.extension_prompt_answered(false),
             (Kind::Menu, _) => {
                 if let Some(tab) = shown {
                     self.apply_menu(tab, MenuEvent::Dismiss);

@@ -1,0 +1,91 @@
+import { Shell } from "../kit/derived.slint";
+import { ExtensionItem } from "model.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { IconButton } from "../kit/controls/icon-button.slint";
+import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
+import { Button, ButtonKind } from "../kit/controls/button.slint";
+import { Card, Row, RowText, RowControls, NoteTone } from "../kit/settings/section.slint";
+
+// The Settings page's Extensions section (its body: the page draws the heading and the section's
+// place in its nav): the installed list, each with its name, version and what it asks for, an
+// Options button when it has an options page, its switch and a remove button; then the two ways
+// to install (the OS file chooser: a .crx file, or an unpacked folder). Every change applies at
+// the next start, so the restart note shows once the list differs from what this run loaded.
+// Composition only (kit Card, Row, RowText, Toggle, IconButton, Button): the look is the settings
+// rows'. `install-file()`, `install-folder()`, `toggled`, `removed` and `options` are intents; the
+// host acts.
+export component ExtensionsCard inherits Card {
+    in property <[ExtensionItem]> items;
+    // the Space colour: the switches
+    in property <color> accent;
+    // the list is not what this run loaded
+    in property <bool> restart;
+    callback install-file();
+    callback install-folder();
+    callback toggled(string, bool);
+    callback removed(string);
+    callback options(string);
+
+    for ext in root.items: Row {
+        tap: true;
+        tapped => {
+            root.toggled(ext.id, !ext.enabled);
+        }
+        RowText {
+            title: ext.name;
+            note: ext.note;
+        }
+        RowControls {
+            if ext.options: Button {
+                kind: ButtonKind.ghost;
+                text: "Options";
+                clicked => {
+                    root.options(ext.id);
+                }
+            }
+            IconButton {
+                icon-path: Glyph.trash;
+                label: "Remove " + ext.name;
+                clicked => {
+                    root.removed(ext.id);
+                }
+            }
+            Toggle {
+                size: ToggleSize.sm;
+                on: ext.enabled;
+                accent: root.accent;
+                label: ext.name;
+                toggled => {
+                    root.toggled(ext.id, !ext.enabled);
+                }
+            }
+        }
+    }
+    Row {
+        RowText {
+            title: root.items.length == 0 ? "No extensions yet" : "Add an extension";
+            note: "A .crx file, or an unpacked folder with a manifest.json. You see what it asks for first.";
+        }
+        RowControls {
+            Button {
+                text: "Install from file";
+                clicked => {
+                    root.install-file();
+                }
+            }
+            Button {
+                text: "Install from folder";
+                clicked => {
+                    root.install-folder();
+                }
+            }
+        }
+    }
+    if root.restart: Row {
+        RowText {
+            title: "Restart to apply";
+            note: "Extensions load when wubble starts: the changes above apply then.";
+            tone: NoteTone.restart;
+        }
+    }
+}

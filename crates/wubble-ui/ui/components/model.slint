@@ -219,6 +219,10 @@ export global GlassKeys {
     out property <int> autofill-prompt: 1000311;
     out property <int> downloads: 1000320;
     out property <int> spaces: 1000325;
+    // the footer's extensions popover and the action popup under it
+    out property <int> extensions: 1000326;
+    // the install prompt (a sheet, after the print sheet)
+    out property <int> extension-sheet: 1000092;
     out property <int> menu: 1000330;
 }
 
@@ -781,6 +785,52 @@ export struct GlanceView {
     x: length,
     card-y: length,
     y: length,
+    width: length,
+    height: length,
+}
+
+// One installed extension of the settings page's "Extensions" section (extensions-section.slint).
+// `note`: its version and what it asks for; `options`: it has an options page.
+export struct ExtensionItem {
+    id: string,
+    name: string,
+    note: string,
+    enabled: bool,
+    options: bool,
+}
+
+// One enabled extension's action on the footer's extensions popover (extensions-popover.slint):
+// the icon it sets (a PNG decoded, else the manifest's), the badge and the title it shows on the
+// visible tab. `usable`: the action is on for that tab.
+export struct ExtensionAction {
+    id: string,
+    title: string,
+    icon: image,
+    has-icon: bool,
+    badge: string,
+    badge-bg: color,
+    badge-fg: color,
+    usable: bool,
+}
+
+// The install prompt (extension-sheet.slint): the extension's name, what it asks for.
+// `serial` is bumped per prompt.
+export struct ExtensionPrompt {
+    open: bool,
+    title: string,
+    message: string,
+    serial: int,
+}
+
+// The action popup (extension-popup.slint): the popup page's last frame in a card under the
+// footer's button, `width` x `height` as the page asked (between Chromium's limits). `id` is
+// the pane its pointer events return as.
+export struct ExtensionPopup {
+    open: bool,
+    id: int,
+    frame: image,
+    clip-width: int,
+    clip-height: int,
     width: length,
     height: length,
 }

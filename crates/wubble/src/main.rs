@@ -1030,6 +1030,20 @@ fn connect_surfaces(window: &AppWindow, win: WindowId) {
     window.on_download_action(move |id, action| {
         with_host_in(win, |host| host.download_action(i64::from(id), action))
     });
+    window.on_extensions_requested(move || with_host_in(win, Host::extensions_requested));
+    window.on_extension_pressed(move |id| with_host_in(win, |host| host.extension_pressed(&id)));
+    window.on_extensions_manage(move || with_host_in(win, Host::extensions_manage));
+    window.on_extensions_dismissed(move || with_host_in(win, Host::extensions_dismissed));
+    window.on_extension_prompt_answered(move |accept| {
+        with_host_in(win, |host| host.extension_prompt_answered(accept))
+    });
+    window.on_extension_install_file(move || with_host_in(win, Host::extension_install_file));
+    window.on_extension_install_folder(move || with_host_in(win, Host::extension_install_folder));
+    window.on_extension_toggled(move |id, on| {
+        with_host_in(win, |host| host.extension_toggled(&id, on))
+    });
+    window.on_extension_removed(move |id| with_host_in(win, |host| host.extension_removed(&id)));
+    window.on_extension_options(move |id| with_host_in(win, |host| host.extension_options(&id)));
     window.on_find_edited(move |q| {
         with_host_in(win, |host| host.find_event(FindEvent::Query(q.into())))
     });
@@ -1544,13 +1558,11 @@ fn run(
     }
     let installed = loaded.settings.extensions();
     // Before CEF starts, when no Chromium can still be reading a copy the list dropped.
-    extensions::sweep(
-        &Profile {
-            dir: profile.into(),
-        }
-        .extensions_dir(),
-        &installed,
-    );
+    let extensions_root = Profile {
+        dir: profile.into(),
+    }
+    .extensions_dir();
+    extensions::sweep(&extensions_root, &installed);
     let mut engine = Engine::start(EngineConfig {
         pump_scheduler: Some(pump_scheduler()),
         content_filter: filter
@@ -1618,7 +1630,7 @@ fn run(
     measure::mark(measure::Stage::WindowOpened);
     let window = first.handle();
     shot::attach(&window);
-    let host = Host::new(
+    let mut host = Host::new(
         engine,
         first,
         factory,
@@ -1630,6 +1642,7 @@ fn run(
         blocking,
         media_observer,
     );
+    host.set_extensions_root(extensions_root);
     HOST.set(Some(host));
     // The browser checks for an update as it opens (the setting and the policy permitting) and
     // counts the start as healthy after a while (`update::install`); smokes do neither.

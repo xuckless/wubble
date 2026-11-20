@@ -1,0 +1,93 @@
+// derived: MenuHighlight look (.tp-menu-hl), MenuRow text roles (.tp-mrow), the menu row's height (wb-tp-mrow), Icon, KitText
+// One extension's action on the footer's extensions popover (wubble-only.md, derived-review.md
+// "Extensions popover"): the download row's anatomy without its progress: the action's icon at the
+// menu row's 16 px (the extension's own picture, else the puzzle piece in haze), its title in the
+// row role, and at the end its badge, a small pill in the colours the extension set. Hovered, the
+// menu's highlight lies under it (fading in .12 s). An action off on the visible tab is dimmed
+// and takes no press. `pressed(id)` is the intent; the host clicks the action.
+
+import { Palette, Space, TouchMenu } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { KitText } from "../../text.slint";
+import { Tween } from "../../motion/tween.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+import { ExtensionAction } from "../../../components/model.slint";
+
+export component AExtensionRow inherits Rectangle {
+    in property <ExtensionAction> item;
+    // the icon an action without a picture of its own shows
+    in property <string> leading-icon: Glyph.puzzle;
+    callback pressed(string);
+    out property <bool> hovered: hover.has-hover;
+    accessible-role: button;
+    accessible-label: root.item.title;
+    accessible-enabled: root.item.usable;
+    opacity: root.item.usable ? 1 : 0.5;
+    hl := Tween {
+        on: hover.has-hover && root.item.usable;
+        in-ms: TouchCss.tp-menu-hl--transition-opacity-duration;
+        out-ms: TouchCss.tp-menu-hl--transition-opacity-duration;
+        in-easing: ease;
+        out-easing: ease;
+    }
+    Rectangle {
+        border-radius: TouchCss.tp-menu-hl--border-radius;
+        background: TouchCss.tp-menu-hl--background;
+        opacity: hl.t * TouchCss.tp-menu-hl-on--opacity;
+    }
+    hover := TouchArea {
+        enabled: root.item.usable;
+        mouse-cursor: pointer;
+        clicked => {
+            root.pressed(root.item.id);
+        }
+    }
+    HorizontalLayout {
+        padding-left: TouchCss.wb-tp-mrow--padding-left;
+        padding-right: Space.s2;
+        spacing: TouchCss.wb-tp-mrow--gap;
+        VerticalLayout {
+            alignment: center;
+            if root.item.has-icon: Image {
+                width: TouchMenu.row-icon;
+                height: TouchMenu.row-icon;
+                source: root.item.icon;
+                image-fit: contain;
+            }
+            if !root.item.has-icon: Icon {
+                size: TouchMenu.row-icon;
+                path: root.leading-icon;
+                tint: Palette.haze;
+            }
+        }
+        KitText {
+            horizontal-stretch: 1;
+            role: Role.wb-tp-mrow;
+            text: root.item.title;
+            color: TouchCss.wb-tp-mrow--color;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.item.badge != "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: TouchMenu.row-icon + Space.s1;
+                min-width: self.height;
+                border-radius: self.height / 2;
+                background: root.item.badge-bg;
+                HorizontalLayout {
+                    padding-left: Space.s2;
+                    padding-right: Space.s2;
+                    KitText {
+                        role: Role.st-row-note;
+                        text: root.item.badge;
+                        color: root.item.badge-fg;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

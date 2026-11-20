@@ -7,6 +7,7 @@ use std::time::Instant;
 use slint::ComponentHandle;
 use wubble_core::bow::{BOWED, EdgeTable};
 use wubble_core::devtools::PANEL_TAB;
+use wubble_core::extensions::shell::POPUP_TAB;
 use wubble_core::model::Model;
 use wubble_core::motion::DT_CAP;
 use wubble_core::split::{Bow, SPLIT, string_line};
@@ -138,6 +139,7 @@ impl Host {
     pub(super) fn framed_tabs(&self) -> Vec<TabId> {
         let mut tabs = framed_tabs(&self.model, &self.screen, self.w.id);
         tabs.extend((self.panel_width() > 0.0).then_some(PANEL_TAB));
+        tabs.extend(self.popup_open().then_some(POPUP_TAB));
         tabs
     }
 
@@ -149,6 +151,8 @@ impl Host {
                 let mut tabs = self.model.window_tabs(self.w.id);
                 // the docked panel is a pane too
                 tabs.extend((self.panel_width() > 0.0).then_some(PANEL_TAB));
+                // an extension's popup is a pane too
+                tabs.extend(self.popup_open().then_some(POPUP_TAB));
                 tabs
             }
         }
@@ -220,11 +224,18 @@ impl Host {
             self.glance_rect(window)
                 .map(|g| (g.tab, self.glance_layout(window, &g))),
         );
+        out.extend(
+            self.popup_open()
+                .then(|| (POPUP_TAB, self.popup_layout(window))),
+        );
         out
     }
 
     /// The layout of `tab`'s view: its pane's, or the whole content area for a tab not on screen.
     pub(super) fn pane_layout(&self, window: &AppWindow, tab: TabId) -> Layout {
+        if tab == POPUP_TAB {
+            return self.popup_layout(window);
+        }
         if let Some(g) = self.glance_rect(window).filter(|g| g.tab == tab) {
             return self.glance_layout(window, &g);
         }
@@ -511,6 +522,7 @@ impl Host {
     /// seam's grab mid-drag, survives).
     pub(super) fn render_panes(&mut self, window: &AppWindow) {
         self.render_glance(window);
+        self.render_popup(window);
         let (_, height) = content_size(window);
         let focused = self.shown();
         let rects = self.pane_rects(window);
@@ -686,7 +698,7 @@ impl Host {
     fn slot_for(&mut self, tab: TabId) -> usize {
         let own = if tab == PANEL_TAB {
             Some(PANEL_SLOT)
-        } else if self.model.is_glance(tab) {
+        } else if self.model.is_glance(tab) || tab == POPUP_TAB {
             Some(PEEK_SLOT)
         } else {
             None

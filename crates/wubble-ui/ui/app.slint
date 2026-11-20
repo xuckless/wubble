@@ -14,7 +14,7 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
@@ -32,6 +32,9 @@ import { BookmarkSheet } from "components/bookmark-sheet.slint";
 import { PrintSheet } from "components/print-sheet.slint";
 import { SwipeChip } from "components/swipe-chip.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
+import { ExtensionsPopover } from "components/extensions-popover.slint";
+import { ExtensionPopupCard } from "components/extension-popup.slint";
+import { ExtensionSheet } from "components/extension-sheet.slint";
 import { SpacesMenu } from "kit/chrome/spaces-menu.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
@@ -57,7 +60,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, ExtensionItem, ExtensionAction, ExtensionPrompt, ExtensionPopup, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -463,6 +466,8 @@ export component AppWindow inherits Window {
     in property <[EntryItem]> settings-site-permissions <=> settings-ui.site-permissions;
     in property <[FilterListItem]> settings-filter-lists <=> settings-ui.filter-lists;
     in property <bool> settings-filter-busy <=> settings-ui.filter-busy;
+    in property <[ExtensionItem]> settings-extensions <=> settings-ui.extensions;
+    in property <bool> settings-extensions-restart <=> settings-ui.extensions-restart;
     in property <AboutView> settings-about <=> settings-ui.about;
     in property <UpdatesView> settings-updates <=> settings-ui.updates;
     in property <[PageLinkItem]> settings-pages <=> settings-ui.pages;
@@ -538,6 +543,11 @@ export component AppWindow inherits Window {
     callback site-permission-removed <=> settings-ui.site-permission-removed;
     callback filter-list-toggled <=> settings-ui.filter-list-toggled;
     callback filter-lists-update <=> settings-ui.filter-lists-update;
+    callback extension-install-file <=> settings-ui.extension-install-file;
+    callback extension-install-folder <=> settings-ui.extension-install-folder;
+    callback extension-toggled <=> settings-ui.extension-toggled;
+    callback extension-removed <=> settings-ui.extension-removed;
+    callback extension-options <=> settings-ui.extension-options;
     callback updates-toggled <=> settings-ui.updates-toggled;
     callback updates-check <=> settings-ui.updates-check;
     callback updates-restart <=> settings-ui.updates-restart;
@@ -553,6 +563,20 @@ export component AppWindow inherits Window {
     callback download-action(int, DownloadAction);
     // The popover is open (presentation only; the list is the host's).
     in-out property <bool> downloads-open: false;
+    // The sidebar footer's extensions button (shown once an extension is installed), its popover
+    // (the enabled extensions' actions) and the open action's popup, which replaces the list;
+    // the host owns which is open (`wubble_core::extensions::shell::Panel`): `extensions-open`
+    // is the list, `extension-popup.open` the popup (once its page has a size).
+    in property <bool> has-extensions: false;
+    in property <[ExtensionAction]> extension-actions;
+    in-out property <bool> extensions-open: false;
+    in property <ExtensionPopup> extension-popup;
+    in property <ExtensionPrompt> extension-prompt;
+    callback extensions-requested();
+    callback extension-pressed(string);
+    callback extensions-manage();
+    callback extensions-dismissed();
+    callback extension-prompt-answered(bool);
     // The sidebar footer's Spaces popup (wubble_core::spacemenu, bound by the host): its lines
     // and the keys' rows (the lines, a separator, New Space). The "^" asks the host
     // (`spaces-menu-requested`), which opens it through the overlay stack; it closes itself.
@@ -649,15 +673,20 @@ export component AppWindow inherits Window {
     property <bool> error-open: root.page-error.open;
     property <bool> bookmark-open: root.bookmark-sheet-view.open;
     property <bool> print-open: root.print-sheet-view.open;
+    property <bool> extension-prompt-open: root.extension-prompt.open;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
-    property <bool> overlay-open: root.menu.open || root.downloads-open || root.spaces-open || root.dialog.open || root.page-error.open;
+    property <bool> overlay-open: root.menu.open || root.downloads-open || root.extensions-open || root.extension-popup.open || root.extension-prompt.open || root.spaces-open || root.dialog.open || root.page-error.open;
     function settle-focus() {
         root.sidebar-focused = false;
         if root.menu.open {
             menu-ui.take-focus();
         } else if root.downloads-open {
             downloads-ui.take-focus();
+        } else if root.extensions-open {
+            extensions-ui.take-focus();
+        } else if root.extension-prompt.open {
+            extension-sheet.focus-sheet();
         } else if root.spaces-open {
             spaces-ui.take-focus();
         } else if root.dialog.open {
@@ -709,6 +738,12 @@ export component AppWindow inherits Window {
         root.settle-focus();
     }
     changed print-open => {
+        root.settle-focus();
+    }
+    changed extension-prompt-open => {
+        root.settle-focus();
+    }
+    changed extensions-open => {
         root.settle-focus();
     }
     changed downloads-open => {
@@ -1287,6 +1322,14 @@ export component AppWindow inherits Window {
                     root.bookmark-sheet-answered(accept, remove, name, folder);
                 }
             }
+            extension-sheet := ExtensionSheet {
+                glass-key: GlassKeys.extension-sheet;
+                glass-layer: GlassOver.card;
+                prompt: root.extension-prompt;
+                answered(accept) => {
+                    root.extension-prompt-answered(accept);
+                }
+            }
             print-sheet := PrintSheet {
                 glass-key: GlassKeys.print-sheet;
                 glass-layer: GlassOver.card;
@@ -1417,6 +1460,11 @@ export component AppWindow inherits Window {
                     root.request-address-focus();
                 }
                 has-downloads: root.downloads.length > 0;
+                has-extensions: root.has-extensions;
+                extensions-open: root.extensions-open || root.extension-popup.open;
+                extensions-requested => {
+                    root.extensions-requested();
+                }
                 spaces-open: root.spaces-open;
                 spaces-requested => {
                     root.spaces-menu-requested();
@@ -1541,6 +1589,50 @@ export component AppWindow inherits Window {
         }
         dismissed => {
             root.downloads-open = false;
+        }
+    }
+
+    extensions-ui := ExtensionsPopover {
+        open: root.extensions-open;
+        anchor-x: sidebar.extensions-anchor.x;
+        anchor-y: sidebar.extensions-anchor.y + Shell.prompt-gap;
+        items: root.extension-actions;
+        pressed(id) => {
+            root.extension-pressed(id);
+        }
+        manage => {
+            root.extensions-manage();
+        }
+        dismissed => {
+            root.extensions-dismissed();
+        }
+    }
+
+    extension-popup-ui := ExtensionPopupCard {
+        popup: root.extension-popup;
+        cursor: root.cursors[root.web-cursor];
+        anchor-x: sidebar.extensions-anchor.x;
+        anchor-y: sidebar.extensions-anchor.y + Shell.prompt-gap;
+        dismissed => {
+            root.extensions-dismissed();
+        }
+        pointer-pressed(pane, button, x, y) => {
+            root.web-pointer-pressed(pane, button, x, y);
+        }
+        pointer-released(pane, button, x, y) => {
+            root.web-pointer-released(pane, button, x, y);
+        }
+        pointer-moved(pane, x, y) => {
+            root.web-pointer-moved(pane, x, y);
+        }
+        pointer-left(pane, x, y) => {
+            root.web-pointer-left(pane, x, y);
+        }
+        pointer-cancelled(pane) => {
+            root.web-pointer-cancelled(pane);
+        }
+        scrolled(pane, x, y, dx, dy) => {
+            root.web-scrolled(pane, x, y, dx, dy);
         }
     }
 
