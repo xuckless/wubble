@@ -7,6 +7,9 @@
 // sheen rim, distortion waves from presses, a border beam and the voice glow (with bloom outside the rect).
 // `uMaterial` 0 draws the effects only (beam, glow) for surfaces over live content;
 // 2 (wubble's, not the design's) is the flat fill of `Quality::Flat`.
+// wubble: over a page (`uPage`) the material is the design's CSS tier (core/wubble.css), as the
+// web draws its glass over web content, not this frost; and no glass gets brighter than the
+// contrast ceiling (`uCssF.zw`, wubble_core::glass), so the kit's light ink stays legible.
 // This pass is what Slint itself cannot do (no backdrop blur): Slint draws the content on top.
 // Prepend: common.wgsl, film.wgsl, wave.wgsl, beam.wgsl. Blend: premultiplied.
 
@@ -29,10 +32,12 @@ struct GlassU {
   uMaterial: f32,    // 1 full glass, 0 effects only, 2 flat fill (wubble)
   uAmb: f32,         // wubble change: the ambience, how much of the page-inclusive blur is mixed in
   uAmbLevel: f32,    // wubble change: which of its levels: 0 the ⅛ one, 1 the 1/16 (the falloff)
-  _p2: f32,
+  uPage: f32,        // wubble change: 1 over a page (the levels are P): the CSS tier, not the frost
   uBeam: vec4<f32>,  // head, length (fractions of the perimeter), strength, hue
   uVoice: vec4<f32>, // low, mid, high, phase
   uWave: array<vec4<f32>, 4>,
+  uCss: vec4<f32>,   // wubble change: the CSS tier's fill: r, g, b, alpha (core/wubble.css)
+  uCssF: vec4<f32>,  // wubble change: its saturate, brightness; the contrast ceiling and its knee (relative luminance)
 };
 
 @group(0) @binding(0) var<uniform> U: GlassU;
@@ -131,12 +136,13 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   // frost of the backdrop at the panel's centre, the tint and the soft inner edge, plus the effects;
   // no rim bend, waves, grain or pointer light.
   if (U.uMaterial > 1.5) { // wubble change: the flat fill
-    var flat_ = frost(bg(c, U.uTier), U.uTier);
-    flat_ = mix(flat_, U.uTint * 0.55 + 0.1, 0.07 * step(0.001, dot(U.uTint, U.uTint)));
-    flat_ += exp(d / 1.6) * step(d, 0.0) * 0.035;
+    var flat_ = material(bg(c, U.uTier)); // wubble change: the frost, or the CSS tier over a page
+    flat_ = mix(flat_, U.uTint * 0.55 + 0.1, 0.07 * step(0.001, dot(U.uTint, U.uTint))); // wubble change: the flat fill
+    flat_ += exp(d / 1.6) * step(d, 0.0) * 0.035; // wubble change: the flat fill
+    flat_ = ceiling(flat_); // wubble change
     flat_ += fx;
-    let aF = inside * U.uAlpha;
-    return vec4<f32>(flat_ * aF, aF) + vec4<f32>(0.0, 0.0, 0.0, shadow * U.uAlpha) * (1.0 - aF);
+    let aF = inside * U.uAlpha; // wubble change: the flat fill
+    return vec4<f32>(flat_ * aF, aF) + vec4<f32>(0.0, 0.0, 0.0, shadow * U.uAlpha) * (1.0 - aF); // wubble change: the flat fill
   }
   if (U.uMaterial < 0.5) {
     // effects only, over live content
@@ -165,7 +171,7 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   col.x = bg(vPx + off - disp * 0.85, tierB).r;
   col.y = bg(vPx + off - disp * 1.00, tierB).g;
   col.z = bg(vPx + off - disp * 1.18, tierB).b;
-  col = frost(col, U.uTier);
+  col = material(col); // wubble change: the frost, or the CSS tier over a page
   // the Space colour, lightly: the colour should mostly come from what's behind
   col = mix(col, U.uTint * 0.55 + 0.1, 0.07 * step(0.001, dot(U.uTint, U.uTint)));
   // the wave's leading band catches a little film colour
@@ -178,6 +184,7 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   let rim = exp(d / 1.6) * step(d, 0.0);
   let facing = max(0.0, dot(n, normalize(lp - p + 1e-4)));
   col += rim * (0.035 + 0.05 * facing * facing);
+  col = ceiling(col); // wubble change: the material under the ink; the touch rim and effects stay as drawn
   // ±0.5/255 grain against 8-bit banding in the smooth frost
   col += (fract(sin(dot(vPx, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
   // film rim: the brand sheen as a soft 1.5 px ring that drifts slowly round the edge, only when touched.
@@ -195,4 +202,33 @@ fn fs_glass(fin: QuadOut) -> @location(0) vec4<f32> {
   col += fx;
   let a = inside * U.uAlpha;
   return vec4<f32>(col * a, a) + vec4<f32>(0.0, 0.0, 0.0, shadow * U.uAlpha) * (1.0 - a);
+}
+
+// wubble change: the frost over the backdrop, the CSS tier over a page
+fn material(b: vec3<f32>) -> vec3<f32> { // wubble change
+  return select(frost(b, U.uTier), css(b), U.uPage > 0.5); // wubble change
+}
+// wubble change: the CSS tier over a page (core/wubble.css .wb-thin/.wb-regular/.wb-thick):
+// backdrop-filter saturate() and brightness() on the blur, then the translucent fill over it.
+fn css(b: vec3<f32>) -> vec3<f32> { // wubble change
+  let L = dot(b, LUMA); // wubble change: saturate() is the luma-preserving colour matrix
+  let c = clamp(vec3<f32>(L) + (b - vec3<f32>(L)) * U.uCssF.x, vec3<f32>(0.0), vec3<f32>(1.0)) * U.uCssF.y; // wubble change
+  return mix(c, U.uCss.rgb, U.uCss.a); // wubble change
+}
+// wubble change: the contrast ceiling (wubble_core::glass, docs/fidelity/derived-review.md). Above
+// the knee the glass's relative luminance is eased toward the ceiling, never past it; the colour
+// is scaled in linear light, so the hue and saturation of what is behind are kept.
+fn toLin(c: vec3<f32>) -> vec3<f32> { // wubble change: the target holds sRGB-encoded values
+  return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045)); // wubble change
+}
+fn toSrgb(c: vec3<f32>) -> vec3<f32> { // wubble change
+  return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308)); // wubble change
+}
+fn ceiling(c: vec3<f32>) -> vec3<f32> { // wubble change
+  let top = U.uCssF.z; let k = U.uCssF.w; // wubble change
+  let lin = toLin(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0))); // wubble change
+  let L = dot(lin, LUMA); // wubble change
+  if (L <= k || top <= k) { return c; } // wubble change
+  let eased = k + (top - k) * (1.0 - exp(-(L - k) / (top - k))); // wubble change
+  return toSrgb(lin * (eased / L)); // wubble change
 }

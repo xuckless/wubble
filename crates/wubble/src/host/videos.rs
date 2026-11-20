@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use wubble_core::model::Command;
+use wubble_core::overlay::Kind;
 use wubble_core::pip::{self, Pip, PipEffect, PipInput};
 use wubble_core::settings as defs;
 use wubble_core::sponsor::{self, ActTable, Plan, Segment, Skips};
@@ -47,9 +48,14 @@ pub type SaveSeam = Box<dyn Fn(TabId, &str)>;
 enum ToastAct {
     /// Undo the last skip in this tab.
     Undo(TabId),
-    /// The one-time "Skip sponsor segments?" question.
-    AskSponsor,
+    /// The one-time "Skip sponsor segments?" question, asked over this tab's video: it stays
+    /// with the tab (`wubble_core::overlay::Kind::Notice`).
+    AskSponsor(TabId),
 }
+
+/// The question's text and button.
+pub(super) const ASK_SPONSOR: (&str, &str) =
+    ("Skip sponsor segments? (uses sponsor.ajay.app)", "Turn on");
 
 /// A DevTools call of picture-in-picture in flight.
 #[derive(Clone, Copy, Debug)]
@@ -809,14 +815,11 @@ impl Host {
                 && !self.videos.asking
                 && video.is_some()
                 && self.shown() == Some(tab)
+                && self.overlay_open(Kind::Notice, Some(tab))
             {
                 self.videos.asking = true;
-                self.toast_with(
-                    "Skip sponsor segments? (uses sponsor.ajay.app)",
-                    "Turn on",
-                    true,
-                );
-                self.videos.toast = Some(ToastAct::AskSponsor);
+                self.toast_with(ASK_SPONSOR.0, ASK_SPONSOR.1, true);
+                self.videos.toast = Some(ToastAct::AskSponsor(tab));
             }
             return;
         }
@@ -944,7 +947,7 @@ impl Host {
     pub(crate) fn toast_acted(&mut self) {
         match self.videos.toast.take() {
             Some(ToastAct::Undo(tab)) => self.sponsor_undo(tab),
-            Some(ToastAct::AskSponsor) => {
+            Some(ToastAct::AskSponsor(_)) => {
                 self.videos.asking = false;
                 self.write_setting(defs::SPONSOR_ASKED.key, "1");
                 self.write_setting(defs::SPONSOR_ENABLED.key, "1");
@@ -954,7 +957,7 @@ impl Host {
     }
 
     pub(crate) fn toast_closed(&mut self) {
-        if let Some(ToastAct::AskSponsor) = self.videos.toast.take() {
+        if let Some(ToastAct::AskSponsor(_)) = self.videos.toast.take() {
             self.videos.asking = false;
             self.write_setting(defs::SPONSOR_ASKED.key, "1");
         }
@@ -964,6 +967,35 @@ impl Host {
     /// not asked again in this run (`asking` stays), only in the next.
     pub(super) fn toast_replaced(&mut self) {
         self.videos.toast = None;
+    }
+
+    /// The tab the question is asked over, while it waits.
+    pub(super) fn notice_tab(&self) -> Option<TabId> {
+        match self.videos.toast {
+            Some(ToastAct::AskSponsor(tab)) => Some(tab),
+            _ => None,
+        }
+    }
+
+    /// The question goes unanswered (its page went): as replaced, not asked again this run.
+    pub(super) fn notice_close(&mut self) {
+        if self.notice_tab().is_some() {
+            self.toast_replaced();
+            self.toast_hide();
+        }
+    }
+
+    /// Its tab left (false) or came back (true): the question hides or shows again, waiting.
+    pub(super) fn notice_shown(&mut self, shown: bool) {
+        let Some(act) = self.videos.toast else {
+            return;
+        };
+        if shown {
+            self.toast_with(ASK_SPONSOR.0, ASK_SPONSOR.1, true);
+            self.videos.toast = Some(act);
+        } else {
+            self.toast_hide();
+        }
     }
 
     fn toast_text(&mut self, text: &str) {

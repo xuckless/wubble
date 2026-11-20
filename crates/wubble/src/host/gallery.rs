@@ -16,7 +16,7 @@ use wubble_ui::{AppWindow, AutofillView};
 
 use super::Host;
 use super::autofill::shell_view;
-use crate::gallery_smoke::{self, Action, Event, Overlay, SCENES, Scene};
+use crate::gallery_smoke::{self, Action, Event, Ground, Overlay, SCENES, Scene};
 use crate::menu::{self, Menu};
 use crate::page_error::PageError;
 use crate::prompt::{Ask, PermissionPrompt, PermissionRequest};
@@ -40,6 +40,21 @@ const FAKE_2: RequestId = RequestId(i32::MAX.unsigned_abs() - 1);
 /// under the address pill.
 const TAB_MENU_AT: (f32, f32) = (120.0, 150.0);
 const SITE_MENU_AT: (f32, f32) = (560.0, 96.0);
+/// Where the page's own menu opens, logical px in the page (over its text).
+const PAGE_MENU_AT: (f32, f32) = (420.0, 120.0);
+
+/// The sidebar's reload button: its centre x, top and bottom (logical px in the window), where
+/// its tooltip hangs.
+const RELOAD_TIP: (f32, f32, f32) = (243.0, 16.0, 42.0);
+
+/// The address of a scene's plain page; `None` keeps whatever page is shown.
+fn ground_url(ground: Ground) -> Option<String> {
+    match ground {
+        Ground::Bundled => None,
+        Ground::White => Some(crate::page_url(crate::GROUND_PAGE)),
+        Ground::Dark => Some(crate::page_url(crate::GROUND_PAGE) + "#dark"),
+    }
+}
 
 impl Host {
     /// One step of the walk: `Ready` each CEF work run once the frame rate is known, `Settled`
@@ -136,17 +151,30 @@ impl Host {
     fn gallery_show(&mut self, window: &AppWindow, scene: &Scene) {
         let scale = window.window().scale_factor();
         let at = |(x, y): (f32, f32)| ((x * scale).round() as i32, (y * scale).round() as i32);
-        // Nothing of the last scene stays: the page's surfaces, the autofill chip's menu.
+        // Nothing of the last scene stays: the page's surfaces, the autofill chip's menu, a
+        // tooltip.
+        self.tip_dismiss();
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
         }
         // The bookmark and print sheets are the host's own state, not the tab's: closed too.
         self.bookmark_sheet_answered(false, false, "", -1);
+        // A waiting notice goes; a new one replaces it by itself (hiding it in the same turn as
+        // showing one races the toast's two serials).
+        if !matches!(scene.overlay, Overlay::Toast | Overlay::Question) {
+            self.toast_hide();
+        }
         if !matches!(self.print, wubble_core::print::Sheet::Closed) {
             self.print_event(wubble_core::print::Event::Cancel);
         }
         if let Some(page) = scene.page {
             self.dispatch(Command::OpenInternal(page));
+        }
+        // a plain page under the scene: loaded once, kept for the scenes after it on the same
+        if let (Some(tab), Some(url)) = (self.shown(), ground_url(scene.ground))
+            && self.model.tabs.get(&tab).is_some_and(|t| t.url != url)
+        {
+            self.dispatch(Command::Navigate { tab, url });
         }
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
@@ -165,6 +193,26 @@ impl Host {
                         entries: menu::tab_entries(&self.model, tab, facts, &self.keymap),
                     };
                 }
+            }
+            Overlay::PageMenu => {
+                let menu = wubble_engine::page::ContextMenu {
+                    page_url: page_url.clone(),
+                    ..Default::default()
+                };
+                let nav = menu::NavFlags {
+                    back: true,
+                    forward: false,
+                    search: None,
+                };
+                surfaces.menu = Menu::Open {
+                    id: FAKE,
+                    at: at(PAGE_MENU_AT),
+                    entries: menu::entries(&menu, nav),
+                };
+            }
+            Overlay::Tooltip => {
+                let (x, top, bottom) = RELOAD_TIP;
+                self.shell_tip("reload", x, (top, bottom), true);
             }
             Overlay::SiteMenu => {
                 let hosts = [("ads.example".to_owned(), 9), ("cdn.tracker".to_owned(), 3)];
@@ -265,6 +313,10 @@ impl Host {
                     window,
                     wubble_core::shot::saved_text(Some(true), Some(true)),
                 );
+            }
+            Overlay::Question => {
+                let (text, action) = super::videos::ASK_SPONSOR;
+                self.toast_with(text, action, true);
             }
             Overlay::Lists => self.gallery_lists(),
             Overlay::None

@@ -39,6 +39,19 @@ pub struct Scene {
     /// A second click after the first settled (a row selected in the section the first
     /// picked).
     pub then: Option<(u16, u16)>,
+    /// The web page under it.
+    pub ground: Ground,
+}
+
+/// The web page a scene is shot over: the glass takes its light from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ground {
+    /// The bundled animated page (a bright pastel gradient).
+    Bundled,
+    /// A plain white article (`assets/ground.html`): the brightest backdrop glass meets.
+    White,
+    /// The same article, near-black.
+    Dark,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,8 +81,14 @@ pub enum Overlay {
     Unlock,
     /// The notice a saved video frame or screenshot brings up.
     Toast,
+    /// A notice waiting for an answer (SponsorBlock's question), at the page's bottom.
+    Question,
     /// The link status bubble on the web page, for this address.
     Status(&'static str),
+    /// A page's own right-click menu (back on, forward off: a disabled row).
+    PageMenu,
+    /// The sidebar's reload button's tooltip (it hangs over the sidebar's edge and the page).
+    Tooltip,
     /// Settings' lists filled: routing rules, sites never put to sleep, zoom levels, remembered
     /// permissions (the list editors with rows).
     Lists,
@@ -86,6 +105,7 @@ const fn scene(name: &'static str) -> Scene {
         click: None,
         then: None,
         frames: 0,
+        ground: Ground::Bundled,
     }
 }
 
@@ -107,6 +127,14 @@ const fn over(name: &'static str, overlay: Overlay) -> Scene {
     Scene {
         overlay,
         ..scene(name)
+    }
+}
+
+/// `over` on a plain page: white, or near-black.
+const fn over_on(name: &'static str, overlay: Overlay, ground: Ground) -> Scene {
+    Scene {
+        ground,
+        ..over(name, overlay)
     }
 }
 
@@ -161,6 +189,7 @@ pub const SCENES: &[Scene] = &[
     over("bookmark-sheet", Overlay::Bookmark),
     over("print-sheet", Overlay::Print),
     over("toast", Overlay::Toast),
+    over("toast-question", Overlay::Question),
     over(
         "status-bubble",
         Overlay::Status(
@@ -169,6 +198,23 @@ pub const SCENES: &[Scene] = &[
     ),
     over("error-page", Overlay::LoadError),
     over("cert-error-page", Overlay::CertError),
+    // the glass over the brightest page and over a dark one: its ink must stay legible on both
+    over_on("white-sidebar", Overlay::None, Ground::White),
+    over_on("white-page-menu", Overlay::PageMenu, Ground::White),
+    over_on("white-tab-menu", Overlay::TabMenu, Ground::White),
+    over_on("white-command-bar", Overlay::CommandBar(""), Ground::White),
+    over_on("white-find-bar", Overlay::Find, Ground::White),
+    over_on("white-bookmark-sheet", Overlay::Bookmark, Ground::White),
+    over_on("white-tooltip", Overlay::Tooltip, Ground::White),
+    Scene {
+        sidebar: SidebarMode::Hidden,
+        pointer: Some(PEEK_EDGE),
+        ..over_on("white-sidebar-peek", Overlay::None, Ground::White)
+    },
+    over_on("dark-page-menu", Overlay::PageMenu, Ground::Dark),
+    over_on("dark-tab-menu", Overlay::TabMenu, Ground::Dark),
+    over_on("dark-command-bar", Overlay::CommandBar(""), Ground::Dark),
+    over_on("dark-find-bar", Overlay::Find, Ground::Dark),
     on("settings", InternalPage::Settings),
     Scene {
         wheel: 700,
@@ -232,6 +278,8 @@ pub const SCENES: &[Scene] = &[
 /// (`--parity`: four favourites, the Space name, five tabs), logical px.
 const TAB_ROW: (u16, u16) = (130, 248);
 const NEW_TAB_ROW: (u16, u16) = (130, 408);
+/// A point at the window's left edge that peeks the hidden sidebar, logical px.
+const PEEK_EDGE: (u16, u16) = (3, 300);
 /// The first tab of the rail on the gallery's own profile (one tab), logical px.
 const RAIL_TAB_ROW: (u16, u16) = (36, 122);
 // Overlays A at the design's 1360x880: a download row, the permission prompt's Block, the

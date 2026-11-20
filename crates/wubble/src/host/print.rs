@@ -280,6 +280,14 @@ impl Host {
 
     pub(crate) fn print_event(&mut self, event: Event) {
         let opening = matches!(event, Event::Open { .. });
+        // the sheet takes the place of another overlay, or waits for a page's dialog
+        // (wubble_core::overlay)
+        if let Event::Open { tab, .. } = &event
+            && self.print == Sheet::Closed
+            && !self.overlay_open(wubble_core::overlay::Kind::PrintSheet, Some(*tab))
+        {
+            return;
+        }
         let url = match &self.print {
             Sheet::Open { tab, .. } | Sheet::Working { tab, .. } => {
                 self.committed.get(tab).cloned()

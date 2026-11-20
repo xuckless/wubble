@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wubble ground</title>
+<style>
+  /* `--smoke gallery`'s plain pages: pure white with black text (the worst case for the glass
+     over it: a Wikipedia article), `#dark` the same in near-black. Nothing moves. */
+  :root { color-scheme: light; --bg: #ffffff; --ink: #202122; }
+  :root.dark { color-scheme: dark; --bg: #0b0c0f; --ink: #d8dae0; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); }
+  body { font: 16px/1.6 sans-serif; padding: 24px 32px; box-sizing: border-box; }
+  h1 { font: 400 30px/1.3 serif; margin: 0 0 12px; border-bottom: 1px solid #a2a9b1; }
+</style>
+<script>
+  // a gallery scene switches by the fragment alone: a same-document navigation, no reload
+  const ground = () => document.documentElement.classList.toggle("dark", location.hash === "#dark");
+  ground();
+  addEventListener("hashchange", ground);
+</script>
+</head>
+<body>
+<h1>Disjoining pressure</h1>
+<p>In surface chemistry, disjoining pressure is the pressure between two surfaces of a thin film.
+For two flat and parallel surfaces, it is the derivative of the Gibbs energy of interaction per
+unit area with respect to distance, in the direction normal to the surfaces.</p>
+<p>The concept of disjoining pressure was introduced by Derjaguin as the difference between the
+pressure in a region of a phase adjacent to a surface confining it, and the pressure in the bulk
+of this phase.</p>
+<p>Disjoining pressure is interpreted as a sum of several interactions: dispersion forces,
+electrostatic forces between charged surfaces, interactions due to layers of neutral molecules
+adsorbed on the two surfaces, and the structural effects of the solvent.</p>
+<p>Classic theory predicts that a thin liquid film on a flat solid surface is stable while the
+disjoining pressure falls as the film thickens, and breaks up once it rises.</p>
+</body>
+</html>
