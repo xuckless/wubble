@@ -142,3 +142,71 @@ Space tabs (pinned, then items, folders flattened), puts tabs of Spaces no windo
 Main window (never active), leaves sleeping tabs out (Chrome would keep the tab and send `onReplaced` on wake: a
 follow-up), and lists every window in every container's profile, each profile's controller holding only its own
 tabs (indices are the window's, so a profile may see gaps).
+
+## Acceptance
+
+Hand check, 2026-11-20, Linux, the patched CEF (`CEF_PATH=~/Dev/wubble-wt/cef-ext`), `scripts/headless.sh` under
+`timeout`, a throwaway profile per extension. Extensions downloaded by hand from their GitHub releases into a scratch
+directory outside the repo (never committed, never fetched by wubble): Bitwarden `oss-dist-chrome-2026.11.0.zip`
+(bitwarden/clients, tag `browser-v2026.11.0`) and uBlock Origin Lite `uBOLite_2026.1116.1650.chromium.zip`
+(uBlockOrigin/uBOL-home), each unzipped and installed as a folder.
+
+How: a throwaway driver (not committed: no new feature code) replayed a script of steps on the host's own code paths,
+each step a call the Settings and footer controls make: `extension_picked(folder)` (Settings "Install from folder",
+minus the native file dialog), the prompt's "Add extension" (`extension_prompt_answered`), a restart (a second run on
+the same profile: extensions load at start), the footer button (`extensions_requested`), a press on the extension's row
+(`extension_pressed`), synthetic Slint pointer events and the host's key path (`smoke_keys`, as `--smoke start` types),
+and a window PNG per step. The page's and the extension's own state came from the DevTools endpoint
+(`remote_debugging_port`) read by a small Node script: `/json/list`, `Runtime.evaluate` in the service worker, the popup
+and the page, and their console (`Runtime.enable` replays the console, and announces each isolated world). Pages: a
+loopback login form (`python3 -m http.server`, `127.0.0.1`). No Bitwarden account exists here: the check stops at the
+sign-in screen (the email field takes typing; no login was attempted). Screenshots and the driver's patch:
+`~/Dev/wubble-wt/notes/xm/acc/` (`p1-prompt.png`, `p2-panel.png`, `p8-typed.png`, `u2-popup.png`, `u3-dashboard.png`,
+`driver-and-fix.patch`).
+
+| Check | Bitwarden 2026.11.0 | uBlock Origin Lite 2026.1116.1650 |
+|---|---|---|
+| Installs (Settings path, prompt, restart) | yes; the prompt lists its permissions (all sites, clipboard, history, block content, notifications); the name shows as `__MSG_extName__` (gap 1) | yes; same, same name gap |
+| Service worker starts | yes: `background.js` is a target; console: WASM SDK loaded, state migrations run, "Autofill monitoring disabled; the active account is logged out" (expected without an account); `tabs.create` works: it opened its getting-started page as a tab | yes: `js/background.js` is a target; storage round trip ok; 6 static rulesets enabled |
+| Footer button shows its action | yes: the popover lists "Bitwarden" with the shield icon (after the fix below) | yes: "uBlock Origin Lite" with its icon |
+| Popup opens, renders, takes input | opens at once but 57 px wide (gap 2); with the page's width set by hand it renders the intro carousel, then the Log in screen, and the email field takes typed text (`email=hello`) | yes: 273 x 438, the filtering-mode slider takes a click (optimal to basic), "Open the dashboard" opens `dashboard.html` as a tab; no text field to type in |
+| Content script runs on the loopback login form | yes: an isolated world "Bitwarden Password Manager" is attached to the page. No inline menu or autofill icon appears: Bitwarden turns autofill off while no account is logged in (its own warning above). Not verifiable here | yes: an isolated world "uBlock Origin Lite" is attached; its four registered content scripts (`scriptlets-isolated/main`, `prevent-popup`, `css-specific`) exist; a dynamic `declarativeNetRequest` block rule stopped a `fetch` on the page (`ERR_BLOCKED_BY_CLIENT`) |
+
+API probe from Bitwarden's service worker (`Runtime.evaluate`): `storage.local`, `alarms`, `idle.queryState`,
+`offscreen.hasDocument`, `contextMenus.create`, `notifications.getAll`, `sidePanel.getOptions`, `tabs.query` (both
+tabs, with urls), `windows.getAll` (one `normal` focused window), `scripting.executeScript` on the loopback tab all
+answer. `chrome.privacy` is absent until its optional permission is granted (as in Chrome).
+
+### Gaps
+
+1. **Extension names with `__MSG_..._` placeholders show raw** in the install prompt, the Settings list and the
+   popover title (`manifest.name` is `__MSG_extName__` for both; `wubble_core::extensions::Extension::name` says "shown
+   raw for now"). Resolve it from `_locales/<default_locale>/messages.json` (then the UI language) when the manifest is read.
+2. **The action popup is laid out far too narrow for Bitwarden (57 px).** Root cause, read in the extension's code:
+   `chrome.tabs.getCurrent()` called from the popup returns a tab object (id, `windowId: -1`, the popup's own URL)
+   where Chrome returns `undefined`, because the popup is a windowless view that carries a `SessionTabHelper` id
+   (`TabsGetCurrentFunction::Run`, `tabs_api.cc:1937`, only tests `GetTabId(contents) >= 0`). Bitwarden's
+   `BrowserApi.isInTab()` then finds a "tab" view (`extension.getViews({tabId, type: 'tab'})` is 1 for that id),
+   decides it is not in a popup and skips `document.body.style.width = 380px` (`inPopup && !isInTab`); it adds the
+   `body-full` class instead. The page's max-content width is then its text's, 57 px. Any extension that tests
+   `tabs.getCurrent()` to tell a popup from a tab behaves so. Fix: a patch so `tabs.getCurrent` answers nothing (and
+   `getViews` does not count the view as a `tab`) for a view that is not one of wubble's tabs (the popup and the
+   DevTools panel); needs a CEF rebuild. Seen: `chrome.tabs.getCurrent()` in the popup gives
+   `{id: 1814074672, windowId: -1, active: false}`; `chrome.extension.getViews({type:'tab'}).length` is 1.
+3. **`chrome.permissions.request` has no window** (P4): from Bitwarden's popup with a user gesture,
+   `chrome.permissions.request({permissions: ['privacy']})` rejects with "Could not find an active window." Bitwarden's
+   first-run "Make Bitwarden your browser's default password manager" step calls it (`Continue`); a user can press
+   Skip. Optional host permissions of other extensions fail the same way. Not tried: the answer in wubble's UI.
+4. **Inline menu not verified**: it needs a Bitwarden account (stopped at sign-in, as agreed). A test account's
+   vault on a loopback form is the next hand check.
+5. **The popup's first page is `#/default-password-manager-prompt`**, not the sign-in screen, because of gap 3 and
+   `chrome.privacy` being undefined; a user presses Skip and Log in. Same cause, listed so nobody reads it as a bug.
+
+Fixed in this pass (found by the check): the footer popover showed the generic puzzle piece for every extension whose
+manifest names its icon with the default-icon map. The engine reports the chosen file as an absolute path inside the
+extension's directory (`action_state.icon_path`); `action_icon` joined it to the directory again and the read failed.
+`icon_file` in `crates/wubble/src/host/ext_ui.rs` now strips the directory, with a unit test.
+
+Not covered: the Web Store, updates, `nativeMessaging` (Bitwarden's desktop-app unlock), `contextMenus` clicks,
+the side panel (Bitwarden's `sidepanel-disabled.html` is its default), `userScripts` (uBOL's optional use), the
+cosmetic filter on a page that has an advert, and macOS and Windows (the patch queue is Linux only).

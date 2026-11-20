@@ -788,13 +788,24 @@ fn action_row(
     }
 }
 
+/// The extension file the manifest's default icon names: the engine reports it as an absolute
+/// path inside the extension's directory (Chromium resolves it), a manifest-style path is
+/// relative to it; anything leaving the directory is refused.
+fn icon_file(dir: &std::path::Path, icon_path: &str) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    let path = std::path::Path::new(icon_path);
+    let rel = path.strip_prefix(dir).unwrap_or(path);
+    let rel = std::path::Path::new(rel.to_str()?.trim_start_matches('/'));
+    let plain = rel.components().next().is_some()
+        && rel.components().all(|c| matches!(c, Component::Normal(_)));
+    plain.then(|| dir.join(rel))
+}
+
 /// The action's picture: the PNG it set for the tab, else its manifest's default icon file
 /// inside the extension's directory (a PNG; anything else shows the puzzle piece).
 fn action_icon(state: &ActionState, dir: &std::path::Path) -> Option<slint::Image> {
     let bytes = if state.icon_png.is_empty() {
-        let rel = state.icon_path.trim_start_matches('/');
-        let plain = !rel.is_empty() && !rel.split('/').any(|part| part == "..");
-        std::fs::read(dir.join(rel)).ok().filter(|_| plain)?
+        std::fs::read(icon_file(dir, &state.icon_path)?).ok()?
     } else {
         state.icon_png.clone()
     };
@@ -805,6 +816,18 @@ fn action_icon(state: &ActionState, dir: &std::path::Path) -> Option<slint::Imag
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_default_icon_is_a_file_inside_the_extension() {
+        let dir = std::path::Path::new("/p/ext");
+        let want = Some(dir.join("images/icon38.png"));
+        assert_eq!(icon_file(dir, "/p/ext/images/icon38.png"), want);
+        assert_eq!(icon_file(dir, "images/icon38.png"), want);
+        assert_eq!(icon_file(dir, "/images/icon38.png"), want);
+        assert_eq!(icon_file(dir, ""), None);
+        assert_eq!(icon_file(dir, "../x.png"), None);
+        assert_eq!(icon_file(dir, "/p/ext/../x.png"), None);
+    }
 
     #[test]
     fn the_page_s_size_answer_is_two_numbers() {
