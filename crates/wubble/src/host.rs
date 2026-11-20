@@ -2238,7 +2238,46 @@ impl Host {
             painted,
             restored_from_snapshot: visible.is_some_and(|t| heard.replaced.contains(&t)),
             frozen: order.iter().map(|t| heard.frozen.get(t).copied()).collect(),
+            shown_title: visible
+                .and_then(|t| self.model.tabs.get(&t))
+                .map(|t| t.title.clone())
+                .unwrap_or_default(),
+            settled: self.w.window.upgrade().is_some_and(|w| {
+                w.get_page_enter() >= 1.0
+                    && w.get_exit_t() >= 1.0
+                    && w.get_exit_page().size().width == 0
+            }),
         }
+    }
+
+    /// `--smoke tabs`: the card shows solid page 1 edge to edge, and none of solid page 0, the
+    /// page shown before it (QA HIGH-04).
+    fn check_no_bleed(&self) -> Result<(), String> {
+        let window = self.w.window.upgrade().ok_or("no window")?;
+        let shot = snapshot(&window)?;
+        let scale = window.window().scale_factor();
+        let region = pixels::Region {
+            x: physical(window.get_content_x(), scale),
+            y: physical(window.get_content_y(), scale),
+            width: physical(window.get_content_width(), scale),
+            height: physical(window.get_content_height(), scale),
+        };
+        let [before, shown] = tabs_smoke::SOLID;
+        let bled = pixels::count_near(&shot, region, before);
+        let own = pixels::count_near(&shot, region, shown);
+        let all = (pixels::GRID * pixels::GRID) as usize;
+        if bled > 0 {
+            return Err(format!(
+                "the fresh tab's card shows the page before it: {bled} of {all} samples"
+            ));
+        }
+        if own < all {
+            return Err(format!(
+                "the fresh tab's card does not show its page: {own} of {all} samples"
+            ));
+        }
+        println!("smoke: tabs no bleed ok samples={all}");
+        Ok(())
     }
 
     /// Chromium answered a freeze or thaw of `tab`'s page.
@@ -2393,6 +2432,12 @@ impl Host {
         let want =
             crate::TABS_SMOKE_PAGES.map(|page| nav_smoke::title_of(page).unwrap_or_default());
         let (state, action) = tabs_smoke::next(state, &seen, &want);
+        // the switch's fade runs on frames: a still page asks for none of its own
+        if matches!(state.stage, tabs_smoke::Stage::Solid(_))
+            && let Some(window) = self.w.window.upgrade()
+        {
+            window.window().request_redraw();
+        }
         self.checks.tabs_smoke = Some(state);
         let nth =
             |host: &Self, i: usize| host.model.order(host.model.active_space()).get(i).copied();
@@ -2429,10 +2474,16 @@ impl Host {
                     view.set_frozen(frozen);
                 }
             }
-            Some(tabs_smoke::Action::Pass) => {
-                self.tabs_passed = true;
-                quit();
+            Some(tabs_smoke::Action::OpenSolid(i)) => {
+                self.dispatch(new_tab(page_url(&tabs_smoke::solid_page(i)), None));
             }
+            Some(tabs_smoke::Action::CheckNoBleed) => match self.check_no_bleed() {
+                Ok(()) => {
+                    self.tabs_passed = true;
+                    quit();
+                }
+                Err(e) => self.fail(e),
+            },
             Some(tabs_smoke::Action::Fail(reason)) => self.fail(reason),
             None => {}
         }

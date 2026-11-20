@@ -267,7 +267,11 @@ impl Driver {
     /// Step everything by `dt` seconds (capped at `DT_CAP`) and write the values.
     /// Returns true while another frame is needed.
     pub fn advance(&mut self, window: &AppWindow, dt: f32) -> bool {
-        let dt = f64::from(dt).min(DT_CAP);
+        // The page switch's fade is a tween of the design's length, on the wall clock (QA
+        // HIGH-04): capped like the springs' steps, a run of slow frames (a new view starting,
+        // a 4K video) stretched its 190 ms to seconds, with the hidden page still showing.
+        let wall = f64::from(dt);
+        let dt = wall.min(DT_CAP);
         self.clock_ms += dt * 1000.0;
         let now = self.now_ms();
         let win = window.window();
@@ -389,7 +393,7 @@ impl Driver {
         // the address pill's border beam: a lap when another tab is shown, lapping while the
         // page loads, fading once it has loaded (beam.rs)
         moving |= self.step_beam(window, dt);
-        moving |= self.step_page(window, dt);
+        moving |= self.step_page(window, wall);
         self.space_t = (self.space_t + dt).min(OVERLAP_IN);
         window.set_space_enter(overlap_in(self.space_t) as f32);
         moving |= self.space_t < OVERLAP_IN;
@@ -401,13 +405,9 @@ impl Driver {
     fn step_page(&mut self, window: &AppWindow, dt: f64) -> bool {
         let tab = Some(i64::from(window.get_active_tab_id())).filter(|&id| id >= 0);
         let was = std::mem::replace(&mut self.page_tab, tab);
-        if was.is_some() && tab.is_some() && was != tab && window.get_panes().row_count() <= 1 {
-            self.page_t = 0.0;
-            self.exit_t = 0.0;
-        } else {
-            self.page_t = (self.page_t + dt).min(OVERLAP_IN);
-            self.exit_t = (self.exit_t + dt).min(PAGE_OUT);
-        }
+        let switched =
+            was.is_some() && tab.is_some() && was != tab && window.get_panes().row_count() <= 1;
+        (self.page_t, self.exit_t) = switch_clock((self.page_t, self.exit_t), switched, dt);
         window.set_page_enter(overlap_in(self.page_t) as f32);
         // The outgoing page (the host's copy of its last frame, `exit-page`) leaves under the
         // incoming one; once gone, or when no switch started it, the copy is dropped.
@@ -478,6 +478,16 @@ impl Driver {
             self.last = None;
         }
         moving
+    }
+}
+
+/// The page switch's clocks (the incoming page's entrance, the outgoing page's exit), `dt`
+/// wall-clock seconds later: both start over on a switch, else they run to their ends.
+fn switch_clock((page_t, exit_t): (f64, f64), switched: bool, dt: f64) -> (f64, f64) {
+    if switched {
+        (0.0, 0.0)
+    } else {
+        ((page_t + dt).min(OVERLAP_IN), (exit_t + dt).min(PAGE_OUT))
     }
 }
 
@@ -1030,5 +1040,21 @@ mod tests {
             assert_eq!(seam::SidebarMode::from(SidebarMode::from(mode)), mode);
         }
         assert_eq!(SidebarMode::from(Rail), SidebarMode::Rail);
+    }
+
+    /// QA HIGH-04: the hidden page's exit lasts the design's 190 ms of wall time, however few
+    /// frames show it; one slow frame ends it.
+    #[test]
+    fn a_switch_fades_for_its_length_in_wall_time() {
+        let at_rest = (OVERLAP_IN, PAGE_OUT);
+        let switched = switch_clock(at_rest, true, 0.016);
+        assert_eq!(switched, (0.0, 0.0));
+        assert_eq!(switch_clock(switched, false, 0.5), at_rest);
+        let mut t = switched;
+        for _ in 0..12 {
+            t = switch_clock(t, false, 1.0 / 60.0);
+        }
+        assert_eq!(t.1, PAGE_OUT);
+        assert!(t.0 < OVERLAP_IN);
     }
 }

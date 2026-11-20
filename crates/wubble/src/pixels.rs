@@ -9,7 +9,7 @@
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 
 /// Samples per side of the grid laid over the content rectangle.
-const GRID: u32 = 16;
+pub const GRID: u32 = 16;
 /// Fewer distinct sampled colours than this counts as a uniform fill.
 const MIN_DISTINCT: usize = 8;
 /// A mean luma (0-255) below this counts as black.
@@ -67,6 +67,37 @@ fn sample(
         mean_luma: luma_sum / (GRID * GRID),
     };
     Ok((sample, colours[0]))
+}
+
+/// Per-channel distance within which a sample counts as a colour.
+const NEAR: u8 = 12;
+
+/// How many of the `GRID` x `GRID` samples inside `region` (cell centres) are within [`NEAR`] of
+/// `rgb` on every channel.
+pub fn count_near(snapshot: &SharedPixelBuffer<Rgba8Pixel>, region: Region, rgb: [u8; 3]) -> usize {
+    let (width, height) = (snapshot.width(), snapshot.height());
+    let right = region.x.saturating_add(region.width).min(width);
+    let bottom = region.y.saturating_add(region.height).min(height);
+    if region.x >= right || region.y >= bottom {
+        return 0;
+    }
+    let pixels = snapshot.as_slice();
+    let mut n = 0;
+    for row in 0..GRID {
+        for col in 0..GRID {
+            let x = region.x + (right - region.x) * (2 * col + 1) / (2 * GRID);
+            let y = region.y + (bottom - region.y) * (2 * row + 1) / (2 * GRID);
+            let p = pixels[(y * width + x) as usize];
+            if [p.r, p.g, p.b]
+                .iter()
+                .zip(rgb)
+                .all(|(a, b)| a.abs_diff(b) <= NEAR)
+            {
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 /// The region is not a near-uniform fill.
@@ -237,6 +268,23 @@ mod tests {
         width: 64,
         height: 64,
     };
+
+    #[test]
+    fn near_counts_the_samples_of_a_colour() {
+        // the left quarter magenta (and near it), the rest cyan
+        let b = buffer(64, 64, |x, _| {
+            if x < 16 {
+                Rgba8Pixel::new(250, 6, 255, 255)
+            } else {
+                Rgba8Pixel::new(0, 255, 255, 255)
+            }
+        });
+        let all = (GRID * GRID) as usize;
+        assert_eq!(count_near(&b, ALL, [255, 0, 255]), all / 4);
+        assert_eq!(count_near(&b, ALL, [0, 255, 255]), all * 3 / 4);
+        assert_eq!(count_near(&b, ALL, [0, 0, 0]), 0);
+        assert_eq!(count_near(&b, Region { x: 64, ..ALL }, [0, 255, 255]), 0);
+    }
 
     #[test]
     fn gradient_passes() {
