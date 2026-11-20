@@ -10,8 +10,10 @@
 //! left running: the browser's quit must close its Space. The host then checks that the user's
 //! recently-closed list and history hold nothing of the agent's.
 //! The sheet is the real one: the host reads what its window shows (the client, the secret names,
-//! the sites, the window choice) and answers through the window's callback, as its buttons do
-//! (`Host::mcp_smoke_answer`).
+//! the sites, the window choice) and answers it with the pointer, through the window's event
+//! path (`Host::mcp_smoke_answer`): Deny for the first, Allow for the second (headless, as asked),
+//! and for the third a press on Windowed, then Allow; the Space each approval opens must be in
+//! the mode the sheet showed.
 //! Every step waits for its answer: the browser bounds each call by its deadline. Run by hand
 //! (it opens a window), under `scripts/headless.sh` and `timeout`.
 
@@ -278,6 +280,83 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
     )?;
     c.step("start_session", "a second one, left for the quit");
     Ok((c.steps, c))
+}
+
+/// The host's side of the run: the sheets it has allowed, and the window choice the next
+/// approval must open the session's Space with (`Host::mcp_smoke_answer`).
+#[derive(Default)]
+pub struct McpSmoke {
+    pub allowed: usize,
+    pub expect: Option<wubble_core::agent::Mode>,
+}
+
+/// The approval sheet on screen, found by its elements (their ids and roles, in a debug build)
+/// and pressed as winit's pointer events would press it.
+pub mod sheet {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use slint::LogicalPosition;
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use wubble_ui::AppWindow;
+
+    fn root(window: &AppWindow) -> Result<ElementHandle, String> {
+        ElementHandle::find_by_element_id(window, "AppWindow::agent-sheet")
+            .next()
+            .ok_or_else(|| "no agent sheet in the window".into())
+    }
+
+    fn centre(e: &ElementHandle) -> LogicalPosition {
+        let (p, s) = (e.absolute_position(), e.size());
+        LogicalPosition::new(p.x + s.width / 2.0, p.y + s.height / 2.0)
+    }
+
+    /// The centre of the sheet's button `label` (Allow, Deny).
+    pub fn button(window: &AppWindow, label: &str) -> Result<LogicalPosition, String> {
+        root(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Button)
+            .match_accessible_label(label)
+            .find_first()
+            .map(|e| centre(&e))
+            .ok_or_else(|| format!("no {label} button on the sheet"))
+    }
+
+    /// The centre of segment `i` of the sheet's Window choice.
+    pub fn window_choice(window: &AppWindow, i: usize) -> Result<LogicalPosition, String> {
+        root(window)?
+            .query_descendants()
+            .match_id("SegRow::seg")
+            .find_all()
+            .get(i)
+            .map(centre)
+            .ok_or_else(|| format!("no window choice {i} on the sheet"))
+    }
+
+    /// The Window choice the sheet shows selected (its tabs' `accessible-item-selected`).
+    pub fn chosen(window: &AppWindow) -> Result<Option<String>, String> {
+        Ok(root(window)?
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Tab)
+            .find_all()
+            .into_iter()
+            .find(|e| e.accessible_item_selected() == Some(true))
+            .and_then(|e| e.accessible_label())
+            .map(|l| l.to_string()))
+    }
+
+    /// A left click at `at`, through the window's event path.
+    pub fn click(window: &AppWindow, at: LogicalPosition) {
+        let w = slint::ComponentHandle::window(window);
+        let button = PointerEventButton::Left;
+        w.dispatch_event(WindowEvent::PointerMoved { position: at });
+        w.dispatch_event(WindowEvent::PointerPressed {
+            position: at,
+            button,
+        });
+        w.dispatch_event(WindowEvent::PointerReleased {
+            position: at,
+            button,
+        });
+    }
 }
 
 #[cfg(test)]

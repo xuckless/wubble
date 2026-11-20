@@ -299,8 +299,8 @@ pub struct Checks {
     pub video_smoke: Option<crate::video_smoke::VideoSmoke>,
     /// `--smoke ax`.
     pub ax_smoke: Option<crate::ax_smoke::AxSmoke>,
-    /// `--smoke mcp`: agent sessions are approved without the sheet (`host/agent.rs`).
-    pub mcp_smoke: bool,
+    /// `--smoke mcp`: the host answers each approval sheet with the pointer (`host/agent.rs`).
+    pub mcp_smoke: Option<crate::mcp_smoke::McpSmoke>,
     /// `--smoke overlay` (`host/overlay.rs`).
     pub overlay_smoke: Option<overlay::Run>,
     /// SponsorBlock's endpoint for `--smoke video` (its loopback fake).

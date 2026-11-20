@@ -270,3 +270,4 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Performance tests | Nothing in `cargo test` or CI asserts timings; performance is measured by hand ([measurements.md](measurements.md)). | 2026-11-18 |
 | Batches | Roadmap items run as parallel lanes; see [orchestration.md](orchestration.md). | 2026-11-18 |
 | macOS access | The Mac is driven only from a session on the Mac; other sessions report macOS as not run ([macos.md](macos.md)). | 2026-11-19 |
+| Sheet bodies built at first open | A sheet mounted in app.slint builds its kit controls at its first opening (`if view.serial > 0`), never with the window: a control takes its `Controls` slot in `init`, and one built with the window does so before `controls::wire`, sharing slot 0 (the agent sheet's dead Window choice). | 2026-11-20 |

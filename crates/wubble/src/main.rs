@@ -1334,7 +1334,7 @@ fn run(
         builtin_smoke: None,
         video_smoke: None,
         ax_smoke: None,
-        mcp_smoke: false,
+        mcp_smoke: None,
         overlay_smoke: None,
         sponsor_endpoint: None,
         begin_frames: false,
@@ -1490,7 +1490,7 @@ fn run(
         Mode::Mcp => (
             Some(bundled()),
             Checks {
-                mcp_smoke: true,
+                mcp_smoke: Some(Default::default()),
                 ..none
             },
         ),
@@ -1681,6 +1681,12 @@ fn run(
     measure::mark(measure::Stage::WindowOpened);
     let window = first.handle();
     shot::attach(&window);
+    // `--smoke mcp` presses the approval sheet's buttons: the window at the gallery's size, a
+    // person's (a headless compositor opens it at its least size, which the sheet overflows).
+    if matches!(mode, Mode::Mcp) {
+        let (w, h) = shot::SIZE;
+        window.window().set_size(slint::LogicalSize::new(w, h));
+    }
     let mut host = Host::new(
         engine,
         first,

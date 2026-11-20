@@ -338,7 +338,7 @@ impl Host {
             self.agent_event(&id, Event::BrowserQuits);
         }
         // `--smoke mcp` leaves a session running for this: its Space must be gone.
-        if self.checks.mcp_smoke {
+        if self.checks.mcp_smoke.is_some() {
             let left = spaces
                 .iter()
                 .any(|sp| self.model.spaces.iter().any(|s| s.id == *sp));
@@ -406,7 +406,17 @@ impl Host {
                 }
                 self.agent_sheet_pump();
             }
-            Effect::OpenSpace(mode) => self.agent_open_space(id, mode),
+            Effect::OpenSpace(mode) => {
+                // `--smoke mcp`: the grant's mode is the one the sheet showed when Allow was pressed
+                if let Some(expect) = self.checks.mcp_smoke.as_mut().and_then(|r| r.expect.take())
+                    && expect != mode
+                {
+                    self.fail(format!(
+                        "the sheet showed {expect:?}, the session opened {mode:?}"
+                    ));
+                }
+                self.agent_open_space(id, mode);
+            }
             Effect::MintToken => {
                 let token = mint();
                 self.agent_event(id, Event::TokenMinted(token.clone()));
@@ -460,7 +470,7 @@ impl Host {
         window.set_agent_sheet_view(sheet_view(&request, &sites, self.agents.sheets));
         self.agents.sheet = Some((window.as_weak(), id));
         self.render_surfaces(&window);
-        if self.checks.mcp_smoke {
+        if self.checks.mcp_smoke.is_some() {
             let _ = slint::invoke_from_event_loop(|| with_host(Host::mcp_smoke_answer));
         }
     }
@@ -1474,9 +1484,13 @@ impl Host {
     }
 
     /// `--smoke mcp`: the sheet is up. Checks what it shows against what the client asked, then
-    /// answers it through the window's own callback, as its buttons do: Allow, but Deny for the
-    /// session that asks for a secret.
+    /// answers it with the pointer, as a person would (`mcp_smoke::sheet`): Deny for the session
+    /// that asks for a secret; Allow for the next, headless as it asked; for the one after, a
+    /// press on Windowed first, which the sheet must then show selected. Each press must answer
+    /// the sheet at once; the Space the approval opens must be in the mode the sheet showed
+    /// (`agent_open_space`).
     pub(crate) fn mcp_smoke_answer(&mut self) {
+        use crate::mcp_smoke::sheet;
         let Some(window) = self.agents.sheet.as_ref().and_then(|(w, _)| w.upgrade()) else {
             return self.fail("the approval sheet is not up".into());
         };
@@ -1496,16 +1510,67 @@ impl Host {
                 view.headless
             ));
         }
-        println!(
-            "smoke: mcp sheet {} asks {secrets:?} on {sites:?}, answered {}",
-            view.client,
-            if deny { "Deny" } else { "Allow" }
-        );
+        let Some(run) = &mut self.checks.mcp_smoke else {
+            return;
+        };
+        // the third sheet: the owner picks Windowed over the client's headless
+        let windowed = !deny && run.allowed == 1;
+        if !deny {
+            run.allowed += 1;
+            run.expect = Some(if windowed {
+                Mode::Windowed
+            } else {
+                Mode::Headless
+            });
+        }
+        let serial = view.serial;
         let headless = view.headless;
-        let _ = self
-            .w
-            .window
-            .upgrade_in_event_loop(move |w| w.invoke_agent_sheet_answered(!deny, headless));
+        let client = view.client.to_string();
+        let weak = window.as_weak();
+        // later, outside the host: the sheet's callbacks call back into it
+        let _ = slint::invoke_from_event_loop(move || {
+            let fail = |why: String| with_host(|h| h.fail(why));
+            let shown = |w: &AppWindow| {
+                let v = w.get_agent_sheet_view();
+                v.open && v.serial == serial
+            };
+            let steps = || -> Result<(), String> {
+                let w = weak.upgrade().ok_or("no window")?;
+                let asked = if headless { "Headless" } else { "Windowed" };
+                if sheet::chosen(&w)?.as_deref() != Some(asked) {
+                    return Err(format!(
+                        "the sheet's window choice shows {:?} selected, the client asked {asked}",
+                        sheet::chosen(&w)?
+                    ));
+                }
+                if windowed {
+                    let at = sheet::window_choice(&w, 0)?;
+                    sheet::click(&w, at);
+                    if sheet::chosen(&w)?.as_deref() != Some("Windowed") {
+                        return Err(format!(
+                            "a press on Windowed at {at:?} left {:?} selected",
+                            sheet::chosen(&w)?
+                        ));
+                    }
+                }
+                let label = if deny { "Deny" } else { "Allow" };
+                let at = sheet::button(&w, label)?;
+                sheet::click(&w, at);
+                if shown(&w) {
+                    return Err(format!(
+                        "a press on {label} at {at:?} did not answer the sheet"
+                    ));
+                }
+                println!(
+                    "smoke: mcp sheet {client} asks {secrets:?} on {sites:?}, pressed {}{label}",
+                    if windowed { "Windowed, then " } else { "" }
+                );
+                Ok(())
+            };
+            if let Err(why) = steps() {
+                fail(why);
+            }
+        });
     }
 
     /// `--smoke mcp`'s client finished: its step count, or what failed. Then the agent's

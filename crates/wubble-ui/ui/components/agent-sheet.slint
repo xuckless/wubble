@@ -47,7 +47,10 @@ export component AgentSheet inherits SheetFrame {
         root.take-focus();
     }
 
-    BCard {
+    // Built at the first sheet and kept, as the print sheet's: its Window choice takes its slot
+    // in the controls registry in `init`, and built with the window it did so before the host
+    // wired the registry, sharing slot 0 with a menu (no indicator, presses on the menu's slot).
+    if root.view.serial > 0: BCard {
         BRow {
             title: "Secrets";
             BNote {
