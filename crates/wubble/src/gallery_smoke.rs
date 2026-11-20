@@ -300,6 +300,14 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(RAIL_TAB_ROW),
         ..over("tabs-crowded-rail", Overlay::Long(Long::Crowd))
     },
+    // Settings' Updates group, picked in the section list, then the page's end (the jump's
+    // spring has not landed when the shot is taken): a development build, so its status says
+    // updates come from elsewhere
+    Scene {
+        click: Some(NAV_UPDATES),
+        wheel: 20_000,
+        ..on("settings-updates", InternalPage::Settings)
+    },
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
@@ -316,10 +324,11 @@ const DOWNLOAD_ROW: (u16, u16) = (330, 835);
 const PERMISSION_BLOCK: (u16, u16) = (204, 298);
 const AUTOFILL_ROW: (u16, u16) = (120, 162);
 // Settings at the design's 1360x880 (extended sidebar): a routing rule's row in General, the
-// section list's Spaces and Sites, the Spaces list's second row.
+// section list's Spaces, Sites and Updates, the Spaces list's second row.
 const NAV_GENERAL: (u16, u16) = (420, 197);
 const NAV_SPACES: (u16, u16) = (420, 387);
 const NAV_SITES: (u16, u16) = (420, 425);
+const NAV_UPDATES: (u16, u16) = (420, 501);
 const ROUTING_RULE: (u16, u16) = (900, 560);
 const ROUTING_ADD: (u16, u16) = (632, 656);
 const SECOND_SPACE: (u16, u16) = (900, 185);

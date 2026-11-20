@@ -529,6 +529,7 @@ fn render_page(window: &AppWindow, host: &Host) {
     if window.get_settings_about().version.is_empty() {
         window.set_settings_about(about());
     }
+    host.render_updates(window);
 }
 
 #[cfg(test)]
