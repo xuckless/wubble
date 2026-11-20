@@ -32,10 +32,12 @@ slint::slint! {
     }
     export component BubbleShot inherits Window {
         in property <bool> shown;
+        in property <string> late-host;
+        in property <string> late-rest;
         width: 600px;
         height: 240px;
         background: #0d1117;
-        Pane { x: 0; y: 0; width: 600px; height: 60px; background: #0d1117; shown: root.shown; host: "github.com"; rest: "/xuckless"; }
+        Pane { x: 0; y: 0; width: 600px; height: 60px; background: #0d1117; shown: root.shown; host: root.late-host; rest: root.late-rest; }
         Pane { x: 0; y: 60px; width: 600px; height: 60px; background: #0d1117; shown: root.shown; host: "github.com"; rest: "/xuckless/the-wallpaper-project/blob/main/src/wubble/pages/settings.tsx"; }
         Pane { x: 0; y: 120px; width: 600px; height: 60px; background: #ffffff; shown: root.shown; host: "github.com"; rest: "/xuckless/the-wallpaper-project/blob/main/src/wubble/pages/settings.tsx"; }
         Pane { x: 0; y: 180px; width: 600px; height: 60px; background: #ffffff; shown: root.shown; host: "a-very-long-host-name-that-does-not-fit.example.com"; rest: "/x"; }
@@ -137,6 +139,14 @@ fn draw_the_status_bubble() {
                 scale_factor: scale as f32,
             });
         shot.show().unwrap();
+        // as the host does: the address arrives after the bubble was drawn empty
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_millis(20));
+            slint::platform::update_timers_and_animations();
+        }
+        let _ = shot.window().take_snapshot();
+        shot.set_late_host("github.com".into());
+        shot.set_late_rest("/xuckless".into());
         shot.set_shown(true);
         // past the tooltip motion's entrance (real time: the offscreen platform's clock)
         for _ in 0..40 {
@@ -151,4 +161,42 @@ fn draw_the_status_bubble() {
         std::fs::write(dir.join(format!("status-bubble-{scale}x.rgba")), out).unwrap();
         shot.hide().unwrap();
     }
+    // the bubble as the shell places it, in a page pane of the whole window
+    SCALE.store(1, Ordering::Relaxed);
+    let app = wubble_ui::AppWindow::new().unwrap();
+    // as the host does: the page's pane exists before the window shows; the address comes later
+    let pane = wubble_ui::SplitPane {
+        id: 1,
+        fill: true,
+        focused: true,
+        ..Default::default()
+    };
+    let panes = std::rc::Rc::new(slint::VecModel::from(vec![pane.clone()]));
+    app.set_panes(slint::ModelRc::from(panes.clone()));
+    app.show().unwrap();
+    for _ in 0..5 {
+        std::thread::sleep(Duration::from_millis(20));
+        slint::platform::update_timers_and_animations();
+    }
+    let _ = app.window().take_snapshot();
+    use slint::Model;
+    panes.set_row_data(
+        0,
+        wubble_ui::SplitPane {
+            status_shown: true,
+            status_host: "github.com".into(),
+            status_rest: "/xuckless/the-wallpaper-project".into(),
+            ..pane
+        },
+    );
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(20));
+        slint::platform::update_timers_and_animations();
+    }
+    let image = app.window().take_snapshot().unwrap();
+    let mut out = Vec::new();
+    out.extend_from_slice(&image.width().to_le_bytes());
+    out.extend_from_slice(&image.height().to_le_bytes());
+    out.extend_from_slice(image.as_bytes());
+    std::fs::write(dir.join("status-bubble-shell.rgba"), out).unwrap();
 }

@@ -32,7 +32,12 @@ export component AStatusBubble inherits Rectangle {
         shown: root.shown;
     }
 
-    width: min(row.preferred-width, root.pane-width / 3 + 2 * Shell.status-pad);
+    // The address's natural width (its two texts'), at most a third of the pane. The texts are
+    // named in the binding so it is evaluated again when they change: a text measured before
+    // the window has a renderer reports no size and records no dependency, so in the shell's
+    // pane (made before the window shows) the width kept that of the empty bubble, a capsule
+    // round a bare "…" with the address spilling out of it.
+    width: root.host == "" && root.rest == "" ? 2 * Shell.status-pad : min(host-text.preferred-width + rest-text.preferred-width + 2 * Shell.status-pad, root.pane-width / 3 + 2 * Shell.status-pad);
     height: Shell.status-height;
     x: root.mirrored ? root.pane-width - self.width - Shell.status-margin : Shell.status-margin;
     y: root.pane-height - self.height - Shell.status-margin;
@@ -43,8 +48,8 @@ export component AStatusBubble inherits Rectangle {
     visible: tip.fade > 0;
     opacity: tip.fade;
 
-    // The capsule is the bubble's own box, and the text row the capsule's: the row cuts the
-    // address to the capsule (the host too, when it alone is longer), never drawing past it.
+    // The text row fills the capsule: it cuts the address to it (the host too, when it alone is
+    // longer), never drawing past it.
     panel := GlassPanel {
         width: root.width;
         height: root.height;
@@ -58,8 +63,6 @@ export component AStatusBubble inherits Rectangle {
         transform-origin: { x: self.width / 2, y: self.height };
         scale: tip.scale;
         row := HorizontalLayout {
-            width: parent.width;
-            height: parent.height;
             padding-left: Shell.status-pad;
             padding-right: Shell.status-pad;
             alignment: start;

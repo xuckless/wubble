@@ -1,6 +1,6 @@
 //! The link status bubble on the testing backend: its glass capsule holds its text. A long
-//! address is cut inside the capsule, never drawn past its end, and the capsule is the bubble's
-//! own box. Mock time only; one test (one platform per process).
+//! address is cut inside the capsule, never drawn past its end, and a short one gets a capsule
+//! its own width, also in the shell's pane where the address arrives after the bubble was made. Mock time only; one test (one platform per process).
 
 use std::time::Duration;
 
@@ -15,10 +15,11 @@ slint::slint! {
     export component BubbleSpecimen inherits Window {
         in property <string> host;
         in property <string> rest;
+        in property <bool> shown;
         width: 900px;
         height: 600px;
         bubble := AStatusBubble {
-            shown: true;
+            shown: root.shown;
             host: root.host;
             rest: root.rest;
             pane-width: root.width;
@@ -63,9 +64,9 @@ fn check(app: &BubbleSpecimen, host: &str, rest: &str) {
     let eps = 0.5;
     assert!(
         (panel.x - bubble.x).abs() < eps
-            && (panel.w - bubble.w).abs() < eps
+            && panel.w <= bubble.w + eps
             && (panel.h - bubble.h).abs() < eps,
-        "{host}{rest}: the capsule is the bubble's box: panel {},{} {}x{} bubble {},{} {}x{}",
+        "{host}{rest}: the capsule starts the bubble's box and fits in it: panel {},{} {}x{} bubble {},{} {}x{}",
         panel.x,
         panel.y,
         panel.w,
@@ -96,8 +97,14 @@ fn check(app: &BubbleSpecimen, host: &str, rest: &str) {
         assert!(t.y >= panel.y - eps && t.y + t.h <= panel.y + panel.h + eps);
     }
     assert!(
-        bubble.w <= 900.0 / 3.0 + 20.0 + eps,
+        panel.w <= 900.0 / 3.0 + 20.0 + eps,
         "at most a third of the pane"
+    );
+    let host_text = one(app, "AStatusBubble::host-text");
+    assert!(
+        host_text.w > 20.0,
+        "{host}{rest}: the host shows, not cut to nothing: {}",
+        host_text.w
     );
 }
 
@@ -106,6 +113,9 @@ fn the_capsule_holds_its_text() {
     init_integration_test_with_mock_time();
     let app = BubbleSpecimen::new().unwrap();
     app.window().set_size(LogicalSize::new(900.0, 600.0));
+    // as the host does: drawn hidden and empty first, then an address arrives and shows
+    mock_elapsed_time(Duration::from_millis(600));
+    app.set_shown(true);
     check(&app, "github.com", "/xuckless");
     check(
         &app,
@@ -116,5 +126,36 @@ fn the_capsule_holds_its_text() {
         &app,
         "a-very-long-host-name-that-does-not-fit-anywhere.example.com",
         "/x",
+    );
+    in_the_shell();
+}
+
+/// The bubble as the shell places it: in a page pane filling the content area.
+fn in_the_shell() {
+    let app = wubble_ui::AppWindow::new().unwrap();
+    app.window().set_size(LogicalSize::new(1360.0, 880.0));
+    let pane = wubble_ui::SplitPane {
+        id: 1,
+        x0: 0.0,
+        x1: 1084.0,
+        focused: true,
+        status_shown: true,
+        status_host: "github.com".into(),
+        status_rest: "/xuckless/the-wallpaper-project".into(),
+        ..Default::default()
+    };
+    app.set_panes(slint::ModelRc::new(slint::VecModel::from(vec![pane])));
+    mock_elapsed_time(Duration::from_millis(600));
+    let panel = ElementHandle::find_by_element_id(&app, "AStatusBubble::panel")
+        .next()
+        .expect("the bubble");
+    let host = ElementHandle::find_by_element_id(&app, "AStatusBubble::host-text")
+        .next()
+        .unwrap();
+    assert!(
+        panel.size().width > 100.0 && host.size().width > 20.0,
+        "the bubble in a pane: {:?}, host {:?}",
+        panel.size(),
+        host.size()
     );
 }
