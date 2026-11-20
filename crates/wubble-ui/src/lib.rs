@@ -431,6 +431,26 @@ mod tests {
         assert!(!focused());
         assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
 
+        // The window losing the keyboard (another app in front) is not leaving the capsule:
+        // the bar stays open in it, and the keys come back to it.
+        app.invoke_request_address_focus();
+        settle();
+        in_page(CommandBarState::Open);
+        app.set_window_active(false);
+        app.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        settle();
+        in_page(CommandBarState::Open);
+        app.set_window_active(true);
+        app.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        settle();
+        in_page(CommandBarState::Open);
+        assert!(focused());
+        press(app, Key::Escape);
+        settle();
+        assert_eq!(app.get_command_bar_state(), CommandBarState::Closed);
+
         // Every other page: Ctrl+L opens the overlay bar as before.
         app.set_page(InternalPageKind::None);
         settle();

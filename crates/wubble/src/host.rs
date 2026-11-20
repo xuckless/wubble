@@ -2924,6 +2924,8 @@ impl Host {
                 self.tab_drag_pointer(at.0, at.1, true);
             }
             WindowEvent::Focused(focused) => {
+                // before Slint sees it: the start page's capsule keeps the bar through it
+                window.set_window_active(*focused);
                 let current = self.model.focused() == self.w.id;
                 if let Some(focused) = input::window_focus(current, *focused) {
                     self.input.window_focused = focused;
