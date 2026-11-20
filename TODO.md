@@ -153,7 +153,11 @@ Open, to build or check:
 - [~] HDR output: researched and spiked; needs the own build (F16 capture) and a Slint renderer patch
 
 ## M7: Ship
-- [~] Auto-updater: signed manifest on GitHub Releases, check on open, apply on next launch (branch `rel/updater`)
+- [x] Auto-updater (signed manifest, check on open, apply on next launch, rollback), `install.sh`, packaging scripts,
+      signing workflow, `docs/release.md` (4ccd853); inert until the public key is set
+- [ ] Release, owner's steps: key and secrets, public key into the binary and `install.sh`, version, tag ([docs/release.md](docs/release.md))
+- [ ] Release gaps: macOS paths and `release-sign.yml` never run; no macOS codec CEF; camera/microphone usage strings in the
+      bundle; Ubuntu's user-namespace limit vs the no-sudo sandbox; rollback misses a build that cannot load; shellcheck not run
 - [x] Video strip save button: enters the media downloader, absent on DRM, progress and saved states (4b4c9f1)
 - [ ] First preview release: Linux tarball + `install.sh`; macOS DMG signed on the owner's Mac; release workflow
 - [ ] MCP server (after the release): [docs/research/mcp-server.md](docs/research/mcp-server.md)

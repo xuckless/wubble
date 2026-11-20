@@ -47,6 +47,7 @@ mod swipe;
 mod tab_drag;
 mod tasks;
 mod tooltip;
+mod updates;
 mod videos;
 mod window;
 pub(crate) use boost::KIT;
@@ -505,6 +506,8 @@ pub struct Host {
     boosts: boost::Boosts,
     /// Video controls, SponsorBlock, picture-in-picture, media keys (`host/videos.rs`).
     videos: videos::Videos,
+    /// The updater (`host/updates.rs`).
+    updater: crate::updater::Updater,
     /// Pages for screen readers (`host/ax.rs`).
     ax: ax::WebAx,
     /// Reduced motion and touch sizing (`look.rs`).
@@ -691,6 +694,11 @@ impl Host {
             builtins: builtins::Builtins::default(),
             boosts: boost::Boosts::new(boosts),
             videos,
+            updater: crate::updater::Updater::production(|e| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| host.update_event(e));
+                });
+            }),
             ax: ax::WebAx::default(),
             video_passed: None,
             ax_passed: None,

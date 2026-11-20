@@ -48,6 +48,8 @@ enum ToastAct {
     /// The one-time "Skip sponsor segments?" question, asked over this tab's video: it stays
     /// with the tab (`wubble_core::overlay::Kind::Notice`).
     AskSponsor(TabId),
+    /// "wubble <v> is ready: restart to update" (`host/updates.rs`).
+    RestartToUpdate,
 }
 
 /// The question's text and button.
@@ -986,6 +988,7 @@ impl Host {
                 self.write_setting(defs::SPONSOR_ASKED.key, "1");
                 self.write_setting(defs::SPONSOR_ENABLED.key, "1");
             }
+            Some(ToastAct::RestartToUpdate) => self.updates_restart(),
             None => {}
         }
     }
@@ -1021,7 +1024,7 @@ impl Host {
 
     /// Its tab left (false) or came back (true): the question hides or shows again, waiting.
     pub(super) fn notice_shown(&mut self, shown: bool) {
-        let Some(act) = self.videos.toast else {
+        let Some(act @ ToastAct::AskSponsor(_)) = self.videos.toast else {
             return;
         };
         if shown {
@@ -1030,6 +1033,12 @@ impl Host {
         } else {
             self.toast_hide();
         }
+    }
+
+    /// The update is ready: a notice with "Restart" that runs `updates_restart`.
+    pub(super) fn toast_restart(&mut self, text: &str) {
+        self.toast_with(text, wubble_core::update::RESTART_ACTION, false);
+        self.videos.toast = Some(ToastAct::RestartToUpdate);
     }
 
     fn toast_text(&mut self, text: &str) {

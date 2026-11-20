@@ -68,6 +68,7 @@ pub mod tabs;
 pub mod tasks;
 pub mod tidy;
 pub mod touch;
+pub mod update;
 pub mod url;
 pub mod video;
 pub mod window;

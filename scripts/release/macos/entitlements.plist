@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for wubble.app and its CEF helper apps (package-macos.sh).
+  The first three are electron-builder's default set for Chromium apps
+  (electron-userland/electron-builder `packages/app-builder-lib/templates/entitlements.mac.plist`,
+  MIT): V8's JIT, and the helpers loading the framework. Camera and microphone: WebRTC pages
+  under the hardened runtime (macOS still asks the user; the Info.plist needs the usage strings).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+</dict>
+</plist>

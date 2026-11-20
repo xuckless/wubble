@@ -486,6 +486,18 @@ export struct SpaceSetting {
     tabs: int,
 }
 
+// The settings page's Updates group (wubble_core::update::view): the switch, the version, what
+// the updater is doing, and which button shows.
+export struct UpdatesView {
+    on: bool,
+    version: string,
+    status: string,
+    can-check: bool,
+    ready: bool,
+    // updates come from elsewhere (a package, a development build): no switch, no button
+    inert: bool,
+}
+
 export struct AboutView {
     version: string,
     cef: string,

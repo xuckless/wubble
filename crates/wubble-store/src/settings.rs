@@ -279,6 +279,10 @@ settings! {
     /// Category to skip 0 / show 1 / off 2 (`wubble_core::sponsor`).
     SponsorActions: ZoomTable = defs::SPONSOR_ACTIONS;
     BoostsEnabled: bool = defs::BOOSTS_ENABLED;
+    /// On by default: the update check when wubble opens (`wubble_core::update`).
+    UpdateCheckOnOpen: bool = defs::UPDATE_CHECK_ON_OPEN;
+    /// Unix seconds of the last update check (0: never).
+    UpdateLastCheck: u32 = defs::UPDATE_LAST_CHECK;
 }
 
 /// A typed value as the text the `settings` table stores for it (the one encoding), for a

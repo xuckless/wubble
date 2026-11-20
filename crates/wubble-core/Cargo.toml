@@ -24,3 +24,13 @@ aes = "0.9.4"
 cbc = { version = "0.2.1", features = ["alloc"] }
 # The SponsorBlock lookup's hash prefix (`sponsor`); pure Rust, already in Cargo.lock (MIT OR Apache-2.0).
 sha2 = "0.11"
+# The updater (`update`): version precedence with pre-release tags (MIT OR Apache-2.0, already in
+# Cargo.lock through cef's build), and minisign signature checks, verify only, no dependencies
+# (MIT; jedisct1/rust-minisign-verify).
+semver = "1"
+minisign-verify = "0.3"
+
+[dev-dependencies]
+# Signs the updater's test manifests and archives with a key pair made in the test (MIT,
+# jedisct1/rust-minisign); tests only.
+minisign = "0.10"
