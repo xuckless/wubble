@@ -56,6 +56,8 @@ mod suggest_fx;
 mod surface;
 mod tabs_smoke;
 mod ui_loop;
+mod update_smoke;
+mod updater;
 mod verdict;
 mod video_smoke;
 mod windows_smoke;
@@ -191,6 +193,16 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Command::Smoke(Smoke::Update) => match update_smoke::run() {
+            Ok(line) => {
+                println!("{line}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("smoke: update FAILED: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Command::Smoke(Smoke::Codecs { wired }) => {
             match with_smoke_dir(|config, dir| codecs_smoke::run(config, dir, wired)) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -310,6 +322,7 @@ fn main() -> ExitCode {
                 }
                 // handled above
                 Smoke::Boot
+                | Smoke::Update
                 | Smoke::Quit
                 | Smoke::Codecs { .. }
                 | Smoke::Session
@@ -416,6 +429,9 @@ fn browse(
             None
         }
     };
+    // The one instance, before anything starts: a staged update applies or a failing version
+    // rolls back, by starting the other version in this process's place.
+    updater::on_launch();
     let config = EngineConfig::from_current_exe().map(|config| EngineConfig {
         cache_dir: profile.cef_cache(),
         ..config
@@ -426,7 +442,9 @@ fn browse(
         downloads,
         listener,
     };
-    Ok(report_run(mode, config, &profile.dir))
+    let code = report_run(mode, config, &profile.dir);
+    updater::relaunch_if_requested();
+    Ok(code)
 }
 
 /// Runs `f` with a fresh per-process directory, removed afterwards: CEF's
@@ -1066,6 +1084,9 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
         with_host_in(win, |host| host.filter_list_toggled(&id, on))
     });
     window.on_filter_lists_update(move || with_host_in(win, |host| host.filter_lists_update()));
+    window.on_updates_toggled(move |on| with_host_in(win, |host| host.updates_toggled(on)));
+    window.on_updates_check(move || with_host_in(win, Host::updates_check));
+    window.on_updates_restart(move || with_host_in(win, Host::updates_restart));
 }
 
 /// The native pages' intents (history, bookmarks, downloads): each becomes one host call.
@@ -1581,6 +1602,17 @@ fn run(
         media_observer,
     );
     HOST.set(Some(host));
+    // The browser checks for an update as it opens (the setting and the policy permitting) and
+    // counts the start as healthy after a while (`update::install`); smokes do neither.
+    let healthy = slint::Timer::default();
+    if matches!(mode, Mode::Browse { .. }) {
+        with_host(Host::updates_opened);
+        healthy.start(
+            slint::TimerMode::SingleShot,
+            Duration::from_secs(wubble_core::update::install::HEALTHY_AFTER_SECS),
+            || with_host(Host::updates_healthy),
+        );
+    }
     if let Some(listener) = listener {
         instance::listen(listener, |message| {
             let _ = slint::invoke_from_event_loop(move || {

@@ -71,6 +71,12 @@ url.workspace = true
 # Media keys and the system's media controls: MPRIS over zbus on Linux (pure Rust, no libdbus;
 # zbus is already in Cargo.lock), the Now Playing centre on macOS, SMTC on Windows (MIT).
 souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
+# The updater (`updater/`): its archives are `.tar.xz`, unpacked with tar (MIT OR Apache-2.0,
+# already in Cargo.lock through download-cef) and lzma-rs (MIT, pure Rust). `--smoke update`
+# signs its own fake release with wubble-release (minisign, MIT).
+tar = { version = "0.4", default-features = false }
+lzma-rs = "0.3"
+wubble-release.workspace = true
 # Single instance: a local socket in the profile (Unix domain socket, Windows named pipe);
 # 0BSD OR Apache-2.0.
 interprocess = "2.2"

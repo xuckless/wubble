@@ -1,0 +1,134 @@
+# Signs a release: run by hand once the tag's GitHub release holds the archives that
+# scripts/release/package-linux.sh and package-macos.sh made (docs/release.md).
+#
+# It downloads the release's assets, checks their .sha256, signs each archive and disk image with
+# the update key (the secret WUBBLE_UPDATE_KEY, and WUBBLE_UPDATE_KEY_PASSWORD when the key is
+# encrypted), writes and signs the update manifest latest.json, and uploads the signatures and
+# the manifest to the release; then it copies the manifest into the rolling `updates` release
+# as preview.json (and stable.json for a version without a pre-release part), which wubble and
+# install.sh read. It never builds the browser: only the small wubble-release tool.
+name: Release sign
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release's tag, e.g. v0.1.0-preview.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-sign
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check the tag's form
+        run: |
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "not a version tag: $TAG" >&2; exit 1 ;;
+          esac
+          case "$TAG" in
+            *[!0-9A-Za-z.+-]*) echo "not a version tag: $TAG" >&2; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Check the tag is the workspace version
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$TAG" ]; then
+            echo "the tag $TAG is not the workspace version $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Download the release's assets
+        run: |
+          mkdir dist
+          gh release download "$TAG" --repo "$REPO" --dir dist --pattern 'wubble-*'
+          rm -f dist/*.minisig
+          ls -l dist
+
+      - name: Build the release tool
+        run: cargo build --locked --release -p wubble-release
+
+      - name: Check the checksums
+        run: |
+          cd dist
+          found=0
+          for f in wubble-*.tar.xz wubble-*.dmg; do
+            [ -e "$f" ] || continue
+            found=1
+            [ -f "$f.sha256" ] || { echo "$f has no .sha256" >&2; exit 1; }
+            sha256sum -c "$f.sha256"
+          done
+          [ "$found" = 1 ] || { echo "no archives on the release" >&2; exit 1; }
+
+      - name: Sign the archives
+        env:
+          WUBBLE_UPDATE_KEY: ${{ secrets.WUBBLE_UPDATE_KEY }}
+          WUBBLE_UPDATE_KEY_PASSWORD: ${{ secrets.WUBBLE_UPDATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$WUBBLE_UPDATE_KEY" ]; then
+            echo "the secret WUBBLE_UPDATE_KEY is not set (docs/release.md)" >&2
+            exit 1
+          fi
+          set -- dist/wubble-*.tar.xz
+          for f in dist/wubble-*.dmg; do [ -e "$f" ] && set -- "$@" "$f"; done
+          target/release/wubble-release sign --key-env WUBBLE_UPDATE_KEY \
+            --password-env WUBBLE_UPDATE_KEY_PASSWORD "$@"
+
+      - name: Write the manifest
+        run: |
+          target/release/wubble-release make-manifest --version "$VERSION" \
+            --base-url "https://github.com/$REPO/releases/download/$TAG" \
+            --out dist/latest.json dist
+          cat dist/latest.json
+
+      - name: Sign the manifest
+        env:
+          WUBBLE_UPDATE_KEY: ${{ secrets.WUBBLE_UPDATE_KEY }}
+          WUBBLE_UPDATE_KEY_PASSWORD: ${{ secrets.WUBBLE_UPDATE_KEY_PASSWORD }}
+        run: |
+          target/release/wubble-release sign --key-env WUBBLE_UPDATE_KEY \
+            --password-env WUBBLE_UPDATE_KEY_PASSWORD dist/latest.json
+
+      - name: Upload the signatures and the manifest
+        run: gh release upload "$TAG" --repo "$REPO" --clobber dist/*.minisig dist/latest.json
+
+      - name: Publish the channel manifests
+        run: |
+          if ! gh release view updates --repo "$REPO" >/dev/null 2>&1; then
+            gh release create updates --repo "$REPO" --prerelease \
+              --target "$DEFAULT_BRANCH" \
+              --title "Update manifests" \
+              --notes "Channel manifests read by wubble's updater and install.sh. Do not delete."
+          fi
+          mkdir channels
+          cp dist/latest.json channels/preview.json
+          cp dist/latest.json.minisig channels/preview.json.minisig
+          case "$VERSION" in
+            *-*) echo "a pre-release: the preview channel only" ;;
+            *)
+              cp dist/latest.json channels/stable.json
+              cp dist/latest.json.minisig channels/stable.json.minisig
+              ;;
+          esac
+          gh release upload updates --repo "$REPO" --clobber channels/*

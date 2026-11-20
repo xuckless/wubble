@@ -52,7 +52,9 @@ fn main() {
         "dev.wubble.browser",
         "wubble",
         "English",
-        semver::Version::new(0, 0, 0),
+        // the workspace version, the one the binary and the updater use
+        semver::Version::parse(env!("CARGO_PKG_VERSION"))
+            .unwrap_or_else(|e| fail(&format!("the workspace version: {e}"))),
     );
     // `bundle` copies `<resources>/mac/*` into Contents/Resources and, when
     // `mac/wubble.icns` exists, sets CFBundleIconFile in the app's Info.plist (the helper

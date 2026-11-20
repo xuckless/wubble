@@ -235,6 +235,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Update signing | Releases and the update manifest are signed; the private key is a GitHub Actions secret (CI signs on a tag), the public key is in the binary. | 2026-11-19 |
 | Release codecs | The downloadable builds ship the own CEF build with H.264 and AAC (owner accepts the patent exposure). | 2026-11-19 |
 | Release form | Linux: tarball + `install.sh` (curl script); macOS: DMG signed and notarised on the owner's Mac + the same script; first releases are previews. | 2026-11-19 |
+| Update mechanics | Rolling `updates` prerelease holds `preview.json`/`stable.json`; check at most every 6 h; Linux versions under `~/.local/share/wubble/versions/` behind a `current` symlink; 3 failed starts roll back. | 2026-11-20 |
 | Shell clipboard | Shell text fields read and write the clipboard through the host's Wayland worker (a wrapper around Slint's winit platform): GNOME offers the clipboard to one device per client. | 2026-11-19 |
 | MCP server | Planned after the first release: wubble as an MCP server, sessions bound to a Space; plan in [research/mcp-server.md](research/mcp-server.md). | 2026-11-19 |
 | MCP build order | Basic version first (secrets as variables, strict containers, headless, full control incl. script), experimental and off by default; guardrails added where use shows the need. | 2026-11-19 |

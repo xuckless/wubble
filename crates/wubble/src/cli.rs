@@ -12,14 +12,15 @@ pub use crate::measure::Scenario;
 const DEFAULT_SECONDS: NonZeroU32 = NonZeroU32::new(10).unwrap();
 
 #[derive(Parser, Debug)]
-#[command(name = "wubble", about = "The wubble browser.")]
+#[command(name = "wubble", about = "The wubble browser.", version)]
 struct Cli {
     /// Page to open (`example.com` means `https://example.com`); the bundled
     /// page if none.
     #[arg(value_name = "URL", conflicts_with_all = ["smoke", "measure"])]
     page: Option<String>,
     /// Run a self-exiting check instead of the browser: `boot` (CEF starts and
-    /// stops, no window), `frames=N` (show N zero-copy frames, then exit; on
+    /// stops, no window), `update` (the updater against a signed fake release on loopback, no
+    /// window, no CEF), `frames=N` (show N zero-copy frames, then exit; on
     /// the bundled page, also check the window shows it), `nav` (navigate between two bundled pages, then exit), `tabs` (open,
     /// switch, sleep, restore and close tabs on bundled pages, then exit), `split` (two
     /// bundled pages side by side, each checked, then unsplit and exit), `page`
@@ -105,6 +106,7 @@ struct Cli {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SmokeArg {
     Boot,
+    Update,
     Quit,
     Frames(NonZeroU32),
     Nav,
@@ -139,6 +141,7 @@ enum SmokeArg {
 fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
     match value.split_once('=') {
         None if value == "boot" => Ok(SmokeArg::Boot),
+        None if value == "update" => Ok(SmokeArg::Update),
         None if value == "quit" => Ok(SmokeArg::Quit),
         None if value == "nav" => Ok(SmokeArg::Nav),
         None if value == "tabs" => Ok(SmokeArg::Tabs),
@@ -169,7 +172,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
             .map(SmokeArg::Frames)
             .map_err(|e| format!("frames=N needs a whole number above 0: {e}")),
         _ => Err(
-            "expected `boot`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
+            "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
              `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark`, `start` or `session-phase=1|2`"
                 .into(),
@@ -181,6 +184,9 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
 pub enum Smoke {
     /// Initialise CEF, print its version, shut down.
     Boot,
+    /// Windowless, no CEF: the updater against a signed fake release on loopback, staged into
+    /// a temporary install root; a tampered archive refused (`update_smoke.rs`).
+    Update,
     /// Inspect on a selection, DevTools windows shown and counted, one more
     /// asked for just before the quit; the quit is clean (`quit_smoke.rs`).
     Quit,
@@ -366,6 +372,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Frames(frames)), url, None) => Smoke::Frames { frames, url },
             (Some(_), Some(_), None) => return conflict("--url only applies to --smoke frames=N"),
             (Some(SmokeArg::Boot), None, None) => Smoke::Boot,
+            (Some(SmokeArg::Update), None, None) => Smoke::Update,
             (Some(SmokeArg::Quit), None, None) => Smoke::Quit,
             (Some(SmokeArg::Nav), None, None) => Smoke::Nav,
             (Some(SmokeArg::Tabs), None, None) => Smoke::Tabs,
@@ -688,6 +695,21 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--smoke", "quit"]).ok(),
             Some(Command::Smoke(Smoke::Quit))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "update"]).ok(),
+            Some(Command::Smoke(Smoke::Update))
+        );
+    }
+
+    /// `--version` prints the workspace version (clap's "display version" exit).
+    #[test]
+    fn version_is_the_workspaces() {
+        let e = parse(["wubble", "--version"]).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::DisplayVersion);
+        assert_eq!(
+            e.to_string().trim(),
+            format!("wubble {}", env!("CARGO_PKG_VERSION"))
         );
     }
 

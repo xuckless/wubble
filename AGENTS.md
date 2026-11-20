@@ -18,6 +18,7 @@ off-screen; Slint composites it as GPU textures, so the whole UI is one scene. R
 | `wubble` | Binary: wires the above | all |
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 | `wubble-sysmem` | OS readers: memory pressure, per-process memory and CPU | core, sysinfo (and the OS APIs) |
+| `wubble-release` | Release tool: update key, signing, the update manifest (CI builds only this) | core |
 
 `vendor/welding/` is our fork of `welding` (MPL-2.0), outside the workspace members: keep its
 upstream style, mark each change `wubble change`, list it in `vendor/welding/WUBBLE_CHANGES.md`;
@@ -34,7 +35,7 @@ test with `cargo test -p welding`.
 
 Every other smoke, measurement and example, and the gallery's scenes: [docs/smokes.md](docs/smokes.md).
 Window smokes need a GUI session; wrap them in `timeout`. macOS (app bundle, console loop, job runner):
-[docs/macos.md](docs/macos.md). Hand-run numbers: [docs/measurements.md](docs/measurements.md).
+[docs/macos.md](docs/macos.md). Releases and the updater: [docs/release.md](docs/release.md). Hand-run numbers: [docs/measurements.md](docs/measurements.md).
 
 ## Design fidelity
 
