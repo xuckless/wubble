@@ -14,9 +14,12 @@ ends with the owner's sign-off. The capture and scoring tool was removed (187d7a
 ## Now: design-fidelity phase
 - [x] Page copy buttons: `navigator.clipboard.writeText`/`write` reach the system clipboard (4992603)
 - [ ] Headless test display has no seat focus: `start`, `page` and clipboard smokes fail there; `write([ClipboardItem])` unverified
-- [ ] Glass over bright pages: saturation and secondary-text contrast (owner to judge)
+- [x] QA round 1 (`qa-report/`): overlay stack and Escape (4f9fbe0), keys and command-bar ranking (db07570),
+      glass over bright pages (8326b57), switch fade, Reader scroll, Settings wheel (1cd0b67), layout and text (b2b7f68)
+- [ ] Glass over white: faint ink (disabled rows, shortcuts) sits near 2:1; glass reads flat grey (owner to judge)
+- [ ] QA retry by hand: Alt+1/2 Spaces, Shift+click peek, audible badge on YouTube (none reproduced in tests)
+- [ ] In-place rename for a new Space in the sidebar (needs a design); Linux alternates for the chords GNOME takes
 - [ ] Start page tiles are stand-ins: the kit tile look and its hover spring
-- [ ] The start page's tab title duplicates the "+ New tab" row
 - [ ] Settings against the web: Reset per section; rows folding while searching
 - [ ] List editor: the selected row stays highlighted while a draft is open
 - [ ] Video strip: should a collapse carry over to later pages (owner decision)
