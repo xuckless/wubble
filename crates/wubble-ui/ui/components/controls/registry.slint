@@ -2,7 +2,7 @@
 // `wubble-ui/src/controls.rs`): Slint `animate` has no springs. Each control instance takes a
 // slot on `init` and draws `Controls.views[slot]`; its pointer events go back as intents. Slint
 // has no "destroyed" callback, so live instances answer every `generation` bump with `alive`
-// and the registry frees the slots nobody answered for (the GlassLayer sweep, glass.rs).
+// and the registry frees the slots nobody answered for.
 // The kit menu (kit/controls/menu.slint) keeps its lifecycle, highlight and keys here too
 // (`wubble_core::controls::menu`): its events return the owner's intents as a `MenuEffect`.
 

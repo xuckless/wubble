@@ -3,7 +3,7 @@
 //! and written to `Controls.views`. The physics is `wubble_core::controls`.
 //!
 //! Slint has no "destroyed" callback: a control a `for` or `if` removes cannot give its slot
-//! back. The registry sweeps like the glass one (`glass.rs`): after enough new slots it bumps
+//! back. The registry sweeps: after enough new slots it bumps
 //! `Controls.generation`, every live control answers `alive`, and the next frame frees the
 //! rest for reuse.
 //!
@@ -238,7 +238,7 @@ fn effect_of(fx: &[Effect]) -> MenuEffect {
     out
 }
 
-/// Where the registry is in a sweep (the glass registry's states).
+/// Where the registry is in a sweep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sweep {
     Idle,

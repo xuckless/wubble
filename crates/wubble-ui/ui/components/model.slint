@@ -109,7 +109,7 @@ export enum GlassTier {
 
 // One glass panel for the wgpu scene (wubble_gfx::scene::GlassRect): where it is in the window
 // (logical px, after its press scale), its corners, tier and touch state. Every GlassPanel
-// reports its own through GlassLayer.report; `present: false` takes it out of the scene.
+// reports its own through GlassLayer.report; one with `present: false` adds nothing.
 export struct GlassItem {
     key: int,
     x: length,
@@ -131,8 +131,8 @@ export struct GlassItem {
 }
 
 // The scene's glass layer. The host sets `scene-active` once, from its explicit choice of
-// glass (wubble backdrop.rs `Glass`); the driver bumps `generation` after the models change,
-// so every live panel reports again and panels a `for` or `if` destroyed drop out.
+// glass (wubble backdrop.rs `Glass`); the driver bumps `generation` every frame and the panels
+// that report in answer are the scene's list (wubble-ui glass.rs): destroyed ones drop out.
 export global GlassLayer {
     in-out property <bool> scene-active: false;
     // The scene draws the overlays' glass above the page (app.slint sets it: the scene is on

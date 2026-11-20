@@ -14,8 +14,9 @@ import { Shell } from "../derived.slint";
 // tier) underneath and this panel's fill is skipped with `over-wgpu: true`.
 // The film rim (touch only) is the kit's Film (motion/film.slint).
 // wubble change: with `over-wgpu` the panel reports its rectangle, radius, tier and touch state
-// as data (`item`, through GlassLayer.report), which the host hands to the scene's `set_glass`
-// each frame it changed; nothing calls into the scene per widget.
+// as data (`item`, through GlassLayer.report) in every frame's sweep; the list the panels on
+// screen report is what the host hands to the scene's `set_glass` when it changed. Nothing calls
+// into the scene per widget, and panels may share a `key`.
 export component GlassPanel inherits Rectangle {
     in property <GlassTier> tier: GlassTier.regular;   // wubble change: the enum, not 0 / 1 / 2
     in property <length> radius: Radius.lg;
@@ -67,8 +68,11 @@ export component GlassPanel inherits Rectangle {
     changed item => {
         GlassLayer.report(root.item);
     }
+    // every frame's sweep (glass.rs): a panel off the scene adds nothing to it
     changed generation => {
-        GlassLayer.report(root.item);
+        if root.item.present {
+            GlassLayer.report(root.item);
+        }
     }
 
     property <GlassTierStyle> t: root.tier == GlassTier.thin ? Glass.thin : root.tier == GlassTier.regular ? Glass.regular : Glass.thick;

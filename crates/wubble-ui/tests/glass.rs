@@ -51,12 +51,12 @@ fn glass_panels_report_their_items() {
     let keys = app.global::<GlassKeys>();
     let (sidebar, address) = (keys.get_sidebar(), keys.get_address());
     app.show().unwrap();
-    // The panels reported on `init`, before this handler: a bump asks again.
+    // The panels reported on `init`, before this handler: a bump (the driver's every frame) asks
+    // the ones on the scene again.
     layer.set_generation(layer.get_generation() + 1);
     pump(1);
 
-    // Without the scene every panel is absent (the Slint glass draws itself).
-    assert!(!item(&seen, address).present);
+    // Without the scene no panel is on it (the Slint glass draws itself): none answers.
     assert!(seen.borrow().values().all(|i| !i.present));
 
     // With it: the window's Regular glass (the sidebar is that glass, the design's one window

@@ -40,7 +40,7 @@ use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
 use wubble_core::tabs::{self, SpaceSwitcher, TabRows, TabUp};
 
-use crate::glass::{GlassFrame, GlassRegistry};
+use crate::glass::GlassRegistry;
 use crate::{
     AppWindow, BeamShape, Chrome, CommandBarState, CommandMode, CommandPlacement, GlassItem,
     GlassLayer, InternalPageKind, LeavingRow, Origin, PageScroll, PeekCue, Radius, Shell,
@@ -512,28 +512,28 @@ pub struct Wired {
 }
 
 impl Wired {
-    /// One frame at `now`, before Slint draws it: step the driver, let the panels report what
-    /// the step moved, and take the frame's glass. Returns whether another frame is needed
-    /// (something still moves, or a sweep asked the panels to report again) and the glass.
+    /// One frame at `now`, before Slint draws it: step the driver, then sweep the glass (every
+    /// live panel reports what the step moved, and the registry's list is exactly those reports,
+    /// `crate::glass`). Returns whether another frame is needed (something still moves) and the
+    /// list when it changed.
     ///
     /// Slint runs `changed` handlers while it draws (`WindowInner::draw_contents`), after the
     /// rendering notifier: reading the registry before them gave the scene the previous
     /// frame's glass, one frame behind Slint (the sidebar's glass trailing its width). The same
     /// handlers run here a moment earlier, so nothing runs that the draw would not run.
-    pub fn frame(&self, window: &AppWindow, now: Instant) -> (bool, GlassFrame) {
+    pub fn frame(&self, window: &AppWindow, now: Instant) -> (bool, Option<Vec<GlassItem>>) {
         let mut moving = self.driver.borrow_mut().frame(window, now);
         let (controls, bump) = self.controls.borrow_mut().frame(now);
         moving |= controls;
         if bump {
             crate::controls::bump(window);
         }
+        self.glass.borrow_mut().begin();
+        let layer = window.global::<GlassLayer>();
+        layer.set_generation(layer.get_generation().wrapping_add(1));
         slint::private_unstable_api::re_exports::ChangeTracker::run_change_handlers();
-        let frame = self.glass.borrow_mut().frame();
-        if frame.bump {
-            let layer = window.global::<GlassLayer>();
-            layer.set_generation(layer.get_generation().wrapping_add(1));
-        }
-        (moving || frame.bump, frame)
+        let glass = self.glass.borrow_mut().end();
+        (moving, glass)
     }
 }
 
@@ -674,8 +674,8 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
     let glass = Rc::new(RefCell::new(GlassRegistry::default()));
     let hook = || (Rc::clone(&driver), window.as_weak());
 
-    // A report outside a frame (a layout the host changed) still reaches the scene: a changed
-    // registry asks for a frame.
+    // A report outside a frame (a layout the host changed) still reaches the scene: a list it
+    // made out of date asks for a frame, whose sweep takes the new glass.
     let g = Rc::clone(&glass);
     let w = window.as_weak();
     window.global::<GlassLayer>().on_report(move |item| {
@@ -687,9 +687,7 @@ pub fn wire(window: &AppWindow, seam: Seam) -> Wired {
     });
 
     let (d, w) = hook();
-    let g = Rc::clone(&glass);
     window.on_shell_model_changed(move || {
-        g.borrow_mut().request_sweep();
         run(&d, &w, |s, w| {
             s.read_model(w);
             None
@@ -1015,11 +1013,11 @@ pub fn install(
                     return;
                 };
                 let now = Instant::now();
-                let (again, frame) = wired.frame(&window, now);
+                let (again, glass) = wired.frame(&window, now);
                 if again {
                     window.window().request_redraw();
                 }
-                hook(&window, now, frame.glass.as_deref());
+                hook(&window, now, glass.as_deref());
             }
             slint::RenderingState::AfterRendering => after_rendering(),
             _ => {}

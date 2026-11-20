@@ -1,116 +1,80 @@
 //! The scene's glass as data: every `GlassPanel` reports its [`GlassItem`] through
-//! `GlassLayer.report`, and [`GlassRegistry`] keeps the live ones by key, back to front. The
-//! driver asks it once per frame for the list, when it changed, and hands that to the host,
-//! which passes it to the scene's `set_glass`. No widget calls into the scene.
+//! `GlassLayer.report`, and [`GlassRegistry`] holds the list the live ones make, back to front.
+//! The driver hands that list to the host when it changed, which passes it to the scene's
+//! `set_glass`. No widget calls into the scene.
 //!
-//! Slint has no "destroyed" callback, so a panel a `for` or `if` removes cannot take itself
-//! out. After the models change the registry sweeps instead: at the next frame it forgets
-//! everything and the driver bumps `GlassLayer.generation`, on which every live panel reports
-//! again (and new ones report on `init`). The list is held back for that one frame, so the
-//! scene keeps the previous glass instead of flashing empty.
-
-use std::collections::BTreeMap;
+//! The list is derived whole on every rendered frame, never patched: the driver opens a sweep,
+//! bumps `GlassLayer.generation` (every live panel on the scene reports again) and runs Slint's
+//! change handlers, and the list is what the panels on screen reported in that sweep. So a key
+//! several panels share (`GlassKeys.menu`: the context menu and every Select's menu) never has its
+//! glass taken out by another panel's `present: false`, the order reports arrive in does not
+//! matter, and a panel a `for` or `if` destroyed simply stops reporting. Slint has no "destroyed"
+//! callback; this needs none. A report between frames only says whether the list is out of date,
+//! so the driver asks for a frame.
 
 use crate::GlassItem;
 
-/// Where the registry is in a sweep. One explicit state, moved only by [`GlassRegistry`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Sweep {
-    Idle,
-    /// The models changed; the next frame forgets the items and bumps the generation.
-    Requested,
-    /// Forgotten this frame; the panels report again before the next one.
-    Holding,
-}
-
-/// What one frame does with the glass.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct GlassFrame {
-    /// Bump `GlassLayer.generation`: every live panel reports again.
-    pub bump: bool,
-    /// The new list, back to front, when it changed since the last frame.
-    pub glass: Option<Vec<GlassItem>>,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GlassRegistry {
-    items: BTreeMap<i32, GlassItem>,
-    dirty: bool,
-    sweep: Sweep,
-    /// The list the host was last handed: a sweep whose panels report the same items again (the
-    /// models changed, the glass did not) hands nothing, so it does not wake a frozen scene.
+    /// The last sweep's list, back to front.
+    items: Vec<GlassItem>,
+    /// The sweep in progress: what the live panels reported so far.
+    sweep: Option<Vec<GlassItem>>,
+    /// The list the host was last handed: a sweep that finds the same glass hands nothing, so it
+    /// does not wake a frozen scene.
     sent: Option<Vec<GlassItem>>,
 }
 
-impl Default for GlassRegistry {
-    fn default() -> Self {
-        Self {
-            items: BTreeMap::new(),
-            dirty: false,
-            sweep: Sweep::Idle,
-            sent: None,
-        }
-    }
-}
-
 impl GlassRegistry {
-    /// A panel's current item: kept when present, removed when not. Returns whether the list
-    /// changed.
+    /// A panel's current item. In a sweep a present one joins the list (a panel reporting twice
+    /// in one sweep, for its item and for the generation, counts once). Between sweeps it changes
+    /// nothing and returns whether the list is out of date: a frame should sweep again.
     pub fn report(&mut self, item: GlassItem) -> bool {
-        let changed = if item.present {
-            self.items.get(&item.key) != Some(&item) && {
-                self.items.insert(item.key, item);
-                true
+        match &mut self.sweep {
+            Some(list) => {
+                if item.present && !list.contains(&item) {
+                    list.push(item);
+                }
+                false
             }
-        } else {
-            self.items.remove(&item.key).is_some()
-        };
-        self.dirty |= changed;
-        changed
-    }
-
-    /// The models changed: sweep at the next frame.
-    pub fn request_sweep(&mut self) {
-        self.sweep = Sweep::Requested;
-    }
-
-    #[cfg(test)]
-    fn sweep(&self) -> Sweep {
-        self.sweep
+            None if item.present => !self.items.contains(&item),
+            None => self.items.iter().any(|i| i.key == item.key),
+        }
     }
 
     /// The live items, back to front (by key).
     pub fn snapshot(&self) -> Vec<GlassItem> {
-        self.items.values().cloned().collect()
+        self.items.clone()
     }
 
     pub fn get(&self, key: i32) -> Option<&GlassItem> {
-        self.items.get(&key)
+        self.items.iter().find(|i| i.key == key)
     }
 
-    /// Once per rendered frame, before the host's hook.
-    pub fn frame(&mut self) -> GlassFrame {
-        match self.sweep {
-            Sweep::Requested => {
-                self.items.clear();
-                self.dirty = true;
-                self.sweep = Sweep::Holding;
-                GlassFrame {
-                    bump: true,
-                    glass: None,
-                }
-            }
-            Sweep::Holding | Sweep::Idle => {
-                self.sweep = Sweep::Idle;
-                let glass = std::mem::take(&mut self.dirty)
-                    .then(|| self.snapshot())
-                    .filter(|list| self.sent.as_ref() != Some(list));
-                if glass.is_some() {
-                    self.sent.clone_from(&glass);
-                }
-                GlassFrame { bump: false, glass }
-            }
-        }
+    /// Start a frame's sweep: until [`Self::end`], reports build the list from nothing.
+    pub fn begin(&mut self) {
+        self.sweep = Some(Vec::new());
+    }
+
+    /// End the sweep: its reports are the list. Returns the list when it differs from the one
+    /// the host holds.
+    pub fn end(&mut self) -> Option<Vec<GlassItem>> {
+        let mut list = self.sweep.take()?;
+        // back to front by key; panels sharing a key in a fixed order whatever order they
+        // reported in, so the same glass is the same list
+        list.sort_by(|a, b| {
+            a.key
+                .cmp(&b.key)
+                .then(a.y.total_cmp(&b.y))
+                .then(a.x.total_cmp(&b.x))
+                .then(a.width.total_cmp(&b.width))
+                .then(a.height.total_cmp(&b.height))
+        });
+        self.items = list;
+        (self.sent.as_ref() != Some(&self.items)).then(|| {
+            self.sent = Some(self.items.clone());
+            self.items.clone()
+        })
     }
 }
 
@@ -129,84 +93,82 @@ mod tests {
         }
     }
 
+    fn gone(key: i32, x: f32) -> GlassItem {
+        GlassItem {
+            present: false,
+            ..item(key, x)
+        }
+    }
+
     fn keys(v: &[GlassItem]) -> Vec<i32> {
         v.iter().map(|i| i.key).collect()
     }
 
-    #[test]
-    fn items_are_kept_by_key_back_to_front() {
-        let mut r = GlassRegistry::default();
-        r.report(item(101, 0.0));
-        r.report(item(0, 0.0));
-        r.report(item(1, 0.0));
-        assert_eq!(keys(&r.frame().glass.unwrap()), [0, 1, 101]);
-        // nothing changed: no new list
-        assert_eq!(r.frame(), GlassFrame::default());
-        // the same item again changes nothing either
-        r.report(item(1, 0.0));
-        assert_eq!(r.frame().glass, None);
+    /// One frame: the given panels report, in this order.
+    fn sweep(r: &mut GlassRegistry, reports: &[GlassItem]) -> Option<Vec<GlassItem>> {
+        r.begin();
+        for i in reports {
+            r.report(i.clone());
+        }
+        r.end()
     }
 
     #[test]
-    fn a_report_replaces_and_absence_removes() {
+    fn the_list_is_what_reported_back_to_front() {
         let mut r = GlassRegistry::default();
-        r.report(item(1, 0.0));
-        r.report(item(1, 5.0));
-        let g = r.frame().glass.unwrap();
-        assert_eq!((g.len(), g[0].x), (1, 5.0));
-        r.report(GlassItem {
-            present: false,
-            ..item(1, 5.0)
-        });
-        assert_eq!(r.frame().glass, Some(vec![]));
-        // removing what is not there is no change
-        r.report(GlassItem {
-            present: false,
-            ..item(7, 0.0)
-        });
-        assert_eq!(r.frame().glass, None);
-    }
-
-    #[test]
-    fn a_sweep_that_changes_nothing_hands_nothing() {
-        let mut r = GlassRegistry::default();
-        r.report(item(0, 0.0));
-        r.report(item(105, 0.0));
-        assert!(r.frame().glass.is_some());
-        r.request_sweep();
-        r.frame();
-        r.report(item(0, 0.0));
-        r.report(item(105, 0.0));
-        assert_eq!(r.frame(), GlassFrame::default());
-        // a change after it still comes through
-        r.report(item(105, 3.0));
-        assert_eq!(r.frame().glass.map(|g| g[1].x), Some(3.0));
-    }
-
-    #[test]
-    fn a_sweep_holds_one_frame_then_shows_only_what_reported_again() {
-        let mut r = GlassRegistry::default();
-        r.report(item(0, 0.0));
-        r.report(item(105, 0.0));
-        r.frame();
-        r.request_sweep();
-        assert_eq!(r.sweep(), Sweep::Requested);
-        // the sweep frame forgets everything, bumps, and keeps the scene's last list
+        let list = sweep(&mut r, &[item(101, 0.0), item(0, 0.0), item(1, 0.0)]);
+        assert_eq!(keys(&list.unwrap()), [0, 1, 101]);
+        // the same glass again hands nothing
         assert_eq!(
-            r.frame(),
-            GlassFrame {
-                bump: true,
-                glass: None
-            }
+            sweep(&mut r, &[item(0, 0.0), item(1, 0.0), item(101, 0.0)]),
+            None
         );
-        assert_eq!(r.sweep(), Sweep::Holding);
-        // only the sidebar is still alive and reports on the bump
-        r.report(item(0, 0.0));
-        assert_eq!(keys(&r.frame().glass.unwrap()), [0]);
-        assert_eq!(r.sweep(), Sweep::Idle);
-        // a sweep with no panel left still clears the scene
-        r.request_sweep();
-        r.frame();
-        assert_eq!(r.frame().glass, Some(vec![]));
+        // a panel that no longer reports (destroyed) is gone
+        assert_eq!(keys(&sweep(&mut r, &[item(0, 0.0)]).unwrap()), [0]);
+        assert_eq!(sweep(&mut r, &[]), Some(vec![]));
+    }
+
+    /// The owner's missing menu glass: the context menu and a closed Select's menu share a key;
+    /// the closed one's report, before or after, never takes the open one's glass out.
+    #[test]
+    fn a_shared_key_keeps_every_present_panel_in_any_order() {
+        let mut r = GlassRegistry::default();
+        let open = item(7, 40.0);
+        for reports in [
+            [open.clone(), gone(7, 999.0)],
+            [gone(7, 999.0), open.clone()],
+        ] {
+            sweep(&mut r, &reports);
+            assert_eq!(r.snapshot(), std::slice::from_ref(&open));
+        }
+        // two present at once (one fading out, one opening): both, in a fixed order
+        let a = sweep(&mut r, &[item(7, 300.0), item(7, 40.0)]).unwrap();
+        assert_eq!(a, [item(7, 40.0), item(7, 300.0)]);
+        assert_eq!(sweep(&mut r, &[item(7, 40.0), item(7, 300.0)]), None);
+    }
+
+    #[test]
+    fn a_panel_reporting_twice_in_a_sweep_counts_once() {
+        let mut r = GlassRegistry::default();
+        assert_eq!(
+            sweep(&mut r, &[item(3, 1.0), item(3, 1.0)]).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_report_between_frames_only_says_whether_to_sweep() {
+        let mut r = GlassRegistry::default();
+        sweep(&mut r, &[item(1, 0.0)]);
+        // the same item, or a panel absent that holds no glass: nothing to do
+        assert!(!r.report(item(1, 0.0)));
+        assert!(!r.report(gone(9, 0.0)));
+        // moved, new, or gone while its key holds glass: the next frame sweeps
+        assert!(r.report(item(1, 5.0)));
+        assert!(r.report(item(2, 0.0)));
+        assert!(r.report(gone(1, 0.0)));
+        // and the list waits for that sweep
+        assert_eq!(r.snapshot(), [item(1, 0.0)]);
+        assert_eq!(r.end(), None, "no sweep open");
     }
 }

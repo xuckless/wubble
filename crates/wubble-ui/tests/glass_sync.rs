@@ -34,7 +34,7 @@ fn run_to_rest(
     let key = app.global::<GlassKeys>().get_sidebar();
     for frame in 0..MAX_FRAMES {
         let (again, out) = wired.frame(app, now);
-        if let Some(glass) = out.glass {
+        if let Some(glass) = out {
             *scene = glass;
         }
         // What Slint draws this frame: the window's glass under the sidebar and the page, in
@@ -175,7 +175,7 @@ fn drag_seam_to(
         let k = ((frame + 1) as f32 / 30.0).min(1.0);
         app.invoke_seam_drag(from + (to - from) * k, 300.0);
         let (_, out) = wired.frame(app, now);
-        if let Some(glass) = out.glass {
+        if let Some(glass) = out {
             *scene = glass;
         }
         check_drag_frame(app, scene, frame);
