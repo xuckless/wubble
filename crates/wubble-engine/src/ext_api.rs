@@ -125,10 +125,12 @@ pub struct ExtViewTab {
 pub enum ExtRequest {
     /// Open `url` as a tab (tabs.create, runtime.openOptionsPage, clients.openWindow); answer
     /// with [`crate::app::Engine::answer_open_tab`]. `container` is the asking extension's
-    /// (its Chrome profile's); `None` for CEF's global profile. `window`: `None` is the current.
+    /// (its Chrome profile's): requests from CEF's global profile, which runs a copy of each
+    /// extension too, are refused before they get here, so one extension event opens one tab
+    /// per container at most, each in its own profile. `window`: `None` is the current.
     OpenTab {
         request: i32,
-        container: Option<ContainerId>,
+        container: ContainerId,
         url: String,
         window: Option<WindowId>,
         active: bool,
@@ -139,6 +141,16 @@ pub enum ExtRequest {
     ActionChanged {
         extension: String,
     },
+}
+
+/// What the host did about an [`ExtRequest::OpenTab`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabOpened {
+    /// A tab with this view.
+    View(ViewId),
+    /// A tab on a page wubble draws itself (`wubble://`): no view, so no tab object.
+    Page,
+    Refused,
 }
 
 /// What a click on an extension's action did.
@@ -287,11 +299,12 @@ impl ExtApi {
         self.sent = Some(state);
     }
 
-    /// Answers open request `request` with the tab's browser, or refuses it (`None`).
-    pub(crate) fn tab_opened(&self, request: i32, browser: Option<i32>) {
+    /// Answers open request `request` with the tab's browser (0: refused, -1: a tab on a page
+    /// wubble draws itself, which has none).
+    pub(crate) fn tab_opened(&self, request: i32, browser: i32) {
         if let Some(table) = self.table {
             // SAFETY: plain values.
-            unsafe { (table.tab_opened)(request, browser.unwrap_or(0)) };
+            unsafe { (table.tab_opened)(request, browser) };
         }
     }
 
@@ -330,7 +343,7 @@ impl ExtApi {
 
     /// The requests CEF made since the last call, with browser ids turned into views
     /// (`view_of`) and profile paths into containers (under `root`); requests about a browser
-    /// that is no view are dropped.
+    /// that is no view are dropped, open requests from a profile that is no container refused.
     pub(crate) fn take(
         &self,
         view_of: impl Fn(i32) -> Option<ViewId>,
@@ -349,13 +362,19 @@ impl ExtApi {
                     url,
                     window,
                     active,
-                } => Some(ExtRequest::OpenTab {
-                    request,
-                    container: container_of(root, Path::new(&profile)),
-                    url,
-                    window: u32::try_from(window).ok().map(WindowId),
-                    active,
-                }),
+                } => match container_of(root, Path::new(&profile)) {
+                    Some(container) => Some(ExtRequest::OpenTab {
+                        request,
+                        container,
+                        url,
+                        window: u32::try_from(window).ok().map(WindowId),
+                        active,
+                    }),
+                    None => {
+                        self.tab_opened(request, 0);
+                        None
+                    }
+                },
                 Raw::Close(b) => view_of(b).map(ExtRequest::CloseTab),
                 Raw::Activate(b) => view_of(b).map(ExtRequest::ActivateTab),
                 Raw::Action(extension) => Some(ExtRequest::ActionChanged { extension }),
@@ -621,8 +640,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_table_of_another_size_or_version_is_rejected() {
+    /// Every open answer the test table got, (request, browser).
+    static ANSWERS: Mutex<Vec<(c_int, c_int)>> = Mutex::new(vec![]);
+
+    /// A table of `size` and `version` that does nothing but record open answers.
+    fn table(size: usize, version: c_int) -> &'static ffi::cef_wubble_ext_t {
         unsafe extern "C" fn set_delegate(_: *const ffi::cef_wubble_ext_delegate_t) {}
         unsafe extern "C" fn set_state(
             _: *const ffi::cef_wubble_ext_window_t,
@@ -631,7 +653,9 @@ mod tests {
             _: usize,
         ) {
         }
-        unsafe extern "C" fn tab_opened(_: c_int, _: c_int) {}
+        unsafe extern "C" fn tab_opened(request: c_int, browser: c_int) {
+            ANSWERS.lock().unwrap().push((request, browser));
+        }
         unsafe extern "C" fn action_click(
             _: *const c_char,
             _: c_int,
@@ -648,19 +672,22 @@ mod tests {
         }
         unsafe extern "C" fn free_string(_: *mut c_char) {}
         unsafe extern "C" fn free_action(_: *mut ffi::cef_wubble_ext_action_t) {}
-        let table = |size, version| {
-            Box::leak(Box::new(ffi::cef_wubble_ext_t {
-                size,
-                version,
-                set_delegate,
-                set_state,
-                tab_opened,
-                action_click,
-                action_state,
-                free_string,
-                free_action,
-            })) as *const ffi::cef_wubble_ext_t
-        };
+        Box::leak(Box::new(ffi::cef_wubble_ext_t {
+            size,
+            version,
+            set_delegate,
+            set_state,
+            tab_opened,
+            action_click,
+            action_state,
+            free_string,
+            free_action,
+        }))
+    }
+
+    #[test]
+    fn a_table_of_another_size_or_version_is_rejected() {
+        let table = |size, version| std::ptr::from_ref(table(size, version));
         let size = std::mem::size_of::<ffi::cef_wubble_ext_t>();
         assert!(checked(table(size, ffi::VERSION)).is_some());
         assert!(checked(table(size - 8, ffi::VERSION)).is_none());
@@ -703,7 +730,7 @@ mod tests {
             [
                 ExtRequest::OpenTab {
                     request: 5,
-                    container: Some(ContainerId(2)),
+                    container: ContainerId(2),
                     url: "https://example.com/".into(),
                     window: None,
                     active: false,
@@ -715,5 +742,20 @@ mod tests {
             ]
         );
         assert!(api.take(|_| None, Path::new("/cache")).is_empty());
+    }
+
+    #[test]
+    fn an_open_request_from_a_profile_that_is_no_container_is_refused() {
+        let api = ExtApi::with(Some(table(
+            std::mem::size_of::<ffi::cef_wubble_ext_t>(),
+            ffi::VERSION,
+        )));
+        let ctx = std::ptr::from_ref(api.queue).cast_mut().cast();
+        let url = CString::new("https://example.com/").unwrap();
+        let global = CString::new("/cache").unwrap();
+        // SAFETY: the callback as CEF would call it, with live strings.
+        unsafe { open_tab(ctx, 77, global.as_ptr(), url.as_ptr(), -1, 1) };
+        assert!(api.take(|_| None, Path::new("/cache")).is_empty());
+        assert!(ANSWERS.lock().unwrap().contains(&(77, 0)));
     }
 }

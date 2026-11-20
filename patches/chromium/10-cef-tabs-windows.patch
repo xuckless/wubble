@@ -5,7 +5,8 @@
 #   registry that makes one WindowController per (wubble window, loaded
 #   profile) (ported from Chromium's AppWindowController and AppBaseWindow),
 #   gives each wubble tab its window id (SessionTabHelper::SetWindowID), and
-#   dispatches tabs.onCreated/onRemoved/onActivated and windows.onFocusChanged
+#   dispatches tabs.onCreated/onRemoved/onActivated (onActivated also for a
+#   tab inserted active) and windows.onFocusChanged
 #   through TabsEventRouter (as its friend). BUILD.gn lists every file of the
 #   module, including those patches 20 and 30 add.
 # Why: wubble's tabs are windowless Alloy browsers; Chromium's chrome.tabs and
@@ -34,10 +35,10 @@ index 2018b0dc0..e0959f623 100644
      "libcef/browser/chrome/views/browser_platform_delegate_chrome_views.cc",
 diff --git a/libcef/browser/chrome/extensions/wubble_ext.cc b/libcef/browser/chrome/extensions/wubble_ext.cc
 new file mode 100644
-index 000000000..45112d566
+index 000000000..07ace35ce
 --- /dev/null
 +++ b/libcef/browser/chrome/extensions/wubble_ext.cc
-@@ -0,0 +1,768 @@
+@@ -0,0 +1,773 @@
 +// wubble change: wubble's tabs and windows as Chromium's extension model (see
 +// wubble_ext.h). WubbleWindowController and WubbleBaseWindow are ported from
 +// Chromium's chrome/browser/extensions/api/tabs/app_window_controller.{h,cc}
@@ -463,6 +464,11 @@ index 000000000..45112d566
 +        watches_[id] = std::make_unique<TabWatch>(contents, id);
 +        if (router) {
 +          WubbleTabsAccess::Created(router, contents, tab.index, tab.active);
++          // A tab inserted active is also activated (TabStripModel's
++          // ActiveTabChanged after the insertion).
++          if (tab.active) {
++            WubbleTabsAccess::Activated(router, contents);
++          }
 +        }
 +      } else if (router && tab.active &&
 +                 (!old->second.active || old->second.window != tab.window)) {
@@ -808,10 +814,10 @@ index 000000000..45112d566
 +}
 diff --git a/libcef/browser/chrome/extensions/wubble_ext.h b/libcef/browser/chrome/extensions/wubble_ext.h
 new file mode 100644
-index 000000000..8f14901bf
+index 000000000..8f8e60fe6
 --- /dev/null
 +++ b/libcef/browser/chrome/extensions/wubble_ext.h
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,86 @@
 +// wubble change: wubble's tabs and windows as Chromium's extension model.
 +//
 +// wubble (the embedder) owns its tabs and windows; each tab is an Alloy style
@@ -878,10 +884,12 @@ index 000000000..8f14901bf
 +bool ActivateTab(content::WebContents* contents);
 +
 +// Asks wubble to open |url| as a tab of |profile| in the window with the
-+// extension id |window_id| (-1: the current one). |callback| gets the new
-+// tab's contents, or null when wubble refused or went away. False (and
++// extension id |window_id| (-1: the current one). |callback| gets whether
++// wubble opened it and the new tab's contents (null when refused, when wubble
++// went away, or for a tab on a page wubble draws itself). False (and
 +// |callback| dropped) when there is no delegate.
-+using OpenedCallback = base::OnceCallback<void(content::WebContents*)>;
++using OpenedCallback =
++    base::OnceCallback<void(bool opened, content::WebContents* contents)>;
 +bool OpenTab(Profile* profile,
 +             const GURL& url,
 +             int window_id,
@@ -898,10 +906,10 @@ index 000000000..8f14901bf
 +#endif  // CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_WUBBLE_EXT_H_
 diff --git a/libcef/browser/chrome/extensions/wubble_ext_capi.h b/libcef/browser/chrome/extensions/wubble_ext_capi.h
 new file mode 100644
-index 000000000..99a57db7a
+index 000000000..70a36f148
 --- /dev/null
 +++ b/libcef/browser/chrome/extensions/wubble_ext_capi.h
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,106 @@
 +// wubble change: the plain C table wubble (the embedder) looks up at run time
 +// to host the chrome.tabs, chrome.windows and chrome.action APIs on its own
 +// tabs and windows. Not a translated CEF API: one exported cef_* function
@@ -985,7 +993,8 @@ index 000000000..99a57db7a
 +                    size_t window_count,
 +                    const cef_wubble_ext_tab_t* tabs,
 +                    size_t tab_count);
-+  // Answers open_tab; |browser_id| 0: refused.
++  // Answers open_tab; |browser_id| 0: refused, -1: opened on a page wubble
++  // draws itself (no browser, so no tab object).
 +  void (*tab_opened)(int request_id, int browser_id);
 +  // Runs the action as a click on the tab: 0 nothing ran, 1 ran (onClicked or
 +  // blocked scripts), 2 it has a popup (*popup_url set; free_string it).

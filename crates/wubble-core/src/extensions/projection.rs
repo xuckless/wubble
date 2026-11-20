@@ -14,6 +14,7 @@
 //! - The focused window is the Model's last one.
 
 use crate::model::Model;
+use crate::pages::InternalPage;
 use crate::space::{Item, Space, SpaceId};
 use crate::tab::TabId;
 use crate::window::{Shown, WindowId};
@@ -107,6 +108,18 @@ pub fn project(model: &Model, live: impl Fn(TabId) -> bool) -> Projection {
         }
     }
     out
+}
+
+/// The page a tab an extension opens on `url` shows: Chrome's new-tab page (what `tabs.create`
+/// without a URL asks for) is wubble's start page; any other URL is itself.
+pub fn opened_url(url: &str) -> &str {
+    let page = url.trim().trim_end_matches('/');
+    let new_tab = ["chrome://newtab", "chrome://new-tab-page"];
+    if new_tab.iter().any(|n| n.eq_ignore_ascii_case(page)) {
+        InternalPage::Start.url()
+    } else {
+        url
+    }
 }
 
 /// `space`'s tabs in sidebar order with (active, pinned); active only when `may_be_active`.
@@ -297,6 +310,19 @@ mod tests {
                 tab(3, 9, 0, true, false),
             ]
         );
+    }
+
+    #[test]
+    fn chromes_new_tab_page_opens_as_the_start_page() {
+        for url in [
+            "chrome://newtab/",
+            "chrome://newtab",
+            "chrome://new-tab-page/",
+        ] {
+            assert_eq!(opened_url(url), "wubble://start");
+        }
+        assert_eq!(opened_url("https://a.test/"), "https://a.test/");
+        assert_eq!(opened_url("chrome://settings/"), "chrome://settings/");
     }
 
     #[test]

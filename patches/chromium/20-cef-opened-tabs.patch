@@ -1,6 +1,7 @@
 # What: tabs extensions open are opened by wubble: wubble_ext_open.cc keeps
 #   the pending requests (delegate.open_tab, answered by tab_opened with the
-#   new tab's browser, or 0 to refuse; all fail when the delegate goes), and
+#   new tab's browser, 0 to refuse, or -1 for a tab on a page wubble draws
+#   itself, which has no browser; all fail when the delegate goes), and
 #   ChromeContentBrowserClientCef::OpenURL sends service workers'
 #   clients.openWindow there when wubble hosts the APIs.
 # Why: without a Browser, Chromium either fails (tabs.create) or makes an
@@ -9,7 +10,7 @@
 #   and which blocks shutdown.
 # Applies in: chromium/src/cef (git apply -p1), after 10-cef-tabs-windows.
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-index f990219e7..775ededa2 100644
+index f990219e7..2ec70c3bf 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 @@ -16,6 +16,7 @@
@@ -29,7 +30,7 @@ index f990219e7..775ededa2 100644
  #include "content/public/browser/render_process_host.h"
  #include "content/public/browser/render_view_host.h"
  #include "content/public/browser/render_widget_host.h"
-@@ -402,6 +405,21 @@ base::OnceClosure ChromeContentBrowserClientCef::SelectClientCertificate(
+@@ -402,6 +405,27 @@ base::OnceClosure ChromeContentBrowserClientCef::SelectClientCertificate(
    return base::OnceClosure();
  }
  
@@ -41,7 +42,13 @@ index f990219e7..775ededa2 100644
 +  if (cef::wubble::IsActive()) {
 +    cef::wubble::OpenTab(
 +        Profile::FromBrowserContext(site_instance->GetBrowserContext()),
-+        params.url, /*window_id=*/-1, /*active=*/true, std::move(callback));
++        params.url, /*window_id=*/-1, /*active=*/true,
++        base::BindOnce(
++            [](base::OnceCallback<void(content::WebContents*)> done,
++               bool /*opened*/, content::WebContents* contents) {
++              std::move(done).Run(contents);
++            },
++            std::move(callback)));
 +    return;
 +  }
 +  ChromeContentBrowserClient::OpenURL(site_instance, params,
@@ -70,10 +77,10 @@ index c7dc8039c..6d6d18749 100644
                         const GURL& opener_top_level_frame_url,
 diff --git a/libcef/browser/chrome/extensions/wubble_ext_open.cc b/libcef/browser/chrome/extensions/wubble_ext_open.cc
 new file mode 100644
-index 000000000..09054fe47
+index 000000000..f5ec66555
 --- /dev/null
 +++ b/libcef/browser/chrome/extensions/wubble_ext_open.cc
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,73 @@
 +// wubble change: tabs extensions open (tabs.create, runtime.openOptionsPage,
 +// clients.openWindow) are opened by wubble, which decides where they go, and
 +// answered with the new tab's contents (see wubble_ext.h).
@@ -132,14 +139,15 @@ index 000000000..09054fe47
 +  }
 +  OpenedCallback callback = std::move(it->second);
 +  pending().callbacks.erase(it);
-+  std::move(callback).Run(ContentsOf(browser_id));
++  content::WebContents* contents = ContentsOf(browser_id);
++  std::move(callback).Run(browser_id == -1 || contents, contents);
 +}
 +
 +void FailPendingOpens() {
 +  auto callbacks = std::move(pending().callbacks);
 +  pending().callbacks.clear();
 +  for (auto& [request, callback] : callbacks) {
-+    std::move(callback).Run(nullptr);
++    std::move(callback).Run(false, nullptr);
 +  }
 +}
 +

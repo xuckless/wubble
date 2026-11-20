@@ -1,5 +1,6 @@
 # What: tabs.create without a Browser asks wubble (RespondLater, answered in
-#   the new TabsCreateFunction::OnWubbleTabOpened with the tab object);
+#   the new TabsCreateFunction::OnWubbleTabOpened with the tab object, or
+#   none for a tab on a page wubble draws itself);
 #   runtime.openOptionsPage the same; windows.create is refused with
 #   "windows.create is not supported in wubble" while wubble hosts the APIs.
 # Why: see 20-cef-opened-tabs.patch; windows.create would make an unmanaged
@@ -42,18 +43,20 @@
    // We didn't find a browser. Bail.
    // TODO(https://crbug.com/468223125): This isn't consistent, since sometimes
    // we *will* create a new browser below.
-@@ -2571,6 +2592,27 @@
+@@ -2571,6 +2592,29 @@
    OpenTabInBrowser(*browser, opener);
  }
  
 +#if BUILDFLAG(ENABLE_CEF)
 +// wubble change.
-+void TabsCreateFunction::OnWubbleTabOpened(content::WebContents* contents) {
-+  if (!contents) {
++void TabsCreateFunction::OnWubbleTabOpened(bool opened,
++                                           content::WebContents* contents) {
++  if (!opened) {
 +    Respond(Error("wubble did not open the tab"));
 +    return;
 +  }
-+  if (has_callback()) {
++  // A tab on a page wubble draws itself has no contents to describe.
++  if (contents && has_callback()) {
 +    Respond(WithArguments(
 +        ExtensionTabUtil::CreateTabObject(
 +            contents,
@@ -80,13 +83,14 @@
  #include "base/memory/raw_ref.h"
  #include "base/memory/scoped_refptr.h"
  #include "base/types/expected.h"
-@@ -326,6 +327,11 @@
+@@ -326,6 +327,12 @@
    void OpenTabInBrowser(BrowserWindowInterface& browser,
                          content::WebContents* opener_tab);
  
 +#if BUILDFLAG(ENABLE_CEF)
-+  // wubble change: wubble opened the tab (null: it did not).
-+  void OnWubbleTabOpened(content::WebContents* contents);
++  // wubble change: wubble answered (no contents: refused, or a page wubble
++  // draws itself).
++  void OnWubbleTabOpened(bool opened, content::WebContents* contents);
 +#endif
 +
    // Stashed properties, since the browser window to use may be created
@@ -106,7 +110,7 @@
  #include "extensions/browser/delayed_install_manager.h"
  #include "extensions/browser/extension_registrar.h"
  #include "extensions/browser/extension_system.h"
-@@ -412,6 +417,21 @@
+@@ -412,6 +417,19 @@
    BrowserWindowInterface* browser =
        extensions::browser_window_util::GetLastActiveNormalBrowserWithProfile(
            *profile, /*include_incognito_or_parent=*/false);
@@ -117,10 +121,8 @@
 +        profile, extensions::OptionsPageInfo::GetOptionsPage(extension),
 +        /*window_id=*/-1, /*active=*/true,
 +        base::BindOnce(
-+            [](base::OnceCallback<void(bool)> done,
-+               content::WebContents* contents) {
-+              std::move(done).Run(contents != nullptr);
-+            },
++            [](base::OnceCallback<void(bool)> done, bool opened,
++               content::WebContents* contents) { std::move(done).Run(opened); },
 +            std::move(callback)));
 +    return;
 +  }

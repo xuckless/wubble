@@ -98,6 +98,15 @@ pub enum Command {
         url: String,
         opener: TabId,
     },
+    /// A tab an extension opened (tabs.create, runtime.openOptionsPage, clients.openWindow):
+    /// last in `space` (`None`: the active Space), in the asking extension's `container` (its
+    /// Chrome profile, so the tab is the extension's to see), shown when `show`.
+    ExtensionTab {
+        url: String,
+        container: ContainerId,
+        space: Option<SpaceId>,
+        show: bool,
+    },
     CloseTab(TabId),
     /// Closes each of these tabs (the tab menu's "Close Tabs Below", a folder's "Close Folder").
     CloseTabs(Vec<TabId>),
@@ -916,6 +925,24 @@ impl Model {
         }
         let mut fx = vec![create];
         // one opened from a Little or Popup window's page shows in the Main window
+        if show {
+            self.spaces[si].active = Some(id);
+            fx.push(Effect::ActivateTab(id));
+        }
+        fx
+    }
+
+    fn extension_tab(
+        &mut self,
+        url: String,
+        container: ContainerId,
+        space: Option<SpaceId>,
+        show: bool,
+    ) -> Vec<Effect> {
+        let Some((id, si, create)) = self.place_new_tab(url, Some(container), None, space) else {
+            return vec![];
+        };
+        let mut fx = vec![create];
         if show {
             self.spaces[si].active = Some(id);
             fx.push(Effect::ActivateTab(id));
@@ -1835,6 +1862,12 @@ pub fn apply(mut m: Model, command: Command) -> (Model, Vec<Effect>) {
             .map(|(_, _, create)| create)
             .into_iter()
             .collect(),
+        Command::ExtensionTab {
+            url,
+            container,
+            space,
+            show,
+        } => m.extension_tab(url, container, space, show),
         Command::CloseTab(t) => m.close_tab(t),
         Command::CloseTabs(tabs) => tabs.into_iter().flat_map(|t| m.close_tab(t)).collect(),
         Command::ActivateTab(t) => m.activate_tab(t),

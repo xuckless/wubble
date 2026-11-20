@@ -23,7 +23,7 @@ mod busy;
 mod devtools;
 mod downloads;
 mod drag;
-mod ext_tabs;
+pub(crate) mod ext_tabs;
 mod external;
 mod gallery;
 mod gesture;
@@ -3463,7 +3463,7 @@ fn external_target(command: &Command) -> Option<(Option<TabId>, &str)> {
         Command::Navigate { tab, url } => (Some(*tab), url),
         Command::NewTab { url, opener, .. } => (*opener, url),
         Command::BackgroundTab { url, opener } => (Some(*opener), url),
-        Command::OpenBeside { url } => (None, url),
+        Command::OpenBeside { url } | Command::ExtensionTab { url, .. } => (None, url),
         _ => return None,
     };
     let external = InternalPage::from_url(url).is_none() && wubble_engine::page::is_external(url);

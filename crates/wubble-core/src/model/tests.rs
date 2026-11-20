@@ -3416,3 +3416,53 @@ fn shell_tabs_have_no_opener_and_close_to_their_neighbour() {
     let (m, _) = run(m, Command::CloseTab(t));
     assert_eq!(active(&m), Some(ids[2]));
 }
+
+fn extension_tab(container: ContainerId, space: Option<SpaceId>, show: bool) -> Command {
+    Command::ExtensionTab {
+        url: "https://ext.test".into(),
+        container,
+        space,
+        show,
+    }
+}
+
+#[test]
+fn an_extension_tab_takes_the_asking_extensions_container_not_the_shown_tabs() {
+    let (m, ids) = with_tabs(2);
+    let (m, _) = run(m, Command::NewContainer { name: "W".into() });
+    let work = m.containers[1].id;
+    let (m, fx) = run(m, extension_tab(work, None, false));
+    let [Effect::CreateTab { tab, container, .. }] = fx[..] else {
+        panic!("{fx:?}")
+    };
+    assert_eq!(container, work);
+    // Last in the active Space (tabs.create's default index), the shown tab still shown.
+    let space = &m.spaces[m.space_idx(m.active_space()).unwrap()];
+    assert_eq!(space.items.last(), Some(&Item::Tab(tab)));
+    assert_eq!(active(&m), Some(ids[1]));
+    assert_eq!(m.tabs[&tab].opener, None);
+}
+
+#[test]
+fn a_shown_extension_tab_goes_to_its_space_and_becomes_its_active_tab() {
+    let (m, _) = with_tabs(1);
+    let (m, s1) = add_space(m, D);
+    let (m, fx) = run(m, extension_tab(D, Some(s1), true));
+    let Some(Effect::CreateTab { tab, .. }) = fx.first().cloned() else {
+        panic!("{fx:?}")
+    };
+    assert!(fx.contains(&Effect::ActivateTab(tab)));
+    let space = &m.spaces[m.space_idx(s1).unwrap()];
+    assert_eq!(space.active, Some(tab));
+    assert!(space.items.contains(&Item::Tab(tab)));
+}
+
+#[test]
+fn an_extension_tab_in_a_gone_container_or_space_opens_nothing() {
+    let (m, _) = with_tabs(1);
+    let (m2, fx) = run(m.clone(), extension_tab(ContainerId(99), None, true));
+    assert!(fx.is_empty());
+    assert_eq!(m2.tabs.len(), m.tabs.len());
+    let (_, fx) = run(m, extension_tab(D, Some(SpaceId(99)), true));
+    assert!(fx.is_empty());
+}

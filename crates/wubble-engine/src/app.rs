@@ -25,7 +25,7 @@ pub use welding::PumpScheduler;
 use welding::{CefRuntime, CefRuntimeConfig, CefSandboxMode};
 use wubble_core::pump::{self, PumpEffect, PumpEvent, PumpState};
 
-use crate::ext_api::{ActionClick, ActionState, ExtApi, ExtRequest, ExtViewTab};
+use crate::ext_api::{ActionClick, ActionState, ExtApi, ExtRequest, ExtViewTab, TabOpened};
 use crate::filter::{ContentFilter, ResponseObserver};
 use crate::nav::WebEvent;
 use crate::page::{PageEvent, PageQueue};
@@ -751,6 +751,14 @@ fn linux_sandbox_warning(read: &dyn Fn(&str) -> Option<String>) -> Option<String
 
 /// The CEF version wubble is built against (the bundled libcef comes from the
 /// same `cef-dll-sys` release).
+/// `view`'s browser id while it is open.
+fn open_browser(views: &[(ViewId, View)], view: ViewId) -> Option<i32> {
+    views
+        .iter()
+        .find(|(id, v)| *id == view && v.is_open())
+        .map(|(_, v)| v.browser_id())
+}
+
 pub fn version() -> &'static str {
     nul_terminated(cef::sys::CEF_VERSION)
 }
@@ -1108,17 +1116,21 @@ impl Engine {
         self.ext.take(view_of, self.profiles.root())
     }
 
-    /// Answers [`ExtRequest::OpenTab`] `request` with the view the host opened for it (`None`:
-    /// refused). The projection is sent first, so the tab extensions get back has its place.
-    pub fn answer_open_tab(&mut self, request: i32, view: Option<ViewId>) {
+    /// Answers [`ExtRequest::OpenTab`] `request` with what the host did. The projection is
+    /// sent first, so the tab extensions get back has its place.
+    pub fn answer_open_tab(&mut self, request: i32, answer: TabOpened) {
         self.sync_ext();
-        let browser = view.and_then(|v| self.open_browser(v));
+        let browser = match answer {
+            TabOpened::View(v) => open_browser(&self.views, v).unwrap_or(0),
+            TabOpened::Page => -1,
+            TabOpened::Refused => 0,
+        };
         self.ext.tab_opened(request, browser);
     }
 
     /// Clicks extension `extension`'s action on `view`'s page.
     pub fn action_click(&self, extension: &str, view: ViewId) -> ActionClick {
-        match self.open_browser(view) {
+        match open_browser(&self.views, view) {
             Some(browser) => self.ext.action_click(extension, browser),
             None => ActionClick::None,
         }
@@ -1126,25 +1138,13 @@ impl Engine {
 
     /// Extension `extension`'s action as `view`'s page sees it; `None` without one.
     pub fn action_state(&self, extension: &str, view: ViewId) -> Option<ActionState> {
-        self.ext.action_state(extension, self.open_browser(view)?)
-    }
-
-    /// `view`'s browser id while it is open.
-    fn open_browser(&self, view: ViewId) -> Option<i32> {
-        self.views
-            .iter()
-            .find(|(id, v)| *id == view && v.is_open())
-            .map(|(_, v)| v.browser_id())
+        self.ext
+            .action_state(extension, open_browser(&self.views, view)?)
     }
 
     fn sync_ext(&mut self) {
         let views = &self.views;
-        self.ext.sync(|view| {
-            views
-                .iter()
-                .find(|(id, v)| *id == view && v.is_open())
-                .map(|(_, v)| v.browser_id())
-        });
+        self.ext.sync(|view| open_browser(views, view));
     }
 
     /// CPU `OnPaint` frames across every view so far, closed ones included;

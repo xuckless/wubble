@@ -37,6 +37,22 @@ async function apis(sender) {
     wake();
   });
   chrome.tabs.onUpdated.removeListener(onUpdated);
+  // A tab created active is activated too (onActivated, seen before tabs.create answers).
+  const activated = new Set();
+  let wakeActive = () => {};
+  const onActivated = (info) => {
+    activated.add(info.tabId);
+    wakeActive();
+  };
+  chrome.tabs.onActivated.addListener(onActivated);
+  const shown = await chrome.tabs.create({ url: new URL('/article?shown', sender.url).href });
+  await new Promise((resolve) => {
+    wakeActive = () => activated.has(shown.id) && resolve();
+    wakeActive();
+  });
+  chrome.tabs.onActivated.removeListener(onActivated);
+  // No URL: wubble's start page, which has no tab object.
+  const start = await chrome.tabs.create({});
   const echo = await chrome.tabs.sendMessage(sender.tab.id, { hello: 'tab' });
   await chrome.action.setBadgeText({ text: '7' });
   return {
@@ -44,6 +60,8 @@ async function apis(sender) {
     query: active && { id: active.id, index: active.index, url: active.url, window: active.windowId },
     sender: sender.tab.id,
     created: { id: created.id, index: created.index, active: created.active, window: created.windowId },
+    shown: { id: shown.id, index: shown.index, active: shown.active },
+    start: start === undefined ? 'none' : 'tab',
     echo: echo && echo.echo,
   };
 }

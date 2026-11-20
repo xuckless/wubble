@@ -171,6 +171,7 @@ Open, to build or check:
 - [ ] Extensions: patches P1 (tabs.query, tab events, windows), P2 (extension-opened tabs and windows), P3 (action button and popup), P4 (permission prompts); then the install page with permissions and "restart to apply"
 - [ ] Extensions: `chrome.tabs`/`windows`/actions on wubble's model; action buttons, popups, options, install, Web Store
 - [x] Extensions: P1 to P3 as the patch queue `patches/chromium` (`scripts/build-cef.sh patch`, `cef_wubble_ext_v1`): `chrome.tabs`, `chrome.windows`, `chrome.action` (engine API) and extension-opened tabs on wubble's model; `--smoke extensions` checks them on a patched CEF, Linux (21af397)
+- [x] Extensions review fixes: opened tabs in the asking container and the named window's Space, the global profile's opens refused, `tabs.create({})` opens the start page, onActivated for a tab created active, `--smoke extensions` through the host's own request code
 - [ ] Extensions: the action buttons, badge and popup UI on the engine's `action_click`/`action_state`/`ActionChanged` (needs the owner's design)
 - [ ] Extensions: the patch queue on macOS and Windows builds, and in the release's CEF (owner go)
 - [ ] Extensions: `tabs.onReplaced` when a sleeping tab wakes, `onMoved`/`onAttached`/`onDetached`, window bounds; `windows.create` is refused for now
