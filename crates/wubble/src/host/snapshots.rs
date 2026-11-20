@@ -152,5 +152,8 @@ impl Host {
             smoke.heard.replaced.insert(tab);
         }
         self.snapshots.book.release(tab);
+        if self.checks.mcp_smoke.is_some() {
+            self.mcp_smoke_frame(tab);
+        }
     }
 }

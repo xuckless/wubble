@@ -48,6 +48,8 @@ const WAIT: Duration = Duration::from_secs(30);
 const READ_ITEMS: usize = 500;
 /// Items a ref is looked up among.
 const ALL_ITEMS: usize = 10_000;
+/// `--smoke mcp`'s tab switch: the step that hides the sidebar (`Host::mcp_smoke_switch`).
+const SWITCH_RESIZE: usize = 4;
 /// The page a session's first tab opens on.
 const BLANK: &str = "about:blank";
 
@@ -1661,13 +1663,123 @@ impl Host {
             Ok(steps) => steps,
             Err(e) => return self.fail(e),
         };
-        self.store.pop_closed(move |closed| {
-            let _ = slint::invoke_from_event_loop(move || {
-                with_host(|host| match closed {
-                    Some(c) => host.fail(format!("the user's closed tabs hold {}", c.url)),
-                    None => host.mcp_smoke_history(steps),
-                })
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.steps = steps;
+        }
+        self.mcp_smoke_switch(0);
+    }
+
+    /// `--smoke mcp`, after the client: the windowed session's two tabs in the window: the
+    /// first shown, the second, the first again (the same size), the second, then the sidebar
+    /// hidden (the second's pane widens, `SWITCH_RESIZE`), then the first again. A tab shown again must present a frame of its own at its pane's new size:
+    /// an agent's view is never hidden for CEF, so nothing else replaces the small snapshot its
+    /// pane stands in with, nor the size it had while unshown. Each step waits for its tab's
+    /// frame (`frame_arrived`); a deadline says which never came.
+    pub(super) fn mcp_smoke_switch(&mut self, step: usize) {
+        let tabs: Vec<TabId> = self
+            .agents
+            .sessions
+            .values()
+            .find(|s| matches!(&s.state, State::Running { grant, .. } if grant.mode == Mode::Windowed))
+            .and_then(|s| s.space)
+            .map(|(space, _)| self.model.order(space))
+            .unwrap_or_default();
+        let [first, second] = tabs[..] else {
+            return self.fail(format!("the windowed session has tabs {tabs:?}, not two"));
+        };
+        let Some(&tab) = [first, second, first, second, second, first].get(step) else {
+            // shown again at full size: on to the user's closed tabs and history
+            let steps = self.checks.mcp_smoke.as_ref().map_or(0, |r| r.steps);
+            self.store.pop_closed(move |closed| {
+                let _ = slint::invoke_from_event_loop(move || {
+                    with_host(|host| match closed {
+                        Some(c) => host.fail(format!("the user's closed tabs hold {}", c.url)),
+                        None => host.mcp_smoke_history(steps),
+                    })
+                });
             });
+            return;
+        };
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.switch = Some((step, tab));
+        }
+        if step == SWITCH_RESIZE {
+            // the sidebar hides: the pane widens (the shell's callback calls back into the host:
+            // later, outside it)
+            let _ = self.w.window.upgrade_in_event_loop(|window| {
+                window.invoke_sidebar_mode_requested(wubble_ui::SidebarMode::Hidden);
+            });
+        } else {
+            self.dispatch(Command::ActivateTab(tab));
+            // already on screen with a frame of its own (the first step, if it was shown)
+            if self.w.frames.contains_key(&tab) && !self.snapshots.standing_in(tab) {
+                return self.mcp_smoke_frame(tab);
+            }
+        }
+        let deadline = slint::Timer::default();
+        deadline.start(slint::TimerMode::SingleShot, WAIT, move || {
+            with_host(|h| {
+                if h.checks.mcp_smoke.as_ref().and_then(|r| r.switch) == Some((step, tab)) {
+                    let shows = h.w.frames.get(&tab).map(|f| f.image.size());
+                    let snapshot = if h.snapshots.standing_in(tab) {
+                        ", its snapshot"
+                    } else {
+                        ""
+                    };
+                    h.fail(format!(
+                        "agent tab {} (switch step {step}) got no frame at its pane's size: \
+                         the pane shows {shows:?}{snapshot}",
+                        tab.0
+                    ));
+                }
+            });
+        });
+        if let Some(run) = &mut self.checks.mcp_smoke {
+            run.deadline = deadline;
+        }
+    }
+
+    /// `--smoke mcp`: a frame of `tab` reached its pane. The switch's step waiting for it moves
+    /// on once the pane shows a frame of its own at its view's size (CEF may paint a pixel
+    /// more), after the resize one at a new size; later, outside the frame loop.
+    pub(super) fn mcp_smoke_frame(&mut self, tab: TabId) {
+        let Some((step, waiting)) = self.checks.mcp_smoke.as_ref().and_then(|r| r.switch) else {
+            return;
+        };
+        if waiting != tab {
+            return;
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            with_host(|h| {
+                if h.checks.mcp_smoke.as_ref().and_then(|r| r.switch) != Some((step, tab)) {
+                    return;
+                }
+                let wanted = h.tab_view(tab).and_then(|v| v.wanted_frame());
+                let shows = h.w.frames.get(&tab).map(|f| f.image.size());
+                let Some(run) = &mut h.checks.mcp_smoke else {
+                    return;
+                };
+                let (Some(w), Some(s)) = (wanted, shows) else {
+                    return;
+                };
+                let full = s.width + 1 >= w.width && s.height + 1 >= w.height;
+                let resized = run
+                    .sized
+                    .is_some_and(|before| before != (s.width, s.height));
+                // not yet: the resize's frame, or a frame painted before it, comes later
+                if !full || (step >= SWITCH_RESIZE && !resized) {
+                    return;
+                }
+                if step + 1 == SWITCH_RESIZE {
+                    run.sized = Some((s.width, s.height));
+                }
+                run.switch = None;
+                println!(
+                    "smoke: mcp switch step {step} tab {}: {}x{}",
+                    tab.0, s.width, s.height
+                );
+                h.mcp_smoke_switch(step + 1);
+            })
         });
     }
 

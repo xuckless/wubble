@@ -1022,9 +1022,15 @@ impl Host {
                 // An agent session's page is never shown, yet must lay out, keep its
                 // accessibility tree and paint for screenshots: visible to CEF, in no window
                 // (`host/agent.rs`).
-                let visible = visible || self.agent_drives(tab);
+                let driven = self.agent_drives(tab);
                 if let Some(view) = self.tab_view(tab) {
-                    view.set_visible(visible);
+                    // Shown in a pane, it must paint now: a hidden view's show asks CEF for a
+                    // frame (`View::set_visible`), but this one was never hidden, and a still
+                    // page paints nothing new, so its pane kept the small snapshot it stood in.
+                    if visible && driven && view.is_visible() {
+                        view.repaint();
+                    }
+                    view.set_visible(visible || driven);
                 }
                 self.pace(PaceEvent::Wake);
             }

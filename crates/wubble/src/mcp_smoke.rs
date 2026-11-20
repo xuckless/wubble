@@ -13,7 +13,9 @@
 //! the sites, the window choice) and answers it with the pointer, through the window's event
 //! path (`Host::mcp_smoke_answer`): Deny for the first, Allow for the second (headless, as asked),
 //! and for the third a press on Windowed, then Allow; the Space each approval opens must be in
-//! the mode the sheet showed.
+//! the mode the sheet showed. Last the host switches between that windowed session's two tabs
+//! in the window, and hides the sidebar while the second shows (its pane widens): the first must
+//! come back at its pane's new size, not its hidden-tab snapshot nor its old size.
 //! Every step waits for its answer: the browser bounds each call by its deadline. Run by hand
 //! (it opens a window), under `scripts/headless.sh` and `timeout`.
 
@@ -274,20 +276,41 @@ fn run(socket: &Path, page: &str) -> Result<(usize, Client), String> {
     }
     c.step("stop_session", "the handle is dead");
     // Left running: the browser's quit must end it and close its Space (checked by the host).
-    c.ok(
+    // The sheet makes it windowed; two tabs on the still page, which the host switches between
+    // in the window (`Host::mcp_smoke_switch`).
+    let started = c.ok(
         "start_session",
         json!({"purpose": "ended by the quit", "headless": true}),
     )?;
-    c.step("start_session", "a second one, left for the quit");
+    let started: Value = serde_json::from_str(&text(&started)).map_err(|e| e.to_string())?;
+    let session = started["session"].as_str().unwrap_or_default().to_owned();
+    let tab = started["tab"].as_str().unwrap_or_default().to_owned();
+    c.ok(
+        "navigate",
+        json!({"session": session, "tab": tab, "url": page}),
+    )?;
+    c.ok("open_tab", json!({"session": session, "url": page}))?;
+    c.step(
+        "start_session",
+        "a second one, windowed on the sheet, two tabs, left for the quit",
+    );
     Ok((c.steps, c))
 }
 
-/// The host's side of the run: the sheets it has allowed, and the window choice the next
-/// approval must open the session's Space with (`Host::mcp_smoke_answer`).
+/// The host's side of the run: the sheets it has allowed, the window choice the next approval
+/// must open the session's Space with (`Host::mcp_smoke_answer`), and the tab switch after the
+/// client.
 #[derive(Default)]
 pub struct McpSmoke {
     pub allowed: usize,
     pub expect: Option<wubble_core::agent::Mode>,
+    /// The client's step count, kept while the host switches tabs.
+    pub steps: usize,
+    /// The switch's step and the tab whose frame it waits for (`Host::mcp_smoke_switch`).
+    pub switch: Option<(usize, wubble_core::tab::TabId)>,
+    /// The panes' frame size before the switch hid the sidebar.
+    pub sized: Option<(u32, u32)>,
+    pub deadline: slint::Timer,
 }
 
 /// The approval sheet on screen, found by its elements (their ids and roles, in a debug build)
