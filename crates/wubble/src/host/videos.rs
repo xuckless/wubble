@@ -1247,12 +1247,14 @@ impl Host {
         let pip = self.pip_smoke_seen();
         let sponsor = tab.and_then(|t| self.videos.sponsor_tabs.get(&t));
         let overlay = tab.and_then(|t| self.videos.overlays.get(&t));
-        let toast = self
-            .w
-            .window
-            .upgrade()
+        let window = self.w.window.upgrade();
+        let toast = window
+            .as_ref()
             .map(|w| (w.get_toast_serial(), w.get_toast_text().to_string()))
             .unwrap_or_default();
+        // what the pointer (`video_smoke_pointer`, the same window) finds: `VideoControls`
+        // shows only over a video with a size
+        let controls = window.is_some_and(|w| w.get_video().w > 0.0);
         smoke::Seen {
             video,
             jumps: sponsor.map_or(0, |s| s.sent.as_ref().map_or(0, |(_, t)| t.len())),
@@ -1260,6 +1262,7 @@ impl Host {
             fired,
             pip,
             now: now_ms() as u64,
+            controls,
             strip: overlay.is_some_and(Overlay::shown),
             collapsed: overlay.is_some_and(Overlay::collapsed),
             speeds: overlay.is_some_and(Overlay::speeds_open),

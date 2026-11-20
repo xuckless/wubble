@@ -200,6 +200,9 @@ pub enum Step {
     /// Waiting for the downloader to list the clip and the page to attach its MediaKeys.
     SaveDrm,
     SaveLoading,
+    /// Loaded: waiting for the new document's video and its controls on screen (the pointer
+    /// finds them there).
+    SaveFound,
     /// Waiting for the button.
     SaveShown,
     /// The button clicked: waiting for the download to start, then for its file.
@@ -267,6 +270,9 @@ pub struct Seen {
     pub pip: PipSeen,
     /// The host's clock, ms.
     pub now: u64,
+    /// The window lays the video's controls over it (its `VideoView` has a size): only then
+    /// can the pointer find them.
+    pub controls: bool,
     /// The strip is open (not hidden, not tucked away).
     pub strip: bool,
     /// The strip is tucked into its tab, and the tab shows.
@@ -595,7 +601,9 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
         ),
 
         // ----- the strip, through the pointer
-        (StripPrep, Snapshot(_)) if video.as_ref().is_some_and(|v| !v.paused && v.looped) => {
+        (StripPrep, Snapshot(seen))
+            if seen.controls && video.as_ref().is_some_and(|v| !v.paused && v.looped) =>
+        {
             to(s, StripShown, vec![Action::PointTo(Spot::Video)])
         }
         (StripShown, Snapshot(seen)) if seen.strip => to(
@@ -763,7 +771,14 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
                 ],
             )
         }
-        (SaveLoading, Web(e)) if loaded(e) => to(s, SaveShown, vec![Action::PointTo(Spot::Video)]),
+        // A load ends before the new document's kit reports its video: until then the window
+        // has no controls over it for the pointer to find.
+        (SaveLoading, Web(e)) if loaded(e) => to(s, SaveFound, vec![]),
+        (SaveFound, Snapshot(seen))
+            if seen.controls && video.as_ref().is_some_and(|v| !v.drm && !v.paused) =>
+        {
+            to(s, SaveShown, vec![Action::PointTo(Spot::Video)])
+        }
         (SaveShown, Snapshot(seen))
             if seen.strip
                 && seen.save == Some(Save::Offered)
@@ -1136,6 +1151,7 @@ mod tests {
         let mut s = VideoSmoke::video("http://127.0.0.1:1".into(), Requests::default());
         s.step = Step::StripLastFrame { serial: 0 };
         let strip = |save, ready| Seen {
+            controls: true,
             strip: true,
             toast: (1, String::new()),
             save: Some(save),
@@ -1168,14 +1184,30 @@ mod tests {
             s,
             Input::Snapshot(&Seen {
                 save: Some(Save::Absent),
-                ..drm
+                ..drm.clone()
             }),
         );
         assert_eq!(
             a.last(),
             Some(&Action::Load("http://127.0.0.1:1/video.html?save".into()))
         );
-        let (s, _) = next(s, Input::Web(&done));
+        // Loaded: the pointer waits for the new document's video under its controls (the old
+        // one's, or a video the window has no controls over yet, is no place to point at).
+        let (s, a) = next(s, Input::Web(&done));
+        assert!(
+            a.is_empty(),
+            "the load ends before the kit reports the video"
+        );
+        let (s, a) = next(s, Input::Snapshot(&drm));
+        assert!(a.is_empty(), "the old document's video");
+        let bare = Seen {
+            controls: false,
+            ..strip(Save::Absent, true)
+        };
+        let (s, a) = next(s, Input::Snapshot(&bare));
+        assert!(a.is_empty(), "no controls on screen yet");
+        let (s, a) = next(s, Input::Snapshot(&strip(Save::Absent, true)));
+        assert_eq!(a, vec![Action::PointTo(Spot::Video)]);
         let (s, a) = next(s, Input::Snapshot(&strip(Save::Offered, true)));
         assert_eq!(a.last(), Some(&Action::Click(Spot::Button("download"))));
         // The click must leave the video playing and the strip open.
