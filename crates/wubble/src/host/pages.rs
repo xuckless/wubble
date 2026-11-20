@@ -11,10 +11,12 @@ use std::time::{Duration, Instant};
 use slint::ComponentHandle;
 use wubble_core::apply::{self, Applied};
 use wubble_core::model::Command;
+use wubble_core::overlay::Kind;
 use wubble_core::pages::{
     self, BookmarkEdit, BookmarkRow, ClearRange, HistoryRow, InternalPage, LoginView, VaultStatus,
 };
 use wubble_core::settings as defs;
+use wubble_core::tab::TabId;
 use wubble_store::Favicon;
 use wubble_ui::{AppWindow, BookmarkSheetView, InternalPageKind};
 use wubble_vault::{RecordId, VaultAnswer, VaultCommand};
@@ -93,7 +95,9 @@ struct Bookmarks {
     icons: HashMap<String, Favicon>,
     expanded: HashSet<i64>,
     query: String,
-    sheet: Option<SheetKind>,
+    /// The open sheet, and the tab it was opened over (`wubble_core::overlay`: it closes with
+    /// that tab).
+    sheet: Option<(Option<TabId>, SheetKind)>,
     /// Bumped per opening, so the sheet restarts from its own fields.
     serial: i32,
     loaded: bool,
@@ -690,7 +694,7 @@ impl Host {
     fn render_bookmark_sheet(&self, window: &AppWindow) {
         let b = &self.pages.bookmarks;
         match &b.sheet {
-            Some(kind) => {
+            Some((_, kind)) => {
                 window.set_bookmark_sheet_view(sheet_view(kind, &b.rows, b.serial));
                 let moving = match kind {
                     SheetKind::Move { id } => Some(*id),
@@ -728,9 +732,23 @@ impl Host {
         self.bookmarks_request(Some(BookmarkEdit::Delete { id: i64::from(id) }));
     }
 
+    /// The tab the open sheet belongs to.
+    pub(super) fn bookmark_sheet_tab(&self) -> Option<TabId> {
+        self.pages
+            .bookmarks
+            .sheet
+            .as_ref()
+            .and_then(|(tab, _)| *tab)
+    }
+
+    /// Opens the sheet over the visible tab, unless an overlay that may not be replaced is up.
     fn open_sheet(&mut self, kind: SheetKind) {
+        let tab = self.shown();
+        if !self.overlay_open(Kind::BookmarkSheet, tab) {
+            return;
+        }
         let b = &mut self.pages.bookmarks;
-        b.sheet = Some(kind);
+        b.sheet = Some((tab, kind));
         b.serial = b.serial.wrapping_add(1);
         self.render_bookmarks();
     }
@@ -786,16 +804,13 @@ impl Host {
         });
     }
 
-    /// Mod+D: the sheet for the visible web page. Not while an engine dialog waits for its
-    /// answer (one sheet at a time).
+    /// Mod+D: the sheet for the visible web page (not while a page's dialog waits: one sheet at
+    /// a time, `open_sheet`).
     pub(crate) fn bookmark_page(&mut self) {
-        let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
         let Some(tab) = self.shown().and_then(|t| self.model.tabs.get(&t)) else {
             return;
         };
-        if window.get_dialog().open || !wubble_core::url::is_recordable(&tab.url) {
+        if !wubble_core::url::is_recordable(&tab.url) {
             return;
         }
         let existing = pages::bookmark_for_url(&self.pages.bookmarks.rows, &tab.url);
@@ -816,7 +831,7 @@ impl Host {
         folder: i32,
     ) {
         let b = &mut self.pages.bookmarks;
-        let Some(kind) = b.sheet.take() else {
+        let Some((_, kind)) = b.sheet.take() else {
             return;
         };
         if let SheetKind::TabFolder { folder, .. } = kind {

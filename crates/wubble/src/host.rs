@@ -28,6 +28,7 @@ mod gallery;
 mod gesture;
 mod gpu;
 mod hover;
+mod layers;
 mod look;
 mod media;
 mod memory;
@@ -1740,6 +1741,15 @@ impl Host {
     }
 
     pub(super) fn open_bar(&mut self, window: &AppWindow, mode: BarMode, query: String) {
+        // the bar takes the place of another overlay, or goes again while a page's dialog waits
+        // (wubble_core::overlay)
+        if !self.overlay_open(wubble_core::overlay::Kind::CommandBar, None) {
+            let _ = self
+                .w
+                .window
+                .upgrade_in_event_loop(|window| window.invoke_dismiss_command_bar());
+            return;
+        }
         self.bar.mode = mode;
         self.suggest_event(wubble_core::suggest::FetchEvent::Closed);
         window.set_command_query(query.as_str().into());
@@ -2974,6 +2984,15 @@ impl Host {
         if key.pressed
             && key.unmodified == Key::Named(NamedKey::Escape)
             && (self.drag_cancelled() || self.cancel_tab_drag())
+        {
+            return EventResult::PreventDefault;
+        }
+        // Esc closes the topmost shell overlay first, wherever the keys are (the page, a sheet,
+        // a menu): wubble_core::overlay.
+        if key.pressed
+            && key.unmodified == Key::Named(NamedKey::Escape)
+            && key.modifiers.keys.is_empty()
+            && self.overlay_escape(window)
         {
             return EventResult::PreventDefault;
         }
