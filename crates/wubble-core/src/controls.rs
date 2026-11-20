@@ -14,6 +14,7 @@
 
 pub mod confirm;
 pub mod hold;
+pub mod list_editor;
 pub mod menu;
 pub mod segmented;
 pub mod slider;

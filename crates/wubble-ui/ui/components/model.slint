@@ -363,8 +363,16 @@ export enum SettingControl {
 
 // One removable entry of a list: its line, and the key removing it names.
 export struct EntryItem {
+    // the whole row as one line (a screen reader's)
     label: string,
+    // what removing or editing it names
     key: string,
+    // one per column of its list editor (kit/controls/list-editor.slint)
+    cells: [string],
+    // a leading icon (a glyph path) in `tint` (transparent: the menu row's icon mist); the
+    // swatch column's dot in `tint`
+    icon: string,
+    tint: color,
 }
 
 // One filter list of the settings page's "Filter lists" section. `key` names a custom list
@@ -401,8 +409,12 @@ export struct SettingItem {
     words: [string],
     labels: [string],
     selected: int,
-    // list and map
+    // list and map: the entries, their list editor's column titles, and the host's answer to
+    // the last draft submitted to this row (a new serial each time; `note` empty: taken)
     entries: [EntryItem],
+    columns: [string],
+    answer: int,
+    note: string,
     changed: bool,
     restart: bool,
     // a choice the design picks from a Select (the search engine): its labels as menu rows;
@@ -437,6 +449,9 @@ export struct SpaceSetting {
     tint: color,
     // "personal" | "work" | "study" (SpaceIcon)
     icon: string,
+    // the colour's swatch name ("Sky"; empty for another colour) and the Space's tab count
+    colour: string,
+    tabs: int,
 }
 
 export struct AboutView {

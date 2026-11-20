@@ -34,6 +34,9 @@ pub(super) struct SettingsPage {
     query: String,
     /// Recording a new chord in the keybinding editor.
     capture: Capture,
+    /// The answer to the last draft a list editor submitted: the setting, a serial that
+    /// changes with each answer, and the refusal's note (empty: taken).
+    answer: (String, i32, &'static str),
 }
 
 impl SettingsPage {
@@ -42,6 +45,7 @@ impl SettingsPage {
             stored,
             query: String::new(),
             capture: Capture::Idle,
+            answer: (String::new(), 0, ""),
         }
     }
 
@@ -195,15 +199,44 @@ impl Host {
         }
     }
 
+    /// A list editor's "−": the entry it names leaves its setting. The Spaces list
+    /// (`pages::SPACES_LIST`) names a Space by its id: it is deleted with its tabs (the list
+    /// asked twice; the last Space stays).
     pub(crate) fn setting_entry_removed(&mut self, key: &str, entry: &str) {
+        if key == pages::SPACES_LIST {
+            if let Ok(id) = entry.parse::<u32>() {
+                self.dispatch(Command::DeleteSpace(SpaceId(id)));
+            }
+            return;
+        }
         if let Some(text) = apply::without_entry(key, &self.settings.stored, entry) {
             self.write_setting(key, &text);
         }
     }
 
+    /// A list editor's draft (`pages::submission`: its cells, and the entry it replaces when it
+    /// edits one) goes into its setting, or is refused with a note; either way the editor gets
+    /// its answer. The Spaces list's "+" adds a Space (`Model::new_space`).
     pub(crate) fn setting_entry_added(&mut self, key: &str, entry: &str) {
-        if let Some(text) = apply::with_entry(key, &self.settings.stored, entry) {
-            self.write_setting(key, &text);
+        if key == pages::SPACES_LIST {
+            let command = self.model.new_space();
+            self.dispatch(command);
+            return;
+        }
+        let draft = pages::submission(entry);
+        let text = pages::entry_text(key, &draft.cells);
+        let put = apply::put_entry(key, &self.settings.stored, draft.replacing, &text);
+        let serial = self.settings.answer.1.wrapping_add(1);
+        self.settings.answer = (
+            key.to_owned(),
+            serial,
+            put.as_ref().err().map_or("", |r| r.note()),
+        );
+        match put {
+            Ok(text) => {
+                self.write_setting(key, &text);
+            }
+            Err(_) => self.render_settings(),
         }
     }
 
@@ -400,7 +433,13 @@ fn render_page(window: &AppWindow, host: &Host) {
     let mode = SidebarMode::from(window.get_sidebar_mode());
     stored.insert(defs::SIDEBAR_MODE.key.into(), mode.id().into());
     let sections = pages::filter(&pages::settings_page(&stored), &page.query);
-    let rows = wubble_ui::settings::setting_items(&sections);
+    let mut rows = wubble_ui::settings::setting_items(&sections);
+    // the list editor that submitted a draft hears back
+    let (answered, serial, note) = &page.answer;
+    if let Some(row) = rows.iter_mut().find(|r| r.key.as_str() == answered) {
+        row.answer = *serial;
+        row.note = (*note).into();
+    }
     crate::bind::sync(window.get_settings_rows(), rows, |m| {
         window.set_settings_rows(m)
     });
@@ -452,6 +491,10 @@ fn render_page(window: &AppWindow, host: &Host) {
                 name: s.name.as_str().into(),
                 tint: slint::Color::from_rgb_u8(s.tint.0, s.tint.1, s.tint.2),
                 icon: s.icon.id().into(),
+                colour: wubble_core::space::swatch_name(s.tint)
+                    .unwrap_or_else(|| "Custom".into())
+                    .into(),
+                tabs: i32::try_from(host.model.order(s.id).len()).unwrap_or(i32::MAX),
             })
         })
         .collect();

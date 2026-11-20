@@ -377,14 +377,63 @@ pub fn without_entry(key: &str, stored: &HashMap<String, String>, entry: &str) -
 /// duplicate leaves it as it is). `None` when `key` is no list setting.
 pub fn with_entry(key: &str, stored: &HashMap<String, String>, entry: &str) -> Option<String> {
     let def = settings::find(key).filter(|d| d.kind == settings::SettingKind::List)?;
+    put_entry(key, stored, None, entry)
+        .ok()
+        .or_else(|| serde_json::to_string(&list(def, stored)).ok())
+}
+
+/// Why the list editor's draft was turned down: the note its row shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    NotAList,
+    Blank,
+    /// `routing.rules`: not `site -> Space, Container`.
+    NotARule,
+    Duplicate,
+}
+
+impl Refusal {
+    pub fn note(self) -> &'static str {
+        match self {
+            Refusal::NotAList => "This list cannot be changed here",
+            Refusal::Blank => "Type something to add",
+            Refusal::NotARule => "Needs a site and a Space, a container or both",
+            Refusal::Duplicate => "Already in the list",
+        }
+    }
+}
+
+/// The stored text of a list setting with `entry` (trimmed) added at the end, or put in the
+/// place of `replacing` (an edit in place; added at the end when that one is gone).
+pub fn put_entry(
+    key: &str,
+    stored: &HashMap<String, String>,
+    replacing: Option<&str>,
+    entry: &str,
+) -> Result<String, Refusal> {
+    let def = settings::find(key)
+        .filter(|d| d.kind == settings::SettingKind::List)
+        .ok_or(Refusal::NotAList)?;
     let mut items = list(def, stored);
     let entry = entry.trim();
-    // a malformed rule is refused rather than stored and silently ignored
-    let valid = key != settings::ROUTING_RULES.key || Rule::parse(entry).is_some();
-    if !entry.is_empty() && valid && !items.iter().any(|i| i == entry) {
-        items.push(entry.to_owned());
+    if entry.is_empty() {
+        return Err(Refusal::Blank);
     }
-    serde_json::to_string(&items).ok()
+    // a malformed rule is refused rather than stored and silently ignored
+    if key == settings::ROUTING_RULES.key && Rule::parse(entry).is_none() {
+        return Err(Refusal::NotARule);
+    }
+    if items
+        .iter()
+        .any(|i| i == entry && Some(i.as_str()) != replacing)
+    {
+        return Err(Refusal::Duplicate);
+    }
+    match replacing.and_then(|r| items.iter().position(|i| i == r)) {
+        Some(at) => entry.clone_into(&mut items[at]),
+        None => items.push(entry.to_owned()),
+    }
+    Ok(serde_json::to_string(&items).expect("a list of strings serialises"))
 }
 
 #[cfg(test)]
@@ -624,6 +673,39 @@ mod tests {
             with_entry("routing.rules", &empty, "a.test -> "),
             Some("[]".into())
         );
+    }
+
+    #[test]
+    fn an_edit_takes_the_place_of_its_row_and_a_refusal_says_why() {
+        let s = stored(&[("blocker.exceptions", r#"["a.test","b.test"]"#)]);
+        let key = "blocker.exceptions";
+        assert_eq!(
+            put_entry(key, &s, Some("a.test"), " c.test ").unwrap(),
+            r#"["c.test","b.test"]"#
+        );
+        assert_eq!(
+            put_entry(key, &s, Some("a.test"), "a.test").unwrap(),
+            r#"["a.test","b.test"]"#,
+            "an edit that changes nothing is no duplicate"
+        );
+        assert_eq!(
+            put_entry(key, &s, Some("gone.test"), "c.test").unwrap(),
+            r#"["a.test","b.test","c.test"]"#
+        );
+        assert_eq!(
+            put_entry(key, &s, Some("a.test"), "b.test"),
+            Err(Refusal::Duplicate)
+        );
+        assert_eq!(put_entry(key, &s, None, "  "), Err(Refusal::Blank));
+        assert_eq!(
+            put_entry("routing.rules", &s, None, "a.test"),
+            Err(Refusal::NotARule)
+        );
+        assert_eq!(
+            put_entry("zoom.sites", &s, None, "a.test"),
+            Err(Refusal::NotAList)
+        );
+        assert!(!Refusal::NotARule.note().is_empty());
     }
 
     #[test]

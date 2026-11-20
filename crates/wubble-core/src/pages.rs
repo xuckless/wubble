@@ -615,13 +615,57 @@ pub struct SettingRow {
     pub restart: bool,
     /// A list or map row's entries, decoded once here; empty for other kinds.
     pub entries: Vec<Entry>,
+    /// A list or map row's column titles in its list editor ([`columns_of`]).
+    pub columns: &'static [&'static str],
 }
 
-/// One removable entry of a list: what it shows, and what removing it names.
+/// One removable entry of a list: what it shows (one cell per column of its list editor, and
+/// the whole as one line for a screen reader), and what removing it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub label: String,
     pub key: String,
+    pub cells: Vec<String>,
+}
+
+/// The column titles of a list or map setting's list editor; the first names the entry.
+/// Empty for the other kinds.
+pub fn columns_of(def: &settings::SettingDef) -> &'static [&'static str] {
+    let sites = [
+        settings::BLOCKER_EXCEPTIONS.key,
+        settings::SLEEP_NEVER_SITES.key,
+        settings::VIDEO_HIDDEN_SITES.key,
+    ];
+    match def.kind {
+        SettingKind::List if def.key == settings::ROUTING_RULES.key => {
+            &["Site", "Space", "Container"]
+        }
+        SettingKind::List if def.key == settings::BLOCKER_CUSTOM_LISTS.key => &["Address"],
+        SettingKind::List if sites.contains(&def.key) => &["Site"],
+        SettingKind::List => &["Entry"],
+        SettingKind::Map if def.key == settings::BLOCKER_LISTS.key => &["List", "Switched"],
+        SettingKind::Map => &["Entry", "Value"],
+        _ => &[],
+    }
+}
+
+/// A list item's cells: a routing rule split into its site, Space and container; any other
+/// item is one cell.
+fn list_cells(def: &settings::SettingDef, item: &str) -> Vec<String> {
+    if def.key != settings::ROUTING_RULES.key {
+        return vec![item.to_owned()];
+    }
+    match crate::routing::Rule::parse(item) {
+        Some(rule) => vec![
+            match rule.pattern {
+                crate::routing::Pattern::Host(h) => h,
+                crate::routing::Pattern::Subdomains(base) => format!("*.{base}"),
+            },
+            rule.space.unwrap_or_default(),
+            rule.container.unwrap_or_default(),
+        ],
+        None => vec![item.to_owned(), String::new(), String::new()],
+    }
 }
 
 /// A list or map row's entries: a list item is its own key, a map entry is named by its key.
@@ -631,6 +675,7 @@ fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> V
             .into_iter()
             .map(|item| Entry {
                 label: item.clone(),
+                cells: list_cells(def, &item),
                 key: item,
             })
             .collect(),
@@ -638,12 +683,61 @@ fn entries_of(def: &settings::SettingDef, stored: &HashMap<String, String>) -> V
             .into_iter()
             .map(|(key, v)| Entry {
                 label: format!("{key}: {v}"),
+                cells: vec![
+                    key.clone(),
+                    if def.key == settings::BLOCKER_LISTS.key {
+                        if v == 0 { "Off" } else { "On" }.to_owned()
+                    } else {
+                        v.to_string()
+                    },
+                ],
                 key,
             })
             .collect(),
         _ => vec![],
     }
 }
+
+/// The list editor's submitted draft (`kit/controls/list-editor.slint`): its cells joined by
+/// [`CELL_SEP`], after the key of the row it replaces and [`REPLACE_SEP`] when it edits one.
+pub const CELL_SEP: char = '\u{1f}';
+pub const REPLACE_SEP: char = '\u{1e}';
+
+/// A draft the list editor submitted, decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Submission<'a> {
+    /// The key of the row it replaces (an edit in place); `None` for a new row.
+    pub replacing: Option<&'a str>,
+    pub cells: Vec<&'a str>,
+}
+
+pub fn submission(text: &str) -> Submission<'_> {
+    let (replacing, cells) = match text.split_once(REPLACE_SEP) {
+        Some((key, cells)) => (Some(key), cells),
+        None => (None, text),
+    };
+    Submission {
+        replacing,
+        cells: cells.split(CELL_SEP).collect(),
+    }
+}
+
+/// The stored entry a list editor's cells make: a routing rule `site -> Space, Container`
+/// (`routing::Rule`'s text), any other list's first cell.
+pub fn entry_text(key: &str, cells: &[&str]) -> String {
+    let cell = |i: usize| cells.get(i).map_or("", |c| c.trim());
+    if key != settings::ROUTING_RULES.key {
+        return cell(0).to_owned();
+    }
+    match (cell(1), cell(2)) {
+        (space, "") => format!("{} -> {space}", cell(0)),
+        (space, container) => format!("{} -> {space}, {container}", cell(0)),
+    }
+}
+
+/// The Spaces section's list editor speaks through the settings entry callbacks under this
+/// key, which no setting has: added, a new Space; removed, the Space by its id.
+pub const SPACES_LIST: &str = "spaces";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SectionView {
@@ -688,6 +782,7 @@ pub fn settings_page_from(
                         changed: value != d.default,
                         restart: d.restart,
                         entries: entries_of(d, stored),
+                        columns: columns_of(d),
                     }
                 })
                 .collect();
@@ -752,19 +847,24 @@ pub fn sites_view(
             .map(|(h, p)| Entry {
                 label: format!("{h}: {p}%"),
                 key: h.clone(),
+                cells: vec![h.clone(), format!("{p}%")],
             })
             .collect(),
         permissions: permissions
             .iter()
-            .map(|(o, k, d)| Entry {
-                label: match crate::external::parse_key(o) {
-                    // links to other apps are kept per site and scheme
+            .map(|(o, k, d)| {
+                // links to other apps are kept per site and scheme
+                let (site, what) = match crate::external::parse_key(o) {
                     Some((scheme, site)) if k == crate::site::Permission::ExternalLinks => {
-                        format!("{site}: Open {scheme} links in another app ({d:?})")
+                        (site, format!("Open {scheme} links in another app"))
                     }
-                    _ => format!("{o}: {} ({d:?})", k.ask_text()),
-                },
-                key: permission_key(o, k),
+                    _ => (o, k.ask_text().to_owned()),
+                };
+                Entry {
+                    label: format!("{site}: {what} ({d:?})"),
+                    key: permission_key(o, k),
+                    cells: vec![site.to_owned(), what, format!("{d:?}")],
+                }
             })
             .collect(),
     }
@@ -1086,13 +1186,22 @@ mod tests {
         }
         assert_eq!((rows[1].value.as_str(), rows[1].changed), ("7", true));
         // List and map rows come decoded: what each entry shows and what removing it names.
-        let entry = |label: &str, key: &str| Entry {
+        let entry = |label: &str, key: &str, cells: &[&str]| Entry {
             label: label.into(),
             key: key.into(),
+            cells: cells.iter().map(|c| c.to_string()).collect(),
         };
-        assert_eq!(rows[5].entries, [entry("a.test", "a.test")]);
-        assert_eq!(rows[6].entries, [entry("b.test: 90", "b.test")]);
+        assert_eq!(rows[5].entries, [entry("a.test", "a.test", &["a.test"])]);
+        assert_eq!(
+            rows[6].entries,
+            [entry("b.test: 90", "b.test", &["b.test", "90"])]
+        );
         assert!(rows[0].entries.is_empty());
+        assert_eq!(
+            (rows[5].columns, rows[6].columns),
+            (&["Entry"][..], &["Entry", "Value"][..])
+        );
+        assert!(rows[0].columns.is_empty());
     }
 
     #[test]
@@ -1289,6 +1398,58 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_shows_in_three_columns_and_its_draft_makes_it_again() {
+        let stored = stored(&[(
+            settings::ROUTING_RULES.key,
+            r#"["*.corp.test -> Work, Bank","a.test -> , Bank","b.test -> Home"]"#,
+        )]);
+        let row = settings_page(&stored)
+            .into_iter()
+            .flat_map(|s| s.rows)
+            .find(|r| r.key == settings::ROUTING_RULES.key)
+            .unwrap();
+        assert_eq!(row.columns, ["Site", "Space", "Container"]);
+        let cells: Vec<Vec<String>> = row.entries.iter().map(|e| e.cells.clone()).collect();
+        assert_eq!(
+            cells,
+            [
+                ["*.corp.test", "Work", "Bank"],
+                ["a.test", "", "Bank"],
+                ["b.test", "Home", ""]
+            ]
+        );
+        for e in &row.entries {
+            let cells: Vec<&str> = e.cells.iter().map(String::as_str).collect();
+            let text = entry_text(settings::ROUTING_RULES.key, &cells);
+            assert_eq!(
+                crate::routing::Rule::parse(&text),
+                crate::routing::Rule::parse(&e.key),
+                "{text}"
+            );
+        }
+        let draft = format!("a.test{REPLACE_SEP}c.test{CELL_SEP}Work{CELL_SEP}");
+        assert_eq!(
+            submission(&draft),
+            Submission {
+                replacing: Some("a.test"),
+                cells: vec!["c.test", "Work", ""]
+            }
+        );
+        assert_eq!(
+            submission("x.test"),
+            Submission {
+                replacing: None,
+                cells: vec!["x.test"]
+            }
+        );
+        assert_eq!(entry_text("blocker.exceptions", &[" x.test "]), "x.test");
+        assert!(
+            settings::ALL.iter().all(|d| d.key != SPACES_LIST),
+            "the Spaces list's key is no setting's"
+        );
+    }
+
+    #[test]
     fn sites_view_lists_zoom_and_decisions_in_order() {
         use crate::site::{Decision, Permission, SitePermissions};
         let zoom = crate::zoom::ZoomTable::from([("b.test".into(), 125), ("a.test".into(), 90)]);
@@ -1305,6 +1466,11 @@ mod tests {
         assert_eq!(
             zoom,
             [("a.test", "a.test: 90%"), ("b.test", "b.test: 125%")]
+        );
+        assert_eq!(v.zoom[0].cells, ["a.test", "90%"]);
+        assert_eq!(
+            v.permissions[0].cells,
+            ["https://a.test", "Use your camera", "Allow"]
         );
         // Each decision is named by its origin and kind, not its place in the list.
         let origins: Vec<(&str, Permission)> = v

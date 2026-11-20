@@ -7,9 +7,9 @@
 // `settings.css`), translated in the kit (`kit/settings/*`: frame, title, count, nav and its
 // indicator, section head, card, row, lead, reset, empty search) and its controls
 // (`kit/controls/*`: Toggle sm, Segmented compact, Select, ElasticSlider compact, Swatches,
-// Kbd, Button, IconButton, the derived Field). This file lays them out and binds the rows.
-// The other native pages and sheets take their Field, Segmented, Stepper, TextButton, Card,
-// SectionHeader, PageFrame and EntryList from here: thin compositions of the same kit parts.
+// Kbd, Button, IconButton, the derived Field and ListEditor). This file lays them out and binds
+// the rows. The other native pages and sheets take their Field, Segmented, Stepper, TextButton,
+// Card, SectionHeader and PageFrame from here: thin compositions of the same kit parts.
 
 import { Shell } from "../kit/derived.slint";
 import { Mark } from "../kit/chrome/mark.slint";
@@ -24,6 +24,7 @@ import { Swatches } from "../kit/controls/swatches.slint";
 import { Kbd } from "../kit/controls/kbd.slint";
 import { Button, ButtonKind } from "../kit/controls/button.slint";
 import { Field } from "../kit/controls/field.slint";
+import { ListEditor, ListEditorAdds } from "../kit/controls/list-editor.slint";
 import { Fold } from "../kit/motion/fold.slint";
 import { PageTitle, SearchCount, PageScroller, SettingsLayout } from "../kit/settings/page.slint";
 import { NavRow, NavIndicator } from "../kit/settings/nav.slint";
@@ -89,46 +90,6 @@ export component Stepper inherits HorizontalLayout {
         max: root.max;
         set(v) => {
             root.set(v);
-        }
-    }
-}
-
-// Entries of a list or map setting, each removable; `can-add` adds a field for a new one.
-export component EntryList inherits VerticalLayout {
-    in property <[EntryItem]> entries;
-    in property <bool> can-add;
-    in property <string> placeholder;
-    in property <string> empty: "None";
-    callback removed(string);
-    callback added(string);
-
-    spacing: SettingsLayout.entry-gap;
-    if root.entries.length == 0 && !root.can-add: RowNote {
-        text: root.empty;
-    }
-    for entry in root.entries: HorizontalLayout {
-        spacing: SettingsLayout.entry-gap;
-        RowNote {
-            horizontal-stretch: 1;
-            text: entry.label;
-            wrap: no-wrap;
-            overflow: elide;
-        }
-        IconButton {
-            icon-path: Glyph.close;
-            label: "Remove";
-            clicked => {
-                root.removed(entry.key);
-            }
-        }
-    }
-    if root.can-add: Field {
-        placeholder: root.placeholder;
-        accepted(t) => {
-            if t != "" {
-                root.added(t);
-            }
-            self.text = "";
         }
     }
 }
@@ -225,17 +186,26 @@ component SettingRow inherits VerticalLayout {
             }
         }
     }
+    // a list or map setting's entries in the list editor: a list adds and edits in place, a
+    // map only removes; the host answers each draft (`setting.answer`, `setting.note`)
     if root.listed: HorizontalLayout {
         padding-left: Shell.row-pad-x;
         padding-right: Shell.row-pad-x;
-        entries := EntryList {
-            entries: root.setting.entries;
-            can-add: root.setting.control == SettingControl.list;
-            placeholder: "Add";
+        entries := ListEditor {
+            columns: root.setting.columns;
+            count: root.setting.entries.length;
+            row-at(i) => {
+                return root.setting.entries[i];
+            }
+            adds: root.setting.control == SettingControl.list ? ListEditorAdds.draft : ListEditorAdds.none;
+            editable: root.setting.control == SettingControl.list;
+            answer: root.setting.answer;
+            note: root.setting.note;
+            label: root.setting.label;
             removed(k) => {
                 root.entry-removed(root.setting.key, k);
             }
-            added(t) => {
+            submitted(t) => {
                 root.entry-added(root.setting.key, t);
             }
         }
@@ -599,33 +569,77 @@ export component SettingsPage inherits Rectangle {
                     SectionHead {
                         text: "Spaces";
                     }
-                    Card {
-                        // a Space's row: its icon on a tile (a click picks the next icon), its
-                        // name (typed, Enter renames), its colours
-                        for space in root.spaces: Row {
+                    spaces-card := Card {
+                        // the Space selected in the list (-1: none)
+                        property <int> picked: spaces-list.selected < root.spaces.length ? spaces-list.selected : -1;
+                        // every Space: "+" adds one ("Space N" in the next swatch) and names it
+                        // in place, "−" deletes the selected one with its tabs (asked twice;
+                        // the last stays), Enter or a double click renames it
+                        HorizontalLayout {
+                            padding: Shell.row-pad-x;
+                            spaces-list := ListEditor {
+                                columns: ["Space", "Colour"];
+                                count: root.spaces.length;
+                                row-at(i) => {
+                                    return {
+                                        label: root.spaces[i].name,
+                                        key: root.spaces[i].id,
+                                        cells: [root.spaces[i].name, root.spaces[i].colour],
+                                        icon: Glyph.space(root.spaces[i].icon),
+                                        tint: root.spaces[i].tint,
+                                    };
+                                }
+                                leads: true;
+                                swatch-column: 1;
+                                adds: ListEditorAdds.owner;
+                                confirm-remove: true;
+                                keep: 1;
+                                edit-columns: 1;
+                                answers: false;
+                                label: "Spaces";
+                                placeholders: ["Name"];
+                                add-label: "New Space";
+                                remove-label: "Delete Space";
+                                confirm-note: spaces-card.picked < 0 ? "" : root.spaces[spaces-card.picked].tabs == 0 ? "Press − again to delete " + root.spaces[spaces-card.picked].name : "Press − again to delete " + root.spaces[spaces-card.picked].name + " and close its " + (root.spaces[spaces-card.picked].tabs == 1 ? "tab" : root.spaces[spaces-card.picked].tabs + " tabs");
+                                ask-add => {
+                                    root.entry-added("spaces", "");
+                                }
+                                removed(k) => {
+                                    root.entry-removed("spaces", k);
+                                }
+                                edited(k, name) => {
+                                    if spaces-card.picked >= 0 && name != "" {
+                                        root.space-renamed(root.spaces[spaces-card.picked].id, name);
+                                    }
+                                }
+                            }
+                        }
+                        // the selected Space: its icon on a tile (a click picks the next icon),
+                        // its name (typed, Enter renames), its colours
+                        if spaces-card.picked >= 0: Row {
                             Lead {
-                                icon-path: Glyph.space(space.icon);
-                                tint: space.tint;
-                                label: space.name + " icon";
+                                icon-path: Glyph.space(root.spaces[spaces-card.picked].icon);
+                                tint: root.spaces[spaces-card.picked].tint;
+                                label: root.spaces[spaces-card.picked].name + " icon";
                                 clicked => {
-                                    root.space-icon-chosen(space.id, root.next-icon(space.icon));
+                                    root.space-icon-chosen(root.spaces[spaces-card.picked].id, root.next-icon(root.spaces[spaces-card.picked].icon));
                                 }
                             }
                             RowNameText {
-                                name: space.name;
+                                name: root.spaces[spaces-card.picked].name;
                                 label: "Space name";
                                 note: "Its colour tints the window's glass and the backdrop.";
                                 renamed(n) => {
-                                    root.space-renamed(space.id, n);
+                                    root.space-renamed(root.spaces[spaces-card.picked].id, n);
                                 }
                             }
                             RowControls {
                                 Swatches {
                                     colours: SpaceColours.all;
-                                    value: space.tint;
-                                    label: space.name + " colour";
+                                    value: root.spaces[spaces-card.picked].tint;
+                                    label: root.spaces[spaces-card.picked].name + " colour";
                                     chosen(c) => {
-                                        root.space-tinted(space.id, c);
+                                        root.space-tinted(root.spaces[spaces-card.picked].id, c);
                                     }
                                 }
                             }
@@ -659,8 +673,15 @@ export component SettingsPage inherits Rectangle {
                             padding-left: Shell.row-pad-x;
                             padding-right: Shell.row-pad-x;
                             padding-bottom: Shell.row-pad-y;
-                            EntryList {
-                                entries: root.site-zoom;
+                            ListEditor {
+                                columns: ["Site", "Zoom"];
+                                count: root.site-zoom.length;
+                                row-at(i) => {
+                                    return root.site-zoom[i];
+                                }
+                                adds: ListEditorAdds.none;
+                                editable: false;
+                                label: "Zoom levels";
                                 empty: "No site has its own zoom";
                                 removed(k) => {
                                     root.site-zoom-removed(k);
@@ -676,8 +697,15 @@ export component SettingsPage inherits Rectangle {
                             padding-left: Shell.row-pad-x;
                             padding-right: Shell.row-pad-x;
                             padding-bottom: Shell.row-pad-y;
-                            EntryList {
-                                entries: root.site-permissions;
+                            ListEditor {
+                                columns: ["Site", "Permission", "Decision"];
+                                count: root.site-permissions.length;
+                                row-at(i) => {
+                                    return root.site-permissions[i];
+                                }
+                                adds: ListEditorAdds.none;
+                                editable: false;
+                                label: "Permissions";
                                 empty: "No site has a remembered permission";
                                 removed(k) => {
                                     root.site-permission-removed(k);

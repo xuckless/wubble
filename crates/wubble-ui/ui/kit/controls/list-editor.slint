@@ -1,0 +1,639 @@
+// derived: Card (settings/section.slint `.st-card` material, `.st-row` radius), MenuHighlight + rows (controls/menu.slint `.tp-menu-hl`, `.tp-mrow`), Row hover (`.st-row.tap:hover`), KitText `.st-group`, MenuRule hairline, Field (controls/field.slint), IconButton (`.wb-ib`), Icon, RowNote coral (`.st-row-note`), Fold (`.st-fold`)
+// A list the user adds to and removes from (wubble-only: the design has none; the owner asked for
+// macOS's add / remove lists in wubble's look, notes/fidelity/derived-review.md "List editor"):
+// - the well: the settings card's material (white .035, inset top highlight) at the row radius
+//   (14), so it sits concentric in a card row;
+// - the header: the column titles in the settings group label (`.st-group`, 13 / 500 mist) over a
+//   hairline (the menu's rule: 1 px rim-top);
+// - the rows: the menu's rows (36 high, padding 0 10, gap 10, 13.5 px ink, the other columns in
+//   the row note's mist) with a leading 16 px icon when `leads`; the hovered row takes the
+//   tap row's white .04, the selected one the menu's ONE highlight gliding between rows (.16 s);
+//   no alternate tint (the design has none). A column `swatch-column` leads with the row's
+//   colour as the swatch dot (`.st-sw i`, 20).
+// - the footer: a hairline, then "+" and "−" as icon buttons parted by a hairline; "−" is
+//   disabled with nothing selected (or at `keep` rows).
+// "+" opens a draft row at the end (one Field per editable column), Enter submits it, Escape
+// drops it; the owner answers (`answer` changes, `note` empty to accept) and a refused draft
+// stays open with its note in coral (the restart note's tone, folding in as `.st-fold`).
+// Keys: Up / Down move the selection, Delete / Backspace remove, Enter edits the selected row
+// (`editable`), Escape cancels; a double click edits. Roles: list, list items, labelled buttons.
+// The interaction is `wubble_core::controls::list_editor` (one enum, one pure transition), run
+// here as the same table (Slint cannot reach a Rust global of its own here);
+// tests/list_editor.rs drives this widget through that module's scripts.
+// Rows come from the owner by index (`count`, `row-at`), so any model can feed it.
+
+import { Space, TouchMenu, Glass } from "../gen/tokens.slint";
+import { SettingsCss, TouchCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { Shell } from "../derived.slint";
+import { KitText } from "../text.slint";
+import { Calm } from "../motion/calm.slint";
+import { Fold } from "../motion/fold.slint";
+import { MenuHighlight } from "menu.slint";
+import { IconButton } from "icon-button.slint";
+import { Field } from "field.slint";
+import { Icon, Glyph } from "icon.slint";
+import { RowNote, NoteTone } from "../settings/section.slint";
+import { EntryItem } from "../../components/model.slint";
+
+// `list_editor::Mode`
+export enum ListEditorMode { browse, draft, sent, asked, confirm }
+// `list_editor::Adds`: what "+" does
+export enum ListEditorAdds { none, draft, owner }
+
+// `list_editor::ListEditor`: `selected` and `row` are -1 for none (`row`: the draft is a new row).
+export struct ListEditorState {
+    mode: ListEditorMode,
+    selected: int,
+    row: int,
+    refused: bool,
+    len: int,
+}
+
+// The column's draft separators (`wubble_core::pages::CELL_SEP`, `REPLACE_SEP`).
+export global ListEditorText {
+    out property <string> cell-sep: "\u{1f}";
+    out property <string> replace-sep: "\u{1e}";
+}
+
+// The menu's rule as a line of the list: 1 px of the thick tier's top rim.
+component Hairline inherits Rectangle {
+    background: Glass.thick.rim-top;
+}
+
+// One cell: its text (the first column in ink, the rest in mist), after a swatch dot when asked.
+component Cell inherits HorizontalLayout {
+    in property <string> text;
+    in property <bool> first;
+    in property <bool> swatch;
+    in property <color> tint;
+    // equal columns whatever their text: the room is shared by stretch alone
+    horizontal-stretch: 1;
+    preferred-width: 0px;
+    spacing: TouchCss.wb-tp-mrow--gap;
+    if root.swatch: VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: SettingsCss.st-sw-i--width;
+            height: SettingsCss.st-sw-i--height;
+            border-radius: SettingsCss.st-sw-i--border-radius;
+            background: root.tint;
+        }
+    }
+    KitText {
+        horizontal-stretch: 1;
+        min-width: 0px;
+        role: root.first ? Role.wb-tp-mrow : Role.st-row-note;
+        text: root.text;
+        color: root.first ? TouchCss.wb-tp-mrow--color : SettingsCss.st-row-note--color;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// One row: its lead, its cells, or the draft's fields while it is edited.
+component ListRow inherits Rectangle {
+    in property <EntryItem> item;
+    in property <[string]> columns;
+    in property <bool> leads;
+    in property <int> swatch-column: -1;
+    in property <bool> selected;
+    in property <int> index;
+    in property <int> count;
+    callback picked();
+    callback edit();
+    height: TouchCss.wb-tp-mrow--height;
+    accessible-role: AccessibleRole.list-item;
+    accessible-label: root.item.label;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.selected;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.picked();
+    }
+    // `.st-row.tap:hover`, at the highlight's inset and radius
+    Rectangle {
+        x: TouchCss.tp-menu-hl--left - TouchCss.tp-menu--padding;
+        width: parent.width - TouchCss.tp-menu-hl--left - TouchCss.tp-menu-hl--right + 2 * TouchCss.tp-menu--padding;
+        border-radius: TouchCss.tp-menu-hl--border-radius;
+        background: ta.has-hover && !root.selected ? SettingsCss.st-row-tap-hover--background : transparent;
+        animate background {
+            duration: Calm.ms(SettingsCss.st-row--transition-background-color-duration);
+        }
+    }
+    ta := TouchArea {
+        clicked => {
+            root.picked();
+        }
+        double-clicked => {
+            root.edit();
+        }
+    }
+    HorizontalLayout {
+        padding-left: TouchCss.wb-tp-mrow--padding-left;
+        padding-right: TouchCss.wb-tp-mrow--padding-right;
+        spacing: TouchCss.wb-tp-mrow--gap;
+        if root.leads: VerticalLayout {
+            alignment: center;
+            Icon {
+                size: TouchMenu.row-icon;
+                path: root.item.icon;
+                tint: root.item.tint.alpha > 0 ? root.item.tint : TouchCss.tp-mrow-svg--color;
+            }
+        }
+        for title[c] in root.columns: Cell {
+            text: c < root.item.cells.length ? root.item.cells[c] : "";
+            first: c == 0;
+            swatch: c == root.swatch-column;
+            tint: root.item.tint;
+        }
+    }
+}
+
+// The draft: one field per edited column (Enter submits, Escape drops it, typing clears a
+// refusal), the row's other cells as they are, at the columns' places.
+component DraftRow inherits HorizontalLayout {
+    in property <EntryItem> item;
+    in property <[string]> columns;
+    in property <[string]> placeholders;
+    in property <bool> leads;
+    in property <int> swatch-column: -1;
+    in property <int> fields;
+    in-out property <string> text0;
+    in-out property <string> text1;
+    in-out property <string> text2;
+    callback commit();
+    callback cancel();
+    callback typed();
+    spacing: TouchCss.wb-tp-mrow--gap;
+    if root.leads: VerticalLayout {
+        padding-left: TouchCss.wb-tp-mrow--padding-left;
+        alignment: center;
+        Icon {
+            size: TouchMenu.row-icon;
+            path: root.item.icon;
+            tint: root.item.tint.alpha > 0 ? root.item.tint : TouchCss.tp-mrow-svg--color;
+        }
+    }
+    if root.columns.length > 0 && root.fields > 0: Field {
+        horizontal-stretch: 1;
+        preferred-width: 0px;
+        text <=> root.text0;
+        placeholder: root.placeholders.length > 0 ? root.placeholders[0] : root.columns[0];
+        init => {
+            self.take-focus();
+        }
+        accepted => {
+            root.commit();
+        }
+        escaped => {
+            root.cancel();
+        }
+        edited => {
+            root.typed();
+        }
+    }
+    if root.columns.length > 1 && root.fields > 1: Field {
+        horizontal-stretch: 1;
+        preferred-width: 0px;
+        text <=> root.text1;
+        placeholder: root.placeholders.length > 1 ? root.placeholders[1] : root.columns[1];
+        accepted => {
+            root.commit();
+        }
+        escaped => {
+            root.cancel();
+        }
+        edited => {
+            root.typed();
+        }
+    }
+    if root.columns.length > 1 && root.fields <= 1: Cell {
+        padding-left: TouchCss.wb-tp-mrow--padding-left;
+        text: root.item.cells.length > 1 ? root.item.cells[1] : "";
+        swatch: root.swatch-column == 1;
+        tint: root.item.tint;
+    }
+    if root.columns.length > 2 && root.fields > 2: Field {
+        horizontal-stretch: 1;
+        preferred-width: 0px;
+        text <=> root.text2;
+        placeholder: root.placeholders.length > 2 ? root.placeholders[2] : root.columns[2];
+        accepted => {
+            root.commit();
+        }
+        escaped => {
+            root.cancel();
+        }
+        edited => {
+            root.typed();
+        }
+    }
+    if root.columns.length > 2 && root.fields <= 2: Cell {
+        padding-left: TouchCss.wb-tp-mrow--padding-left;
+        text: root.item.cells.length > 2 ? root.item.cells[2] : "";
+        swatch: root.swatch-column == 2;
+        tint: root.item.tint;
+    }
+}
+
+export component ListEditor inherits Rectangle {
+    // the column titles (1 to 3); the first names the row
+    in property <[string]> columns;
+    // the rows, by index: `row-at(i)` for `i` below `count`
+    in property <int> count;
+    pure callback row-at(int) -> EntryItem;
+    // rows lead with their icon (`EntryItem.icon`, tinted `EntryItem.tint`)
+    in property <bool> leads: false;
+    // the column whose cell leads with the row's colour (-1: none)
+    in property <int> swatch-column: -1;
+    // `list_editor::Caps`
+    in property <ListEditorAdds> adds: ListEditorAdds.draft;
+    in property <bool> removes: true;
+    in property <bool> editable: true;
+    in property <bool> confirm-remove: false;
+    in property <int> keep: 0;
+    // how many leading columns the draft edits (the rest show the row's cells)
+    in property <int> edit-columns: 3;
+    // whether the owner answers a draft (`answer` / `note`); otherwise it is taken as sent
+    in property <bool> answers: true;
+    // the owner's answer to the last draft: a new serial each time, `note` empty to accept it
+    in property <int> answer;
+    in property <string> note;
+    // what the list holds, for a screen reader, and its empty state
+    in property <string> label;
+    in property <string> empty: "None";
+    // the draft's field placeholders, by column
+    in property <[string]> placeholders;
+    in property <string> add-label: "Add";
+    in property <string> remove-label: "Remove";
+    // what a second "−" will do (`confirm-remove`), in coral beside the buttons
+    in property <string> confirm-note;
+    // A row removed (its key); a draft submitted: its cells joined by `ListEditorText.cell-sep`,
+    // after the replaced row's key and `replace-sep` for an edit (`pages::submission`); the
+    // owner asked to add a row itself (`ListEditorAdds.owner`).
+    callback removed(string);
+    callback submitted(string);
+    callback edited(string, string);
+    callback ask-add();
+    in-out property <ListEditorState> state: { mode: ListEditorMode.browse, selected: -1, row: -1, refused: false, len: root.count };
+    out property <int> selected: root.state.selected;
+    out property <ListEditorMode> mode: root.state.mode;
+    // the draft's text, by column
+    in-out property <string> draft0;
+    in-out property <string> draft1;
+    in-out property <string> draft2;
+
+    property <bool> idle: root.state.mode == ListEditorMode.browse || root.state.mode == ListEditorMode.confirm;
+    property <bool> drafting: root.state.mode == ListEditorMode.draft || root.state.mode == ListEditorMode.sent;
+    property <bool> can-remove: root.removes && root.state.len > root.keep && root.state.selected >= 0 && root.idle;
+    property <bool> can-add: root.adds != ListEditorAdds.none && root.idle;
+    property <int> fields: min(root.columns.length, root.edit-columns);
+    property <length> row-h: TouchCss.wb-tp-mrow--height;
+    property <length> pad: TouchCss.tp-menu--padding;
+
+    // ----- the transition (`list_editor::transition`), one function per event
+
+    function browse(selected: int, len: int) {
+        root.state = { mode: ListEditorMode.browse, selected: selected, row: -1, refused: false, len: len };
+    }
+    function open-draft(row: int) {
+        root.draft0 = row >= 0 && root.row-at(row).cells.length > 0 ? root.row-at(row).cells[0] : "";
+        root.draft1 = row >= 0 && root.row-at(row).cells.length > 1 ? root.row-at(row).cells[1] : "";
+        root.draft2 = row >= 0 && root.row-at(row).cells.length > 2 ? root.row-at(row).cells[2] : "";
+        root.state = { mode: ListEditorMode.draft, selected: row >= 0 ? row : root.state.selected, row: row, refused: false, len: root.state.len };
+    }
+    public function rows(len: int) {
+        let s = root.state;
+        let selected = s.selected < 0 ? -1 : s.selected < len ? s.selected : len - 1;
+        if s.mode == ListEditorMode.asked && len > s.len {
+            root.state.len = len;
+            if root.editable {
+                root.open-draft(len - 1);
+            } else {
+                root.browse(len - 1, len);
+            }
+            return;
+        }
+        if (s.mode == ListEditorMode.draft || s.mode == ListEditorMode.sent) && s.row >= len {
+            root.browse(selected, len);
+            return;
+        }
+        if s.mode == ListEditorMode.confirm && (selected != s.selected || len != s.len) {
+            root.browse(selected, len);
+            return;
+        }
+        root.state.selected = selected;
+        root.state.len = len;
+    }
+    public function pick(i: int) {
+        if i < root.state.len && root.state.mode != ListEditorMode.sent {
+            root.browse(i, root.state.len);
+        }
+        keys.focus();
+    }
+    public function step(down: bool) {
+        if !root.idle || root.state.len == 0 {
+            return;
+        }
+        let last = root.state.len - 1;
+        let s = root.state.selected;
+        root.browse(s < 0 ? (down ? 0 : last) : down ? min(s + 1, last) : max(s - 1, 0), root.state.len);
+    }
+    public function add() {
+        if !root.idle {
+            return;
+        }
+        if root.adds == ListEditorAdds.draft {
+            root.open-draft(-1);
+        } else if root.adds == ListEditorAdds.owner {
+            root.state.mode = ListEditorMode.asked;
+            root.ask-add();
+        }
+    }
+    public function edit(i: int) {
+        let row = i >= 0 ? i : root.state.selected;
+        if root.idle && root.editable && row >= 0 && row < root.state.len {
+            root.open-draft(row);
+        }
+    }
+    public function remove() {
+        if !root.can-remove {
+            return;
+        }
+        let i = root.state.selected;
+        if root.confirm-remove && root.state.mode == ListEditorMode.browse {
+            root.state.mode = ListEditorMode.confirm;
+            return;
+        }
+        root.browse(i, root.state.len);
+        root.removed(root.row-at(i).key);
+    }
+    public function commit() {
+        if root.state.mode != ListEditorMode.draft {
+            return;
+        }
+        let row = root.state.row;
+        let cells = root.draft0 + (root.fields > 1 ? ListEditorText.cell-sep + root.draft1 : "") + (root.fields > 2 ? ListEditorText.cell-sep + root.draft2 : "");
+        root.state.mode = ListEditorMode.sent;
+        root.state.refused = false;
+        if row >= 0 {
+            root.submitted(root.row-at(row).key + ListEditorText.replace-sep + cells);
+            root.edited(root.row-at(row).key, cells);
+        } else {
+            root.submitted(cells);
+        }
+        if !root.answers {
+            root.answered(true, root.count);
+        }
+    }
+    public function typed() {
+        if root.state.mode == ListEditorMode.draft {
+            root.state.refused = false;
+        }
+    }
+    public function cancel() {
+        if root.state.mode == ListEditorMode.draft || root.state.mode == ListEditorMode.confirm || root.state.mode == ListEditorMode.asked {
+            root.browse(root.state.selected, root.state.len);
+            keys.focus();
+        }
+    }
+    public function answered(accepted: bool, len: int) {
+        let s = root.state;
+        if s.mode != ListEditorMode.sent {
+            return;
+        }
+        if accepted {
+            let selected = s.row >= 0 ? s.row : len - 1;
+            root.browse(selected < len ? selected : -1, len);
+            keys.focus();
+        } else {
+            root.state = { mode: ListEditorMode.draft, selected: s.selected, row: s.row, refused: true, len: len };
+        }
+    }
+
+    // the keys go to the list (a click on it does the same)
+    public function focus-list() {
+        keys.focus();
+    }
+
+    changed count => {
+        root.rows(root.count);
+    }
+    changed answer => {
+        root.answered(root.note == "", root.count);
+    }
+
+    // ----- the look
+
+    border-radius: SettingsCss.st-row--border-radius;
+    background: SettingsCss.st-card--background;
+    inner-shadow-offset-y: SettingsCss.st-card--box-shadow-shadow-1-y;
+    inner-shadow-color: SettingsCss.st-card--box-shadow-shadow-1-color;
+    clip: true;
+    accessible-role: AccessibleRole.list;
+    accessible-label: root.label;
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.UpArrow {
+                root.step(false);
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.step(true);
+                return accept;
+            }
+            if event.text == Key.Delete || event.text == Key.Backspace {
+                root.remove();
+                return accept;
+            }
+            if event.text == Key.Return && root.idle {
+                root.edit(-1);
+                return accept;
+            }
+            if event.text == Key.Escape && root.state.mode != ListEditorMode.browse {
+                root.cancel();
+                return accept;
+            }
+            reject
+        }
+        TouchArea {
+            clicked => {
+                keys.focus();
+            }
+        }
+        VerticalLayout {
+            spacing: 0px;
+            // the column titles
+            HorizontalLayout {
+                height: SettingsCss.st-sec-head--height;
+                padding-left: root.pad + TouchCss.wb-tp-mrow--padding-left;
+                padding-right: root.pad + TouchCss.wb-tp-mrow--padding-right;
+                spacing: TouchCss.wb-tp-mrow--gap;
+                if root.leads: Rectangle {
+                    width: TouchMenu.row-icon;
+                }
+                for title[c] in root.columns: HorizontalLayout {
+                    horizontal-stretch: 1;
+                    preferred-width: 0px;
+                    spacing: TouchCss.wb-tp-mrow--gap;
+                    // the swatch column's titles sit over its text, past the dot
+                    if c == root.swatch-column: Rectangle {
+                        width: SettingsCss.st-sw-i--width;
+                    }
+                    KitText {
+                        horizontal-stretch: 1;
+                        min-width: 0px;
+                        role: Role.st-group;
+                        text: title;
+                        color: SettingsCss.st-group--color;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+            Hairline {
+                height: Shell.hairline;
+            }
+            // the rows, the one highlight under them
+            Rectangle {
+                hl := MenuHighlight {
+                    on: root.state.selected >= 0 && !(root.drafting && root.state.row == root.state.selected);
+                    jump: false;
+                    top: root.pad + max(0, root.state.selected) * root.row-h;
+                    panel-width: parent.width;
+                }
+                VerticalLayout {
+                    padding: root.pad;
+                    spacing: 0px;
+                    for i in root.count: Rectangle {
+                        height: root.row-h;
+                        if !(root.drafting && root.state.row == i): ListRow {
+                            item: root.row-at(i);
+                            columns: root.columns;
+                            leads: root.leads;
+                            swatch-column: root.swatch-column;
+                            selected: root.state.selected == i;
+                            index: i;
+                            count: root.count;
+                            picked => {
+                                root.pick(i);
+                            }
+                            edit => {
+                                root.pick(i);
+                                root.edit(i);
+                            }
+                        }
+                        if root.drafting && root.state.row == i: DraftRow {
+                            item: root.row-at(i);
+                            columns: root.columns;
+                            placeholders: root.placeholders;
+                            leads: root.leads;
+                            swatch-column: root.swatch-column;
+                            fields: root.fields;
+                            text0 <=> root.draft0;
+                            text1 <=> root.draft1;
+                            text2 <=> root.draft2;
+                            commit => {
+                                root.commit();
+                            }
+                            cancel => {
+                                root.cancel();
+                            }
+                            typed => {
+                                root.typed();
+                            }
+                        }
+                    }
+                    if root.drafting && root.state.row < 0: Rectangle {
+                        height: root.row-h;
+                        DraftRow {
+                            columns: root.columns;
+                            placeholders: root.placeholders;
+                            leads: root.leads;
+                            swatch-column: root.swatch-column;
+                            fields: root.fields;
+                            text0 <=> root.draft0;
+                            text1 <=> root.draft1;
+                            text2 <=> root.draft2;
+                            commit => {
+                                root.commit();
+                            }
+                            cancel => {
+                                root.cancel();
+                            }
+                            typed => {
+                                root.typed();
+                            }
+                        }
+                    }
+                    if root.count == 0 && !root.drafting: HorizontalLayout {
+                        height: root.row-h;
+                        padding-left: TouchCss.wb-tp-mrow--padding-left;
+                        RowNote {
+                            text: root.empty;
+                            wrap: no-wrap;
+                        }
+                    }
+                }
+            }
+            // a refused draft's note, folding in under it
+            Fold {
+                open: root.state.mode == ListEditorMode.draft && root.state.refused && root.note != "";
+                content-height: refusal.preferred-height;
+                refusal := HorizontalLayout {
+                    padding-left: root.pad + TouchCss.wb-tp-mrow--padding-left;
+                    padding-right: root.pad + TouchCss.wb-tp-mrow--padding-right;
+                    padding-bottom: root.pad;
+                    RowNote {
+                        text: root.note;
+                        tone: NoteTone.conflict;
+                    }
+                }
+            }
+            Hairline {
+                height: Shell.hairline;
+            }
+            // "+" | "−"
+            HorizontalLayout {
+                padding: root.pad;
+                spacing: Space.s1;
+                alignment: start;
+                IconButton {
+                    icon-path: Glyph.plus;
+                    label: root.add-label;
+                    enabled: root.can-add;
+                    clicked => {
+                        root.add();
+                    }
+                }
+                VerticalLayout {
+                    padding-top: Space.s2;
+                    padding-bottom: Space.s2;
+                    Hairline {
+                        width: Shell.hairline;
+                    }
+                }
+                IconButton {
+                    icon-path: Glyph.minus;
+                    label: root.remove-label;
+                    enabled: root.can-remove;
+                    clicked => {
+                        root.remove();
+                    }
+                }
+                if root.state.mode == ListEditorMode.confirm: HorizontalLayout {
+                    padding-left: Space.s2;
+                    RowNote {
+                        text: root.confirm-note;
+                        tone: NoteTone.conflict;
+                        wrap: no-wrap;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -42,13 +42,15 @@ fn word_label(kind: SettingKind, word: &str) -> String {
         .unwrap_or_default()
 }
 
-/// A list's entries for an `EntryList`.
+/// A list's entries for a list editor (kit/controls/list-editor.slint): a row of cells each.
 pub fn entry_items(entries: &[Entry]) -> Vec<EntryItem> {
     entries
         .iter()
         .map(|e| EntryItem {
             label: e.label.as_str().into(),
             key: e.key.as_str().into(),
+            cells: strings(e.cells.iter().map(String::as_str)),
+            ..Default::default()
         })
         .collect()
 }
@@ -63,6 +65,7 @@ pub fn setting_item(row: &SettingRow) -> SettingItem {
         restart: row.restart,
         selected: -1,
         entries: ModelRc::from(std::rc::Rc::new(VecModel::from(entry_items(&row.entries)))),
+        columns: strings(row.columns.iter().copied()),
         ..Default::default()
     };
     match row.control {
