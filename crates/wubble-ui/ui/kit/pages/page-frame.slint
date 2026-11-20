@@ -96,8 +96,8 @@ export component PageFrame inherits Rectangle {
     in property <bool> searchable: true;
     // The `.st-count` line under the search ("N results", the task manager's total); empty: none.
     in property <string> count;
-    // The column's width: `Shell.settings-width`; a table (the task manager) takes the settings
-    // grid's (`.st-grid` max-width 1120).
+    // The column's width: `Shell.settings-width`; a table (the task manager) takes up to the
+    // settings grid's (`.st-grid` max-width 1120), from the list pages' left edge.
     in property <length> column: Shell.settings-width;
     callback query-changed(string);
 
@@ -111,19 +111,25 @@ export component PageFrame inherits Rectangle {
 
     visible: root.open;
 
+    // Every page's column starts where the list pages' does, so titles line up page to page; a
+    // wider column (the task manager's table) grows to the right, short of the page's margin.
+    property <length> list-width: min(Shell.settings-width, root.width - 2 * Shell.settings-pad-max);
+    property <length> left: (root.width - root.list-width) / 2;
+
     page := PageScroller {
         open: root.open;
         HorizontalLayout {
-            alignment: center;
+            alignment: start;
+            padding-left: root.left;
             padding-top: Shell.settings-top;
             padding-bottom: Shell.settings-bottom;
             VerticalLayout {
-                width: min(root.column, root.width - 2 * Shell.settings-pad-max);
+                width: max(root.list-width, min(root.column, root.width - root.left - Shell.settings-pad-max));
                 // .st-pin h1: margin 0 0 20px 4px, line-height 1
                 HorizontalLayout {
                     padding-left: Shell.settings-title-in;
                     padding-bottom: Shell.settings-title-below;
-                    KitText {
+                    heading := KitText {
                         role: root.width <= SettingsCss.max-width-759px--query-max-width ? Role.st-title-narrow : Role.st-title;
                         height: self.role.size;
                         text: root.title;

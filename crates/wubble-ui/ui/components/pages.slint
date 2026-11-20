@@ -5,7 +5,6 @@
 // intent through a callback; the host acts and redraws. Compose only: the kit draws.
 
 import { Shell } from "../kit/derived.slint";
-import { SettingsCss } from "../kit/gen/css.slint";
 import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { Button, PressableButton, ButtonKind } from "../kit/controls/button.slint";
@@ -484,7 +483,7 @@ export component TasksPage inherits PageFrame {
             width: Shell.task-discard;
         }
         TableSlot {
-            width: SettingsCss.wb-st-hold--min-width;
+            width: Shell.task-discard;
         }
     }
     if root.items.length > 0: ListCard {
@@ -502,10 +501,12 @@ export component TasksPage inherits PageFrame {
             TableCell {
                 width: Shell.task-memory;
                 text: item.memory;
+                dash-empty: item.tab >= 0;
             }
             TableCell {
                 width: Shell.task-cpu;
                 text: item.cpu;
+                dash-empty: item.tab >= 0;
             }
             // A slot per control whether it shows or not, so the columns line up row to row.
             TableSlot {
@@ -529,10 +530,11 @@ export component TasksPage inherits PageFrame {
                 }
             }
             TableSlot {
-                width: SettingsCss.wb-st-hold--min-width;
+                width: Shell.task-discard;
                 if item.can-end: KeyedHoldButton {
                     // End acts on the pid alone (host/tasks.rs task_action)
                     key: item.pid;
+                    compact: true;
                     text: "End";
                     done-text: "Ended";
                     done => {

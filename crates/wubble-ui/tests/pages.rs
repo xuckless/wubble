@@ -15,7 +15,7 @@ use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use wubble_ui::{
     AppWindow, BookmarkLineItem, DownloadItem, DownloadStatus, HistoryLineItem, InternalPageKind,
-    LoginItem, PasswordsView, VaultState,
+    LoginItem, PageScroll, PasswordsView, TaskItem, VaultState,
 };
 
 fn pump() {
@@ -165,6 +165,49 @@ fn page_scenarios() {
     app.set_logins(model(vec![login("1"), login("2")]));
     pump();
     assert_eq!(count(&app, "PasswordsPage::login-row"), 2);
+
+    // The task manager: its column starts where the other list pages' does (the table grows to
+    // the right), its End button is a row's size, and a long table scrolls.
+    app.window().set_size(LogicalSize::new(1280.0, 700.0));
+    let tasks: Vec<TaskItem> = (0..40)
+        .map(|i| TaskItem {
+            tab: if i < 30 { i } else { -1 },
+            pid: 100 + i,
+            title: format!("row {i}").into(),
+            state: "Background".into(),
+            memory: if i < 30 { "".into() } else { "12.0 MB".into() },
+            cpu: if i < 30 { "".into() } else { "0.0 %".into() },
+            busy: "".into(),
+            never_sleep: false,
+            can_discard: i < 30,
+            can_end: true,
+        })
+        .collect();
+    app.set_tasks(model(tasks));
+    // the task manager's title starts where the history page's does
+    let heading = |app: &AppWindow| {
+        ElementHandle::find_by_element_id(app, "PageFrame::heading")
+            .map(|e| e.absolute_position().x)
+            .collect::<Vec<_>>()
+    };
+    app.set_page(InternalPageKind::History);
+    pump();
+    let history = heading(&app);
+    app.set_page(InternalPageKind::Tasks);
+    pump();
+    let tasks = heading(&app);
+    assert!(
+        history.len() == 1 && history == tasks,
+        "{history:?} {tasks:?}"
+    );
+    let page = app.global::<PageScroll>();
+    assert!(
+        page.get_content() > page.get_viewport() && page.get_viewport() > 0.0,
+        "the table scrolls: {} in {}",
+        page.get_content(),
+        page.get_viewport()
+    );
+    app.window().set_size(LogicalSize::new(1280.0, 4000.0));
 
     // The address pill: the star and the badge only when asked, and each reports its click.
     app.set_page(InternalPageKind::None);

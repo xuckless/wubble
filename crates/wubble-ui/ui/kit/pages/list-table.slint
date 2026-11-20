@@ -5,6 +5,7 @@
 // column's middle. Column widths are the caller's (`Shell.task-*`).
 
 import { SettingsCss } from "../gen/css.slint";
+import { Palette } from "../gen/tokens.slint";
 import { Role } from "../gen/text.slint";
 import { KitText } from "../text.slint";
 
@@ -18,13 +19,20 @@ export component TableHead inherits KitText {
     overflow: elide;
 }
 
-// One number.
-export component TableCell inherits KitText {
-    role: Role.st-path-wb-mono;
-    color: SettingsCss.st-path-wb-mono--color;
-    horizontal-alignment: right;
-    vertical-alignment: center;
-    overflow: elide;
+// One number. `dash-empty`: a cell with no figure (a row the meter has no sample for) shows an
+// en dash in haze instead of nothing (wubble: the design's tables have no missing values).
+export component TableCell inherits Rectangle {
+    in property <string> text;
+    in property <bool> dash-empty;
+    property <bool> blank: root.dash-empty && root.text == "";
+    KitText {
+        role: Role.st-path-wb-mono;
+        text: root.blank ? "–" : root.text;
+        color: root.blank ? Palette.haze : SettingsCss.st-path-wb-mono--color;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+        overflow: elide;
+    }
 }
 
 // A control's column: the control keeps its own size, on the column's middle.
