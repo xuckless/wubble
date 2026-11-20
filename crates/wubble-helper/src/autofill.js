@@ -169,6 +169,10 @@
 
   // The last submitted form and its password fields, until they leave the page.
   let submitted = null;
+  // This document submitted a sign-in: its own "settled" (on load) would describe the page as
+  // it was before the submit's outcome, so it is not sent (the browser would read the form
+  // still there as a failed sign-in and drop the save). The next document reports the outcome.
+  let submittedHere = false;
   function submitLike(form) {
     const snapshot = formSnapshot(form, true);
     const passwords = fieldsOf(form).filter(
@@ -178,6 +182,7 @@
       return;
     }
     submitted = { snapshot, passwords };
+    submittedHere = true;
     post({ t: "submit", form: snapshot });
   }
 
@@ -241,7 +246,9 @@
     if (e.isTrusted) {
       frame(() => {
         lastForms = stringify(forms());
-        post({ t: "settled", forms: parse(lastForms) });
+        if (!submittedHere) {
+          post({ t: "settled", forms: parse(lastForms) });
+        }
       });
     }
   });
