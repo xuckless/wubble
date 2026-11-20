@@ -9,8 +9,9 @@ use std::rc::Rc;
 use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use wubble_core::space::Rgb;
 use wubble_core::tab::TabId;
+use wubble_core::tabmarks::{Marks, Sound};
 use wubble_engine::nav::Page;
-use wubble_ui::{AppWindow, CommandResult, MenuEntry, SpaceItem, SpacesMenuRow, TabItem};
+use wubble_ui::{AppWindow, CommandResult, MenuEntry, SpaceItem, SpacesMenuRow, TabItem, TabSound};
 
 use crate::bar::BarRow;
 use crate::shell::{self, ShellView, TabRow};
@@ -51,6 +52,12 @@ pub fn favicon_image(width: u32, height: u32, rgba: &[u8]) -> slint::Image {
 fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<TabItem> {
     rows.iter()
         .map(|r| {
+            let marks = Marks::of(r.agent, r.audible, r.muted);
+            let sound = match marks.sound {
+                None => TabSound::None,
+                Some(Sound::Playing) => TabSound::Playing,
+                Some(Sound::Muted) => TabSound::Muted,
+            };
             TabItem {
                 id: r.id,
                 title: r.title.as_str().into(),
@@ -60,8 +67,8 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
                     .and_then(|id| favicons.get(&id))
                     .cloned()
                     .unwrap_or_default(),
-                audible: r.audible,
-                muted: r.muted,
+                sound,
+                sound_label: marks.sound.map_or("", Sound::press_label).into(),
                 in_split: r.in_split,
                 blocked: i32::try_from(r.blocked).unwrap_or(i32::MAX),
                 kind: match r.kind {
@@ -71,7 +78,7 @@ fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<T
                 depth: i32::from(r.depth),
                 count: i32::try_from(r.count).unwrap_or(i32::MAX),
                 collapsed: r.collapsed,
-                agent: r.agent,
+                agent: marks.agent,
             }
         })
         .collect()

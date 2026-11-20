@@ -18,8 +18,8 @@ slint::slint! {
     import { CommandBar } from "ui/kit/chrome/command-bar.slint";
     import { TabRow } from "ui/kit/chrome/tab-row.slint";
     import { SpacesButton } from "ui/kit/chrome/spaces-button.slint";
-    import { CommandBarState, CommandMode, CommandResult, TabItem } from "ui/components/model.slint";
-    export { CommandBarState, CommandMode, CommandResult, TabItem }
+    import { CommandBarState, CommandMode, CommandResult, TabItem, TabSound } from "ui/components/model.slint";
+    export { CommandBarState, CommandMode, CommandResult, TabItem, TabSound }
     export component Probe inherits Window {
         width: 400px;
         height: 300px;
@@ -69,13 +69,19 @@ slint::slint! {
         }
         out property <bool> rail-close-shown: rail.rail-close-shown;
         out property <length> rail-h: rail.height;
-        // an agent's tab on the rail: the agent badge on the icon's bottom-right corner
+        // a tab on the rail that plays sound and is an agent's: the sound badge on the icon's
+        // top-right corner, the agent badge on its bottom-right
+        in property <TabSound> marked-sound: TabSound.playing;
+        in-out property <int> marked-mutes;
         in-out property <int> marked-stops;
         in-out property <int> marked-presses;
+        in-out property <int> marked-closes;
         marked := TabRow {
             x: 250px; y: 20px; width: 48px; compact: true;
-            tab: { id: 10, title: "m", url: "https://m.test", agent: true };
+            tab: { id: 10, title: "m", url: "https://m.test", agent: true, sound: root.marked-sound, sound-label: "Mute tab" };
+            mute => { root.marked-mutes += 1; }
             agent-stop => { root.marked-stops += 1; }
+            close => { root.marked-closes += 1; }
             press(y) => { root.marked-presses += 1; }
         }
         // the switcher's "^"
@@ -285,9 +291,11 @@ fn rail_close(p: &Probe) {
     assert!(!p.get_rail_close_shown());
 }
 
-/// The rail's agent badge (derived: the close badge's circle on the icon's bottom-right corner):
-/// drawn at rest, a press on it stops the agents, the rest of the icon still picks the tab.
-fn rail_agent_badge(p: &Probe) {
+/// The rail's sound and agent badges (derived: the close badge's circle on the icon's other
+/// corners): drawn at rest, a press on the top-right one mutes, on the bottom-right one stops the
+/// agents, the rest of the icon still picks the tab; with no sound the top-right corner is the
+/// icon's.
+fn rail_marks(p: &Probe) {
     let click = |x: f32, y: f32| {
         let position = LogicalPosition::new(x, y);
         let button = PointerEventButton::Left;
@@ -298,20 +306,50 @@ fn rail_agent_badge(p: &Probe) {
     let row_h = p.get_rail_h();
     let (icon_x, icon_y) = (250.0 + (48.0 - 18.0) / 2.0, 20.0 + (row_h - 18.0) / 2.0);
     run_out();
-    // the pointer is out: the badge is there with no hover on the row
+    // the pointer is out: the badges are there with no hover on the row
+    click(icon_x + 18.0, icon_y);
+    run_out();
+    assert_eq!(
+        (
+            p.get_marked_mutes(),
+            p.get_marked_stops(),
+            p.get_marked_presses()
+        ),
+        (1, 0, 0),
+        "the top-right badge mutes"
+    );
     click(icon_x + 18.0, icon_y + 18.0);
     run_out();
     assert_eq!(
-        (p.get_marked_stops(), p.get_marked_presses()),
-        (1, 0),
+        (
+            p.get_marked_mutes(),
+            p.get_marked_stops(),
+            p.get_marked_presses(),
+            p.get_marked_closes()
+        ),
+        (1, 1, 0, 0),
         "the bottom-right badge stops the agents"
     );
     click(icon_x + 9.0, icon_y + 9.0);
-    assert_eq!(
-        (p.get_marked_stops(), p.get_marked_presses()),
-        (1, 1),
-        "the icon's middle picks the tab"
+    assert_eq!(p.get_marked_presses(), 1, "the icon's middle picks the tab");
+    // a muted tab keeps its badge, and it is still the button
+    p.set_marked_sound(TabSound::Muted);
+    run_out();
+    click(icon_x + 18.0, icon_y);
+    assert_eq!(p.get_marked_mutes(), 2);
+    // no sound, no badge: the corner belongs to the tab
+    p.set_marked_sound(TabSound::None);
+    run_out();
+    click(icon_x + 16.0, icon_y + 2.0);
+    assert_eq!((p.get_marked_mutes(), p.get_marked_presses()), (2, 2));
+    // hovering a badge keeps the row's close badge shown, as the row's own hover does
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(icon_x + 18.0, icon_y + 18.0),
+        },
     );
+    run_out();
     at(p, WindowEvent::PointerExited);
     run_out();
 }
@@ -348,6 +386,6 @@ fn chrome_kit_parts_follow_the_design() {
     spaces(&p);
     command_bar(&p);
     rail_close(&p);
-    rail_agent_badge(&p);
+    rail_marks(&p);
     spaces_button(&p);
 }

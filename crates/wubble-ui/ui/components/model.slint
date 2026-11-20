@@ -2,14 +2,23 @@
 // The port's `TabItem` (design repo src/wubble/slint/components.slint, @source slint-tab-row)
 // plus `id`. `favicon` is the site's real favicon, never a letter tile; an empty image shows the
 // neutral globe glyph.
+// The sound badge of a tab: none, the page plays sound (a press mutes), the tab is muted (a
+// press unmutes). wubble_core::tabmarks::Sound.
+export enum TabSound {
+    none,
+    playing,
+    muted,
+}
+
 export struct TabItem {
     id: int,
     title: string,
     url: string,
     favicon: image,
-    // wubble: the page plays sound (the engine's audible probe) / the tab is muted.
-    audible: bool,
-    muted: bool,
+    // wubble: the sound badge (wubble_core::tabmarks::Marks), from the page playing sound (the
+    // engine's audible probe) and the tab being muted; `sound-label` is what a press does.
+    sound: TabSound,
+    sound-label: string,
     // wubble: a pane of the Space's split (the design's tab-row split glyph).
     in-split: bool,
     // wubble: requests the blocker stopped on this tab's page.
