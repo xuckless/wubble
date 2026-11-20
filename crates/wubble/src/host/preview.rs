@@ -82,11 +82,9 @@ impl Host {
         let mut view = window.get_preview();
         match tab.and_then(|t| Some((t, self.model.tabs.get(&t)?))) {
             Some((id, t)) => {
-                let (host, path) = wubble_core::url::address_parts(&t.url);
-                view.title = if t.title.is_empty() { &t.url } else { &t.title }
-                    .as_str()
-                    .into();
-                view.address = format!("{host}{path}").into();
+                let (title, address) = crate::shell::preview_words(t);
+                view.title = title.into();
+                view.address = address.into();
                 // the page on screen has no snapshot: the card says only what it is
                 let on_screen = self.model.visible_tabs().contains(&id);
                 view.thumb = self
