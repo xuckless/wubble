@@ -199,4 +199,66 @@ fn settings_page_scenarios() {
     row.invoke_accessible_default_action();
     pump();
     assert_eq!(*recorded.borrow(), ["open-settings"]);
+
+    // The built-in pages: a nav link each, after the sections, that runs the page's own action;
+    // a search that names pages shows their redirect rows, counted after the settings.
+    use wubble_core::pages::{PAGE_LINKS, page_links_matching};
+    use wubble_ui::settings::page_link_items;
+    let actions = Rc::new(RefCell::new(vec![]));
+    let a = actions.clone();
+    app.on_shell_action(move |id| a.borrow_mut().push(id.to_string()));
+    app.set_settings_pages(ModelRc::from(Rc::new(VecModel::from(page_link_items(
+        &PAGE_LINKS,
+    )))));
+    pump();
+    let of_type = |label: &str, ty: &str| -> Vec<ElementHandle> {
+        ElementHandle::find_by_accessible_label(&app, label)
+            .filter(|h| h.type_name().as_deref() == Some(ty))
+            .collect()
+    };
+    for link in &PAGE_LINKS {
+        let rows = of_type(link.title(), "NavRow");
+        assert_eq!(rows.len(), 1, "{}", link.title());
+        assert_eq!(
+            rows[0].accessible_role(),
+            Some(i_slint_backend_testing::AccessibleRole::Button)
+        );
+    }
+    let about = ElementHandle::find_by_accessible_label(&app, "About")
+        .find(|h| h.type_name().as_deref() == Some("NavRow"))
+        .unwrap();
+    let history = &of_type("History", "NavRow")[0];
+    assert!(
+        history.absolute_position().y > about.absolute_position().y,
+        "the pages come after the sections"
+    );
+    history.invoke_accessible_default_action();
+    pump();
+    assert_eq!(*actions.borrow(), ["open-history"]);
+    assert!(
+        of_type("Archive", "Row").is_empty(),
+        "no redirect row unsearched"
+    );
+    app.set_settings_searching(true);
+    app.set_settings_page_matches(ModelRc::from(Rc::new(VecModel::from(page_link_items(
+        page_links_matching("tabs"),
+    )))));
+    pump();
+    let redirect = of_type("Archive", "Row");
+    assert_eq!(redirect.len(), 1);
+    assert_eq!(
+        redirect[0].accessible_description().as_deref(),
+        Some(PAGE_LINKS[4].note)
+    );
+    assert_eq!(of_type("Task manager", "Row").len(), 1);
+    let n = app.get_settings_rows().row_count() + app.get_settings_bindings().row_count();
+    let line = format!("{n} settings, 2 pages");
+    assert_eq!(
+        ElementHandle::find_by_accessible_label(&app, &line).count(),
+        1,
+        "the count line says {line:?}"
+    );
+    redirect[0].invoke_accessible_default_action();
+    pump();
+    assert_eq!(*actions.borrow(), ["open-history", "open-archive"]);
 }

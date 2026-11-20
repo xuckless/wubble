@@ -1088,6 +1088,15 @@ impl Host {
             &crate::shell::view_model(&self.model, self.w.id, &self.audio, &blocked),
             &self.favicons,
         );
+        crate::bind::render_spaces_menu(
+            &window,
+            &self.spaces_popup(),
+            &self
+                .keymap
+                .shortcut_for(wubble_core::action::Action::NewSpace)
+                .map(|c| c.to_string())
+                .unwrap_or_default(),
+        );
         let held = self
             .shown()
             .and_then(|t| self.held_popups.get(&t))

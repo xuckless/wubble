@@ -13,9 +13,14 @@
 // - `.st-path .wb-mono`: 13 px mono mist (the licence notices).
 // wubble: a row's note may be a warning (`tone`: the restart note in amber, a shortcut taken
 // by another action in coral); a Space's title is its editable name.
+// derived (docs/fidelity/derived-review.md): a search's redirect row to a built-in page
+// (`PageLinkRow`): a `.tap` row, the page's icon on the `.st-lead` tile in the Space accent, its
+// title and one-line note, and the menu's "leads on" chevron (`.tp-mrow-sub`: 14 px haze) at its
+// end; a click anywhere on it opens the page.
 
-import { Palette } from "../gen/tokens.slint";
-import { SettingsCss } from "../gen/css.slint";
+import { Palette, TouchMenu } from "../gen/tokens.slint";
+import { SettingsCss, TouchCss } from "../gen/css.slint";
+import { KitIcons } from "../gen/icons.slint";
 import { Role } from "../gen/text.slint";
 import { KitText } from "../text.slint";
 import { Calm } from "../motion/calm.slint";
@@ -252,5 +257,45 @@ export component NothingMatches inherits VerticalLayout {
     HorizontalLayout {
         alignment: start;
         @children
+    }
+}
+
+// A search's redirect row to a built-in page (derived, see the header): `opened()` is the intent.
+export component PageLinkRow inherits VerticalLayout {
+    in property <string> title;
+    in property <string> note;
+    in property <string> icon-path;
+    in property <color> accent;
+    callback opened();
+    Row {
+        tap: true;
+        accessible-role: AccessibleRole.button;
+        accessible-label: root.title;
+        accessible-description: root.note;
+        accessible-action-default => {
+            root.opened();
+        }
+        tapped => {
+            root.opened();
+        }
+        Lead {
+            icon-path: root.icon-path;
+            tint: root.accent;
+            clicked => {
+                root.opened();
+            }
+        }
+        RowText {
+            title: root.title;
+            note: root.note;
+        }
+        VerticalLayout {
+            alignment: center;
+            Icon {
+                size: TouchMenu.sub-icon;
+                path: KitIcons.chevron-right;
+                tint: TouchCss.tp-mrow-tp-mrow-sub--color;
+            }
+        }
     }
 }

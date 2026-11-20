@@ -20,7 +20,7 @@ import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
 import { CommandBar } from "kit/chrome/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
-import { GlanceView } from "components/model.slint";
+import { GlanceView, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
@@ -32,6 +32,7 @@ import { BookmarkSheet } from "components/bookmark-sheet.slint";
 import { PrintSheet } from "components/print-sheet.slint";
 import { SwipeChip } from "components/swipe-chip.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
+import { SpacesMenu } from "kit/chrome/spaces-menu.slint";
 import { FindBar } from "components/find-bar.slint";
 import { Toast } from "components/toast.slint";
 import { PreviewCard } from "components/preview-card.slint";
@@ -56,7 +57,7 @@ import "fonts/GeistMono-Variable.ttf";
 
 export { AutofillAnswer, AutofillView, PageScroll, Tips, TipView, Calm, Shell, GlanceView }
 export { Controls, ControlView } from "components/controls/registry.slint";
-export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind }
+export { PeekCue, CommandMode, Palette, SplitPane, SplitSeam, TabItem, SpaceItem, CommandResult, CommandKind, CommandBarState, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, WindowEdge, Chrome, Radius, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, Fonts, VideoMark, VideoView, BoostView, AxItemView, AxKind, SpacesMenuRow, SpacesMenuGeometry, PageLinkItem }
 
 export component AppWindow inherits Window {
     title: "wubble";
@@ -221,7 +222,7 @@ export component AppWindow inherits Window {
     in property <int> active-space-id <=> sidebar.active-space-id;
 
     // ── driven by wubble_ui::driver once per rendered frame ──
-    // tabs.rs: rows, the indicator (its row, -1 for none), the Space capsule
+    // tabs.rs: rows, the indicator (its row, -1 for none), the window's Space's row
     in property <[length]> row-y <=> sidebar.row-y;
     in property <[float]> row-scale <=> sidebar.row-scale;
     in property <int> dragged-row <=> sidebar.dragged-row;
@@ -247,9 +248,6 @@ export component AppWindow inherits Window {
     in property <float> indicator-stretch <=> sidebar.indicator-stretch;
     in property <float> indicator-origin <=> sidebar.indicator-origin;
     in property <int> space-index <=> sidebar.space-index;
-    in property <length> capsule-offset <=> sidebar.capsule-offset;
-    in property <float> capsule-stretch <=> sidebar.capsule-stretch;
-    in property <float> capsule-origin <=> sidebar.capsule-origin;
     // seam.rs: the mode (Seam owns it), the width spring, contents a beat behind, the string
     in property <SidebarMode> sidebar-mode: SidebarMode.extended;
     in property <length> sidebar-width: Chrome.sidebarDefault;
@@ -280,10 +278,6 @@ export component AppWindow inherits Window {
     // Pointer reports for the driver, in window coordinates.
     callback tab-press <=> sidebar.tab-press;
     callback tab-track <=> sidebar.tab-track;
-    out property <length> space-strip-x <=> sidebar.space-strip-x;
-    out property <length> space-strip-y <=> sidebar.space-strip-y;
-    out property <length> space-pitch <=> sidebar.space-pitch;
-    out property <length> space-tile <=> sidebar.space-tile;
     // A tab dragged out of the list (wubble_core::tabdrag), written by the host: its title
     // follows the pointer, and the content edge it would split into is lit (0 none, 1 left,
     // 2 right). Written for wubble: the design repo has no drag out of the list.
@@ -385,7 +379,8 @@ export component AppWindow inherits Window {
     callback command-dismissed();
     // Intents: the bar opens itself; Rust may prefill the query.
     callback new-tab-requested();
-    callback space-switched <=> sidebar.space-switched;
+    // space id: a row of the Spaces popup (and the host's own switches)
+    callback space-switched(int);
     callback address-focus-requested();
     // The bar opens to choose a page to put beside the focused one (split view).
     callback beside-requested();
@@ -470,6 +465,8 @@ export component AppWindow inherits Window {
     in property <bool> settings-filter-busy <=> settings-ui.filter-busy;
     in property <AboutView> settings-about <=> settings-ui.about;
     in property <UpdatesView> settings-updates <=> settings-ui.updates;
+    in property <[PageLinkItem]> settings-pages <=> settings-ui.pages;
+    in property <[PageLinkItem]> settings-page-matches <=> settings-ui.page-matches;
     // The history page: the lines (day headers and visits), the search state, "Show more".
     in property <[HistoryLineItem]> history-lines;
     in property <bool> history-searching;
@@ -556,6 +553,37 @@ export component AppWindow inherits Window {
     callback download-action(int, DownloadAction);
     // The popover is open (presentation only; the list is the host's).
     in-out property <bool> downloads-open: false;
+    // The sidebar footer's Spaces popup (wubble_core::spacemenu, bound by the host): its lines
+    // and the keys' rows (the lines, a separator, New Space). The "^" asks the host
+    // (`spaces-menu-requested`), which opens it through the overlay stack; it closes itself.
+    in property <[SpacesMenuRow]> spaces-menu-rows;
+    in property <[MenuEntry]> spaces-menu-entries;
+    in-out property <bool> spaces-open: false;
+    callback spaces-menu-requested();
+    // a dragged tab over the popup: the line it would drop on (-1 none), its top in the list,
+    // or the sticky New Space row (the host's, from wubble_core::tabdrag)
+    in property <int> spaces-drop-line: -1;
+    in property <length> spaces-drop-top;
+    in property <bool> spaces-drop-sticky;
+    out property <SpacesMenuGeometry> spaces-menu-geometry: {
+        shown: root.spaces-open,
+        switcher-x: sidebar.spaces-anchor-x,
+        switcher-y: sidebar.spaces-anchor-y,
+        switcher-w: sidebar.spaces-switcher-w,
+        switcher-h: sidebar.spaces-switcher-h,
+        panel-x: spaces-ui.panel-x,
+        panel-y: spaces-ui.panel-y,
+        panel-w: spaces-ui.panel-w,
+        panel-h: spaces-ui.panel-h,
+        rows-x: spaces-ui.rows-x,
+        rows-w: spaces-ui.rows-width,
+        list-top: spaces-ui.list-top,
+        list-h: spaces-ui.list-h,
+        scroll: spaces-ui.list-scroll,
+        line: spaces-ui.line-height,
+        rule: spaces-ui.rule-height,
+        sticky-top: spaces-ui.sticky-top,
+    };
     changed downloads => {
         if root.downloads.length == 0 {
             root.downloads-open = false;
@@ -598,6 +626,11 @@ export component AppWindow inherits Window {
     in property <PopupView> popup;
     in property <image> popup-frame;
 
+    // `q` typed into the settings page's search (the gallery)
+    public function settings-type-query(q: string) {
+        settings-ui.type-query(q);
+    }
+
     // Puts `text` on the clipboard through Slint's own (no clipboard crate): a hidden field
     // selects it and copies.
     public function copy-text(text: string) {
@@ -618,13 +651,15 @@ export component AppWindow inherits Window {
     property <bool> print-open: root.print-sheet-view.open;
     property <bool> find-open: root.find.open;
     property <int> find-focus: root.find.focus-serial;
-    property <bool> overlay-open: root.menu.open || root.downloads-open || root.dialog.open || root.page-error.open;
+    property <bool> overlay-open: root.menu.open || root.downloads-open || root.spaces-open || root.dialog.open || root.page-error.open;
     function settle-focus() {
         root.sidebar-focused = false;
         if root.menu.open {
             menu-ui.take-focus();
         } else if root.downloads-open {
             downloads-ui.take-focus();
+        } else if root.spaces-open {
+            spaces-ui.take-focus();
         } else if root.dialog.open {
             sheet.focus-sheet();
         } else if root.page-error.open {
@@ -677,6 +712,9 @@ export component AppWindow inherits Window {
         root.settle-focus();
     }
     changed downloads-open => {
+        root.settle-focus();
+    }
+    changed spaces-open => {
         root.settle-focus();
     }
     // The screenshot overlay took the keys; closed, they go back.
@@ -908,6 +946,10 @@ export component AppWindow inherits Window {
             settings-ui := SettingsPage {
                 open: root.settings-open;
                 accent: root.space-accent;
+                // a built-in page's link: the page's own action
+                page-requested(id) => {
+                    root.shell-action(id);
+                }
             }
             // start page (L7): the new-tab page's front over the scene's living layer
             if root.page == InternalPageKind.start: StartPage {
@@ -1375,6 +1417,10 @@ export component AppWindow inherits Window {
                     root.request-address-focus();
                 }
                 has-downloads: root.downloads.length > 0;
+                spaces-open: root.spaces-open;
+                spaces-requested => {
+                    root.spaces-menu-requested();
+                }
                 downloads-requested => {
                     root.downloads-open = !root.downloads-open;
                 }
@@ -1495,6 +1541,30 @@ export component AppWindow inherits Window {
         }
         dismissed => {
             root.downloads-open = false;
+        }
+    }
+
+    spaces-ui := SpacesMenu {
+        open: root.spaces-open;
+        rows: root.spaces-menu-rows;
+        entries: root.spaces-menu-entries;
+        anchor-x: sidebar.spaces-anchor-x;
+        anchor-y: sidebar.spaces-anchor-y;
+        trigger-x: sidebar.spaces-trigger-x;
+        trigger-y: sidebar.spaces-trigger-y;
+        drop-line: root.spaces-drop-line;
+        drop-top: root.spaces-drop-top;
+        drop-sticky: root.spaces-drop-sticky;
+        picked(id) => {
+            root.spaces-open = false;
+            root.space-switched(id);
+        }
+        new-space => {
+            root.spaces-open = false;
+            root.shell-action("new-space");
+        }
+        dismissed => {
+            root.spaces-open = false;
         }
     }
 

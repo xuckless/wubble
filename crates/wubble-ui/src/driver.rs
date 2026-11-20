@@ -1,5 +1,5 @@
 //! Effect side of the spring-driven shell: steps the physics in `wubble_core` (tab rows, the
-//! Space capsule, the seam and the tab list's scroller) once per rendered frame and writes the
+//! seam and the tab list's scroller) once per rendered frame and writes the
 //! values into Slint `in` properties.
 //!
 //! The frame body is the design repo's port driver (`src/wubble/slint/driver.rs`,
@@ -38,7 +38,7 @@ use wubble_core::motion::{DT_CAP, OVERLAP_IN, ease, overlap_in, tween};
 const PAGE_OUT: f64 = 0.19;
 use wubble_core::scroller::{DeltaMode, Scroller};
 use wubble_core::seam::{self, INSET, SEAM, Seam};
-use wubble_core::tabs::{self, SpaceSwitcher, TabRows, TabUp};
+use wubble_core::tabs::{self, TabRows, TabUp};
 
 use crate::glass::GlassRegistry;
 use crate::{
@@ -78,7 +78,8 @@ pub struct Driver {
     tabs: TabRows,
     /// Tab ids of the rows, in the Slint model's order.
     ids: Vec<i32>,
-    spaces: SpaceSwitcher,
+    /// The window's Space's row: a change replays the Space name's entrance.
+    space: usize,
     seam: Seam,
     scroll: Scroller,
     /// The open native page's scroller (`PageScroll`): the design's pages scroll in its
@@ -178,7 +179,7 @@ impl Driver {
         let mut driver = Self {
             tabs: TabRows::new(&row_ids(&ids), row),
             ids,
-            spaces: SpaceSwitcher::new(space.unwrap_or(0)),
+            space: space.unwrap_or(0),
             seam,
             scroll: Scroller::new(),
             page_scroll: Scroller::new(),
@@ -231,10 +232,10 @@ impl Driver {
         window.set_selected_row(slint_index(row));
         let space = active_space(window);
         if let Some(i) = space {
-            if i != self.spaces.active {
+            if i != self.space {
                 self.space_t = 0.0;
             }
-            self.spaces.active = i;
+            self.space = i;
         }
         window.set_space_index(slint_index(space));
     }
@@ -321,13 +322,6 @@ impl Driver {
         window.set_indicator_y(ind.y as f32);
         window.set_indicator_stretch(ind.stretch as f32);
         window.set_indicator_origin(ind.origin as f32);
-
-        // the Space capsule (tabs.rs SpaceSwitcher)
-        moving |= self.spaces.step(dt);
-        let cap = self.spaces.indicator();
-        window.set_capsule_offset(cap.y as f32);
-        window.set_capsule_stretch(cap.stretch as f32);
-        window.set_capsule_origin(cap.origin as f32);
 
         // the seam (seam.rs): width, contents a beat behind, the bowed string
         moving |= self.seam.step(dt, h_win);

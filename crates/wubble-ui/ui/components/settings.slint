@@ -13,7 +13,7 @@
 
 import { Shell } from "../kit/derived.slint";
 import { Mark } from "../kit/chrome/mark.slint";
-import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, FilterListItem } from "model.slint";
+import { EntryItem, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, UpdatesView, FilterListItem, PageLinkItem } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { IconButton } from "../kit/controls/icon-button.slint";
 import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
@@ -27,8 +27,8 @@ import { Field } from "../kit/controls/field.slint";
 import { ListEditor, ListEditorAdds } from "../kit/controls/list-editor.slint";
 import { Fold } from "../kit/motion/fold.slint";
 import { PageTitle, SearchCount, PageScroller, SettingsLayout } from "../kit/settings/page.slint";
-import { NavRow, NavIndicator } from "../kit/settings/nav.slint";
-import { SectionHead, SectionHeader, CardSlice, Card, Row, RowText, RowNameText, RowNote, RowControls, NoteTone, Lead, MonoNote, NothingMatches, SpaceColours } from "../kit/settings/section.slint";
+import { NavRow, NavIndicator, NavGroup } from "../kit/settings/nav.slint";
+import { SectionHead, SectionHeader, CardSlice, Card, Row, RowText, RowNameText, RowNote, RowControls, NoteTone, Lead, MonoNote, NothingMatches, SpaceColours, PageLinkRow } from "../kit/settings/section.slint";
 import { ResetButton } from "../kit/settings/reset.slint";
 
 export { Field, SectionHeader, Card }
@@ -382,6 +382,11 @@ export component SettingsPage inherits Rectangle {
     in property <UpdatesView> updates;
     // the search box has text: only the matching rows show, the other sections are left out
     in property <bool> searching;
+    // The built-in pages it links to (the nav's second group), and those the search names (its
+    // redirect rows). Nothing of them is rebuilt here: a link runs the page's own action.
+    in property <[PageLinkItem]> pages;
+    in property <[PageLinkItem]> page-matches;
+    callback page-requested(string);
     callback query-changed(string);
     callback setting-changed(string, string);
     callback setting-reset(string);
@@ -410,6 +415,11 @@ export component SettingsPage inherits Rectangle {
         page.reset();
         root.tracked = 0;
     }
+    // `q` typed into the search (the gallery's search scene)
+    public function type-query(q: string) {
+        search.text = q;
+        root.search-for(q);
+    }
 
     visible: root.open;
 
@@ -436,6 +446,9 @@ export component SettingsPage inherits Rectangle {
     property <int> about-at: root.table + 5;
     property <int> last: root.searching ? (root.bindings.length > 0 ? root.shortcuts : root.table - 1) : root.about-at;
     property <int> matches: root.rows.length + root.bindings.length;
+    // what the search leaves: "N settings", then ", M pages" when it names pages
+    property <string> settings-count: root.matches == 1 ? "1 setting" : root.matches + " settings";
+    property <string> pages-count: root.page-matches.length == 1 ? "1 page" : root.page-matches.length + " pages";
     // the section the reader is in: the last one past the tracking line, the last at the end,
     // or the one picked in the list until the page is scrolled by hand
     property <int> tracked: 0;
@@ -477,6 +490,25 @@ export component SettingsPage inherits Rectangle {
 
             VerticalLayout {
                 spacing: 0px;
+
+                // A search's redirect rows: the built-in pages it names, above the settings
+                if root.searching && root.page-matches.length > 0: VerticalLayout {
+                    padding-bottom: Shell.section-below;
+                    SectionHead {
+                        text: "Pages";
+                    }
+                    Card {
+                        for link in root.page-matches: PageLinkRow {
+                            title: link.title;
+                            note: link.note;
+                            icon-path: Glyph.page(link.url);
+                            accent: root.accent;
+                            opened => {
+                                root.page-requested(link.action);
+                            }
+                        }
+                    }
+                }
 
                 // A flat list (rows keep their instance across a re-render); each section's
                 // first row carries its heading, each row draws its slice of the section's card.
@@ -915,7 +947,7 @@ export component SettingsPage inherits Rectangle {
 
                 // `.st-empty`: the search left nothing
                 Fold {
-                    open: root.searching && root.matches == 0;
+                    open: root.searching && root.matches == 0 && root.page-matches.length == 0;
                     content-height: empty.preferred-height;
                     empty := NothingMatches {
                         text: "Nothing matches “" + search.text + "”.";
@@ -969,7 +1001,7 @@ export component SettingsPage inherits Rectangle {
                 padding-bottom: Shell.count-below;
                 padding-left: Shell.count-in;
                 SearchCount {
-                    text: !root.searching ? "" : root.matches == 0 ? "No matches" : root.matches == 1 ? "1 setting" : root.matches + " settings";
+                    text: !root.searching ? "" : root.page-matches.length == 0 ? (root.matches == 0 ? "No matches" : root.settings-count) : root.matches == 0 ? root.pages-count : root.settings-count + ", " + root.pages-count;
                 }
             }
             // .st-nav: the table's sections (one per first row), then the page's own
@@ -1016,6 +1048,24 @@ export component SettingsPage inherits Rectangle {
                                 root.pick(root.table + i);
                             }
                         }
+                    }
+                }
+            }
+            // the built-in pages: links out of Settings, each opening its page
+            NavGroup {
+                text: "Pages";
+            }
+            for link in root.pages: Rectangle {
+                height: root.pitch;
+                NavRow {
+                    y: 0px;
+                    title: link.title;
+                    icon-path: Glyph.page(link.url);
+                    leads: true;
+                    accent: root.accent;
+                    accessible-role: AccessibleRole.button;
+                    picked => {
+                        root.page-requested(link.action);
                     }
                 }
             }

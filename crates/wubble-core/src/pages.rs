@@ -556,6 +556,92 @@ impl InternalPage {
     }
 }
 
+// ------------------------------------------------------------ page links
+
+/// A built-in page Settings links to (owner, 2026-11-19: the pages are not reachable "unless
+/// users know what to type in the searchbar or know the right key combinations"; "Links in the
+/// settings nav, opens up in a new page where needed. and when searched, shows a redirect
+/// link"). Settings rebuilds nothing of the page: the link runs `action`, the page's own
+/// action (the command bar's and the shortcut's), which shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PageLink {
+    pub page: InternalPage,
+    pub action: crate::action::Action,
+    /// One line under the title in a search's redirect row.
+    pub note: &'static str,
+    /// Words a search finds it by, besides its title.
+    pub keywords: &'static [&'static str],
+}
+
+impl PageLink {
+    pub fn title(&self) -> &'static str {
+        self.page.title()
+    }
+
+    /// The address, which also names its icon in the shell (kit `Glyph.page`).
+    pub fn url(&self) -> &'static str {
+        self.page.url()
+    }
+
+    /// The query (case-insensitive, trimmed) is in its title or one of its keywords; a blank
+    /// query matches none.
+    pub fn matches(&self, query: &str) -> bool {
+        let needle = query.trim().to_lowercase();
+        !needle.is_empty()
+            && (contains_ci(self.title(), &needle)
+                || self.keywords.iter().any(|k| contains_ci(k, &needle)))
+    }
+}
+
+/// Every page Settings links to, in the nav's order: each user-facing built-in page but
+/// Settings itself and the start page (the new-tab page, which the new-tab row opens).
+pub const PAGE_LINKS: [PageLink; 6] = {
+    use crate::action::Action;
+    [
+        PageLink {
+            page: InternalPage::History,
+            action: Action::OpenHistory,
+            note: "Pages you visited, by day",
+            keywords: &["visited", "recent", "browsing"],
+        },
+        PageLink {
+            page: InternalPage::Bookmarks,
+            action: Action::OpenBookmarks,
+            note: "Saved pages and their folders",
+            keywords: &["favourites", "favorites", "saved pages", "folders"],
+        },
+        PageLink {
+            page: InternalPage::Downloads,
+            action: Action::OpenDownloads,
+            note: "Files you downloaded",
+            keywords: &["files"],
+        },
+        PageLink {
+            page: InternalPage::Passwords,
+            action: Action::OpenPasswords,
+            note: "Saved sign-ins",
+            keywords: &["logins", "sign-ins", "accounts", "credentials"],
+        },
+        PageLink {
+            page: InternalPage::Archive,
+            action: Action::OpenArchive,
+            note: "Tabs put away after a while unvisited",
+            keywords: &["archived", "old tabs", "closed tabs"],
+        },
+        PageLink {
+            page: InternalPage::Tasks,
+            action: Action::OpenTasks,
+            note: "Tabs and processes, their memory and CPU",
+            keywords: &["tasks", "tabs", "memory", "cpu", "processes"],
+        },
+    ]
+};
+
+/// The links a settings search shows as redirect rows, in table order.
+pub fn page_links_matching(query: &str) -> Vec<&'static PageLink> {
+    PAGE_LINKS.iter().filter(|l| l.matches(query)).collect()
+}
+
 // --------------------------------------------------------------- settings
 
 /// The control a settings row shows, picked by the setting's kind ([`control_for`]).
@@ -878,6 +964,39 @@ mod tests {
     const HOUR: i64 = 3_600_000;
     // 2024-03-01T12:00:00Z
     const NOW: i64 = 1_709_294_400_000;
+
+    #[test]
+    fn page_links_cover_every_user_facing_page_once_with_its_own_action() {
+        use crate::action::Action;
+        let linked: Vec<_> = PAGE_LINKS.iter().map(|l| l.page).collect();
+        let expected: Vec<_> = InternalPage::ALL
+            .into_iter()
+            .filter(|p| !matches!(p, InternalPage::Settings | InternalPage::Start))
+            .collect();
+        assert_eq!(linked, expected);
+        for l in &PAGE_LINKS {
+            // the action the command bar and the shortcut run, by its id
+            assert_eq!(Action::from_id(&l.action.id()), Some(l.action));
+            assert!(!l.note.is_empty(), "{}", l.title());
+        }
+        assert_eq!(PAGE_LINKS[5].title(), "Task manager");
+        assert_eq!(PAGE_LINKS[0].url(), "wubble://history");
+    }
+
+    #[test]
+    fn a_settings_search_finds_pages_by_title_or_keyword() {
+        let titles =
+            |q: &str| -> Vec<&str> { page_links_matching(q).iter().map(|l| l.title()).collect() };
+        assert_eq!(titles("hist"), ["History"]);
+        assert_eq!(titles("  PASSWORDS "), ["Passwords"]);
+        assert_eq!(titles("logins"), ["Passwords"]);
+        assert_eq!(titles("memory"), ["Task manager"]);
+        assert_eq!(titles("favorites"), ["Bookmarks"]);
+        // in two pages' words: both, in table order
+        assert_eq!(titles("tabs"), ["Archive", "Task manager"]);
+        assert!(titles("").is_empty(), "a blank query lists no page");
+        assert!(titles("zzz").is_empty());
+    }
 
     fn visit(url: &str, title: &str, ms: i64) -> HistoryRow {
         HistoryRow {

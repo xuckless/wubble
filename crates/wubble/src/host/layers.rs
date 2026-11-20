@@ -50,6 +50,9 @@ impl Host {
         if window.get_downloads_open() {
             add(Kind::Downloads, None);
         }
+        if window.get_spaces_open() {
+            add(Kind::Spaces, None);
+        }
         if shown
             .and_then(|t| self.surfaces.get(&t))
             .is_some_and(|s| matches!(s.menu, Menu::Open { .. } | Menu::Shell { .. }))
@@ -96,6 +99,28 @@ impl Host {
             .contains(&Effect::Open(layer))
     }
 
+    /// The footer's "^" (or the current Space's tile): the Spaces popup opens when the overlays
+    /// let it (it closes the downloads popover or a menu; a page's dialog refuses it).
+    pub fn spaces_menu_requested(&mut self) {
+        self.hover_dismiss();
+        let Some(window) = self.w.window.upgrade() else {
+            return;
+        };
+        if window.get_spaces_open() || !self.overlay_open(Kind::Spaces, None) {
+            return;
+        }
+        window.set_spaces_open(true);
+        self.render_surfaces(&window);
+    }
+
+    /// This window's Spaces popup (wubble_core::spacemenu), as drawn and as dropped on.
+    pub(super) fn spaces_popup(&self) -> wubble_core::spacemenu::Popup {
+        wubble_core::spacemenu::popup(
+            &self.model.spaces,
+            crate::shell::window_space(&self.model, self.w.id),
+        )
+    }
+
     /// Escape: closes the topmost overlay; whether there was one to close.
     pub(super) fn overlay_escape(&mut self, window: &AppWindow) -> bool {
         let shown = self.shown();
@@ -133,6 +158,7 @@ impl Host {
                 });
             }
             (Kind::Downloads, _) => window.set_downloads_open(false),
+            (Kind::Spaces, _) => window.set_spaces_open(false),
             (Kind::Menu, _) => {
                 if let Some(tab) = shown {
                     self.apply_menu(tab, MenuEvent::Dismiss);

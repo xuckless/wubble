@@ -380,52 +380,6 @@ impl TabRows {
     }
 }
 
-// @source slint-spaces-switcher
-/// The Space switcher's capsule (`SpaceSwitcher` in tabs.tsx): follows the active icon on the
-/// follow spring and stretches between them along the switcher's axis.
-#[derive(Clone, Debug)]
-pub struct SpaceSwitcher {
-    pos: Spring,
-    stretch: Stretch,
-    pub active: usize,
-}
-
-impl SpaceSwitcher {
-    /// 36 tile + 2 gap
-    pub const PITCH: f64 = 38.0;
-
-    pub fn new(active: usize) -> Self {
-        SpaceSwitcher {
-            pos: spring(active as f64),
-            stretch: Stretch::new(),
-            active,
-        }
-    }
-
-    pub fn step(&mut self, dt: f64) -> bool {
-        let m = step(
-            &mut self.pos,
-            self.active as f64,
-            K::follow[0],
-            K::follow[1],
-            dt,
-        );
-        self.stretch.update(self.pos.x * Self::PITCH, dt) || m
-    }
-
-    /// Offset along the axis (px), and the indicator stretch along it / squash across it.
-    /// `origin` is the TS transform-origin along the axis: 0.3 moving forward, 0.7 back.
-    pub fn indicator(&self) -> Indicator {
-        let s = self.stretch.x();
-        Indicator {
-            y: self.pos.x * Self::PITCH,
-            stretch: s,
-            squash: squash_of(s),
-            origin: self.stretch.origin(),
-        }
-    }
-}
-
 /// wubble change: the tab list's Up / Down keys (`tabs.tsx` row `onKeyDown`:
 /// `clamp(i ± 1, 0, n - 1)`, no wrap), over wubble's rows, where folder headers sit between the
 /// tabs: from row `from`, the nearest tab row (`is_tab`) one way, or `from` itself at the end.

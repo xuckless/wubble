@@ -9,9 +9,15 @@
 // 6), the same follow spring and stretch along a row of 36 px pitch. The nav's pitch is 38, so
 // the ring's travel is scaled by 38 / 36 and its stretch along x is applied along y (kit gap: a
 // ring slot with its own pitch and axis).
+// derived (docs/fidelity/derived-review.md): wubble's nav has a second group under the
+// sections, the built-in pages Settings links to (owner, 2026-11-19): its heading the settings
+// group label (`.st-group`: 13 / 500 mist, 22 above, 8 below, 8 in; `NavGroup`), its rows the
+// section rows with the menu's "leads on" chevron at their end (`.tp-mrow-sub`: 14 px haze;
+// NavRow `leads`), never current: a click opens the page.
 
-import { Palette } from "../gen/tokens.slint";
-import { SettingsCss } from "../gen/css.slint";
+import { Palette, TouchMenu } from "../gen/tokens.slint";
+import { SettingsCss, TouchCss } from "../gen/css.slint";
+import { KitIcons } from "../gen/icons.slint";
 import { Role } from "../gen/text.slint";
 import { Shell } from "../derived.slint";
 import { KitText } from "../text.slint";
@@ -65,6 +71,8 @@ export component NavRow inherits Rectangle {
     in property <bool> on;
     in property <bool> enabled: true;
     in property <color> accent: Palette.sky;
+    // a link out of Settings: the "leads on" chevron at its end
+    in property <bool> leads;
     callback picked();
 
     property <bool> lit: root.on || (ta.has-hover && root.enabled);
@@ -123,6 +131,30 @@ export component NavRow inherits Rectangle {
                     duration: Calm.ms(SettingsCss.wb-st-nav-btn--transition-color-duration);
                 }
             }
+            if root.leads: VerticalLayout {
+                alignment: center;
+                Icon {
+                    size: TouchMenu.sub-icon;
+                    path: KitIcons.chevron-right;
+                    tint: TouchCss.tp-mrow-tp-mrow-sub--color;
+                }
+            }
         }
+    }
+}
+
+// The nav's second group's heading (`.st-group`, derived: see the header)
+export component NavGroup inherits HorizontalLayout {
+    in property <string> text;
+    padding-top: SettingsCss.st-group--margin-top;
+    padding-bottom: SettingsCss.st-group--margin-bottom;
+    padding-left: SettingsCss.st-group--margin-left;
+    padding-right: SettingsCss.st-group--margin-right;
+    KitText {
+        role: Role.st-group;
+        text: root.text;
+        color: SettingsCss.st-group--color;
+        vertical-alignment: center;
+        overflow: elide;
     }
 }

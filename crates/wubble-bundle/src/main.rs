@@ -83,7 +83,7 @@ fn main() {
 /// `NSLocalNetworkUsageDescription`: since macOS 15 a connection to the local network (a dev
 /// server or NAS at 192.168.x.x, a `name.local` host; loopback is exempt) needs the user's
 /// Local Network permission, and macOS shows this sentence when it asks. Chrome's Info.plist
-/// carries the same key. No `NSBonjourServices`: wubble browses no Bonjour service itself.
+/// carries the same key (and the camera and microphone ones below). No `NSBonjourServices`: wubble browses no Bonjour service itself.
 #[cfg(target_os = "macos")]
 fn add_plist_keys(path: &std::path::Path) {
     let mut info = plist::Value::from_file(path)
@@ -94,6 +94,18 @@ fn add_plist_keys(path: &std::path::Path) {
         "NSLocalNetworkUsageDescription".into(),
         "wubble opens the web pages you ask for, including ones served by devices and \
          development servers on your local network."
+            .into(),
+    );
+    // Under the hardened runtime macOS refuses the camera and the microphone to an app whose
+    // Info.plist does not say why (the entitlements alone are not enough); Chrome's carries
+    // the same two keys. wubble still asks per site before a page gets either.
+    info.insert(
+        "NSCameraUsageDescription".into(),
+        "A web page you allow can use the camera, for example for a video call.".into(),
+    );
+    info.insert(
+        "NSMicrophoneUsageDescription".into(),
+        "A web page you allow can use the microphone, for example for a call or a recording."
             .into(),
     );
     plist::Value::Dictionary(info)

@@ -10,7 +10,7 @@ use i_slint_backend_testing::init_integration_test_with_mock_time;
 use slint::ComponentHandle;
 use wubble_core::motion::K;
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
-use wubble_core::tabs::{SpaceSwitcher, TABS};
+use wubble_core::tabs::TABS;
 use wubble_ui::{AppWindow, Chrome};
 
 /// The value of `name: <number><unit>;` in a token file.
@@ -44,10 +44,6 @@ fn tokens_match_physics() {
         TABS::pitch
     );
     assert_eq!(f64::from(app.get_row_pitch()), TABS::pitch);
-    assert_eq!(
-        token("kit/derived.slint", "space-tile") + token("kit/derived.slint", "space-gap"),
-        SpaceSwitcher::PITCH
-    );
 
     for (name, kc) in [
         ("follow", K::follow),

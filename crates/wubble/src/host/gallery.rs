@@ -108,6 +108,9 @@ impl Host {
                 if SCENES[i].wheel > 0 {
                     shot::wheel(&window, SCENES[i].wheel as f32);
                 }
+                if SCENES[i].overlay == Overlay::SpacesDrag {
+                    self.gallery_drag_to_spaces();
+                }
             }
             Some(Action::Click(i)) => {
                 self.gallery_wait(SETTLE);
@@ -160,8 +163,9 @@ impl Host {
     fn gallery_show(&mut self, window: &AppWindow, scene: &Scene) {
         let scale = window.window().scale_factor();
         let at = |(x, y): (f32, f32)| ((x * scale).round() as i32, (y * scale).round() as i32);
-        // Nothing of the last scene stays: the page's surfaces, the autofill chip's menu, a
-        // tooltip.
+        // Nothing of the last scene stays: a held tab, the page's surfaces, the autofill chip's
+        // menu, a tooltip.
+        self.cancel_tab_drag();
         self.tip_dismiss();
         if let Some(tab) = self.shown() {
             self.surfaces.remove(&tab);
@@ -187,6 +191,12 @@ impl Host {
         }
         if let Overlay::Long(long) = scene.overlay {
             self.gallery_long(long);
+        }
+        if let Overlay::Spaces(n) = scene.overlay {
+            while self.model.spaces.len() < n {
+                let command = self.model.new_space();
+                self.dispatch(command);
+            }
         }
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
@@ -339,6 +349,9 @@ impl Host {
             | Overlay::Long(Long::Pill | Long::Crowd)
             | Overlay::CommandBar(_)
             | Overlay::Downloads
+            | Overlay::Spaces(_)
+            | Overlay::SpacesDrag
+            | Overlay::SettingsSearch(_)
             | Overlay::Unlock
             | Overlay::Status(_) => {}
         }
@@ -371,6 +384,7 @@ impl Host {
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
             window.invoke_dismiss_command_bar();
             window.set_downloads_open(overlay == Overlay::Downloads);
+            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_)));
             window.invoke_sidebar_mode_requested(sidebar.into());
             match overlay {
                 Overlay::CommandBar(query) => {
@@ -381,6 +395,7 @@ impl Host {
                     }
                 }
                 Overlay::Unlock => window.invoke_passwords_unlock(),
+                Overlay::SettingsSearch(query) => window.invoke_settings_type_query(query.into()),
                 _ => {}
             }
         });

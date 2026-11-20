@@ -12,9 +12,10 @@ use slint::{
     platform::{PointerEventButton, WindowEvent},
 };
 use wubble_core::seam::{INSET, SEAM, SIDEBAR_DEFAULT};
-use wubble_core::tabs::SpaceSwitcher;
 use wubble_ui::driver::{self, Driver};
-use wubble_ui::{AppWindow, PopupView, SidebarMode, SpaceItem, SplitPane, SplitSeam};
+use wubble_ui::{
+    AppWindow, MenuEntry, PopupView, SidebarMode, SpaceItem, SpacesMenuRow, SplitPane, SplitSeam,
+};
 
 const DT: f32 = 0.016;
 
@@ -221,11 +222,15 @@ fn seam_drag(app: &AppWindow, driver: &Shared) {
     pointer(app, 900.0, 300.0);
 }
 
-fn space_capsule(app: &AppWindow, driver: &Shared) {
+/// The footer's switcher shows the window's Space (its row in the model, resolved when the model
+/// arrives after the id); its Spaces popup opens above the switcher, from its left edge, the
+/// menu's 8 px away, at most seven rows tall plus its rule and sticky row (the menu's padding 6
+/// round them), on the rail too (where the "^" is under the current Space's tile).
+fn space_footer(app: &AppWindow, driver: &Shared) {
     let spaces: Vec<SpaceItem> = (1..=3)
         .map(|id| SpaceItem {
             id,
-            name: "".into(),
+            name: format!("space {id}").into(),
             tint: Default::default(),
             icon: "personal".into(),
         })
@@ -235,11 +240,9 @@ fn space_capsule(app: &AppWindow, driver: &Shared) {
     pump(1);
     settle(app, driver);
     assert_eq!(app.get_space_index(), 2);
-    assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
     app.set_active_space_id(1);
     pump(1);
-    settle(app, driver);
-    assert_eq!(app.get_capsule_offset(), 0.0);
+    assert_eq!(app.get_space_index(), 0);
 
     // Id set before the model: the index resolves when the model arrives.
     app.set_spaces(ModelRc::default());
@@ -248,8 +251,148 @@ fn space_capsule(app: &AppWindow, driver: &Shared) {
     assert_eq!(app.get_space_index(), -1);
     app.set_spaces(ModelRc::from(spaces.as_slice()));
     pump(1);
-    settle(app, driver);
-    assert_eq!(app.get_capsule_offset(), 2.0 * SpaceSwitcher::PITCH as f32);
+    assert_eq!(app.get_space_index(), 2);
+
+    let rows: Vec<SpacesMenuRow> = (1..=12)
+        .map(|id| SpacesMenuRow {
+            id,
+            name: format!("row {id}").into(),
+            icon: "work".into(),
+            current: id == 3,
+            ..Default::default()
+        })
+        .collect();
+    let mut entries: Vec<MenuEntry> = rows
+        .iter()
+        .map(|r| MenuEntry {
+            label: r.name.clone(),
+            enabled: true,
+            ..Default::default()
+        })
+        .collect();
+    entries.push(MenuEntry {
+        separator: true,
+        ..Default::default()
+    });
+    entries.push(MenuEntry {
+        label: "New Space".into(),
+        enabled: true,
+        ..Default::default()
+    });
+    app.set_spaces_menu_rows(ModelRc::from(rows.as_slice()));
+    app.set_spaces_menu_entries(ModelRc::from(entries.as_slice()));
+    use wubble_core::space::{Rgb, SpaceIcon, SpaceId};
+    use wubble_core::spacemenu::{Geometry, Group, Popup, Row, Section, Sticky, Target};
+    use wubble_core::tabdrag::Point;
+    let popup = Popup {
+        sections: vec![Section {
+            group: Group::Spaces,
+            rows: (1..=12)
+                .map(|id| Row {
+                    target: Target::Space(SpaceId(id)),
+                    name: format!("row {id}"),
+                    tint: Rgb(0, 0, 0),
+                    icon: SpaceIcon::Work,
+                    current: id == 3,
+                })
+                .collect(),
+        }],
+        sticky: Sticky::NewSpace,
+    };
+    let button = |label: &str| {
+        ElementHandle::find_by_accessible_label(app, label)
+            .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
+            .unwrap()
+    };
+    for rail in [false, true] {
+        drag_seam_to(
+            app,
+            driver,
+            if rail { 100.0 } else { SIDEBAR_DEFAULT as f32 },
+        );
+        rest(app, driver);
+        assert_eq!(app.get_sidebar_rail(), rail);
+        app.set_spaces_open(true);
+        pump(400);
+        let list = ElementHandle::find_by_accessible_label(app, "Switch Space")
+            .next()
+            .unwrap();
+        let (at, size) = (list.absolute_position(), list.size());
+        let current = button("space 3");
+        let more = button("Spaces");
+        assert_eq!(more.accessible_expanded(), Some(true));
+        assert_eq!(at.x, current.absolute_position().x, "rail {rail}");
+        assert_eq!(
+            at.y + size.height,
+            current.absolute_position().y - 8.0,
+            "rail {rail}"
+        );
+        assert_eq!(size.height, 2.0 * 6.0 + 7.0 * 36.0 + 8.0 + 36.0);
+        assert_eq!(size.width, 236.0);
+        if rail {
+            assert!(more.absolute_position().y > current.absolute_position().y);
+        } else {
+            assert_eq!(
+                more.absolute_position().x,
+                current.absolute_position().x + 38.0
+            );
+        }
+        // A dragged tab's targets (wubble_core::tabdrag): the geometry the shell reports puts
+        // the switcher on the two tiles and each drop row on its drawn row, the current
+        // Space's row (3) none.
+        let g = app.get_spaces_menu_geometry();
+        assert!(g.shown);
+        assert_eq!(
+            (g.switcher_x, g.switcher_y),
+            (current.absolute_position().x, current.absolute_position().y)
+        );
+        let (sw, sh) = if rail { (36.0, 74.0) } else { (74.0, 36.0) };
+        assert_eq!((g.switcher_w, g.switcher_h), (sw, sh), "rail {rail}");
+        assert_eq!(
+            (g.panel_x, g.panel_y, g.panel_w, g.panel_h),
+            (at.x, at.y, size.width, size.height)
+        );
+        let geometry = Geometry {
+            x: f64::from(g.rows_x),
+            w: f64::from(g.rows_w),
+            list_top: f64::from(g.list_top),
+            list_height: f64::from(g.list_h),
+            scroll: f64::from(g.scroll),
+            row: f64::from(g.line),
+            rule: f64::from(g.rule),
+        };
+        let targets = popup.drop_rows(&geometry);
+        assert_eq!(
+            targets.len(),
+            6,
+            "seven rows shown, the current one no target"
+        );
+        for name in ["row 1", "row 2", "row 4", "row 7"] {
+            let row = ElementHandle::find_by_accessible_label(app, name)
+                .find(|h| {
+                    h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem)
+                })
+                .unwrap();
+            let (p, z) = (row.absolute_position(), row.size());
+            let mid = Point {
+                x: f64::from(p.x + z.width / 2.0),
+                y: f64::from(p.y + z.height / 2.0),
+            };
+            let hit: Vec<_> = targets.iter().filter(|(_, _, r)| r.contains(mid)).collect();
+            assert_eq!(hit.len(), 1, "{name} rail {rail}");
+            assert_eq!(format!("row {}", hit[0].1.0), name);
+        }
+        let sticky = ElementHandle::find_by_accessible_label(app, "New Space")
+            .find(|h| {
+                h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem)
+            })
+            .unwrap();
+        assert_eq!(sticky.absolute_position().y, g.sticky_top);
+        app.set_spaces_open(false);
+        pump(400);
+    }
+    drag_seam_to(app, driver, SIDEBAR_DEFAULT as f32);
+    rest(app, driver);
 }
 
 /// The header's sidebar button (the first of the nav buttons right of the lights) asks for the
@@ -322,7 +465,7 @@ fn shell_scenarios() {
     sidebar_button(&app, &driver);
     peek(&app, &driver);
     seam_drag(&app, &driver);
-    space_capsule(&app, &driver);
+    space_footer(&app, &driver);
     popup_input(&app);
     split_panes(&app, &driver);
     split_seam_drag(&app);
@@ -382,9 +525,9 @@ fn margin_in_rounded(
 const LIGHT: f32 = 12.0;
 
 /// The header holds the lights and the four nav buttons, and they never meet; the footer's buttons
-/// (`.wb-side-bottom > .wb-ib`, 36 square) sit side by side at its end, downloads, dev tools
-/// (the design's Source) and settings last, clear of the Space tiles. At the default width and
-/// at the minimum.
+/// (`.wb-side-bottom > .wb-ib`, 36 square) sit side by side at its end, downloads then settings,
+/// clear of the switcher (the current Space's tile and the "^", 36 + 2 + 36). At the default
+/// width and at the minimum.
 fn header_and_footer(app: &AppWindow, driver: &Shared) {
     use wubble_ui::DownloadItem;
     app.set_downloads(ModelRc::from([DownloadItem::default()].as_slice()));
@@ -405,16 +548,12 @@ fn header_and_footer(app: &AppWindow, driver: &Shared) {
         );
         assert_eq!(e.settings_end, e.end - SIDE_PAD, "at {raw}");
         assert_eq!(e.settings_end - e.settings, 36.0, "at {raw}");
-        // the dev tools button (the design's Source) between them, all three side by side,
-        // when the row has room for them after the Spaces and their "+" (`spaces_end`); else
-        // it gives way (at the minimum, or with three Spaces at the default width)
-        let room = e.settings_end - e.spaces_end >= 3.0 * 36.0;
-        let tools = if room { 36.0 } else { 0.0 };
-        assert_eq!(e.downloads_end, e.settings - tools, "at {raw}");
+        assert_eq!(e.downloads_end, e.settings, "at {raw}");
         assert_eq!(e.downloads_end - e.downloads, 36.0, "at {raw}");
+        assert_eq!(e.spaces_end - e.spaces, 74.0, "at {raw}");
         assert!(
             e.spaces_end < e.downloads,
-            "at {raw}: the tiles and their \"+\" clear of downloads"
+            "at {raw}: the switcher clear of downloads"
         );
     }
 }

@@ -1049,6 +1049,7 @@ fn connect_settings(window: &AppWindow, win: WindowId) {
     window.on_settings_requested(move || {
         with_host_in(win, |host| host.perform(Action::OpenSettings))
     });
+    window.on_spaces_menu_requested(move || with_host_in(win, |host| host.spaces_menu_requested()));
     window.on_settings_query_changed(move |q| with_host_in(win, |host| host.settings_query(&q)));
     window.on_setting_changed(move |key, value| {
         with_host_in(win, |host| {

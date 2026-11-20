@@ -1,0 +1,65 @@
+// derived: space-switcher.slint (`.wb-space`: a 36 x 36 tile, its 17 px glyph in ink, the colour moving over .2 s, a click's wobble), menu.slint MenuTrigger (touch-kit.tsx `chevron`, turned over by `.tp-chev.up`: 180 deg over .22 s ease-out while open)
+// The Spaces popup's trigger, the "^" after the current Space's tile (owner, 2026-11-19:
+// "Replace the + near the Home icon with a ^ and that opens up popup with all the saved
+// spaces"): one more switcher tile, the design's menu chevron in the tile's look. The popup grows
+// upward from it, so the chevron points up at rest (the design's open turn) and turns back down
+// while the popup is open (the design's trigger turns its chevron over while its menu is open).
+// No capsule: it is never a Space. Recorded in docs/fidelity/derived-review.md.
+
+import { BrowserCss, TouchCss } from "../gen/css.slint";
+import { KitIcons } from "../gen/icons.slint";
+import { Shell } from "../derived.slint";
+import { Icon } from "../controls/icon.slint";
+import { Wobble } from "../motion/wobble.slint";
+import { Tween } from "../motion/tween.slint";
+import { Calm } from "../motion/calm.slint";
+import { SpaceTint } from "space-switcher.slint";
+
+export component SpacesButton inherits Rectangle {
+    // the popup is open
+    in property <bool> open;
+    callback clicked();
+    out property <bool> hovered: ta.has-hover;
+    // the chevron's turn, 0 (up, closed) to 1 (down, open)
+    out property <float> chevron-turn: turn.t;
+    // tabs.tsx SpaceSwitcher: each click wobbles the tile once more
+    property <bool> hit: false;
+    width: BrowserCss.wb-space--width;
+    height: BrowserCss.wb-space--height;
+    accessible-role: AccessibleRole.button;
+    accessible-label: "Spaces";
+    accessible-expanded: root.open;
+    accessible-action-default => {
+        root.clicked();
+    }
+    turn := Tween {
+        on: root.open;
+        in-ms: TouchCss.tp-chev--transition-transform-duration;
+        out-ms: TouchCss.tp-chev--transition-transform-duration;
+        in-easing: TouchCss.tp-chev--transition-transform-easing;
+        out-easing: TouchCss.tp-chev--transition-transform-easing;
+    }
+    ta := TouchArea {
+        clicked => {
+            root.hit = !root.hit;
+            root.clicked();
+        }
+    }
+    Wobble {
+        width: parent.width;
+        height: parent.height;
+        hit: root.hit;
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: Shell.space-glyph;
+            path: KitIcons.chevron;
+            tint: SpaceTint.of(ta.has-hover, false);
+            transform-rotation: TouchCss.tp-chev-up--transform-rotate * 1deg * (1 - turn.t);
+            animate tint {
+                duration: Calm.ms(BrowserCss.wb-space--transition-color-duration);
+                easing: ease;
+            }
+        }
+    }
+}

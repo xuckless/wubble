@@ -74,7 +74,8 @@ export global Glyph {
         if url == "wubble://bookmarks" { return self.star; }
         if url == "wubble://downloads" { return self.download; }
         if url == "wubble://passwords" { return self.lock; }
-        if url == "wubble://archive" { return self.clock; }
+        // the design's stacked trays (settings.tsx `spaces`): History keeps the clock (owner)
+        if url == "wubble://archive" { return self.stack; }
         if url == "wubble://tasks" { return self.gauge; }
         return self.globe;
     }

@@ -1,0 +1,308 @@
+// derived: Menu (controls/menu.slint: the touch kit's thick-glass body, MenuRow with the Select's check column, MenuHighlight, MenuRule, its keys and machine `wubble_core::controls::menu`), APopover (overlay/a/a-popover.slint), `.st-menu.up` (pages/settings.css:79: a menu opening above its trigger, `bottom: calc(100% + gap)`), Flickable + Thumb (controls/scroller.slint, as overlay/b/b-panel.slint), CMD.rows (browser/command.tsx:20: the most rows a list shows)
+// The sidebar footer's Spaces popup (owner, 2026-11-19: the "^" "opens up popup with all the
+// saved spaces ... and a sticky new session inside that popup. That's how we use space!"; the
+// sticky row is "New Space" for now). The design has no Spaces menu: it is the touch kit's menu
+// opening upward from its trigger as the settings Select does near the page's end, 8 above it,
+// growing from the trigger's centre. Its lines (wubble_core::spacemenu) scroll: every Space in
+// order, each its name after its icon, the current one checked in its own colour (the Select's
+// chosen row, `.st-mcheck`, in the Space's tint), a rule between two groups (a second group, the
+// MCP plan's sessions, comes later as data); at most `Tsx.cmd-rows` rows show, the rest under
+// the design's scroll thumb. Under them, outside the scroller and after the menu's rule, the
+// sticky row: New Space (plus icon, its shortcut). One highlight per part (the scrolled rows',
+// the sticky row's) follows the pointer and the keys; the keys are the kit menu's (Up/Down with
+// wrap over both parts, Enter/Space, Escape, Tab) and the focused row scrolls into view.
+// Fills its parent (the window): a press outside the panel dismisses it. `picked(id)`,
+// `new-space()` and `dismissed()` are intents; the owner closes it.
+
+import { Space, TouchMenu, Tsx } from "../gen/tokens.slint";
+import { TouchCss } from "../gen/css.slint";
+import { Glyph } from "../controls/icon.slint";
+import { MenuRow, MenuHighlight, MenuRule } from "../controls/menu.slint";
+import { Thumb } from "../controls/scroller.slint";
+import { APopover } from "../overlay/a/a-popover.slint";
+import { SpacesMenuRow, MenuEntry, GlassKeys } from "../../components/model.slint";
+import { Controls, ControlView } from "../../components/controls/registry.slint";
+
+export component SpacesMenu inherits Rectangle {
+    in property <bool> open;
+    // the scrolled lines
+    in property <[SpacesMenuRow]> rows;
+    // the keys' rows: `rows` as menu entries, then a separator and the sticky row (its label and
+    // shortcut are the sticky row's)
+    in property <[MenuEntry]> entries;
+    // in this element's coordinates: the switcher's top left (the panel's left edge, the line it
+    // opens above: on the rail the "^" is under the current Space's tile) and the "^"'s centre
+    // (where the panel grows from)
+    in property <length> anchor-x;
+    in property <length> anchor-y;
+    in property <length> trigger-x;
+    in property <length> trigger-y;
+    // a dragged tab over a row (wubble_core::tabdrag): the line it would drop on (-1 none) and
+    // that line's top in the scrolled list, or the sticky row; lit as the pointer lights a row
+    in property <int> drop-line: -1;
+    in property <length> drop-top;
+    in property <bool> drop-sticky;
+    callback picked(int);
+    callback new-space();
+    callback dismissed();
+
+    property <int> slot: -1;
+    property <ControlView> v: Controls.view(root.slot);
+    property <int> gen: Controls.generation;
+    property <int> sticky: root.entries.length - 1;
+    property <length> pad: TouchCss.tp-menu--padding;
+    property <length> row-h: TouchCss.wb-tp-mrow--height;
+    property <length> list-height: min(lines.preferred-height, Tsx.cmd-rows * root.row-h);
+    property <length> panel-height: 2 * root.pad + root.list-height + Space.s2 + root.row-h;
+    property <length> panel-width: TouchCss.tp-menu--width;
+    out property <bool> mounted: pop.mounted;
+    // the panel's place, in this element's coordinates (the tests, the gallery)
+    out property <length> panel-x: max(Space.s2, min(root.anchor-x, root.width - root.panel-width - Space.s2));
+    out property <length> panel-y: max(Space.s2, root.anchor-y - TouchMenu.gap - root.panel-height);
+    out property <length> panel-bottom: root.panel-y + root.panel-height;
+    out property <bool> scrolls: lines.preferred-height > root.list-height;
+    // where the lines fall, in this element's coordinates (a dragged tab's drop targets:
+    // wubble_core::spacemenu::Geometry)
+    out property <length> list-top: root.panel-y + root.pad;
+    out property <length> list-h: root.list-height;
+    out property <length> list-scroll: flick.content-y;
+    out property <length> line-height: root.row-h;
+    out property <length> rule-height: Space.s2;
+    out property <length> sticky-top: root.panel-y + root.pad + root.list-height + Space.s2;
+    out property <length> rows-x: root.panel-x + root.pad;
+    out property <length> rows-width: root.panel-width - 2 * root.pad;
+    out property <length> panel-w: root.panel-width;
+    out property <length> panel-h: root.panel-height;
+
+    changed open => {
+        root.send(root.open ? 0 : 2, -1);
+        if root.open {
+            flick.content-y = 0px;
+        }
+    }
+    changed entries => {
+        root.send(-1, 0);
+    }
+    changed gen => {
+        Controls.alive(root.slot);
+    }
+    init => {
+        if root.open {
+            root.send(0, -1);
+        }
+    }
+
+    // One event to the machine (`Controls.menu-event`'s kinds), its intents to the owner.
+    function send(kind: int, arg: int) {
+        if root.slot < 0 {
+            root.slot = Controls.acquire(3, 0);
+        }
+        let fx = Controls.menu-event(root.slot, kind, arg, root.entries.length, root.entries);
+        if fx.pick > 0 {
+            if fx.pick - 1 == root.sticky {
+                root.new-space();
+            } else if fx.pick - 1 < root.rows.length && !root.rows[fx.pick - 1].rule {
+                root.picked(root.rows[fx.pick - 1].id);
+            }
+        }
+        if fx.dismiss {
+            root.dismissed();
+        }
+    }
+
+    public function take-focus() {
+        keys.focus();
+    }
+
+    // the focused line kept in view
+    changed v => {
+        if root.v.focus >= 0 && root.v.focus < root.rows.length {
+            let top = root.v.hl-rows * root.row-h + root.v.hl-rules * Space.s2;
+            if top + flick.content-y < 0px {
+                flick.content-y = -top;
+            } else if top + root.row-h + flick.content-y > root.list-height {
+                flick.content-y = root.list-height - top - root.row-h;
+            }
+        }
+    }
+
+    visible: pop.mounted;
+
+    // the scrim
+    TouchArea {
+        enabled: root.open;
+        pointer-event(e) => {
+            if e.kind == PointerEventKind.down {
+                root.send(7, 0);
+            }
+        }
+        scroll-event(e) => {
+            accept
+        }
+    }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if !root.open {
+                return reject;
+            }
+            if event.text == Key.Escape {
+                root.send(5, 2);
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.send(5, 1);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.send(5, 0);
+                return accept;
+            }
+            if event.text == Key.Return || event.text == " " {
+                root.send(5, 4);
+                return accept;
+            }
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                root.send(5, 3);
+                return reject;
+            }
+            return accept;
+        }
+    }
+
+    pop := APopover {
+        open: root.open;
+        key: GlassKeys.spaces;
+        x: root.panel-x;
+        y: root.panel-y;
+        width: root.panel-width;
+        height: root.panel-height;
+        // it grows from the trigger's centre, below the panel
+        origin-x: root.trigger-x - self.x;
+        origin-y: root.trigger-y - self.y;
+        accessible-role: AccessibleRole.list;
+        accessible-label: "Switch Space";
+        // the pointer over the panel: leaving it puts the highlight out (the web's
+        // `onPointerLeave` on the whole menu)
+        area := TouchArea {
+            enabled: root.open;
+            changed has-hover => {
+                if !self.has-hover {
+                    root.send(4, 0);
+                }
+            }
+            flick := Flickable {
+                x: 0px;
+                y: root.pad;
+                width: parent.width;
+                height: root.list-height;
+                content-height: lines.preferred-height;
+                interactive: root.scrolls;
+                MenuHighlight {
+                    on: root.drop-line >= 0 || (!root.drop-sticky && root.v.hl >= 0 && root.v.hl < root.rows.length);
+                    jump: root.drop-line >= 0 ? false : root.v.jump;
+                    panel-width: root.panel-width;
+                    top: root.drop-line >= 0 ? root.drop-top : root.v.hl-rows * root.row-h + root.v.hl-rules * Space.s2;
+                }
+                lines := VerticalLayout {
+                    padding-left: root.pad;
+                    padding-right: root.pad;
+                    for line[i] in root.rows: Rectangle {
+                        height: line.rule ? Space.s2 : root.row-h;
+                        if line.rule: MenuRule {
+                            shown: root.open;
+                            index: i;
+                        }
+                        if !line.rule: MenuRow {
+                            shown: root.open;
+                            index: i;
+                            icon: Glyph.space(line.icon);
+                            label: line.name;
+                            check-column: true;
+                            checked: line.current;
+                            accent: line.tint;
+                            accessible-role: AccessibleRole.list-item;
+                            accessible-label: line.name;
+                            accessible-checkable: true;
+                            accessible-checked: line.current;
+                            accessible-item-index: i;
+                            accessible-item-count: root.rows.length;
+                            accessible-item-selected: i == root.v.focus;
+                            accessible-action-default => {
+                                root.send(6, i);
+                            }
+                            TouchArea {
+                                enabled: root.open;
+                                changed has-hover => {
+                                    if self.has-hover {
+                                        root.send(3, i);
+                                    }
+                                }
+                                clicked => {
+                                    root.send(6, i);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Thumb {
+                y: root.pad;
+                height: root.list-height;
+                shown: area.has-hover && root.scrolls;
+                top: flick.content-height > 0 ? -flick.content-y * flick.height / flick.content-height : 0px;
+                length: flick.content-height > 0 ? flick.height * min(1, flick.height / flick.content-height) : 0px;
+            }
+            // the menu's rule, then the sticky row
+            Rectangle {
+                x: root.pad;
+                y: root.pad + root.list-height;
+                width: parent.width - 2 * root.pad;
+                height: Space.s2;
+                MenuRule {
+                    shown: root.open;
+                    index: root.rows.length;
+                }
+            }
+            Rectangle {
+                y: root.pad + root.list-height + Space.s2;
+                height: root.row-h;
+                MenuHighlight {
+                    on: root.drop-sticky || (root.drop-line < 0 && root.v.hl == root.sticky);
+                    jump: root.v.jump;
+                    panel-width: root.panel-width;
+                    top: 0px;
+                }
+                if root.sticky >= 0: MenuRow {
+                    x: root.pad;
+                    width: parent.width - 2 * root.pad;
+                    shown: root.open;
+                    index: min(root.rows.length, Tsx.cmd-rows) + 1;
+                    icon: Glyph.plus;
+                    label: root.entries[root.sticky].label;
+                    kbd: root.entries[root.sticky].shortcut;
+                    check-column: true;
+                    accessible-role: AccessibleRole.list-item;
+                    accessible-label: root.entries[root.sticky].label;
+                    accessible-item-selected: root.v.focus == root.sticky;
+                    accessible-action-default => {
+                        root.send(6, root.sticky);
+                    }
+                    TouchArea {
+                        enabled: root.open;
+                        changed has-hover => {
+                            if self.has-hover {
+                                root.send(3, root.sticky);
+                            }
+                        }
+                        clicked => {
+                            root.send(6, root.sticky);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

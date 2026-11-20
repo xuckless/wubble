@@ -47,6 +47,52 @@ export struct SpaceItem {
     icon: string,
 }
 
+// One line of the sidebar's Spaces popup (wubble_core::spacemenu: its groups' rows, a rule
+// between two groups). `id` is the Space's.
+export struct SpacesMenuRow {
+    rule: bool,
+    id: int,
+    name: string,
+    tint: color,
+    // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
+    icon: string,
+    current: bool,
+}
+
+// A built-in page Settings links to (wubble_core::pages::PAGE_LINKS): its title, address (which
+// names its icon, kit `Glyph.page`), one-line note and the id of the action that opens it.
+export struct PageLinkItem {
+    title: string,
+    url: string,
+    note: string,
+    action: string,
+}
+
+// The Spaces popup's geometry in window px, for a dragged tab's drop targets
+// (wubble_core::spacemenu::Geometry, tabdrag::Rects).
+export struct SpacesMenuGeometry {
+    shown: bool,
+    // the switcher (the "^" and the current Space's tile)
+    switcher-x: length,
+    switcher-y: length,
+    switcher-w: length,
+    switcher-h: length,
+    // the panel
+    panel-x: length,
+    panel-y: length,
+    panel-w: length,
+    panel-h: length,
+    // the rows' column, the scrolled list and its lines, the sticky row
+    rows-x: length,
+    rows-w: length,
+    list-top: length,
+    list-h: length,
+    scroll: length,
+    line: length,
+    rule: length,
+    sticky-top: length,
+}
+
 export enum CommandKind {
     open-tab,
     history,
@@ -172,6 +218,7 @@ export global GlassKeys {
     out property <int> autofill-menu: 1000310;
     out property <int> autofill-prompt: 1000311;
     out property <int> downloads: 1000320;
+    out property <int> spaces: 1000325;
     out property <int> menu: 1000330;
 }
 

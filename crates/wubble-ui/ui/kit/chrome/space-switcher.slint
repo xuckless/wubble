@@ -1,13 +1,14 @@
 // design: browser/tabs.tsx:138-174, browser/chrome.tsx:285-287, browser/browser.css:57-58, browser/browser.css:92-96, core/wubble.css:59-69 @598f814
-// The Space switcher (`SpaceSwitcher`, `.wb-spaces`): the drawn icons (17, stroke 1.7) 36 x 36
-// tiles 2 apart, in a row or a column (`.wb-spaces-v`); each icon in ink, as the web renders it:
-// `.wb-space`'s haze (0,1,0) loses to `.wb button { color: inherit }` (0,1,1), so a tile takes
-// `.wb`'s ink at rest and when active (`.wb-space-on` loses too), and `.wb-space:hover` (0,2,0)
-// is ink as well (the colour transition .2 s stays); no press; a click wobbles the tile
-// (`wb-wob-a/b`). Under them the capsule (`.wb-spaces-ind`: 36 x 36, radius 12, the active
-// Space's colour at .2, the colour moving over .4 s ease-in-out) follows the active one and
-// stretches between them: the follow spring and the stretch are Rust's (wubble_core::tabs
-// `SpaceSwitcher`), written in as `offset`, `stretch` and `origin`.
+// The Space switcher's tile (`SpaceSwitcher`, `.wb-spaces`): the drawn icon (17, stroke 1.7) on a
+// 36 x 36 tile, in ink, as the web renders it: `.wb-space`'s haze (0,1,0) loses to `.wb button
+// { color: inherit }` (0,1,1), so a tile takes `.wb`'s ink at rest and when active (`.wb-space-on`
+// loses too), and `.wb-space:hover` (0,2,0) is ink as well (the colour transition .2 s stays); no
+// press; a click wobbles the tile (`wb-wob-a/b`). Under it the capsule (`.wb-spaces-ind`: 36 x 36,
+// radius 12, the active Space's colour at .2, the colour moving over .4 s ease-in-out).
+// wubble (owner, 2026-11-19: "no per-Space icons any more: all switching through the popup"):
+// only the current Space's tile shows, so the capsule rests under it and never travels; the
+// colour still moves when the Space changes. A click opens the Spaces popup (kit SpacesMenu)
+// as the "^" beside it does. Recorded in docs/fidelity/derived-review.md.
 // The Space's name over the tabs (`.wb-space-name`): 18 high, padding 2 10 0, 12 / 500 mist,
 // entering with the Overlap (`wb-in`) when the Space changes.
 
@@ -28,77 +29,56 @@ export global SpaceTint {
     }
 }
 
-export component SpaceSwitcher inherits Rectangle {
-    in property <[SpaceItem]> spaces;
-    // the active Space's row in `spaces`, -1 for none
-    in property <int> active: -1;
-    in property <bool> vertical: false;
-    // the capsule: offset along the switcher (the follow spring times the pitch), its stretch
-    // and the stretch's origin along it (wubble_core::tabs::SpaceSwitcher)
-    in property <length> offset: 0px;
-    in property <float> stretch: 1;
-    in property <float> origin: 0.3;
-    callback picked(int);
-    out property <length> pitch: BrowserCss.wb-space--width + BrowserCss.wb-spaces--gap;
-    out property <length> span: max(0px, root.spaces.length * root.pitch - BrowserCss.wb-spaces--gap);
-    width: root.vertical ? BrowserCss.wb-space--width : root.span;
-    height: root.vertical ? root.span : BrowserCss.wb-space--height;
-    accessible-role: AccessibleRole.tab-list;
-    accessible-label: "Spaces";
-
-    // `.wb-spaces-ind`: along the axis stretched about `origin`, across it squashed
-    property <length> along: BrowserCss.wb-spaces-ind--width * root.stretch;
-    property <length> across: BrowserCss.wb-spaces-ind--width / Math.sqrt(root.stretch);
-    property <length> at: root.offset + (BrowserCss.wb-spaces-ind--width - self.along) * root.origin;
+export component SpaceCurrent inherits Rectangle {
+    // the window's Space; `known` false: none yet (no tile, no capsule colour)
+    in property <SpaceItem> space;
+    in property <bool> known;
+    // the popup it opens is open
+    in property <bool> expanded;
+    callback clicked();
+    // tabs.tsx SpaceSwitcher: each click wobbles the tile once more
+    property <bool> hit: false;
+    width: BrowserCss.wb-space--width;
+    height: BrowserCss.wb-space--height;
+    accessible-role: AccessibleRole.button;
+    accessible-label: root.space.name;
+    accessible-description: "Current Space";
+    accessible-expanded: root.expanded;
+    accessible-action-default => {
+        root.clicked();
+    }
+    // `.wb-spaces-ind`, at rest under the one tile
     Rectangle {
-        x: root.vertical ? (BrowserCss.wb-spaces-ind--width - root.across) / 2 : root.at;
-        y: root.vertical ? root.at : (BrowserCss.wb-spaces-ind--height - root.across) / 2;
-        width: root.vertical ? root.across : root.along;
-        height: root.vertical ? root.along : root.across;
+        width: BrowserCss.wb-spaces-ind--width;
+        height: BrowserCss.wb-spaces-ind--height;
         border-radius: BrowserCss.wb-spaces-ind--border-radius;
-        background: root.active >= 0 && root.active < root.spaces.length ? root.spaces[root.active].tint : transparent;
+        background: root.known ? root.space.tint : transparent;
         opacity: BrowserCss.wb-spaces-ind--opacity;
         animate background {
             duration: Calm.ms(BrowserCss.wb-spaces-ind--transition-background-color-duration);
             easing: BrowserCss.wb-spaces-ind--transition-background-color-easing;
         }
     }
-
-    for space[i] in root.spaces: tile := Rectangle {
-        // tabs.tsx SpaceSwitcher: each click wobbles the tile once more
-        property <bool> hit: false;
-        property <bool> on: i == root.active;
-        x: root.vertical ? 0px : i * root.pitch;
-        y: root.vertical ? i * root.pitch : 0px;
-        width: BrowserCss.wb-space--width;
-        height: BrowserCss.wb-space--height;
-        accessible-role: AccessibleRole.tab;
-        accessible-label: space.name;
-        accessible-item-selectable: true;
-        accessible-item-selected: tile.on;
-        accessible-action-default => {
-            root.picked(space.id);
+    ta := TouchArea {
+        clicked => {
+            root.hit = !root.hit;
+            root.clicked();
         }
-        ta := TouchArea {
-            clicked => {
-                tile.hit = !tile.hit;
-                root.picked(space.id);
-            }
-        }
-        Wobble {
-            width: parent.width;
-            height: parent.height;
-            hit: tile.hit;
-            Icon {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                size: Shell.space-glyph;
-                path: Glyph.space(space.icon);
-                tint: SpaceTint.of(ta.has-hover, tile.on);
-                animate tint {
-                    duration: Calm.ms(BrowserCss.wb-space--transition-color-duration);
-                    easing: ease;
-                }
+    }
+    Wobble {
+        width: parent.width;
+        height: parent.height;
+        hit: root.hit;
+        Icon {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            size: Shell.space-glyph;
+            path: Glyph.space(root.space.icon);
+            visible: root.known;
+            tint: SpaceTint.of(ta.has-hover, true);
+            animate tint {
+                duration: Calm.ms(BrowserCss.wb-space--transition-color-duration);
+                easing: ease;
             }
         }
     }

@@ -81,6 +81,14 @@ pub struct ShellView {
     pub secure: bool,
 }
 
+/// The Space `window` shows: its own (a Little or Popup window's), else the active one.
+pub fn window_space(model: &Model, window: WindowId) -> wubble_core::space::SpaceId {
+    model
+        .window(window)
+        .and_then(|w| w.space())
+        .unwrap_or_else(|| model.active_space())
+}
+
 /// The shell of `window`: its Space's rows (the active Space for a Little or Popup window, whose
 /// sidebar is hidden) and its page's address.
 pub fn view_model(
@@ -89,10 +97,7 @@ pub fn view_model(
     audio: &AudioMap,
     blocked: &BlockedMap,
 ) -> ShellView {
-    let space_id = model
-        .window(window)
-        .and_then(|w| w.space())
-        .unwrap_or_else(|| model.active_space());
+    let space_id = window_space(model, window);
     let space = model.spaces.iter().find(|s| s.id == space_id);
     // a peek's tab is no row: the card over the page shows it
     let rows = |ids: &mut dyn Iterator<Item = TabId>| -> Vec<TabRow> {
@@ -276,7 +281,7 @@ pub fn preview_words(tab: &Tab) -> (String, String) {
     (tab_title(tab), address)
 }
 
-fn slint_id(id: impl TryInto<i32>) -> Option<i32> {
+pub(crate) fn slint_id(id: impl TryInto<i32>) -> Option<i32> {
     id.try_into().ok()
 }
 
