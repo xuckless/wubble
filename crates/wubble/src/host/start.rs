@@ -388,11 +388,9 @@ impl Host {
         let Some(tab) = shown else {
             return;
         };
-        // The bar in the page is the start tab's: one start tab after another (Ctrl+T on a start
-        // page) starts it afresh for the new one.
-        let in_page = window.get_command_placement() == wubble_ui::CommandPlacement::InPage
-            && window.get_command_bar_state() != wubble_ui::CommandBarState::Closed;
-        if in_page && self.bar.mode != BarMode::Navigate(tab) {
+        // The bar in the page is the start tab's: a start page shown (one start tab after
+        // another, or after the overlay bar elsewhere) starts its capsule afresh, empty, for it.
+        if self.bar.mode != BarMode::Navigate(tab) {
             self.open_bar(window, BarMode::Navigate(tab), String::new());
         }
         let bridge = window.global::<StartBridge>();
