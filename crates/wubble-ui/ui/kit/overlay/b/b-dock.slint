@@ -22,7 +22,9 @@
 // row's type and mist, inset as a menu row's label.
 //
 // BDockTab: the strip tucked away: a thin-glass tile as high as the strip at the page's right
-// edge with a chevron, sliding in from the edge and out to it on the same Overlap curve.
+// edge with a chevron, sliding in from the edge and out to it on the same Overlap curve. On
+// hover it takes the `.wb-ib` hover look (white .07 under the chevron, ink chevron, 150 ms);
+// only a click opens the strip.
 
 import { Motion, Fonts, Palette } from "../../gen/tokens.slint";
 import { TouchCss, BrowserCss } from "../../gen/css.slint";
@@ -113,7 +115,6 @@ export component BDockTab inherits Rectangle {
     in property <int> key: -1;
     in property <int> layer;
     callback clicked();
-    callback entered();
     out property <bool> hovered: tab-area.has-hover;
     out property <float> progress: tw.t;
 
@@ -143,17 +144,24 @@ export component BDockTab inherits Rectangle {
                 clicked => {
                     root.clicked();
                 }
-                changed has-hover => {
-                    if self.has-hover {
-                        root.entered();
-                    }
-                }
+            }
+            hov := Tween {
+                on: tab-area.has-hover && root.shown;
+                in-ms: BrowserCss.wb-ib--transition-background-color-duration;
+                out-ms: BrowserCss.wb-ib--transition-background-color-duration;
+                in-easing: ease;
+                out-easing: ease;
+            }
+            Rectangle {
+                border-radius: TouchCss.tp-dock--border-radius / 2;
+                background: BrowserCss.wb-ib-hover-not-disabled--background;
+                opacity: hov.t;
             }
             Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 path: Glyph.chevron-left;
-                tint: TouchCss.wb-tp-dock-btn--color;
+                tint: BrowserCss.wb-ib-hover-not-disabled--color.mix(TouchCss.wb-tp-dock-btn--color, hov.t);
             }
         }
     }

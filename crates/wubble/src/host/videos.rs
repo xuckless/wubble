@@ -15,7 +15,7 @@ use wubble_core::settings as defs;
 use wubble_core::sponsor::{self, ActTable, Plan, Segment, Skips};
 use wubble_core::tab::TabId;
 use wubble_core::video::{
-    self, Over, Overlay, PageCmd, RateTable, VideoCmd, VideoEffect, VideoInput, VideoState,
+    self, Fold, Over, Overlay, PageCmd, RateTable, VideoCmd, VideoEffect, VideoInput, VideoState,
 };
 use wubble_engine::input::Point;
 use wubble_engine::page::PageEvent;
@@ -137,8 +137,8 @@ pub(super) struct Videos {
     /// The pointer over the visible page's video, and over the controls.
     over_video: bool,
     over_controls: bool,
-    /// Hosts where the controls stay hidden (`video.hidden_sites`), and whether the strip starts
-    /// folded into its tab (`video.collapsed`).
+    /// Hosts where the controls stay hidden (`video.hidden_sites`), and whether a new video's
+    /// strip starts folded into its tab (`video.collapsed`).
     hidden: Vec<String>,
     collapsed: bool,
     /// Whether each tab's main video played at its last snapshot.
@@ -418,11 +418,17 @@ impl Host {
             .map(|t| t.url.clone())
             .unwrap_or_default();
         let site_rate = video::site_rate(&self.videos.rates, &url);
+        let fold = if self.videos.collapsed {
+            Fold::Tucked
+        } else {
+            Fold::Open
+        };
         self.video_event(
             tab,
             VideoInput::Snapshot {
                 video: video.clone(),
                 site_rate,
+                fold,
                 now,
             },
         );
@@ -556,7 +562,6 @@ impl Host {
             "save" => VideoCmd::Save,
             "collapse" => VideoCmd::Collapse,
             "expand" => VideoCmd::Expand,
-            "peek" => VideoCmd::Peek,
             "dismiss" => VideoCmd::Dismiss,
             "hide-site" => VideoCmd::HideSite,
             _ => return,
@@ -574,6 +579,17 @@ impl Host {
 
     pub(crate) fn video_hovered(&mut self, over: bool) {
         self.videos.over_controls = over;
+        // Off the controls: on the video or not by where the pointer is now. The pane heard
+        // nothing while the controls had the pointer, and a strip that goes from under a still
+        // pointer (collapsed, a click away) gives it no move: its last word, "left", is stale.
+        if !over && let Some(window) = self.w.window.upgrade() {
+            let video = self.video_on_window(&window).map(|(r, _)| r);
+            self.videos.over_video = self
+                .input
+                .pointer
+                .zip(video)
+                .is_some_and(|(p, r)| r.contains((f64::from(p.x), f64::from(p.y))));
+        }
         self.video_pointer_changed();
     }
 
@@ -609,15 +625,7 @@ impl Host {
                 (false, false) => Over::Away,
             };
             let now = now_ms() as u64;
-            let collapsed = self.videos.collapsed;
-            self.video_event(
-                tab,
-                VideoInput::Pointer {
-                    over,
-                    now,
-                    collapsed,
-                },
-            );
+            self.video_event(tab, VideoInput::Pointer { over, now });
         }
     }
 
@@ -700,32 +708,16 @@ impl Host {
         }
         // a tab in picture-in-picture has its controls there, not under the Main window's card
         let tab = self.model.window_key_tab(self.w.id);
-        let zoom = tab
-            .and_then(|t| self.tab_view(t))
-            .map_or(100, |v| v.zoom_percent());
-        let (x, y) = self.content_origin(window);
-        // The pane's viewport: the controls never reach over another pane or off the page.
-        let pane = video::Rect {
-            x: f64::from(x),
-            y: f64::from(y),
-            w: self
-                .pane_rects(window)
-                .into_iter()
-                .find(|p| Some(p.tab) == tab)
-                .map_or(0.0, |p| p.width),
-            h: f64::from(window.get_content_height()) - f64::from(y),
-        };
+        let on_window = self.video_on_window(window);
         let overlay = tab.and_then(|t| self.videos.overlays.get(&t));
-        let view = match (overlay, tab) {
-            (Some(o), Some(tab)) if self.videos.controls && !self.site_hides_video(tab) => {
-                o.video().and_then(|v| {
-                    let r = v
-                        .rect
-                        .on_window(zoom, (f64::from(x), f64::from(y)))
-                        .intersect(&pane)?;
+        let view = match (overlay, tab, on_window) {
+            (Some(o), Some(tab), Some((r, pane)))
+                if self.videos.controls && !self.site_hides_video(tab) =>
+            {
+                o.video().map(|v| {
                     let marks = self.sponsor_marks(tab, v.duration);
                     let nearest = video::nearest_rate(v.rate);
-                    Some(VideoView {
+                    VideoView {
                         open: o.shown(),
                         collapsed: o.collapsed(),
                         pane_right: (pane.x + pane.w) as f32,
@@ -747,12 +739,40 @@ impl Host {
                         can_pip: self.model.can_pip(tab),
                         can_save: self.videos.save.is_some(),
                         marks: slint::ModelRc::new(slint::VecModel::from(marks)),
-                    })
+                    }
                 })
             }
             _ => None,
         };
         window.set_video(view.unwrap_or_default());
+    }
+
+    /// The window's tab's video in the window (logical px), cut to its pane, and the pane's
+    /// viewport: the controls never reach over another pane or off the page.
+    fn video_on_window(&mut self, window: &AppWindow) -> Option<(video::Rect, video::Rect)> {
+        let tab = self.model.window_key_tab(self.w.id)?;
+        let zoom = self.tab_view(tab).map_or(100, |v| v.zoom_percent());
+        let rect = self
+            .videos
+            .overlays
+            .get(&tab)
+            .and_then(Overlay::video)?
+            .rect;
+        let (x, y) = self.content_origin(window);
+        let pane = video::Rect {
+            x: f64::from(x),
+            y: f64::from(y),
+            w: self
+                .pane_rects(window)
+                .into_iter()
+                .find(|p| p.tab == tab)
+                .map_or(0.0, |p| p.width),
+            h: f64::from(window.get_content_height()) - f64::from(y),
+        };
+        let r = rect
+            .on_window(zoom, (f64::from(x), f64::from(y)))
+            .intersect(&pane)?;
+        Some((r, pane))
     }
 
     /// The tab's site is one the user hid the controls on.
@@ -1166,6 +1186,7 @@ impl Host {
             pip,
             now: now_ms() as u64,
             strip: overlay.is_some_and(Overlay::shown),
+            collapsed: overlay.is_some_and(Overlay::collapsed),
             speeds: overlay.is_some_and(Overlay::speeds_open),
             toast,
         }
@@ -1198,6 +1219,10 @@ impl Host {
                     vp.x + vs.width / 2.0,
                     vp.y + vs.height * 0.75,
                 )),
+                smoke::Spot::VideoNear => Some(slint::LogicalPosition::new(
+                    vp.x + vs.width * 0.4,
+                    vp.y + vs.height * 0.75,
+                )),
                 smoke::Spot::Away => Some(slint::LogicalPosition::new(
                     vp.x + vs.width + 40.0,
                     vp.y + vs.height * 0.75,
@@ -1209,7 +1234,7 @@ impl Host {
             let Some(position) = at else {
                 return crate::with_host(|h| h.fail(format!("{spot:?} is not on screen")));
             };
-            crate::with_host(|h| h.input.pointer = Some(position));
+            crate::with_host(|h| h.set_pointer(&window, Some(position)));
             let w = window.window();
             w.dispatch_event(WindowEvent::PointerMoved { position });
             if click {

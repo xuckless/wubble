@@ -23,10 +23,13 @@
 //!    (looped): a move over the video shows it; the pointer resting on its play button keeps it
 //!    past the hide delay; a click pauses, mute works paused, a click plays; a click on the bar
 //!    seeks; the speed button's menu sets 2; mute and loop toggle; the frame button saves a frame
-//!    (its notice comes up); the pointer moved off the video hides the strip; back on it, the
-//!    frame saved once more, the run ends with the strip up and its frame button under the
-//!    pointer (`--shot`'s picture; the notice is gone by the time the shot settles)
-//!    (`smoke: strip ok`).
+//!    (its notice comes up); the collapse button tucks the strip into its tab: the pointer
+//!    resting on the tab, then on the video, does not open it (the tab stays while the pointer
+//!    is on it, goes a while after it rests on the video, and comes back as the tab on the next
+//!    move), and a click on the tab does (`smoke: strip collapse ok`); the pointer moved off the
+//!    video hides the strip; back on it, the frame saved once more, the run ends with the strip
+//!    up and its frame button under the pointer (`--shot`'s picture; the notice is gone by the
+//!    time the shot settles) (`smoke: strip ok`).
 //!
 //! `--smoke boost`: a Boost stored through the editor's path (`http://127.0.0.1/boost*`: CSS, a
 //! tint, a document-start script) colours `boost.html` and sets its title; `other.html` stays as
@@ -151,6 +154,18 @@ pub enum Step {
     StripFrame {
         serial: i32,
     },
+    /// The collapse button clicked: waiting for the tab.
+    StripCollapse,
+    /// The pointer rests on the tab since this time.
+    TabHeld {
+        since: u64,
+    },
+    /// The pointer rests on the video beside the tab: waiting for the tab to go.
+    TabVideo,
+    /// Moved on the video again: the tab must come back, not the strip.
+    TabBack,
+    /// The tab clicked: waiting for the strip.
+    TabClicked,
     StripLeft,
     StripBack,
     StripLastFrame {
@@ -220,6 +235,8 @@ pub struct Seen {
     pub now: u64,
     /// The strip is open (not hidden, not tucked away).
     pub strip: bool,
+    /// The strip is tucked into its tab, and the tab shows.
+    pub collapsed: bool,
     /// Its speed menu is open.
     pub speeds: bool,
     /// The window's notice: its serial and text.
@@ -257,6 +274,8 @@ pub enum Input<'a> {
 pub enum Spot {
     /// The middle of the video's lower half (under the strip).
     Video,
+    /// A little left of `Video`: a move that is a move.
+    VideoNear,
     /// Beside the video, on the page.
     Away,
     /// The centre of the strip's element with this id (`VideoControls::<id>`).
@@ -619,10 +638,38 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
             let line = format!("smoke: strip frame notice {:?}", seen.toast.1);
             to(
                 s,
-                StripLeft,
-                vec![Action::Log(line), Action::PointTo(Spot::Away)],
+                StripCollapse,
+                vec![Action::Log(line), Action::Click(Spot::Button("collapse"))],
             )
         }
+        (StripCollapse, Snapshot(seen)) if seen.collapsed && !seen.strip => to(
+            s,
+            TabHeld { since: seen.now },
+            vec![Action::PointTo(Spot::Button("tab"))],
+        ),
+        (TabHeld { .. } | TabVideo | TabBack, Snapshot(seen)) if seen.strip => {
+            fail(s, "a hover opened the collapsed strip".into())
+        }
+        (TabHeld { .. }, Snapshot(seen)) if !seen.collapsed => {
+            fail(s, "the tab went while the pointer was on it".into())
+        }
+        (TabHeld { since }, Snapshot(seen)) if seen.now > since + HOLD_MS => {
+            to(s, TabVideo, vec![Action::PointTo(Spot::Video)])
+        }
+        (TabVideo, Snapshot(seen)) if !seen.collapsed => {
+            to(s, TabBack, vec![Action::PointTo(Spot::VideoNear)])
+        }
+        (TabBack, Snapshot(seen)) if seen.collapsed => {
+            to(s, TabClicked, vec![Action::Click(Spot::Button("tab"))])
+        }
+        (TabClicked, Snapshot(seen)) if seen.strip && !seen.collapsed => to(
+            s,
+            StripLeft,
+            vec![
+                Action::Log("smoke: strip collapse ok".into()),
+                Action::PointTo(Spot::Away),
+            ],
+        ),
         (StripLeft, Snapshot(seen)) if !seen.strip => {
             to(s, StripBack, vec![Action::PointTo(Spot::Video)])
         }

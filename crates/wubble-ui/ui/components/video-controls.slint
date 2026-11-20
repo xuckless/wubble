@@ -21,20 +21,33 @@ import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 // Intents only: `command(name, value)` with name play, speeds, rate, loop, mute, seek, pip,
 // frame, save, collapse, expand, peek, dismiss, hide-site (`value`: the rate, or the seek
 // fraction). The strip's right end has a collapse chevron, which tucks the strip into a tab on
-// the page's right edge (a click or a hover on the tab opens it again), and a close button
-// (a click hides the strip until the next navigation, a right-click hides it on this site).
+// the page's right edge (only a click on the tab opens it again: a hover shows the tab's own
+// hover look), and a close button (a click hides the strip until the next navigation, a
+// right-click hides it on this site). Shown, hidden and collapsed are wubble_core::video::Ui;
+// this file only reports the pointer and the clicks.
 export component VideoControls inherits Rectangle {
-    // (element ids the tests and `--smoke video` find: root, strip, tab, close, play, bar,
-    // rate-button, loop, frame, mute, speed)
+    // (element ids the tests and `--smoke video` find: root, strip, tab, collapse, close, play,
+    // bar, rate-button, loop, frame, mute, speed)
     in property <VideoView> video;
     // The speed menu's rows, slowest first (`wubble_core::video::RATES`).
     in property <[string]> rates;
+    // The window's pointer (window px), `pointer-in` while it is in the window.
+    in property <bool> pointer-in;
+    in property <length> pointer-x;
+    in property <length> pointer-y;
     callback command(string, float);
     // The pointer is over the controls (they stay while it is).
     callback hovered(bool);
     // The pointer is on the strip, the tab or the speed menu: one answer for all three, so one
-    // going away as another appears under the pointer does not read as leaving.
-    property <bool> any-hover: dock.hovered || tab.hovered || speeds-area.has-hover;
+    // going away as another appears under the pointer does not read as leaving. By hover, and
+    // by place: an element that appears under a still pointer has no hover until the pointer
+    // moves (the strip opening under it went 1.2 s later, the pointer on it), and a grab (the
+    // scrubber dragged off the strip) keeps the hover outside the place.
+    property <bool> any-hover: dock.hovered || tab.hovered || speeds-area.has-hover || root.under;
+    property <bool> under: root.pointer-in && ((root.video.open && root.at(strip.absolute-position, strip.width, strip.height)) || (root.video.collapsed && root.at(tab.absolute-position, tab.width, tab.height)) || (root.video.open && root.video.speeds && root.at(speeds.absolute-position, speeds.width, speeds.height)));
+    pure function at(p: Point, w: length, h: length) -> bool {
+        root.pointer-x >= p.x && root.pointer-x < p.x + w && root.pointer-y >= p.y && root.pointer-y < p.y + h
+    }
     // the strip's controls are built while it shows, and kept while it leaves
     property <bool> built: root.video.open || dock.progress > 0;
     changed any-hover => {
@@ -121,7 +134,7 @@ export component VideoControls inherits Rectangle {
                     root.command("save", 0);
                 }
             }
-            if root.built: IconButton {
+            if root.built: collapse := IconButton {
                 icon-path: Glyph.chevron-right;
                 label: "Collapse";
                 clicked => {
@@ -152,9 +165,6 @@ export component VideoControls inherits Rectangle {
         y: Space.s2;
         clicked => {
             root.command("expand", 0);
-        }
-        entered => {
-            root.command("peek", 0);
         }
     }
 
