@@ -54,6 +54,12 @@ pub enum Overlay {
     Find,
     Permission,
     Dialog,
+    /// A prompt dialog, its field holding the page's text.
+    Prompt,
+    /// Mod+D's bookmark sheet (name, folders).
+    Bookmark,
+    /// The print sheet.
+    Print,
     LoadError,
     CertError,
     AutofillMenu,
@@ -151,6 +157,9 @@ pub const SCENES: &[Scene] = &[
     },
     over("autofill-save", Overlay::AutofillSave),
     over("dialog-sheet", Overlay::Dialog),
+    over("dialog-prompt", Overlay::Prompt),
+    over("bookmark-sheet", Overlay::Bookmark),
+    over("print-sheet", Overlay::Print),
     over("toast", Overlay::Toast),
     over(
         "status-bubble",
@@ -207,6 +216,10 @@ pub const SCENES: &[Scene] = &[
     // the new-tab page: under `--frozen-backdrop` its liquid holds and its bubble steps on the
     // harness's fixed clock (backdrop.rs), so it is shot at rest the same way every run
     on("start", InternalPage::Start),
+    Scene {
+        pointer: Some(HISTORY_ROW),
+        ..on("history-hover", InternalPage::History)
+    },
     // the rail with its tab hovered: the close badge on the icon's corner (derived)
     Scene {
         sidebar: SidebarMode::Rail,
@@ -234,6 +247,8 @@ const NAV_SITES: (u16, u16) = (420, 425);
 const ROUTING_RULE: (u16, u16) = (900, 560);
 const ROUTING_ADD: (u16, u16) = (632, 656);
 const SECOND_SPACE: (u16, u16) = (900, 185);
+/// The first visit's row on the history page (its actions show on hover), logical px.
+const HISTORY_ROW: (u16, u16) = (800, 304);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).
 const BURST: u32 = 24;
 

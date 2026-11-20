@@ -2871,7 +2871,10 @@ impl Host {
                     x: f64::from(position.x),
                     y: f64::from(position.y),
                 });
-                self.input.pointer = Some(slint::LogicalPosition::new(position.x, position.y));
+                self.set_pointer(
+                    &window,
+                    Some(slint::LogicalPosition::new(position.x, position.y)),
+                );
                 self.w
                     .glass
                     .borrow_mut()
@@ -2884,7 +2887,7 @@ impl Host {
             | WindowEvent::DroppedFile(_)
             | WindowEvent::HoveredFileCancelled => self.file_drop(&window, event),
             WindowEvent::CursorLeft { .. } => {
-                self.input.pointer = None;
+                self.set_pointer(&window, None);
                 self.w.glass.borrow_mut().pointer_leave();
             }
             // A left press on a favourite sends a wave through its glass (chrome.tsx `Fav`
@@ -3129,6 +3132,17 @@ impl Host {
             self.tip_pointer(tab, point.x, point.y);
         }
         self.media_pointer(pane, Some(point));
+    }
+
+    /// Where the pointer is in the window, or None once it left: kept here and given to the
+    /// window, whose video strip takes its hover from it.
+    pub(crate) fn set_pointer(&mut self, window: &AppWindow, at: Option<slint::LogicalPosition>) {
+        self.input.pointer = at;
+        window.set_pointer_in(at.is_some());
+        if let Some(p) = at {
+            window.set_pointer_x(p.x);
+            window.set_pointer_y(p.y);
+        }
     }
 
     pub fn pointer_left(&mut self, pane: i32, point: Point) {

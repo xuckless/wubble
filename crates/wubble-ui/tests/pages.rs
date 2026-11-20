@@ -15,7 +15,7 @@ use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, VecModel};
 use wubble_ui::{
     AppWindow, BookmarkLineItem, DownloadItem, DownloadStatus, HistoryLineItem, InternalPageKind,
-    LoginItem, PasswordsView, VaultState,
+    LoginItem, PageScroll, PasswordsView, TaskItem, VaultState,
 };
 
 fn pump() {
@@ -110,20 +110,20 @@ fn page_scenarios() {
         visit("B", "https://b.test/"),
     ]));
     pump();
-    assert_eq!(count(&app, "OpenRow::ta"), 2);
+    assert_eq!(count(&app, "HistoryPage::visit"), 2);
     let opened = Rc::new(RefCell::new(vec![]));
     let (o1, o2) = (opened.clone(), opened.clone());
     app.on_page_opened(move |u| o1.borrow_mut().push(format!("here {u}")));
     app.on_page_opened_new_tab(move |u| o2.borrow_mut().push(format!("tab {u}")));
-    click(&app, "OpenRow::ta", PointerEventButton::Left);
-    click(&app, "OpenRow::ta", PointerEventButton::Middle);
+    click(&app, "ListRow::ta", PointerEventButton::Left);
+    click(&app, "ListRow::ta", PointerEventButton::Middle);
     assert_eq!(
         *opened.borrow(),
         ["here https://a.test/", "tab https://a.test/"]
     );
     app.set_history_lines(model(vec![]));
     pump();
-    assert_eq!(count(&app, "OpenRow::ta"), 0);
+    assert_eq!(count(&app, "HistoryPage::visit"), 0);
 
     // Bookmarks: a folder's click toggles it, a link's click opens it.
     app.set_page(InternalPageKind::Bookmarks);
@@ -136,7 +136,7 @@ fn page_scenarios() {
     let toggled = Rc::new(RefCell::new(vec![]));
     let t = toggled.clone();
     app.on_bookmark_toggled(move |id| t.borrow_mut().push(id));
-    click(&app, "OpenRow::ta", PointerEventButton::Left);
+    click(&app, "ListRow::ta", PointerEventButton::Left);
     assert_eq!(*toggled.borrow(), [1]);
 
     // Downloads: one row per item of the shared model, the popover's row.
@@ -165,6 +165,49 @@ fn page_scenarios() {
     app.set_logins(model(vec![login("1"), login("2")]));
     pump();
     assert_eq!(count(&app, "PasswordsPage::login-row"), 2);
+
+    // The task manager: its column starts where the other list pages' does (the table grows to
+    // the right), its End button is a row's size, and a long table scrolls.
+    app.window().set_size(LogicalSize::new(1280.0, 700.0));
+    let tasks: Vec<TaskItem> = (0..40)
+        .map(|i| TaskItem {
+            tab: if i < 30 { i } else { -1 },
+            pid: 100 + i,
+            title: format!("row {i}").into(),
+            state: "Background".into(),
+            memory: if i < 30 { "".into() } else { "12.0 MB".into() },
+            cpu: if i < 30 { "".into() } else { "0.0 %".into() },
+            busy: "".into(),
+            never_sleep: false,
+            can_discard: i < 30,
+            can_end: true,
+        })
+        .collect();
+    app.set_tasks(model(tasks));
+    // the task manager's title starts where the history page's does
+    let heading = |app: &AppWindow| {
+        ElementHandle::find_by_element_id(app, "PageFrame::heading")
+            .map(|e| e.absolute_position().x)
+            .collect::<Vec<_>>()
+    };
+    app.set_page(InternalPageKind::History);
+    pump();
+    let history = heading(&app);
+    app.set_page(InternalPageKind::Tasks);
+    pump();
+    let tasks = heading(&app);
+    assert!(
+        history.len() == 1 && history == tasks,
+        "{history:?} {tasks:?}"
+    );
+    let page = app.global::<PageScroll>();
+    assert!(
+        page.get_content() > page.get_viewport() && page.get_viewport() > 0.0,
+        "the table scrolls: {} in {}",
+        page.get_content(),
+        page.get_viewport()
+    );
+    app.window().set_size(LogicalSize::new(1280.0, 4000.0));
 
     // The address pill: the star and the badge only when asked, and each reports its click.
     app.set_page(InternalPageKind::None);

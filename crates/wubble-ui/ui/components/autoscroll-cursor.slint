@@ -1,12 +1,13 @@
 // Middle-click autoscroll's pointer (wubble_core::autoscroll), drawn by the shell while the
-// system pointer is hidden over the page: a film ring where autoscroll began, and at the
+// system pointer is hidden over the page: the film ring where autoscroll began, and at the
 // pointer a dot while the page holds still or an arrow toward the scroll, stretched along its
 // length with the speed and thinned across to keep its area (the design's stretch spring and
-// `squash_of`, stepped in Rust). Not in the design repo: drawn from its ink and film tokens.
-// Positions are in the parent's coordinates; it takes no input.
+// `squash_of`, stepped in Rust). The design has no autoscroll (wubble-only.md §23): its parts
+// are kit/overlay/b/b-autoscroll.slint. Positions are in the parent's coordinates; it takes no
+// input.
 
-import { Palette } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
+import { BAutoscrollRing, BAutoscrollDot, BAutoscrollArrow } from "../kit/overlay/b/b-autoscroll.slint";
 
 export component AutoscrollCursor inherits Rectangle {
     in property <length> anchor-x;
@@ -20,44 +21,21 @@ export component AutoscrollCursor inherits Rectangle {
     in property <float> stretch: 1;
     in property <float> squash: 1;
 
-    property <brush> film: @linear-gradient(120deg, Palette.sky 0%, Palette.lilac 33%, Palette.blush 66%, Palette.mint 100%);
-    property <length> ring: Shell.autoscroll-ring;
-    property <length> dot: Shell.autoscroll-dot;
     property <length> arrow-length: Shell.autoscroll-arrow-length * root.stretch;
     property <length> arrow-width: Shell.autoscroll-arrow-width * root.squash;
 
     // where autoscroll began
-    Rectangle {
-        x: root.anchor-x - root.ring / 2;
-        y: root.anchor-y - root.ring / 2;
-        width: root.ring;
-        height: root.ring;
-        border-radius: self.width / 2;
-        border-width: Shell.autoscroll-ring-width;
-        border-color: root.film;
-        background: Palette.deep.with-alpha(0.35);
-        Rectangle {
-            width: Shell.autoscroll-centre;
-            height: Shell.autoscroll-centre;
-            border-radius: self.width / 2;
-            background: Palette.ink.with-alpha(0.8);
-        }
+    BAutoscrollRing {
+        x: root.anchor-x - self.width / 2;
+        y: root.anchor-y - self.height / 2;
     }
 
-    if !root.moving: Rectangle {
-        x: root.pointer-x - root.dot / 2;
-        y: root.pointer-y - root.dot / 2;
-        width: root.dot;
-        height: root.dot;
-        border-radius: self.width / 2;
-        background: Palette.ink;
-        border-width: Shell.autoscroll-rim;
-        border-color: root.film;
-        drop-shadow-blur: Shell.autoscroll-shadow;
-        drop-shadow-color: Palette.abyss.with-alpha(0.6);
+    if !root.moving: BAutoscrollDot {
+        x: root.pointer-x - self.width / 2;
+        y: root.pointer-y - self.height / 2;
     }
 
-    // A chevron pointing down from the pointer's spot, turned toward the scroll.
+    // The chevron pointing down from the pointer's spot, turned toward the scroll.
     if root.moving: Rectangle {
         x: root.pointer-x - self.width / 2;
         y: root.pointer-y - self.height / 2;
@@ -65,17 +43,11 @@ export component AutoscrollCursor inherits Rectangle {
         height: self.width;
         transform-rotation: root.heading;
         transform-origin: { x: self.width / 2, y: self.height / 2 };
-        arrow := Path {
+        arrow := BAutoscrollArrow {
             x: (parent.width - root.arrow-width) / 2;
             y: parent.height / 2 - root.arrow-length / 2;
             width: root.arrow-width;
             height: root.arrow-length;
-            viewbox-width: 10;
-            viewbox-height: 10;
-            commands: "M 0 3 L 5 10 L 10 3 L 5 5.5 Z";
-            fill: Palette.ink;
-            stroke: root.film;
-            stroke-width: Shell.autoscroll-rim;
         }
     }
 }

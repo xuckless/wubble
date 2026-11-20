@@ -1,118 +1,95 @@
-import { Palette, Motion, Space, Fonts, Type, Chrome } from "../kit/gen/tokens.slint";
-import { Shell } from "../kit/derived.slint";
-import { PressableButton } from "../kit/controls/button.slint";
 import { DownloadItem, DownloadAction, DownloadStatus } from "model.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { ListRow, RowAction } from "../kit/pages/list-row.slint";
+import { DownloadTint } from "../kit/pages/list-progress.slint";
+import { Shell } from "../kit/derived.slint";
 
-// One download: its glyph, name, second line and progress, and the buttons its state allows
-// (pause, resume, cancel, retry, open, show in folder, remove). The one row of the downloads
-// popover and of the downloads page, so both read one model and look alike. `action` is the
-// intent; the host acts. Written from scratch: the design repo has no downloads list.
+// One download: its icon, name, second line and progress, and the buttons its state allows
+// (pause, resume, cancel, retry, open, show in folder, remove): the downloads page's row (the
+// popover draws its own, overlays A's ADownloadRow, from the same model). `action` is the
+// intent; the host acts. A kit list row (ui/kit/pages/list-row.slint) with the progress rail;
+// the buttons are its actions, shown on the row's hover.
 export component DownloadRow inherits Rectangle {
     in property <DownloadItem> item;
+    // the entrance (a list page's row): in when this turns true, `index` on the stagger
+    in property <bool> shown: true;
+    in property <int> index;
+    // the popover places rows `Shell.download-row` apart; the page lays them out at their own
+    // height (0)
+    in property <length> pitch: Shell.download-row;
     callback action(int, DownloadAction);
 
     // Still has bytes to come (`DownloadState::is_active`).
     property <bool> active: root.item.status == DownloadStatus.running || root.item.status == DownloadStatus.paused || root.item.status == DownloadStatus.interrupted;
     property <bool> done: root.item.status == DownloadStatus.complete;
-    border-radius: Shell.menu-row-radius;
-    background: row-touch.has-hover ? Shell.command-selected : transparent;
-    row-touch := TouchArea { }
-    HorizontalLayout {
-        padding-left: Shell.menu-row-pad;
-        padding-right: Space.s1;
-        spacing: Space.s3;
-        Rectangle {
-            width: Shell.icon;
-            Icon {
-                y: (parent.height - self.height) / 2;
-                path: Glyph.download;
-                tint: done ? Palette.mint : active ? Palette.ink : Palette.haze;
-            }
-        }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            alignment: center;
-            spacing: Space.s1;
-            Text {
-                text: root.item.name;
-                color: Palette.ink;
-                font-family: Fonts.ui;
-                font-size: Type.body.size;
-                overflow: elide;
-            }
-            Text {
-                text: root.item.detail;
-                color: Palette.mist;
-                font-family: Fonts.ui;
-                font-size: Type.label.size;
-                overflow: elide;
-            }
-            // The progress track, while there are bytes to come.
-            Rectangle {
-                visible: active;
-                height: active ? Shell.download-track : 0px;
-                border-radius: Shell.download-track / 2;
-                background: Palette.rim;
-                Rectangle {
-                    x: 0px;
-                    width: root.item.progress < 0 ? parent.width : parent.width * root.item.progress;
-                    border-radius: parent.border-radius;
-                    background: Palette.sky;
-                    opacity: root.item.progress < 0 ? 0.35 : 1;
-                    animate width {
-                        duration: Calm.ms(Motion.dropdown-in);
-                        easing: Motion.ease-out;
-                    }
-                }
-            }
-        }
-        if root.item.status == DownloadStatus.running: PressableButton {
-            text: "Pause";
+    height: row-touch.height;
+
+    row-touch := ListRow {
+        title: root.item.name;
+        note: root.item.detail;
+        icon-path: Glyph.download;
+        icon-tint: DownloadTint.of(root.done, root.active);
+        tappable: false;
+        has-progress: root.active;
+        progress: root.item.progress;
+        shown: root.shown;
+        index: root.index;
+        pitch: root.pitch;
+        if root.item.status == DownloadStatus.running: RowAction {
+            icon-path: Glyph.pause;
+            label: "Pause";
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.pause);
             }
         }
-        if root.item.status == DownloadStatus.paused || root.item.status == DownloadStatus.interrupted: PressableButton {
-            text: "Resume";
+        if root.item.status == DownloadStatus.paused || root.item.status == DownloadStatus.interrupted: RowAction {
+            icon-path: Glyph.play;
+            label: "Resume";
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.resume);
             }
         }
-        if active: PressableButton {
-            text: "Cancel";
+        if root.active: RowAction {
+            icon-path: Glyph.close;
+            label: "Cancel";
+            danger: true;
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.cancel);
             }
         }
-        if root.item.status == DownloadStatus.cancelled || root.item.status == DownloadStatus.failed: PressableButton {
-            text: "Retry";
+        if root.item.status == DownloadStatus.cancelled || root.item.status == DownloadStatus.failed: RowAction {
+            icon-path: Glyph.reload;
+            label: "Retry";
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.retry);
             }
         }
-        if done: PressableButton {
-            text: "Open";
+        if root.done: RowAction {
+            icon-path: Glyph.arrow;
+            label: "Open";
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.open);
             }
         }
-        if done: PressableButton {
-            text: "Show";
+        if root.done: RowAction {
+            icon-path: Glyph.folder;
+            label: "Show in folder";
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.reveal);
             }
         }
-        if !active: PressableButton {
-            width: Chrome.controls;
+        if !root.active: RowAction {
+            icon-path: Glyph.close;
             label: "Remove from list";
-            padding-x: (Chrome.controls - Shell.icon) / 2;
+            reveal: row-touch.reveal;
             clicked => {
                 root.action(root.item.id, DownloadAction.remove);
-            }
-            Icon {
-                path: Glyph.close;
             }
         }
     }

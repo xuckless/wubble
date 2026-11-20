@@ -575,6 +575,11 @@ export component AppWindow inherits Window {
     // The visible page's video controls (wubble_core::video) and the speed menu's rows.
     in property <VideoView> video;
     in property <[string]> video-rates;
+    // Where the pointer is in the window (window px; `pointer-in` false once it left), from the
+    // host's raw pointer events: the video strip's hover by place (VideoControls).
+    in property <bool> pointer-in;
+    in property <length> pointer-x;
+    in property <length> pointer-y;
     callback video-command(string, float);
     callback video-hovered(bool);
     // The Boost editor (wubble_core::boost).
@@ -1095,6 +1100,9 @@ export component AppWindow inherits Window {
             if !root.pip: VideoControls {
                 video: root.video;
                 rates: root.video-rates;
+                pointer-in: root.pointer-in;
+                pointer-x: root.pointer-x;
+                pointer-y: root.pointer-y;
                 command(name, value) => {
                     root.video-command(name, value);
                 }

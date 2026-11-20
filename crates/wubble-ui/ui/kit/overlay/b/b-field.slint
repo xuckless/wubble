@@ -1,0 +1,25 @@
+// derived: Field (controls/field.slint), KitText, Role.st-group
+// The sheets' text field is the kit Field (wubble-only.md 6 and 13, "plain field"): `BField`
+// re-exports it so the sheets keep their name; `BGroup` is the sheets' labelled group.
+
+import { SettingsCss } from "../../gen/css.slint";
+import { Role } from "../../gen/text.slint";
+import { KitText } from "../../text.slint";
+
+export { Field as BField } from "../../controls/field.slint";
+
+// A labelled group in a sheet (`.st-group` above its control: 13 / 500 mist, 8 in from the
+// start, 8 above the control). The label is the control's caption, not a heading.
+export component BGroup inherits VerticalLayout {
+    in property <string> label;
+    spacing: SettingsCss.st-group--margin-bottom;
+    if root.label != "": HorizontalLayout {
+        padding-left: SettingsCss.st-group--margin-left;
+        KitText {
+            role: Role.st-group;
+            text: root.label;
+            color: SettingsCss.st-group--color;
+        }
+    }
+    @children
+}

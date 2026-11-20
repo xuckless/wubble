@@ -1,100 +1,23 @@
-// The native pages beside settings (wubble://history, bookmarks, downloads, passwords, tasks):
-// each a
-// function of the model its host fills (wubble_core::pages view-models), on the shared PageFrame.
-// Every change is an intent through a callback; the host acts and redraws. The design repo has
-// nothing for these pages (no list row, sheet or tree), so they are written from scratch from
-// the settings page's widgets (Field, TextButton, Card, SectionHeader) and the sheet chrome.
+// The native pages beside settings (wubble://history, archive, bookmarks, downloads, passwords,
+// tasks): each a function of the model its host fills (wubble_core::pages view-models), laid out
+// from the kit's list-page parts (ui/kit/pages: PageFrame, ListCard, ListRow, the table cells;
+// derived from the settings page, notes/fidelity/wubble-only.md section 32). Every change is an
+// intent through a callback; the host acts and redraws. Compose only: the kit draws.
 
-import { Palette, Space, Fonts, Type, Radius, Chrome } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { PressableButton } from "../kit/controls/button.slint";
 import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "model.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { IconButton } from "nav-buttons.slint";
-import { PageFrame, Field, TextButton, SectionHeader, Card } from "settings.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { Button, PressableButton, ButtonKind } from "../kit/controls/button.slint";
+import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
+import { Segmented } from "../kit/controls/segmented.slint";
+import { Sheet } from "../kit/controls/sheet.slint";
+import { PageFrame } from "../kit/pages/page-frame.slint";
+import { ListCard, ListGroup, ListEmpty, ListToolbar, ListNote, ListFoot } from "../kit/pages/list-card.slint";
+import { ListRow, RowAction, RowTextAction, RowChevron } from "../kit/pages/list-row.slint";
+import { ListField } from "../kit/pages/list-field.slint";
+import { KeyedHoldButton, KeyedConfirmButton } from "../kit/pages/row-keyed.slint";
+import { TableHead, TableCell, TableSlot, TableHeadLine } from "../kit/pages/list-table.slint";
 import { DownloadRow } from "download-row.slint";
-import { SheetFrame } from "sheet-frame.slint";
-import { Segmented } from "settings.slint";
-
-// The favicon of a row, or the neutral globe.
-component RowIcon inherits Rectangle {
-    in property <image> favicon;
-    in property <string> fallback: Glyph.globe;
-    width: Shell.icon;
-    if root.favicon.width > 0: Image {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        source: root.favicon;
-        width: Shell.page-favicon;
-        height: Shell.page-favicon;
-    }
-    if root.favicon.width == 0: Icon {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        path: root.fallback;
-    }
-}
-
-// A row's text: the title, then the address in the mono face.
-component RowText inherits HorizontalLayout {
-    in property <string> title;
-    in property <string> detail;
-    spacing: Space.s3;
-    horizontal-stretch: 1;
-    Text {
-        horizontal-stretch: 1;
-        text: root.title;
-        color: Palette.ink;
-        font-family: Fonts.ui;
-        font-size: Type.body.size;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-    Text {
-        horizontal-stretch: 1;
-        text: root.detail;
-        color: Palette.haze;
-        font-family: Fonts.mono;
-        font-size: Type.label.size;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-}
-
-// What a page shows when there is nothing to list.
-component EmptyNote inherits Text {
-    color: Palette.haze;
-    font-family: Fonts.ui;
-    font-size: Type.body.size;
-    wrap: word-wrap;
-}
-
-// A row that opens its address: click opens it here, middle-click in a new tab.
-component OpenRow inherits Rectangle {
-    callback opened();
-    callback opened-new-tab();
-    // What a screen reader calls the row (its title); the default action opens it.
-    in property <string> label;
-    accessible-role: AccessibleRole.list-item;
-    accessible-label: root.label;
-    accessible-action-default => {
-        root.opened();
-    }
-    height: Shell.page-row;
-    border-radius: Radius.sm;
-    background: ta.has-hover ? Shell.icon-button-hover : transparent;
-    ta := TouchArea {
-        clicked => {
-            root.opened();
-        }
-        pointer-event(e) => {
-            if e.button == PointerEventButton.middle && e.kind == PointerEventKind.up {
-                root.opened-new-tab();
-            }
-        }
-    }
-    @children
-}
 
 // ───────────────────────────────────────────────────────────────────────────── history
 
@@ -137,47 +60,45 @@ export component HistoryPage inherits Rectangle {
             root.query-changed(q);
         }
 
-        HorizontalLayout {
-            padding-top: Space.s4;
-            alignment: end;
-            if root.clearable: TextButton {
+        ListToolbar {
+            if root.clearable: Button {
+                kind: ButtonKind.ghost;
                 text: "Clear browsing data";
                 clicked => {
                     root.range = 0;
                     root.clearing = true;
+                    sheet.take-focus();
                 }
             }
         }
-        if root.lines.length == 0: EmptyNote {
-                text: root.searching ? root.empty-search-text : root.empty-text;
+        if root.lines.length == 0: ListEmpty {
+            text: root.searching ? root.empty-search-text : root.empty-text;
         }
-        for line in root.lines: VerticalLayout {
-            padding-top: line.header ? Space.s6 : 0px;
-            if line.header: SectionHeader {
+        for line[i] in root.lines: VerticalLayout {
+            if line.header: ListGroup {
                 text: line.label;
             }
-            if !line.header: OpenRow {
-                label: line.title;
-                opened => {
-                    root.opened(line.url, line.key);
-                }
-                opened-new-tab => {
-                    root.opened-new-tab(line.url, line.key);
-                }
-                HorizontalLayout {
-                    padding-left: Space.s3;
-                    padding-right: Space.s1;
-                    spacing: Space.s3;
-                    RowIcon {
-                        favicon: line.favicon;
+            if !line.header: ListCard {
+                first: i == 0 || root.lines[i - 1].header;
+                last: i == root.lines.length - 1 || root.lines[i + 1].header;
+                visit := ListRow {
+                    title: line.title;
+                    note: line.url;
+                    mono-note: true;
+                    favicon: line.favicon;
+                    shown: root.open;
+                    index: i;
+                    opened => {
+                        root.opened(line.url, line.key);
                     }
-                    RowText {
-                        title: line.title;
-                        detail: line.url;
+                    opened-new-tab => {
+                        root.opened-new-tab(line.url, line.key);
                     }
-                    IconButton {
+                    RowAction {
                         icon-path: Glyph.trash;
                         label: "Delete";
+                        danger: true;
+                        reveal: visit.reveal;
                         clicked => {
                             root.deleted(line.url, line.key);
                         }
@@ -185,10 +106,9 @@ export component HistoryPage inherits Rectangle {
                 }
             }
         }
-        if root.has-more: HorizontalLayout {
-            padding-top: Space.s4;
-            alignment: center;
-            TextButton {
+        if root.has-more: ListFoot {
+            Button {
+                kind: ButtonKind.ghost;
                 text: "Show more";
                 clicked => {
                     root.more();
@@ -197,7 +117,7 @@ export component HistoryPage inherits Rectangle {
         }
     }
 
-    SheetFrame {
+    sheet := Sheet {
         open: root.clearing;
         title: "Clear browsing data";
         message: "Forgets the visits in the range. Bookmarks and downloads stay.";
@@ -211,6 +131,7 @@ export component HistoryPage inherits Rectangle {
             root.clearing = false;
         }
         Segmented {
+            compact: true;
             labels: root.ranges;
             selected: root.range;
             chosen(i) => {
@@ -238,73 +159,67 @@ export component BookmarksPage inherits PageFrame {
     title: "Bookmarks";
     placeholder: "Search bookmarks";
 
-    HorizontalLayout {
-        padding-top: Space.s4;
-        alignment: end;
-        TextButton {
+    ListToolbar {
+        Button {
+            kind: ButtonKind.ghost;
             text: "New folder";
             clicked => {
                 root.folder-requested();
             }
         }
     }
-    if root.lines.length == 0: EmptyNote {
+    if root.lines.length == 0: ListEmpty {
         text: root.searching ? "No bookmarks match" : "No bookmarks yet. Press Ctrl+D on a page to add one.";
     }
-    for line in root.lines: bookmark-row := OpenRow {
-        label: line.title;
-        accessible-expandable: line.is-folder;
-        accessible-expanded: line.expanded;
-        opened => {
-            if line.is-folder {
-                root.toggled(line.id);
-            } else {
-                root.opened(line.url);
-            }
-        }
-        opened-new-tab => {
-            if !line.is-folder {
-                root.opened-new-tab(line.url);
-            }
-        }
-        HorizontalLayout {
-            padding-left: Space.s3 + line.depth * Shell.page-indent;
-            padding-right: Space.s1;
-            spacing: Space.s3;
-            if line.is-folder: Rectangle {
-                width: Shell.icon;
-                Icon {
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    path: line.expanded ? Glyph.chevron-down : Glyph.forward;
+    if root.lines.length > 0: ListCard {
+        for line[i] in root.lines: bookmark-row := ListRow {
+            title: line.title;
+            note: line.is-folder ? "" : line.path != "" ? line.path : line.url;
+            mono-note: line.path == "";
+            favicon: line.favicon;
+            icon-path: line.is-folder ? Glyph.folder : Glyph.globe;
+            indent: line.depth * Shell.page-indent;
+            shown: root.open;
+            index: i;
+            accessible-expandable: line.is-folder;
+            accessible-expanded: line.expanded;
+            opened => {
+                if line.is-folder {
+                    root.toggled(line.id);
+                } else {
+                    root.opened(line.url);
                 }
             }
-            RowIcon {
-                favicon: line.favicon;
-                fallback: line.is-folder ? Glyph.folder : Glyph.globe;
+            opened-new-tab => {
+                if !line.is-folder {
+                    root.opened-new-tab(line.url);
+                }
             }
-            RowText {
-                title: line.title;
-                detail: line.is-folder ? "" : line.path != "" ? line.path : line.url;
-            }
-            TextButton {
+            RowTextAction {
                 text: "Rename";
+                reveal: bookmark-row.reveal;
                 clicked => {
                     root.rename-requested(line.id);
                 }
             }
-            if !line.is-folder: TextButton {
+            if !line.is-folder: RowTextAction {
                 text: "Move";
+                reveal: bookmark-row.reveal;
                 clicked => {
                     root.move-requested(line.id);
                 }
             }
-            IconButton {
+            RowAction {
                 icon-path: Glyph.trash;
                 label: "Delete";
+                danger: true;
+                reveal: bookmark-row.reveal;
                 clicked => {
                     root.deleted(line.id);
                 }
+            }
+            if line.is-folder: RowChevron {
+                open: line.expanded;
             }
         }
     }
@@ -321,24 +236,27 @@ export component DownloadsPage inherits PageFrame {
     title: "Downloads";
     searchable: false;
 
-    HorizontalLayout {
-        padding-top: Space.s4;
-        alignment: end;
-        TextButton {
+    ListToolbar {
+        Button {
+            kind: ButtonKind.ghost;
             text: "Clear finished";
             clicked => {
                 root.clear-finished();
             }
         }
     }
-    if root.items.length == 0: EmptyNote {
+    if root.items.length == 0: ListEmpty {
         text: "No downloads";
     }
-    for item in root.items: DownloadRow {
-        height: Shell.download-row;
-        item: item;
-        action(id, a) => {
-            root.action(id, a);
+    if root.items.length > 0: ListCard {
+        for item[i] in root.items: DownloadRow {
+            item: item;
+            pitch: 0px;
+            shown: root.open;
+            index: i;
+            action(id, a) => {
+                root.action(id, a);
+            }
         }
     }
 }
@@ -372,6 +290,13 @@ export component PasswordsPage inherits Rectangle {
         root.adding = false;
     }
 
+    function save() {
+        if site.text != "" && password.text != "" {
+            root.added(site.text, username.text, password.text);
+            root.close-sheet();
+        }
+    }
+
     frame := PageFrame {
         open: root.open;
         title: "Passwords";
@@ -380,74 +305,70 @@ export component PasswordsPage inherits Rectangle {
             root.query-changed(q);
         }
 
-        Card {
-            content-pad: Shell.row-pad-x;
-            VerticalLayout {
-                padding-top: Space.s3;
-                padding-bottom: Space.s3;
-                spacing: Space.s2;
-                Text {
-                    text: root.view.title;
-                    color: Palette.ink;
-                    font-family: Fonts.ui;
-                    font-size: Type.heading.size;
-                    font-weight: Type.heading.weight;
-                }
-                Text {
-                    visible: self.text != "";
-                    text: root.view.body;
-                    color: Palette.mist;
-                    font-family: Fonts.ui;
-                    font-size: Type.body.size;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: Space.s2;
-                    alignment: start;
-                    if root.view.state == VaultState.locked: TextButton {
+        ListToolbar { }
+        // the vault: its state, what it means, and what can be done
+        ListCard {
+            ListRow {
+                title: root.view.title;
+                icon-path: root.view.state == VaultState.locked ? Glyph.lock : Glyph.key;
+                tappable: false;
+                shown: root.open;
+                if root.view.state == VaultState.locked: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        kind: ButtonKind.pri;
                         text: "Unlock";
                         clicked => {
                             root.unlock();
                         }
                     }
-                    if root.view.state != VaultState.locked: TextButton {
+                }
+                if root.view.state != VaultState.locked: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        kind: ButtonKind.ghost;
                         text: "Add";
                         clicked => {
                             root.adding = true;
+                            site.take-focus();
                         }
                     }
-                    if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable: TextButton {
+                }
+                if root.view.state != VaultState.locked && root.view.state != VaultState.unavailable: VerticalLayout {
+                    alignment: center;
+                    Button {
+                        kind: ButtonKind.ghost;
                         text: "Import CSV";
                         clicked => {
                             root.import-requested();
                         }
                     }
                 }
-                Text {
-                    visible: self.text != "";
-                    text: root.view.notice;
-                    color: Palette.mist;
-                    font-family: Fonts.ui;
-                    font-size: Type.label.size;
-                    wrap: word-wrap;
-                }
+            }
+            if root.view.body != "": ListNote {
+                text: root.view.body;
+            }
+            if root.view.notice != "": ListNote {
+                text: root.view.notice;
             }
         }
-        if root.view.state == VaultState.unlocked && root.logins.length == 0: EmptyNote {
+        if root.view.state == VaultState.unlocked && root.logins.length == 0: ListEmpty {
             text: "No saved passwords";
         }
-        for login in root.logins: login-row := Rectangle {
-            height: Shell.page-row;
-            HorizontalLayout {
-                padding-left: Space.s3;
-                padding-right: Space.s1;
-                spacing: Space.s3;
-                RowText {
-                    title: login.site;
-                    detail: login.has-revealed ? login.revealed : login.username;
-                }
-                TextButton {
-                    text: login.has-revealed ? "Hide" : "Show";
+        if root.logins.length > 0: ListToolbar { }
+        if root.logins.length > 0: ListCard {
+            for login[i] in root.logins: login-row := ListRow {
+                title: login.site;
+                note: login.has-revealed ? login.revealed : login.username;
+                mono-note: login.has-revealed;
+                icon-path: Glyph.key;
+                tappable: false;
+                shown: root.open;
+                index: i + 1;
+                RowAction {
+                    icon-path: Glyph.eye;
+                    label: login.has-revealed ? "Hide" : "Show";
+                    always: true;
                     clicked => {
                         if login.has-revealed {
                             root.hide();
@@ -456,16 +377,21 @@ export component PasswordsPage inherits Rectangle {
                         }
                     }
                 }
-                TextButton {
-                    text: "Copy";
-                    clicked => {
+                KeyedConfirmButton {
+                    key: login.id;
+                    compact: true;
+                    idle-text: "Copy";
+                    done-text: "Copied";
+                    run => {
                         root.copy(login.id);
                     }
                 }
-                IconButton {
-                    icon-path: Glyph.trash;
-                    label: "Delete";
-                    clicked => {
+                KeyedHoldButton {
+                    key: login.id;
+                    compact: true;
+                    text: "Delete";
+                    done-text: "Deleted";
+                    done => {
                         root.deleted(login.id);
                     }
                 }
@@ -473,38 +399,41 @@ export component PasswordsPage inherits Rectangle {
         }
     }
 
-    SheetFrame {
+    Sheet {
         open: root.adding;
         title: "Add a password";
         accept-text: "Save";
         cancel-text: "Cancel";
         accepted => {
-            if site.text != "" && password.text != "" {
-                root.added(site.text, username.text, password.text);
-                root.close-sheet();
-            }
+            root.save();
         }
         cancelled => {
             root.close-sheet();
         }
-        site := Field {
-            height: Shell.sheet-input;
+        site := ListField {
             placeholder: "Site, e.g. https://example.com";
+            accepted => {
+                root.save();
+            }
             escaped => {
                 root.close-sheet();
             }
         }
-        username := Field {
-            height: Shell.sheet-input;
+        username := ListField {
             placeholder: "Username";
+            accepted => {
+                root.save();
+            }
             escaped => {
                 root.close-sheet();
             }
         }
-        password := Field {
-            height: Shell.sheet-input;
+        password := ListField {
             placeholder: "Password";
             secret: true;
+            accepted => {
+                root.save();
+            }
             escaped => {
                 root.close-sheet();
             }
@@ -514,29 +443,8 @@ export component PasswordsPage inherits Rectangle {
 
 // ─────────────────────────────────────────────────────────────────────────── task manager
 
-// A button column: the button keeps its own size, on the slot's middle.
-component TaskSlot inherits Rectangle {
-    HorizontalLayout {
-        alignment: center;
-        VerticalLayout {
-            alignment: center;
-            @children
-        }
-    }
-}
-
-// A row's small grey column (state, memory, CPU).
-component TaskCell inherits Text {
-    color: Palette.haze;
-    font-family: Fonts.mono;
-    font-size: Type.label.size;
-    vertical-alignment: center;
-    horizontal-alignment: right;
-    overflow: elide;
-}
-
-// wubble://tasks: tabs and processes with memory, CPU, state and why a tab stays awake. Written
-// from scratch (the design repo has no task manager) from the downloads page's parts.
+// wubble://tasks: tabs and processes with memory, CPU, state and why a tab stays awake, as a
+// table of rows (kit TableHead / TableCell) in the settings grid's width.
 export component TasksPage inherits PageFrame {
     in property <[TaskItem]> items;
     in property <string> total;
@@ -544,81 +452,94 @@ export component TasksPage inherits PageFrame {
 
     title: "Task manager";
     searchable: false;
+    column: Shell.settings-max;
 
-    HorizontalLayout {
-        padding-top: Space.s4;
-        padding-bottom: Space.s2;
-        Text {
+    ListToolbar {
+        text: root.total;
+    }
+    TableHeadLine {
+        TableHead {
             horizontal-stretch: 1;
-            text: root.total;
-            color: Palette.haze;
-            font-family: Fonts.ui;
-            font-size: Type.label.size;
+            numeric: false;
+            text: "Name";
+        }
+        TableHead {
+            width: Shell.task-state;
+            text: "State";
+        }
+        TableHead {
+            width: Shell.task-memory;
+            text: "Memory";
+        }
+        TableHead {
+            width: Shell.task-cpu;
+            text: "CPU";
+        }
+        TableHead {
+            width: Shell.task-sleep;
+            numeric: false;
+            horizontal-alignment: center;
+            text: "Never sleep";
+        }
+        TableSlot {
+            width: Shell.task-discard;
+        }
+        TableSlot {
+            width: Shell.task-discard;
         }
     }
-    for item in root.items: Rectangle {
-        height: Shell.page-row;
-        border-radius: Radius.sm;
-        background: ta.has-hover ? Shell.icon-button-hover : transparent;
-        ta := TouchArea { }
-        HorizontalLayout {
-            spacing: Space.s3;
-            padding-left: Space.s2;
-            padding-right: Space.s2;
-            VerticalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                Text {
-                    text: item.title;
-                    color: Palette.ink;
-                    font-family: Fonts.ui;
-                    font-size: Type.body.size;
-                    overflow: elide;
-                }
-                if item.busy != "": Text {
-                    text: item.busy;
-                    color: Palette.haze;
-                    font-family: Fonts.ui;
-                    font-size: Type.label.size;
-                    overflow: elide;
-                }
-            }
-            TaskCell {
+    if root.items.length > 0: ListCard {
+        for item[i] in root.items: ListRow {
+            title: item.title;
+            note: item.busy;
+            lead: false;
+            tappable: false;
+            shown: root.open;
+            index: i;
+            TableCell {
                 width: Shell.task-state;
                 text: item.state;
             }
-            TaskCell {
+            TableCell {
                 width: Shell.task-memory;
                 text: item.memory;
+                dash-empty: item.tab >= 0;
             }
-            TaskCell {
+            TableCell {
                 width: Shell.task-cpu;
                 text: item.cpu;
+                dash-empty: item.tab >= 0;
             }
-            // A slot per button whether it shows or not, so the columns line up row to row.
-            TaskSlot {
+            // A slot per control whether it shows or not, so the columns line up row to row.
+            TableSlot {
                 width: Shell.task-sleep;
-                if item.tab >= 0: TextButton {
-                    text: item.never-sleep ? "Allow sleep" : "Never sleep";
-                    clicked => {
+                if item.tab >= 0: Toggle {
+                    size: ToggleSize.sm;
+                    on: item.never-sleep;
+                    label: "Never sleep";
+                    toggled => {
                         root.action(item.tab, item.pid, TaskAction.never-sleep);
                     }
                 }
             }
-            TaskSlot {
+            TableSlot {
                 width: Shell.task-discard;
-                if item.can-discard: TextButton {
+                if item.can-discard: PressableButton {
                     text: "Discard";
                     clicked => {
                         root.action(item.tab, item.pid, TaskAction.discard);
                     }
                 }
             }
-            TaskSlot {
-                width: Shell.task-end;
-                if item.can-end: TextButton {
+            TableSlot {
+                width: Shell.task-discard;
+                if item.can-end: KeyedHoldButton {
+                    // End acts on the pid alone (host/tasks.rs task_action)
+                    key: item.pid;
+                    compact: true;
                     text: "End";
-                    clicked => {
+                    done-text: "Ended";
+                    done => {
                         root.action(item.tab, item.pid, TaskAction.end);
                     }
                 }

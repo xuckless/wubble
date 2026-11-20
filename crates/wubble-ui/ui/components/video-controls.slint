@@ -1,45 +1,55 @@
-import { Palette, Space, Fonts, Type, Motion } from "../kit/gen/tokens.slint";
+import { Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { GlassPanel } from "../kit/material/glass.slint";
-import { GlassTier, VideoView, GlassKeys, GlassOver } from "model.slint";
-import { IconButton } from "nav-buttons.slint";
-import { Icon, Glyph } from "../kit/controls/icon.slint";
-import { TextButton } from "settings.slint";
-import { Calm } from "../kit/motion/calm.slint";
+import { VideoView, GlassKeys, GlassOver } from "model.slint";
+import { IconButton } from "../kit/controls/icon-button.slint";
+import { Glyph } from "../kit/controls/icon.slint";
+import { BDock, BDockTab, BDockText } from "../kit/overlay/b/b-dock.slint";
+import { BScrubber } from "../kit/overlay/b/b-scrubber.slint";
+import { APopover } from "../kit/overlay/a/a-popover.slint";
+import { TouchCss } from "../kit/gen/css.slint";
+import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 
-// Video controls over the page's main video (wubble_core::video): play, a progress bar with the
+// Video controls over the page's main video (wubble_core::video): play, a scrubber with the
 // SponsorBlock segments on it, speed, loop, picture-in-picture, a frame screenshot, mute and the
-// media downloader's save. Written from scratch: the design repo has no media controls. Built
-// from the house's parts: the reader controls' thick glass strip over content (GlassPanel), the
-// sidebar's icon buttons (PressableButton) and the settings page's TextButton for the speeds.
+// media downloader's save. The design has no media controls (wubble-only.md §27): the strip is
+// the touch Dock (kit/overlay/b/b-dock.slint: thin glass, kit IconButtons, `on` for loop and
+// mute), the scrubber the kit ElasticSlider (b-scrubber.slint), the speed a value button whose
+// menu is the overlays' popover (kit/overlay/a/a-popover.slint) holding the Select's checked rows.
 // Only the strip and the speed menu take the pointer; the rest of the video stays the page's.
 // The strip is a compact one in the video's top right corner, never across the bottom, where
 // pages keep their own controls (YouTube's bar, `<video controls>`).
 // Intents only: `command(name, value)` with name play, speeds, rate, loop, mute, seek, pip,
 // frame, save, collapse, expand, peek, dismiss, hide-site (`value`: the rate, or the seek
 // fraction). The strip's right end has a collapse chevron, which tucks the strip into a tab on
-// the page's right edge (a click or a hover on the tab opens it again), and a close button
-// (a click hides the strip until the next navigation, a right-click hides it on this site).
+// the page's right edge (only a click on the tab opens it again: a hover shows the tab's own
+// hover look), and a close button (a click hides the strip until the next navigation, a
+// right-click hides it on this site). Shown, hidden and collapsed are wubble_core::video::Ui;
+// this file only reports the pointer and the clicks.
 export component VideoControls inherits Rectangle {
-    // (element ids the tests and `--smoke video` find: root, strip, tab, close, play, bar,
-    // rate-button, loop, frame, mute, speed)
+    // (element ids the tests and `--smoke video` find: root, strip, tab, collapse, close, play,
+    // bar, rate-button, loop, frame, mute, speed)
     in property <VideoView> video;
     // The speed menu's rows, slowest first (`wubble_core::video::RATES`).
     in property <[string]> rates;
+    // The window's pointer (window px), `pointer-in` while it is in the window.
+    in property <bool> pointer-in;
+    in property <length> pointer-x;
+    in property <length> pointer-y;
     callback command(string, float);
     // The pointer is over the controls (they stay while it is).
     callback hovered(bool);
     // The pointer is on the strip, the tab or the speed menu: one answer for all three, so one
-    // going away as another appears under the pointer does not read as leaving.
-    // set by the speed menu, which is only built while it is open
-    property <bool> menu-over;
-    property <bool> any-hover: hover.has-hover || tab-hover.has-hover || root.menu-over;
-    property <bool> speeds-open: root.video.speeds;
-    changed speeds-open => {
-        if !self.speeds-open {
-            root.menu-over = false;
-        }
+    // going away as another appears under the pointer does not read as leaving. By hover, and
+    // by place: an element that appears under a still pointer has no hover until the pointer
+    // moves (the strip opening under it went 1.2 s later, the pointer on it), and a grab (the
+    // scrubber dragged off the strip) keeps the hover outside the place.
+    property <bool> any-hover: dock.hovered || tab.hovered || speeds-area.has-hover || root.under;
+    property <bool> under: root.pointer-in && ((root.video.open && root.at(strip.absolute-position, strip.width, strip.height)) || (root.video.collapsed && root.at(tab.absolute-position, tab.width, tab.height)) || (root.video.open && root.video.speeds && root.at(speeds.absolute-position, speeds.width, speeds.height)));
+    pure function at(p: Point, w: length, h: length) -> bool {
+        root.pointer-x >= p.x && root.pointer-x < p.x + w && root.pointer-y >= p.y && root.pointer-y < p.y + h
     }
+    // the strip's controls are built while it shows, and kept while it leaves
+    property <bool> built: root.video.open || dock.progress > 0;
     changed any-hover => {
         root.hovered(self.any-hover);
     }
@@ -50,205 +60,144 @@ export component VideoControls inherits Rectangle {
     height: root.video.h;
     visible: root.video.w > 0;
 
-    strip := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
-        key: GlassKeys.video-strip;
-        over-layer: GlassOver.card;
-        present: root.video.w > 0;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
-        width: max(0px, min(Shell.video-strip-width, root.width - 2 * Space.s2));
+    // (the dock in a plain element: an element id on a component with children is not found)
+    strip := Rectangle {
+        width: max(0px, min(dock.row-width, root.width - 2 * Space.s2));
+        height: dock.height;
         x: root.width - self.width - Space.s2;
-        height: Shell.icon-button + 2 * Space.s1;
-        y: Space.s2 - (root.video.open ? 0px : Shell.toast-rise);
-        opacity: root.video.open ? 1 : 0;
-        animate opacity, y {
-            duration: Calm.ms(root.video.open ? Motion.overlap-in : Motion.overlap-out);
-            easing: root.video.open ? Motion.ease-out : Motion.ease-in;
-        }
-        // The strip's controls inside its touch area: a pointer on a button is still on the
-        // strip (a sibling under the buttons lost its hover to each of them, and the strip went
-        // while the pointer was on it).
-        hover := TouchArea {
-            enabled: root.video.open;
-            if root.video.open: HorizontalLayout {
-                padding: Space.s1;
-                spacing: Space.s1;
-                play := IconButton {
-                    icon-path: root.video.paused ? Glyph.play : Glyph.pause;
-                    label: root.video.paused ? "Play" : "Pause";
-                    clicked => {
-                        root.command("play", 0);
-                    }
+        y: Space.s2;
+        dock := BDock {
+            width: parent.width;
+            key: GlassKeys.video-strip;
+            layer: GlassOver.card;
+            shown: root.video.open && root.video.w > 0;
+            interactive: root.video.open;
+            // The strip's controls inside its touch area: a pointer on a button is still on the
+            // strip (a sibling under the buttons lost its hover to each of them, and the strip went
+            // while the pointer was on it).
+            if root.built: play := IconButton {
+                icon-path: root.video.paused ? Glyph.play : Glyph.pause;
+                label: root.video.paused ? "Play" : "Pause";
+                clicked => {
+                    root.command("play", 0);
                 }
-                // The progress bar: the played part, the segments, a click seeks.
-                bar := Rectangle {
-                    horizontal-stretch: 1;
-                    Rectangle {
-                        y: (parent.height - self.height) / 2;
-                        height: Shell.video-rail;
-                        border-radius: Shell.video-rail / 2;
-                        background: Shell.track;
-                    }
-                    for mark in root.video.marks: Rectangle {
-                        x: mark.from * parent.width;
-                        width: max(Shell.video-mark-min, (mark.to - mark.from) * parent.width);
-                        y: (parent.height - self.height) / 2;
-                        height: Shell.video-rail;
-                        background: mark.colour;
-                        opacity: 0.85;
-                    }
-                    Rectangle {
-                        y: (parent.height - self.height) / 2;
-                        width: root.video.progress * parent.width;
-                        height: Shell.video-rail;
-                        border-radius: Shell.video-rail / 2;
-                        background: Palette.ink.transparentize(0.25);
-                    }
-                    Rectangle {
-                        x: root.video.progress * parent.width - self.width / 2;
-                        y: (parent.height - self.height) / 2;
-                        width: Shell.video-knob;
-                        height: Shell.video-knob;
-                        border-radius: Shell.video-knob / 2;
-                        background: Palette.ink;
-                    }
-                    TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.command("seek", clamp(self.mouse-x / self.width, 0, 1));
-                        }
-                    }
+            }
+            if root.built: bar := BScrubber {
+                progress: root.video.progress;
+                marks: root.video.marks;
+                horizontal-stretch: 1;
+                seek(f) => {
+                    root.command("seek", clamp(f, 0, 1));
                 }
-                rate-button := TextButton {
-                    text: root.video.rate;
-                    clicked => {
-                        root.command("speeds", 0);
-                    }
+            }
+            if root.built: rate-button := BDockText {
+                value: root.video.rate;
+                label: "Speed";
+                clicked => {
+                    root.command("speeds", 0);
                 }
-                loop := IconButton {
-                    icon-path: Glyph.loop;
-                    label: "Loop";
-                    background: root.video.looped ? Shell.icon-button-hover.with-alpha(0.18) : self.hovered ? Shell.icon-button-hover : transparent;
-                    clicked => {
-                        root.command("loop", 0);
-                    }
+            }
+            if root.built: loop := IconButton {
+                icon-path: Glyph.loop;
+                label: "Loop";
+                on: root.video.looped;
+                clicked => {
+                    root.command("loop", 0);
                 }
-                if root.video.can-pip: IconButton {
-                    icon-path: Glyph.pip;
-                    label: "Picture in picture";
-                    clicked => {
-                        root.command("pip", 0);
-                    }
+            }
+            if root.built && root.video.can-pip: IconButton {
+                icon-path: Glyph.pip;
+                label: "Picture in picture";
+                clicked => {
+                    root.command("pip", 0);
                 }
-                frame := IconButton {
-                    icon-path: Glyph.camera;
-                    label: "Save frame";
-                    clicked => {
-                        root.command("frame", 0);
-                    }
+            }
+            if root.built: frame := IconButton {
+                icon-path: Glyph.camera;
+                label: "Save frame";
+                clicked => {
+                    root.command("frame", 0);
                 }
-                mute := IconButton {
-                    icon-path: root.video.muted ? Glyph.speaker-muted : Glyph.speaker;
-                    label: root.video.muted ? "Unmute" : "Mute";
-                    clicked => {
-                        root.command("mute", 0);
-                    }
+            }
+            if root.built: mute := IconButton {
+                icon-path: root.video.muted ? Glyph.speaker-muted : Glyph.speaker;
+                label: root.video.muted ? "Unmute" : "Mute";
+                on: root.video.muted;
+                clicked => {
+                    root.command("mute", 0);
                 }
-                if root.video.can-save: IconButton {
-                    icon-path: Glyph.download;
-                    label: "Save video";
-                    clicked => {
-                        root.command("save", 0);
-                    }
+            }
+            if root.built && root.video.can-save: IconButton {
+                icon-path: Glyph.download;
+                label: "Save video";
+                clicked => {
+                    root.command("save", 0);
                 }
-                IconButton {
-                    icon-path: Glyph.chevron-right;
-                    label: "Collapse";
-                    clicked => {
-                        root.command("collapse", 0);
-                    }
+            }
+            if root.built: collapse := IconButton {
+                icon-path: Glyph.chevron-right;
+                label: "Collapse";
+                clicked => {
+                    root.command("collapse", 0);
                 }
-                close := IconButton {
-                    icon-path: Glyph.close;
-                    label: "Close";
-                    clicked => {
-                        root.command("dismiss", 0);
-                    }
-                    secondary-clicked => {
-                        root.command("hide-site", 0);
-                    }
+            }
+            if root.built: close := IconButton {
+                icon-path: Glyph.close;
+                label: "Close";
+                clicked => {
+                    root.command("dismiss", 0);
+                }
+                secondary-clicked => {
+                    root.command("hide-site", 0);
                 }
             }
         }
     }
 
     // The collapsed strip: a tab docked to the page pane's right edge, where the strip was.
-    tab := GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
+    tab := BDockTab {
         key: GlassKeys.video-tab;
-        over-layer: GlassOver.card;
-        present: root.video.w > 0;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
+        layer: GlassOver.card;
+        shown: root.video.collapsed && root.video.w > 0;
         width: Shell.video-tab-width;
         height: strip.height;
-        x: root.video.pane-right - root.x - self.width + (root.video.collapsed ? 0px : self.width);
+        x: root.video.pane-right - root.x - self.width;
         y: Space.s2;
-        opacity: root.video.collapsed ? 1 : 0;
-        visible: root.video.collapsed || self.opacity > 0;
-        animate opacity, x {
-            duration: Calm.ms(root.video.collapsed ? Motion.overlap-in : Motion.overlap-out);
-            easing: root.video.collapsed ? Motion.ease-out : Motion.ease-in;
-        }
-        tab-hover := TouchArea {
-            enabled: root.video.collapsed;
-            mouse-cursor: pointer;
-            clicked => {
-                root.command("expand", 0);
-            }
-            changed has-hover => {
-                if self.has-hover {
-                    root.command("peek", 0);
-                }
-            }
-        }
-        Icon {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            path: Glyph.chevron-left;
-            tint: Palette.ink;
+        clicked => {
+            root.command("expand", 0);
         }
     }
 
-    // The speed menu, under the strip's right end; it may reach below a short video, down to the
-    // pane's bottom (cut to the video, a small one's fastest rows were out of reach).
-    if root.video.open && root.video.speeds: GlassPanel {
-        // the scene draws its glass above the page (GlassPanel `over-layer`)
+    // The speed menu, under the strip's right end, grown from the speed button; it may reach
+    // below a short video, down to the pane's bottom (cut to the video, a small one's fastest
+    // rows were out of reach).
+    speeds := APopover {
         key: GlassKeys.video-speeds;
-        over-layer: GlassOver.card;
-        present: root.video.w > 0;
-        tier: GlassTier.thick;
-        radius: Shell.menu-radius;
-        over-content: true;
+        layer: GlassOver.card;
+        open: root.video.open && root.video.speeds;
+        width: TouchCss.tp-menu--width;
         x: strip.x + strip.width - self.width;
         y: strip.y + strip.height + Space.s1;
-        width: list.preferred-width;
         height: max(0px, min(list.preferred-height, root.video.pane-bottom - root.y - self.y - Space.s1));
-        clip: true;
-        // Around the rows, as the strip's: a row under the pointer is still the menu.
-        TouchArea {
-            changed has-hover => {
-                root.menu-over = self.has-hover;
-            }
-            list := VerticalLayout {
-                padding: Space.s1;
-                for rate[i] in root.rates: speed := TextButton {
-                    text: (i == root.video.rate-index ? "\u{2713} " : "    ") + rate;
-                    clicked => {
-                        root.command("rate", i);
+        origin-x: self.width;
+        origin-y: 0px;
+        // cut to the panel's corners; its area keeps the hover over all its rows
+        Rectangle {
+            border-radius: TouchCss.tp-menu--border-radius;
+            clip: true;
+            speeds-area := TouchArea {
+                enabled: root.video.open && root.video.speeds;
+                list := BChoiceList {
+                    card: false;
+                    for rate[i] in root.rates: speed := BChoiceRow {
+                        label: rate;
+                        checked: i == root.video.rate-index;
+                        hovered(on) => {
+                            list.hover(i, on);
+                        }
+                        picked => {
+                            root.command("rate", i);
+                        }
                     }
                 }
             }

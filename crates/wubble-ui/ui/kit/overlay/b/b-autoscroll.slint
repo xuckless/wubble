@@ -1,0 +1,54 @@
+// derived: Film (motion/film.slint, the film rim) as the anchor ring, the slider knob (.tp-sl-knob, pages/touch.css:53: ink, shadow 0 6 14 / .5) as the still dot, Icon chevron-down in mist as the arrow
+// Middle-click autoscroll's pointer (wubble-only.md §23): where autoscroll began, the film rim
+// (`.wb-film`, lit: autoscroll is held) round a small ink centre; at the pointer, while the page
+// holds still, the slider's knob in small; while it scrolls, the chevron in mist pointing the
+// way, stretched along its length and thinned across by the caller (the stretch spring, stepped
+// in Rust). Draws only; takes no input.
+// derived (notes/fidelity/derived-review.md "Overlays B"): the sizes (Shell.autoscroll-*), the
+// knob at the dot's size, the chevron as the arrow.
+
+import { Palette } from "../../gen/tokens.slint";
+import { TouchCss } from "../../gen/css.slint";
+import { Shell } from "../../derived.slint";
+import { Film } from "../../motion/film.slint";
+import { Icon, Glyph } from "../../controls/icon.slint";
+
+export component BAutoscrollRing inherits Rectangle {
+    width: Shell.autoscroll-ring;
+    height: Shell.autoscroll-ring;
+    Film {
+        radius: root.width / 2;
+        on: true;
+    }
+    Rectangle {
+        width: Shell.autoscroll-centre;
+        height: Shell.autoscroll-centre;
+        border-radius: self.width / 2;
+        background: Palette.ink;
+    }
+}
+
+export component BAutoscrollDot inherits Rectangle {
+    width: Shell.autoscroll-dot;
+    height: Shell.autoscroll-dot;
+    border-radius: self.width / 2;
+    background: TouchCss.tp-sl-knob--background;
+    drop-shadow-offset-y: TouchCss.tp-sl-knob--box-shadow-shadow-1-y * Shell.autoscroll-dot / TouchCss.tp-sl-knob--width;
+    drop-shadow-blur: TouchCss.tp-sl-knob--box-shadow-shadow-1-blur * Shell.autoscroll-dot / TouchCss.tp-sl-knob--width;
+    drop-shadow-color: TouchCss.tp-sl-knob--box-shadow-shadow-1-color;
+}
+
+// The arrow at the size the caller gives it (length down, breadth across): the chevron's
+// strokes span half the 24 grid across (6..18) and a quarter down (9..15), so the icon is drawn
+// twice as wide and four times as long as the box, about its centre, for the strokes to fill it.
+export component BAutoscrollArrow inherits Rectangle {
+    Icon {
+        path: Glyph.chevron-down;
+        tint: Palette.mist;
+        size: root.width * 2;
+        width: root.width * 2;
+        height: root.height * 4;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+    }
+}

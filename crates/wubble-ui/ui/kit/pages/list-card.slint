@@ -1,0 +1,108 @@
+// derived: Raised(components/raised.slint) + KitText(text.slint) roles st-group / st-empty-p, pages/settings.css:39-40,117-118 @598f814
+// The list pages' blocks, from the settings page's (wubble-only.md section 32): `ListCard` is
+// `.st-card` (white .035, radius 20, padding 6, the inset top light) round a list's rows; a list
+// that the host sends flat (history: day headers between visits) draws it in slices, one per row,
+// `first` and `last` rounding and padding only its ends (Raised's sliced card). `ListGroup` is
+// `.st-group` (13 / 500 mist, margin 22 8 8) over a card; `ListEmpty` is `.st-empty` (padding
+// 32 8, 15 mist, 12 under it, a button under that in `@children`); `ListToolbar` is the page's
+// action line, the buttons at its end as `.st-row-ctl` sets them (gap 12), spaced as `.st-count`.
+
+import { SettingsCss } from "../gen/css.slint";
+import { Role } from "../gen/text.slint";
+import { KitText } from "../text.slint";
+import { Raised } from "../../components/raised.slint";
+
+export component ListCard inherits Raised {
+    in property <bool> first: true;
+    in property <bool> last: true;
+    fill: SettingsCss.st-card--background;
+    highlight: root.first ? SettingsCss.st-card--box-shadow-shadow-1-color : transparent;
+    radius: SettingsCss.st-card--border-radius;
+    top-radius: root.first ? self.radius : 0px;
+    bottom-radius: root.last ? self.radius : 0px;
+    VerticalLayout {
+        padding-left: SettingsCss.st-card--padding;
+        padding-right: SettingsCss.st-card--padding;
+        padding-top: root.first ? SettingsCss.st-card--padding : 0px;
+        padding-bottom: root.last ? SettingsCss.st-card--padding : 0px;
+        @children
+    }
+}
+
+export component ListGroup inherits HorizontalLayout {
+    in property <string> text;
+    padding-top: SettingsCss.st-group--margin-top;
+    padding-left: SettingsCss.st-group--margin-left;
+    padding-right: SettingsCss.st-group--margin-right;
+    padding-bottom: SettingsCss.st-group--margin-bottom;
+    KitText {
+        role: Role.st-group;
+        text: root.text;
+        color: SettingsCss.st-group--color;
+        overflow: elide;
+        accessible-role: AccessibleRole.text;
+    }
+}
+
+export component ListEmpty inherits VerticalLayout {
+    in property <string> text;
+    padding-top: SettingsCss.st-empty--padding-top;
+    padding-bottom: SettingsCss.st-empty--padding-bottom;
+    padding-left: SettingsCss.st-empty--padding-left;
+    padding-right: SettingsCss.st-empty--padding-right;
+    spacing: SettingsCss.st-empty-p--margin-bottom;
+    KitText {
+        role: Role.st-empty-p;
+        text: root.text;
+        color: SettingsCss.st-empty--color;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: start;
+        @children
+    }
+}
+
+export component ListToolbar inherits HorizontalLayout {
+    // what the line says at its start (the task manager's total)
+    in property <string> text;
+    padding-top: SettingsCss.st-count--margin-top;
+    padding-bottom: SettingsCss.st-count--margin-bottom;
+    padding-left: SettingsCss.st-count--margin-left;
+    spacing: SettingsCss.st-row-ctl--gap;
+    KitText {
+        horizontal-stretch: 1;
+        role: Role.st-count;
+        text: root.text;
+        color: SettingsCss.st-count--color;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    @children
+}
+
+// A paragraph inside a card (the vault's explanation and its last import's report): the row's
+// note (`.st-row-note`, 13 mist) at the row's padding, wrapped; under the row's text when the
+// row above it leads with a tile (`under-lead`).
+export component ListNote inherits HorizontalLayout {
+    in property <string> text;
+    in property <color> ink: SettingsCss.st-row-note--color;
+    in property <bool> under-lead: true;
+    padding-left: SettingsCss.st-row--padding-left + (root.under-lead ? SettingsCss.st-lead--width + SettingsCss.st-row--gap-column : 0px);
+    padding-right: SettingsCss.st-row--padding-right;
+    padding-bottom: SettingsCss.st-row--padding-bottom;
+    KitText {
+        role: Role.st-row-note;
+        text: root.text;
+        color: root.ink;
+        wrap: word-wrap;
+    }
+}
+
+// The line under a list that pages it on ("Show more"): its button in the middle, as far under
+// the card as `.st-empty`'s button sits under its text.
+export component ListFoot inherits HorizontalLayout {
+    alignment: center;
+    padding-top: SettingsCss.st-empty-p--margin-bottom;
+    @children
+}

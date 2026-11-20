@@ -8,6 +8,9 @@
 // fill (`inset(0 (1-p) 0 0 round 12px)`), so the colour turns exactly at the fill's edge.
 // Disabled: .4. Physics and timers: `wubble_core::controls::hold`, through the `Controls`
 // registry (kind 4). The design's slint/ port has none: written from the TSX and CSS.
+// `compact` (wubble): a list row's size, as kit Segmented's `compact` is the settings row's
+// `.st-seg`: no minimum width, the `.st-seg` button's 30 height, 13 side padding and its
+// indicator's 9 radius, so a row's hold button is as small as its label.
 
 import { Tsx } from "../gen/tokens.slint";
 import { SettingsCss } from "../gen/css.slint";
@@ -60,6 +63,7 @@ export component HoldButton inherits Rectangle {
     in property <string> text;
     in property <string> done-text;
     in property <bool> enabled: true;
+    in property <bool> compact;
     // the hold completed
     callback done();
 
@@ -95,9 +99,12 @@ export component HoldButton inherits Rectangle {
         role: Role.wb-st-hold;
         text: root.is-done ? root.done-text : root.text;
     }
-    height: SettingsCss.wb-st-hold--height;
-    min-width: SettingsCss.wb-st-hold--min-width;
-    preferred-width: max(SettingsCss.wb-st-hold--min-width, meas.preferred-width + (root.is-done ? Tsx.hold-done-icon + SettingsCss.st-hold-done--gap : 0px) + SettingsCss.wb-st-hold--padding-left + SettingsCss.wb-st-hold--padding-right);
+    property <length> least: root.compact ? 0px : SettingsCss.wb-st-hold--min-width;
+    property <length> pad: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--padding-left : SettingsCss.wb-st-hold--padding-left;
+    property <length> radius: root.compact ? SettingsCss.st-seg-tp-seg-ind--border-radius : SettingsCss.wb-st-hold--border-radius;
+    height: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--height : SettingsCss.wb-st-hold--height;
+    min-width: root.least;
+    preferred-width: max(root.least, meas.preferred-width + (root.is-done ? Tsx.hold-done-icon + SettingsCss.st-hold-done--gap : 0px) + 2 * root.pad);
     opacity: root.enabled ? 1 : SettingsCss.wb-st-hold-disabled--opacity;
 
     // scale(k, squashOf(k)) about the centre
@@ -105,16 +112,16 @@ export component HoldButton inherits Rectangle {
         transform-origin: { x: self.width / 2, y: self.height / 2 };
         transform-scale-x: root.v.scale-x;
         transform-scale-y: root.v.scale-y;
-        border-radius: SettingsCss.wb-st-hold--border-radius;
+        border-radius: root.radius;
         background: SettingsCss.wb-st-hold--background;
         pulse := Pulse {
-            radius: SettingsCss.wb-st-hold--border-radius;
+            radius: root.radius;
         }
         // `.st-hold-fill`
         Rectangle {
             x: 0px;
             width: parent.width * root.v.value;
-            border-radius: min(SettingsCss.wb-st-hold--border-radius, self.width / 2);
+            border-radius: min(root.radius, self.width / 2);
             clip: true;
             Rectangle {
                 x: 0px;
@@ -132,7 +139,7 @@ export component HoldButton inherits Rectangle {
         Rectangle {
             x: 0px;
             width: parent.width * root.v.value;
-            border-radius: min(SettingsCss.wb-st-hold--border-radius, self.width / 2);
+            border-radius: min(root.radius, self.width / 2);
             clip: true;
             HoldLabel {
                 x: 0px;
@@ -180,6 +187,6 @@ export component HoldButton inherits Rectangle {
     }
     FocusRing {
         shown: keys.has-focus;
-        radius: SettingsCss.wb-st-hold--border-radius;
+        radius: root.radius;
     }
 }
