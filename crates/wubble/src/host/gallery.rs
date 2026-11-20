@@ -142,6 +142,11 @@ impl Host {
         }
         // The bookmark and print sheets are the host's own state, not the tab's: closed too.
         self.bookmark_sheet_answered(false, false, "", -1);
+        // A waiting notice goes; a new one replaces it by itself (hiding it in the same turn as
+        // showing one races the toast's two serials).
+        if !matches!(scene.overlay, Overlay::Toast | Overlay::Question) {
+            self.toast_hide();
+        }
         if !matches!(self.print, wubble_core::print::Sheet::Closed) {
             self.print_event(wubble_core::print::Event::Cancel);
         }
@@ -265,6 +270,10 @@ impl Host {
                     window,
                     wubble_core::shot::saved_text(Some(true), Some(true)),
                 );
+            }
+            Overlay::Question => {
+                let (text, action) = super::videos::ASK_SPONSOR;
+                self.toast_with(text, action, true);
             }
             Overlay::Lists => self.gallery_lists(),
             Overlay::None
