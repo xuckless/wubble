@@ -25,6 +25,8 @@ Done today, after the kit merges listed under "Design fidelity":
       sidebar empty-area menu, start-page hover card (b2b7f68)
 - [x] Invisible test display with focus, clipboard and GPU; save prompt lost when a sign-in beats page load (6d70c9e)
 
+- [x] Paste (Ctrl+V) in shell fields: one clipboard path through the host's Wayland worker (6885c31)
+
 Open, for the owner's eye:
 - [ ] Glass over white: faint ink (disabled rows, shortcuts, counts) sits near 2:1; glass reads flat grey
 - [ ] Menus grow from the design's 236 to 320 for long rows (derived; on the review sheet)
@@ -151,6 +153,10 @@ Open, to build or check:
 - [~] HDR output: researched and spiked; needs the own build (F16 capture) and a Slint renderer patch
 
 ## M7: Ship
+- [~] Auto-updater: signed manifest on GitHub Releases, check on open, apply on next launch (branch `rel/updater`)
+- [~] Video strip download button (branch `qa2/viddl`)
+- [ ] First preview release: Linux tarball + `install.sh`; macOS DMG signed on the owner's Mac; release workflow
+- [ ] MCP server (after the release): [docs/research/mcp-server.md](docs/research/mcp-server.md)
 - [x] Import readers (f83b314) and store-side apply (e6f826a)
 - [ ] Import app wiring: pick a profile, apply, replace the live model, show the summary
 - [ ] Import: Zen legacy tables, Arc history, Little Arc, Helium/Chromium; verify Zen macOS and Arc Windows paths
