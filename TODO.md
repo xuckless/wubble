@@ -185,6 +185,22 @@ Open, to build or check:
 - [ ] Default-browser registration, URL handlers
 - [ ] Hardening: vault unlock off the store thread; clear the clipboard after a password copy
 
+## Optimization roadmap (after extensions, password managers and the MCP server)
+Numbers behind it: [docs/measurements.md](docs/measurements.md) "Browser benchmarks" and "Main-process flame graph" (2026-11-20). Target: the shell's cost follows what is visible, not "match Chrome". In order:
+- [x] Profile the main process during video: 76 % of the main thread's user CPU is Slint redrawing the whole window per page frame; the scene is 1.3 %, the frame import 7 % (flame graph, 2026-11-20)
+- [ ] Stop redrawing the shell per page frame: a page frame redraws only its pane; the sidebar and bars are not re-walked or re-recorded (partial rendering in Slint's Skia renderer on wgpu, or the shell cached as a layer)
+- [ ] Partial rendering inside the page: CEF's damage rects through the frame path, so only the video or the moving part redraws
+- [ ] Content-driven frame rate: at most one page frame per refresh; CEF's rate follows the content (still: none, video: its own rate, input and motion: vsync); one pure state machine in `wubble_gfx::pacing`
+- [ ] Profile again with kernel time (needs root for `perf`): GPU driver calls and present, about a third of the main process's CPU, unseen so far
+- [ ] The CEF message pump on the main thread (14 % during video): what runs there per frame
+- [ ] Find the Speedometer gap (16 % behind Chromium): run it in plain CEF with our `libcef.so`, no shell
+- [ ] CEF build with PGO and ThinLTO (`scripts/build-cef.sh` sets `chrome_pgo_phase=0 use_thin_lto=false`), if the plain-CEF run is also behind
+- [ ] Memory breakdown per allocation in the main and GPU processes, before any memory change
+- [ ] Hidden tabs free their frame targets; the blur pyramid exists only while glass is open; revisit Skia's 256 MiB layer budget
+- [ ] A page frame touches the scene and the blur pyramid only while overlay glass or motion is on screen (1.3 % today: low value)
+- [ ] Re-run the benchmarks, the flame graph and the video CPU/RAM profile against Chromium and Firefox after each step; keep the harness and the profile scripts in `scripts/`
+- [ ] Only if plain video still costs far more than Chromium after the above: the page on a native OS surface with faked glass (overturns four frame-path decisions; owner decides)
+
 ## Open decisions (owner)
 - Hardware video decode: keep the opt-in row (unsandboxed GPU process) or remove it
 - Start page liquid: stirring per second or per frame

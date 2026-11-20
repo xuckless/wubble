@@ -168,3 +168,57 @@ Under load, 4K60 VP9 in software, 28 `yes` burners at nice 0 (video frames/s fro
 
 Frame path under video (`wubble --measure video --seconds 12`, 240 Hz CEF cap): one copy in the paint callback, one blit into the ring, one composite per page frame, `cpu_fallback` 0. Scene renders before b9: `scene_cpu` n 3462 = `slint_render` n 3462 (the scene stepped on every page frame, fullscreen too). After (`scene_due`, dev profile (opt-level 1), other builds running): `scene_cpu` n 572 against `slint_render` n 3411 (2881 page frames delivered, 2776 presented); scene p50 0.42 ms per render it does. Fullscreen: no scene render and no scene layer.
 
+
+## Browser benchmarks against Chromium and Firefox (2026-11-20)
+
+2026-11-20, Linux: i7-14700F (28 threads), RTX 5060 / NVIDIA 615.71.09, Fedora 44, GNOME Wayland. wubble 0.1.0-preview.1 (the published tarball, own CEF 156 build) against Chromium 157.0.8103.78 (Fedora build; Google Chrome is not installed) and Firefox 160.0, each on a fresh profile, one browser at a time, load average under 3. Speedometer 3.1 (`release/3.1`) and MotionMark 1.3 served from loopback inside a same-origin frame of 1000x680 CSS px in every browser; the wrapper page starts the suite and posts the score. CPU seconds are user + system over the browser's whole process tree from launch to the score; memory is the tree's peak PSS (`smaps_rollup`, sampled every 5 s). Speedometer: 3 runs each, interleaved; MotionMark: 1 run each (it chose a 144 fps target in all three; why not 300 was not checked). The harness was a scratch script, not kept in the repo.
+
+| Visible windows, 300 Hz display | wubble | Chromium 157 | Firefox 160 |
+|---|---|---|---|
+| Speedometer 3.1 score | 27.2 to 27.4 | 32.5 to 32.7 | 31.9 to 32.4 |
+| Speedometer CPU s per run | 41.4 to 41.7 | 31.9 to 32.5 | 35.1 to 35.9 |
+| Speedometer peak PSS (MB) | 1271 to 1384 | 1225 to 1434 | 2886 to 3245 |
+| MotionMark 1.3 score | 1708.75 ±1.02 % | 1783.94 ±1.03 % | 1102.74 ±0.92 % |
+| MotionMark CPU s per run | 620.4 | 530.8 | 496.2 |
+| MotionMark peak PSS (MB) | 1368 | 1093 | 1459 |
+
+MotionMark per test, same runs (Multiply / Canvas Arcs / Leaves / Paths / Canvas Lines / Images / Design / Suits): wubble 1320 / 4254 / 1286 / 10021 / 25173 / 178 / 242 / 928; Chromium 1683 / 4150 / 1528 / 9768 / 21673 / 167 / 303 / 898; Firefox 1104 / 546 / 986 / 3800 / 18931 / 271 / 207 / 910.
+
+The same suites on the headless display (`scripts/headless.sh`, one 60 Hz virtual monitor, 1920x1080), before the frame was fixed: the page filled each window's content area (wubble 1004x784, Chromium 1256x688, Firefox 1332x804), so the MotionMark scores are not comparable across browsers.
+
+| Headless, 60 Hz | wubble | Chromium 157 | Firefox 160 |
+|---|---|---|---|
+| Speedometer 3.1 score | 28.7 to 28.9 | 33.8 to 34.0 | 31.9 to 32.9 |
+| Speedometer CPU s per run | 35.6 to 36.0 | 30.0 to 30.2 | 33.2 to 33.8 |
+| Speedometer peak PSS (MB) | 1224 to 1249 | 1080 to 1211 | 2373 to 2455 |
+| MotionMark 1.3 score (60 fps target) | 4205.03 ±0.94 % | 3854.82 ±1.49 % | 2612.56 ±1.26 % |
+| MotionMark CPU s per run | 514.2 | 431.4 | 385.9 |
+| MotionMark peak PSS (MB) | 1525 | 1253 | 1508 |
+
+wubble is about 16 % behind Chromium on Speedometer and within one run's noise on MotionMark (4 % behind), for 17 % (MotionMark) to 28 % (Speedometer) more CPU. From 60 Hz to 300 Hz wubble's Speedometer CPU rose 36 to 41.5 s, Chromium's 30 to 32 s. The Speedometer gap's cause is not isolated: the engine version (156 against 157), the own CEF build's flags, or the shell's compositing competing with the page.
+
+## Main-process flame graph (2026-11-20)
+
+2026-11-20, same machine, visible window on the 300 Hz display (CEF at 240). A 1080p60 VP9 clip (software decode) looping in a still page, shown at 854x480. `perf record -e cycles:u -F 999 --call-graph lbr` on the whole process tree for 20 s, 10 s after start; user space only (`perf_event_paranoid` 2, no root), so kernel time is not in it. The binary is a local `--profile dist` build of the same source with symbols kept (DWARF unwinding of the wubble binary failed in perf 7.3, hence LBR: 32 frames, deeper stacks completed from the most common caller chain). One recording. Tree CPU 42 % of a core, main process 14 % (user + system). The flame graphs and the scripts were kept outside the repo.
+
+| User CPU samples by process | share |
+|---|---|
+| Chromium page process (with the software decode) | 49.6 % |
+| wubble main process | 32.1 % |
+| Chromium GPU process | 18.2 % |
+
+| Main thread (2719 of the main process's 3222 samples) | share |
+|---|---|
+| Slint render of the window, total | 75.8 % |
+| item tree walk and property evaluation | 25.0 % |
+| Skia flush to the GPU (with the NVIDIA driver) | 19.7 % |
+| opacity, clip and layer bookkeeping | 9.0 % |
+| recording paths | 7.7 % |
+| present | 6.4 % |
+| recording rectangles, images, shadows | 4.6 % |
+| recording text | 3.4 % |
+| CEF message pump (Chromium in-process and host work) | 14.0 % |
+| page frame arrival (`on_accelerated_paint`: import and blit) | 7.1 % |
+| event loop, Wayland, other | 3.0 % |
+
+Inclusive: the NVIDIA driver 23.2 %, `wubble_gfx::scene::render::Renderer::frame` 1.3 %, `import_vulkan` 3.5 %. The whole window is redrawn for every page frame; the scene is not the cost.
