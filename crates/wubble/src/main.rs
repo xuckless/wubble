@@ -1186,6 +1186,12 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_agent_sheet_answered(move |allow, headless| {
         with_host_in(win, |host| host.agent_sheet_answered(allow, headless))
     });
+    window.on_agent_sheet_removed(move |site, key| {
+        with_host_in(win, |host| host.agent_sheet_removed(site, &key))
+    });
+    window.on_agent_sheet_site_submitted(move |text| {
+        with_host_in(win, |host| host.agent_sheet_site_submitted(&text))
+    });
     window.on_print_sheet_answered(move |accept| {
         with_host_in(win, |host| host.print_answered(accept))
     });

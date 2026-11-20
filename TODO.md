@@ -20,7 +20,7 @@ macOS is driven only from the owner's own session and has not been run since bat
   - [x] Agent sessions in `wubble-core::agent`: one state machine, named secrets, activity log (`agent_log` table), `agent.mcp_enabled`
   - [x] Transport and execution: the profile's MCP socket, `wubble mcp` relay, a Space and container per session, the tools through the engine paths, `--smoke mcp` (92a726b)
   - [x] Shell UI: the approval sheet (one modal, Escape denies), the agent mark on tab rows and the Space header, "Stop All Agents" (command bar, mark), the activity page `wubble://agent` linked from Settings, gallery scenes, `--smoke mcp` drives the real sheet
-  - [ ] Approval sheet fixes: the Window choice took a pre-wire Controls slot (dead, no selection), now presses by pointer in `--smoke mcp`; kit Segmented and list editors for Secrets and Sites
+  - [x] Approval sheet: the Window choice took a pre-wire Controls slot (dead, no selection), body now built at first opening, `--smoke mcp` presses it by pointer (374ce01); Secrets and Sites in the kit list editor, edited before Allow (`agent::Lists`)
   - [ ] Bind a requested secret name to a vault login on the sheet (the sheet shows the names; a grant holds none until then)
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)
 - Then the "Optimization roadmap". The release follow-ups in M7 wait for the next version.

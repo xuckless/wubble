@@ -504,6 +504,8 @@ export component AppWindow inherits Window {
     // An agent session's approval sheet; the intent is (allow, headless).
     in property <AgentSheetView> agent-sheet-view;
     callback agent-sheet-answered(bool, bool);
+    callback agent-sheet-removed(bool, string);
+    callback agent-sheet-site-submitted(string);
     // The agent activity log page, newest first.
     in property <[AgentLogItem]> agent-log;
     // A touchpad history swipe: -1..1 of the way to forward (negative) or back; 0 hides the
@@ -1365,6 +1367,12 @@ export component AppWindow inherits Window {
                 sheet: root.agent-sheet-view;
                 answered(allow, headless) => {
                     root.agent-sheet-answered(allow, headless);
+                }
+                removed(site, key) => {
+                    root.agent-sheet-removed(site, key);
+                }
+                site-submitted(text) => {
+                    root.agent-sheet-site-submitted(text);
                 }
             }
             // The history swipe's chip at the edge it goes toward.

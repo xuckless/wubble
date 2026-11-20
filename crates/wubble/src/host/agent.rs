@@ -62,7 +62,8 @@ struct Session {
     conn: ConnId,
     state: State,
     purpose: String,
-    sites: Vec<String>,
+    /// What the client asked for, as the owner leaves it on the sheet; Allow grants its sites.
+    lists: agent::Lists,
     /// The `start_session` call, answered once the token exists (or the session ended).
     start: Option<RequestId>,
     /// The Space and container the approval opened.
@@ -203,6 +204,8 @@ pub(super) struct Agents {
     sheet: Option<(slint::Weak<AppWindow>, SessionId)>,
     /// Counts the sheets shown, so each restarts the sheet's window choice.
     sheets: i32,
+    /// The answer to the sheet's last Sites draft: its serial, and the note (empty: taken).
+    answer: (i32, &'static str),
 }
 
 impl Agents {
@@ -263,17 +266,32 @@ fn inside(b: Bounds, outer: Bounds) -> bool {
 }
 
 /// The sheet's window view of what it shows.
-fn sheet_view(request: &Request, sites: &[String], serial: i32) -> AgentSheetView {
-    let names = |v: &[String]| -> slint::ModelRc<slint::SharedString> {
-        let v: Vec<slint::SharedString> = v.iter().map(|s| s.as_str().into()).collect();
-        v.as_slice().into()
+fn sheet_view(
+    request: &Request,
+    lists: &agent::Lists,
+    serial: i32,
+    answer: (i32, &str),
+) -> AgentSheetView {
+    // one column each: the name, the site
+    let rows = |v: &[String]| -> slint::ModelRc<wubble_ui::EntryItem> {
+        let entries: Vec<wubble_core::pages::Entry> = v
+            .iter()
+            .map(|s| wubble_core::pages::Entry {
+                label: s.clone(),
+                key: s.clone(),
+                cells: vec![s.clone()],
+            })
+            .collect();
+        wubble_ui::settings::entry_items(&entries).as_slice().into()
     };
     AgentSheetView {
         open: true,
         serial,
         client: request.client.as_str().into(),
-        secrets: names(&request.wants_secrets),
-        sites: names(sites),
+        secrets: rows(&lists.secrets),
+        sites: rows(&lists.sites),
+        answer: answer.0,
+        note: answer.1.into(),
         headless: request.wants_mode == Mode::Headless,
     }
 }
@@ -445,18 +463,18 @@ impl Host {
             return;
         }
         // the session that has waited longest (the session table is the one owner of who waits)
-        let Some((id, request, sites)) = self
+        let Some((id, request, lists)) = self
             .agents
             .sessions
             .iter()
             .filter_map(|(id, s)| match &s.state {
                 State::AwaitingApproval(request) => {
-                    Some((s.asked, id.clone(), request.clone(), s.sites.clone()))
+                    Some((s.asked, id.clone(), request.clone(), s.lists.clone()))
                 }
                 _ => None,
             })
             .min_by_key(|(asked, ..)| *asked)
-            .map(|(_, id, request, sites)| (id, request, sites))
+            .map(|(_, id, request, lists)| (id, request, lists))
         else {
             return;
         };
@@ -467,7 +485,8 @@ impl Host {
             return;
         }
         self.agents.sheets += 1;
-        window.set_agent_sheet_view(sheet_view(&request, &sites, self.agents.sheets));
+        self.agents.answer = (0, "");
+        window.set_agent_sheet_view(sheet_view(&request, &lists, self.agents.sheets, (0, "")));
         self.agents.sheet = Some((window.as_weak(), id));
         self.render_surfaces(&window);
         if self.checks.mcp_smoke.is_some() {
@@ -492,10 +511,68 @@ impl Host {
             .agents
             .sessions
             .get(&id)
-            .map(|s| s.sites.clone())
+            .map(|s| s.lists.sites.clone())
             .unwrap_or_default();
         // the session's transition dismisses the sheet and shows the next
         self.agent_event(&id, agent::answer(&sites, allow, headless));
+    }
+
+    /// A list editor's "−" on the sheet: a site, else a secret name, leaves what Allow grants.
+    pub(crate) fn agent_sheet_removed(&mut self, site: bool, key: &str) {
+        let edit = if site {
+            agent::ListEdit::RemoveSite(key)
+        } else {
+            agent::ListEdit::RemoveSecret(key)
+        };
+        let _ = self.agent_sheet_edit(edit);
+        self.agent_sheet_render();
+    }
+
+    /// The Sites editor's draft (`pages::submission`: one cell, and the site it replaces when
+    /// it edits one): taken into the session's list, or refused with a note; either way the
+    /// editor gets its answer.
+    pub(crate) fn agent_sheet_site_submitted(&mut self, text: &str) {
+        let draft = wubble_core::pages::submission(text);
+        let site = draft.cells.first().copied().unwrap_or_default();
+        let result = self.agent_sheet_edit(agent::ListEdit::PutSite {
+            replacing: draft.replacing,
+            site,
+        });
+        self.agents.answer = (
+            self.agents.answer.0.wrapping_add(1),
+            result.err().map_or("", agent::ListRefusal::note),
+        );
+        self.agent_sheet_render();
+    }
+
+    /// One edit of the shown session's lists (`agent::Lists::edit`).
+    fn agent_sheet_edit(&mut self, edit: agent::ListEdit) -> Result<(), agent::ListRefusal> {
+        let Some((_, id)) = &self.agents.sheet else {
+            return Ok(());
+        };
+        let Some(s) = self.agents.sessions.get_mut(id) else {
+            return Ok(());
+        };
+        s.lists.edit(edit)
+    }
+
+    /// The shown sheet's view again, after an edit (same serial: the window choice stays).
+    fn agent_sheet_render(&mut self) {
+        let Some((window, id)) = &self.agents.sheet else {
+            return;
+        };
+        let (Some(window), Some(s)) = (window.upgrade(), self.agents.sessions.get(id)) else {
+            return;
+        };
+        let State::AwaitingApproval(request) = &s.state else {
+            return;
+        };
+        window.set_agent_sheet_view(sheet_view(
+            request,
+            &s.lists,
+            self.agents.sheets,
+            self.agents.answer,
+        ));
     }
 
     /// The sheet is showing (the overlay stack's read).
@@ -514,7 +591,10 @@ impl Host {
                 conn: 0,
                 state: State::Requested,
                 purpose: "Look up the release notes".into(),
-                sites: vec!["github.com".into()],
+                lists: agent::Lists::asked(
+                    &["GITHUB_TOKEN".into(), "NPM_TOKEN".into()],
+                    &["github.com".into(), "*.githubusercontent.com".into()],
+                ),
                 start: None,
                 space: None,
                 note: None,
@@ -878,7 +958,7 @@ impl Host {
                 conn: reply.conn,
                 state: State::Requested,
                 purpose,
-                sites,
+                lists: agent::Lists::asked(&secrets, &sites),
                 start: Some(reply.id),
                 space: None,
                 note: None,
@@ -1495,8 +1575,8 @@ impl Host {
             return self.fail("the approval sheet is not up".into());
         };
         let view = window.get_agent_sheet_view();
-        let secrets: Vec<String> = view.secrets.iter().map(|s| s.to_string()).collect();
-        let sites: Vec<String> = view.sites.iter().map(|s| s.to_string()).collect();
+        let secrets: Vec<String> = view.secrets.iter().map(|s| s.key.to_string()).collect();
+        let sites: Vec<String> = view.sites.iter().map(|s| s.key.to_string()).collect();
         if !view.open || view.client.is_empty() {
             return self.fail("the approval sheet names no client".into());
         }

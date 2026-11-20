@@ -662,10 +662,14 @@ export struct AgentSheetView {
     serial: int,
     // The calling program's name.
     client: string,
-    // The secrets it asks for, by name (never a value).
-    secrets: [string],
-    // The sites it limits itself to; none: any site.
-    sites: [string],
+    // The secrets it asks for, by name (never a value), as the owner left them (one column).
+    secrets: [EntryItem],
+    // The sites it is limited to, as the owner left them (one column); none: any site.
+    sites: [EntryItem],
+    // The host's answer to the Sites editor's last draft: a new serial each time, `note` empty
+    // to accept it (kit ListEditor `answer` / `note`).
+    answer: int,
+    note: string,
     // The client asks to run without showing its window.
     headless: bool,
 }

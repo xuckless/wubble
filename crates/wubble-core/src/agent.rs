@@ -106,6 +106,82 @@ impl Grant {
     }
 }
 
+/// What the approval sheet lets the owner change before Allow: the secret names the client
+/// asked for (removed only: none can be bound to a login yet) and the sites (empty: any site).
+/// The host keeps one per waiting session; Allow builds the grant from it ([`answer`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lists {
+    pub secrets: Vec<String>,
+    pub sites: Vec<String>,
+}
+
+/// One change on the sheet's list editors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListEdit<'a> {
+    RemoveSecret(&'a str),
+    RemoveSite(&'a str),
+    /// A site added at the end, or put in the place of `replacing` (an edit in place).
+    PutSite {
+        replacing: Option<&'a str>,
+        site: &'a str,
+    },
+}
+
+/// Why a site was refused; the editor shows the note under its draft.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListRefusal {
+    NotASite,
+    Listed,
+}
+
+impl ListRefusal {
+    pub fn note(self) -> &'static str {
+        match self {
+            ListRefusal::NotASite => {
+                "Not a site: example.com, *.example.com or https://example.com/docs/*"
+            }
+            ListRefusal::Listed => "Already in the list",
+        }
+    }
+}
+
+impl Lists {
+    /// The client's request, as the sheet first shows it.
+    pub fn asked(secrets: &[String], sites: &[String]) -> Lists {
+        Lists {
+            secrets: secrets.to_vec(),
+            sites: sites.to_vec(),
+        }
+    }
+
+    /// Applies `edit`; a site must be a [`Pattern`] and not already listed (trimmed). Removing
+    /// what is not listed changes nothing.
+    pub fn edit(&mut self, edit: ListEdit) -> Result<(), ListRefusal> {
+        match edit {
+            ListEdit::RemoveSecret(name) => self.secrets.retain(|s| s != name),
+            ListEdit::RemoveSite(site) => self.sites.retain(|s| s != site),
+            ListEdit::PutSite { replacing, site } => {
+                let site = site.trim();
+                if Pattern::parse(site).is_none() {
+                    return Err(ListRefusal::NotASite);
+                }
+                if self
+                    .sites
+                    .iter()
+                    .any(|s| s == site && Some(s.as_str()) != replacing)
+                {
+                    return Err(ListRefusal::Listed);
+                }
+                match replacing.and_then(|r| self.sites.iter().position(|s| s == r)) {
+                    Some(i) => site.clone_into(&mut self.sites[i]),
+                    None => self.sites.push(site.to_owned()),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A per-session bearer secret. Made by the host (`Effect::MintToken`), never printed, compared
 /// without early exit.
 #[derive(Clone, PartialEq, Eq)]
@@ -312,6 +388,42 @@ pub fn answer(sites: &[String], allow: bool, headless: bool) -> Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sheet_lists_remove_add_and_edit_sites() {
+        let mut l = Lists::asked(&["A".into(), "B".into()], &["example.com".into()]);
+        assert_eq!(l.edit(ListEdit::RemoveSecret("A")), Ok(()));
+        assert_eq!(l.secrets, ["B"]);
+        let put = |replacing, site| ListEdit::PutSite { replacing, site };
+        assert_eq!(l.edit(put(None, " github.com ")), Ok(()));
+        assert_eq!(l.sites, ["example.com", "github.com"]);
+        assert_eq!(l.edit(put(None, "github.com")), Err(ListRefusal::Listed));
+        assert_eq!(l.edit(put(None, "not a site")), Err(ListRefusal::NotASite));
+        assert_eq!(l.edit(put(Some("example.com"), "*.example.org")), Ok(()));
+        assert_eq!(l.sites, ["*.example.org", "github.com"]);
+        // an edit that keeps its own text is no duplicate
+        assert_eq!(l.edit(put(Some("github.com"), "github.com")), Ok(()));
+        assert_eq!(l.edit(ListEdit::RemoveSite("github.com")), Ok(()));
+        assert_eq!(l.edit(ListEdit::RemoveSite("gone.com")), Ok(()));
+        assert_eq!(l.sites, ["*.example.org"]);
+    }
+
+    #[test]
+    fn allow_grants_the_edited_sites_and_an_empty_list_any_site() {
+        let mut l = Lists::asked(&[], &["example.com".into()]);
+        let Event::Approve(g) = answer(&l.sites, true, false) else {
+            panic!("not approved");
+        };
+        assert!(!g.allows_site("https://github.com/"));
+        assert_eq!(g.mode, Mode::Windowed);
+        l.edit(ListEdit::RemoveSite("example.com")).unwrap();
+        let Event::Approve(g) = answer(&l.sites, true, true) else {
+            panic!("not approved");
+        };
+        assert!(g.allows_site("https://github.com/"));
+        assert_eq!(g.mode, Mode::Headless);
+        assert_eq!(g.secret_names().count(), 0);
+    }
 
     const ON: Env = Env {
         mcp_enabled: true,

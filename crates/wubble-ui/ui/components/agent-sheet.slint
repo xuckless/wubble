@@ -1,12 +1,15 @@
 import { SheetFrame } from "sheet-frame.slint";
 import { AgentSheetView } from "model.slint";
 import { Segmented } from "../kit/controls/segmented.slint";
-import { BCard, BRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
+import { BCard, BRow, BStackRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
+import { ListEditor, ListEditorAdds } from "../kit/controls/list-editor.slint";
 
 // An agent session's approval sheet (docs/research/mcp-server.md section 6): who asks (the
 // calling program, as the host found it), the secrets it asks for by name, the sites it limits
-// itself to, windowed or headless, Allow and Deny. The design has no such sheet (derived-review.md,
-// Agent sessions): the SheetFrame chrome over a settings card of rows, as the print sheet. It is
+// itself to, windowed or headless, Allow and Deny. The owner edits the two lists before Allow
+// (the kit's list editor, as Settings' lists): the host holds them and builds the grant. The
+// design has no such sheet (derived-review.md, Agent sessions): the SheetFrame chrome over a
+// settings card of rows, as the print sheet. It is
 // modal and the window's, one at a time (`wubble_core::overlay::Kind::AgentSheet`); `answered`
 // is the intent (allow, headless), the host answers the session. Enter never approves (the
 // sheet may appear while the user types: keyjacking); Escape and Deny refuse, only the Allow
@@ -14,6 +17,10 @@ import { BCard, BRow, BNote } from "../kit/overlay/b/b-sheet-parts.slint";
 export component AgentSheet inherits SheetFrame {
     in property <AgentSheetView> sheet;
     callback answered(bool, bool);
+    // a list editor's "−": (a site, else a secret name; its key)
+    callback removed(bool, string);
+    // the Sites editor's draft (`pages::submission`); the host answers with `answer` / `note`
+    callback site-submitted(string);
 
     // The window choice: restarts from what the client asked, at each sheet.
     property <bool> headless;
@@ -51,23 +58,49 @@ export component AgentSheet inherits SheetFrame {
     // in the controls registry in `init`, and built with the window it did so before the host
     // wired the registry, sharing slot 0 with a menu (no indicator, presses on the menu's slot).
     if root.view.serial > 0: BCard {
-        BRow {
+        // the secret names asked for: the owner may remove one (none can be added: a name is
+        // only what a client asks for, and none is bound to a login yet)
+        BStackRow {
             title: "Secrets";
-            BNote {
-                text: root.view.secrets.length == 0 ? "None asked for" : "Names only";
+            ListEditor {
+                columns: ["Name"];
+                count: root.view.secrets.length;
+                row-at(i) => {
+                    return root.view.secrets[i];
+                }
+                adds: ListEditorAdds.none;
+                editable: false;
+                label: "Secrets";
+                empty: "None asked for";
+                removed(k) => {
+                    root.removed(false, k);
+                }
             }
         }
-        for name in root.view.secrets: BRow {
-            title: name;
-        }
-        BRow {
+        // the sites the session is limited to; the owner removes, adds and edits them (the
+        // host answers each draft); none: any site
+        BStackRow {
             title: "Sites";
-            BNote {
-                text: root.view.sites.length == 0 ? "Any site" : "Only these";
+            ListEditor {
+                columns: ["Site"];
+                count: root.view.sites.length;
+                row-at(i) => {
+                    return root.view.sites[i];
+                }
+                adds: ListEditorAdds.draft;
+                editable: true;
+                answer: root.view.answer;
+                note: root.view.note;
+                label: "Sites";
+                empty: "Any site";
+                placeholders: ["example.com"];
+                removed(k) => {
+                    root.removed(true, k);
+                }
+                submitted(t) => {
+                    root.site-submitted(t);
+                }
             }
-        }
-        for site in root.view.sites: BRow {
-            title: site;
         }
         BRow {
             title: "Window";
