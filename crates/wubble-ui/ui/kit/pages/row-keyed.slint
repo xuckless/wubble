@@ -37,6 +37,7 @@ export component KeyedConfirmButton inherits VerticalLayout {
     in property <string> key;
     in property <string> idle-text;
     in property <string> done-text;
+    in property <bool> compact;
     callback run();
     property <int> epoch;
     changed key => {
@@ -44,6 +45,7 @@ export component KeyedConfirmButton inherits VerticalLayout {
     }
     alignment: center;
     for e in [root.epoch]: ConfirmButton {
+        compact: root.compact;
         idle-text: root.idle-text;
         done-text: root.done-text;
         run => {

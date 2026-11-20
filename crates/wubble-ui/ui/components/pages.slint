@@ -379,6 +379,7 @@ export component PasswordsPage inherits Rectangle {
                 }
                 KeyedConfirmButton {
                     key: login.id;
+                    compact: true;
                     idle-text: "Copy";
                     done-text: "Copied";
                     run => {
@@ -387,6 +388,7 @@ export component PasswordsPage inherits Rectangle {
                 }
                 KeyedHoldButton {
                     key: login.id;
+                    compact: true;
                     text: "Delete";
                     done-text: "Deleted";
                     done => {

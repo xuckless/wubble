@@ -7,9 +7,11 @@
 // idle. Timers: `wubble_core::controls::confirm`, through the `Controls` registry (kind 5).
 // `aria-live="polite"`: a polite live region whose label is the label shown. The design's
 // slint/ port has none: written from the TSX and CSS.
+// `compact` (wubble): a list row's size, as HoldButton's `compact`: no minimum width, the
+// `.st-seg` button's 30 height, 13 side padding and 9 radius.
 
 import { Tsx } from "../gen/tokens.slint";
-import { SettingsCss } from "../gen/css.slint";
+import { SettingsCss, TouchCss } from "../gen/css.slint";
 import { Role } from "../gen/text.slint";
 import { Pulse } from "../motion/pulse.slint";
 import { SwapItem } from "../motion/crossfade.slint";
@@ -25,6 +27,7 @@ export component ConfirmButton inherits Button {
     in property <string> done-text;
     // how long the busy label shows, ms (`ms`; 0, or no busy label: straight to done)
     in property <int> busy-ms: 0;
+    in property <bool> compact;
     // the action, at the click
     callback run();
 
@@ -51,7 +54,10 @@ export component ConfirmButton inherits Button {
     }
 
     kind: ButtonKind.glass;
-    min-width: SettingsCss.st-confirm--min-width;
+    min-width: root.compact ? 0px : SettingsCss.st-confirm--min-width;
+    height: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--height : TouchCss.wb-tp-btn-body--height;
+    border-radius: root.compact ? SettingsCss.st-seg-tp-seg-ind--border-radius : TouchCss.wb-tp-btn-body--border-radius;
+    padding-x: root.compact ? SettingsCss.wb-st-seg-tp-seg-btn--padding-left : TouchCss.wb-tp-btn-body--padding-left;
     label: root.phase == 1 ? root.busy-text : root.phase == 2 ? root.done-text : root.idle-text;
     accessible-live-region: AccessibleLiveness.polite;
 
