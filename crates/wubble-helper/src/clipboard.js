@@ -9,7 +9,8 @@
 // Called once per frame with this channel's `send(text)` and `register(fn)`
 // (main.rs `compose`, on welding's context script, change 26). To the browser,
 // `[kind, text]` as JSON:
-//   copy     a trusted copy or cut, or `navigator.clipboard.writeText`: the text
+//   copy     a trusted copy or cut, `navigator.clipboard.writeText`, or the
+//            `text/plain` item of `navigator.clipboard.write`: the text
 //   primary  the selection changed: the primary selection's text
 //   paste    Chromium's trusted paste was cancelled: answer with the clipboard
 //            ("primary" for a middle click in a field)
@@ -84,11 +85,33 @@
       if (text) post('primary', text);
     }, 60);
   }, true);
-  const proto = window.Clipboard && Clipboard.prototype;
+  // `navigator.clipboard`'s own prototype: Blink puts the `Clipboard` interface object on
+  // `window` only after this script ran (a secure-context interface, installed after the
+  // context is created), while the instance and its prototype are already there.
+  const proto = navigator.clipboard && Object.getPrototypeOf(navigator.clipboard);
+  const includes = Array.prototype.includes;
+  const blobText = Blob.prototype.text;
+  // A `write`'s text: its first item's `text/plain` (Chromium writes one item), or nothing.
+  const plainText = (items) => {
+    const item = items && items[0];
+    if (!item || !apply(includes, item.types || [], ['text/plain'])) return Promise.resolve();
+    return item.getType('text/plain').then((blob) => apply(blobText, blob, []));
+  };
+  // Chromium checks a write first (a focused, secure document, the frame allowed
+  // `clipboard-write`, a user activation) and resolves it only when it may: then it goes
+  // through the window too.
   if (proto && proto.writeText) {
     const writeText = proto.writeText;
     proto.writeText = function (text) {
-      return writeText.call(this, text).then((v) => { post('copy', text); return v; });
+      return apply(writeText, this, [text]).then((v) => { post('copy', text); return v; });
+    };
+  }
+  if (proto && proto.write) {
+    const write = proto.write;
+    proto.write = function (items) {
+      return apply(write, this, [items]).then((v) => plainText(items).then(
+        (text) => { if (typeof text === 'string') post('copy', text); return v; },
+        () => v));
     };
   }
   if (proto && proto.readText) {
