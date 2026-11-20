@@ -12,7 +12,8 @@ glass, motion, icons, controls, chrome, start page, Settings, list pages and eve
 ends with the owner's sign-off. The capture and scoring tool was removed (187d7a4). Windows is not green in CI.
 
 ## Now: design-fidelity phase
-- [~] Page copy buttons do nothing (`navigator.clipboard.writeText` and friends; branch `fix/copy`)
+- [x] Page copy buttons: `navigator.clipboard.writeText`/`write` reach the system clipboard (4992603)
+- [ ] Headless test display has no seat focus: `start`, `page` and clipboard smokes fail there; `write([ClipboardItem])` unverified
 - [ ] Glass over bright pages: saturation and secondary-text contrast (owner to judge)
 - [ ] Start page tiles are stand-ins: the kit tile look and its hover spring
 - [ ] The start page's tab title duplicates the "+ New tab" row
