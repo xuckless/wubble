@@ -128,15 +128,12 @@ export global Shell {
     // .wb-space-name: 18 high, 2 px top padding
     out property <length> space-name-height: BrowserCss.wb-space-name--height;
     out property <length> space-name-top: BrowserCss.wb-space-name--padding-top;
-    // .wb-spaces: 36 tiles 2 apart (pitch 38 = SpaceSwitcher::PITCH), drawn at 17;
-    // .wb-spaces-ind: accent at 20 %, colour change over .4 s
-    out property <length> space-tile: 36px;
+    // .wb-spaces: the Space glyph drawn at 17
     // A tab dragged out of the list (wubble's own, the design has none): the ghost row that
     // follows the pointer and the content edge it would split into.
     out property <length> drag-ghost-max: 280px;
     out property <length> drag-ghost-blur: 12px;
     out property <length> drag-zone-border: 2px;
-    out property <length> space-gap: 2px;
     out property <length> space-glyph: 17px;
     // .wb-side-bottom > .wb-ib: 36 square (radius control-radius); .wb-side-bottom-rail: gap 10
     out property <length> side-bottom-button: 36px;

@@ -77,12 +77,12 @@ kit/derived.slint	kit-literal	24px	2
 kit/derived.slint	kit-literal	26px	3
 kit/derived.slint	kit-literal	280px	1
 kit/derived.slint	kit-literal	28px	1
-kit/derived.slint	kit-literal	2px	11
+kit/derived.slint	kit-literal	2px	10
 kit/derived.slint	kit-literal	30px	2
 kit/derived.slint	kit-literal	320px	1
 kit/derived.slint	kit-literal	340px	1
 kit/derived.slint	kit-literal	360px	2
-kit/derived.slint	kit-literal	36px	4
+kit/derived.slint	kit-literal	36px	3
 kit/derived.slint	kit-literal	380px	2
 kit/derived.slint	kit-literal	3px	2
 kit/derived.slint	kit-literal	400px	1

@@ -12,7 +12,9 @@ use i_slint_backend_testing::{
 };
 use slint::platform::{Key, WindowEvent};
 use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
-use wubble_ui::{AppWindow, CommandBarState, FocusRegion, MenuEntry, MenuView, SpaceItem, TabItem};
+use wubble_ui::{
+    AppWindow, CommandBarState, FocusRegion, MenuEntry, MenuView, SpaceItem, SpacesMenuRow, TabItem,
+};
 
 /// The one element `label` names (role and all), failing with the label when there is none.
 fn one(app: &AppWindow, label: &str) -> ElementHandle {
@@ -20,6 +22,15 @@ fn one(app: &AppWindow, label: &str) -> ElementHandle {
         .filter(|e| e.accessible_role() != Some(AccessibleRole::Text))
         .collect();
     assert_eq!(found.len(), 1, "one element labelled {label:?}");
+    found.remove(0)
+}
+
+/// The one element `label` names with `role`.
+fn one_as(app: &AppWindow, label: &str, role: AccessibleRole) -> ElementHandle {
+    let mut found: Vec<_> = ElementHandle::find_by_accessible_label(app, label)
+        .filter(|e| e.accessible_role() == Some(role))
+        .collect();
+    assert_eq!(found.len(), 1, "one {role:?} labelled {label:?}");
     found.remove(0)
 }
 
@@ -83,6 +94,7 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         let l = log.clone();
         app.on_menu_chosen(move |i| l.borrow_mut().push(format!("menu {i}")));
     }
+    app.on_spaces_menu_requested(push("spaces menu".into()));
     app.on_settings_requested(push("settings".into()));
     app.on_new_tab_requested(push("new tab".into()));
     {
@@ -149,16 +161,57 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
     one(&app, "Settings").invoke_accessible_default_action();
     one(&app, "New tab").invoke_accessible_default_action();
 
-    // The Spaces: tabs of their own list, the active one selected.
+    // The footer's Spaces: the current one's tile and the "^", buttons that ask for the popup.
+    let current = one_as(&app, "Work", AccessibleRole::Button);
+    current.invoke_accessible_default_action();
+    let more = one_as(&app, "Spaces", AccessibleRole::Button);
+    more.invoke_accessible_default_action();
+    // The popup: a list of every Space, the current one checked, then New Space; a row's
+    // default action switches to its Space and closes the popup, New Space runs its action.
+    let row = |id: i32, name: &str, current: bool| SpacesMenuRow {
+        id,
+        name: name.into(),
+        icon: "personal".into(),
+        current,
+        ..Default::default()
+    };
+    let item = |label: &str| MenuEntry {
+        label: label.into(),
+        enabled: true,
+        ..Default::default()
+    };
+    app.set_spaces_menu_rows(ModelRc::new(VecModel::from(vec![
+        row(10, "Home", false),
+        row(11, "Work", true),
+    ])));
+    app.set_spaces_menu_entries(ModelRc::new(VecModel::from(vec![
+        item("Home"),
+        item("Work"),
+        MenuEntry {
+            separator: true,
+            ..Default::default()
+        },
+        item("New Space"),
+    ])));
+    app.set_spaces_open(true);
+    pump();
     assert_eq!(
-        one(&app, "Spaces").accessible_role(),
-        Some(AccessibleRole::TabList)
+        one(&app, "Switch Space").accessible_role(),
+        Some(AccessibleRole::List)
     );
-    let home = one(&app, "Home");
-    assert_eq!(home.accessible_role(), Some(AccessibleRole::Tab));
-    assert_eq!(home.accessible_item_selected(), Some(false));
-    assert_eq!(one(&app, "Work").accessible_item_selected(), Some(true));
+    let home = one_as(&app, "Home", AccessibleRole::ListItem);
+    assert_eq!(home.accessible_checked(), Some(false));
+    let work = one_as(&app, "Work", AccessibleRole::ListItem);
+    assert_eq!(work.accessible_checked(), Some(true));
     home.invoke_accessible_default_action();
+    pump();
+    assert!(!app.get_spaces_open(), "a pick closes the popup");
+    app.set_spaces_open(true);
+    pump();
+    one_as(&app, "New Space", AccessibleRole::ListItem).invoke_accessible_default_action();
+    pump();
+    assert!(!app.get_spaces_open());
+    mock_elapsed_time(Duration::from_millis(300));
 
     // The context menu: a list of items; a disabled one does nothing.
     let entry = |label: &str, enabled: bool| MenuEntry {
@@ -192,7 +245,10 @@ fn the_shell_names_its_controls_and_runs_their_default_action() {
         "action reload",
         "settings",
         "action new-tab",
+        "spaces menu",
+        "spaces menu",
         "space 10",
+        "action new-space",
         "menu 0",
     ]
     .map(SharedString::from)

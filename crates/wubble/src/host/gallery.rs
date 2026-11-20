@@ -188,6 +188,12 @@ impl Host {
         if let Overlay::Long(long) = scene.overlay {
             self.gallery_long(long);
         }
+        if let Overlay::Spaces(n) = scene.overlay {
+            while self.model.spaces.len() < n {
+                let command = self.model.new_space();
+                self.dispatch(command);
+            }
+        }
         let shown = self.shown();
         let mut surfaces = Surfaces::default();
         let mut autofill = View::default();
@@ -339,6 +345,7 @@ impl Host {
             | Overlay::Long(Long::Pill | Long::Crowd)
             | Overlay::CommandBar(_)
             | Overlay::Downloads
+            | Overlay::Spaces(_)
             | Overlay::SettingsSearch(_)
             | Overlay::Unlock
             | Overlay::Status(_) => {}
@@ -372,6 +379,7 @@ impl Host {
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
             window.invoke_dismiss_command_bar();
             window.set_downloads_open(overlay == Overlay::Downloads);
+            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_)));
             window.invoke_sidebar_mode_requested(sidebar.into());
             match overlay {
                 Overlay::CommandBar(query) => {

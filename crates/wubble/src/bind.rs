@@ -10,10 +10,11 @@ use slint::{Color, ComponentHandle, Model, ModelRc, VecModel};
 use wubble_core::space::Rgb;
 use wubble_core::tab::TabId;
 use wubble_engine::nav::Page;
-use wubble_ui::{AppWindow, CommandResult, SpaceItem, TabItem};
+use wubble_ui::{AppWindow, CommandResult, MenuEntry, SpaceItem, SpacesMenuRow, TabItem};
 
 use crate::bar::BarRow;
 use crate::shell::{self, ShellView, TabRow};
+use wubble_core::spacemenu;
 
 fn color(Rgb(r, g, b): Rgb) -> Color {
     Color::from_rgb_u8(r, g, b)
@@ -101,6 +102,62 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
     // Rows synced in place change no property, so no `changed` handler tells
     // the driver: tell it here.
     window.invoke_shell_model_changed();
+}
+
+/// The Spaces popup's lines (`wubble_core::spacemenu`) and the keys' rows: the lines, a
+/// separator, the sticky row with its shortcut. A Space whose id does not fit Slint's `int` is
+/// skipped (TODO.md "Slint ids").
+pub fn render_spaces_menu(window: &AppWindow, popup: &spacemenu::Popup, new_space_key: &str) {
+    use spacemenu::{Line, Sticky, Target};
+    let rows: Vec<SpacesMenuRow> = popup
+        .lines()
+        .into_iter()
+        .filter_map(|line| match line {
+            Line::Rule => Some(SpacesMenuRow {
+                rule: true,
+                ..Default::default()
+            }),
+            Line::Row(r) => {
+                let Target::Space(id) = r.target;
+                Some(SpacesMenuRow {
+                    rule: false,
+                    id: shell::slint_id(id.0)?,
+                    name: r.name.as_str().into(),
+                    tint: color(r.tint),
+                    icon: r.icon.id().into(),
+                    current: r.current,
+                })
+            }
+        })
+        .collect();
+    let mut entries: Vec<MenuEntry> = rows
+        .iter()
+        .map(|r| MenuEntry {
+            label: r.name.clone(),
+            enabled: !r.rule,
+            separator: r.rule,
+            ..Default::default()
+        })
+        .collect();
+    entries.push(MenuEntry {
+        separator: true,
+        ..Default::default()
+    });
+    entries.push(match popup.sticky {
+        Sticky::NewSpace => MenuEntry {
+            label: "New Space".into(),
+            enabled: true,
+            icon: "plus".into(),
+            shortcut: new_space_key.into(),
+            ..Default::default()
+        },
+    });
+    sync(window.get_spaces_menu_rows(), rows, |m| {
+        window.set_spaces_menu_rows(m)
+    });
+    sync(window.get_spaces_menu_entries(), entries, |m| {
+        window.set_spaces_menu_entries(m)
+    });
 }
 
 /// Back and forward follow the visible view's history (none without a view), and the address

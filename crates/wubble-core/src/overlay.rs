@@ -51,6 +51,8 @@ pub enum Kind {
     CommandBar,
     /// The sidebar's downloads popover.
     Downloads,
+    /// The sidebar footer's Spaces popup (the "^": every Space, then New Space).
+    Spaces,
     /// A context menu: a tab's, a folder's or the page's.
     Menu,
 }
@@ -67,7 +69,7 @@ pub enum Scope {
 impl Kind {
     pub fn scope(self) -> Scope {
         match self {
-            Kind::CommandBar | Kind::Downloads | Kind::Menu => Scope::Window,
+            Kind::CommandBar | Kind::Downloads | Kind::Spaces | Kind::Menu => Scope::Window,
             _ => Scope::Tab,
         }
     }
@@ -91,7 +93,12 @@ impl Kind {
     fn closes_on_leave(self) -> bool {
         matches!(
             self,
-            Kind::Menu | Kind::BookmarkSheet | Kind::PrintSheet | Kind::Region | Kind::Hints
+            Kind::Menu
+                | Kind::Spaces
+                | Kind::BookmarkSheet
+                | Kind::PrintSheet
+                | Kind::Region
+                | Kind::Hints
         )
     }
 
@@ -313,6 +320,28 @@ mod tests {
     fn a_window_overlay_keeps_no_tab() {
         assert_eq!(Layer::new(Menu, Some(A)).tab, None);
         assert_eq!(Layer::new(Find, Some(A)).tab, Some(A));
+    }
+
+    #[test]
+    fn the_spaces_popup_is_one_window_overlay_among_the_others() {
+        assert_eq!(Layer::new(Spaces, Some(A)).tab, None);
+        // it replaces the downloads popover, and a menu replaces it
+        let (layers, fx) = step(&[win(Downloads)], Event::Open(win(Spaces)));
+        assert_eq!(layers, [win(Spaces)]);
+        assert_eq!(
+            fx,
+            [Effect::Close(win(Downloads)), Effect::Open(win(Spaces))]
+        );
+        let (layers, _) = step(&[win(Spaces)], Event::Open(win(Menu)));
+        assert_eq!(layers, [win(Menu)]);
+        // refused over a page's dialog; Escape closes it first; a tab switch closes it
+        let (_, fx) = step(&[on(Dialog, A)], Event::Open(win(Spaces)));
+        assert!(fx.is_empty());
+        let (layers, fx) = step(&[on(Find, A), win(Spaces)], Event::Escape);
+        assert_eq!(layers, [on(Find, A)]);
+        assert_eq!(fx, [Effect::Close(win(Spaces))]);
+        let (layers, _) = step(&[win(Spaces)], Event::Switched(Some(B)));
+        assert!(layers.is_empty());
     }
 
     #[test]

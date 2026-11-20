@@ -2,9 +2,9 @@
 //! feeds it the pointer and the window's drop targets and runs what it returns. Inside the
 //! list the row physics (`wubble_ui::driver`) reorders as before.
 //!
-//! Drop targets are measured from the window: the sidebar, the Space strip's icons, the
-//! content area and, where the platform tells window positions (X11, macOS, Windows; not
-//! Wayland), the other wubble windows. A release outside every target makes a new window.
+//! Drop targets are measured from the window: the sidebar, the content area and, where the
+//! platform tells window positions (X11, macOS, Windows; not Wayland), the other wubble windows.
+//! A release outside every target makes a new window.
 
 use std::time::Instant;
 
@@ -213,36 +213,6 @@ impl Host {
         let size = win.size().to_logical(scale);
         let (w, h) = (f64::from(size.width), f64::from(size.height));
         let sidebar = f64::from(window.get_sidebar_width());
-        let tile = f64::from(window.get_space_tile());
-        let pitch = f64::from(window.get_space_pitch());
-        let (sx, sy) = (
-            f64::from(window.get_space_strip_x()),
-            f64::from(window.get_space_strip_y()),
-        );
-        let rail = window.get_sidebar_rail();
-        let spaces = (sidebar > 0.5)
-            .then(|| self.model.spaces.iter().map(|s| s.id))
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(i, id)| {
-                let step = i as f64 * pitch;
-                let (x, y) = if rail {
-                    (sx, sy + step)
-                } else {
-                    (sx + step, sy)
-                };
-                (
-                    id,
-                    Rect {
-                        x,
-                        y,
-                        w: tile,
-                        h: tile,
-                    },
-                )
-            })
-            .collect();
         Rects {
             window: Some(Rect {
                 x: 0.0,
@@ -256,7 +226,9 @@ impl Host {
                 w: sidebar,
                 h,
             }),
-            spaces,
+            // the footer shows only the window's own Space now (the others are in the "^"
+            // popup, which is no drop target): no Space to drop a tab onto
+            spaces: vec![],
             content: Some(Rect {
                 x: f64::from(window.get_content_x()),
                 y: f64::from(window.get_content_y()),

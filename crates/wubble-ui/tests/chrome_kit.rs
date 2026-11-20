@@ -14,10 +14,10 @@ slint::slint! {
     #[edition = "1.19"]
     import { AddressPill } from "ui/kit/chrome/address-pill.slint";
     import { Favs } from "ui/kit/chrome/favs.slint";
-    import { SpaceTint, SpaceSwitcher } from "ui/kit/chrome/space-switcher.slint";
+    import { SpaceTint, SpaceCurrent } from "ui/kit/chrome/space-switcher.slint";
     import { CommandBar } from "ui/kit/chrome/command-bar.slint";
     import { TabRow } from "ui/kit/chrome/tab-row.slint";
-    import { SpaceAdd } from "ui/kit/chrome/space-add.slint";
+    import { SpacesButton } from "ui/kit/chrome/spaces-button.slint";
     import { CommandBarState, CommandMode, CommandResult, TabItem } from "ui/components/model.slint";
     export { CommandBarState, CommandMode, CommandResult, TabItem }
     export component Probe inherits Window {
@@ -35,12 +35,15 @@ slint::slint! {
         out property <length> favs-height: favs.height;
         // the Space glyph's colour: rest, hovered, active
         out property <[color]> space-tints: [SpaceTint.of(false, false), SpaceTint.of(true, false), SpaceTint.of(false, true)];
-        spaces := SpaceSwitcher {
-            x: 20px; y: 200px; vertical: root.compact;
-            spaces: [{ id: 1, name: "a" }, { id: 2, name: "b" }, { id: 3, name: "c" }];
+        // the current Space's tile: a click asks for the popup
+        in-out property <int> current-clicks;
+        current := SpaceCurrent {
+            x: 20px; y: 200px; known: true;
+            space: { id: 2, name: "b", icon: "work" };
+            clicked => { root.current-clicks += 1; }
         }
-        out property <length> spaces-w: spaces.width;
-        out property <length> spaces-h: spaces.height;
+        out property <length> current-w: current.width;
+        out property <length> current-h: current.height;
         in property <bool> bar-on;
         in property <CommandMode> bar-mode;
         in property <[CommandResult]> bar-results;
@@ -66,11 +69,13 @@ slint::slint! {
         }
         out property <bool> rail-close-shown: rail.rail-close-shown;
         out property <length> rail-h: rail.height;
-        // the switcher's "+"
-        in-out property <int> adds;
-        add := SpaceAdd { x: 320px; y: 100px; clicked => { root.adds += 1; } }
-        out property <bool> add-hovered: add.hovered;
-        out property <length> add-w: add.width;
+        // the switcher's "^"
+        in-out property <int> mores;
+        in property <bool> more-open;
+        more := SpacesButton { x: 320px; y: 100px; open: root.more-open; clicked => { root.mores += 1; } }
+        out property <bool> more-hovered: more.hovered;
+        out property <length> more-w: more.width;
+        out property <float> more-turn: more.chevron-turn;
         out property <length> origin-x: pill.origin.x;
         out property <length> origin-y: pill.origin.y;
     }
@@ -158,7 +163,8 @@ fn favourites(p: &Probe) {
 }
 
 /// The Space glyph's computed colour: ink at rest, hovered and active (`.wb button { color:
-/// inherit }` outranks `.wb-space`'s haze); `.wb-spaces` 36 tiles 2 apart, a column on the rail.
+/// inherit }` outranks `.wb-space`'s haze); the current Space's tile is one 36 px `.wb-space`
+/// whose click asks for the Spaces popup.
 fn spaces(p: &Probe) {
     use slint::Model;
     let tints: Vec<slint::Color> = p.get_space_tints().iter().collect();
@@ -168,17 +174,14 @@ fn spaces(p: &Probe) {
     );
     assert_eq!(tints, [ink, ink, ink]);
     assert_ne!(tints[0], haze, "the web renders no haze glyph");
-    assert_eq!(
-        (p.get_spaces_w(), p.get_spaces_h()),
-        (3.0 * 38.0 - 2.0, 36.0)
-    );
-    p.set_compact(true);
-    mock_elapsed_time(Duration::from_millis(1));
-    assert_eq!(
-        (p.get_spaces_w(), p.get_spaces_h()),
-        (36.0, 3.0 * 38.0 - 2.0)
-    );
-    p.set_compact(false);
+    assert_eq!((p.get_current_w(), p.get_current_h()), (36.0, 36.0));
+    let position = LogicalPosition::new(38.0, 218.0);
+    let button = PointerEventButton::Left;
+    at(p, WindowEvent::PointerPressed { position, button });
+    at(p, WindowEvent::PointerReleased { position, button });
+    assert_eq!(p.get_current_clicks(), 1);
+    at(p, WindowEvent::PointerExited);
+    run_out();
 }
 
 fn key(p: &Probe, k: slint::platform::Key) {
@@ -273,19 +276,25 @@ fn rail_close(p: &Probe) {
     assert!(!p.get_rail_close_shown());
 }
 
-/// The switcher's "+": a `.wb-space` tile (36 square) that reports a click (the new-space
-/// action) and its hover (its tooltip).
-fn space_add(p: &Probe) {
-    assert_eq!(p.get_add_w(), 36.0);
+/// The switcher's "^": a `.wb-space` tile (36 square) that reports a click (the popup) and its
+/// hover; its chevron points up at rest and turns over (`.tp-chev.up`) while the popup is open.
+fn spaces_button(p: &Probe) {
+    assert_eq!(p.get_more_w(), 36.0);
+    assert_eq!(p.get_more_turn(), 0.0);
     let position = LogicalPosition::new(338.0, 118.0);
     let button = PointerEventButton::Left;
     at(p, WindowEvent::PointerMoved { position });
-    assert!(p.get_add_hovered());
+    assert!(p.get_more_hovered());
     at(p, WindowEvent::PointerPressed { position, button });
     at(p, WindowEvent::PointerReleased { position, button });
-    assert_eq!(p.get_adds(), 1);
+    assert_eq!(p.get_mores(), 1);
+    p.set_more_open(true);
+    run_out();
+    assert_eq!(p.get_more_turn(), 1.0);
+    p.set_more_open(false);
     at(p, WindowEvent::PointerExited);
     run_out();
+    assert_eq!(p.get_more_turn(), 0.0);
 }
 
 #[test]
@@ -299,5 +308,5 @@ fn chrome_kit_parts_follow_the_design() {
     spaces(&p);
     command_bar(&p);
     rail_close(&p);
-    space_add(&p);
+    spaces_button(&p);
 }

@@ -3,13 +3,12 @@
 // stretching indicator and drawn Space icons. wubble changes: it binds to wubble's models (ids,
 // pinned tabs, Spaces), and gains what the port's Sidebar lacks and the web chrome has
 // (browser.css, chrome.tsx, tabs.tsx): the address pill, the favourites grid, the Space name,
-// the new-tab row, the Space capsule and a scrolling tab list. Layout follows browser.css: padding
+// the new-tab row, the Space footer and a scrolling tab list. Layout follows browser.css: padding
 // 6, 12 between groups, rows on a 40 px pitch.
 //
 // Everything that moves is driven from Rust (wubble_core::tabs + scroller via wubble_ui::driver):
 //   row-y / row-scale  each row's spring (slot·pitch) and drag lift, in list coordinates
 //   indicator-*        the Follow spring, its stretch and transform origin
-//   capsule-*          the Space capsule (SpaceSwitcher): offset along the switcher, stretch
 //   scroll-y, thumb-*  the tab list's scroller
 // Nothing here tweens a value Rust owns; only hover fades and the 0.97 press use `animate`.
 
@@ -146,7 +145,7 @@ export component Sidebar inherits Rectangle {
         new-tab: new-tab.absolute-position.x,
         new-tab-end: new-tab.absolute-position.x + new-tab.width,
         spaces: switcher.spaces-x,
-        // the Spaces and their "+"
+        // the current Space's tile and the "^"
         spaces-end: switcher.spaces-x + switcher.switcher-w,
         downloads: switcher.downloads-x,
         downloads-end: switcher.downloads-x + switcher.downloads-w,
@@ -172,21 +171,21 @@ export component Sidebar inherits Rectangle {
     in property <bool> thumb-visible;
     out property <length> scroll-viewport: list.viewport-height;
     out property <length> scroll-content: list.content-height;
-    // the Space capsule; `space-index` is the active Space's row in `spaces`, -1 for none
+    // the window's Space's row in `spaces`, -1 for none
     in property <int> space-index: -1;
-    in property <length> capsule-offset: 0px;
-    in property <float> capsule-stretch: 1;
-    in property <float> capsule-origin: 0.3;
+    // The Spaces popup (the footer's "^") is open; asked for by its trigger.
+    in property <bool> spaces-open: false;
+    callback spaces-requested();
+    // Where the popup opens, in window coordinates: above the switcher, from its left edge,
+    // growing from the "^"'s centre.
+    out property <length> spaces-anchor-x: switcher.spaces-x;
+    out property <length> spaces-anchor-y: switcher.spaces-y;
+    out property <length> spaces-trigger-x: switcher.more-x + switcher.more-w / 2;
+    out property <length> spaces-trigger-y: switcher.more-y + switcher.more-w / 2;
 
     callback tab-press(int, length);
     // tab id, then TabRow `track`'s kind and pointer in window px
     callback tab-track(int, int, length, length);
-    // The Space strip's first icon in window px, the step to the next and whether they run
-    // down (rail) instead of across: where a dragged tab can be dropped onto a Space.
-    out property <length> space-strip-x: switcher.spaces-x;
-    out property <length> space-strip-y: switcher.spaces-y;
-    out property <length> space-pitch: switcher.pitch;
-    out property <length> space-tile: Shell.space-tile;
     callback tab-drag(length);
     callback tab-release(int);
     callback tab-closed(int);        // tab id
@@ -217,7 +216,6 @@ export component Sidebar inherits Rectangle {
     // A header button: the id of the wubble `Action` it runs.
     callback action(string);
     callback address-activated();
-    callback space-switched(int);    // space id
     callback scroll-wheel(length);
     callback space-swipe(length, length);    // scroll deltas (x, y) over the tab list (Space swipe)
     callback scroll-touch-down(length);
@@ -563,26 +561,19 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                // .wb-side-bottom: the Space switcher and the buttons at the far end (kit SideBottom)
+                // .wb-side-bottom: the current Space, its "^" and the buttons at the far end
+                // (kit SideBottom)
                 switcher := SideBottom {
                     spaces: root.spaces;
                     active: root.space-index;
                     vertical: root.compact;
-                    capsule-offset: root.capsule-offset;
-                    capsule-stretch: root.capsule-stretch;
-                    capsule-origin: root.capsule-origin;
                     has-downloads: root.has-downloads;
-                    space-picked(id) => {
-                        root.space-switched(id);
-                    }
-                    new-space-requested => {
-                        root.action("new-space");
+                    spaces-open: root.spaces-open;
+                    spaces-requested => {
+                        root.spaces-requested();
                     }
                     downloads-requested => {
                         root.downloads-requested();
-                    }
-                    dev-tools-requested => {
-                        root.action("dev-tools");
                     }
                     settings-requested => {
                         root.settings-requested();

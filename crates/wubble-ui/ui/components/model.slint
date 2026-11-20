@@ -47,6 +47,18 @@ export struct SpaceItem {
     icon: string,
 }
 
+// One line of the sidebar's Spaces popup (wubble_core::spacemenu: its groups' rows, a rule
+// between two groups). `id` is the Space's.
+export struct SpacesMenuRow {
+    rule: bool,
+    id: int,
+    name: string,
+    tint: color,
+    // "personal" | "work" | "study" (wubble_core::space::SpaceIcon)
+    icon: string,
+    current: bool,
+}
+
 // A built-in page Settings links to (wubble_core::pages::PAGE_LINKS): its title, address (which
 // names its icon, kit `Glyph.page`), one-line note and the id of the action that opens it.
 export struct PageLinkItem {
@@ -181,6 +193,7 @@ export global GlassKeys {
     out property <int> autofill-menu: 1000310;
     out property <int> autofill-prompt: 1000311;
     out property <int> downloads: 1000320;
+    out property <int> spaces: 1000325;
     out property <int> menu: 1000330;
 }
 

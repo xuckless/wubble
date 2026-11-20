@@ -92,6 +92,8 @@ pub enum Overlay {
     /// Settings' lists filled: routing rules, sites never put to sleep, zoom levels, remembered
     /// permissions (the list editors with rows).
     Lists,
+    /// The sidebar footer's Spaces popup, the profile holding at least this many Spaces.
+    Spaces(usize),
     /// Settings' search with this typed into it.
     SettingsSearch(&'static str),
     /// The first web tab shown again at a long address, with the blocker's count and the
@@ -186,6 +188,12 @@ pub const SCENES: &[Scene] = &[
     over("tab-row-menu", Overlay::TabMenu),
     over("site-menu", Overlay::SiteMenu),
     over("downloads-popover", Overlay::Downloads),
+    // the footer's "^": every Space and the sticky New Space (three Spaces), on the rail too
+    over("spaces-popup", Overlay::Spaces(3)),
+    Scene {
+        sidebar: SidebarMode::Rail,
+        ..over("spaces-popup-rail", Overlay::Spaces(3))
+    },
     Scene {
         pointer: Some(DOWNLOAD_ROW),
         ..over("downloads-popover-hover", Overlay::Downloads)
@@ -307,6 +315,11 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(RAIL_TAB_ROW),
         ..over("tabs-crowded-rail", Overlay::Long(Long::Crowd))
     },
+    // last: twelve Spaces stay in the profile, the popup's rows scroll over its sticky row
+    Scene {
+        pointer: Some(SPACES_ROW),
+        ..over("spaces-popup-many", Overlay::Spaces(12))
+    },
 ];
 
 /// The second tab row and the new-tab row of the extended sidebar on the parity profile
@@ -330,6 +343,8 @@ const NAV_SITES: (u16, u16) = (420, 425);
 const ROUTING_RULE: (u16, u16) = (900, 560);
 const ROUTING_ADD: (u16, u16) = (632, 656);
 const SECOND_SPACE: (u16, u16) = (900, 185);
+/// The fourth row of the twelve-Space popup (its highlight, and the scroll thumb), logical px.
+const SPACES_ROW: (u16, u16) = (130, 646);
 /// The first visit's row on the history page (its actions show on hover), logical px.
 const HISTORY_ROW: (u16, u16) = (800, 304);
 /// Frames in a motion burst (about the length of an entrance at the snapshot rate).

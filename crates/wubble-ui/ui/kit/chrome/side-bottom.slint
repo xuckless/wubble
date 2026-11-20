@@ -2,85 +2,79 @@
 // The sidebar's footer (`.wb-side-bottom`): the Space switcher, then the icon buttons pushed to
 // the far end (`.wb-spaces + .wb-ib { margin-left: auto }`), each `.wb-ib` 36 x 36, radius 12,
 // side by side; on the rail a column 10 apart (`.wb-side-bottom-rail`). The design's buttons are
-// Source and Settings: wubble's Source is the page's developer tools, and wubble adds its
-// downloads list first while there are downloads (derived: docs/fidelity/derived-review.md).
-// Developer tools give way when the row has no room for all three (F12 still opens them).
-// wubble: the switcher's "+" (kit SpaceAdd, derived) follows the Spaces, one tile on.
+// Source and Settings; wubble adds its downloads list first while there are downloads
+// (derived: docs/fidelity/derived-review.md).
+// wubble (owner, 2026-11-19): the switcher is the current Space's tile and the "^" that opens
+// the Spaces popup (kit SpaceCurrent, SpacesButton; every Space is switched to through the
+// popup). The Source button is gone: developer tools stay in the page's menu ("Inspect"), their
+// shortcut and the command bar. Its place, before downloads, is where the extensions button
+// will go.
 
 import { BrowserCss } from "../gen/css.slint";
 import { IconButton } from "../controls/icon-button.slint";
 import { Glyph } from "../controls/icon.slint";
-import { SpaceSwitcher } from "space-switcher.slint";
-import { SpaceAdd } from "space-add.slint";
+import { SpaceCurrent } from "space-switcher.slint";
+import { SpacesButton } from "spaces-button.slint";
 import { SpaceItem } from "../../components/model.slint";
 
 export component SideBottom inherits Rectangle {
     in property <[SpaceItem]> spaces;
+    // the window's Space's row in `spaces`, -1 for none
     in property <int> active: -1;
     in property <bool> vertical: false;
-    in property <length> capsule-offset: 0px;
-    in property <float> capsule-stretch: 1;
-    in property <float> capsule-origin: 0.3;
     in property <bool> has-downloads: false;
-    callback space-picked(int);
-    callback new-space-requested();
+    // the Spaces popup is open
+    in property <bool> spaces-open: false;
+    callback spaces-requested();
     callback downloads-requested();
-    callback dev-tools-requested();
     callback settings-requested();
 
     property <length> ib: BrowserCss.wb-side-bottom-gt-wb-ib--width;
     property <length> gap: BrowserCss.wb-side-bottom-rail--gap;
-    // the Spaces and their "+" (one more tile on the switcher's pitch); developer tools give
-    // way first, then the "+" (the command bar and Settings still add a Space)
-    property <length> with-add: strip.span + strip.pitch;
-    property <bool> tools: root.vertical || !root.has-downloads || root.width >= root.with-add + 3 * root.ib;
-    property <int> buttons: (root.has-downloads ? 1 : 0) + (root.tools ? 1 : 0) + 1;
-    property <bool> add-shown: root.vertical || root.width >= root.with-add + root.buttons * root.ib;
-    property <length> spaces-end: root.add-shown ? root.with-add : strip.span;
-    // the buttons' places, in order: the row from the far end, the column under the Spaces
+    // the tile pitch (`.wb-space` and `.wb-spaces` gap)
+    property <length> pitch: BrowserCss.wb-space--width + BrowserCss.wb-spaces--gap;
+    // the switcher: the current Space's tile and the "^"
+    property <length> spaces-span: root.pitch + BrowserCss.wb-space--width;
+    property <int> buttons: (root.has-downloads ? 1 : 0) + 1;
+    // the buttons' places, in order: the row from the far end, the column under the switcher
     function place(k: int) -> length {
-        return root.vertical ? root.spaces-end + root.gap + k * (root.ib + root.gap) : root.width - (root.buttons - k) * root.ib;
+        return root.vertical ? root.spaces-span + root.gap + k * (root.ib + root.gap) : root.width - (root.buttons - k) * root.ib;
     }
-    // where the parts fall, in window px (the alignment the tests pin, the drop targets, the
-    // downloads popover's anchor)
-    out property <length> spaces-x: strip.absolute-position.x;
-    out property <length> spaces-y: strip.absolute-position.y;
-    out property <length> spaces-w: strip.width;
-    // the Spaces and their "+" when it shows
-    out property <length> switcher-w: root.vertical ? strip.width : root.spaces-end - BrowserCss.wb-spaces--gap * (root.add-shown ? 1 : 0);
-    out property <length> pitch: strip.pitch;
+    // where the parts fall, in window px (the alignment the tests pin, the popovers' anchors)
+    out property <length> spaces-x: current.absolute-position.x;
+    out property <length> spaces-y: current.absolute-position.y;
+    out property <length> switcher-w: root.vertical ? current.width : root.spaces-span;
+    out property <length> more-x: more.absolute-position.x;
+    out property <length> more-y: more.absolute-position.y;
+    out property <length> more-w: more.width;
     out property <length> downloads-x: downloads.absolute-position.x;
     out property <length> downloads-y: downloads.absolute-position.y;
     out property <length> downloads-w: downloads.width;
     out property <length> settings-x: settings.absolute-position.x;
     out property <length> settings-w: settings.width;
-    height: root.vertical ? root.spaces-end + root.buttons * (root.ib + root.gap) : BrowserCss.wb-space--height;
+    height: root.vertical ? root.spaces-span + root.buttons * (root.ib + root.gap) : BrowserCss.wb-space--height;
 
-    strip := SpaceSwitcher {
+    // a click on the current Space opens the popup too (it switches nothing)
+    current := SpaceCurrent {
         x: root.vertical ? (root.width - self.width) / 2 : 0px;
         y: 0px;
-        spaces: root.spaces;
-        active: root.active;
-        vertical: root.vertical;
-        offset: root.capsule-offset;
-        stretch: root.capsule-stretch;
-        origin: root.capsule-origin;
-        picked(id) => {
-            root.space-picked(id);
-        }
-    }
-    // wubble: a new Space, one tile after the Spaces
-    add-space := SpaceAdd {
-        visible: root.add-shown;
-        x: root.vertical ? (root.width - self.width) / 2 : strip.span + BrowserCss.wb-spaces--gap;
-        y: root.vertical ? strip.span + BrowserCss.wb-spaces--gap : 0px;
+        known: root.active >= 0 && root.active < root.spaces.length;
+        space: self.known ? root.spaces[root.active] : { };
+        expanded: root.spaces-open;
         clicked => {
-            root.new-space-requested();
+            root.spaces-requested();
         }
     }
-    out property <length> add-space-x: add-space.absolute-position.x;
-    out property <length> add-space-y: add-space.absolute-position.y;
-    // wubble: the downloads list (the design has no downloads), first of the buttons
+    more := SpacesButton {
+        x: root.vertical ? (root.width - self.width) / 2 : root.pitch;
+        y: root.vertical ? root.pitch : 0px;
+        open: root.spaces-open;
+        clicked => {
+            root.spaces-requested();
+        }
+    }
+    // wubble: the extensions button goes here, first of the buttons (owner, 2026-11-19)
+    // wubble: the downloads list (the design has no downloads)
     downloads := IconButton {
         visible: root.has-downloads;
         width: root.ib;
@@ -93,21 +87,6 @@ export component SideBottom inherits Rectangle {
         label: "Downloads";
         clicked => {
             root.downloads-requested();
-        }
-    }
-    // the design's Source button (`code`): wubble's is the page's developer tools
-    dev-tools := IconButton {
-        visible: root.tools;
-        width: root.ib;
-        height: BrowserCss.wb-side-bottom-gt-wb-ib--height;
-        border-radius: BrowserCss.wb-side-bottom-gt-wb-ib--border-radius;
-        x: root.vertical ? (root.width - self.width) / 2 : root.place(root.buttons - 2);
-        y: root.vertical ? root.place(root.buttons - 2) : 0px;
-        icon-path: Glyph.code;
-        tip-action: "dev-tools";
-        label: "Developer tools";
-        clicked => {
-            root.dev-tools-requested();
         }
     }
     // Settings, always at the far end
