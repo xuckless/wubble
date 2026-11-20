@@ -41,6 +41,8 @@ Tested on 2026-11-20 by two agents on real sites (GitHub, Excalidraw, DuckDuckGo
 - [ ] New tool (owner approved): `read_text` for a page's prose (article body), so reading needs no script
 - [ ] New tools (owner approved): `scroll`, `hover`, `drag` by element ref; coordinates only inside a `<canvas>` the agent holds a ref for
 - [ ] Polish: `read_page` gives link targets, does not cut text at about 120 characters, and reports truncation and its default cap; `press_key` says when a chord did nothing (Control+L, Alt+Left, Control+Shift+T do nothing today); a stale ref is an error in `read_page` as in `click`; `list_tabs` returns a URL where its description says origin; scheme matching is case-sensitive (`HTTPS://` refused)
+- [ ] Later (owner, 2026-11-20): "Move tab to" in a tab's right-click menu, a two-level menu: hovering the row (with its ">") opens the list of user-created Spaces; moving a tab out of an agent Space makes it an ordinary tab of that Space
+- [ ] Later (owner, 2026-11-20): clearing an agent Space that still has tabs asks first: "Close anyway", or "Move tabs", which opens the list of user-created Spaces downward and moves them before the Space is cleared (until then the dustbin clears at once)
 - [ ] Bind a requested secret name to a vault login on the sheet (a grant holds no secret until then; `fill_secret` is refused cleanly)
 - [ ] Not yet tested: a script or redirect getting past the http(s)-only rule; `stop_session` then the old handle; a right click's menu; the draft-issue run on a signed-in private repository (waits for the owner's sign-in in the session's tab)
 - [ ] Agent views keep rendering while no window shows them (a hidden view has no accessibility tree and no screenshot): find a cheaper way
