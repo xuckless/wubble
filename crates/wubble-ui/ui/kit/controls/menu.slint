@@ -35,6 +35,29 @@ import { GlassTier, MenuEntry, GlassKeys, GlassOver } from "../../components/mod
 import { Controls, ControlView, MenuEffect } from "../../components/controls/registry.slint";
 
 // `.tp-menu-hl`: the one highlight, under the rows. `top` is its row's top in the panel.
+// A menu's or popover's scrim: fills its parent, and a press on it while `on` is the popup's
+// `outside()` (dismiss). The press is consumed whole: the scrim keeps the pointer until the
+// release even though the dismissal turned it off, so neither the press nor its release reaches
+// what lies under it. Without the hold, Slint hands the press of an area that disables itself
+// in its own handler to the item below: on the popup's own anchor (the "^", a Select's trigger,
+// a chip) that release was a click, and the anchor opened the popup again (qa4).
+export component Scrim inherits TouchArea {
+    in property <bool> on;
+    callback outside();
+    property <bool> held;
+    enabled: root.on || root.held;
+    pointer-event(e) => {
+        if e.kind == PointerEventKind.down {
+            if root.on && !root.held {
+                root.outside();
+            }
+            root.held = true;
+        } else if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+            root.held = false;
+        }
+    }
+}
+
 export component MenuHighlight inherits Rectangle {
     in property <bool> on;
     in property <bool> jump;
@@ -270,12 +293,10 @@ export component Menu inherits Rectangle {
     // machine has heard of it; the body shows only while mounted)
 
     // the scrim
-    TouchArea {
-        enabled: root.shown;
-        pointer-event(e) => {
-            if e.kind == PointerEventKind.down {
-                root.send(7, 0);
-            }
+    Scrim {
+        on: root.shown;
+        outside => {
+            root.send(7, 0);
         }
         scroll-event(e) => {
             root.send(7, 0);

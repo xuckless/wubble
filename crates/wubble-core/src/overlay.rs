@@ -26,7 +26,10 @@
 //!   and notice close; a page's dialog is the engine's to drop.
 //!
 //! A pointer press outside an overlay is the kit's: the menu's and the command bar's scrims
-//! dismiss them, a sheet's scrim holds the page (modal); none of it needs a rule here.
+//! dismiss them, a sheet's scrim holds the page (modal); none of it needs a rule here. A
+//! dismissing press is consumed whole (kit `Scrim`), so a press on the popup's own toggle (the
+//! "^", the downloads button, a chip, a Select's trigger) closes it and is no click that opens
+//! it again.
 
 use crate::tab::TabId;
 

@@ -3,6 +3,7 @@ import { Shell } from "../kit/derived.slint";
 import { OverlapLayer } from "../kit/motion/overlap.slint";
 import { DownloadItem, DownloadAction, GlassKeys } from "model.slint";
 import { APopover } from "../kit/overlay/a/a-popover.slint";
+import { Scrim } from "../kit/controls/menu.slint";
 import { ADownloadRow } from "../kit/overlay/a/a-download-row.slint";
 
 // The downloads list, opened from the sidebar's download button: one row per download, newest
@@ -25,12 +26,10 @@ export component DownloadsPopover inherits Rectangle {
     // the panel has faded; only the open popover takes the pointer.
     visible: panel.mounted;
 
-    TouchArea {
-        enabled: root.open;
-        pointer-event(e) => {
-            if e.kind == PointerEventKind.down {
-                root.dismissed();
-            }
+    Scrim {
+        on: root.open;
+        outside => {
+            root.dismissed();
         }
         scroll-event(e) => {
             accept

@@ -17,7 +17,7 @@
 import { Space, TouchMenu, Tsx } from "../gen/tokens.slint";
 import { TouchCss } from "../gen/css.slint";
 import { Glyph } from "../controls/icon.slint";
-import { MenuRow, MenuHighlight, MenuRule } from "../controls/menu.slint";
+import { MenuRow, MenuHighlight, MenuRule, Scrim } from "../controls/menu.slint";
 import { Thumb } from "../controls/scroller.slint";
 import { APopover } from "../overlay/a/a-popover.slint";
 import { SpacesMenuRow, MenuEntry, GlassKeys } from "../../components/model.slint";
@@ -129,12 +129,10 @@ export component SpacesMenu inherits Rectangle {
     visible: pop.mounted;
 
     // the scrim
-    TouchArea {
-        enabled: root.open;
-        pointer-event(e) => {
-            if e.kind == PointerEventKind.down {
-                root.send(7, 0);
-            }
+    Scrim {
+        on: root.open;
+        outside => {
+            root.send(7, 0);
         }
         scroll-event(e) => {
             accept
