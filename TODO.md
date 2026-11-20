@@ -6,12 +6,13 @@ fidelity: [docs/fidelity/](docs/fidelity/kit-plan.md) · research: [docs/researc
 Legend: `[ ]` open · `[~]` in progress · `[x]` done, with the commit that brought it to `main` (`git show <hash>`).
 
 ## Status (2026-11-19)
-`main` is at 3ee2f9d. M0 to M5 and the built-ins work on Linux; macOS (M2 Pro) passed every smoke but `parity` in
+See `git log` for where `main` is. M0 to M5 and the built-ins work on Linux; macOS (M2 Pro) passed every smoke but `parity` in
 batch eight and has not been run since. The design-fidelity phase has merged phases 0 to 3: kit, generated values,
 glass, motion, icons, controls, chrome, start page, Settings, list pages and every overlay are on kit components; it
 ends with the owner's sign-off. The capture and scoring tool was removed (187d7a4). Windows is not green in CI.
 
 ## Now: design-fidelity phase
+- [~] Page copy buttons do nothing (`navigator.clipboard.writeText` and friends; branch `fix/copy`)
 - [ ] Glass over bright pages: saturation and secondary-text contrast (owner to judge)
 - [ ] Start page tiles are stand-ins: the kit tile look and its hover spring
 - [ ] The start page's tab title duplicates the "+ New tab" row
@@ -88,6 +89,7 @@ ends with the owner's sign-off. The capture and scoring tool was removed (187d7a
 - [x] Chrome first half (78756cb), second half (69efb8c); Settings and overlays A (79ae01e)
 - [x] Start-page field, rail close, new Space (60c86ca)
 - [x] List pages, overlays B, video strip (607ec72); list editor, Spaces in Settings, status bubble (3ee2f9d)
+- [x] New-tab page: capsule at 60% of the page, bubble higher, heading "Let's Wubble" (4c6633a)
 - [x] Scoring tool removed: review by screenshots and the owner's eye (187d7a4)
 - [ ] Empty the kit lock baseline (107 rows, mostly `kit/derived.slint` literals); alias the value-equal `Shell` literals
 - [ ] Voice glow shader into the kit (no microphone)

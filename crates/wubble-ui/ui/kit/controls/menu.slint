@@ -11,7 +11,7 @@
 // The lifecycle, highlight and keys are `wubble_core::controls::menu` (through `Controls`); the
 // curves are tweens here. Keys as the TSX: Down/Up with wrap, Escape (closes, refocuses the
 // trigger), Tab (closes), Enter/Space on the focused row; no type-ahead, Home/End or mnemonic.
-// derived (notes/fidelity/derived-review.md): the separator, a 1 px rim-top hairline in an 8 px
+// derived (docs/fidelity/derived-review.md): the separator, a 1 px rim-top hairline in an 8 px
 // (`Space.s2`) row, inset by the row padding; disabled rows in haze; submenus are not built
 // (the design's "Move to Space" only draws the chevron).
 
@@ -598,7 +598,7 @@ export component MenuTrigger inherits Rectangle {
 // with `done-labels[i]` in mint for `MENU.confirmMs` (the machine times it). Escape closes and
 // refocuses the trigger; a choice by key refocuses it too. The menu draws over what this element's
 // later siblings draw only within its own parent (Slint's z-order is per parent): place it last,
-// or in an overlay (notes/fidelity/deviations.md).
+// or in an overlay (docs/fidelity/deviations.md).
 export component MenuButton inherits Rectangle {
     in property <string> text;
     in property <[MenuEntry]> entries;

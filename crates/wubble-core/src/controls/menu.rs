@@ -17,7 +17,7 @@
 //!   (`viaKey`: the click's `detail === 0`), and the trigger confirms the row for
 //!   `MENU.confirmMs` (1400 ms).
 //!
-//! wubble (derived, notes/fidelity/derived-review.md): separators (wubble's menus have them, the
+//! wubble (derived, docs/fidelity/derived-review.md): separators (wubble's menus have them, the
 //! design's none) are skipped by the keys and never lit; disabled rows take the focus but are
 //! never lit or chosen.
 //!

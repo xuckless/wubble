@@ -145,6 +145,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Start page | The design's start page (living bubble, search capsule, site tiles) is wubble's new-tab page `wubble://start`; supersedes "New tab" (command bar only). | 2026-11-19 |
 | Start page on screen | Ctrl+T and an empty window open a start tab; its living liquid is a second scene at the page card's size, run only while a start tab shows. | 2026-11-19 |
 | Start page address field | On the start page the centre capsule is the only address field and holds the command bar; other pages keep the top overlay bar. | 2026-11-19 |
+| New-tab page layout | Owner override of the web design: the search capsule's centre sits at 60% of the page, the bubble rises with it, the heading reads "Let's Wubble". | 2026-11-19 |
 | Overlay glass blurs the page | The scene composites the page frame so overlay glass (menus, command bar, peek, sheets) frosts the live page; overturns "glass never blurs web content". | 2026-11-19 |
 | Page in the scene | Slint draws the page sharp once; the scene draws each pane's frame again only into a half-res blurred pyramid that overlay glass reads. | 2026-11-19 |
 | Still sidebar glass | Owner override of the web design: no moving liquid under the sidebar; still frosted glass with page-edge ambience. | 2026-11-19 |
