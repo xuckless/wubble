@@ -769,6 +769,30 @@ pub const BOOSTS_ENABLED: SettingDef = SettingDef {
     restart: false,
 };
 
+/// The updater's check when wubble opens (`update`): on by default, the one request wubble makes
+/// on its own unless asked (docs/decisions.md "Auto-update"). Its row is in the page's Updates
+/// group, beside the status, not in a table section. Read when wubble opens.
+pub const UPDATE_CHECK_ON_OPEN: SettingDef = SettingDef {
+    key: "update.check_on_open",
+    kind: SettingKind::Bool,
+    default: "1",
+    label: "Check for updates when wubble opens",
+    section: Section::Hidden,
+    restart: false,
+};
+/// When the updater last asked for the manifest, Unix seconds (0: never; `update::Policy`).
+pub const UPDATE_LAST_CHECK: SettingDef = SettingDef {
+    key: "update.last_check",
+    kind: SettingKind::Count {
+        min: 0,
+        max: u32::MAX,
+    },
+    default: "0",
+    label: "Last update check",
+    section: Section::Hidden,
+    restart: false,
+};
+
 /// Every setting, in the order the page shows them within a section.
 pub const ALL: &[&SettingDef] = &[
     &SEARCH_ENGINE,
@@ -839,6 +863,8 @@ pub const ALL: &[&SettingDef] = &[
     &SPONSOR_ASKED,
     &SPONSOR_ACTIONS,
     &BOOSTS_ENABLED,
+    &UPDATE_CHECK_ON_OPEN,
+    &UPDATE_LAST_CHECK,
 ];
 
 /// The definition of `key`, if it is a setting.
