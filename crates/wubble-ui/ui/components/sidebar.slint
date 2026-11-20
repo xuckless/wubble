@@ -182,6 +182,9 @@ export component Sidebar inherits Rectangle {
     out property <length> spaces-anchor-y: switcher.spaces-y;
     out property <length> spaces-trigger-x: switcher.more-x + switcher.more-w / 2;
     out property <length> spaces-trigger-y: switcher.more-y + switcher.more-w / 2;
+    // The switcher's box, in window coordinates: where a dragged tab opens the popup.
+    out property <length> spaces-switcher-w: switcher.switcher-w;
+    out property <length> spaces-switcher-h: switcher.switcher-h;
 
     callback tab-press(int, length);
     // tab id, then TabRow `track`'s kind and pointer in window px

@@ -37,6 +37,11 @@ export component SpacesMenu inherits Rectangle {
     in property <length> anchor-y;
     in property <length> trigger-x;
     in property <length> trigger-y;
+    // a dragged tab over a row (wubble_core::tabdrag): the line it would drop on (-1 none) and
+    // that line's top in the scrolled list, or the sticky row; lit as the pointer lights a row
+    in property <int> drop-line: -1;
+    in property <length> drop-top;
+    in property <bool> drop-sticky;
     callback picked(int);
     callback new-space();
     callback dismissed();
@@ -56,6 +61,18 @@ export component SpacesMenu inherits Rectangle {
     out property <length> panel-y: max(Space.s2, root.anchor-y - TouchMenu.gap - root.panel-height);
     out property <length> panel-bottom: root.panel-y + root.panel-height;
     out property <bool> scrolls: lines.preferred-height > root.list-height;
+    // where the lines fall, in this element's coordinates (a dragged tab's drop targets:
+    // wubble_core::spacemenu::Geometry)
+    out property <length> list-top: root.panel-y + root.pad;
+    out property <length> list-h: root.list-height;
+    out property <length> list-scroll: flick.content-y;
+    out property <length> line-height: root.row-h;
+    out property <length> rule-height: Space.s2;
+    out property <length> sticky-top: root.panel-y + root.pad + root.list-height + Space.s2;
+    out property <length> rows-x: root.panel-x + root.pad;
+    out property <length> rows-width: root.panel-width - 2 * root.pad;
+    out property <length> panel-w: root.panel-width;
+    out property <length> panel-h: root.panel-height;
 
     changed open => {
         root.send(root.open ? 0 : 2, -1);
@@ -184,10 +201,10 @@ export component SpacesMenu inherits Rectangle {
                 content-height: lines.preferred-height;
                 interactive: root.scrolls;
                 MenuHighlight {
-                    on: root.v.hl >= 0 && root.v.hl < root.rows.length;
-                    jump: root.v.jump;
+                    on: root.drop-line >= 0 || (!root.drop-sticky && root.v.hl >= 0 && root.v.hl < root.rows.length);
+                    jump: root.drop-line >= 0 ? false : root.v.jump;
                     panel-width: root.panel-width;
-                    top: root.v.hl-rows * root.row-h + root.v.hl-rules * Space.s2;
+                    top: root.drop-line >= 0 ? root.drop-top : root.v.hl-rows * root.row-h + root.v.hl-rules * Space.s2;
                 }
                 lines := VerticalLayout {
                     padding-left: root.pad;
@@ -253,7 +270,7 @@ export component SpacesMenu inherits Rectangle {
                 y: root.pad + root.list-height + Space.s2;
                 height: root.row-h;
                 MenuHighlight {
-                    on: root.v.hl == root.sticky;
+                    on: root.drop-sticky || (root.drop-line < 0 && root.v.hl == root.sticky);
                     jump: root.v.jump;
                     panel-width: root.panel-width;
                     top: 0px;

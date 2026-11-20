@@ -10,6 +10,7 @@
 //! group at all (owner: hidden until the MCP server is built).
 
 use crate::space::{Rgb, Space, SpaceIcon, SpaceId};
+use crate::tabdrag::Rect;
 
 /// A group of rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +62,20 @@ pub enum Line<'a> {
     Row(&'a Row),
 }
 
+/// Where the open popup's scrolled list falls, in window px (the shell's SpacesMenu reports
+/// it): its left edge and width, its top and visible height, how far it is scrolled (the
+/// content's offset, 0 or less), and the heights of a row and a rule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Geometry {
+    pub x: f64,
+    pub w: f64,
+    pub list_top: f64,
+    pub list_height: f64,
+    pub scroll: f64,
+    pub row: f64,
+    pub rule: f64,
+}
+
 /// The popup for a window showing Space `current`, over the model's Spaces in order.
 pub fn popup(spaces: &[Space], current: SpaceId) -> Popup {
     let rows: Vec<Row> = spaces
@@ -87,6 +102,48 @@ pub fn popup(spaces: &[Space], current: SpaceId) -> Popup {
 }
 
 impl Popup {
+    /// Where line `i` starts in the list, unscrolled: the rows and rules above it.
+    pub fn line_top(&self, i: usize, g: &Geometry) -> f64 {
+        self.lines()
+            .iter()
+            .take(i)
+            .map(|l| match l {
+                Line::Rule => g.rule,
+                Line::Row(_) => g.row,
+            })
+            .sum()
+    }
+
+    /// A dragged tab's drop targets in the open popup: every Space row but the current Space's,
+    /// as much of it as the list shows (a row scrolled out is none), with its line index in
+    /// [`Popup::lines`] (the row the shell lights).
+    pub fn drop_rows(&self, g: &Geometry) -> Vec<(usize, SpaceId, Rect)> {
+        let (top, bottom) = (g.list_top, g.list_top + g.list_height);
+        let mut y = g.list_top + g.scroll;
+        let mut out = vec![];
+        for (i, line) in self.lines().into_iter().enumerate() {
+            let h = match line {
+                Line::Rule => g.rule,
+                Line::Row(_) => g.row,
+            };
+            if let Line::Row(r) = line {
+                let (a, b) = (y.max(top), (y + h).min(bottom));
+                let Target::Space(space) = r.target;
+                if !r.current && b > a {
+                    let rect = Rect {
+                        x: g.x,
+                        y: a,
+                        w: g.w,
+                        h: b - a,
+                    };
+                    out.push((i, space, rect));
+                }
+            }
+            y += h;
+        }
+        out
+    }
+
     /// The scrolled list: each group's rows, a rule between two groups.
     pub fn lines(&self) -> Vec<Line<'_>> {
         let mut out = vec![];
@@ -152,6 +209,43 @@ mod tests {
         assert!(p.sections.is_empty());
         assert!(p.lines().is_empty());
         assert_eq!(p.sticky, Sticky::NewSpace);
+    }
+
+    #[test]
+    fn drop_rows_are_the_other_spaces_rows_the_list_shows() {
+        let spaces: Vec<_> = (0..10).map(|i| space(i, "s")).collect();
+        let p = popup(&spaces, SpaceId(1));
+        let g = Geometry {
+            x: 20.0,
+            w: 224.0,
+            list_top: 100.0,
+            list_height: 7.0 * 36.0,
+            scroll: -18.0,
+            row: 36.0,
+            rule: 8.0,
+        };
+        let rows = p.drop_rows(&g);
+        // scrolled half a row: row 0 half shown, row 1 is the current Space, rows 2..=6 whole,
+        // row 7 half shown, rows 8 and 9 scrolled out
+        let ids: Vec<_> = rows.iter().map(|(i, s, _)| (*i, s.0)).collect();
+        assert_eq!(
+            ids,
+            [(0, 0), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7)]
+        );
+        let (_, _, first) = rows[0];
+        assert_eq!(
+            (first.x, first.y, first.w, first.h),
+            (20.0, 100.0, 224.0, 18.0)
+        );
+        let (_, _, third) = rows[1];
+        assert_eq!((third.y, third.h), (100.0 - 18.0 + 72.0, 36.0));
+        let (_, _, last) = rows[6];
+        assert_eq!(last.y + last.h, 100.0 + 7.0 * 36.0);
+        assert_eq!(last.h, 18.0);
+        assert_eq!(p.line_top(7, &g), 7.0 * 36.0);
+        let mut two = p.clone();
+        two.sections.push(p.sections[0].clone());
+        assert_eq!(two.line_top(11, &g), 10.0 * 36.0 + 8.0, "past the rule");
     }
 
     #[test]

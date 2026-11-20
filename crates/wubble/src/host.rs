@@ -1090,10 +1090,7 @@ impl Host {
         );
         crate::bind::render_spaces_menu(
             &window,
-            &wubble_core::spacemenu::popup(
-                &self.model.spaces,
-                crate::shell::window_space(&self.model, self.w.id),
-            ),
+            &self.spaces_popup(),
             &self
                 .keymap
                 .shortcut_for(wubble_core::action::Action::NewSpace)

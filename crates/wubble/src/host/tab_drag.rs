@@ -2,7 +2,8 @@
 //! feeds it the pointer and the window's drop targets and runs what it returns. Inside the
 //! list the row physics (`wubble_ui::driver`) reorders as before.
 //!
-//! Drop targets are measured from the window: the sidebar, the content area and, where the
+//! Drop targets are measured from the window: the sidebar, the footer's Spaces switcher and,
+//! while it is open, the Spaces popup's rows, the content area and, where the
 //! platform tells window positions (X11, macOS, Windows; not Wayland), the other wubble windows.
 //! A release outside every target makes a new window.
 
@@ -98,6 +99,47 @@ impl Host {
         self.run_tab_drag(Input::Release { hit });
     }
 
+    /// `--smoke gallery`'s "spaces-popup-drag": the visible tab dragged onto the switcher, held
+    /// there past the hover delay (the popup opens), then over the popup's first drop row.
+    pub(super) fn gallery_drag_to_spaces(&mut self) {
+        let (Some(window), Some(tab)) = (self.w.window.upgrade(), self.shown()) else {
+            return;
+        };
+        self.drag_window = self.w.id;
+        let g = window.get_spaces_menu_geometry();
+        let at = Point {
+            x: f64::from(g.switcher_x + g.switcher_w / 2.0),
+            y: f64::from(g.switcher_y + g.switcher_h / 2.0),
+        };
+        self.run_tab_drag(Input::Press {
+            tab,
+            at: Point { x: 0.0, y: 0.0 },
+        });
+        let now = Instant::now();
+        let hit = tabdrag::hit(at, &self.drop_rects(&window));
+        self.drag_at = at;
+        self.run_tab_drag(Input::Move { at, hit, now });
+        self.run_tab_drag(Input::Tick {
+            now: now + tabdrag::SPACE_HOVER,
+        });
+        let rows = self
+            .spaces_popup()
+            .drop_rows(&spaces_geometry(&window.get_spaces_menu_geometry()));
+        if let Some((_, _, r)) = rows.first() {
+            let at = Point {
+                x: r.x + r.w / 2.0,
+                y: r.y + r.h / 2.0,
+            };
+            let hit = tabdrag::hit(at, &self.drop_rects(&window));
+            self.drag_at = at;
+            self.run_tab_drag(Input::Move {
+                at,
+                hit,
+                now: now + tabdrag::SPACE_HOVER,
+            });
+        }
+    }
+
     /// Esc during a drag: nothing moves.
     pub(super) fn cancel_tab_drag(&mut self) -> bool {
         if self.tab_drag == tabdrag::Drag::Idle {
@@ -107,7 +149,8 @@ impl Host {
         true
     }
 
-    /// The hover delay ran out while the pointer rested on a Space's icon.
+    /// A hover delay ran out: on the Spaces switcher (the popup opens) or off the popup (it
+    /// closes).
     pub fn drag_tick(&mut self) {
         self.run_tab_drag(Input::Tick {
             now: Instant::now(),
@@ -121,7 +164,8 @@ impl Host {
         let (next, effects) = tabdrag::transition(self.tab_drag, input);
         self.tab_drag = next;
         let source = self.drag_window;
-        // a rest on a Space's icon opens it: the machine is asked again once the delay is up
+        // a rest on the switcher opens the popup, a while off it closes it: the machine is asked
+        // again once the delay is up
         if next.awaits_dwell() {
             self.drag_timer.start(
                 slint::TimerMode::SingleShot,
@@ -152,7 +196,27 @@ impl Host {
                     window.invoke_tab_rows_cancel();
                 }
             }
-            Effect::SwitchSpace(space) => self.dispatch(Command::SwitchSpace(space)),
+            Effect::OpenSpaces => self.spaces_menu_requested(),
+            Effect::CloseSpaces => {
+                if self.enter(self.drag_window)
+                    && let Some(window) = self.w.window.upgrade()
+                {
+                    window.set_spaces_open(false);
+                }
+            }
+            Effect::MoveToNewSpace { tab } => {
+                let command = self.model.new_space();
+                self.dispatch(command);
+                if let Some(space) = self.model.spaces.last().map(|s| s.id) {
+                    self.dispatch(Command::MoveTab {
+                        tab,
+                        to: Dest::Normal {
+                            space,
+                            index: usize::MAX,
+                        },
+                    });
+                }
+            }
             Effect::MoveToSpace { tab, space } => self.dispatch(Command::MoveTab {
                 tab,
                 to: Dest::Normal {
@@ -199,6 +263,25 @@ impl Host {
         window.set_drag_ghost(ghost.into());
         window.set_drag_x(self.drag_at.x as f32);
         window.set_drag_y(self.drag_at.y as f32);
+        // the popup row a release would drop on, lit as the pointer lights one
+        let (line, top) = match self.tab_drag.over() {
+            Some(DropTarget::Space(space)) => {
+                let g = spaces_geometry(&window.get_spaces_menu_geometry());
+                let popup = self.spaces_popup();
+                popup
+                    .drop_rows(&g)
+                    .into_iter()
+                    .find(|(_, s, _)| *s == space)
+                    .map_or((-1, 0.0), |(i, _, _)| {
+                        let line = i32::try_from(i).unwrap_or(-1);
+                        (line, popup.line_top(i, &g) as f32)
+                    })
+            }
+            _ => (-1, 0.0),
+        };
+        window.set_spaces_drop_line(line);
+        window.set_spaces_drop_top(top);
+        window.set_spaces_drop_sticky(self.tab_drag.over() == Some(DropTarget::NewSpace));
         window.set_drag_zone(match self.tab_drag.over() {
             Some(DropTarget::SplitEdge(Side::Left)) => 1,
             Some(DropTarget::SplitEdge(Side::Right)) => 2,
@@ -213,6 +296,25 @@ impl Host {
         let size = win.size().to_logical(scale);
         let (w, h) = (f64::from(size.width), f64::from(size.height));
         let sidebar = f64::from(window.get_sidebar_width());
+        let g = window.get_spaces_menu_geometry();
+        let rect = |x: f32, y: f32, w: f32, h: f32| Rect {
+            x: f64::from(x),
+            y: f64::from(y),
+            w: f64::from(w),
+            h: f64::from(h),
+        };
+        let trigger =
+            (sidebar > 0.5).then(|| rect(g.switcher_x, g.switcher_y, g.switcher_w, g.switcher_h));
+        let open = g.shown && sidebar > 0.5;
+        let spaces = if open {
+            self.spaces_popup()
+                .drop_rows(&spaces_geometry(&g))
+                .into_iter()
+                .map(|(_, space, r)| (space, r))
+                .collect()
+        } else {
+            vec![]
+        };
         Rects {
             window: Some(Rect {
                 x: 0.0,
@@ -226,9 +328,10 @@ impl Host {
                 w: sidebar,
                 h,
             }),
-            // the footer shows only the window's own Space now (the others are in the "^"
-            // popup, which is no drop target): no Space to drop a tab onto
-            spaces: vec![],
+            trigger,
+            menu: open.then(|| rect(g.panel_x, g.panel_y, g.panel_w, g.panel_h)),
+            spaces,
+            new_space: open.then(|| rect(g.rows_x, g.sticky_top, g.rows_w, g.line)),
             content: Some(Rect {
                 x: f64::from(window.get_content_x()),
                 y: f64::from(window.get_content_y()),
@@ -267,5 +370,18 @@ impl Host {
                 ))
             })
             .collect()
+    }
+}
+
+/// The open popup's lines in window px, as the shell reports them.
+fn spaces_geometry(g: &wubble_ui::SpacesMenuGeometry) -> wubble_core::spacemenu::Geometry {
+    wubble_core::spacemenu::Geometry {
+        x: f64::from(g.rows_x),
+        w: f64::from(g.rows_w),
+        list_top: f64::from(g.list_top),
+        list_height: f64::from(g.list_h),
+        scroll: f64::from(g.scroll),
+        row: f64::from(g.line),
+        rule: f64::from(g.rule),
     }
 }

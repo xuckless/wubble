@@ -94,6 +94,9 @@ pub enum Overlay {
     Lists,
     /// The sidebar footer's Spaces popup, the profile holding at least this many Spaces.
     Spaces(usize),
+    /// The visible tab dragged onto the footer's switcher until the Spaces popup opened (three
+    /// Spaces), then held over the popup's first drop row.
+    SpacesDrag,
     /// Settings' search with this typed into it.
     SettingsSearch(&'static str),
     /// The first web tab shown again at a long address, with the blocker's count and the
@@ -112,6 +115,13 @@ pub enum Long {
     SiteMenu,
     /// Enough tabs in the Space that the list scrolls.
     Crowd,
+}
+
+impl Scene {
+    /// Acted on once it settled (`Action::Scroll`): clicked, scrolled, or a tab dragged.
+    pub fn acts(&self) -> bool {
+        self.wheel > 0 || self.click.is_some() || matches!(self.overlay, Overlay::SpacesDrag)
+    }
 }
 
 const fn scene(name: &'static str) -> Scene {
@@ -194,6 +204,7 @@ pub const SCENES: &[Scene] = &[
         sidebar: SidebarMode::Rail,
         ..over("spaces-popup-rail", Overlay::Spaces(3))
     },
+    over("spaces-popup-drag", Overlay::SpacesDrag),
     Scene {
         pointer: Some(DOWNLOAD_ROW),
         ..over("downloads-popover-hover", Overlay::Downloads)
@@ -395,7 +406,8 @@ pub enum Action {
     /// Seed the profile (the design's Spaces and tabs with `--parity`; nothing without).
     Seed,
     Show(usize),
-    /// Click (`Scene::click`) and scroll (`Scene::wheel`) scene `i`.
+    /// Click (`Scene::click`), scroll (`Scene::wheel`) or drag (`Overlay::SpacesDrag`) in
+    /// scene `i`.
     Scroll(usize),
     /// Scene `i`'s second click (`Scene::then`).
     Click(usize),
@@ -426,7 +438,7 @@ pub fn next(stage: Stage, event: Event) -> (Stage, Option<Action>) {
         (Stage::Shown(i), Event::Settled) if SCENES[i].frames > 0 => {
             (Stage::Burst(i, 0), Some(Action::ShootFrame(i, 0)))
         }
-        (Stage::Shown(i), Event::Settled) if SCENES[i].wheel > 0 || SCENES[i].click.is_some() => {
+        (Stage::Shown(i), Event::Settled) if SCENES[i].acts() => {
             (Stage::Scrolled(i), Some(Action::Scroll(i)))
         }
         (Stage::Scrolled(i), Event::Settled) if SCENES[i].then.is_some() => {
@@ -589,7 +601,7 @@ mod tests {
         for (i, scene) in SCENES.iter().enumerate() {
             assert_eq!(
                 actions.contains(&Action::Scroll(i)),
-                scene.wheel > 0 || scene.click.is_some(),
+                scene.acts(),
                 "{}",
                 scene.name
             );

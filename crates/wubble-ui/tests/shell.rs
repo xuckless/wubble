@@ -281,6 +281,24 @@ fn space_footer(app: &AppWindow, driver: &Shared) {
     });
     app.set_spaces_menu_rows(ModelRc::from(rows.as_slice()));
     app.set_spaces_menu_entries(ModelRc::from(entries.as_slice()));
+    use wubble_core::space::{Rgb, SpaceIcon, SpaceId};
+    use wubble_core::spacemenu::{Geometry, Group, Popup, Row, Section, Sticky, Target};
+    use wubble_core::tabdrag::Point;
+    let popup = Popup {
+        sections: vec![Section {
+            group: Group::Spaces,
+            rows: (1..=12)
+                .map(|id| Row {
+                    target: Target::Space(SpaceId(id)),
+                    name: format!("row {id}"),
+                    tint: Rgb(0, 0, 0),
+                    icon: SpaceIcon::Work,
+                    current: id == 3,
+                })
+                .collect(),
+        }],
+        sticky: Sticky::NewSpace,
+    };
     let button = |label: &str| {
         ElementHandle::find_by_accessible_label(app, label)
             .find(|h| h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Button))
@@ -319,6 +337,57 @@ fn space_footer(app: &AppWindow, driver: &Shared) {
                 current.absolute_position().x + 38.0
             );
         }
+        // A dragged tab's targets (wubble_core::tabdrag): the geometry the shell reports puts
+        // the switcher on the two tiles and each drop row on its drawn row, the current
+        // Space's row (3) none.
+        let g = app.get_spaces_menu_geometry();
+        assert!(g.shown);
+        assert_eq!(
+            (g.switcher_x, g.switcher_y),
+            (current.absolute_position().x, current.absolute_position().y)
+        );
+        let (sw, sh) = if rail { (36.0, 74.0) } else { (74.0, 36.0) };
+        assert_eq!((g.switcher_w, g.switcher_h), (sw, sh), "rail {rail}");
+        assert_eq!(
+            (g.panel_x, g.panel_y, g.panel_w, g.panel_h),
+            (at.x, at.y, size.width, size.height)
+        );
+        let geometry = Geometry {
+            x: f64::from(g.rows_x),
+            w: f64::from(g.rows_w),
+            list_top: f64::from(g.list_top),
+            list_height: f64::from(g.list_h),
+            scroll: f64::from(g.scroll),
+            row: f64::from(g.line),
+            rule: f64::from(g.rule),
+        };
+        let targets = popup.drop_rows(&geometry);
+        assert_eq!(
+            targets.len(),
+            6,
+            "seven rows shown, the current one no target"
+        );
+        for name in ["row 1", "row 2", "row 4", "row 7"] {
+            let row = ElementHandle::find_by_accessible_label(app, name)
+                .find(|h| {
+                    h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem)
+                })
+                .unwrap();
+            let (p, z) = (row.absolute_position(), row.size());
+            let mid = Point {
+                x: f64::from(p.x + z.width / 2.0),
+                y: f64::from(p.y + z.height / 2.0),
+            };
+            let hit: Vec<_> = targets.iter().filter(|(_, _, r)| r.contains(mid)).collect();
+            assert_eq!(hit.len(), 1, "{name} rail {rail}");
+            assert_eq!(format!("row {}", hit[0].1.0), name);
+        }
+        let sticky = ElementHandle::find_by_accessible_label(app, "New Space")
+            .find(|h| {
+                h.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::ListItem)
+            })
+            .unwrap();
+        assert_eq!(sticky.absolute_position().y, g.sticky_top);
         app.set_spaces_open(false);
         pump(400);
     }

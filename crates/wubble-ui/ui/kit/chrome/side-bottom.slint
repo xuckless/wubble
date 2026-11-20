@@ -44,6 +44,7 @@ export component SideBottom inherits Rectangle {
     out property <length> spaces-x: current.absolute-position.x;
     out property <length> spaces-y: current.absolute-position.y;
     out property <length> switcher-w: root.vertical ? current.width : root.spaces-span;
+    out property <length> switcher-h: root.vertical ? root.spaces-span : current.height;
     out property <length> more-x: more.absolute-position.x;
     out property <length> more-y: more.absolute-position.y;
     out property <length> more-w: more.width;

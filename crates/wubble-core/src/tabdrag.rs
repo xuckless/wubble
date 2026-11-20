@@ -1,15 +1,18 @@
 //! Where a dragged tab goes: one state enum and one pure transition.
 //!
 //! Inside the tab list the row physics (`tabs::TabRows`, the design's reorder) keeps owning
-//! the drag; this machine only decides what a drag that leaves the list means: onto another
-//! Space's icon (the Space opens after a hover of [`SPACE_HOVER`], so the tab can be dropped
-//! into its list; released on the icon it moves there), onto the content area's left or right
-//! edge (a split), onto another wubble window, or outside every window (a new window).
+//! the drag; this machine only decides what a drag that leaves the list means: onto the
+//! footer's Spaces switcher (its "^" or the current Space's tile: after a hover of
+//! [`SPACE_HOVER`] the Spaces popup opens, and a release on one of its Space rows moves the tab
+//! there, on its New Space row into a new Space; the popup closes when the drag ends or has
+//! been off it for [`SPACE_HOVER`]), onto the content area's left or right edge (a split), onto
+//! another wubble window, or outside every window (a new window).
 //!
 //! Written for wubble: the design repo has reorder and click-to-switch only (no drop onto a
 //! Space, no hover dwell, no drop-to-split, no tear-out). The dwell is the Finder/Firefox
-//! spring-loading idea; its length is the owner's to tune. Time is passed in (`now`), never
-//! read here.
+//! spring-loading idea; its length is the owner's to tune (owner, 2026-11-20: "when drag on top
+//! of the ^ the popup opens and place the tab into the desired space"). Time is passed in
+//! (`now`), never read here.
 //!
 //! On Wayland a client cannot learn global pointer or window positions, so the host can never
 //! name another window under the pointer there: a release outside the window is always
@@ -22,7 +25,8 @@ use crate::tab::TabId;
 use crate::tabs::TABS;
 use crate::window::{WindowId, WindowTarget};
 
-/// How long a dragged tab hovers over another Space's icon before that Space opens.
+/// How long a dragged tab hovers over the Spaces switcher before the popup opens, and how long
+/// it may be off the open popup before the popup closes.
 pub const SPACE_HOVER: Duration = Duration::from_millis(500);
 /// The share of the content area's width, at each side, that drops into a split.
 pub const EDGE_SHARE: f64 = 0.25;
@@ -60,7 +64,14 @@ pub enum DropTarget {
     None,
     /// The tab list: the row physics reorders.
     List,
+    /// The footer's switcher: the "^" or the current Space's tile.
+    SpacesTrigger,
+    /// The open Spaces popup, on none of its targets (a rule, the current Space's row).
+    SpacesMenu,
+    /// A row of the open Spaces popup.
     Space(SpaceId),
+    /// The popup's New Space row.
+    NewSpace,
     SplitEdge(Side),
     /// Another wubble window (never on Wayland).
     Window(WindowId),
@@ -74,7 +85,13 @@ pub struct Rects {
     /// The window itself: (0, 0, width, height).
     pub window: Option<Rect>,
     pub list: Option<Rect>,
+    /// The footer's switcher.
+    pub trigger: Option<Rect>,
+    /// The open Spaces popup's panel, its Space rows (but the current Space's) and its New
+    /// Space row.
+    pub menu: Option<Rect>,
     pub spaces: Vec<(SpaceId, Rect)>,
+    pub new_space: Option<Rect>,
     pub content: Option<Rect>,
     /// Other wubble windows, where the platform tells (empty on Wayland).
     pub windows: Vec<(WindowId, Rect)>,
@@ -93,6 +110,15 @@ pub fn hit(p: Point, r: &Rects) -> DropTarget {
     if let Some((s, _)) = r.spaces.iter().find(|(_, rect)| rect.contains(p)) {
         return DropTarget::Space(*s);
     }
+    if inside(&r.new_space) {
+        return DropTarget::NewSpace;
+    }
+    if inside(&r.menu) {
+        return DropTarget::SpacesMenu;
+    }
+    if inside(&r.trigger) {
+        return DropTarget::SpacesTrigger;
+    }
     if inside(&r.list) {
         return DropTarget::List;
     }
@@ -101,6 +127,28 @@ pub fn hit(p: Point, r: &Rects) -> DropTarget {
         Some(c) if p.x >= c.x + c.w * (1.0 - EDGE_SHARE) => DropTarget::SplitEdge(Side::Right),
         _ => DropTarget::None,
     }
+}
+
+impl DropTarget {
+    /// The switcher or the open popup: the pointer keeps the popup open.
+    fn keeps_popup(self) -> bool {
+        matches!(
+            self,
+            DropTarget::SpacesTrigger
+                | DropTarget::SpacesMenu
+                | DropTarget::Space(_)
+                | DropTarget::NewSpace
+        )
+    }
+}
+
+/// The Spaces popup, as this drag opened it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Popup {
+    Closed,
+    Open,
+    /// Open, the pointer off it since then.
+    Left(Instant),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,8 +164,7 @@ pub enum Drag {
         over: DropTarget,
         /// When the pointer came over `over`.
         since: Instant,
-        /// The Space the hover opened, once it has.
-        opened: Option<SpaceId>,
+        popup: Popup,
     },
 }
 
@@ -132,7 +179,7 @@ pub enum Input {
         hit: DropTarget,
         now: Instant,
     },
-    /// A frame or timer while the pointer rests (the hover delay runs on).
+    /// A frame or timer while the pointer rests (the hover delays run on).
     Tick {
         now: Instant,
     },
@@ -145,11 +192,16 @@ pub enum Input {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
-    /// The hovered Space opens (the tab is still held).
-    SwitchSpace(SpaceId),
+    /// The Spaces popup opens (the tab is still held), through the overlays.
+    OpenSpaces,
+    CloseSpaces,
     MoveToSpace {
         tab: TabId,
         space: SpaceId,
+    },
+    /// A new Space (`Model::new_space`), then the tab moves there.
+    MoveToNewSpace {
+        tab: TabId,
     },
     SplitInto {
         tab: TabId,
@@ -172,10 +224,32 @@ impl Drag {
         }
     }
 
-    /// Whether the pointer rests on a Space's icon the hover has not opened yet: a later
-    /// [`Input::Tick`] may open it, so the host keeps a timer running.
+    /// Whether a hover delay runs (the pointer on the switcher with the popup closed, or off
+    /// the open popup): a later [`Input::Tick`] may open or close it, so the host keeps a timer
+    /// running.
     pub fn awaits_dwell(&self) -> bool {
-        matches!(*self, Drag::Dragging { over: DropTarget::Space(s), opened, .. } if opened != Some(s))
+        matches!(
+            *self,
+            Drag::Dragging {
+                over: DropTarget::SpacesTrigger,
+                popup: Popup::Closed,
+                ..
+            } | Drag::Dragging {
+                popup: Popup::Left(_),
+                ..
+            }
+        )
+    }
+
+    /// The popup this drag opened is up.
+    pub fn popup_open(&self) -> bool {
+        matches!(
+            *self,
+            Drag::Dragging {
+                popup: Popup::Open | Popup::Left(_),
+                ..
+            }
+        )
     }
 
     /// The target the pointer is over, while dragging.
@@ -199,76 +273,106 @@ pub fn transition(d: Drag, input: Input) -> (Drag, Vec<Effect>) {
                 tab,
                 over: hit,
                 since: now,
-                opened: None,
+                popup: Popup::Closed,
             };
-            (next, vec![])
+            dwell(next, now)
         }
         (
             Drag::Dragging {
                 tab,
                 over,
                 since,
-                opened,
+                popup,
             },
             Input::Move { hit, now, .. },
         ) => {
             let since = if hit == over { since } else { now };
+            let popup = match popup {
+                Popup::Closed => Popup::Closed,
+                _ if hit.keeps_popup() => Popup::Open,
+                Popup::Open => Popup::Left(now),
+                left => left,
+            };
             dwell(
                 Drag::Dragging {
                     tab,
                     over: hit,
                     since,
-                    opened,
+                    popup,
                 },
                 now,
             )
         }
         (Drag::Dragging { .. }, Input::Tick { now }) => dwell(d, now),
-        (Drag::Dragging { tab, opened, .. }, Input::Release { hit }) => {
-            let drop = match (hit, opened) {
-                // into the list of the Space the hover opened
-                (DropTarget::List, Some(space)) => Some(Effect::MoveToSpace { tab, space }),
+        (Drag::Dragging { tab, .. }, Input::Release { hit }) => {
+            let close = d.popup_open().then_some(Effect::CloseSpaces);
+            let drop = match hit {
                 // the row physics reorders
-                (DropTarget::List, None) => return (Drag::Idle, vec![]),
-                (DropTarget::Space(space), _) => Some(Effect::MoveToSpace { tab, space }),
-                (DropTarget::SplitEdge(side), _) => Some(Effect::SplitInto { tab, side }),
-                (DropTarget::Window(w), _) => Some(Effect::MoveToWindow {
+                DropTarget::List => return (Drag::Idle, close.into_iter().collect()),
+                DropTarget::Space(space) => Some(Effect::MoveToSpace { tab, space }),
+                DropTarget::NewSpace => Some(Effect::MoveToNewSpace { tab }),
+                DropTarget::SplitEdge(side) => Some(Effect::SplitInto { tab, side }),
+                DropTarget::Window(w) => Some(Effect::MoveToWindow {
                     tab,
                     to: WindowTarget::Existing(w),
                 }),
-                (DropTarget::Outside, _) => Some(Effect::MoveToWindow {
+                DropTarget::Outside => Some(Effect::MoveToWindow {
                     tab,
                     to: WindowTarget::New,
                 }),
-                (DropTarget::None, _) => None,
+                DropTarget::None | DropTarget::SpacesTrigger | DropTarget::SpacesMenu => None,
             };
             (
                 Drag::Idle,
-                std::iter::once(Effect::CancelRows).chain(drop).collect(),
+                std::iter::once(Effect::CancelRows)
+                    .chain(drop)
+                    .chain(close)
+                    .collect(),
             )
         }
-        (Drag::Dragging { .. }, Input::Cancel) => (Drag::Idle, vec![Effect::CancelRows]),
+        (Drag::Dragging { .. }, Input::Cancel) => (
+            Drag::Idle,
+            std::iter::once(Effect::CancelRows)
+                .chain(d.popup_open().then_some(Effect::CloseSpaces))
+                .collect(),
+        ),
         (Drag::Pressed { .. }, Input::Release { .. } | Input::Cancel) => (Drag::Idle, vec![]),
         (d, _) => (d, vec![]),
     }
 }
 
-/// Opens the hovered Space once the pointer has rested on its icon for [`SPACE_HOVER`].
+/// Opens the Spaces popup once the pointer has rested on the switcher for [`SPACE_HOVER`];
+/// closes it once the pointer has been off it as long.
 fn dwell(d: Drag, now: Instant) -> (Drag, Vec<Effect>) {
+    let waited = |t: Instant| now.saturating_duration_since(t) >= SPACE_HOVER;
     match d {
         Drag::Dragging {
             tab,
-            over: DropTarget::Space(space),
+            over: DropTarget::SpacesTrigger,
             since,
-            opened,
-        } if opened != Some(space) && now.saturating_duration_since(since) >= SPACE_HOVER => (
+            popup: Popup::Closed,
+        } if waited(since) => (
             Drag::Dragging {
                 tab,
-                over: DropTarget::Space(space),
+                over: DropTarget::SpacesTrigger,
                 since,
-                opened: Some(space),
+                popup: Popup::Open,
             },
-            vec![Effect::SwitchSpace(space)],
+            vec![Effect::OpenSpaces],
+        ),
+        Drag::Dragging {
+            tab,
+            over,
+            since,
+            popup: Popup::Left(left),
+        } if waited(left) => (
+            Drag::Dragging {
+                tab,
+                over,
+                since,
+                popup: Popup::Closed,
+            },
+            vec![Effect::CloseSpaces],
         ),
         d => (d, vec![]),
     }
@@ -346,72 +450,114 @@ mod tests {
         assert_eq!(release(d, DropTarget::List), vec![]);
     }
 
+    fn tick(d: Drag, ms: u64) -> (Drag, Vec<Effect>) {
+        transition(
+            d,
+            Input::Tick {
+                now: t0() + Duration::from_millis(ms),
+            },
+        )
+    }
+
+    const HOVER: u64 = SPACE_HOVER.as_millis() as u64;
+
     #[test]
-    fn hovering_a_space_opens_it_once_after_the_delay() {
+    fn hovering_the_switcher_opens_the_popup_once_after_the_delay() {
         let d = dragging(DropTarget::List);
-        let (d, fx) = mv(d, 60.0, DropTarget::Space(S), 100);
+        let (d, fx) = mv(d, 60.0, DropTarget::SpacesTrigger, 100);
         assert!(fx.is_empty());
         assert_eq!(d.ghost(), Some(T));
-        let early = 100 + SPACE_HOVER.as_millis() as u64 - 1;
-        let (d, fx) = transition(
-            d,
-            Input::Tick {
-                now: t0() + Duration::from_millis(early),
-            },
-        );
-        assert!(fx.is_empty(), "not before the delay");
-        let (d, fx) = mv(d, 61.0, DropTarget::Space(S), early + 1);
-        assert_eq!(fx, vec![Effect::SwitchSpace(S)]);
-        let (d, fx) = mv(d, 62.0, DropTarget::Space(S), early + 900);
-        assert!(fx.is_empty(), "once");
-        // dropped into the opened Space's list
-        assert_eq!(
-            release(d, DropTarget::List),
-            vec![Effect::CancelRows, Effect::MoveToSpace { tab: T, space: S }]
-        );
-    }
-
-    #[test]
-    fn a_second_space_still_waits_for_its_hover() {
-        let d = dragging(DropTarget::Space(S));
         assert!(d.awaits_dwell());
-        let (d, fx) = transition(
-            d,
-            Input::Tick {
-                now: t0() + SPACE_HOVER,
-            },
+        let (d, fx) = tick(d, 100 + HOVER - 1);
+        assert!(fx.is_empty(), "not before the delay");
+        let (d, fx) = mv(d, 61.0, DropTarget::SpacesTrigger, 100 + HOVER);
+        assert_eq!(fx, vec![Effect::OpenSpaces]);
+        assert!(d.popup_open() && !d.awaits_dwell());
+        let (d, fx) = mv(d, 62.0, DropTarget::SpacesTrigger, 100 + 3 * HOVER);
+        assert!(fx.is_empty(), "once");
+        // onto a row and released there: the tab moves to its Space, the popup closes
+        let (d, fx) = mv(d, 63.0, DropTarget::Space(S), 100 + 3 * HOVER);
+        assert!(fx.is_empty());
+        assert_eq!(
+            release(d, DropTarget::Space(S)),
+            vec![
+                Effect::CancelRows,
+                Effect::MoveToSpace { tab: T, space: S },
+                Effect::CloseSpaces
+            ]
         );
-        assert_eq!(fx, vec![Effect::SwitchSpace(S)]);
-        assert!(!d.awaits_dwell(), "opened: nothing to wait for");
-        // on to another Space's icon: the timer must run again
-        let other = SpaceId(3);
-        let (d, _) = mv(d, 80.0, DropTarget::Space(other), 600);
-        assert!(d.awaits_dwell(), "{d:?}");
-        let (d, fx) = transition(
-            d,
-            Input::Tick {
-                now: t0() + Duration::from_millis(600) + SPACE_HOVER,
-            },
-        );
-        assert_eq!(fx, vec![Effect::SwitchSpace(other)]);
-        assert!(!d.awaits_dwell());
-        let (d, _) = mv(d, 90.0, DropTarget::List, 1200);
-        assert!(!d.awaits_dwell());
+    }
+
+    /// Opened, then the pointer goes to the popup's New Space row, or its current Space's row.
+    fn opened() -> Drag {
+        let d = dragging(DropTarget::SpacesTrigger);
+        let (d, fx) = tick(d, HOVER);
+        assert_eq!(fx, vec![Effect::OpenSpaces]);
+        d
     }
 
     #[test]
-    fn leaving_the_icon_restarts_the_delay() {
-        let d = dragging(DropTarget::Space(S));
-        let (d, _) = mv(d, 60.0, DropTarget::None, 400);
-        let (d, fx) = mv(d, 61.0, DropTarget::Space(S), 450);
-        assert!(fx.is_empty());
-        let (_, fx) = transition(
-            d,
-            Input::Tick {
-                now: t0() + Duration::from_millis(900),
-            },
+    fn the_new_space_row_takes_the_tab_and_the_current_row_cancels() {
+        let (d, _) = mv(opened(), 70.0, DropTarget::NewSpace, HOVER + 10);
+        assert_eq!(
+            release(d, DropTarget::NewSpace),
+            vec![
+                Effect::CancelRows,
+                Effect::MoveToNewSpace { tab: T },
+                Effect::CloseSpaces
+            ]
         );
-        assert!(fx.is_empty(), "450 + 500 not reached");
+        let (d, _) = mv(opened(), 70.0, DropTarget::SpacesMenu, HOVER + 10);
+        assert_eq!(
+            release(d, DropTarget::SpacesMenu),
+            vec![Effect::CancelRows, Effect::CloseSpaces]
+        );
+        // released on the switcher before the popup opened: nothing
+        assert_eq!(
+            release(
+                dragging(DropTarget::SpacesTrigger),
+                DropTarget::SpacesTrigger
+            ),
+            vec![Effect::CancelRows]
+        );
+    }
+
+    #[test]
+    fn off_the_popup_for_the_delay_closes_it_and_coming_back_keeps_it() {
+        let (d, fx) = mv(opened(), 300.0, DropTarget::None, 1000);
+        assert!(fx.is_empty());
+        assert!(d.awaits_dwell(), "the leave delay runs");
+        // back before the delay: it stays, and the delay starts again on the next leave
+        let (d, _) = mv(d, 60.0, DropTarget::SpacesMenu, 1000 + HOVER - 1);
+        assert!(!d.awaits_dwell());
+        let (d, _) = mv(d, 300.0, DropTarget::List, 2000);
+        let (d, fx) = tick(d, 2000 + HOVER - 1);
+        assert!(fx.is_empty());
+        let (d, fx) = tick(d, 2000 + HOVER);
+        assert_eq!(fx, vec![Effect::CloseSpaces]);
+        assert!(!d.popup_open() && !d.awaits_dwell());
+        // closed: the list takes the drop as before
+        assert_eq!(release(d, DropTarget::List), vec![]);
+        // the drag cancelled while it is open closes it
+        assert_eq!(
+            transition(opened(), Input::Cancel).1,
+            vec![Effect::CancelRows, Effect::CloseSpaces]
+        );
+        // released in the list while open: the rows reorder, the popup closes
+        assert_eq!(
+            release(opened(), DropTarget::List),
+            vec![Effect::CloseSpaces]
+        );
+    }
+
+    #[test]
+    fn leaving_the_switcher_restarts_the_delay() {
+        let d = dragging(DropTarget::SpacesTrigger);
+        let (d, _) = mv(d, 60.0, DropTarget::None, 400);
+        let (d, fx) = mv(d, 61.0, DropTarget::SpacesTrigger, 450);
+        assert!(fx.is_empty());
+        let (_, fx) = tick(d, 450 + HOVER - 1);
+        assert!(fx.is_empty(), "450 + the delay not reached");
     }
 
     #[test]
@@ -473,17 +619,36 @@ mod tests {
                 x: 0.0,
                 y: 50.0,
                 w: 200.0,
-                h: 450.0,
+                h: 560.0,
+            }),
+            trigger: Some(Rect {
+                x: 10.0,
+                y: 560.0,
+                w: 74.0,
+                h: 36.0,
+            }),
+            // the popup over the list, above the switcher: a Space row, the New Space row
+            menu: Some(Rect {
+                x: 10.0,
+                y: 400.0,
+                w: 236.0,
+                h: 150.0,
             }),
             spaces: vec![(
                 S,
                 Rect {
-                    x: 20.0,
-                    y: 520.0,
-                    w: 30.0,
-                    h: 30.0,
+                    x: 16.0,
+                    y: 406.0,
+                    w: 224.0,
+                    h: 36.0,
                 },
             )],
+            new_space: Some(Rect {
+                x: 16.0,
+                y: 508.0,
+                w: 224.0,
+                h: 36.0,
+            }),
             content: Some(Rect {
                 x: 200.0,
                 y: 0.0,
@@ -500,7 +665,10 @@ mod tests {
                 },
             )],
         };
-        assert_eq!(hit(at(30.0, 530.0), &r), DropTarget::Space(S));
+        assert_eq!(hit(at(30.0, 420.0), &r), DropTarget::Space(S));
+        assert_eq!(hit(at(30.0, 520.0), &r), DropTarget::NewSpace);
+        assert_eq!(hit(at(30.0, 470.0), &r), DropTarget::SpacesMenu);
+        assert_eq!(hit(at(30.0, 570.0), &r), DropTarget::SpacesTrigger);
         assert_eq!(hit(at(30.0, 100.0), &r), DropTarget::List);
         assert_eq!(hit(at(250.0, 100.0), &r), DropTarget::SplitEdge(Side::Left));
         assert_eq!(

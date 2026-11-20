@@ -68,6 +68,31 @@ export struct PageLinkItem {
     action: string,
 }
 
+// The Spaces popup's geometry in window px, for a dragged tab's drop targets
+// (wubble_core::spacemenu::Geometry, tabdrag::Rects).
+export struct SpacesMenuGeometry {
+    shown: bool,
+    // the switcher (the "^" and the current Space's tile)
+    switcher-x: length,
+    switcher-y: length,
+    switcher-w: length,
+    switcher-h: length,
+    // the panel
+    panel-x: length,
+    panel-y: length,
+    panel-w: length,
+    panel-h: length,
+    // the rows' column, the scrolled list and its lines, the sticky row
+    rows-x: length,
+    rows-w: length,
+    list-top: length,
+    list-h: length,
+    scroll: length,
+    line: length,
+    rule: length,
+    sticky-top: length,
+}
+
 export enum CommandKind {
     open-tab,
     history,

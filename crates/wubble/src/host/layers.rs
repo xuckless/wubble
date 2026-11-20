@@ -113,6 +113,14 @@ impl Host {
         self.render_surfaces(&window);
     }
 
+    /// This window's Spaces popup (wubble_core::spacemenu), as drawn and as dropped on.
+    pub(super) fn spaces_popup(&self) -> wubble_core::spacemenu::Popup {
+        wubble_core::spacemenu::popup(
+            &self.model.spaces,
+            crate::shell::window_space(&self.model, self.w.id),
+        )
+    }
+
     /// Escape: closes the topmost overlay; whether there was one to close.
     pub(super) fn overlay_escape(&mut self, window: &AppWindow) -> bool {
         let shown = self.shown();
