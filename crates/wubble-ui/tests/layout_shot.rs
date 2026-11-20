@@ -2,9 +2,10 @@
 //! eye: a tool, not an assertion. Without `WUBBLE_LAYOUT_SHOT=DIR` (or a wgpu adapter) it returns
 //! at once; with it, it writes `DIR/<name>.rgba` (u32 width, u32 height, little endian, then
 //! RGBA) of the whole window: the address pill with a long address and every chip, twenty tabs,
-//! and the sidebar mid-way through closing (to hidden, then to the rail) at three points of the
-//! seam's spring, stepped by the real driver at a fixed frame delta. The headless gallery cannot
-//! show the collapse: its seam only moves on presented frames.
+//! menus with long rows (Slint's glass: no scene here), the sidebar mid-way through closing (to
+//! hidden, then to the rail) at three points of the seam's spring, stepped by the real driver at
+//! a fixed frame delta, and the crowded rail with a tab hovered. The headless gallery cannot show
+//! the collapse: its seam only moves on presented frames.
 //! Pattern: tests/status_bubble_shot.rs (the offscreen platform).
 
 use std::path::{Path, PathBuf};
@@ -15,7 +16,7 @@ use i_slint_renderer_skia::SkiaWGPU30Renderer;
 use slint::platform::{Platform, Renderer, WindowAdapter};
 use slint::{ComponentHandle, PhysicalSize, PlatformError};
 use wubble_ui::driver;
-use wubble_ui::{AppWindow, SidebarMode, SpaceItem, TabItem};
+use wubble_ui::{AppWindow, MenuEntry, MenuView, SidebarMode, SpaceItem, TabItem};
 
 const SIZE: (u32, u32) = (1360, 880);
 const DT: f32 = 1.0 / 120.0;
@@ -120,6 +121,28 @@ fn tab(id: i32, title: &str) -> TabItem {
     }
 }
 
+/// A menu at `(x, y)` with these rows (label, icon, shortcut); an empty label is a separator.
+fn menu(x: f32, y: f32, rows: &[(&str, &str, &str)]) -> MenuView {
+    let entries: Vec<MenuEntry> = rows
+        .iter()
+        .map(|&(label, icon, shortcut)| MenuEntry {
+            label: label.into(),
+            enabled: !label.is_empty(),
+            separator: label.is_empty(),
+            icon: icon.into(),
+            shortcut: shortcut.into(),
+            danger: false,
+        })
+        .collect();
+    MenuView {
+        open: true,
+        x,
+        y,
+        entries: slint::ModelRc::from(Rc::new(slint::VecModel::from(entries))),
+        icons: true,
+    }
+}
+
 #[test]
 fn draw_the_layout_cases() {
     let Some(dir) = std::env::var_os("WUBBLE_LAYOUT_SHOT").map(PathBuf::from) else {
@@ -162,8 +185,8 @@ fn draw_the_layout_cases() {
         },
     ]))));
     app.set_active_space_id(1);
-    app.set_address_host("en.wikipedia.org".into());
-    app.set_address_path("/wiki/List_of_longest_words_in_the_English_language".into());
+    // as the host does: the pill first shows the bundled page's address, the long one later
+    app.set_address_host("data".into());
     app.set_address_secure(true);
     app.set_address_bookmarkable(true);
     app.set_address_blocker_visible(true);
@@ -176,8 +199,69 @@ fn draw_the_layout_cases() {
         }
     };
     step(600);
-    pump(400);
+    pump(100);
+    let _ = app.window().take_snapshot();
+    app.set_address_host("en.wikipedia.org".into());
+    app.set_address_path("/wiki/List_of_longest_words_in_the_English_language".into());
+    pump(300);
     shoot(&app, &dir, "pill-and-crowd");
+
+    // menus whose rows name a Space and a site: the panel fits its widest row, up to its
+    // maximum, then a row is cut on one line
+    for (name, view) in [
+        (
+            "menu-tab-rows",
+            menu(
+                120.0,
+                150.0,
+                &[
+                    ("Reload", "", "Ctrl+R"),
+                    ("Pin Tab", "pin", "Ctrl+Shift+D"),
+                    ("New Folder with Tab", "", ""),
+                    ("", "", ""),
+                    ("Never Sleep", "awake", ""),
+                    ("Never Sleep Tabs in This Space", "awake", ""),
+                    ("Never Sleep en.wikipedia.org", "awake", ""),
+                    ("Never Sleep a-very-lon\u{2026}ample.com", "awake", ""),
+                ],
+            ),
+        ),
+        (
+            "menu-site-long-host",
+            menu(
+                190.0,
+                92.0,
+                &[
+                    ("Blocked 14 requests", "", ""),
+                    ("Turn off blocking on www.youtube.com", "shield", ""),
+                    ("Page theme on a-very-lon\u{2026}ample.com", "", ""),
+                    (
+                        "A row far too long for any menu to show whole, cut on one line",
+                        "",
+                        "",
+                    ),
+                ],
+            ),
+        ),
+        (
+            "menu-sidebar",
+            menu(
+                90.0,
+                820.0,
+                &[
+                    ("New Tab", "", "Ctrl+T"),
+                    ("New Space", "", "Ctrl+Shift+S"),
+                    ("New Folder", "", ""),
+                ],
+            ),
+        ),
+    ] {
+        app.set_menu(view);
+        pump(600);
+        shoot(&app, &dir, name);
+        app.set_menu(MenuView::default());
+        pump(400);
+    }
 
     // the sidebar closing, then closing to the rail: three points of the seam's way each
     for (mode, name) in [
