@@ -2,10 +2,9 @@
 
 ## What this is
 
-wubble is a Chromium-based browser with a Slint shell, GPL-3.0-only. Chromium
-renders web content off-screen; Slint composites it as GPU textures, so the whole
-UI is one scene. Roadmap, decisions and risks live in [TODO.md](TODO.md) — read
-its "Decided" table before proposing architecture.
+wubble is a Chromium-based browser with a Slint shell, GPL-3.0-only. Chromium renders web content
+off-screen; Slint composites it as GPU textures, so the whole UI is one scene. Roadmap and risks:
+[TODO.md](TODO.md). Decisions: [docs/decisions.md](docs/decisions.md), read before proposing architecture.
 
 ## Layout
 
@@ -20,168 +19,82 @@ its "Decided" table before proposing architecture.
 | `wubble-helper` | CEF subprocess entry point; stays tiny | cef, welding (for its shared CEF app) |
 | `wubble-sysmem` | OS readers: memory pressure, per-process memory and CPU | core, sysinfo (and the OS APIs) |
 
-`vendor/welding/` is our fork of the `welding` crate (MPL-2.0), outside the
-workspace members: keep its upstream style, mark each change `wubble change`
-and list it in `vendor/welding/WUBBLE_CHANGES.md`; test with `cargo test -p welding`.
-
-UX source of truth: the owner's design repo, cloned at
-`~/Dev/wubble-wt/ref/the-wallpaper-project/src/wubble` (see `ux/README.md`). Match it, and
-copy from its `slint/` port (tokens, physics, components, wgpu renderer) before writing UI
-code. `ux/pack/` is an older, superseded snapshot.
-The owner keeps adding widgets and behaviours to that repo: it is the bucket UI work is
-adopted from. `git pull` the clone before UI work, look there first, and write a widget
-from scratch only when the bucket has nothing for it (then say so in your report).
+`vendor/welding/` is our fork of `welding` (MPL-2.0), outside the workspace members: keep its
+upstream style, mark each change `wubble change`, list it in `vendor/welding/WUBBLE_CHANGES.md`;
+test with `cargo test -p welding`.
 
 ## Commands
 
     cargo check --workspace        # first run downloads prebuilt CEF and Skia (rust-skia binaries)
     cargo build --workspace        # builds wubble-helper too; needed before cargo run
-    cargo test -p wubble-core
-    cargo run -p wubble
+    cargo test --workspace
+    cargo run -p wubble -- example.com   # the browser on a page
     cargo run -p wubble -- --smoke boot   # CEF boots and shuts down, no window
-    cargo run -p wubble -- --smoke quit   # Inspect on a selection and DevTools windows (shown, counted), one more just before the quit; clean quit; exits; run by hand only
-    cargo run -p wubble -- --smoke frames=300   # window shows 300 zero-copy frames, exits; run by hand only
-    cargo run -p wubble -- --smoke nav   # window navigates between two bundled pages, exits; run by hand only
-    cargo run -p wubble -- --smoke tabs   # window opens, switches, sleeps, restores and closes tabs, exits; run by hand only
-    cargo run -p wubble -- --smoke windows   # a second window, a tab moved into it, both checked, closed; a Little window promoted; exits; run by hand only
-    cargo run -p wubble -- --smoke split   # window splits two bundled pages, checks each pane, unsplits, exits; run by hand only
-    cargo run -p wubble -- --smoke page   # window drives a select popup, an alert, a context menu, find and zoom, exits; run by hand only
-    cargo run -p wubble -- --smoke session   # two tabs saved, restarted and restored on a temp profile; two windows, exits; run by hand only
-    cargo run -p wubble -- --smoke start   # Ctrl+T's start page: its bubble's pixels, a poke, a pop, the capsule's command bar, a tile; `--shot-dir DIR` for one PNG a step; exits; run by hand only
-    cargo run -p wubble -- --smoke settings   # window opens wubble://settings, flips a setting through its toggle, reads the store back, exits; run by hand only
-    cargo run -p wubble -- --smoke autofill   # loopback sign-in page, fake keyring: fill from the key menu, submit, save prompt, vault row; exits; run by hand only
-    cargo run -p wubble-engine --example block_smoke   # windowless: the request-filter hook cancels a script and runs the commit script (a stand-in filter, not wubble-blocker), exits; run by hand only
-    cargo run -p wubble-engine --example gpu_crash_smoke   # windowless: kills the GPU process (chrome://gpucrash), frames must resume; run by hand only
-    cargo run -p wubble -- --shot-dir DIR --smoke gallery   # walks the shell through its surfaces on a seeded profile, one PNG each; run by hand only
-    cargo run -p wubble-engine --example cookie_smoke   # windowless, two processes on one temp profile: a container's tabs share cookies (persistent and session) and localStorage, other containers see none, they survive a restart, clearing and forgetting a site work; prints `smoke: cookies ok`; run by hand only
-    WUBBLE_CODEC_CLIPS=DIR cargo run -p wubble -- --smoke codecs   # windowless: which codecs and media sources play with the browser's blocker, observer and kit (`codecs=bare`: without them); clips from scripts/codec-clips.sh DIR (none: the bundled clip only); exits
-    cargo run -p wubble-engine --example local_probe   # windowless: localhost, 127.0.0.1, [::1] and the LAN address load with fetch, cookies, WebSocket and a service worker; exits
-    cargo run -p wubble -- --smoke pages   # opens history, bookmarks, downloads, passwords on a seeded profile, exits; run by hand only
-    cargo run -p wubble -- --smoke ax   # a11y.web on: the page's accessible items, a click and a field's value through them, exits; run by hand only
-    cargo run -p wubble-engine --example ax_smoke   # windowless: CEF's accessibility tree of a bundled page, mapped and printed (`-- --dump FILE` writes the JSON), exits; run by hand only
-    cargo run -p wubble -- --smoke media   # loopback page: detects a file, HLS (plain + AES-128) and a DRM stream, saves three, checks size and SHA-256, exits; run by hand only
-    cargo run -p wubble -- --smoke overlay   # green/red page: menu, command bar and peek glass frost the page, the gutter takes its light, no page blur while nothing is over it; `overlay=dark`, `--shot-dir DIR` for one PNG a step; exits; run by hand only
-    cargo run -p wubble -- --smoke builtins   # page dark mode, reader, link hints, screenshots, the PDF viewer on bundled pages, exits; run by hand only
-    cargo run -p wubble -- --smoke video   # loopback video page: controls, speed per site, SponsorBlock against a fake endpoint, a media key, PiP spike line, the Pip window opened, returned and closed; exits; run by hand only
-    cargo run -p wubble -- --smoke boost   # loopback pages: a Boost's CSS, tint and document-start script, a CSP page, turned off; exits; run by hand only
-    scripts/build-cef.sh WORK   # Linux x64: CEF 156.0.30 with proprietary codecs into WORK (~38 GB, ~2.5 h, no root); run by hand only
-    CEF_PATH=WORK/cef_path cargo build --workspace   # wubble on that CEF (H.264, AAC, HLS: `--smoke codecs` then asserts them); unset CEF_PATH for the prebuilt
-    cargo run -p wubble -- --measure load   # windowed, release: loopback pages cold and warm, in-page timings and first frame; `--load-variant`, `--runs`, `--load-page`, `--load-back`, `--serve-only`; `scripts/measure-load.sh` (a process per cold sample) and `scripts/measure-load-chromium.sh` compare plain Chromium; hand run only
-    cargo run -p wubble -- --measure memory --out mem.csv   # process tree memory with 0/1/10/50 tabs, frozen, discarded; window; run by hand only
-    scripts/mem-compare.sh chromium-browser 10   # another browser's PSS sum on the same page; opens its window; run by hand only
-    cargo run -p wubble -- example.com   # the browser on a page (the bundled one without a URL)
-    cargo run -p wubble -- --profile DIR   # the browser on another profile (database + CEF cache)
-    cargo run -p wubble -- --downloads DIR   # downloads go to DIR instead of the OS downloads folder
-    cargo run -p wubble -- --no-sandbox   # CEF without its sandbox, debugging only (warned at start)
+    cargo run -p wubble -- --shot-dir DIR --smoke gallery   # one PNG per shell surface; run by hand
 
-The gallery (`gallery_smoke.rs`, `host/gallery.rs`) writes `DIR/NN-name.png` per scene in the
-order of `gallery_smoke::SCENES`: sidebar extended/rail/hidden, a tab row and the new-tab row
-hovered, the command bar opening (a burst: `DIR/NN-name/fKKK.png` with `times.txt`), command bar
-(empty, with results), tab-row menu, site menu, downloads popover, find bar, permission prompt, autofill
-menu and save prompt, dialog sheet, dialog prompt, bookmark sheet, print sheet, toast, link status bubble, error and certificate error pages,
-Settings (four scroll positions; its list editors: rules with a row selected, a draft, Spaces,
-Sites), history, bookmarks, downloads, passwords (locked, unlocked), archive, task manager, start page, a history row hovered (its actions shown),
-the rail with its tab hovered (the close badge).
-Add a surface by adding a `Scene` row (data over existing host state, never `AppWindow`
-properties: the host rewrites those). Size and scale come from the environment:
-`WUBBLE_SHOT_SIZE=900x600` (logical; the design's 1360x880 by default) and
-`SLINT_SCALE_FACTOR=2` (the PNG is then physical, 2x). Surfaces that need a live page (split
-panes, DevTools docked, video strip, reader, boost editor, Little and Popup windows) are not
-scenes: use `--shot PNG` with their own smoke. Compare each PNG with its design counterpart
-(`browser/*.css`, `pages/*.css`, `notes/ref-settings.png`) before UI work is handed back.
-
-macOS runs CEF only from an app bundle (`ssh pixl-mac`, plain cargo there; rsync the
-worktree without `target/` and `.git`; clippy needs `rustup component add clippy` once):
-
-    cargo build --workspace && cargo run -p wubble-bundle   # writes target/debug/bundle/wubble.app
-    target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke boot   # any wubble args; `open` fails over ssh
-    cargo build --workspace --examples && cargo run -p wubble-bundle -- --exe target/debug/examples/frame_smoke
-    target/debug/bundle/wubble.app/Contents/MacOS/wubble   # windowless zero-copy and colour check; re-bundle without --exe after
-    cargo run -p wubble-engine --example frame_smoke   # the same check on Linux
-
-Window smokes need a GUI session: over ssh they hang creating the window, so always
-wrap them in `timeout`. Console smoke loop: log in at the Mac console as `pixlbot`
-(fast user switching; the toolchain and `~/wubble-main` are that user's), open Terminal,
-`cd ~/wubble-main && export PATH=/opt/homebrew/bin:$HOME/.cargo/bin:$PATH`, build the bundle
-(above), then:
-
-    for s in boot nav tabs session frames=120 split page settings pages autofill windows media video boost builtins quit block parity; do echo "== $s"; timeout 120 target/debug/bundle/wubble.app/Contents/MacOS/wubble --smoke $s > /tmp/wubble-$s.log 2>&1; echo "exit $?"; grep -E '^smoke|panicked|^wubble:' /tmp/wubble-$s.log; done; pgrep -fl MacOS/wubble
-
-Each section ends `exit 0` with its `smoke:` lines (`frames=120`: `smoke: pixels ok` and
-`smoke: glass ok`); `exit 124` is a hang killed by `timeout`; any other exit is a crash
-(full output in `/tmp/wubble-<smoke>.log`). A `panicked` line about handling an event
-while another is handled is the cue for a dispatch2 main-queue pump. `pgrep` prints nothing.
-`block_smoke` runs like `frame_smoke` (bundled with `--exe`, over plain ssh).
-
-Job runner: when the owner leaves `~/wubble-runner/run.sh` running in a Terminal at the console,
-a window smoke runs from ssh as a job: `printf "wubble-<dir>\n<timeout s>\n<args>\n" >
-~/wubble-runner/queue/<name>.job` runs `~/wubble-<dir>/target/debug/bundle/wubble.app/Contents/MacOS/wubble <args>`
-(only `wubble-*` dirs) and writes `/tmp/wubble-runner-out/<name>.log` and `.exit` (124 = timeout).
-It runs one job at a time for every lane; it cannot run the examples (they replace the bundle's binary).
-
-Window runs over ssh, when the owner has started `~/wubble-runner/run.sh` in their GUI session: `printf "wubble-<dir>\n<timeout s>\n<args>\n" > ~/wubble-runner/queue/<fresh name>.job` runs `~/wubble-<dir>/target/debug/bundle/wubble.app/Contents/MacOS/wubble <args>` there (no environment variables: use flags; write output files to `/tmp`).
-Poll for `/tmp/wubble-runner-out/<name>.exit` (124 = timeout), read `<name>.log`; keep runs under 30 s and few (windows open on the owner's screen), and `rm -rf target/debug/bundle` before re-bundling (an in-place rewrite of the binary gets it killed, exit 137).
+Every other smoke, measurement and example, and the gallery's scenes: [docs/smokes.md](docs/smokes.md).
+Window smokes need a GUI session; wrap them in `timeout`. macOS (app bundle, console loop, job runner):
+[docs/macos.md](docs/macos.md). Hand-run numbers: [docs/measurements.md](docs/measurements.md).
 
 ## Design fidelity
 
-The web version of the design (`~/Dev/wubble-wt/ref/the-wallpaper-project/src/wubble`:
-`browser/`, `core/`, `pages/`) is the truth for look, motion, effects and widget behaviour; its
-`slint/` port is a head start only where it is line-for-line with the web. wubble's repo is the
-truth for features and wording. Plan and lanes: `~/Dev/wubble-wt/notes/fidelity/kit-plan.md`;
-tools: `tools/fidelity/README.md`. Rules for every agent:
+The UX source is the owner's design repo `xuckless/the-wallpaper-project`, directory `src/wubble`,
+cloned beside this repo (see [ux/README.md](ux/README.md)). The owner keeps adding widgets there: `git pull` it
+before UI work, look there first, and write a widget from scratch only when it has nothing (say so in your report).
 
-- **Compose only kit components.** UI is drawn only by `crates/wubble-ui/ui/kit/**`. A shell
-  `.slint` file (everything else) lays out kit components and binds models: no fills, borders,
-  shadows, gradients, `Path`s, `animate`, font settings, raw `Text`, design token groups
-  (`Palette.`, `Glass.`, `Motion.`, ...) or literals. Need a look the kit lacks? Translate the
-  design's widget into a kit file; never draw it in the shell.
-- **Derive, never invent.** Every kit file starts with `// design: <file>:<lines> @<commit>`
-  (the web source it translates, statement for statement, shaders included) or `// derived:
-  <kit parts it composes>` for a wubble-only surface (rules in `notes/fidelity/wubble-only.md`).
-  A derived piece that needs a primitive the design does not have waits for the owner.
-- **Values are generated.** Colours, lengths, durations, easings, springs, keyframes and icon
-  paths come from `ui/kit/gen/*.slint` and `wubble_core::kit_gen`, written by
-  `node tools/fidelity/extract.mjs`; nobody edits them by hand. When the clone moves: pull it,
-  rerun the generator (`--check` says what is stale), commit the regenerated files.
-- **The lock.** `crates/wubble-ui/tests/kit_lock.rs` (in `cargo test`) enforces the rules above
-  against a baseline of today's violations (`kit_lock_baseline.txt`) that only shrinks: a new
-  violation fails; after clearing some, lower it with
-  `KIT_LOCK_WRITE=1 cargo test -p wubble-ui --test kit_lock`. Never raise it or delete it.
-- **Look.** There is no scoring tool: take `--shot` / `--shot-dir` PNGs of every surface you
-  touched (and of the plain window with nothing open) and compare each by eye with the web design
-  before handing work back; attach them to your report. The owner's eye is the final judge.
+Its web version (`browser/`, `core/`, `pages/`) is the truth for look, motion, effects and widget behaviour;
+its `slint/` port is a head start only where it is line-for-line with the web. wubble's repo is the truth for
+features and wording. `ux/pack/` is an older, superseded snapshot. Plan: [docs/fidelity/kit-plan.md](docs/fidelity/kit-plan.md);
+tools: [tools/fidelity/README.md](tools/fidelity/README.md).
+
+- **Compose only kit components.** UI is drawn only by `crates/wubble-ui/ui/kit/**`. A shell `.slint` file
+  lays out kit components and binds models: no fills, borders, shadows, gradients, `Path`s, `animate`, font
+  settings, raw `Text`, token groups (`Palette.`, `Glass.`, `Motion.`, ...) or literals.
+- **Derive, never invent.** Every kit file starts with `// design: <file>:<lines> @<commit>` (the web source
+  it translates, shaders included) or `// derived: <kit parts it composes>` (rules:
+  [docs/fidelity/wubble-only.md](docs/fidelity/wubble-only.md)). Derived pieces go on the owner's sheet,
+  [docs/fidelity/derived-review.md](docs/fidelity/derived-review.md); one needing a new primitive waits for the owner.
+- **Values are generated.** Colours, lengths, durations, easings, springs, keyframes and icon paths come from
+  `ui/kit/gen/*.slint` and `wubble_core::kit_gen`, written by `node tools/fidelity/extract.mjs`; never edit them
+  by hand. When the clone moves: pull, rerun (`--check` says what is stale), commit the result.
+- **The lock.** `crates/wubble-ui/tests/kit_lock.rs` enforces these rules against `kit_lock_baseline.txt`,
+  which only shrinks: lower it with `KIT_LOCK_WRITE=1 cargo test -p wubble-ui --test kit_lock`; never raise it.
+- **Look.** No scoring tool: shoot every surface you touched and the plain window (`--shot`, `--shot-dir`),
+  compare each by eye with the web design, attach them to your report. What Slint cannot do:
+  [docs/fidelity/deviations.md](docs/fidelity/deviations.md). The owner's eye is the final judge.
 
 ## Code principles
 
-1. **Declarative first.** UI is a function of state: Slint bindings over models, no imperative widget poking. Config, keybindings, policies and feature tables are data.
-2. **No implicit state machines.** Anything with a lifecycle is one `enum` of states plus one pure `fn transition(state, event) -> (state, effects)`. No behaviour may depend on combinations of scattered booleans or on callback ordering.
+1. **Declarative first.** UI is a function of state: Slint bindings over models. Config, keybindings, policies and feature tables are data.
+2. **No implicit state machines.** A lifecycle is one `enum` plus one pure `fn transition(state, event) -> (state, effects)`; no scattered booleans or callback ordering.
 3. **Effects at the edge.** Transitions return effects as values; only `wubble-engine` and `wubble-gfx` execute them. `wubble-core` stays pure and unit-tested.
 4. **One owner per state.** Each piece of state lives in one place; everything else derives from it.
-5. **No duplicated code.** Reuse or extend an existing function, type or Slint component before writing a new one. Per-platform code implements one shared trait. Two copies of the same constant, token or table count as duplication.
+5. **No duplicated code.** Reuse or extend before writing new. Per-platform code implements one shared trait. Two copies of a constant, token or table are duplication.
 
 ## Working rules
 
-- **Copy first.** Before writing anything non-trivial, look for an existing crate or a proven implementation in another browser/project (Chromium, CEF, Firefox, Zen, Brave, Servo, Zed) and use or port it. Licence must be GPL-3.0-compatible (MIT, BSD, Apache-2.0, MPL-2.0); nothing proprietary. Copied or ported code carries a source comment and an entry in `THIRD_PARTY_NOTICES.md`.
-- **No performance-dependent tests.** Nothing in `cargo test` or CI may assert timings, fps or throughput. Performance is measured by hand on the owner's Linux machine or the owner's macOS machine.
-- **Sprint mode.** Build breadth first to spec, each item reviewed for correctness and simplicity; a hardening pass over the whole product comes at the end of the build-out.
-- Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 156). Do not bump one alone.
-- No CPU readback on the frame path. A fallback `OnPaint` frame is a bug to count and log.
-- 120 Hz budget: 8.33 ms per frame. Glass quality degrades before animation drops a frame.
-- Platforms: Linux (lead) and macOS are built locally; Windows is CI-only.
-- New logic in `wubble-core` comes with unit tests. Run the commands above before handing work back.
-- Nothing phones home by default. Any new network request made by wubble itself needs a flag that is off by default.
-- Keep `TODO.md` current: tick items you finish, record new decisions in its "Decided" table.
-- Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths.
-- Commit only when asked; one logical change per commit.
+- **Copy first.** Look for a crate or a proven implementation (Chromium, CEF, Firefox, Zen, Brave, Servo, Zed) and port it. GPL-3.0-compatible licences only (MIT, BSD, Apache-2.0, MPL-2.0); each copy carries a source comment and a `THIRD_PARTY_NOTICES.md` entry.
+- **No performance-dependent tests.** Nothing in `cargo test` or CI asserts timings, fps or throughput; performance is measured by hand on the owner's machines.
+- **Sprint mode.** Breadth first to spec, each item reviewed for correctness and simplicity; hardening comes at the end of the build-out.
+- Version pins move together: `slint`, `wgpu`, `welding` and `cef` must agree (wgpu 30, CEF 156).
+- No CPU readback on the frame path; a fallback `OnPaint` frame is a bug to count and log. 120 Hz budget: 8.33 ms; glass degrades before animation drops a frame.
+- Platforms: Linux (lead) and macOS built locally; Windows CI-only.
+- New logic in `wubble-core` comes with unit tests. Run the checks above before handing work back.
+- Nothing phones home by default: any request wubble itself makes needs a flag that is off by default.
+- Keep [TODO.md](TODO.md) current (one line per item, done items with their commit); record decisions in [docs/decisions.md](docs/decisions.md), one line each.
+- Don't edit `ux/pack/`; don't commit `target/` or machine-specific paths. Commit only when asked; one logical change per commit.
 
-## Orchestrating a batch
+## Research
 
-`.claude/workflows/lane-batch.js` runs a batch of roadmap items in parallel lanes:
-(research) → implement → correctness review + simplicity review → refix, then merges
-the lanes into one integration branch and runs the full check round.
+- [docs/research/renderer-roads.md](docs/research/renderer-roads.md): femtovg fork, Slint's Skia renderer, or our own UI (Skia chosen).
+- [docs/research/cef-codec-build.md](docs/research/cef-codec-build.md): building CEF 156 with H.264, AAC and HLS, and pointing wubble at it.
+- [docs/research/build-runners.md](docs/research/build-runners.md): where automated CEF builds could run, their cost, codec patents.
+- [docs/research/apple-passwords.md](docs/research/apple-passwords.md): Apple Passwords and passkeys in a CEF browser on macOS.
+- [docs/research/translate.md](docs/research/translate.md): on-device page translation options.
+- [docs/research/ocr.md](docs/research/ocr.md): on-device OCR for live text in images.
+- [docs/research/motion-audit.md](docs/research/motion-audit.md): every design motion against wubble (pre-kit audit).
 
-- A lane is a git worktree under `~/Dev/wubble-wt/` on its own branch; items in a lane run in order, lanes run in parallel. Put items that touch the same files in the same lane.
-- The lead creates the integration branch and the lane worktrees, launches the workflow, then reviews the integration diff before merging to `main` and pushing.
-- Each stage uses the cheapest model that can do it: Sonnet medium by default, Opus medium for items marked `hard`, per-stage overrides (including Haiku) via the item's `models`.
-- Research runs for every item unless it sets `research: false`, and is copy-first: it looks for code to reuse before designing anything.
-- Lanes build through `~/Dev/wubble-wt/cargo.sh`: one build at a time (a lock), each worktree with its own target directory, so a lane never picks up another lane's crates.
+## Batches
+
+Roadmap items run as parallel lanes through `.claude/workflows/lane-batch.js`: how, and the rules learned,
+in [docs/orchestration.md](docs/orchestration.md).

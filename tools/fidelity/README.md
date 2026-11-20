@@ -2,8 +2,8 @@
 
 The web version of the design (`the-wallpaper-project`, `src/wubble/{browser,core,pages}`) is the
 truth for look, motion, effects and widget behaviour. These tools take values from it and measure
-wubble against it. Plan and scope: `~/Dev/wubble-wt/notes/fidelity/kit-plan.md`. The design clone
-is `$WUBBLE_DESIGN` or `~/Dev/wubble-wt/ref/the-wallpaper-project`; nothing here edits it. Node
+wubble against it. Plan and scope: [docs/fidelity/kit-plan.md](../../docs/fidelity/kit-plan.md). The design clone
+is `$WUBBLE_DESIGN` (else the default clone path in `lib/design.mjs`); nothing here edits it. Node
 22 and `/usr/bin/chromium-browser` are the only requirements (no npm packages of our own; the
 clone's own `npm install` provides vite).
 
@@ -12,7 +12,7 @@ clone's own `npm install` provides vite).
     node tools/fidelity/extract.mjs                write the generated kit files
     node tools/fidelity/extract.mjs --check        exit 1 if they are stale against the clone
     node tools/fidelity/extract.mjs --report F     where generated values differ from wubble's
-    node tools/fidelity/extract.mjs --coverage ~/Dev/wubble-wt/notes/fidelity/inventory.md
+    node tools/fidelity/extract.mjs --coverage INVENTORY.md   (the pre-phase design inventory, not kept in the repo)
 
 Writes `crates/wubble-ui/ui/kit/gen/tokens.slint` (palette, Spaces, radius, space, chrome, glass
 tiers, fonts, type roles, motion, the CSS ease-out table, keyframe tables), `gen/text.slint` (the
