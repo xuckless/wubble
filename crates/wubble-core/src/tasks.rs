@@ -42,6 +42,21 @@ pub struct TaskRow {
     /// How many tabs run in this row's renderer (1 = its own).
     pub shared_with: usize,
     pub never_sleep: bool,
+    /// The Space a tab row's tab is in, when there is more than one (tabs of the same title in
+    /// two Spaces are told apart, QA MED-06); `None` for a process row.
+    pub space: Option<String>,
+}
+
+impl TaskRow {
+    /// The row's second line: its Space, then why it stays awake.
+    pub fn note(&self) -> String {
+        let busy = self.busy.join(", ");
+        match &self.space {
+            Some(space) if busy.is_empty() => space.clone(),
+            Some(space) => format!("{space} \u{b7} {busy}"),
+            None => busy,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -97,6 +112,7 @@ pub fn rows(
                 busy: t.busy.labels(),
                 shared_with: pid.map_or(0, |p| sharing[&p]),
                 never_sleep: t.busy.contains(Reason::NeverSleep),
+                space: (model.spaces.len() > 1).then(|| space.name.clone()),
             });
         }
     }
@@ -110,6 +126,7 @@ pub fn rows(
             busy: vec![],
             shared_with: 0,
             never_sleep: false,
+            space: None,
         });
     }
     let counted: BTreeSet<u32> = rows.iter().filter_map(|r| r.pid).collect();
@@ -150,6 +167,42 @@ mod tests {
             rss_bytes: mb << 20,
             cpu_percent: cpu,
         }
+    }
+
+    /// With two Spaces each tab row names its Space (two tabs of one title stay apart), before
+    /// why it stays awake; with one Space nothing is added.
+    #[test]
+    fn tab_rows_name_their_space_when_there_are_several() {
+        let (m, ids) = model(1);
+        let none = rows(&m, &BTreeMap::new(), &[], &BTreeMap::new());
+        assert_eq!(none.rows[0].space, None);
+        let (m, _) = apply(
+            m,
+            Command::Busy {
+                tab: ids[0],
+                reason: Reason::NeverSleep,
+                on: true,
+            },
+        );
+        let command = m.new_space();
+        let (m, _) = apply(m, command);
+        let t = rows(
+            &m,
+            &BTreeMap::new(),
+            &[(9, "Browser".into())],
+            &BTreeMap::new(),
+        );
+        let first = m.spaces[0].name.clone();
+        assert_eq!(t.rows[0].space.as_deref(), Some(first.as_str()));
+        assert_eq!(
+            t.rows[0].note(),
+            format!("{first} \u{b7} {}", t.rows[0].busy.join(", "))
+        );
+        let browser = t.rows.iter().find(|r| r.title == "Browser").unwrap();
+        assert_eq!(
+            (browser.space.clone(), browser.note()),
+            (None, String::new())
+        );
     }
 
     #[test]

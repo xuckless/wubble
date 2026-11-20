@@ -25,7 +25,11 @@ export component TableCell inherits Rectangle {
     in property <string> text;
     in property <bool> dash-empty;
     property <bool> blank: root.dash-empty && root.text == "";
+    // the cell's whole width, so the figure sits at the column's right edge under its name
+    // (QA MED-06: it sat centred, crowding the next column)
     KitText {
+        width: parent.width;
+        height: parent.height;
         role: Role.st-path-wb-mono;
         text: root.blank ? "–" : root.text;
         color: root.blank ? Palette.haze : SettingsCss.st-path-wb-mono--color;

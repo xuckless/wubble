@@ -78,7 +78,7 @@ fn item(row: &TaskRow, own_pid: u32) -> TaskItem {
             .sample
             .map_or(String::new(), |s| format!("{:.1} %", s.cpu_percent))
             .into(),
-        busy: row.busy.join(", ").into(),
+        busy: row.note().into(),
         never_sleep: row.never_sleep,
         can_discard: idle && matches!(row.state, Some(Liveness::Background | Liveness::Frozen)),
         can_end: row.pid.is_some_and(|p| p != own_pid),
@@ -180,6 +180,7 @@ mod tests {
             busy: vec![],
             shared_with: 1,
             never_sleep: false,
+            space: None,
         }
     }
 
