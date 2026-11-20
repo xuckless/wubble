@@ -5,3 +5,4 @@
 .env
 /.cef-cache
 /target-run
+/qa-report
