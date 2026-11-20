@@ -211,8 +211,6 @@ pub enum Panel {
     Closed,
     List,
     Popup {
-        extension: ExtensionId,
-        url: String,
         /// Its page's size once known, between [`POPUP_MIN`] and [`POPUP_MAX`].
         size: Option<(u32, u32)>,
     },
@@ -254,19 +252,13 @@ pub fn panel_transition(state: Panel, event: PanelEvent) -> (Panel, Vec<PanelEff
             (Panel::Closed, effects)
         }
         (Panel::List, PanelEvent::Clicked(extension, Clicked::Popup(url))) => (
-            Panel::Popup {
-                extension: extension.clone(),
-                url: url.clone(),
-                size: None,
-            },
+            Panel::Popup { size: None },
             vec![PanelEffect::OpenPopup { extension, url }],
         ),
         // the click ran the extension's code: the list has done its work
         (Panel::List, PanelEvent::Clicked(_, Clicked::Ran)) => (Panel::Closed, vec![]),
-        (Panel::Popup { extension, url, .. }, PanelEvent::Sized(w, h)) => (
+        (Panel::Popup { .. }, PanelEvent::Sized(w, h)) => (
             Panel::Popup {
-                extension,
-                url,
                 size: Some(popup_size((w, h))),
             },
             vec![],
@@ -490,21 +482,12 @@ mod tests {
                 url: url.clone()
             }]
         );
-        assert_eq!(
-            p,
-            Panel::Popup {
-                extension: id(),
-                url: url.clone(),
-                size: None
-            }
-        );
+        assert_eq!(p, Panel::Popup { size: None });
         let (p, fx) = panel_transition(p, PanelEvent::Sized(5000, 10));
         assert!(fx.is_empty());
         assert_eq!(
             p,
             Panel::Popup {
-                extension: id(),
-                url,
                 size: Some((800, 25))
             }
         );

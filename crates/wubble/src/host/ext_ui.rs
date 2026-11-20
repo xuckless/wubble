@@ -22,6 +22,7 @@ use wubble_core::extensions::{Event, ExtensionId, Installed, restart_needed};
 use wubble_core::model::Command;
 use wubble_core::overlay::Kind;
 use wubble_core::space::ContainerId;
+use wubble_core::window::WindowId;
 use wubble_engine::app::ViewId;
 use wubble_engine::cdp::EvalId;
 use wubble_engine::ext_api::{ActionClick, ActionState};
@@ -37,13 +38,58 @@ use crate::{physical, slint_int, with_host};
 /// How often an open popup's page is asked for its size.
 const SIZE_POLL: Duration = Duration::from_millis(150);
 
-/// The popup page's size, CSS px: its body's far edges with the body's margins (Chromium lays
-/// the popup out as wide as it may and shrinks it to what the page uses; a body without a width
-/// of its own fills the width, so the popup is as wide as it may be).
-const SIZE_SCRIPT: &str = "(() => { const b = document.body; if (!b) return [0, 0]; \
-    const r = b.getBoundingClientRect(), s = getComputedStyle(b); \
-    return [Math.ceil(Math.max(r.right + parseFloat(s.marginRight), b.scrollWidth)), \
-    Math.ceil(Math.max(r.bottom + parseFloat(s.marginBottom), b.scrollHeight))]; })()";
+/// The popup page's content size, CSS px: the root element shrink-wrapped (`max-content`, so a
+/// body without a width of its own is as wide as its content, not the viewport; it also lets the
+/// page grow back past the width it was last given) with the body's own scroll extent.
+const SIZE_SCRIPT: &str = "(() => { const d = document.documentElement, b = document.body; \
+    if (!b) return [0, 0]; d.style.width = 'max-content'; const r = d.getBoundingClientRect(); \
+    return [Math.ceil(Math.max(r.width, b.scrollWidth)), \
+    Math.ceil(Math.max(r.height, b.scrollHeight))]; })()";
+
+/// Polls between a size question and the next one when no answer came (the page navigated or its
+/// renderer reloaded with the question in flight).
+const SIZE_ANSWER_TICKS: u8 = 3;
+
+/// The question in flight to the popup's page.
+#[derive(Default)]
+struct SizePoll {
+    eval: Option<EvalId>,
+    waited: u8,
+}
+
+impl SizePoll {
+    /// A poll tick: true when a new question is due (none in flight, or the last one got no
+    /// answer for [`SIZE_ANSWER_TICKS`]).
+    fn due(&mut self) -> bool {
+        if self.eval.is_none() {
+            return true;
+        }
+        self.waited += 1;
+        if self.waited < SIZE_ANSWER_TICKS {
+            return false;
+        }
+        *self = Self::default();
+        true
+    }
+
+    fn asked(&mut self, eval: Option<EvalId>) {
+        *self = Self { eval, waited: 0 };
+    }
+
+    /// `id` is the answer awaited.
+    fn answers(&mut self, id: EvalId) -> bool {
+        let yes = self.eval == Some(id);
+        if yes {
+            *self = Self::default();
+        }
+        yes
+    }
+}
+
+/// The window that owns a panel or prompt: the one it opened in, until it closes.
+fn claim(owner: Option<WindowId>, open: bool, window: WindowId) -> Option<WindowId> {
+    open.then(|| owner.unwrap_or(window))
+}
 
 /// What the extension shell holds.
 pub(super) struct ExtUi {
@@ -55,10 +101,13 @@ pub(super) struct ExtUi {
     root: PathBuf,
     panel: Panel,
     prompt: Prompt,
+    /// The windows the panel and the prompt belong to: the others show nothing of them.
+    panel_owner: Option<WindowId>,
+    prompt_owner: Option<WindowId>,
     /// The open popup's view.
     popup: Option<ViewId>,
     /// The question to the popup's page the next answer is for.
-    size_eval: Option<EvalId>,
+    size_poll: SizePoll,
     timer: slint::Timer,
     /// Bumped per prompt.
     prompt_serial: i32,
@@ -75,8 +124,10 @@ impl ExtUi {
             root: PathBuf::new(),
             panel: Panel::Closed,
             prompt: Prompt::Closed,
+            panel_owner: None,
+            prompt_owner: None,
             popup: None,
-            size_eval: None,
+            size_poll: SizePoll::default(),
             timer: slint::Timer::default(),
             prompt_serial: 0,
             gallery: None,
@@ -151,8 +202,11 @@ impl Host {
     fn extension_picked(&mut self, path: PathBuf) {
         match crate::extensions::read(&path, &self.ext_ui.root) {
             Ok(ext) => {
+                // its unpacked copy, if any, is the next start's sweep
                 if self.overlay_open(Kind::ExtensionSheet, None) {
                     self.prompt_event(PromptEvent::Ask(ext));
+                } else {
+                    self.extension_failed("close the open dialog first");
                 }
             }
             Err(e) => self.extension_failed(&e.to_string()),
@@ -180,6 +234,11 @@ impl Host {
             self.ext_ui.prompt_serial = self.ext_ui.prompt_serial.wrapping_add(1);
         }
         let (prompt, effects) = prompt_transition(std::mem::take(&mut self.ext_ui.prompt), event);
+        self.ext_ui.prompt_owner = claim(
+            self.ext_ui.prompt_owner,
+            prompt != Prompt::Closed,
+            self.w.id,
+        );
         self.ext_ui.prompt = prompt;
         for effect in effects {
             match effect {
@@ -273,6 +332,7 @@ impl Host {
 
     pub(super) fn panel_event(&mut self, event: PanelEvent) {
         let (panel, effects) = panel_transition(std::mem::take(&mut self.ext_ui.panel), event);
+        self.ext_ui.panel_owner = claim(self.ext_ui.panel_owner, panel != Panel::Closed, self.w.id);
         self.ext_ui.panel = panel;
         for effect in effects {
             match effect {
@@ -347,7 +407,7 @@ impl Host {
 
     fn close_popup(&mut self) {
         self.ext_ui.timer.stop();
-        self.ext_ui.size_eval = None;
+        self.ext_ui.size_poll = SizePoll::default();
         if let Some(id) = self.ext_ui.popup.take() {
             self.engine.close_view(id);
         }
@@ -378,19 +438,24 @@ impl Host {
 
     /// The popup's view when keys go to it: the last press was in it.
     pub(super) fn keys_to_popup(&self) -> Option<ViewId> {
-        (self.key_pane == Some(POPUP_TAB))
+        (self.key_pane == Some(POPUP_TAB) && self.panel_here())
             .then_some(self.ext_ui.popup)
             .flatten()
     }
 
     /// The install prompt is open (an overlay).
     pub(super) fn ext_ui_prompt_open(&self) -> bool {
-        self.ext_ui.prompt != Prompt::Closed
+        self.ext_ui.prompt != Prompt::Closed && self.ext_ui.prompt_owner == Some(self.w.id)
     }
 
     /// The footer popover or an action's popup is open (an overlay).
     pub(super) fn ext_ui_panel_open(&self) -> bool {
-        self.ext_ui.panel != Panel::Closed
+        self.ext_ui.panel != Panel::Closed && self.panel_here()
+    }
+
+    /// The panel is this window's.
+    fn panel_here(&self) -> bool {
+        self.ext_ui.panel_owner == Some(self.w.id)
     }
 
     /// `view` is the open popup's.
@@ -400,7 +465,7 @@ impl Host {
 
     /// The popup's pane is on screen (its frames are kept and its pointer is routed).
     pub(super) fn popup_open(&self) -> bool {
-        self.ext_ui.popup.is_some()
+        self.ext_ui.popup.is_some() && self.panel_here()
     }
 
     /// The popup's own view.
@@ -410,10 +475,11 @@ impl Host {
     }
 
     fn popup_ask_size(&mut self) {
-        if self.ext_ui.size_eval.is_some() {
+        if !self.ext_ui.size_poll.due() {
             return;
         }
-        self.ext_ui.size_eval = self.popup_view().and_then(|v| v.eval(SIZE_SCRIPT));
+        let eval = self.popup_view().and_then(|v| v.eval(SIZE_SCRIPT));
+        self.ext_ui.size_poll.asked(eval);
     }
 
     /// The popup's page events: its answer about its size; every request it makes is refused
@@ -421,11 +487,10 @@ impl Host {
     pub(super) fn on_popup_page_event(&mut self, event: wubble_engine::page::PageEvent) {
         use wubble_engine::page::PageEvent;
         if let PageEvent::EvalResult { id, result } = &event {
-            if self.ext_ui.size_eval == Some(*id) {
-                self.ext_ui.size_eval = None;
-                if let Some((w, h)) = result.as_deref().ok().and_then(parse_size) {
-                    self.panel_event(PanelEvent::Sized(w, h));
-                }
+            if self.ext_ui.size_poll.answers(*id)
+                && let Some((w, h)) = result.as_deref().ok().and_then(parse_size)
+            {
+                self.panel_event(PanelEvent::Sized(w, h));
             }
             return;
         }
@@ -528,15 +593,20 @@ impl Host {
             window.set_settings_extensions(m)
         });
         window.set_settings_extensions_restart(restart);
-        window.set_extensions_open(self.ext_ui.panel == Panel::List);
-        if self.ext_ui.panel == Panel::List {
+        let list_open = self.ext_ui.panel == Panel::List && self.panel_here();
+        window.set_extensions_open(list_open);
+        if list_open {
             let actions = self.extension_actions();
             crate::bind::sync(window.get_extension_actions(), actions, |m| {
                 window.set_extension_actions(m)
             });
         }
-        window.set_extension_prompt(match &self.ext_ui.prompt {
-            Prompt::Asking(ext) => {
+        let asking = match &self.ext_ui.prompt {
+            Prompt::Asking(ext) if self.ext_ui.prompt_owner == Some(self.w.id) => Some(ext),
+            _ => None,
+        };
+        window.set_extension_prompt(match asking {
+            Some(ext) => {
                 let (title, message) = prompt_text(ext);
                 ExtensionPrompt {
                     open: true,
@@ -546,7 +616,7 @@ impl Host {
                 }
             }
             // a sheet that closes keeps its words while it leaves
-            Prompt::Closed => ExtensionPrompt {
+            None => ExtensionPrompt {
                 open: false,
                 ..window.get_extension_prompt()
             },
@@ -574,7 +644,8 @@ impl Host {
 
     /// The popup's card: its page's last frame at the size it asked for.
     pub(super) fn render_popup(&self, window: &AppWindow) {
-        let view = match (self.ext_ui.popup_size(), self.w.frames.get(&POPUP_TAB)) {
+        let size = self.ext_ui.popup_size().filter(|_| self.panel_here());
+        let view = match (size, self.w.frames.get(&POPUP_TAB)) {
             (Some((w, h)), frame) => ExtensionPopup {
                 open: true,
                 id: crate::shell::pane_id(POPUP_TAB),
@@ -743,6 +814,30 @@ mod tests {
         assert_eq!(parse_size("[1]"), None);
         assert_eq!(parse_size("null"), None);
         assert_eq!(parse_size("[1e400,2]"), None);
+    }
+
+    #[test]
+    fn an_unanswered_size_question_is_asked_again_after_a_few_polls() {
+        let mut poll = SizePoll::default();
+        assert!(poll.due());
+        poll.asked(Some(EvalId(1)));
+        for _ in 1..SIZE_ANSWER_TICKS {
+            assert!(!poll.due());
+        }
+        assert!(poll.due());
+        // an answer frees the next question at once
+        poll.asked(Some(EvalId(1)));
+        assert!(poll.answers(EvalId(1)));
+        assert!(poll.due());
+    }
+
+    #[test]
+    fn a_panel_belongs_to_the_window_it_opened_in_until_it_closes() {
+        let (a, b) = (WindowId(1), WindowId(2));
+        assert_eq!(claim(None, true, a), Some(a));
+        assert_eq!(claim(Some(a), true, b), Some(a));
+        assert_eq!(claim(Some(a), false, b), None);
+        assert_eq!(claim(None, false, a), None);
     }
 
     #[test]

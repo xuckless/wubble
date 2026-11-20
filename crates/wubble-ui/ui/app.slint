@@ -33,7 +33,7 @@ import { PrintSheet } from "components/print-sheet.slint";
 import { SwipeChip } from "components/swipe-chip.slint";
 import { DownloadsPopover } from "components/downloads-popover.slint";
 import { ExtensionsPopover } from "components/extensions-popover.slint";
-import { ExtensionPopupCard } from "components/extension-popup.slint";
+import { APopupCard } from "kit/overlay/a/a-popup-card.slint";
 import { ExtensionSheet } from "components/extension-sheet.slint";
 import { SpacesMenu } from "kit/chrome/spaces-menu.slint";
 import { FindBar } from "components/find-bar.slint";
@@ -1608,7 +1608,8 @@ export component AppWindow inherits Window {
         }
     }
 
-    extension-popup-ui := ExtensionPopupCard {
+    extension-popup-ui := APopupCard {
+        key: GlassKeys.extensions;
         popup: root.extension-popup;
         cursor: root.cursors[root.web-cursor];
         anchor-x: sidebar.extensions-anchor.x;
