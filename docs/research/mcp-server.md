@@ -30,6 +30,41 @@ until it is typed: a script can read the field. A session that has secrets is th
 First guardrail candidates, in order: no evaluation on a page a secret was filled into; redaction of filled values
 from reads; an optional site allowlist that is enforced; then the airlocks of section 5.
 
+## 0.1 After the first tests (2026-11-20)
+
+The basic version of section 0 is built and on `main` (14 tools). Two agents then used it on real sites the same day:
+one of ours through a small stdio client (the owner's GitHub profile and repositories, a pull request of `anole` read
+and explained as an Excalidraw diagram made through Excalidraw's own Mermaid dialog, every tool and the refusal cases),
+and an independent agent on another model (DuckDuckGo, Wikipedia, Excalidraw by script). Both found the tools fast
+(a few hundredths of a second per call except navigation) and the refusals sound: non-http(s) addresses, bad session
+and tab handles (no hint whether a tab exists outside the session), a site outside the session's list, a stale ref,
+`fill_secret` with no secret bound. Not tested: a script or redirect getting past the http(s)-only rule.
+
+What they found, and the order to fix it in (owner, 2026-11-20; the open items are in TODO.md "MCP server"):
+
+1. **Bugs.** A `screenshot` cropped to a ref ignores the scroll position and does not scroll the element into view;
+   `click` fails on some visible links; `evaluate` takes one expression only and returns `{}` for a promise.
+2. **Waiting.** Nothing waits for "the page changed": `type` with `submit` returns before the navigation starts,
+   `wait_for` text matches a form field's own value, `wait_for load` returns at once on in-page navigation, and
+   `open_tab` returns before the load while `navigate` waits. Add a navigation / URL-change condition and a
+   "text gone" one, keep field values out of text matching, make the three calls wait alike.
+3. **Hand-off.** `list_tabs` does not say which tab is active and nothing brings a tab forward; closing the
+   connection closes the session's tabs, so an agent cannot leave its work for the user. Add the active flag,
+   `focus_tab`, and a way to end a session that keeps its tabs.
+4. **New tools, approved by the owner.**
+   - `request_more`: more sites or secrets mid-session. It raises the approval sheet listing only what is new, every
+     time; nothing is granted without the owner's press.
+   - `read_text`: a page's prose, so reading an article needs neither the whole accessibility tree nor a script.
+   - `scroll`, `hover`, `drag`: by element ref. Coordinates are accepted only inside a `<canvas>` the agent holds a
+     ref for, so an agent cannot press arbitrary positions of the window.
+5. **Polish.** Link targets, untruncated text and a truncation note in `read_page`; a `press_key` reply that says
+   when a chord did nothing; a stale ref as an error everywhere; `list_tabs`' description (it returns a URL).
+
+Found by the owner on the same run, fixed separately: the approval sheet's Window choice showed no selection and
+could not be changed, and its Secrets and Sites were not editable (they become the kit's multi-option control and
+list editor, and what the owner leaves in the lists is the grant); an agent tab the owner switched to showed a
+blurred page. Still open from section 0: binding a secret's name to a saved login on the sheet.
+
 ## 1. Summary and recommendation
 
 Build it, after the first release, as **sessions**. The user asks their harness for something; the agent calls
