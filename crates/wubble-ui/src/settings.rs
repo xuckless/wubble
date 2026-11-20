@@ -4,10 +4,10 @@
 use slint::{ModelRc, SharedString, VecModel};
 use wubble_core::keys::BindingRow;
 use wubble_core::omnibox::ENGINES;
-use wubble_core::pages::{Control, Entry, SectionView, SettingRow};
+use wubble_core::pages::{Control, Entry, PageLink, SectionView, SettingRow};
 use wubble_core::settings::{Section, SettingKind};
 
-use crate::{BindingItem, EntryItem, MenuEntry, SettingControl, SettingItem};
+use crate::{BindingItem, EntryItem, MenuEntry, PageLinkItem, SettingControl, SettingItem};
 
 fn strings<I: IntoIterator<Item = S>, S: Into<SharedString>>(items: I) -> ModelRc<SharedString> {
     ModelRc::from(std::rc::Rc::new(VecModel::from(
@@ -146,6 +146,20 @@ pub fn binding_items(rows: &[BindingRow]) -> Vec<BindingItem> {
                     .unwrap_or_else(Vec::new),
             ),
             changed: r.overridden,
+        })
+        .collect()
+}
+
+/// The built-in pages Settings links to (`wubble_core::pages::PAGE_LINKS`, or a search's
+/// matches) as the page's nav rows and redirect rows.
+pub fn page_link_items<'a>(links: impl IntoIterator<Item = &'a PageLink>) -> Vec<PageLinkItem> {
+    links
+        .into_iter()
+        .map(|l| PageLinkItem {
+            title: l.title().into(),
+            url: l.url().into(),
+            note: l.note.into(),
+            action: l.action.id().into(),
         })
         .collect()
 }

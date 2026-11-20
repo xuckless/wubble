@@ -339,6 +339,7 @@ impl Host {
             | Overlay::Long(Long::Pill | Long::Crowd)
             | Overlay::CommandBar(_)
             | Overlay::Downloads
+            | Overlay::SettingsSearch(_)
             | Overlay::Unlock
             | Overlay::Status(_) => {}
         }
@@ -381,6 +382,7 @@ impl Host {
                     }
                 }
                 Overlay::Unlock => window.invoke_passwords_unlock(),
+                Overlay::SettingsSearch(query) => window.invoke_settings_type_query(query.into()),
                 _ => {}
             }
         });

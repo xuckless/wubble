@@ -14,13 +14,13 @@ import { SplitView, SplitPane, SplitSeam } from "kit/chrome/split-view.slint";
 import { Palette as GenPalette } from "kit/gen/tokens.slint";
 import { BrowserCss as GenBrowserCss } from "kit/gen/css.slint";
 import { BrowserIcons as GenBrowserIcons } from "kit/gen/icons.slint";
-import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind } from "components/model.slint";
+import { TabItem, SpaceItem, WindowEdge, Origin, CommandResult, CommandKind, CommandBarState, CommandMode, CommandPlacement, FocusRegion, SidebarMode, GlassTier, SideEdges, BeamShape, LeavingRow, GlassItem, GlassLayer, GlassKeys, GlassOver, MenuEntry, MenuView, DialogView, FindView, PopupView, PermissionView, PreviewView, TipView, ErrorView, DownloadItem, DownloadAction, DownloadStatus, SettingItem, SettingControl, BindingItem, CaptureView, SpaceSetting, AboutView, EntryItem, FilterListItem, InternalPageKind, HistoryLineItem, BookmarkLineItem, FolderChoiceItem, BookmarkSheetView, PrintSheetView, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, VideoMark, VideoView, BoostView, AxItemView, AxKind, PageLinkItem } from "components/model.slint";
 // start page (L7): the new-tab page's front and its bridge to the host (host/start.rs)
 import { StartPage, StartBridge, StartSite } from "kit/pages/start.slint";
 export { StartBridge, StartSite }
 import { CommandBar } from "kit/chrome/command-bar.slint";
 import { GlanceCard } from "components/glance-card.slint";
-import { GlanceView } from "components/model.slint";
+import { GlanceView, PageLinkItem } from "components/model.slint";
 import { ContextMenu } from "components/context-menu.slint";
 import { DialogSheet } from "components/dialog-sheet.slint";
 import { PermissionPrompt } from "components/permission-prompt.slint";
@@ -469,6 +469,8 @@ export component AppWindow inherits Window {
     in property <[FilterListItem]> settings-filter-lists <=> settings-ui.filter-lists;
     in property <bool> settings-filter-busy <=> settings-ui.filter-busy;
     in property <AboutView> settings-about <=> settings-ui.about;
+    in property <[PageLinkItem]> settings-pages <=> settings-ui.pages;
+    in property <[PageLinkItem]> settings-page-matches <=> settings-ui.page-matches;
     // The history page: the lines (day headers and visits), the search state, "Show more".
     in property <[HistoryLineItem]> history-lines;
     in property <bool> history-searching;
@@ -593,6 +595,11 @@ export component AppWindow inherits Window {
     callback boost-act(string);
     in property <PopupView> popup;
     in property <image> popup-frame;
+
+    // `q` typed into the settings page's search (the gallery)
+    public function settings-type-query(q: string) {
+        settings-ui.type-query(q);
+    }
 
     // Puts `text` on the clipboard through Slint's own (no clipboard crate): a hidden field
     // selects it and copies.
@@ -904,6 +911,10 @@ export component AppWindow inherits Window {
             settings-ui := SettingsPage {
                 open: root.settings-open;
                 accent: root.space-accent;
+                // a built-in page's link: the page's own action
+                page-requested(id) => {
+                    root.shell-action(id);
+                }
             }
             // start page (L7): the new-tab page's front over the scene's living layer
             if root.page == InternalPageKind.start: StartPage {

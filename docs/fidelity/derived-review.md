@@ -310,3 +310,18 @@ Shots: (screenshots kept outside the repo) (settings-lists, settings-spaces, set
 | Piece | derived | rule it follows | shot |
 |---|---|---|---|
 | Menu width (`controls/menu.slint` Menu `fit-width`, PointMenu) | a menu at a point (tab row, site, page, sidebar) is the design's 236 unless a row needs more; then it grows to its widest row whole, up to `Shell.menu-max` (the prompt surface's 320, `.ur-o-surface`), past which a row is cut on one line with an ellipsis; a host inside a label is cut in its middle past 20 characters (`menu::menu_host`); the Select and the touch menu button keep their fixed widths | `.tp-menu` width, `.tp-mrow` one line, `.ur-o-surface` | gallery NN-long-menu-rows, NN-site-popover-long-host; tests/layout_shot.rs menu-* |
+
+## Settings links and the sidebar footer (ui8/nav)
+
+Owner, 2026-11-19: "Remove dev tools from the navbar (it stays on the right click) we would add
+the extensions button over there. Replace the + near the Home icon with a ^ and that opens up
+popup with all the saved spaces and 'sessions (mcp plan)' and a sticky new session inside that
+popup"; the footer shows only the current Space's icon and the "^"; the pages (history,
+archive, ...) get "Links in the settings nav ... and when searched, shows a redirect link". The
+design has no Spaces menu and no page links in its settings nav.
+
+| Piece | derived | rule it follows | shot |
+|---|---|---|---|
+| Settings nav pages group (`kit/settings/nav.slint` NavGroup, NavRow `leads`) | under the sections a second group: its heading the settings group label (`.st-group`: 13 / 500 mist, 22 above, 8 below, 8 in), "Pages"; one row per built-in page (History, Bookmarks, Downloads, Passwords, Archive, Task manager; `wubble_core::pages::PAGE_LINKS`) in the section rows' look with the page's own icon (kit `Glyph.page`) and the menu's "leads on" chevron at its end (`.tp-mrow-sub`: 14 px haze); never current, never disabled by a search; a click runs the page's own action (as its shortcut and the command bar) | `.st-group`, `.st-nav-btn`, `.tp-mrow-sub` | 42-settings.png |
+| Settings search redirect rows (`kit/settings/section.slint` PageLinkRow) | a search that names a page (its title or keywords) shows, above the settings it leaves, a "Pages" section head and a card of tap rows (`.st-row.tap`): the page's icon on the `.st-lead` tile in the Space accent, its title and one-line note (`.st-row-text`), the "leads on" chevron at the end; a click opens the page; the count line reads "N settings, M pages" ("M pages" alone, "No matches" only when neither) | `.st-sec-head`, `.st-card`, `.st-row.tap`, `.st-lead`, `.tp-mrow-sub`, `.st-count` | 50-settings-search-pages.png |
+

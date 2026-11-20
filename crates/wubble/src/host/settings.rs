@@ -451,6 +451,17 @@ fn render_page(window: &AppWindow, host: &Host) {
 
     let needle = page.query.trim().to_lowercase();
     window.set_settings_searching(!needle.is_empty());
+    // the built-in pages: all of them in the nav, those the query names as redirect rows
+    crate::bind::sync(
+        window.get_settings_pages(),
+        wubble_ui::settings::page_link_items(&pages::PAGE_LINKS),
+        |m| window.set_settings_pages(m),
+    );
+    crate::bind::sync(
+        window.get_settings_page_matches(),
+        wubble_ui::settings::page_link_items(pages::page_links_matching(&page.query)),
+        |m| window.set_settings_page_matches(m),
+    );
     let overrides = page.overrides();
     let bindings: Vec<_> = keys::binding_rows(Platform::current(), &overrides)
         .into_iter()

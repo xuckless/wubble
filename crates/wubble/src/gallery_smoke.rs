@@ -92,6 +92,8 @@ pub enum Overlay {
     /// Settings' lists filled: routing rules, sites never put to sleep, zoom levels, remembered
     /// permissions (the list editors with rows).
     Lists,
+    /// Settings' search with this typed into it.
+    SettingsSearch(&'static str),
     /// The first web tab shown again at a long address, with the blocker's count and the
     /// reader in the pill (wubble's layout cases: QA HIGH-01, CRIT-05, HIGH-03, MED-05).
     Long(Long),
@@ -264,6 +266,11 @@ pub const SCENES: &[Scene] = &[
     Scene {
         click: Some(NAV_SITES),
         ..on_lists("settings-sites")
+    },
+    // a search that names built-in pages: their redirect rows over the settings it leaves
+    Scene {
+        overlay: Overlay::SettingsSearch("tabs"),
+        ..on("settings-search-pages", InternalPage::Settings)
     },
     on("history", InternalPage::History),
     on("bookmarks", InternalPage::Bookmarks),

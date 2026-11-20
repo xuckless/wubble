@@ -47,6 +47,15 @@ export struct SpaceItem {
     icon: string,
 }
 
+// A built-in page Settings links to (wubble_core::pages::PAGE_LINKS): its title, address (which
+// names its icon, kit `Glyph.page`), one-line note and the id of the action that opens it.
+export struct PageLinkItem {
+    title: string,
+    url: string,
+    note: string,
+    action: string,
+}
+
 export enum CommandKind {
     open-tab,
     history,
