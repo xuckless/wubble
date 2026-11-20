@@ -12,8 +12,15 @@ pub use crate::measure::Scenario;
 const DEFAULT_SECONDS: NonZeroU32 = NonZeroU32::new(10).unwrap();
 
 #[derive(Parser, Debug)]
-#[command(name = "wubble", about = "The wubble browser.", version)]
+#[command(
+    name = "wubble",
+    about = "The wubble browser.",
+    version,
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
+    #[command(subcommand)]
+    sub: Option<Sub>,
     /// Page to open (`example.com` means `https://example.com`); the bundled
     /// page if none.
     #[arg(value_name = "URL", conflicts_with_all = ["smoke", "measure"])]
@@ -102,6 +109,17 @@ struct Cli {
     no_sandbox: bool,
 }
 
+#[derive(clap::Subcommand, Debug)]
+enum Sub {
+    /// Speak MCP on stdio for an agent harness, relayed to the running browser's private socket
+    /// (agent sessions, off by default: `agent.mcp_enabled`). Starts no browser.
+    Mcp {
+        /// The browser's profile directory, if it was started with one.
+        #[arg(long, value_name = "DIR")]
+        profile: Option<PathBuf>,
+    },
+}
+
 /// The `--smoke` value alone; `--url` is joined in by `Command::try_from`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SmokeArg {
@@ -130,6 +148,7 @@ enum SmokeArg {
         wired: bool,
     },
     Ax,
+    Mcp,
     /// `overlay` or `overlay=dark`.
     Overlay {
         dark: bool,
@@ -168,6 +187,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         None if value == "ax" => Ok(SmokeArg::Ax),
         None if value == "extensions" => Ok(SmokeArg::Extensions { installed: true }),
         None if value == "extensions-none" => Ok(SmokeArg::Extensions { installed: false }),
+        None if value == "mcp" => Ok(SmokeArg::Mcp),
         None if value == "start" => Ok(SmokeArg::Start),
         None if value == "overlay" => Ok(SmokeArg::Overlay { dark: false }),
         Some(("overlay", "dark")) => Ok(SmokeArg::Overlay { dark: true }),
@@ -180,7 +200,7 @@ fn parse_smoke(value: &str) -> Result<SmokeArg, String> {
         _ => Err(
             "expected `boot`, `update`, `quit`, `frames=N`, `nav`, `tabs`, `split`, `page`, `parity`, `block`, \
              `settings`, `pages`, `gallery`, `session`, `autofill`, `windows`, `media`, `builtins`, `video`, \
-             `boost`, `codecs`, `codecs=bare`, `ax`, `overlay`, `overlay=dark`, `start`, `extensions`, \
+             `boost`, `codecs`, `codecs=bare`, `ax`, `mcp`, `overlay`, `overlay=dark`, `start`, `extensions`, \
              `extensions-none` or `session-phase=1|2`"
                 .into(),
         ),
@@ -244,6 +264,9 @@ pub enum Smoke {
     /// Pages for screen readers: `a11y.web` on, the bundled page's accessible items, a click
     /// and a field's value through them.
     Ax,
+    /// Agent sessions over MCP: a client on the browser's socket starts a headless session
+    /// and drives the bundled loopback page through the tools (`mcp_smoke.rs`).
+    Mcp,
     /// Overlay glass over the bundled green and red page (`dark`: the dark one) frosts the
     /// page; the window's glass picks up its light (`overlay_smoke.rs`). `dir`: `--shot-dir`,
     /// one PNG per step.
@@ -282,6 +305,10 @@ pub enum Command {
     Smoke(Smoke),
     /// `--measure`: a hand-run frame-path measurement.
     Measure(Measure),
+    /// `wubble mcp`: the stdio relay to the browser's MCP socket on this profile.
+    Mcp {
+        profile: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -324,6 +351,9 @@ impl TryFrom<Cli> for Command {
 
     fn try_from(cli: Cli) -> Result<Self, Self::Error> {
         let conflict = |msg| Err(Cli::command().error(ErrorKind::ArgumentConflict, msg));
+        if let Some(Sub::Mcp { profile }) = cli.sub {
+            return Ok(Command::Mcp { profile });
+        }
         if let Some(scenario) = cli.measure {
             // clap rejects a URL, `--smoke` and `--profile` next to it.
             if scenario != Scenario::Load
@@ -405,6 +435,7 @@ impl TryFrom<Cli> for Command {
             (Some(SmokeArg::Boost), None, None) => Smoke::Boost,
             (Some(SmokeArg::Codecs { wired }), None, None) => Smoke::Codecs { wired },
             (Some(SmokeArg::Ax), None, None) => Smoke::Ax,
+            (Some(SmokeArg::Mcp), None, None) => Smoke::Mcp,
             (Some(SmokeArg::Overlay { dark }), None, None) => Smoke::Overlay {
                 dark,
                 dir: cli.shot_dir,
@@ -635,6 +666,25 @@ mod tests {
     }
 
     #[test]
+    fn mcp_is_the_relay_and_takes_a_profile() {
+        assert_eq!(
+            parse(["wubble", "mcp"]).ok(),
+            Some(Command::Mcp { profile: None })
+        );
+        assert_eq!(
+            parse(["wubble", "mcp", "--profile", "/tmp/p"]).ok(),
+            Some(Command::Mcp {
+                profile: Some(PathBuf::from("/tmp/p"))
+            })
+        );
+        assert!(parse(["wubble", "mcp", "--smoke", "boot"]).is_err());
+        assert_eq!(
+            parse(["wubble", "example.com/p"]).ok(),
+            run(Some("https://example.com/p"))
+        );
+    }
+
+    #[test]
     fn smoke_builtins() {
         assert_eq!(
             parse(["wubble", "--smoke", "builtins"]).ok(),
@@ -657,6 +707,10 @@ mod tests {
         assert_eq!(
             parse(["wubble", "--smoke", "ax"]).ok(),
             Some(Command::Smoke(Smoke::Ax))
+        );
+        assert_eq!(
+            parse(["wubble", "--smoke", "mcp"]).ok(),
+            Some(Command::Smoke(Smoke::Mcp))
         );
         assert_eq!(
             parse(["wubble", "--smoke", "overlay"]).ok(),

@@ -48,6 +48,8 @@ pub enum Kind {
     PrintSheet,
     /// The extension install prompt: what an extension asks for, Allow or Cancel.
     ExtensionSheet,
+    /// An agent session's approval sheet (`agent`): the window's, modal, one at a time.
+    AgentSheet,
     /// The screenshot region picker.
     Region,
     /// Keyboard link hints.
@@ -77,6 +79,7 @@ impl Kind {
     pub fn scope(self) -> Scope {
         match self {
             Kind::ExtensionSheet
+            | Kind::AgentSheet
             | Kind::CommandBar
             | Kind::Downloads
             | Kind::Extensions
@@ -95,8 +98,18 @@ impl Kind {
     fn modal(self) -> bool {
         matches!(
             self,
-            Kind::Dialog | Kind::BookmarkSheet | Kind::PrintSheet | Kind::ExtensionSheet
+            Kind::Dialog
+                | Kind::BookmarkSheet
+                | Kind::PrintSheet
+                | Kind::ExtensionSheet
+                | Kind::AgentSheet
         )
+    }
+
+    /// Answers to someone outside the window (the page's engine, an agent's client): no other
+    /// overlay closes it, and while one shows the user's overlays are refused.
+    fn holds(self) -> bool {
+        matches!(self, Kind::Dialog | Kind::AgentSheet)
     }
 
     fn takes_escape(self) -> bool {
@@ -237,7 +250,9 @@ fn open(stack: Stack, layer: Layer) -> (Stack, Vec<Effect>) {
     let refused = match layer.kind {
         Kind::Notice | Kind::Dialog => false,
         Kind::Find => visible.iter().any(|l| l.kind.modal()),
-        _ => visible.iter().any(|l| l.kind == Kind::Dialog),
+        // an agent's sheet never replaces the user's sheet, which it waits for
+        Kind::AgentSheet => visible.iter().any(|l| l.kind.holds() || l.kind.modal()),
+        _ => visible.iter().any(|l| l.kind.holds()),
     };
     if refused {
         return (stack, vec![]);
@@ -254,10 +269,10 @@ fn open(stack: Stack, layer: Layer) -> (Stack, Vec<Effect>) {
             .into_iter()
             .filter(|l| l.kind.exclusive() && !l.kind.modal())
             .collect(),
-        // the page's dialog never closes another page's dialog
+        // a held overlay (a page's dialog, an agent's sheet) is never closed by another
         _ => visible
             .into_iter()
-            .filter(|l| l.kind.exclusive() && l.kind != Kind::Dialog)
+            .filter(|l| l.kind.exclusive() && !l.kind.holds())
             .collect(),
     };
     let (mut next, effects) = close(stack, gone, vec![]);
@@ -495,6 +510,68 @@ mod tests {
             let (layers, fx) = step(&[on(kind, A)], Event::Open(on(Find, A)));
             assert_eq!(layers, [on(kind, A)]);
             assert!(fx.is_empty());
+        }
+    }
+
+    #[test]
+    fn an_agent_sheet_is_a_window_modal_that_nothing_replaces() {
+        let sheet = win(AgentSheet);
+        assert_eq!(Layer::new(AgentSheet, Some(A)).tab, None);
+        // it replaces a menu or the command bar
+        for kind in [Menu, CommandBar, Downloads] {
+            let (layers, fx) = step(&[win(kind)], Event::Open(sheet));
+            assert_eq!(layers, [sheet]);
+            assert_eq!(fx, [Effect::Close(win(kind)), Effect::Open(sheet)]);
+        }
+        // it waits for the user's sheet and for a page's dialog
+        for other in [on(BookmarkSheet, A), on(PrintSheet, A), on(Dialog, A)] {
+            let (layers, fx) = step(&[other], Event::Open(sheet));
+            assert_eq!(layers, [other]);
+            assert!(fx.is_empty());
+        }
+        // while it shows the user's overlays are refused, and a page's dialog does not close it
+        for kind in [Menu, CommandBar, Downloads, Spaces] {
+            let (layers, fx) = step(&[sheet], Event::Open(win(kind)));
+            assert_eq!(layers, [sheet]);
+            assert!(fx.is_empty(), "{kind:?}");
+        }
+        let (layers, fx) = step(&[sheet], Event::Open(on(Find, A)));
+        assert_eq!(layers, [sheet]);
+        assert!(fx.is_empty());
+        let (layers, fx) = step(&[sheet], Event::Open(on(Dialog, A)));
+        assert_eq!(layers, [sheet, on(Dialog, A)]);
+        assert_eq!(fx, [Effect::Open(on(Dialog, A))]);
+        // Escape closes it first (the topmost); a tab switch or navigation leaves it
+        let (layers, fx) = step(&[sheet, on(Dialog, A)], Event::Escape);
+        assert_eq!(layers, [on(Dialog, A)]);
+        assert_eq!(fx, [Effect::Close(sheet)]);
+        let (layers, fx) = step(&[sheet], Event::Switched(Some(B)));
+        assert_eq!(layers, [sheet]);
+        assert!(fx.is_empty());
+        let (layers, fx) = step(&[sheet], Event::Navigated(A));
+        assert_eq!(layers, [sheet]);
+        assert!(fx.is_empty());
+    }
+
+    #[test]
+    fn the_install_prompt_and_an_agent_sheet_show_one_at_a_time() {
+        let agent = win(AgentSheet);
+        let prompt = win(ExtensionSheet);
+        // an agent's sheet waits for the install prompt
+        let (layers, fx) = step(&[prompt], Event::Open(agent));
+        assert_eq!(layers, [prompt]);
+        assert!(fx.is_empty());
+        // while an agent's sheet shows, the install prompt and the popover are refused
+        for kind in [ExtensionSheet, Extensions] {
+            let (layers, fx) = step(&[agent], Event::Open(win(kind)));
+            assert_eq!(layers, [agent], "{kind:?}");
+            assert!(fx.is_empty(), "{kind:?}");
+        }
+        // Escape closes each
+        for sheet in [prompt, agent] {
+            let (layers, fx) = step(&[sheet], Event::Escape);
+            assert!(layers.is_empty());
+            assert_eq!(fx, [Effect::Close(sheet)]);
         }
     }
 

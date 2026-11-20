@@ -42,6 +42,7 @@ pub(super) fn kind_of(page: Option<InternalPage>) -> InternalPageKind {
         Some(InternalPage::Passwords) => InternalPageKind::Passwords,
         Some(InternalPage::Archive) => InternalPageKind::Archive,
         Some(InternalPage::Tasks) => InternalPageKind::Tasks,
+        Some(InternalPage::AgentLog) => InternalPageKind::AgentLog,
         Some(InternalPage::Start) => InternalPageKind::Start,
     }
 }
@@ -375,6 +376,7 @@ impl Host {
                 Some(InternalPage::History) => self.feed_fetch(Feed::History, false, HISTORY_PAGE),
                 Some(InternalPage::Archive) => self.feed_fetch(Feed::Archive, false, HISTORY_PAGE),
                 Some(InternalPage::Bookmarks) => self.bookmarks_request(None),
+                Some(InternalPage::AgentLog) => self.agent_log_shown(),
                 _ => {}
             }
         }

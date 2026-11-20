@@ -245,6 +245,10 @@ settings! {
     VideoHardwareDecode: bool = defs::VIDEO_HARDWARE_DECODE;
     /// A CEF start switch: read before the engine starts.
     DevtoolsRemotePort: u32 = defs::DEVTOOLS_REMOTE_PORT;
+    /// Read before the MCP socket would open: off, nothing listens. The host reads it once it
+    /// listens (`agent`); until then only the settings page and the tests touch the row.
+    #[expect(dead_code, reason = "the MCP host is a later item")]
+    AgentMcpEnabled: bool = defs::AGENT_MCP_ENABLED;
     PasswordsOfferToSave: bool = defs::PASSWORDS_OFFER_TO_SAVE;
     PasswordsAutofill: bool = defs::PASSWORDS_AUTOFILL;
     MediaEnabled: bool = defs::MEDIA_ENABLED;

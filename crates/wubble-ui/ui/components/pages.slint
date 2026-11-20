@@ -5,7 +5,7 @@
 // intent through a callback; the host acts and redraws. Compose only: the kit draws.
 
 import { Shell } from "../kit/derived.slint";
-import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction } from "model.slint";
+import { HistoryLineItem, BookmarkLineItem, DownloadItem, DownloadAction, LoginItem, PasswordsView, VaultState, TaskItem, TaskAction, AgentLogItem } from "model.slint";
 import { Glyph } from "../kit/controls/icon.slint";
 import { Button, PressableButton, ButtonKind } from "../kit/controls/button.slint";
 import { Toggle, ToggleSize } from "../kit/controls/toggle.slint";
@@ -544,6 +544,33 @@ export component TasksPage inherits PageFrame {
                     }
                 }
             }
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────── agent activity
+
+// wubble://agent: what agent sessions did (`wubble_core::agent::log`), newest first, one row a
+// call: the tool and the page it touched over the session, its age and how it ended. Read only.
+// wubble-only (derived-review.md, Agent sessions): the list page's own parts.
+export component AgentLogPage inherits PageFrame {
+    in property <[AgentLogItem]> items;
+
+    title: "Agent activity";
+    searchable: false;
+    column: Shell.settings-max;
+
+    if root.items.length == 0: ListEmpty {
+        text: "No agent has used wubble yet. Sessions appear here once you turn agents on in Settings and approve one.";
+    }
+    if root.items.length > 0: ListCard {
+        for item[i] in root.items: ListRow {
+            title: item.title;
+            note: item.note;
+            icon-path: item.failed ? Glyph.close : Glyph.check;
+            tappable: false;
+            shown: root.open;
+            index: i;
         }
     }
 }

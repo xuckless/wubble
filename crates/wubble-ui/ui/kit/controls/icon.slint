@@ -78,6 +78,8 @@ export global Glyph {
         // the design's stacked trays (settings.tsx `spaces`): History keeps the clock (owner)
         if url == "wubble://archive" { return self.stack; }
         if url == "wubble://tasks" { return self.gauge; }
+        // wubble-only (derived-review.md, Agent sessions): the generated set has no agent glyph
+        if url == "wubble://agent" { return self.zap; }
         return self.globe;
     }
 

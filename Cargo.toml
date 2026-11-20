@@ -19,6 +19,7 @@ wubble-blocker = { path = "crates/wubble-blocker" }
 wubble-core = { path = "crates/wubble-core" }
 wubble-engine = { path = "crates/wubble-engine" }
 wubble-gfx = { path = "crates/wubble-gfx" }
+wubble-mcp = { path = "crates/wubble-mcp" }
 wubble-release = { path = "crates/wubble-release" }
 wubble-store = { path = "crates/wubble-store" }
 wubble-sysmem = { path = "crates/wubble-sysmem" }

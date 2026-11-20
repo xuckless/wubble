@@ -874,6 +874,8 @@ mod tests {
             Action::OpenPasswords,
             Action::MoveTabToNewWindow,
             Action::OpenArchive,
+            Action::OpenAgentLog,
+            Action::StopAgents,
             Action::TidyTabs,
             Action::UndoTidyTabs,
             Action::CloseDuplicateTabs,

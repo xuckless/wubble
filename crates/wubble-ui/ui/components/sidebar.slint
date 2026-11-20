@@ -387,6 +387,10 @@ export component Sidebar inherits Rectangle {
                     SpaceName {
                         text: root.spaces[root.space-index].name;
                         enter: root.space-enter;
+                        agent: root.spaces[root.space-index].agent;
+                        agent-stop => {
+                            root.action("stop-agents");
+                        }
                     }
                 }
 
@@ -536,6 +540,9 @@ export component Sidebar inherits Rectangle {
                                             }
                                             mute => {
                                                 root.tab-mute-toggled(tab.id);
+                                            }
+                                            agent-stop => {
+                                                root.action("stop-agents");
                                             }
                                             context(x, y) => {
                                                 root.tab-context(tab.id, x, y);
