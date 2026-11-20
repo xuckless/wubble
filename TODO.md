@@ -154,7 +154,7 @@ Open, to build or check:
 
 ## M7: Ship
 - [~] Auto-updater: signed manifest on GitHub Releases, check on open, apply on next launch (branch `rel/updater`)
-- [~] Video strip download button (branch `qa2/viddl`)
+- [x] Video strip save button: enters the media downloader, absent on DRM, progress and saved states (4b4c9f1)
 - [ ] First preview release: Linux tarball + `install.sh`; macOS DMG signed on the owner's Mac; release workflow
 - [ ] MCP server (after the release): [docs/research/mcp-server.md](docs/research/mcp-server.md)
 - [x] Import readers (f83b314) and store-side apply (e6f826a)
