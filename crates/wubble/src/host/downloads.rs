@@ -120,7 +120,7 @@ impl Downloads {
         self.inflight.values().any(|f| f.tab == tab)
     }
 
-    fn get(&self, id: i64) -> Option<&DownloadEntry> {
+    pub(super) fn get(&self, id: i64) -> Option<&DownloadEntry> {
         self.list.iter().find(|e| e.id == id)
     }
 
@@ -433,6 +433,7 @@ impl Host {
             return;
         };
         let progress = matches!(event, DownloadEvent::Progress { .. });
+        let save = self.video_save_now();
         let entry = self.downloads.list[at].clone();
         let (entry, effects) = entry.apply(event);
         self.downloads.list[at] = entry.clone();
@@ -458,6 +459,8 @@ impl Host {
             if let Some(window) = self.w.window.upgrade() {
                 self.render_downloads(&window);
             }
+            // the video strip's save button shows the download too
+            self.video_save_redraw(save);
             return;
         }
         for effect in effects {

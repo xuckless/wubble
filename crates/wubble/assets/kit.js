@@ -118,6 +118,8 @@
         paused: v.paused, rate: v.playbackRate, loop: v.loop, muted: v.muted,
         // Which document answered: unique per document, larger for a later one.
         doc: performance.timeOrigin,
+        // EME MediaKeys attached: protected media, which the downloader never touches.
+        drm: !!v.mediaKeys,
       };
     }
     return out;

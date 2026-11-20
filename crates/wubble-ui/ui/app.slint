@@ -586,6 +586,8 @@ export component AppWindow inherits Window {
     in property <length> pointer-x;
     in property <length> pointer-y;
     callback video-command(string, float);
+    // the strip's save button, its bottom left (window px): the media downloader's entry
+    callback video-save(length, length);
     callback video-hovered(bool);
     // The Boost editor (wubble_core::boost).
     in property <BoostView> boost;
@@ -1110,6 +1112,9 @@ export component AppWindow inherits Window {
                 pointer-y: root.pointer-y;
                 command(name, value) => {
                     root.video-command(name, value);
+                }
+                save(x, y) => {
+                    root.video-save(x, y);
                 }
                 hovered(over) => {
                     root.video-hovered(over);

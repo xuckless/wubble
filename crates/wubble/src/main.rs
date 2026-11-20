@@ -1164,6 +1164,7 @@ fn connect_pages(window: &AppWindow, win: WindowId) {
     window.on_video_command(move |name, value| {
         with_host_in(win, |host| host.video_command(&name, value))
     });
+    window.on_video_save(move |x, y| with_host_in(win, |host| host.video_save(x, y)));
     window.on_video_hovered(move |over| with_host_in(win, |host| host.video_hovered(over)));
     window.on_pip_command(move |name, value| {
         with_host_in(win, |host| host.pip_command(&name, value))

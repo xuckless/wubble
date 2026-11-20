@@ -1,4 +1,4 @@
-// derived: .tp-dock (pages/touch.css:92) on GlassPanel thin (material/glass.slint), Tween + OverlapLook (motion/overlap.slint), IconButton (controls/icon-button.slint)
+// derived: .tp-dock (pages/touch.css:92) on GlassPanel thin (material/glass.slint), Tween + OverlapLook (motion/overlap.slint), IconButton (controls/icon-button.slint), AProgress (overlay/a/a-progress.slint)
 // The strip of buttons over a video and in the picture-in-picture window (wubble-only.md §27,
 // §28: "the touch Dock"): the dock's body (padding 6, gap 2, radius 18: concentric with the 12
 // of its tiles) in thin glass, holding the shell's `.wb-ib` icon buttons (30, not the touch
@@ -21,16 +21,27 @@
 // BDockLabel: a word of help at the strip's start (the screenshot picker's hint), in the menu
 // row's type and mist, inset as a menu row's label.
 //
+// BDockSave: the strip's save button (the media downloader's entry): the `.wb-ib` IconButton
+// with the download glyph; once saved, the check (the touch Download specimen's "Download ->
+// Saved" swaps its icon to the check, touch.tsx:300-358); while saving, the downloads list's
+// progress track (overlay/a/a-progress.slint) across the tile's foot, under the glyph. A click
+// reports the tile's bottom left, where the downloader's menu opens (as the pill's chip does).
+// derived (docs/fidelity/derived-review.md "Overlays B", "Strip save button"): the track inset
+// `Space.s2` from the tile's sides and `Space.s1 / 2` from its foot; no Swap crossfade between the
+// glyphs (IconButton draws one icon); the design has no progress look for its Download button.
+//
 // BDockTab: the strip tucked away: a thin-glass tile as high as the strip at the page's right
 // edge with a chevron, sliding in from the edge and out to it on the same Overlap curve. On
 // hover it takes the `.wb-ib` hover look (white .07 under the chevron, ink chevron, 150 ms);
 // only a click opens the strip.
 
-import { Motion, Fonts, Palette } from "../../gen/tokens.slint";
+import { Motion, Fonts, Palette, Space } from "../../gen/tokens.slint";
 import { TouchCss, BrowserCss } from "../../gen/css.slint";
 import { Role, TextRole } from "../../gen/text.slint";
 import { KitText } from "../../text.slint";
 import { PressableButton } from "../../controls/button.slint";
+import { IconButton } from "../../controls/icon-button.slint";
+import { AProgress } from "../a/a-progress.slint";
 import { CrossfadeText } from "../../motion/crossfade.slint";
 import { Shell } from "../../derived.slint";
 import { GlassPanel } from "../../material/glass.slint";
@@ -201,6 +212,31 @@ export component BDockText inherits PressableButton {
     BDockValue {
         value: root.value;
         ink: root.ink;
+        accessible-role: none;
+    }
+}
+
+export component BDockSave inherits Rectangle {
+    in property <string> label;
+    // a download from the page runs; `fraction` 0..1, below 0 while its size is unknown
+    in property <bool> saving;
+    in property <float> fraction;
+    in property <bool> saved;
+    callback clicked(length, length);
+    width: button.width;
+    height: button.height;
+    button := IconButton {
+        icon-path: root.saved ? Glyph.check : Glyph.download;
+        label: root.label;
+        clicked => {
+            root.clicked(self.absolute-position.x, self.absolute-position.y + self.height);
+        }
+    }
+    if root.saving: AProgress {
+        x: Space.s2;
+        y: parent.height - self.height - Space.s1 / 2;
+        width: parent.width - 2 * Space.s2;
+        value: root.fraction;
         accessible-role: none;
     }
 }

@@ -237,6 +237,7 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Release form | Linux: tarball + `install.sh` (curl script); macOS: DMG signed and notarised on the owner's Mac + the same script; first releases are previews. | 2026-11-19 |
 | Shell clipboard | Shell text fields read and write the clipboard through the host's Wayland worker (a wrapper around Slint's winit platform): GNOME offers the clipboard to one device per client. | 2026-11-19 |
 | MCP server | Planned after the first release: wubble as an MCP server, sessions bound to a Space; plan in [research/mcp-server.md](research/mcp-server.md). | 2026-11-19 |
+| MCP build order | Basic version first (secrets as variables, strict containers, headless, full control incl. script), experimental and off by default; guardrails added where use shows the need. | 2026-11-19 |
 
 ## Process
 

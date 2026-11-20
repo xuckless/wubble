@@ -234,6 +234,7 @@ impl Host {
     pub(super) fn apply_media_settings(&mut self, settings: MediaSettings) {
         self.media.observer.set(&settings);
         let youtube_off = !settings.youtube && self.media.settings.youtube;
+        let save = self.video_save_now();
         self.media.settings = settings;
         if youtube_off {
             for list in self.media.tabs.values_mut() {
@@ -243,6 +244,7 @@ impl Host {
         if let Some(window) = self.w.window.upgrade() {
             self.render_pill(&window);
         }
+        self.video_save_redraw(save);
     }
 
     /// The main frame of `tab` committed `url` (before `committed` moves on): another page
@@ -275,6 +277,7 @@ impl Host {
     }
 
     fn media_update(&mut self, tab: TabId, event: MediaEvent) {
+        let save = self.video_save_now();
         let list = self.media.tabs.remove(&tab).unwrap_or_default();
         let before = list.has_media();
         let (list, effects) = list.update(event);
@@ -288,6 +291,7 @@ impl Host {
         {
             self.render_pill(&window);
         }
+        self.video_save_redraw(save);
     }
 
     /// The tab's view, else any live one: whose session a fetch uses.
@@ -698,13 +702,18 @@ impl Host {
 
     // ----- the pill and the menu
 
-    /// The glyph was clicked: the menu of the visible tab's streams, or (ask-each-time off) the
-    /// default quality of its first saveable stream at once.
+    /// The glyph was clicked: the downloader's entry for the visible tab.
     pub(crate) fn media_menu_requested(&mut self, x: f32, y: f32) {
+        if let Some(tab) = self.model.visible_tab() {
+            self.media_entry(tab, x, y);
+        }
+    }
+
+    /// The downloader's one entry (the pill's glyph, the video strip's save button): the menu of
+    /// the tab's streams at `x`, `y` (window px), or (ask-each-time off) the default quality of
+    /// its first saveable stream at once.
+    pub(super) fn media_entry(&mut self, tab: TabId, x: f32, y: f32) {
         let Some(window) = self.w.window.upgrade() else {
-            return;
-        };
-        let Some(tab) = self.model.visible_tab() else {
             return;
         };
         let Some(list) = self.media.tabs.get(&tab) else {
@@ -751,6 +760,36 @@ impl Host {
         let at = ((x * scale) as i32, (y * scale) as i32);
         self.apply_menu(tab, crate::menu::MenuEvent::ShellRequested { at, entries });
         self.render_surfaces(&window);
+    }
+
+    /// The tab's streams, as the downloader lists them (none while it is off).
+    pub(super) fn media_items(&self, tab: TabId) -> &[Detected] {
+        match self.media.tabs.get(&tab) {
+            Some(list) if self.media.settings.enabled => &list.items,
+            _ => &[],
+        }
+    }
+
+    /// The downloads entry of the latest download started from the tab's page.
+    pub(super) fn media_latest(&self, tab: TabId) -> Option<i64> {
+        let page = page_key(self.committed.get(&tab)?);
+        self.media
+            .runs
+            .iter()
+            .rev()
+            .find(|(_, r)| r.tab == tab && page_key(&r.page) == page)
+            .map(|(&id, _)| id)
+    }
+
+    /// `--smoke video`: downloads started from the tab.
+    pub(super) fn media_runs_from(&self, tab: TabId) -> usize {
+        self.media.runs.values().filter(|r| r.tab == tab).count()
+    }
+
+    /// `--smoke video`: the saved file of the tab's latest download, once it is done.
+    pub(super) fn media_saved(&self, tab: TabId) -> Option<PathBuf> {
+        let run = self.media.runs.get(&self.media_latest(tab)?)?;
+        (run.job == Job::Done).then(|| run.output.clone())
     }
 
     /// A menu row (or the glyph) chose to save `choice` of the tab's `item`.
