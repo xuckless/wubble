@@ -633,7 +633,7 @@ export component SettingsPage inherits Rectangle {
                                         label: root.spaces[i].name,
                                         key: root.spaces[i].id,
                                         cells: [root.spaces[i].name, root.spaces[i].colour],
-                                        icon: Glyph.space(root.spaces[i].icon),
+                                        icon: Glyph.space(root.spaces[i].tile-icon),
                                         tint: root.spaces[i].tint,
                                     };
                                 }
@@ -666,7 +666,7 @@ export component SettingsPage inherits Rectangle {
                         // its name (typed, Enter renames), its colours
                         if spaces-card.picked >= 0: Row {
                             Lead {
-                                icon-path: Glyph.space(root.spaces[spaces-card.picked].icon);
+                                icon-path: Glyph.space(root.spaces[spaces-card.picked].tile-icon);
                                 tint: root.spaces[spaces-card.picked].tint;
                                 label: root.spaces[spaces-card.picked].name + " icon";
                                 clicked => {

@@ -18,8 +18,8 @@ slint::slint! {
     import { CommandBar } from "ui/kit/chrome/command-bar.slint";
     import { TabRow } from "ui/kit/chrome/tab-row.slint";
     import { SpacesButton } from "ui/kit/chrome/spaces-button.slint";
-    import { CommandBarState, CommandMode, CommandResult, TabItem } from "ui/components/model.slint";
-    export { CommandBarState, CommandMode, CommandResult, TabItem }
+    import { CommandBarState, CommandMode, CommandResult, TabItem, TabSound } from "ui/components/model.slint";
+    export { CommandBarState, CommandMode, CommandResult, TabItem, TabSound }
     export component Probe inherits Window {
         width: 400px;
         height: 300px;
@@ -69,6 +69,32 @@ slint::slint! {
         }
         out property <bool> rail-close-shown: rail.rail-close-shown;
         out property <length> rail-h: rail.height;
+        // a tab on the rail that plays sound and is an agent's: the sound badge on the icon's
+        // top-right corner (a button), the agent badge on its bottom-right (an indicator)
+        in property <TabSound> marked-sound: TabSound.playing;
+        in-out property <int> marked-mutes;
+        in-out property <int> marked-stops;
+        in-out property <int> marked-presses;
+        in-out property <int> marked-closes;
+        marked := TabRow {
+            x: 250px; y: 20px; width: 48px; compact: true;
+            tab: { id: 10, title: "m", url: "https://m.test", agent: true, sound: root.marked-sound, sound-label: "Mute tab" };
+            mute => { root.marked-mutes += 1; }
+            agent-stop => { root.marked-stops += 1; }
+            close => { root.marked-closes += 1; }
+            press(y) => { root.marked-presses += 1; }
+        }
+        // an agent's tab on the extended sidebar: the agent mark at the row's right stops the
+        // agents, the badge on the favicon's corner is an indicator
+        in-out property <int> ext-stops;
+        in-out property <int> ext-presses;
+        ext := TabRow {
+            x: 100px; y: 250px; width: 240px;
+            tab: { id: 11, title: "e", url: "https://e.test", agent: true };
+            agent-stop => { root.ext-stops += 1; }
+            press(y) => { root.ext-presses += 1; }
+        }
+        out property <length> ext-h: ext.height;
         // the switcher's "^"
         in-out property <int> mores;
         in property <bool> more-open;
@@ -276,6 +302,99 @@ fn rail_close(p: &Probe) {
     assert!(!p.get_rail_close_shown());
 }
 
+/// The rail's sound and agent badges (derived: the close badge's circle on the icon's other
+/// corners): drawn at rest, a press on the top-right one mutes; the bottom-right one is an
+/// indicator, a press on it picks the tab and stops nothing; with no sound the top-right corner
+/// is the icon's.
+fn rail_marks(p: &Probe) {
+    let click = |x: f32, y: f32| {
+        let position = LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        at(p, WindowEvent::PointerMoved { position });
+        at(p, WindowEvent::PointerPressed { position, button });
+        at(p, WindowEvent::PointerReleased { position, button });
+    };
+    let row_h = p.get_rail_h();
+    let (icon_x, icon_y) = (250.0 + (48.0 - 18.0) / 2.0, 20.0 + (row_h - 18.0) / 2.0);
+    run_out();
+    // the pointer is out: the badges are there with no hover on the row
+    click(icon_x + 18.0, icon_y);
+    run_out();
+    assert_eq!(
+        (
+            p.get_marked_mutes(),
+            p.get_marked_stops(),
+            p.get_marked_presses()
+        ),
+        (1, 0, 0),
+        "the top-right badge mutes"
+    );
+    click(icon_x + 18.0, icon_y + 18.0);
+    run_out();
+    assert_eq!(
+        (
+            p.get_marked_mutes(),
+            p.get_marked_stops(),
+            p.get_marked_presses(),
+            p.get_marked_closes()
+        ),
+        (1, 0, 1, 0),
+        "a press on the agent badge picks the tab and stops nothing"
+    );
+    click(icon_x + 9.0, icon_y + 9.0);
+    assert_eq!(p.get_marked_presses(), 2, "the icon's middle picks the tab");
+    // a muted tab keeps its badge, and it is still the button
+    p.set_marked_sound(TabSound::Muted);
+    run_out();
+    click(icon_x + 18.0, icon_y);
+    assert_eq!(p.get_marked_mutes(), 2);
+    // no sound, no badge: the corner belongs to the tab
+    p.set_marked_sound(TabSound::None);
+    run_out();
+    click(icon_x + 16.0, icon_y + 2.0);
+    assert_eq!((p.get_marked_mutes(), p.get_marked_presses()), (2, 3));
+    // hovering a badge keeps the row's close badge shown, as the row's own hover does
+    at(
+        p,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(icon_x + 18.0, icon_y + 18.0),
+        },
+    );
+    run_out();
+    at(p, WindowEvent::PointerExited);
+    run_out();
+}
+
+/// An agent's tab on the extended sidebar: the mark at the row's right stops the agents; a press
+/// on the badge at the favicon's bottom-right corner picks the tab and stops nothing.
+fn extended_agent_row(p: &Probe) {
+    let click = |x: f32, y: f32| {
+        let position = LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        at(p, WindowEvent::PointerMoved { position });
+        at(p, WindowEvent::PointerPressed { position, button });
+        at(p, WindowEvent::PointerReleased { position, button });
+    };
+    let h = p.get_ext_h();
+    run_out();
+    // the favicon's box starts 10 px in; its bottom-right corner
+    click(100.0 + 10.0 + 18.0, 250.0 + (h + 18.0) / 2.0);
+    assert_eq!(
+        (p.get_ext_stops(), p.get_ext_presses()),
+        (0, 1),
+        "the badge picks the tab and stops nothing"
+    );
+    // the mark: 6 px padding, the close slot (22) and the mark (22) from the right edge
+    click(100.0 + 240.0 - 6.0 - 22.0 - 11.0, 250.0 + h / 2.0);
+    assert_eq!(
+        (p.get_ext_stops(), p.get_ext_presses()),
+        (1, 1),
+        "the row's mark stops the agents"
+    );
+    at(p, WindowEvent::PointerExited);
+    run_out();
+}
+
 /// The switcher's "^": a `.wb-space` tile (36 square) that reports a click (the popup) and its
 /// hover; its chevron points up at rest and turns over (`.tp-chev.up`) while the popup is open.
 fn spaces_button(p: &Probe) {
@@ -308,5 +427,7 @@ fn chrome_kit_parts_follow_the_design() {
     spaces(&p);
     command_bar(&p);
     rail_close(&p);
+    rail_marks(&p);
+    extended_agent_row(&p);
     spaces_button(&p);
 }

@@ -48,6 +48,14 @@ samples the design's own `SoftBody` and `Minis` (imported through `lib/ts-loader
 clock with a recorded `Math.random`, into `crates/wubble-core/tests/fixtures/start_*.json`, which
 `wubble_core::start`'s tests replay. Re-run it when the design's start-page code changes.
 
+    node --disable-warning=ExperimentalWarning tools/fidelity/sample-orbs.mjs
+
+samples Ultra Reactivate's thinking-orb engine (`vendor/thinking-orbs`: every preset at six times,
+two knob settings, the ink ramps) into `crates/wubble-core/tests/fixtures/orb_frames.json`, which
+`wubble_core::orb`'s tests replay. The generator copies the engine's TypeScript it translates into
+`ts-snapshot/` (with `COMMIT`); `crates/wubble-core/tests/orb_constants.rs` diffs each translated
+file's numbers against it, as `shader_constants.rs` does for the GLSL.
+
 ## Looking
 
 There is no capture or scoring tool here any more (removed 2026-11-19: a cold run of the web

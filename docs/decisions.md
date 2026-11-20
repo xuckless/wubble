@@ -176,6 +176,8 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Blur σ at every quality | Pyramid σ is in texels of the level read, so below Full the blur gets `BLUR_SIGMA × scale`. | 2026-11-19 |
 | Shader constants are checked | Every WGSL file starts `// translates:`; `shader_constants.rs` compares its literals with the cited GLSL both ways. | 2026-11-19 |
 | Review by eye | The capture and scoring tool was removed (187d7a4): review is by screenshots and the owner's eye; supersedes "Fidelity bar", "Fidelity capture" and the harness's shared dye. | 2026-11-19 |
+| Thinking orb road | Engine translated into `wubble_core::orb` (checked against frames the design's engine computed); painted by an instanced WGSL pass in `wubble-gfx` into the orb's own texture; only a running orb asks for frames. | 2026-11-20 |
+| Mascots deferred | Ultra Reactivate's BotAvatar is not ported: its default fabric look needs CPU bakes, per-texel shading and a readback per frame; a flat-only port would not be the design's look ([research/agent-widgets.md](research/agent-widgets.md)). | 2026-11-20 |
 
 ## Privacy and security
 
@@ -259,6 +261,8 @@ Read this before proposing architecture; add new decisions here, one line each.
 | Agent views | An agent session's pages stay visible to CEF though no window shows them (visible-but-unmapped): a hidden view lays out nothing, so it has no accessibility tree and no screenshot. | 2026-11-20 |
 | MCP approval sheet | A session is approved on a modal sheet of the one overlay stack (`Kind::AgentSheet`: the window's, one at a time, waiting for a page's dialog or the user's sheet, never closed by another overlay); Enter never approves, Escape and Deny refuse; the window choice is the sheet's. A grant holds no secret until a name can be bound to a vault login (the sheet shows the names asked, and says none is granted). | 2026-11-20 |
 | MCP stop | "Stop All Agents" (command bar, `Action::StopAgents`) and the mark on an agent's tab rows and Space header end every session (`Event::Stop`); it works while a session is headless. | 2026-11-20 |
+| Agent glyph | An agent session's Space draws the agent glyph (the design's `sparkle`, one alias `Glyph.agent`) on its tile everywhere (footer, Spaces popup, Settings list), derived from the running session (`space::glyph_id`), never stored; an agent's tab carries an indicator-only badge of it on its favicon's bottom-right corner, extended and rail (no pointer input; stopping stays on the row mark, the Space header and the command bar). | 2026-11-20 |
+| Rail sound badge | On the rail a tab that plays sound or is muted shows a round badge on its favicon's top-right corner (the close badge's circle); a press mutes or unmutes it (the extended row's `toggle_mute`); a muted tab keeps it while quiet (`tabmarks::Marks`). | 2026-11-20 |
 | Agent refs and waits | `read_page` refs are `e<doc>.<node>` from the accessibility mirror, stale after a navigation; `navigate` returns once a load it started ended and the new document's tree arrived, and a new tab's handle is given only after its first load; each call's clicks are counted alone; `fill_secret` types only after a top-frame script confirms the clicked element took focus, on the login's site; every waiting call has a deadline (30 s, or `wait_for`'s `timeout_ms`). | 2026-11-20 |
 
 ## Process

@@ -12,6 +12,7 @@
 
 pub mod import;
 pub mod mask;
+pub mod orb;
 pub mod pacing;
 pub mod scene;
 pub mod swatch;

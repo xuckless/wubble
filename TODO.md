@@ -16,11 +16,13 @@ own session and has not been run since batch eight; Windows is not green in CI.
 
 ## Now (2026-11-20)
 In flight, each in its own worktree, not yet on `main`:
-- [~] `xm/tab-marks`: an agent icon for an agent session's Space (footer tile, Spaces popup, header); an agent badge at the bottom right of an agent tab's favicon; in the rail, a sound badge at the favicon's top right that mutes and unmutes (the close badge's circular style)
-- [~] `xm/orbs`: the Thinking orb and the agentic mascots from Ultra Reactivate (`src/ultra-reactivate/vendor/thinking-orbs`, `bot-avatars`; MIT, Libraries.dev) as kit widgets with gallery scenes; no wiring
+- [~] `xm/sheet-fix`: a dustbin on each agent Space row of the Spaces popup (clears that session and its Space)
 Next, in order:
-- [ ] Wire the mascots (the agent session log's identity) and the thinking orb, after the owner reads the proposal in `docs/research/agent-widgets.md`
-- [ ] The agent glyph: the generated set has none (the lightning bolt stands in); the owner's glyph, then one swap
+- [ ] Wire the thinking orb (in the kit, gallery only so far): the agent mark while a call is in flight, the activity page header, the approval sheet; after the owner reads the proposal in `docs/research/agent-widgets.md` section 5
+- [ ] The mascots are researched, not ported: their fabric and plastic shading is CPU-baked with per-frame readbacks in the web version, so a faithful port needs a GPU rewrite (`docs/research/agent-widgets.md` section 3.3); owner decides whether to do it
+- [ ] Thinking orb: the `gravity` cursor warp is not ported; one moving 64 px orb costs a whole-window redraw per frame (about 8 to 9 % of a core at 60 Hz, hand run): tied to "Stop redrawing the shell" in the optimization roadmap
+- [ ] The agent glyph: the design's `sparkle` stands in (one alias, `Glyph.agent`) and reads as a crosshair at badge size; the owner's glyph, a mascot or the orb, then one swap
+- [ ] Hand check: the rail's sound badge on a tab that really plays audio (the gallery fakes the audible state; no smoke presses mute), and Settings' Spaces list with an agent Space
 - [ ] Extensions: the gaps under M6 (Bitwarden's popup width first: one more patch and an engine rebuild)
 - [ ] The "Optimization roadmap". The release follow-ups in M7 wait for the next version.
 - Later, in its own build: a passthrough to OS password managers and passkey keychains (fingerprint, passkeys where the laptop has them)

@@ -222,3 +222,15 @@ wubble is about 16 % behind Chromium on Speedometer and within one run's noise o
 | event loop, Wayland, other | 3.0 % |
 
 Inclusive: the NVIDIA driver 23.2 %, `wubble_gfx::scene::render::Renderer::frame` 1.3 %, `import_vulkan` 3.5 %. The whole window is redrawn for every page frame; the scene is not the cost.
+
+## One thinking orb (xm/orbs)
+
+2026-11-20, Linux release, RTX 5060, headless display (`scripts/headless.sh`, 60 Hz, 1360x880 at 1x), `--measure idle --seconds 8` on the idle page, with `WUBBLE_MEASURE_ORB=<state>` putting one 64 px orb, moving, on the library's stage (`host/gallery_orbs.rs` `measure_one`). Load average 12 to 17 (a build on the box).
+
+| run | slint_renders/s | scene_renders/s | browser main thread | browser process | GPU (whole) |
+|---|---|---|---|---|---|
+| no orb | 0.13 | 0 | 1.0 % | 2.0 % | 7.1 % |
+| composing (566 dots, the most) | 49.4 | 0 | 9.4 % | 10.5 % | 7.7 % |
+| working (516 dots) | 59.9 | 0 | 8.0 % | 8.8 % | 9.2 % |
+
+A moving orb redraws the whole window every frame (Skia's renderer has no partial redraw here); the orb's own pass is small next to that. An orb at rest or paused costs no frames (`agent-orbs-paused`: 180 shown, 0 moving).
