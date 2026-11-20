@@ -7,6 +7,7 @@
 //! given, strings capped.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use serde_json::Value;
 use wubble_core::model::Command;
@@ -20,7 +21,7 @@ use wubble_core::video::{
 };
 use wubble_engine::input::Point;
 use wubble_engine::page::PageEvent;
-use wubble_ui::{AppWindow, VideoMark, VideoView};
+use wubble_ui::{AppWindow, VideoMark, VideoSave, VideoView};
 
 use super::boost::KIT_REF;
 use super::{Host, now_ms};
@@ -38,10 +39,6 @@ const SPONSOR_RETRY_MS: u64 = 30_000;
 /// The kit's snapshot, as the poll asks for it.
 const SNAPSHOT: &str =
     "(function(){var k=window[Symbol.for('wubble.kit')];return k?k.snapshot():null})()";
-
-/// The media downloader's menu for a page: the "save" button's seam. Set by that lane; without
-/// it the button is not shown.
-pub type SaveSeam = Box<dyn Fn(TabId, &str)>;
 
 /// What the toast's button does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,7 +168,6 @@ pub(super) struct Videos {
     keys: Option<Keys>,
     keys_failed: bool,
     toast: Option<ToastAct>,
-    save: Option<SaveSeam>,
 }
 
 impl Default for Videos {
@@ -206,7 +202,6 @@ impl Default for Videos {
             keys: None,
             keys_failed: false,
             toast: None,
-            save: None,
         }
     }
 }
@@ -529,12 +524,7 @@ impl Host {
                     }
                 }
                 VideoEffect::Pip => self.pip_event(PipInput::Request(tab)),
-                VideoEffect::Save => {
-                    let url = self.model.tabs.get(&tab).map(|t| t.url.clone());
-                    if let (Some(save), Some(url)) = (&self.videos.save, url) {
-                        save(tab, &url);
-                    }
-                }
+                VideoEffect::Save { x, y } => self.media_entry(tab, x, y),
                 VideoEffect::Redraw => {
                     if self.shown() == Some(tab) {
                         self.redraw_video();
@@ -565,14 +555,24 @@ impl Host {
             "seek-by" => VideoCmd::SeekBy(f64::from(value)),
             "pip" => VideoCmd::Pip,
             "frame" => VideoCmd::Frame,
-            "save" => VideoCmd::Save,
             "collapse" => VideoCmd::Collapse,
             "expand" => VideoCmd::Expand,
             "dismiss" => VideoCmd::Dismiss,
             "hide-site" => VideoCmd::HideSite,
             _ => return,
         };
-        let can_save = self.videos.save.is_some();
+        self.video_cmd(tab, cmd);
+    }
+
+    /// The strip's save button, its bottom left at `x`, `y` (window px).
+    pub(crate) fn video_save(&mut self, x: f32, y: f32) {
+        if let Some(tab) = self.shown() {
+            self.video_cmd(tab, VideoCmd::Save { x, y });
+        }
+    }
+
+    fn video_cmd(&mut self, tab: TabId, cmd: VideoCmd) {
+        let can_save = self.video_save_state(tab).offered();
         self.video_event(
             tab,
             VideoInput::Command {
@@ -581,6 +581,28 @@ impl Host {
                 can_save,
             },
         );
+    }
+
+    /// The shown tab's save button, to tell whether a change of the downloader moved it.
+    pub(super) fn video_save_now(&self) -> Option<(TabId, video::Save)> {
+        let tab = self.shown()?;
+        Some((tab, self.video_save_state(tab)))
+    }
+
+    /// Draws the strip again when the downloader moved its save button from `before`.
+    pub(super) fn video_save_redraw(&mut self, before: Option<(TabId, video::Save)>) {
+        if before != self.video_save_now() {
+            self.redraw_video();
+        }
+    }
+
+    /// The tab's save button, from the downloader's state (`video::Save::of`).
+    pub(super) fn video_save_state(&self, tab: TabId) -> video::Save {
+        let Some(v) = self.videos.overlays.get(&tab).and_then(Overlay::video) else {
+            return video::Save::Absent;
+        };
+        let latest = self.media_latest(tab).and_then(|id| self.downloads.get(id));
+        video::Save::of(v, self.media_items(tab), latest)
     }
 
     pub(crate) fn video_hovered(&mut self, over: bool) {
@@ -722,6 +744,7 @@ impl Host {
             {
                 o.video().map(|v| {
                     let marks = self.sponsor_marks(tab, v.duration);
+                    let save = self.video_save_state(tab);
                     let nearest = video::nearest_rate(v.rate);
                     VideoView {
                         open: o.shown(),
@@ -743,7 +766,18 @@ impl Host {
                             .map_or(-1, |i| i as i32),
                         speeds: o.speeds_open(),
                         can_pip: self.model.can_pip(tab),
-                        can_save: self.videos.save.is_some(),
+                        save: match save {
+                            video::Save::Absent => VideoSave::Absent,
+                            video::Save::Offered => VideoSave::Offered,
+                            video::Save::Saving(_) => VideoSave::Saving,
+                            video::Save::Saved => VideoSave::Saved,
+                            video::Save::Failed => VideoSave::Failed,
+                        },
+                        save_fraction: match save {
+                            video::Save::Saving(Some(f)) => f,
+                            _ => -1.0,
+                        },
+                        save_label: save.label().into(),
                         marks: slint::ModelRc::new(slint::VecModel::from(marks)),
                     }
                 })
@@ -1221,6 +1255,14 @@ impl Host {
             collapsed: overlay.is_some_and(Overlay::collapsed),
             speeds: overlay.is_some_and(Overlay::speeds_open),
             toast,
+            save: tab.map(|t| self.video_save_state(t)),
+            ready: tab.is_some_and(|t| {
+                self.media_items(t)
+                    .iter()
+                    .any(|i| matches!(i.found, wubble_core::media::detect::Found::Ready(_)))
+            }),
+            runs: tab.map_or(0, |t| self.media_runs_from(t)),
+            saved: tab.and_then(|t| self.media_saved(t)),
         }
     }
 
@@ -1368,6 +1410,17 @@ impl Host {
                 smoke::Action::PutBoost(b) => self.boost_put_for_smoke(*b),
                 smoke::Action::ToggleBoost(id) => self.toggle_boost(id),
                 smoke::Action::Log(line) => println!("{line}"),
+                smoke::Action::CheckSaved(path) => {
+                    let dir = self
+                        .downloads
+                        .dir()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default();
+                    match smoke::check_saved(&path, &dir) {
+                        Ok(line) => println!("{line}"),
+                        Err(e) => self.fail(e),
+                    }
+                }
                 smoke::Action::Pass(what) => {
                     self.video_passed = Some(what);
                     crate::quit();

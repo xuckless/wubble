@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use i_slint_renderer_skia::SkiaWGPU30Renderer;
 use slint::platform::{Platform, PointerEventButton, Renderer, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, LogicalPosition, ModelRc, PhysicalSize, PlatformError, VecModel};
-use wubble_ui::{AppWindow, BoostView, VideoMark, VideoView};
+use wubble_ui::{AppWindow, BoostView, VideoMark, VideoSave, VideoView};
 
 const LOGICAL: (u32, u32) = (1360, 880);
 
@@ -138,7 +138,9 @@ fn video() -> VideoView {
         progress: 0.42,
         looped: true,
         can_pip: true,
-        can_save: true,
+        save: VideoSave::Offered,
+        save_fraction: -1.0,
+        save_label: "Save video".into(),
         marks: ModelRc::new(VecModel::from(vec![VideoMark {
             from: 0.6,
             to: 0.7,
@@ -283,5 +285,47 @@ fn main() {
     step(100);
     shoot(&app, &dir, "12-autoscroll-moving");
     app.set_autoscroll_on(false);
+
+    // the strip's save button: hovered, saving (40 %), saved; then the strip on a 320 x 240
+    // player (the video smoke's) and a 240 x 135 one
+    let hover = |id: &str| {
+        let e = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app,
+            &format!("VideoControls::{id}"),
+        )
+        .next();
+        if let Some(e) = e {
+            let (p, size) = (e.absolute_position(), e.size());
+            pointer(p.x + size.width / 2.0, p.y + size.height / 2.0);
+        }
+    };
+    app.set_video(video());
+    step(600);
+    hover("download");
+    step(400);
+    shoot(&app, &dir, "13-video-save-hover");
+    pointer(10.0, 10.0);
+    app.set_video(VideoView {
+        save: VideoSave::Saving,
+        save_fraction: 0.4,
+        ..video()
+    });
+    step(600);
+    shoot(&app, &dir, "14-video-saving");
+    app.set_video(VideoView {
+        save: VideoSave::Saved,
+        ..video()
+    });
+    step(600);
+    shoot(&app, &dir, "15-video-saved");
+    for (name, w, h) in [
+        ("16-video-small", 320.0, 240.0),
+        ("17-video-tiny", 240.0, 135.0),
+    ] {
+        app.set_video(VideoView { w, h, ..video() });
+        step(600);
+        shoot(&app, &dir, name);
+    }
+    app.set_video(VideoView::default());
     app.hide().unwrap();
 }

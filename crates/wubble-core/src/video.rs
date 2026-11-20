@@ -2,7 +2,7 @@
 //! kit (`kit.js`) reports the page's main `<video>` as a [`VideoState`]; the overlay shows over
 //! it while the pointer is there or just after a control was used, and its controls become
 //! [`VideoEffect`]s the host carries out (page kit commands, the per-site rate, a frame
-//! screenshot, picture-in-picture, the media downloader's seam).
+//! screenshot, picture-in-picture, the media downloader's entry).
 //!
 //! The strip's life is [`Ui`]: hidden, shown, collapsed into its tab, or dismissed. Folded is
 //! a state of its own ([`Fold`] while hidden, [`Ui::Collapsed`] while the tab shows), so a
@@ -14,6 +14,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::download::{DownloadEntry, DownloadState};
+use crate::media::Refusal;
+use crate::media::detect::{Detected, Found};
 use crate::zoom;
 
 /// The speeds offered, slowest first (0.25 to 4, as Chromium's own player menu tops out at 2).
@@ -84,6 +87,9 @@ pub struct VideoState {
     /// The document that answered (its `performance.timeOrigin`): an answer of the document
     /// a navigation replaces can still arrive after the navigation began.
     pub doc: f64,
+    /// The element has MediaKeys attached (EME: Widevine, PlayReady, FairPlay, ClearKey): its
+    /// stream is protected, whatever the downloader saw of it.
+    pub drm: bool,
 }
 
 impl VideoState {
@@ -116,6 +122,7 @@ impl VideoState {
             looped: flag("loop"),
             muted: flag("muted"),
             doc: finite(num("doc").unwrap_or(0.0)).unwrap_or(0.0),
+            drm: flag("drm"),
         })
     }
 
@@ -287,7 +294,11 @@ pub enum VideoCmd {
     SeekBy(f64),
     Pip,
     Frame,
-    Save,
+    /// The save button, its menu anchored at this window point (logical px).
+    Save {
+        x: f32,
+        y: f32,
+    },
     /// Tuck the strip into its tab (remembered).
     Collapse,
     /// Open the strip from its tab, by a click (a hover never does).
@@ -312,7 +323,7 @@ pub enum VideoInput {
     Pointer { over: Over, now: u64 },
     /// The host's clock moved on (each poll).
     Tick(u64),
-    /// A control was used. `can_save`: the media downloader's seam is connected.
+    /// A control was used. `can_save`: the save button is offered ([`Save::offered`]).
     Command {
         cmd: VideoCmd,
         now: u64,
@@ -342,8 +353,12 @@ pub enum VideoEffect {
     /// Save the frame shown now.
     Frame,
     Pip,
-    /// The media downloader's menu (the seam).
-    Save,
+    /// The media downloader's entry for the page (its menu, or the default quality at once),
+    /// anchored at this window point.
+    Save {
+        x: f32,
+        y: f32,
+    },
     /// Remember the strip folded (true) or open (false).
     RememberCollapsed(bool),
     /// Hide the controls on this tab's site from now on.
@@ -562,8 +577,8 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
                 VideoCmd::SeekBy(_) => {}
                 VideoCmd::Pip => effects.push(VideoEffect::Pip),
                 VideoCmd::Frame => effects.push(VideoEffect::Frame),
-                VideoCmd::Save if can_save => effects.push(VideoEffect::Save),
-                VideoCmd::Save => {}
+                VideoCmd::Save { x, y } if can_save => effects.push(VideoEffect::Save { x, y }),
+                VideoCmd::Save { .. } => {}
             }
             // The menu opening holds the strip, closing it starts the clock again.
             if let Ui::Shown {
@@ -586,6 +601,62 @@ pub fn transition(state: Overlay, input: VideoInput) -> (Overlay, Vec<VideoEffec
         }
         // Pointer, ticks and controls with no video: nothing to show.
         (state @ Overlay::NoVideo { .. }, _) => (state, vec![]),
+    }
+}
+
+/// The strip's save button: what the media downloader offers for the page and how the latest
+/// download started from it stands. Derived at each draw from the downloader's own state (the
+/// tab's list of streams, the downloads list's entry); nothing of it is kept here.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Save {
+    /// No button: nothing the downloader can save, or protected media (DRM).
+    Absent,
+    Offered,
+    /// A download from the page runs (or is paused, or interrupted); its fraction, to the
+    /// percent, once the size is known.
+    Saving(Option<f32>),
+    Saved,
+    Failed,
+}
+
+impl Save {
+    /// The button for `video`, from the tab's streams (`media`: the downloader's list, empty
+    /// while it is off or saw nothing) and the downloads entry of the latest download from the page. DRM is
+    /// absolute: an element with MediaKeys, or a stream of the page the downloader refused as
+    /// protected, takes the button away, whatever else the page offers.
+    pub fn of(video: &VideoState, media: &[Detected], latest: Option<&DownloadEntry>) -> Save {
+        let protected = video.drm
+            || media
+                .iter()
+                .any(|i| i.found == Found::Refused(Refusal::Protected));
+        let ready = media.iter().any(|i| matches!(i.found, Found::Ready(_)));
+        if protected || !ready {
+            return Save::Absent;
+        }
+        match latest.map(|e| (&e.state, e.fraction())) {
+            Some((DownloadState::Complete, _)) => Save::Saved,
+            Some((DownloadState::Failed(_), _)) => Save::Failed,
+            Some((state, fraction)) if state.is_active() => {
+                Save::Saving(fraction.map(|f| (f * 100.0).round() / 100.0))
+            }
+            _ => Save::Offered,
+        }
+    }
+
+    pub fn offered(self) -> bool {
+        self != Save::Absent
+    }
+
+    /// The button's accessible label (the downloader's word is "save": its pill's "Save media",
+    /// its setting "Save videos to").
+    pub fn label(self) -> String {
+        match self {
+            Save::Absent | Save::Offered => "Save video".into(),
+            Save::Saving(None) => "Saving video".into(),
+            Save::Saving(Some(f)) => format!("Saving video, {:.0}%", f * 100.0),
+            Save::Saved => "Video saved".into(),
+            Save::Failed => "Saving failed, save the video again".into(),
+        }
     }
 }
 
@@ -628,6 +699,7 @@ mod tests {
             looped: false,
             muted: false,
             doc: 1.0,
+            drm: false,
         }
     }
 
@@ -988,18 +1060,25 @@ mod tests {
         assert_eq!(e[0], VideoEffect::Frame);
         let (s, e) = cmd(s, VideoCmd::Pip, 6);
         assert_eq!(e[0], VideoEffect::Pip);
-        // Save only with the downloader's seam.
-        let (s, e) = cmd(s, VideoCmd::Save, 7);
+        // Save only while the button is offered; it neither pauses, seeks nor folds the strip.
+        let save = VideoCmd::Save { x: 3.0, y: 4.0 };
+        let (s, e) = cmd(s, save, 7);
         assert_eq!(e, vec![VideoEffect::Redraw]);
-        let (_, e) = transition(
+        let before = s.clone();
+        let (s, e) = transition(
             s,
             VideoInput::Command {
-                cmd: VideoCmd::Save,
+                cmd: save,
                 now: 8,
                 can_save: true,
             },
         );
-        assert_eq!(e[0], VideoEffect::Save);
+        assert_eq!(
+            e,
+            vec![VideoEffect::Save { x: 3.0, y: 4.0 }, VideoEffect::Redraw]
+        );
+        assert_eq!(s.video(), before.video());
+        assert!(s.shown() && !s.collapsed());
         // A live stream cannot be sought.
         let live = VideoState {
             duration: f64::INFINITY,
@@ -1012,6 +1091,115 @@ mod tests {
         };
         let (_, e) = cmd(s, VideoCmd::Seek(0.5), 9);
         assert_eq!(e, vec![VideoEffect::Redraw]);
+    }
+
+    fn media(found: &[Found]) -> Vec<Detected> {
+        found
+            .iter()
+            .enumerate()
+            .map(|(i, f)| Detected {
+                id: i as u32,
+                url: format!("https://a.test/{i}.mp4"),
+                kind: crate::media::detect::Kind::File,
+                title: None,
+                found: f.clone(),
+            })
+            .collect()
+    }
+
+    fn ready() -> Found {
+        use crate::media::{Container, Track, Variant};
+        Found::Ready(vec![Variant::file(
+            "https://a.test/v.mp4",
+            Track::Muxed,
+            Container::Mp4,
+            Some(1_000),
+            false,
+        )])
+    }
+
+    fn entry(state: DownloadState, received: u64, total: Option<u64>) -> DownloadEntry {
+        DownloadEntry {
+            id: 1,
+            url: "https://a.test/v.mp4".into(),
+            name: "v.mp4".into(),
+            path: "/d/v.mp4".into(),
+            received,
+            total,
+            state,
+            started_ms: 0,
+        }
+    }
+
+    #[test]
+    fn the_save_button_is_offered_only_for_what_the_downloader_can_save() {
+        let v = video();
+        // Nothing seen (or the downloader off), only streams still resolving, live or broken.
+        assert_eq!(Save::of(&v, &[], None), Save::Absent);
+        let unsaveable = media(&[
+            Found::Resolving,
+            Found::Refused(Refusal::Live),
+            Found::Refused(Refusal::Failed("x".into())),
+        ]);
+        assert_eq!(Save::of(&v, &unsaveable, None), Save::Absent);
+        assert!(!Save::Absent.offered());
+        // A stream ready to save.
+        let page = media(&[Found::Resolving, ready()]);
+        assert_eq!(Save::of(&v, &page, None), Save::Offered);
+        assert!(Save::Offered.offered());
+    }
+
+    #[test]
+    fn protected_media_never_gets_the_save_button() {
+        let page = media(&[ready()]);
+        // The element has MediaKeys: protected, whatever the downloader saw.
+        let drm = VideoState {
+            drm: true,
+            ..video()
+        };
+        assert_eq!(Save::of(&drm, &page, None), Save::Absent);
+        let running = entry(DownloadState::Running, 1, Some(2));
+        assert_eq!(Save::of(&drm, &page, Some(&running)), Save::Absent);
+        // A stream of the page the downloader refused as protected, beside a saveable one.
+        let mixed = media(&[ready(), Found::Refused(Refusal::Protected)]);
+        assert_eq!(Save::of(&video(), &mixed, None), Save::Absent);
+        // The snapshot reads the flag.
+        let v = serde_json::json!({"x": 0, "y": 0, "w": 1, "h": 1, "drm": true});
+        assert!(VideoState::from_json(&v).unwrap().drm);
+    }
+
+    #[test]
+    fn the_save_button_follows_the_latest_download() {
+        let (v, page) = (video(), media(&[ready()]));
+        let at = |e: DownloadEntry| Save::of(&v, &page, Some(&e));
+        assert_eq!(
+            at(entry(DownloadState::Running, 1, Some(3))),
+            Save::Saving(Some(0.33))
+        );
+        assert_eq!(
+            at(entry(DownloadState::Paused, 1, Some(2))),
+            Save::Saving(Some(0.5))
+        );
+        assert_eq!(
+            at(entry(DownloadState::Interrupted("net".into()), 0, Some(2))),
+            Save::Saving(Some(0.0))
+        );
+        // Size unknown: saving, no fraction.
+        assert_eq!(
+            at(entry(DownloadState::Running, 7, None)),
+            Save::Saving(None)
+        );
+        assert_eq!(at(entry(DownloadState::Complete, 2, Some(2))), Save::Saved);
+        assert_eq!(
+            at(entry(DownloadState::Failed("x".into()), 0, None)),
+            Save::Failed
+        );
+        // Cancelled: offered again.
+        assert_eq!(at(entry(DownloadState::Cancelled, 0, None)), Save::Offered);
+        assert_eq!(Save::Offered.label(), "Save video");
+        assert_eq!(Save::Saving(Some(0.33)).label(), "Saving video, 33%");
+        assert_eq!(Save::Saving(None).label(), "Saving video");
+        assert_eq!(Save::Saved.label(), "Video saved");
     }
 
     #[test]

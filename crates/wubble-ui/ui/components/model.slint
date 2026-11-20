@@ -654,6 +654,10 @@ export struct VideoMark {
     colour: color,
 }
 
+// The strip's save button (wubble_core::video::Save): none, or the media downloader's state for
+// the page.
+export enum VideoSave { absent, offered, saving, saved, failed }
+
 // The controls of the visible page's video. `x`..`h`: the video's rectangle in the content
 // area, logical px. `rate`: the speed shown ("1.5×"); `rate-index`: its row in the speed menu.
 export struct VideoView {
@@ -675,7 +679,11 @@ export struct VideoView {
     rate-index: int,
     speeds: bool,
     can-pip: bool,
-    can-save: bool,
+    save: VideoSave,
+    // while saving: 0..1, below 0 while the size is unknown
+    save-fraction: float,
+    // its accessible label (wubble_core::video::Save::label)
+    save-label: string,
     marks: [VideoMark],
 }
 

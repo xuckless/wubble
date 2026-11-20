@@ -28,8 +28,15 @@
 //!    is on it, goes a while after it rests on the video, and comes back as the tab on the next
 //!    move), and a click on the tab does (`smoke: strip collapse ok`); the pointer moved off the
 //!    video hides the strip; back on it, the frame saved once more, the run ends with the strip
-//!    up and its frame button under the pointer (`--shot`'s picture; the notice is gone by the
-//!    time the shot settles) (`smoke: strip ok`).
+//!    up (`smoke: strip ok`);
+//! 8. the save button (the media downloader's entry): absent while the downloader offers
+//!    nothing (the clip is under its size floor); with the floor at 0, absent on `drm.html`,
+//!    whose video has ClearKey MediaKeys attached (EME), though the downloader lists its clip;
+//!    on `video.html?save` it shows, and a click (ask-each-time off: the default quality at
+//!    once) starts a download through the downloader, which saves the clip, byte for byte, into
+//!    the smoke's downloads folder; the clip plays on and the strip stays open; the run ends
+//!    with the strip up and the pointer on the save button, its check (`--shot`'s picture)
+//!    (`smoke: save ok`).
 //!
 //! `--smoke boost`: a Boost stored through the editor's path (`http://127.0.0.1/boost*`: CSS, a
 //! tint, a document-start script) colours `boost.html` and sets its title; `other.html` stays as
@@ -42,8 +49,10 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use wubble_core::boost::{At, Boost, Tint};
-use wubble_core::video::VideoState;
+
+use wubble_core::video::{Save, VideoState};
 use wubble_engine::nav::WebEvent;
 use wubble_engine::page::PageEvent;
 
@@ -61,10 +70,25 @@ pub const BOOSTED_BG: &str = "rgb(1, 2, 3)";
 
 const CLIP: &[u8] = include_bytes!("../assets/clip.webm");
 
-const VIDEO_PAGE: &str = "<!doctype html><title>video</title>\
-    <body style=\"margin:0;background:#202020\">\
-    <video src=\"/clip.webm\" muted autoplay playsinline width=\"320\" height=\"240\" \
-    style=\"display:block;margin:40px\"></video>";
+/// The video page; its clip's URL takes the page's query, so each page's clip is a response of
+/// its own (not the HTTP cache's) that the downloader's hook sees. The save steps' pages show the
+/// video 480 wide, room for the strip's save button (`Shell.video-save-min`).
+fn video_page(query: &str) -> String {
+    let width = if query.is_empty() { 320 } else { 480 };
+    format!(
+        "<!doctype html><title>video</title>\
+         <body style=\"margin:0;background:#202020\">\
+         <video src=\"/clip.webm?{query}\" muted autoplay playsinline width=\"{width}\" \
+         height=\"240\" style=\"display:block;margin:40px\"></video>"
+    )
+}
+
+/// The video page with ClearKey MediaKeys attached to its video (EME, which Chromium has built
+/// in): protected media, as far as the save button goes, though the clip itself is clear.
+const DRM_SCRIPT: &str = "<script>navigator.requestMediaKeySystemAccess('org.w3.clearkey',\
+    [{initDataTypes:['webm'],videoCapabilities:[{contentType:'video/webm; codecs=\"vp8\"'}]}])\
+    .then(a=>a.createMediaKeys()).then(k=>document.querySelector('video').setMediaKeys(k))\
+    .catch(e=>console.error('smoke: eme '+e))</script>";
 const BOOST_PAGE: &str = "<!doctype html><title>plain</title>\
     <body style=\"background:rgb(250,250,250)\"><p>A page to boost.</p>";
 
@@ -171,6 +195,16 @@ pub enum Step {
     StripLastFrame {
         serial: i32,
     },
+    /// The floor at 0, `drm.html` loading.
+    SaveDrmLoading,
+    /// Waiting for the downloader to list the clip and the page to attach its MediaKeys.
+    SaveDrm,
+    SaveLoading,
+    /// Waiting for the button.
+    SaveShown,
+    /// The button clicked: waiting for the download to start, then for its file.
+    SaveClicked,
+    SaveChecking,
     /// Passed: the window quits.
     Done,
     // --smoke boost
@@ -241,6 +275,14 @@ pub struct Seen {
     pub speeds: bool,
     /// The window's notice: its serial and text.
     pub toast: (i32, String),
+    /// The strip's save button, as the host derives it from the downloader.
+    pub save: Option<Save>,
+    /// The downloader lists a stream of the page it can save.
+    pub ready: bool,
+    /// Downloads the downloader started from the tab.
+    pub runs: usize,
+    /// The saved file of the tab's latest finished download.
+    pub saved: Option<PathBuf>,
 }
 
 /// Picture-in-picture as the host has it at a snapshot.
@@ -306,6 +348,8 @@ pub enum Action {
     PutBoost(Box<Boost>),
     ToggleBoost(i64),
     Log(String),
+    /// Check the saved file against the clip (`check_saved`).
+    CheckSaved(PathBuf),
     Pass(String),
     Fail(String),
 }
@@ -684,11 +728,82 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
                 ],
             )
         }
-        (StripLastFrame { serial }, Snapshot(seen)) if seen.toast.0 != serial && seen.strip => to(
+        (StripLastFrame { serial }, Snapshot(seen)) if seen.toast.0 != serial && seen.strip => {
+            // The clip is under the downloader's size floor: it offers nothing, so no button.
+            if seen.save != Some(Save::Absent) || seen.ready {
+                return fail(
+                    s,
+                    format!("a save button with nothing to save: {:?}", seen.save),
+                );
+            }
+            let drm = url(&s, "drm.html");
+            to(
+                s,
+                SaveDrmLoading,
+                vec![
+                    Action::Log("smoke: strip ok".into()),
+                    Action::Setting("media.min_bytes", "0"),
+                    Action::Setting("media.ask_each_time", "0"),
+                    Action::Load(drm),
+                ],
+            )
+        }
+        (SaveDrmLoading, Web(e)) if loaded(e) => to(s, SaveDrm, vec![]),
+        (SaveDrm, Snapshot(seen)) if seen.ready && video.as_ref().is_some_and(|v| v.drm) => {
+            if seen.save != Some(Save::Absent) {
+                return fail(s, format!("protected video, save button {:?}", seen.save));
+            }
+            let page = url(&s, "video.html?save");
+            to(
+                s,
+                SaveLoading,
+                vec![
+                    Action::Log("smoke: save absent on protected media".into()),
+                    Action::Load(page),
+                ],
+            )
+        }
+        (SaveLoading, Web(e)) if loaded(e) => to(s, SaveShown, vec![Action::PointTo(Spot::Video)]),
+        (SaveShown, Snapshot(seen))
+            if seen.strip
+                && seen.save == Some(Save::Offered)
+                && video.as_ref().is_some_and(|v| !v.paused) =>
+        {
+            to(
+                s,
+                SaveClicked,
+                vec![
+                    Action::PointTo(Spot::Button("download")),
+                    Action::Click(Spot::Button("download")),
+                ],
+            )
+        }
+        (SaveClicked | SaveChecking, Snapshot(seen)) if !seen.strip || seen.collapsed => {
+            fail(s, "the save click took the strip away".into())
+        }
+        (SaveClicked | SaveChecking, Snapshot(_)) if video.as_ref().is_some_and(|v| v.paused) => {
+            fail(s, "the save click paused the video".into())
+        }
+        (SaveClicked, Snapshot(seen)) if seen.runs > 0 => match &seen.saved {
+            Some(path) if seen.save == Some(Save::Saved) => {
+                let line = format!("smoke: save started {} download(s)", seen.runs);
+                let path = path.clone();
+                to(
+                    s,
+                    SaveChecking,
+                    vec![Action::Log(line), Action::CheckSaved(path)],
+                )
+            }
+            _ => (s, vec![]),
+        },
+        (SaveChecking, Snapshot(seen)) if seen.runs != 1 => {
+            fail(s, format!("one click, {} downloads", seen.runs))
+        }
+        (SaveChecking, Snapshot(_)) => to(
             s,
             Done,
             vec![
-                Action::Log("smoke: strip ok".into()),
+                Action::Log("smoke: save ok".into()),
                 Action::Pass("video".into()),
             ],
         ),
@@ -763,6 +878,23 @@ pub fn next(mut s: VideoSmoke, input: Input) -> (VideoSmoke, Vec<Action>) {
     }
 }
 
+/// The saved file is the clip, byte for byte, and lies in `dir` (the smoke's downloads folder).
+pub fn check_saved(path: &Path, dir: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes != CLIP {
+        return Err(format!(
+            "{} holds {} bytes, not the clip's {}",
+            path.display(),
+            bytes.len(),
+            CLIP.len()
+        ));
+    }
+    if path.parent() != Some(dir) {
+        return Err(format!("{} is not in {}", path.display(), dir.display()));
+    }
+    Ok(format!("smoke: save wrote {}", path.display()))
+}
+
 /// Serves the smoke's pages, the clip and the fake SponsorBlock endpoint on `127.0.0.1` at a free
 /// port, from a thread that ends with the process. Loopback only: nothing is fetched from
 /// outside.
@@ -813,7 +945,15 @@ fn answer(mut stream: TcpStream, log: &Requests) -> std::io::Result<()> {
         head.push_str(&header);
     }
     let (kind, body, extra): (&str, Vec<u8>, &str) = match path.split('?').next().unwrap_or("") {
-        "/video.html" => ("text/html; charset=utf-8", VIDEO_PAGE.into(), ""),
+        "/video.html" => {
+            let query = path.split_once('?').map_or("", |(_, q)| q);
+            ("text/html; charset=utf-8", video_page(query).into(), "")
+        }
+        "/drm.html" => (
+            "text/html; charset=utf-8",
+            (video_page("drm") + DRM_SCRIPT).into(),
+            "",
+        ),
         "/clip.webm" => ("video/webm", CLIP.to_vec(), ""),
         "/boost.html" | "/other.html" => ("text/html; charset=utf-8", BOOST_PAGE.into(), ""),
         "/boost-csp.html" => (
@@ -984,6 +1124,99 @@ mod tests {
         );
         assert_eq!(a, vec![Action::Video("loop", 0.0)]);
         assert_eq!(s.step, Step::Loop);
+    }
+
+    #[test]
+    fn the_save_steps_need_the_button_only_where_the_downloader_offers_it() {
+        let done = WebEvent::LoadingChanged {
+            loading: false,
+            can_go_back: false,
+            can_go_forward: false,
+        };
+        let mut s = VideoSmoke::video("http://127.0.0.1:1".into(), Requests::default());
+        s.step = Step::StripLastFrame { serial: 0 };
+        let strip = |save, ready| Seen {
+            strip: true,
+            toast: (1, String::new()),
+            save: Some(save),
+            ready,
+            ..seen(Some(playing()))
+        };
+        // A button with nothing to save fails.
+        let (_, a) = next(s.clone(), Input::Snapshot(&strip(Save::Offered, true)));
+        assert!(matches!(&a[..], [Action::Fail(_)]));
+        let (s, a) = next(s, Input::Snapshot(&strip(Save::Absent, false)));
+        assert_eq!(
+            a.last(),
+            Some(&Action::Load("http://127.0.0.1:1/drm.html".into()))
+        );
+        let (s, _) = next(s, Input::Web(&done));
+        // Protected: waits for the downloader's list and the MediaKeys, then the button must be
+        // absent.
+        let drm = Seen {
+            video: Some(VideoState {
+                drm: true,
+                ..playing()
+            }),
+            ..strip(Save::Offered, true)
+        };
+        let (_, a) = next(s.clone(), Input::Snapshot(&drm));
+        assert!(matches!(&a[..], [Action::Fail(_)]));
+        let (s, a) = next(s, Input::Snapshot(&strip(Save::Absent, true)));
+        assert!(a.is_empty(), "MediaKeys not attached yet");
+        let (s, a) = next(
+            s,
+            Input::Snapshot(&Seen {
+                save: Some(Save::Absent),
+                ..drm
+            }),
+        );
+        assert_eq!(
+            a.last(),
+            Some(&Action::Load("http://127.0.0.1:1/video.html?save".into()))
+        );
+        let (s, _) = next(s, Input::Web(&done));
+        let (s, a) = next(s, Input::Snapshot(&strip(Save::Offered, true)));
+        assert_eq!(a.last(), Some(&Action::Click(Spot::Button("download"))));
+        // The click must leave the video playing and the strip open.
+        let paused = Seen {
+            video: Some(VideoState {
+                paused: true,
+                ..playing()
+            }),
+            ..strip(Save::Offered, true)
+        };
+        let (_, a) = next(s.clone(), Input::Snapshot(&paused));
+        assert!(matches!(&a[..], [Action::Fail(_)]));
+        let saving = Seen {
+            runs: 1,
+            ..strip(Save::Saving(Some(0.5)), true)
+        };
+        let (s, a) = next(s, Input::Snapshot(&saving));
+        assert!(a.is_empty());
+        let saved = Seen {
+            runs: 1,
+            saved: Some("/d/video.webm".into()),
+            ..strip(Save::Saved, true)
+        };
+        let (s, a) = next(s, Input::Snapshot(&saved));
+        assert_eq!(a.last(), Some(&Action::CheckSaved("/d/video.webm".into())));
+        let (_, a) = next(s, Input::Snapshot(&saved));
+        assert_eq!(a.last(), Some(&Action::Pass("video".into())));
+    }
+
+    #[test]
+    fn the_saved_file_must_be_the_clip_in_the_folder() {
+        let dir = std::env::temp_dir().join(format!("wubble-viddl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("video.webm");
+        std::fs::write(&file, CLIP).unwrap();
+        assert!(check_saved(&file, &dir).is_ok());
+        assert!(check_saved(&file, Path::new("/elsewhere")).is_err());
+        std::fs::write(&file, b"short").unwrap();
+        assert!(check_saved(&file, &dir).is_err());
+        assert!(check_saved(&dir.join("none"), &dir).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

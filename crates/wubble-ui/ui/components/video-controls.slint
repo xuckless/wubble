@@ -1,9 +1,9 @@
 import { Space } from "../kit/gen/tokens.slint";
 import { Shell } from "../kit/derived.slint";
-import { VideoView, GlassKeys, GlassOver } from "model.slint";
+import { VideoView, VideoSave, GlassKeys, GlassOver } from "model.slint";
 import { IconButton } from "../kit/controls/icon-button.slint";
 import { Glyph } from "../kit/controls/icon.slint";
-import { BDock, BDockTab, BDockText } from "../kit/overlay/b/b-dock.slint";
+import { BDock, BDockTab, BDockText, BDockSave } from "../kit/overlay/b/b-dock.slint";
 import { BScrubber } from "../kit/overlay/b/b-scrubber.slint";
 import { APopover } from "../kit/overlay/a/a-popover.slint";
 import { TouchCss } from "../kit/gen/css.slint";
@@ -11,7 +11,9 @@ import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 
 // Video controls over the page's main video (wubble_core::video): play, a scrubber with the
 // SponsorBlock segments on it, speed, loop, picture-in-picture, a frame screenshot, mute and the
-// media downloader's save. The design has no media controls (wubble-only.md §27): the strip is
+// media downloader's save (the pill's entry: its menu, or the default quality at once; shown
+// only for media the downloader can save, never for protected media, and only on a video wide
+// enough for one more tile; the download's progress and its end show on the button). The design has no media controls (wubble-only.md §27): the strip is
 // the touch Dock (kit/overlay/b/b-dock.slint: thin glass, kit IconButtons, `on` for loop and
 // mute), the scrubber the kit ElasticSlider (b-scrubber.slint), the speed a value button whose
 // menu is the overlays' popover (kit/overlay/a/a-popover.slint) holding the Select's checked rows.
@@ -19,15 +21,15 @@ import { BChoiceList, BChoiceRow } from "../kit/overlay/b/b-sheet-parts.slint";
 // The strip is a compact one in the video's top right corner, never across the bottom, where
 // pages keep their own controls (YouTube's bar, `<video controls>`).
 // Intents only: `command(name, value)` with name play, speeds, rate, loop, mute, seek, pip,
-// frame, save, collapse, expand, peek, dismiss, hide-site (`value`: the rate, or the seek
-// fraction). The strip's right end has a collapse chevron, which tucks the strip into a tab on
+// frame, collapse, expand, peek, dismiss, hide-site (`value`: the rate, or the seek
+// fraction); `save(x, y)` with the save button's bottom left, where the downloader's menu opens. The strip's right end has a collapse chevron, which tucks the strip into a tab on
 // the page's right edge (only a click on the tab opens it again: a hover shows the tab's own
 // hover look), and a close button (a click hides the strip until the next navigation, a
 // right-click hides it on this site). Shown, hidden and collapsed are wubble_core::video::Ui;
 // this file only reports the pointer and the clicks.
 export component VideoControls inherits Rectangle {
     // (element ids the tests and `--smoke video` find: root, strip, tab, collapse, close, play,
-    // bar, rate-button, loop, frame, mute, speed)
+    // bar, rate-button, loop, frame, mute, download, speed)
     in property <VideoView> video;
     // The speed menu's rows, slowest first (`wubble_core::video::RATES`).
     in property <[string]> rates;
@@ -36,6 +38,7 @@ export component VideoControls inherits Rectangle {
     in property <length> pointer-x;
     in property <length> pointer-y;
     callback command(string, float);
+    callback save(length, length);
     // The pointer is over the controls (they stay while it is).
     callback hovered(bool);
     // The pointer is on the strip, the tab or the speed menu: one answer for all three, so one
@@ -127,11 +130,13 @@ export component VideoControls inherits Rectangle {
                     root.command("mute", 0);
                 }
             }
-            if root.built && root.video.can-save: IconButton {
-                icon-path: Glyph.download;
-                label: "Save video";
-                clicked => {
-                    root.command("save", 0);
+            if root.built && root.video.save != VideoSave.absent && root.width >= Shell.video-save-min: download := BDockSave {
+                saving: root.video.save == VideoSave.saving;
+                saved: root.video.save == VideoSave.saved;
+                fraction: root.video.save-fraction;
+                label: root.video.save-label;
+                clicked(x, y) => {
+                    root.save(x, y);
                 }
             }
             if root.built: collapse := IconButton {
