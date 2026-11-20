@@ -227,6 +227,8 @@ export struct MenuView {
     x: length,
     y: length,
     entries: [MenuEntry],
+    // some row has an icon: the rows without one keep the icon's column, so labels line up
+    icons: bool,
 }
 
 // A JS dialog or the HTTP sign-in as a sheet. `cancel` empty: no cancel button (an alert).

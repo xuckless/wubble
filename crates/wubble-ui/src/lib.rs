@@ -183,6 +183,7 @@ mod tests {
         let open_menu = |x: f32| {
             app.set_menu(MenuView {
                 open: true,
+                icons: true,
                 x,
                 y: 40.0,
                 entries: ModelRc::from(entries.as_slice()),
