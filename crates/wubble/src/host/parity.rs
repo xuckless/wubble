@@ -471,6 +471,9 @@ impl Host {
                 });
             }
             HostOp::OnlyFirstTab => {
+                if self.model.glance_of(self.w.id).is_some() {
+                    self.dispatch(wubble_core::model::Command::CloseGlance(self.w.id));
+                }
                 let order = self.model.order(self.model.active_space());
                 if let Some(&first) = order.first() {
                     self.dispatch(wubble_core::model::Command::ActivateTab(first));
@@ -512,6 +515,16 @@ impl Host {
                 }
             }
             HostOp::AnswerPrint => self.print_answered(true),
+            HostOp::NewSpace => self.perform(wubble_core::action::Action::NewSpace),
+            HostOp::OnlyFirstSpace => {
+                let spaces: Vec<_> = self.model.spaces.iter().map(|s| s.id).collect();
+                if let Some(&first) = spaces.first() {
+                    self.dispatch(wubble_core::model::Command::SwitchSpace(first));
+                    for &space in &spaces[1..] {
+                        self.dispatch(wubble_core::model::Command::DeleteSpace(space));
+                    }
+                }
+            }
             HostOp::ZoomReset => {
                 if let Some(view) = self.view()
                     && view.zoom_percent() != 100
@@ -620,6 +633,15 @@ impl Host {
             HostCheck::AutoscrollStretched => {
                 let stretch = window.get_autoscroll_stretch();
                 is(stretch > 1.05, format!("autoscroll stretch {stretch}"))
+            }
+            HostCheck::Space(i) => {
+                let active = self.model.active_space();
+                let at = self.model.spaces.iter().position(|s| s.id == active);
+                is(at == Some(i), format!("active Space at {at:?}"))
+            }
+            HostCheck::Peek(want) => {
+                let open = self.model.glance_of(self.w.id).is_some();
+                is(open == want, format!("peek open: {open}"))
             }
             HostCheck::PrintSheet(want) => {
                 let open = self.print_open();
