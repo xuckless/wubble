@@ -46,6 +46,8 @@ pub enum Kind {
     /// Add bookmark (and the bookmarks page's rename, move and new-folder sheets).
     BookmarkSheet,
     PrintSheet,
+    /// The extension install prompt: what an extension asks for, Allow or Cancel.
+    ExtensionSheet,
     /// The screenshot region picker.
     Region,
     /// Keyboard link hints.
@@ -54,6 +56,8 @@ pub enum Kind {
     CommandBar,
     /// The sidebar's downloads popover.
     Downloads,
+    /// The sidebar footer's extensions popover, and the action popup that replaces its list.
+    Extensions,
     /// The sidebar footer's Spaces popup (the "^": every Space, then New Space).
     Spaces,
     /// A context menu: a tab's, a folder's or the page's.
@@ -72,7 +76,12 @@ pub enum Scope {
 impl Kind {
     pub fn scope(self) -> Scope {
         match self {
-            Kind::CommandBar | Kind::Downloads | Kind::Spaces | Kind::Menu => Scope::Window,
+            Kind::ExtensionSheet
+            | Kind::CommandBar
+            | Kind::Downloads
+            | Kind::Extensions
+            | Kind::Spaces
+            | Kind::Menu => Scope::Window,
             _ => Scope::Tab,
         }
     }
@@ -84,7 +93,10 @@ impl Kind {
 
     /// Holds the page under a scrim: the find bar waits for it.
     fn modal(self) -> bool {
-        matches!(self, Kind::Dialog | Kind::BookmarkSheet | Kind::PrintSheet)
+        matches!(
+            self,
+            Kind::Dialog | Kind::BookmarkSheet | Kind::PrintSheet | Kind::ExtensionSheet
+        )
     }
 
     fn takes_escape(self) -> bool {
@@ -98,6 +110,8 @@ impl Kind {
             self,
             Kind::Menu
                 | Kind::Spaces
+                | Kind::Extensions
+                | Kind::ExtensionSheet
                 | Kind::BookmarkSheet
                 | Kind::PrintSheet
                 | Kind::Region
@@ -348,6 +362,37 @@ mod tests {
     }
 
     #[test]
+    fn the_extensions_popover_is_a_window_overlay_that_follows_the_rules() {
+        assert_eq!(Layer::new(Extensions, Some(A)).tab, None);
+        // it replaces the downloads popover, and the Spaces popup replaces it
+        let (layers, _) = step(&[win(Downloads)], Event::Open(win(Extensions)));
+        assert_eq!(layers, [win(Extensions)]);
+        let (layers, _) = step(&[win(Extensions)], Event::Open(win(Spaces)));
+        assert_eq!(layers, [win(Spaces)]);
+        // refused over a page's dialog; Escape and a tab switch close it
+        let (_, fx) = step(&[on(Dialog, A)], Event::Open(win(Extensions)));
+        assert!(fx.is_empty());
+        let (layers, fx) = step(&[win(Extensions)], Event::Escape);
+        assert!(layers.is_empty());
+        assert_eq!(fx, [Effect::Close(win(Extensions))]);
+        let (layers, _) = step(&[win(Extensions)], Event::Switched(Some(B)));
+        assert!(layers.is_empty());
+    }
+
+    #[test]
+    fn the_install_prompt_is_a_modal_sheet_that_holds_the_find_bar_off() {
+        assert_eq!(Layer::new(ExtensionSheet, Some(A)).tab, None);
+        let (_, fx) = step(&[win(ExtensionSheet)], Event::Open(on(Find, A)));
+        assert!(fx.is_empty());
+        // it replaces a popover; Escape cancels it
+        let (layers, _) = step(&[win(Extensions)], Event::Open(win(ExtensionSheet)));
+        assert_eq!(layers, [win(ExtensionSheet)]);
+        let (layers, fx) = step(&[win(ExtensionSheet)], Event::Escape);
+        assert!(layers.is_empty());
+        assert_eq!(fx, [Effect::Close(win(ExtensionSheet))]);
+    }
+
+    #[test]
     fn print_over_add_bookmark_replaces_it() {
         let (layers, fx) = step(&[on(BookmarkSheet, A)], Event::Open(on(PrintSheet, A)));
         assert_eq!(layers, [on(PrintSheet, A)]);
@@ -365,10 +410,12 @@ mod tests {
         let exclusive = [
             on(BookmarkSheet, A),
             on(PrintSheet, A),
+            win(ExtensionSheet),
             on(Region, A),
             on(Hints, A),
             win(CommandBar),
             win(Downloads),
+            win(Extensions),
             win(Menu),
         ];
         for old in exclusive {
@@ -392,10 +439,12 @@ mod tests {
         for kind in [
             BookmarkSheet,
             PrintSheet,
+            ExtensionSheet,
             Region,
             Hints,
             CommandBar,
             Downloads,
+            Extensions,
             Menu,
             Find,
         ] {

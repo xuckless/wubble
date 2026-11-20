@@ -29,6 +29,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 mod projection;
+pub mod shell;
 pub use projection::{ExtTab, ExtWindow, ExtWindowKind, Projection, opened_url, project};
 
 /// A Chrome extension id: 32 letters `a` to `p`.
@@ -134,6 +135,8 @@ pub struct Manifest {
     pub permissions: Vec<String>,
     /// The base64 public key, when the manifest pins its id.
     pub key: Option<String>,
+    /// The options page, a path inside the extension (`options_ui.page`, else `options_page`).
+    pub options_page: Option<String>,
 }
 
 impl Manifest {
@@ -202,6 +205,13 @@ pub fn parse_manifest(json: &str) -> Result<Manifest, ExtError> {
         version: version.to_owned(),
         permissions,
         key: text("key").map(str::to_owned),
+        options_page: v
+            .get("options_ui")
+            .and_then(|o| o.get("page"))
+            .and_then(Value::as_str)
+            .or_else(|| text("options_page"))
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned),
     })
 }
 
@@ -463,6 +473,8 @@ pub struct Extension {
     pub source: Source,
     /// What it was granted ([`Manifest::permissions`]).
     pub permissions: Vec<String>,
+    /// Its options page inside the extension ([`Manifest::options_page`]).
+    pub options_page: Option<String>,
 }
 
 impl Extension {
@@ -475,6 +487,7 @@ impl Extension {
             enabled: true,
             source,
             permissions: manifest.permissions,
+            options_page: manifest.options_page,
         }
     }
 
@@ -508,6 +521,7 @@ impl Extension {
             "enabled": self.enabled,
             "source": source,
             "permissions": self.permissions,
+            "options_page": self.options_page,
         })
     }
 
@@ -535,6 +549,8 @@ impl Extension {
                 .iter()
                 .map(|p| p.as_str().map(str::to_owned))
                 .collect::<Option<_>>()?,
+            // (absent in lists stored before the options page was read)
+            options_page: text(v, "options_page"),
         })
     }
 }
@@ -827,6 +843,7 @@ mod tests {
             enabled: true,
             source,
             permissions: vec!["storage".into()],
+            options_page: Some("options.html".into()),
         }
     }
 
