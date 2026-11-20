@@ -1439,6 +1439,12 @@ fn run(
             let (port, requests) = video_server.clone().ok_or("no smoke server")?;
             let base = format!("http://127.0.0.1:{port}");
             let (page, smoke) = if matches!(mode, Mode::Video) {
+                // its pointer finds the strip's buttons by their element ids
+                if !wubble_ui::ELEMENT_IDS {
+                    return Err("--smoke video needs element ids: a debug build, \
+                        or a release one built with SLINT_EMIT_DEBUG_INFO=1"
+                        .into());
+                }
                 (
                     "video.html",
                     video_smoke::VideoSmoke::video(base.clone(), requests),

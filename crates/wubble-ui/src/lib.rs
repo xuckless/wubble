@@ -11,6 +11,10 @@ pub mod window;
 
 use slint::{Model, VecModel};
 
+/// The generated code carries the element ids `ElementHandle` finds (build.rs): a debug build, or
+/// one built with `SLINT_EMIT_DEBUG_INFO=1`.
+pub const ELEMENT_IDS: bool = option_env!("WUBBLE_ELEMENT_IDS").is_some();
+
 /// Make `model` hold `rows`, in place: changed rows are rewritten, rows past the old end are
 /// added and rows past the new end removed. A Slint `for` keeps an instance per row it did not
 /// see removed, so a row's own state (hover, the press, a TouchArea's grab mid-drag, its tweens)
