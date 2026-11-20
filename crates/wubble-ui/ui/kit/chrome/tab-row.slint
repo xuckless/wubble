@@ -11,8 +11,7 @@ import { Calm } from "../motion/calm.slint";
 import { BrowserCss } from "../gen/css.slint";
 import { KitText } from "../text.slint";
 import { Role } from "../gen/text.slint";
-import { RailClose } from "rail-close.slint";
-import { AgentMark } from "agent-mark.slint";
+import { RailBadge } from "rail-badge.slint";
 
 // @source slint-tab-row
 // wubble change: `TabItem` (with an `id`) is in components/model.slint.
@@ -30,7 +29,7 @@ export component TabRow inherits Rectangle {
     callback close();
     // wubble change: the speaker glyph, shown while the page plays sound or is muted.
     callback mute();
-    // wubble change: the mark of a tab an agent session drives; a click stops the session.
+    // wubble change: the agent badge of a tab an agent session drives; a press stops the sessions.
     callback agent-stop();
     // wubble change: a right click, pointer in window px (the tab's context menu).
     callback context(length, length);
@@ -108,11 +107,13 @@ export component TabRow inherits Rectangle {
         moved => { if (self.pressed) { root.drag(self.absolute-position.y + self.mouse-y); } }
     }
 
+    // the icon box's left edge: centred on the rail, on the sidebar's grid else
+    property <length> icon-x: root.compact ? (root.width - Shell.tab-icon) / 2 : Shell.side-grid;
     // wubble change: metrics from browser.css (.wb-tab padding 0 6 0 10, gap 10, an 18 px icon
     // box), so the icon sits on the sidebar's 24 px grid; the favicon shows only when the model
     // has one, else the neutral globe (icons.tsx `Favicon`), never a letter tile.
     HorizontalLayout {
-        padding-left: root.compact ? (root.width - Shell.tab-icon) / 2 : Shell.side-grid;
+        padding-left: root.icon-x;
         padding-right: Shell.side-pad;
         spacing: Shell.side-grid;
         Rectangle {
@@ -158,15 +159,9 @@ export component TabRow inherits Rectangle {
                 tint: speaker-touch.has-hover ? Palette.ink : Palette.haze;
             }
         }
-        // wubble change: the agent mark (kit AgentMark, derived), before the speaker.
-        if !root.compact && root.tab.agent: AgentMark {
-            stopped => {
-                root.agent-stop();
-            }
-        }
         // wubble change: the split glyph of a pane of the Space's split (tabs.tsx `wb-tab-split`:
         // 22 px, haze, the icon at 13 px), gone while the row is hovered.
-        if !root.compact && root.tab.in-split && !touch.has-hover && !close-touch.has-hover: Rectangle {
+        if !root.compact && root.tab.in-split && !root.row-hovered: Rectangle {
             width: 22px;
             Icon {
                 x: (parent.width - self.width) / 2;
@@ -188,7 +183,7 @@ export component TabRow inherits Rectangle {
     // wubble change: it fades and grows in as .wb-tab-x does (browser.css: opacity 0 → 1 over
     // .15 s, scale .8 → 1 over .2 s ease-out; a 22 px tile, radius 7, white 10% on its own hover).
     // wubble change: hover only, the selected row too (.wb-tab:hover .wb-tab-x)
-    property <bool> close-shown: !root.compact && (touch.has-hover || close-touch.has-hover);
+    property <bool> close-shown: !root.compact && root.row-hovered;
     Rectangle {
         x: root.width - Shell.side-pad - self.width;
         y: (root.height - self.height) / 2;
@@ -216,17 +211,31 @@ export component TabRow inherits Rectangle {
             tint: close-touch.has-hover ? BrowserCss.wb-tab-x-hover--color : BrowserCss.wb-tab-x--color;
         }
     }
-    // wubble change: on the rail, the close badge on the icon's top-left corner (kit RailClose,
-    // derived), while the row or the badge is hovered; the rest of the icon still picks the tab.
-    property <bool> row-hovered: touch.has-hover || rail-close.hovered;
+    // wubble change: the badges on the favicon's corners (kit RailBadge, derived): on the rail the
+    // close badge on the top-left, while the row or a badge is hovered; on both layouts the agent
+    // badge on the bottom-right of an agent's tab, which stops the sessions. The rest of the icon
+    // still picks the tab.
+    property <length> icon-top: (root.height - Shell.tab-icon) / 2;
+    property <bool> row-hovered: touch.has-hover || close-touch.has-hover || rail-close.hovered || agent-badge.hovered;
     out property <bool> rail-close-shown: root.compact && root.row-hovered && !root.dragging;
-    rail-close := RailClose {
+    rail-close := RailBadge {
         visible: root.compact;
         shown: root.rail-close-shown;
-        x: (root.width - Shell.tab-icon) / 2 - self.width / 2;
-        y: (root.height - Shell.tab-icon) / 2 - self.height / 2;
+        x: root.icon-x - self.width / 2;
+        y: root.icon-top - self.height / 2;
         clicked => {
             root.close();
+        }
+    }
+    agent-badge := RailBadge {
+        visible: root.tab.agent;
+        shown: !root.dragging;
+        icon-path: Glyph.agent;
+        label: "Stop all agents";
+        x: root.icon-x + Shell.tab-icon - self.width / 2;
+        y: root.icon-top + Shell.tab-icon - self.height / 2;
+        clicked => {
+            root.agent-stop();
         }
     }
     // wubble change: the keyboard focus ring, inside the row (.wb-tab outline-offset -2px)

@@ -50,27 +50,29 @@ pub fn favicon_image(width: u32, height: u32, rgba: &[u8]) -> slint::Image {
 
 fn tab_items(rows: &[TabRow], favicons: &BTreeMap<TabId, slint::Image>) -> Vec<TabItem> {
     rows.iter()
-        .map(|r| TabItem {
-            id: r.id,
-            title: r.title.as_str().into(),
-            url: r.url.as_str().into(),
-            // None yet: the row shows the neutral glyph.
-            favicon: shell::tab_id(r.id)
-                .and_then(|id| favicons.get(&id))
-                .cloned()
-                .unwrap_or_default(),
-            audible: r.audible,
-            muted: r.muted,
-            in_split: r.in_split,
-            blocked: i32::try_from(r.blocked).unwrap_or(i32::MAX),
-            kind: match r.kind {
-                shell::RowKind::Tab => 0,
-                shell::RowKind::Folder => 1,
-            },
-            depth: i32::from(r.depth),
-            count: i32::try_from(r.count).unwrap_or(i32::MAX),
-            collapsed: r.collapsed,
-            agent: r.agent,
+        .map(|r| {
+            TabItem {
+                id: r.id,
+                title: r.title.as_str().into(),
+                url: r.url.as_str().into(),
+                // None yet: the row shows the neutral glyph.
+                favicon: shell::tab_id(r.id)
+                    .and_then(|id| favicons.get(&id))
+                    .cloned()
+                    .unwrap_or_default(),
+                audible: r.audible,
+                muted: r.muted,
+                in_split: r.in_split,
+                blocked: i32::try_from(r.blocked).unwrap_or(i32::MAX),
+                kind: match r.kind {
+                    shell::RowKind::Tab => 0,
+                    shell::RowKind::Folder => 1,
+                },
+                depth: i32::from(r.depth),
+                count: i32::try_from(r.count).unwrap_or(i32::MAX),
+                collapsed: r.collapsed,
+                agent: r.agent,
+            }
         })
         .collect()
 }
@@ -91,7 +93,7 @@ pub fn render(window: &AppWindow, v: &ShellView, favicons: &BTreeMap<TabId, slin
             id: s.id,
             name: s.name.as_str().into(),
             tint: color(s.tint),
-            icon: s.icon.id().into(),
+            icon: wubble_core::space::glyph_id(s.icon, s.agent).into(),
             agent: s.agent,
         })
         .collect();
@@ -126,7 +128,7 @@ pub fn render_spaces_menu(window: &AppWindow, popup: &spacemenu::Popup, new_spac
                     id: shell::slint_id(id.0)?,
                     name: r.name.as_str().into(),
                     tint: color(r.tint),
-                    icon: r.icon.id().into(),
+                    icon: r.glyph().into(),
                     current: r.current,
                 })
             }

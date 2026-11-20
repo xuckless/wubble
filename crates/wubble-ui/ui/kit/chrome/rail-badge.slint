@@ -1,8 +1,11 @@
-// derived: window-lights.slint (the close light: a round `.wb-light`, white .18, coral with its dark glyph on hover), tab-row.slint (`.wb-tab-x`: the close glyph (in its hover ink, to read on the small badge), fading in over .15 s and growing from .8 over .2 s ease-out while the row is hovered)
-// The close badge of a tab on the sidebar's rail (owner, 2026-11-19: "on these icons I'd like
-// to see a (x) mark that closes the tab … on the top left corner"): the window's close light at
-// its own size, centred on the tab icon's top-left corner; it shows while the row or the badge
-// is hovered, as the full row's close button does. Recorded in
+// derived: window-lights.slint (the close light: a round `.wb-light`, white .18, a coloured light with its dark glyph on hover), tab-row.slint (`.wb-tab-x`: the glyph in its hover ink, to read on the small badge, fading in over .15 s and growing from .8 over .2 s ease-out while the row is hovered)
+// A round badge on a tab icon's corner, on the sidebar's rail and on the extended row's favicon.
+// The close badge (owner, 2026-11-19: "on these icons I'd like to see a (x) mark that closes the
+// tab … on the top left corner") is the window's close light at its own size, centred on the
+// tab icon's top-left corner; it shows while the row or the badge is hovered, as the full row's
+// close button does. The sound badge (top-right: mutes, unmutes) and the agent badge
+// (bottom-right: stops the agent sessions) are the same circle with their own glyph and
+// hover light, always shown: `shown` is what fades and grows the circle. Recorded in
 // docs/fidelity/derived-review.md.
 
 import { BrowserCss } from "../gen/css.slint";
@@ -10,22 +13,26 @@ import { Shell } from "../derived.slint";
 import { Icon, Glyph } from "../controls/icon.slint";
 import { Calm } from "../motion/calm.slint";
 
-export component RailClose inherits Rectangle {
+export component RailBadge inherits Rectangle {
     in property <bool> shown;
+    in property <string> icon-path: Glyph.close;
+    in property <string> label: "Close tab";
+    // the light the circle takes on its own hover: the window's close (coral) by default
+    in property <color> light: BrowserCss.wb-lights-hover-wb-light-nth-child-1--background;
     callback clicked();
     out property <bool> hovered: ta.has-hover;
 
     width: BrowserCss.wb-light--width;
     height: BrowserCss.wb-light--height;
     accessible-role: AccessibleRole.button;
-    accessible-label: "Close tab";
+    accessible-label: root.label;
     accessible-action-default => {
         root.clicked();
     }
 
     Rectangle {
         border-radius: self.width * BrowserCss.wb-light--border-radius;
-        background: ta.has-hover ? BrowserCss.wb-lights-hover-wb-light-nth-child-1--background : BrowserCss.wb-light--background;
+        background: ta.has-hover ? root.light : BrowserCss.wb-light--background;
         animate background {
             duration: Calm.ms(BrowserCss.wb-light--transition-background-color-duration);
             easing: ease;
@@ -46,7 +53,7 @@ export component RailClose inherits Rectangle {
             y: (parent.height - self.height) / 2;
             size: Shell.light-glyph;
             weight: Shell.light-stroke;
-            path: Glyph.close;
+            path: root.icon-path;
             tint: ta.has-hover ? BrowserCss.wb-lights-hover-wb-light--color : BrowserCss.wb-tab-x-hover--color;
             animate tint {
                 duration: Calm.ms(BrowserCss.wb-light--transition-color-duration);

@@ -69,6 +69,15 @@ slint::slint! {
         }
         out property <bool> rail-close-shown: rail.rail-close-shown;
         out property <length> rail-h: rail.height;
+        // an agent's tab on the rail: the agent badge on the icon's bottom-right corner
+        in-out property <int> marked-stops;
+        in-out property <int> marked-presses;
+        marked := TabRow {
+            x: 250px; y: 20px; width: 48px; compact: true;
+            tab: { id: 10, title: "m", url: "https://m.test", agent: true };
+            agent-stop => { root.marked-stops += 1; }
+            press(y) => { root.marked-presses += 1; }
+        }
         // the switcher's "^"
         in-out property <int> mores;
         in property <bool> more-open;
@@ -276,6 +285,37 @@ fn rail_close(p: &Probe) {
     assert!(!p.get_rail_close_shown());
 }
 
+/// The rail's agent badge (derived: the close badge's circle on the icon's bottom-right corner):
+/// drawn at rest, a press on it stops the agents, the rest of the icon still picks the tab.
+fn rail_agent_badge(p: &Probe) {
+    let click = |x: f32, y: f32| {
+        let position = LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        at(p, WindowEvent::PointerMoved { position });
+        at(p, WindowEvent::PointerPressed { position, button });
+        at(p, WindowEvent::PointerReleased { position, button });
+    };
+    let row_h = p.get_rail_h();
+    let (icon_x, icon_y) = (250.0 + (48.0 - 18.0) / 2.0, 20.0 + (row_h - 18.0) / 2.0);
+    run_out();
+    // the pointer is out: the badge is there with no hover on the row
+    click(icon_x + 18.0, icon_y + 18.0);
+    run_out();
+    assert_eq!(
+        (p.get_marked_stops(), p.get_marked_presses()),
+        (1, 0),
+        "the bottom-right badge stops the agents"
+    );
+    click(icon_x + 9.0, icon_y + 9.0);
+    assert_eq!(
+        (p.get_marked_stops(), p.get_marked_presses()),
+        (1, 1),
+        "the icon's middle picks the tab"
+    );
+    at(p, WindowEvent::PointerExited);
+    run_out();
+}
+
 /// The switcher's "^": a `.wb-space` tile (36 square) that reports a click (the popup) and its
 /// hover; its chevron points up at rest and turns over (`.tp-chev.up`) while the popup is open.
 fn spaces_button(p: &Probe) {
@@ -308,5 +348,6 @@ fn chrome_kit_parts_follow_the_design() {
     spaces(&p);
     command_bar(&p);
     rail_close(&p);
+    rail_agent_badge(&p);
     spaces_button(&p);
 }

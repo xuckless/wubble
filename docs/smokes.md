@@ -62,7 +62,7 @@ Numbers from the `--measure` runs: [measurements.md](measurements.md).
 
 `--shot-dir DIR --smoke gallery` (`crates/wubble/src/gallery_smoke.rs`, `host/gallery.rs`) writes
 `DIR/NN-name.png` per scene in the order of `gallery_smoke::SCENES`: sidebar extended, rail and hidden;
-a tab row and the new-tab row hovered; the command bar opening (a burst: `DIR/NN-name/fKKK.png` with
+a tab row and the new-tab row hovered; an agent's tabs on the rail and its Space in the Spaces popup; the command bar opening (a burst: `DIR/NN-name/fKKK.png` with
 `times.txt`), empty and with results; tab-row menu; site menu; downloads popover (and a row hovered);
 find bar; permission prompt (and Block hovered); autofill menu (and a login hovered) and save prompt;
 dialog sheet and prompt; bookmark sheet; print sheet; toast; link status bubble; error and certificate

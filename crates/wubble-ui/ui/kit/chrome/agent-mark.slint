@@ -1,7 +1,7 @@
-// derived: `.wb-tab-x` (browser/browser.css:75-78: a 22 tile, radius 7, white 10 % on its own hover, the glyph in mist then ink) + Icon(controls/icon.slint, the generated `zap` glyph) + Palette sky / coral
+// derived: `.wb-tab-x` (browser/browser.css:75-78: a 22 tile, radius 7, white 10 % on its own hover, the glyph in mist then ink) + Icon(controls/icon.slint, the agent glyph) + Palette sky / coral
 // The mark of an agent session, wubble-only (docs/fidelity/derived-review.md, Agent sessions):
-// on each tab row the session drives and on the Space header of its Space. The design has no
-// agent; this is the tab row's close tile in the position of the speaker, the bolt in the sky
+// on the Space header of an agent's Space (its tab rows carry the agent badge, RailBadge). The design has no
+// agent; this is the tab row's close tile in the position of the speaker, the agent glyph in the sky
 // at rest (the accent every "something is running" mark in the design takes) and in coral on its
 // own hover, where a click stops every agent session (`stopped`: the command is Stop All Agents). A
 // button "Stop all agents" to assistive tech, so the stop is never mouse-only. The steady glow the research note asks for waits for
@@ -35,7 +35,7 @@ export component AgentMark inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             size: Shell.tab-close-icon;
-            path: Glyph.zap;
+            path: Glyph.agent;
             tint: touch.has-hover ? Palette.coral : Palette.sky;
             animate tint { duration: Calm.ms(BrowserCss.wb-tab-x--transition-background-color-duration); easing: ease; }
         }

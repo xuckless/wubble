@@ -294,6 +294,7 @@ fn space_footer(app: &AppWindow, driver: &Shared) {
                     name: format!("row {id}"),
                     tint: Rgb(0, 0, 0),
                     icon: SpaceIcon::Work,
+                    agent: false,
                     current: id == 3,
                 })
                 .collect(),

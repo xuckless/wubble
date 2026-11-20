@@ -77,6 +77,8 @@ pub enum Overlay {
     AgentSheet,
     /// An approved agent session in the window: its tab rows and Space header carry the mark.
     AgentTabs,
+    /// The same session, the footer's Spaces popup open over the agent's Space row.
+    AgentSpaces,
     LoadError,
     CertError,
     AutofillMenu,
@@ -199,6 +201,13 @@ pub const SCENES: &[Scene] = &[
         pointer: Some(NEW_TAB_ROW),
         ..scene("new-tab-hover")
     },
+    // an agent session's tabs on the rail (the badge on each favicon) and its Space in the
+    // footer's popup (the agent glyph on its row), before the scenes that pile Spaces up
+    Scene {
+        sidebar: SidebarMode::Rail,
+        ..over("agent-tabs-rail", Overlay::AgentTabs)
+    },
+    over("agent-spaces-popup", Overlay::AgentSpaces),
     Scene {
         frames: BURST,
         ..over("command-bar-open", Overlay::CommandBar(""))

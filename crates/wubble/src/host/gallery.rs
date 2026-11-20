@@ -308,7 +308,7 @@ impl Host {
                 }
             }
             Overlay::AgentSheet => self.gallery_agent(false),
-            Overlay::AgentTabs => self.gallery_agent(true),
+            Overlay::AgentTabs | Overlay::AgentSpaces => self.gallery_agent(true),
             Overlay::LoadError => {
                 surfaces.error = PageError::Load {
                     url: "https://example.invalid/".into(),
@@ -393,7 +393,7 @@ impl Host {
         let _ = self.w.window.upgrade_in_event_loop(move |window| {
             window.invoke_dismiss_command_bar();
             window.set_downloads_open(overlay == Overlay::Downloads);
-            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_)));
+            window.set_spaces_open(matches!(overlay, Overlay::Spaces(_) | Overlay::AgentSpaces));
             window.invoke_sidebar_mode_requested(sidebar.into());
             match overlay {
                 Overlay::CommandBar(query) => {
